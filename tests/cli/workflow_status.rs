@@ -45,7 +45,7 @@ fn status_args(run_directory: &Path, options: &[&str]) -> Vec<String> {
     let mut args = vec![
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run_directory.to_string_lossy().into_owned(),
     ];
     args.extend(options.iter().map(|option| (*option).to_owned()));
@@ -91,10 +91,9 @@ fn write_state(run_directory: &Path, state: &serde_json::Value) {
 }
 
 pub(super) fn status_schema() -> jsonschema::Validator {
-    let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/schemas/workflow-status-result-v1.schema.json"
-    )))
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../schemas/workflow-status-result-v1.schema.json"
+    ))
     .unwrap();
     jsonschema::draft202012::new(&schema).unwrap()
 }
@@ -321,10 +320,9 @@ fn assert_live_finalization_status(args: &[String], run_directory: &Path, tree_r
 
 #[test]
 fn status_schema_rejects_active_ownership_with_eligible_retry() {
-    let mut value: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/workflow-status/v1/valid/settled-interrupted.json"
-    )))
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/workflow-status/v1/valid/settled-interrupted.json"
+    ))
     .unwrap();
     value["recovery"] = serde_json::json!({"status": "active"});
 
@@ -358,10 +356,9 @@ fn status_schema_bounds_result_publication_invariants() {
         serde_json::json!("export_values:secret");
     assert!(!status_schema().is_valid(&value));
 
-    let mut interrupted: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/workflow-status/v1/valid/settled-interrupted.json"
-    )))
+    let mut interrupted: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/workflow-status/v1/valid/settled-interrupted.json"
+    ))
     .unwrap();
     interrupted["state"]["attempts"][0]["result"]["resultInvariant"] =
         serde_json::json!("export_values");
@@ -459,7 +456,7 @@ fn status_json_records_when_a_step_that_ran_started() {
 #[test]
 fn closed_status_schema_accepts_positive_and_rejects_negative_fixtures() {
     let validator = status_schema();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workflow-status/v1");
+    let root = crate::fixture_root().join("tests/fixtures/workflow-status/v1");
     for (category, valid) in [("valid", true), ("invalid", false)] {
         let mut fixtures = fs::read_dir(root.join(category))
             .unwrap()
@@ -556,32 +553,10 @@ fn status_json_and_plain_are_closed_read_only_snapshots() {
     assert!(!output.stdout.contains(&0x1b));
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(status_schema().is_valid(&result));
-    assert_eq!(
-        result
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
-        [
-            "command",
-            "continuation",
-            "exitStatus",
-            "outcome",
-            "record",
-            "recovery",
-            "retry",
-            "run",
-            "runDirectory",
-            "schemaVersion",
-            "state",
-            "wait",
-            "workspaceModified",
-        ]
-    );
+    assert_eq!(members(&result), SHOWN_MEMBERS, "{result}");
     assert_eq!(result["schemaVersion"], 1);
-    assert_eq!(result["command"], "useful workflow run status");
-    assert_eq!(result["outcome"], "status");
+    assert_eq!(result["command"], "useful workflow run show");
+    assert_eq!(result["outcome"], "shown");
     assert_eq!(result["exitStatus"], 0);
     assert_eq!(result["record"], serde_json::Value::Null);
     assert_eq!(result["wait"], serde_json::Value::Null);
@@ -628,6 +603,99 @@ fn status_json_and_plain_are_closed_read_only_snapshots() {
     );
     let lock_after = fs::metadata(run_directory.join("run.lock")).unwrap();
     assert_eq!(lock_after.len(), lock_before.len());
+}
+
+/// The members of `show`'s `shown` document (REQ-LOCALRUN-189), sorted.
+const SHOWN_MEMBERS: [&str; 18] = [
+    "attempts",
+    "children",
+    "command",
+    "continuation",
+    "controls",
+    "exitStatus",
+    "mirror",
+    "outcome",
+    "position",
+    "record",
+    "recovery",
+    "retry",
+    "run",
+    "runDirectory",
+    "schemaVersion",
+    "state",
+    "wait",
+    "workspaceModified",
+];
+
+fn members(document: &serde_json::Value) -> Vec<&str> {
+    document
+        .as_object()
+        .unwrap_or_else(|| panic!("{document}"))
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+// REQ-LOCALRUN-189: `show` prints one `shown` document holding the run's status and its
+// records, for a run of a tree and for a run of a closure, which has no run record, and the
+// `error` document for a run directory it cannot read.
+#[test]
+fn show_prints_the_status_and_the_records_of_a_run_in_one_document() {
+    let bundle = child_tree(super::workflow_run::CHILD_TREE_DECIDE);
+    fs::write(bundle.execution_root().join("verdict-input"), "planned").unwrap();
+    let tree_run = bundle.result("shown-tree");
+    let output = run(&child_tree_args(&bundle, &tree_run));
+    assert!(output.status.success(), "{output:?}");
+    let (output, tree) = status_json(&tree_run);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(status_schema().is_valid(&tree), "{tree}");
+    assert_eq!(members(&tree), SHOWN_MEMBERS, "{tree}");
+    assert_eq!(tree["command"], "useful workflow run show");
+    assert_eq!(tree["outcome"], "shown");
+    assert_eq!(tree["exitStatus"], 0);
+    assert_eq!(tree["record"], run_record(&tree_run));
+    assert_eq!(tree["recovery"]["status"], "settled", "{tree}");
+    assert_eq!(tree["attempts"][0]["number"], 1, "{tree}");
+    let mut steps = tree["children"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{tree}"))
+        .iter()
+        .map(|child| child["step"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    steps.sort_unstable();
+    assert_eq!(steps, ["build", "design"], "{tree}");
+    assert_eq!(tree["controls"], serde_json::json!([]), "{tree}");
+    assert_eq!(tree["mirror"], serde_json::json!([]), "{tree}");
+
+    let (_bundle, closure_run) = completed_run("shown-closure");
+    let (output, closure) = status_json(&closure_run);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(status_schema().is_valid(&closure), "{closure}");
+    assert_eq!(closure["record"], serde_json::Value::Null, "{closure}");
+    assert_eq!(closure["position"], serde_json::Value::Null, "{closure}");
+    assert_eq!(closure["attempts"][0]["number"], 1, "{closure}");
+    assert_eq!(closure["children"], serde_json::json!([]), "{closure}");
+
+    fs::remove_file(closure_run.join("run.lock")).unwrap();
+    let error = show_error(&status(&closure_run, &["--json"]), "run_directory_invalid");
+    assert!(status_schema().is_valid(&error), "{error}");
+}
+
+/// The `error` document `show --json` prints, exit 1, for a run it cannot read
+/// (REQ-LOCALRUN-165), its code `code`.
+pub(super) fn show_error(output: &std::process::Output, code: &str) -> serde_json::Value {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["schemaVersion"], 1, "{document}");
+    assert_eq!(
+        document["command"], "useful workflow run show",
+        "{document}"
+    );
+    assert_eq!(document["outcome"], "error", "{document}");
+    assert_eq!(document["exitStatus"], 1, "{document}");
+    assert_eq!(document["error"]["code"], code, "{document}");
+    document
 }
 
 // REQ-LOCALRUN-147, REQ-LOCALRUN-149
@@ -906,19 +974,19 @@ fn signals_interrupt_blocked_status_output_without_a_valid_object() {
 
 // REQ-LOCALRUN-80
 #[test]
-fn status_usage_errors_return_two_without_a_status_object() {
+fn show_usage_errors_return_two_without_a_document() {
     for args in [
-        vec!["workflow", "run", "status", "--json"],
-        vec!["workflow", "run", "status", "/tmp/run", "--plain", "--json"],
+        vec!["workflow", "run", "show", "--json"],
+        vec!["workflow", "run", "show", "/tmp/run", "--plain", "--json"],
         vec![
             "workflow",
             "run",
-            "status",
+            "show",
             "/tmp/run",
             "--execution-root",
             "/tmp/execution",
         ],
-        vec!["workflow", "run", "status", "--run-dir", "/tmp/run"],
+        vec!["workflow", "run", "show", "--run-dir", "/tmp/run"],
     ] {
         let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let output = isolated_command(&args).output().unwrap();
@@ -1140,6 +1208,19 @@ fn status_and_view_report_a_waiting_run() {
 
 const ADDRESSED_ROOT_WORKFLOW: &str = "schemaVersion: 1\nname: addressed\nprograms: [scripts]\nsteps:\n  complete:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
 
+/// `command` with no session stored, so a lookup that goes on to Cloud says nobody is signed
+/// in and asks nothing, rather than failing to read the suite's unusable credentials file.
+pub(super) fn signed_out(mut command: std::process::Command) -> std::process::Output {
+    let directory = super::private_credential_directory();
+    command
+        .env(
+            "USEFUL_CREDENTIALS_FILE",
+            directory.path().join("credentials.json"),
+        )
+        .output()
+        .unwrap()
+}
+
 /// `useful workflow run ARGS` against the `useful` home `home`.
 fn run_under_home(home: &Home, args: &[&str]) -> std::process::Output {
     let args = ["workflow", "run"]
@@ -1155,7 +1236,7 @@ fn run_under_home(home: &Home, args: &[&str]) -> std::process::Output {
 
 // REQ-LOCALRUN-180, REQ-LOCALRUN-172
 #[test]
-fn status_addresses_a_run_under_the_home_by_its_id() {
+fn show_addresses_a_run_under_the_home_by_its_id() {
     let tree = Tree::engineering();
     tree.write("workflow.yaml", ADDRESSED_ROOT_WORKFLOW);
     let home = Home::new();
@@ -1190,26 +1271,37 @@ fn status_addresses_a_run_under_the_home_by_its_id() {
         .unwrap()
         .to_owned();
 
-    let by_id = run_under_home(&home, &["status", &id, "--json"]);
+    let by_id = run_under_home(&home, &["show", &id, "--json"]);
     assert_eq!(by_id.status.code(), Some(0), "{by_id:?}");
     let by_id: serde_json::Value = serde_json::from_slice(&by_id.stdout).unwrap();
     assert!(status_schema().is_valid(&by_id), "{by_id}");
-    assert_eq!(by_id["command"], "useful workflow run status");
+    assert_eq!(by_id["command"], "useful workflow run show");
     assert_eq!(by_id["runDirectory"], created["runDirectory"]);
     assert_eq!(by_id["record"]["id"], id.as_str());
 
     let unknown = "run_7zzzzzzzzzzzzzzzzzzzzzzzzz";
-    let missing = run_under_home(&home, &["status", unknown, "--json"]);
+    let show_unknown = |args: &[&str]| {
+        let mut command = isolated_command(
+            &["workflow", "run", "show", unknown]
+                .iter()
+                .chain(args)
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        command.env("USEFUL_HOME", home.path());
+        signed_out(command)
+    };
+    let missing = show_unknown(&["--json"]);
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     let missing: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
-    assert_eq!(missing["command"], "useful workflow run status");
+    assert_eq!(missing["command"], "useful workflow run show");
     assert_eq!(missing["outcome"], "error");
     assert_eq!(missing["exitStatus"], 1);
     assert_eq!(missing["error"]["code"], "run_not_found", "{missing}");
     assert!(status_schema().is_valid(&missing), "{missing}");
     assert!(missing.get("runDirectory").is_none(), "{missing}");
 
-    let plain = run_under_home(&home, &["status", unknown]);
+    let plain = show_unknown(&[]);
     assert_eq!(plain.status.code(), Some(1), "{plain:?}");
     assert!(plain.stdout.is_empty());
     assert!(

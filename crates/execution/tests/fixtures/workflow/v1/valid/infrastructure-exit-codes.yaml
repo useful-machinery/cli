@@ -1,0 +1,18 @@
+schemaVersion: 1
+steps:
+  check:
+    kind: cmd
+    infrastructureExitCodes: [71, 75]
+    recovery:
+      retries: 2
+      handler:
+        kind: cmd
+        command:
+          argv: ["./repair"]
+    command:
+      argv: ["./check"]
+  probe:
+    kind: cmd
+    infrastructureExitCodes: [255]
+    command:
+      argv: ["./probe"]

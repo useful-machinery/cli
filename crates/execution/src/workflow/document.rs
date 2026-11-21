@@ -49,13 +49,14 @@ pub struct RootBlocks {
 
 impl RootBlocks {
     /// The blocks a workflow file other than a tree's root may not carry: all of these but
-    /// a `requires` that holds no `tools`, the override of REQ-WFDEF-35 (REQ-WFFORMAT-89).
+    /// a `requires` that holds neither `tools` nor `check`, the override of REQ-WFDEF-35
+    /// (REQ-WFFORMAT-89, REQ-WFDEF-42).
     pub(crate) fn without_override(&self) -> Self {
         let mut blocks = self.clone();
         if blocks
             .requires
             .as_ref()
-            .is_some_and(|requires| requires.tools.is_empty())
+            .is_some_and(|requires| requires.tools.is_empty() && requires.check.is_none())
         {
             blocks.requires = None;
         }
@@ -63,13 +64,17 @@ impl RootBlocks {
     }
 }
 
-/// The `requires` block: the tools admission probes, and the integrations the workflow
-/// declares with whose credentials act for them, kept as declared (REQ-WFDEF-34).
-/// Admission probes `tools` alone and keeps the environment names of each declared
-/// integration's id for every step (REQ-WFEXEC-78); the engine reads no `as` or `bindings`.
+/// The `requires` block: the tools admission probes, the check the host condition runs,
+/// and the integrations the workflow declares with whose credentials act for them, kept as
+/// declared (REQ-WFDEF-34, REQ-WFDEF-42). Admission probes `tools` alone and keeps the
+/// environment names of each declared integration's id for every step (REQ-WFEXEC-78); the
+/// engine reads no `as` or `bindings`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootRequires {
     pub tools: Vec<String>,
+    /// The argv of `requires.check`, which only the host condition runs (REQ-WFDEF-42,
+    /// REQ-WFEXEC-81); `None` when not written.
+    pub check: Option<Vec<String>>,
     /// The block's `as`, the default for every integration; `None` when not written.
     pub acting_as: Option<IntegrationAs>,
     /// The declared integrations by provider id; empty when the block names none.
@@ -411,12 +416,14 @@ pub(crate) enum SourceReference {
     FirstOf(Vec<OutputReference>),
 }
 
-/// The `outcome` block (REQ-WFFORMAT-88): the output that names a succeeded run's outcome
-/// and the name a failed run takes.
+/// The `outcome` block (REQ-WFFORMAT-88): the output that names a succeeded run's outcome,
+/// the name a failed run takes and the name one takes whose failing step was the host's
+/// (REQ-WFFORMAT-110).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OutcomeDeclaration {
     pub(crate) from: SourceReference,
     pub(crate) on_failure: String,
+    pub(crate) on_infrastructure: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -463,6 +470,8 @@ pub(crate) struct StepDefinition {
     pub(crate) body: NodeBody,
     pub(crate) control_dependencies: Vec<String>,
     pub(crate) recovery: Option<StepRecovery>,
+    /// A `cmd` step's `infrastructureExitCodes` (REQ-WFFORMAT-109); empty for every other step.
+    pub(crate) infrastructure_exit_codes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -570,6 +579,14 @@ pub(crate) enum EdgeTarget {
         on_hand_back: Option<String>,
         rule: Option<WaitRule>,
     },
+    /// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111): `then` as authored, which
+    /// validation requires to be the step whose edge it is, and `limit` and `else_` as
+    /// authored, which validation requires; `else_` is never limited nor a host wait.
+    HostWait {
+        then: String,
+        limit: Option<u32>,
+        else_: Option<Box<EdgeTarget>>,
+    },
 }
 
 /// A wait's rule `{source, event, where}` (REQ-WFFORMAT-97, REQ-WFDEF-5): authored on an
@@ -609,6 +626,7 @@ pub enum WaitKind {
     Stop,
     External,
     Children,
+    Host,
 }
 
 impl WaitKind {
@@ -621,6 +639,7 @@ impl WaitKind {
             Self::Stop => "stop",
             Self::External => "external",
             Self::Children => "children",
+            Self::Host => "host",
         }
     }
 }

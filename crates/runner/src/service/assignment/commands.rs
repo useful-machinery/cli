@@ -1,3 +1,4 @@
+use super::finalization::BeforeExecutionEnd;
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -301,7 +302,11 @@ impl AssignmentManager {
         let Some(causal_lease) = self.decisions[index].causal_lease.clone() else {
             let identity = accepted.identity.clone();
             let root = accepted.root;
-            self.finish_before_execution(identity, root, "execution_lease_expired")?;
+            self.finish_before_execution(
+                identity,
+                root,
+                BeforeExecutionEnd::LeaseLost(LeaseLossReason::AuthorityMissing),
+            )?;
             return Ok(None);
         };
         let cancellation_grace = accepted.execution.cancellation().grace();
@@ -311,7 +316,11 @@ impl AssignmentManager {
                 Err(GrantValidationFailure::MissingBasis) => {
                     let identity = accepted.identity.clone();
                     let root = accepted.root;
-                    self.finish_before_execution(identity, root, "execution_lease_expired")?;
+                    self.finish_before_execution(
+                        identity,
+                        root,
+                        BeforeExecutionEnd::LeaseLost(LeaseLossReason::AuthorityMissing),
+                    )?;
                     return Ok(None);
                 }
                 Err(GrantValidationFailure::Arithmetic(_)) => {
@@ -333,7 +342,11 @@ impl AssignmentManager {
             Ok(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater) => {
                 let identity = accepted.identity.clone();
                 let root = accepted.root;
-                self.finish_before_execution(identity, root, "execution_lease_expired")?;
+                self.finish_before_execution(
+                    identity,
+                    root,
+                    BeforeExecutionEnd::LeaseLost(LeaseLossReason::StartLate),
+                )?;
                 return Ok(None);
             }
             Err(_) => {
@@ -356,6 +369,7 @@ impl AssignmentManager {
             .entry(accepted.assignment_id().to_owned())
             .or_default()
             .clone();
+        let lease_loss = LeaseLoss::new(cancellation.clone(), run_event.clone());
         // The run's view, which the manager's reads and the run's observer share
         // (REQ-RUNNERENROLL-147); none for a tree run.
         let view = match &accepted.execution {
@@ -368,6 +382,7 @@ impl AssignmentManager {
         self.hold(HeldAssignment::Running(Box::new(RunningAssignment {
             identity: accepted.identity.clone(),
             cancellation,
+            lease_loss: lease_loss.clone(),
             cancellation_grace,
             current_grant: start.lease,
             causal_lease: causal_lease.clone(),
@@ -395,11 +410,13 @@ impl AssignmentManager {
             engine_terminal,
             run_event,
             ExecutionAuthority {
+                lease_loss,
                 lease_clock: self.lease_clock.clone(),
                 causal_lease,
                 updates: authority_receiver,
                 start_authority: start_authority_receiver,
                 infrastructure_interruption: infrastructure_interruption_receiver,
+                command_fence: Arc::clone(self.tree_run.fence()),
             },
         );
         // The engine of a single-workflow run holds its steps while the monitor's reading is
@@ -597,7 +614,7 @@ impl AssignmentManager {
             let Some(running) = self.running_mut(assignment_id) else {
                 return Ok(timed(RenewalDisposition::NotRunning));
             };
-            revoke_authority(running);
+            revoke_authority(running, LeaseLossReason::RenewalLate);
             return Ok(timed(RenewalDisposition::CancellationStarted));
         }
         if renewal.lease.sequence <= running.current_grant.sequence {
@@ -746,7 +763,7 @@ impl AssignmentManager {
         if reason == "execution_lease_expired"
             && let Some(running) = self.running_mut(assignment_id)
         {
-            revoke_authority(running);
+            revoke_authority(running, LeaseLossReason::RevokedByCloud);
         }
         Ok(())
     }
@@ -765,6 +782,19 @@ impl AssignmentManager {
         let Some(observation) = self.outbox.acknowledge(id) else {
             return;
         };
+        if let AssignmentObservation::LeaseRenewalRequested {
+            assignment_id,
+            current_lease_sequence,
+            ..
+        } = &observation
+            && let Some(lease) = self
+                .decisions
+                .iter()
+                .find(|retained| retained.offer.assignment_id == *assignment_id)
+                .and_then(|retained| retained.causal_lease.as_ref())
+        {
+            lease.acknowledge_renewal(*current_lease_sequence, id);
+        }
         if let AssignmentObservation::Artifact {
             delivery_id,
             request: ArtifactRequest::ConfirmResult { .. },
@@ -810,6 +840,7 @@ impl AssignmentManager {
                     return;
                 };
                 self.reporting.remove(&assignment_id);
+                self.run_ended.notify_one();
                 if let Some(root) = finishing.root {
                     self.begin_assignment_finalization(
                         finishing.identity.assignment_id,
@@ -821,6 +852,7 @@ impl AssignmentManager {
                 }
             } else {
                 self.reporting.remove(observation.assignment_id());
+                self.run_ended.notify_one();
             }
         }
         self.outbox.wake();
@@ -968,7 +1000,7 @@ impl AssignmentManager {
             HeldAssignment::Accepted(accepted) => {
                 let identity = accepted.identity.clone();
                 let root = accepted.root;
-                self.finish_before_execution(identity, root, "graceful_shutdown")?;
+                self.finish_before_execution(identity, root, BeforeExecutionEnd::Shutdown)?;
             }
             HeldAssignment::Running(running) => {
                 running

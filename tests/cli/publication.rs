@@ -377,10 +377,14 @@ fn ok_publication_response(body: &serde_json::Value) -> Vec<u8> {
 
 fn create_args(json: bool, caller_key: bool) -> Vec<&'static str> {
     let mut args = vec![
+        "workflow",
+        "run",
         "publication",
         "create",
-        ORGANIZATION,
+        "--run",
         RUN_ID,
+        "--org",
+        ORGANIZATION,
         "--export",
         EXPORT_NAME,
     ];
@@ -395,7 +399,17 @@ fn create_args(json: bool, caller_key: bool) -> Vec<&'static str> {
 }
 
 fn show_args(json: bool) -> Vec<&'static str> {
-    let mut args = vec!["publication", "show", ORGANIZATION, RUN_ID, PUBLICATION_ID];
+    let mut args = vec![
+        "workflow",
+        "run",
+        "publication",
+        "show",
+        PUBLICATION_ID,
+        "--run",
+        RUN_ID,
+        "--org",
+        ORGANIZATION,
+    ];
     if json {
         args.push("--json");
     }
@@ -426,7 +440,15 @@ fn show_wait_args(json: bool, timeout: Option<&'static str>) -> Vec<&'static str
 }
 
 fn list_args(json: bool, page: bool) -> Vec<&'static str> {
-    let mut args = vec!["publication", "list", ORGANIZATION, RUN_ID];
+    let mut args = vec![
+        "workflow",
+        "run",
+        "publication",
+        "list",
+        RUN_ID,
+        "--org",
+        ORGANIZATION,
+    ];
     if page {
         args.extend(["--limit", "4", "--cursor", NEXT_CURSOR]);
     }
@@ -462,21 +484,29 @@ fn assert_no_publication_secret(output: &Output, secrets: &[&str]) {
 fn publication_timeout_requires_wait_on_create_and_show() {
     for args in [
         vec![
+            "workflow",
+            "run",
             "publication",
             "create",
-            ORGANIZATION,
+            "--run",
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--export",
             EXPORT_NAME,
             "--timeout",
             "1s",
         ],
         vec![
+            "workflow",
+            "run",
             "publication",
             "show",
-            ORGANIZATION,
-            RUN_ID,
             PUBLICATION_ID,
+            "--run",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--timeout",
             "1s",
         ],
@@ -501,7 +531,7 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
     let run_service_command = |args: Vec<&str>, response: Vec<u8>| {
         let mut args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
         args.extend([
-            "--service-api-key-file".to_owned(),
+            "--api-key-file".to_owned(),
             service_key_path.to_owned(),
             "--json".to_owned(),
             "--allow-insecure-http".to_owned(),
@@ -530,10 +560,14 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
 
     let create = run_service_command(
         vec![
+            "workflow",
+            "run",
             "publication",
             "create",
-            ORGANIZATION,
+            "--run",
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--export",
             EXPORT_NAME,
             "--idempotency-key",
@@ -546,7 +580,17 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
     )));
 
     let show = run_service_command(
-        vec!["publication", "show", ORGANIZATION, RUN_ID, PUBLICATION_ID],
+        vec![
+            "workflow",
+            "run",
+            "publication",
+            "show",
+            PUBLICATION_ID,
+            "--run",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+        ],
         ok_publication_response(&publication_body()),
     );
     assert!(show.starts_with(&format!(
@@ -555,11 +599,15 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
 
     let show_wait = run_service_command(
         vec![
+            "workflow",
+            "run",
             "publication",
             "show",
-            ORGANIZATION,
-            RUN_ID,
             PUBLICATION_ID,
+            "--run",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
         ],
         ok_publication_response(&succeeded_publication("no_changes")),
@@ -569,7 +617,15 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
     )));
 
     let list = run_service_command(
-        vec!["publication", "list", ORGANIZATION, RUN_ID],
+        vec![
+            "workflow",
+            "run",
+            "publication",
+            "list",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+        ],
         ok_publication_response(&serde_json::json!({"items": []})),
     );
     assert!(list.starts_with(&format!(
@@ -624,7 +680,10 @@ fn publication_create_sends_the_closed_request_and_renders_plain_and_json_receip
         }
         assert_no_publication_secret(&output, &[TOKEN]);
 
-        let request = server.finish().remove(0);
+        // An ID is the Cloud run of that ID: the create request is the first request sent.
+        let mut requests = server.finish();
+        assert_eq!(requests.len(), 1);
+        let request = requests.remove(0);
         assert!(request.starts_with(&format!(
             "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/publications HTTP/1.1\r\n"
         )));
@@ -646,6 +705,60 @@ fn publication_create_sends_the_closed_request_and_renders_plain_and_json_receip
         assert!(!request.contains("targetBranch"));
         assert!(!request.contains("pullRequest"));
     }
+}
+
+// REQ-PUBLISH-54, REQ-LOCALRUN-180: `--run` naming a subject is the run the runs listing names
+// for it, in the organization in effect, and the publication is created for that run.
+#[test]
+fn publication_create_of_a_subject_finds_the_run_in_the_runs_listing() {
+    use super::run_command::workflow_run_show::{listing_route, page, row};
+    let body = publication_body();
+    let (server, _directory, credential_path) = prepared_publication(vec![
+        page(
+            &[row(RUN_ID, "def_01k0z6r1w8f4jy2m7q9v3x5abc", "AUTO-12")],
+            None,
+        ),
+        accepted_response(&body),
+    ]);
+    let output = run_with_env(
+        &[
+            "workflow",
+            "run",
+            "publication",
+            "create",
+            "--run",
+            "AUTO-12",
+            "--export",
+            EXPORT_NAME,
+            "--idempotency-key",
+            CALLER_KEY,
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        assert_one_json_document(&output.stdout)["publication"],
+        body
+    );
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0].starts_with(&format!("{} HTTP/1.1\r\n", listing_route("active", None))),
+        "{}",
+        requests[0]
+    );
+    assert!(requests[1].starts_with(&format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/publications HTTP/1.1\r\n"
+    )));
 }
 
 // REQ-PUBLISH-87, REQ-PUBLISH-92, REQ-PUBLISH-95
@@ -736,7 +849,7 @@ fn existing_target_workflow_policy_failure_is_readable() {
             String::from_utf8_lossy(&output.stderr)
         );
         let document = assert_one_json_document(&output.stdout);
-        let observed = if args[1] == "list" {
+        let observed = if args[3] == "list" {
             &document["items"][0]
         } else {
             &document["publication"]
@@ -1684,7 +1797,7 @@ fn create_wait_timeout_and_signal_after_acceptance_stop_only_observation() {
         );
         let environment =
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args(create_wait_args(true, true, timeout))
             .stdin(Stdio::null())
@@ -1760,7 +1873,7 @@ fn timeout_and_signals_stop_only_local_publication_show_observation() {
         );
         let environment =
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args(show_wait_args(true, timeout))
             .stdin(Stdio::null())
@@ -1833,7 +1946,7 @@ fn signal_during_session_acquisition_emits_no_false_publication_receipt() {
         &server.issuer,
         credential_path.to_str().unwrap(),
     );
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args(create_args(true, false))
         .stdin(Stdio::null())

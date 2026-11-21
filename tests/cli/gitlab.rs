@@ -63,27 +63,122 @@ fn prepared(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile::TempDir, Stri
     write_credential_fixture(&path, &server.api_url, SESSION, "2999-01-01T00:00:00Z");
     (server, dir, path.to_str().unwrap().to_owned())
 }
-fn run_gitlab(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
-    let mut command = vec!["connection", "gitlab"];
-    command.extend_from_slice(args);
+/// A token file holding `SECRET` in `dir`: a regular file of the caller's with mode 0600.
+fn token_file(dir: &tempfile::TempDir) -> String {
+    let path = dir.path().join("token");
+    fs::write(&path, SECRET).unwrap();
+    fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+/// The options that confirm the verified identity `42` without a terminal (REQ-CONNECTION-58).
+const CONFIRM: [&str; 3] = [
+    "--expected-provider-user-id",
+    "42",
+    "--dedicated-automation",
+];
+/// `useful org integration connect gitlab` of the group access token in `token`, confirmed as
+/// `42`, with `args`.
+fn create_gitlab(server: &ScriptedServer, credential: &str, token: &str, args: &[&str]) -> Output {
+    let create = [
+        "connect",
+        "gitlab",
+        "--token-file",
+        token,
+        "--kind",
+        "group-access-token",
+    ];
+    run_org(server, credential, &[&create[..], &CONFIRM, args].concat())
+}
+/// `useful org integration reconnect` of `INTEGRATION` at version 3 with the group access token in
+/// `token`, confirmed as `42`, with `args`.
+fn reconnect_gitlab(
+    server: &ScriptedServer,
+    credential: &str,
+    token: &str,
+    args: &[&str],
+) -> Output {
+    let reconnect = [
+        "reconnect",
+        CONNECTION,
+        "--expected-version",
+        "3",
+        "--token-file",
+        token,
+        "--kind",
+        "group-access-token",
+    ];
+    run_org(
+        server,
+        credential,
+        &[&reconnect[..], &CONFIRM, args].concat(),
+    )
+}
+/// `useful org integration list` of GitLab's connections alone, for the organization `ORG`.
+fn list_gitlab(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    let list = [
+        "org",
+        "integration",
+        "list",
+        "--provider",
+        "gitlab",
+        "--org",
+        ORG,
+    ];
+    run_json(server, credential, &[&list[..], args].concat())
+}
+/// `useful org integration show` of the GitLab connection `INTEGRATION` in the organization `ORG`.
+fn show_gitlab(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    let show = ["org", "integration", "show", CONNECTION, "--org", ORG];
+    run_json(server, credential, &[&show[..], args].concat())
+}
+/// `useful org integration repository list` of the GitLab connection `INTEGRATION` in `ORG`.
+const LIST_REPOSITORIES: [&str; 7] = [
+    "org",
+    "integration",
+    "repository",
+    "list",
+    CONNECTION,
+    "--org",
+    ORG,
+];
+fn list_repositories(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    run_json(server, credential, &[&LIST_REPOSITORIES[..], args].concat())
+}
+/// `useful org integration` with `args`, in the organization `ORG`.
+fn run_org(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    run_json(
+        server,
+        credential,
+        &[&["org", "integration"][..], args, &["--org", ORG]].concat(),
+    )
+}
+fn run_json(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    let mut command = args.to_vec();
     command.extend_from_slice(&["--json", "--allow-insecure-http"]);
     run_with_env(
         &command,
         &deployment_environment(&server.api_url, credential),
     )
 }
-fn document(output: &Output) -> serde_json::Value {
+/// Every JSON document `output` wrote; none carries the token.
+fn documents(output: &Output) -> Vec<serde_json::Value> {
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
     let documents: Vec<serde_json::Value> = output
         .stdout
         .split(|b| *b == b'\n')
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice(line).unwrap())
         .collect();
+    for document in &documents {
+        assert_eq!(document["schemaVersion"], 1, "{document}");
+    }
+    documents
+}
+fn document(output: &Output) -> serde_json::Value {
+    let mut documents = documents(output);
     assert_eq!(documents.len(), 1, "{output:?}");
-    assert_eq!(documents[0]["schemaVersion"], 1);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
-    assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
-    documents.into_iter().next().unwrap()
+    documents.remove(0)
 }
 fn single(output: &Output) -> serde_json::Value {
     assert!(
@@ -99,6 +194,43 @@ fn failure(output: &Output, exit: i32) -> serde_json::Value {
     assert_eq!(doc["organizationRef"], ORG);
     assert!(output.stderr.is_empty(), "{output:?}");
     doc
+}
+/// The documents of a `create gitlab` or `reconnect` that ended with `exit`, one per step and the
+/// last its ending.
+fn steps(output: &Output, exit: i32) -> Vec<serde_json::Value> {
+    assert_eq!(output.status.code(), Some(exit), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let documents = documents(output);
+    for document in &documents {
+        assert_eq!(document["organizationRef"], ORG, "{document}");
+    }
+    documents
+}
+fn outcomes(documents: &[serde_json::Value]) -> Vec<&str> {
+    documents
+        .iter()
+        .map(|document| document["outcome"].as_str().unwrap())
+        .collect()
+}
+/// A candidate GitLab verified as the user `user`.
+fn verified_as(user: &str) -> serde_json::Value {
+    let mut value = candidate("verified");
+    value["providerUserId"] = user.into();
+    value
+}
+/// Cloud's acknowledgement of a candidate's cancellation.
+fn cancelled() -> Vec<u8> {
+    http_response("204 No Content", None, b"")
+}
+/// The path, under the organization's GitLab connections, of the candidate `CANDIDATE`.
+fn candidate_path() -> String {
+    format!("/{CONNECTION}/credential-candidates/{CANDIDATE}")
+}
+fn not_found() -> Vec<u8> {
+    problem_http_response(
+        "404 Not Found",
+        serde_json::json!({"type":"https://api.usefulmachinery.com/problems/not-found","title":"Not found","status":404}),
+    )
 }
 fn request(
     request: &str,
@@ -125,148 +257,414 @@ fn request(
     }
 }
 
-// REQ-CONNECTION-56, REQ-CONNECTION-75
+// REQ-CONNECTION-56, REQ-CONNECTION-74, REQ-CONNECTION-75, REQ-CONNECTION-104,
+// REQ-CONNECTION-105
 #[test]
 fn connection_and_candidate_verbs_use_exact_resources_and_explicit_bodies() {
-    let (server, _dir, credential) = prepared(vec![
+    let (server, dir, credential) = prepared(vec![
         json_http_response("201 Created", initial_connection()),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({"items":[connection()],"nextCursor":null}),
-        ),
-        json_http_response("200 OK", connection()),
-        json_http_response("201 Created", candidate("pending")),
-        json_http_response("200 OK", candidate("pending")),
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", group_pending()),
         json_http_response("200 OK", candidate("verified")),
         json_http_response("200 OK", active_connection()),
-        http_response("204 No Content", None, b""),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items":[active_connection()],"nextCursor":null}),
+        ),
+        super::connection::no_authorizations(),
+        super::connection::no_authorizations(),
+        json_http_response("200 OK", active_connection()),
         json_http_response("200 OK", disconnected_connection()),
     ]);
-    let dir = private_credential_directory();
-    let token_path = dir.path().join("token");
-    fs::write(&token_path, SECRET).unwrap();
-    fs::set_permissions(&token_path, Permissions::from_mode(0o600)).unwrap();
-    let file = token_path.to_str().unwrap();
-    let key = ["--idempotency-key", "test-key"];
-    let cases: Vec<Vec<&str>> = vec![
-        vec![
-            "create",
-            ORG,
-            "https://gitlab.com",
+    let token = token_file(&dir);
+    let delegator = "prn_01k0z6r1w8f4jy2m7q9v3x5abc";
+    let output = create_gitlab(
+        &server,
+        &credential,
+        &token,
+        &[
             "--delegator-principal-id",
-            "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
-            key[0],
-            key[1],
+            delegator,
+            "--idempotency-key",
+            "test-key",
         ],
-        vec!["list", ORG, "--limit", "2"],
-        vec!["show", ORG, CONNECTION],
-        vec![
-            "credential",
-            "create",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--kind",
-            "dedicated-user",
-            "--token-file",
-            file,
-            key[0],
-            key[1],
-        ],
-        vec!["credential", "show", ORG, CONNECTION, CANDIDATE],
-        vec![
-            "credential",
-            "activate",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--expected-provider-user-id",
-            "42",
-            "--dedicated-automation",
-            key[0],
-            key[1],
-        ],
-        vec![
-            "credential",
-            "cancel",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            key[0],
-            key[1],
-        ],
-        vec![
-            "remove",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--yes",
-            key[0],
-            key[1],
-        ],
-    ];
-    // Activation's explicit review performs one GET before POST.
-    for args in cases {
-        let doc = single(&run_gitlab(&server, &credential, &args));
-        let outcome = doc["outcome"].as_str().unwrap();
-        assert!(
-            !outcome.is_empty() && outcome.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
-            "{outcome}"
-        );
-        if args.contains(&"cancel") {
-            assert_eq!(doc["outcome"], "cancellation_acknowledged");
-            assert!(doc["result"].get("state").is_none());
-            assert_eq!(doc["result"]["id"], CANDIDATE);
-        }
+    );
+    let created = steps(&output, 0);
+    assert_eq!(outcomes(&created), ["created", "submitted", "activated"]);
+    for document in &created {
+        assert_eq!(document["idempotencyKey"], "test-key", "{document}");
     }
+    assert_eq!(created[0]["result"]["id"], CONNECTION);
+    assert_eq!(created[1]["result"]["id"], CANDIDATE);
+    assert_eq!(created[2]["result"]["state"], "active");
+    assert_eq!(
+        single(&list_gitlab(&server, &credential, &[]))["outcome"],
+        "listed"
+    );
+    assert_eq!(
+        single(&show_gitlab(&server, &credential, &[]))["outcome"],
+        "shown"
+    );
+    let removed = single(&run_org(
+        &server,
+        &credential,
+        &[
+            "disconnect",
+            CONNECTION,
+            "--expected-version",
+            "4",
+            "--yes",
+            "--idempotency-key",
+            "test-key",
+        ],
+    ));
+    assert_eq!(removed["outcome"], "disconnected");
     let requests = server.finish();
     let suffix = format!("/{CONNECTION}");
-    let candidate_suffix = format!("{suffix}/credential-candidates/{CANDIDATE}");
     request(
         &requests[0],
         "POST",
         "",
         Some(
-            serde_json::json!({"instanceUrl":"https://gitlab.com","delegatorPrincipalId":"prn_01k0z6r1w8f4jy2m7q9v3x5abc"}),
+            serde_json::json!({"instanceUrl":"https://gitlab.com","delegatorPrincipalId":delegator}),
         ),
-        Some("test-key"),
+        Some("test-key.create"),
     );
-    request(&requests[1], "GET", "?limit=2", None, None);
-    request(&requests[2], "GET", &suffix, None, None);
     request(
-        &requests[3],
+        &requests[1],
         "POST",
         &format!("{suffix}/credential-candidates"),
         Some(
-            serde_json::json!({"expectedVersion":3,"kind":"personal_access_token","accountUse":"dedicated_user","token":SECRET}),
+            serde_json::json!({"expectedVersion":1,"kind":"group_access_token","token":SECRET,"delegatorPrincipalId":delegator}),
         ),
-        Some("test-key"),
+        Some("test-key.submit"),
     );
-    request(&requests[4], "GET", &candidate_suffix, None, None);
-    request(&requests[5], "GET", &candidate_suffix, None, None);
+    request(&requests[2], "GET", &candidate_path(), None, None);
+    request(&requests[3], "GET", &candidate_path(), None, None);
     request(
-        &requests[6],
+        &requests[4],
         "POST",
-        &format!("{candidate_suffix}/activate"),
+        &format!("{}/activate", candidate_path()),
         Some(serde_json::json!({"expectedProviderUserId":"42","dedicatedAutomation":true})),
-        Some("test-key"),
+        Some("test-key.activate"),
     );
+    request(&requests[5], "GET", "?limit=100", None, None);
+    request(&requests[8], "GET", &suffix, None, None);
     request(
-        &requests[7],
-        "DELETE",
-        &candidate_suffix,
-        None,
-        Some("test-key"),
-    );
-    request(
-        &requests[8],
+        &requests[9],
         "POST",
         &format!("{suffix}/disconnect"),
-        Some(serde_json::json!({"expectedVersion":3})),
+        Some(serde_json::json!({"expectedVersion":4})),
         Some("test-key"),
     );
+}
+
+// REQ-CONNECTION-56
+#[test]
+fn a_candidate_that_fails_verification_ends_the_command_without_cancelling_it() {
+    let instance = "https://gitlab.example.com";
+    let mut connection = initial_connection();
+    connection["instanceUrl"] = instance.into();
+    let mut failed = group_pending();
+    failed["instanceUrl"] = instance.into();
+    failed["state"] = "failed".into();
+    failed["failureCode"] = "identity-rejected".into();
+    let (server, dir, credential) = prepared(vec![
+        json_http_response("201 Created", connection),
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", failed),
+    ]);
+    let token = token_file(&dir);
+    let output = create_gitlab(&server, &credential, &token, &["--instance-url", instance]);
+    let documents = steps(&output, 7);
+    assert_eq!(
+        outcomes(&documents),
+        ["created", "submitted", "candidate_unavailable"]
+    );
+    let ending = &documents[2];
+    assert_eq!(ending["failureCode"], "identity-rejected");
+    assert_eq!(ending["connectionId"], CONNECTION);
+    assert_eq!(ending["candidateId"], CANDIDATE);
+    assert!(ending.get("cancellation").is_none(), "{ending}");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    request(
+        &requests[0],
+        "POST",
+        "",
+        Some(serde_json::json!({"instanceUrl":instance})),
+        None,
+    );
+    request(&requests[2], "GET", &candidate_path(), None, None);
+}
+
+// REQ-CONNECTION-56, REQ-CONNECTION-58, REQ-CONNECTION-74
+#[test]
+fn an_identity_other_than_the_confirmed_one_cancels_the_candidate() {
+    for (answer, cancellation) in [
+        (cancelled(), "acknowledged"),
+        (
+            http_response("500 Internal Server Error", None, b""),
+            "failed",
+        ),
+    ] {
+        let (server, dir, credential) = prepared(vec![
+            json_http_response("201 Created", initial_connection()),
+            json_http_response("201 Created", group_pending()),
+            json_http_response("200 OK", verified_as("43")),
+            answer,
+        ]);
+        let token = token_file(&dir);
+        let output = create_gitlab(
+            &server,
+            &credential,
+            &token,
+            &["--idempotency-key", "mismatch-key"],
+        );
+        let documents = steps(&output, 8);
+        assert_eq!(
+            outcomes(&documents),
+            ["created", "submitted", "identity_mismatch"]
+        );
+        let ending = &documents[2];
+        assert_eq!(ending["connectionId"], CONNECTION);
+        assert_eq!(ending["candidateId"], CANDIDATE);
+        assert_eq!(ending["cancellation"], cancellation);
+        assert_eq!(ending["idempotencyKey"], "mismatch-key");
+        let requests = server.finish();
+        assert_eq!(requests.len(), 4);
+        request(
+            &requests[3],
+            "DELETE",
+            &candidate_path(),
+            None,
+            Some("mismatch-key.cancel"),
+        );
+    }
+}
+
+// REQ-CONNECTION-56, REQ-CONNECTION-77
+#[test]
+fn a_wait_that_times_out_cancels_the_candidate() {
+    let (server, dir, credential) = prepared(vec![
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", group_pending()),
+        cancelled(),
+    ]);
+    let token = token_file(&dir);
+    let output = reconnect_gitlab(&server, &credential, &token, &["--timeout", "1ms"]);
+    let documents = steps(&output, 1);
+    assert_eq!(outcomes(&documents), ["submitted", "timed_out"]);
+    assert_eq!(documents[1]["connectionId"], CONNECTION);
+    assert_eq!(documents[1]["cancellation"], "acknowledged");
+    let requests = server.finish();
+    request(&requests[2], "DELETE", &candidate_path(), None, None);
+}
+
+// REQ-CONNECTION-56
+#[test]
+fn a_signal_while_the_candidate_is_pending_cancels_it() {
+    for (signal, code) in [
+        (rustix::process::Signal::INT, 130),
+        (rustix::process::Signal::TERM, 143),
+    ] {
+        let (mut server, dir, credential) = prepared(vec![
+            json_http_response("201 Created", group_pending()),
+            cancelled(),
+        ]);
+        let token = token_file(&dir);
+        let mut command = Command::new(crate::executable());
+        command
+            .args(["org", "integration", "reconnect", CONNECTION])
+            .args(["--expected-version", "3", "--kind", "group-access-token"])
+            .args(["--token-file", &token, "--idempotency-key", "signal-key"])
+            .args(CONFIRM)
+            .args(["--org", ORG, "--json", "--allow-insecure-http"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for variable in DEPLOYMENT_VARIABLES {
+            command.env_remove(variable);
+        }
+        command.env_remove(CREDENTIALS_FILE_VARIABLE);
+        command.envs(deployment_environment(&server.api_url, &credential));
+        // The candidate is read only after the production cadence, so the signal finds it
+        // pending.
+        command.env("USEFUL_TEST_POLL_INTERVAL_MILLISECONDS", "5000");
+        let child = command.spawn().unwrap();
+        let submission = server.wait_for_request();
+        assert_eq!(
+            header_value(&submission, "idempotency-key"),
+            "signal-key.submit"
+        );
+        rustix::process::kill_process(
+            rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap(),
+            signal,
+        )
+        .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let documents = steps(&output, code);
+        assert_eq!(outcomes(&documents), ["submitted", "interrupted"]);
+        let ending = &documents[1];
+        assert_eq!(ending["connectionId"], CONNECTION);
+        assert_eq!(ending["candidateId"], CANDIDATE);
+        assert_eq!(ending["cancellation"], "acknowledged");
+        assert_eq!(ending["idempotencyKey"], "signal-key");
+        let requests = server.finish();
+        assert_eq!(requests.len(), 1);
+        request(
+            &requests[0],
+            "DELETE",
+            &candidate_path(),
+            None,
+            Some("signal-key.cancel"),
+        );
+    }
+}
+
+// REQ-CONNECTION-58
+#[test]
+fn a_confirmation_that_cannot_be_asked_is_refused_before_any_request() {
+    let (server, dir, credential) = prepared(vec![]);
+    let token = token_file(&dir);
+    let kind = [
+        "--token-file",
+        token.as_str(),
+        "--kind",
+        "group-access-token",
+    ];
+    for args in [
+        [&["connect", "gitlab"][..], &kind].concat(),
+        [&["reconnect", CONNECTION][..], &kind].concat(),
+    ] {
+        let output = run_org(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+    }
+    // Without --json and in a new session, which has no terminal to ask on.
+    let mut command = Command::new("python3");
+    command
+        .args([
+            "-c",
+            "import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])",
+            crate::executable().to_str().unwrap(),
+            "org",
+            "integration",
+            "connect",
+            "gitlab",
+        ])
+        .args(kind)
+        .args(["--org", ORG, "--allow-insecure-http"])
+        .stdin(Stdio::null());
+    for variable in DEPLOYMENT_VARIABLES {
+        command.env_remove(variable);
+    }
+    command.envs(deployment_environment(&server.api_url, &credential));
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(server.finish().is_empty());
+}
+
+// REQ-CONNECTION-108, REQ-CONNECTION-57
+#[test]
+fn reconnect_stages_a_token_on_the_existing_connection() {
+    let mut pending = candidate("pending");
+    pending["accountUse"] = "service_account".into();
+    let (server, dir, credential) = prepared(vec![
+        json_http_response("200 OK", connection()),
+        json_http_response("201 Created", pending),
+        json_http_response("200 OK", candidate("verified")),
+        json_http_response("200 OK", active_connection()),
+    ]);
+    let token = token_file(&dir);
+    let reconnect = [
+        "reconnect",
+        CONNECTION,
+        "--token-file",
+        token.as_str(),
+        "--kind",
+        "service-account",
+    ];
+    let output = run_org(&server, &credential, &[&reconnect[..], &CONFIRM].concat());
+    let documents = steps(&output, 0);
+    assert_eq!(outcomes(&documents), ["submitted", "activated"]);
+    assert_eq!(documents[1]["result"]["id"], CONNECTION);
+    for args in [
+        vec!["reconnect", CONNECTION],
+        vec!["reconnect", CONNECTION, "--kind", "service-account"],
+        vec!["reconnect", CONNECTION, "--token-file", token.as_str()],
+    ] {
+        let output = run_org(&server, &credential, &[&args[..], &CONFIRM].concat());
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 4);
+    request(&requests[0], "GET", &format!("/{CONNECTION}"), None, None);
+    request(
+        &requests[1],
+        "POST",
+        &format!("/{CONNECTION}/credential-candidates"),
+        Some(
+            serde_json::json!({"expectedVersion":3,"kind":"personal_access_token","accountUse":"service_account","token":SECRET}),
+        ),
+        None,
+    );
+    request(&requests[2], "GET", &candidate_path(), None, None);
+    request(
+        &requests[3],
+        "POST",
+        &format!("{}/activate", candidate_path()),
+        Some(serde_json::json!({"expectedProviderUserId":"42","dedicatedAutomation":true})),
+        None,
+    );
+}
+
+// REQ-CONNECTION-106
+#[test]
+fn options_of_another_provider_are_refused_before_any_request() {
+    let (server, dir, credential) = prepared(vec![]);
+    let token = token_file(&dir);
+    let gitlab = [
+        "connect",
+        "gitlab",
+        "--token-file",
+        token.as_str(),
+        "--kind",
+        "group-access-token",
+    ];
+    for args in [
+        [&gitlab[..], &CONFIRM, &["--no-wait"]].concat(),
+        [&gitlab[..], &CONFIRM, &["--state-updates"]].concat(),
+        [&gitlab[..], &CONFIRM, &["--installation", "7"]].concat(),
+        vec!["connect", "github", "--token-file", token.as_str()],
+        vec!["connect", "github", "--timeout", "1m"],
+        vec!["connect", "linear", "--kind", "group-access-token"],
+        vec!["connect", "linear", "--instance-url", "https://gitlab.com"],
+        vec![
+            "reconnect",
+            "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "--idempotency-key",
+            "k",
+        ],
+        vec![
+            "reconnect",
+            "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "--expected-version",
+            "3",
+        ],
+        [
+            &["reconnect", CONNECTION, "--no-wait"][..],
+            &gitlab[2..],
+            &CONFIRM,
+        ]
+        .concat(),
+    ] {
+        let output = run_org(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+    }
+    assert!(server.finish().is_empty());
 }
 
 // REQ-CONNECTION-56, REQ-CONNECTION-72, REQ-CONNECTION-73
@@ -288,36 +686,28 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
         json_http_response("200 OK", selected),
         json_http_response("200 OK", removed),
     ]);
-    let doc = single(&run_gitlab(
+    let doc = single(&list_repositories(
         &server,
         &credential,
-        &[
-            "repository",
-            "list",
-            ORG,
-            CONNECTION,
-            "--selected",
-            "--limit",
-            "1",
-        ],
+        &["--selected", "--limit", "2"],
     ));
     assert_eq!(doc["outcome"], "repositories_listed");
+    assert_eq!(doc["organizationRef"], ORG);
+    assert!(doc["idempotencyKey"].is_null(), "{doc}");
     assert_eq!(doc["result"]["nextCursor"], "another-page");
     assert_eq!(doc["result"]["items"][0]["availability"], "unavailable");
     let human = run_with_env(
         &[
-            "connection",
-            "gitlab",
-            "repository",
-            "list",
-            ORG,
-            CONNECTION,
-            "--search",
-            "widget",
-            "--cursor",
-            "another-page",
-            "--allow-insecure-http",
-        ],
+            &LIST_REPOSITORIES[..],
+            &[
+                "--search",
+                "widget",
+                "--cursor",
+                "another-page",
+                "--allow-insecure-http",
+            ],
+        ]
+        .concat(),
         &deployment_environment(&server.api_url, &credential),
     );
     assert!(human.status.success(), "{human:?}");
@@ -325,33 +715,24 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
     assert!(text.starts_with("GitLab repositories: repositories listed\n"));
     assert!(text.contains("123456789  group/subgroup/widget  main  selected  unavailable"));
     assert!(text.contains("next cursor: another-page"));
-    let exact = single(&run_gitlab(
+    let exact = single(&list_repositories(
         &server,
         &credential,
-        &[
-            "repository",
-            "list",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "123456789",
-        ],
+        &["--repository-id", "123456789"],
     ));
     assert_eq!(
         exact["result"]["items"][0]["providerRepositoryId"],
         "123456789"
     );
-    for (verb, version, outcome) in [("link", "4", "linked"), ("remove", "5", "removed")] {
+    for (verb, version, outcome) in [("add", "4", "linked"), ("remove", "5", "removed")] {
         let args = [
             vec![
                 "repository",
                 verb,
-                ORG,
-                CONNECTION,
-                "--repository-id",
                 "123456789",
-                "--repository-id",
                 "42",
+                "--integration",
+                CONNECTION,
                 "--expected-version",
                 version,
                 "--idempotency-key",
@@ -366,7 +747,7 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
             },
         ]
         .concat();
-        let doc = single(&run_gitlab(&server, &credential, &args));
+        let doc = single(&run_org(&server, &credential, &args));
         assert_eq!(doc["outcome"], outcome);
         assert_eq!(doc["idempotencyKey"], "selection-key");
     }
@@ -374,7 +755,7 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
     request(
         &requests[0],
         "GET",
-        &format!("/{CONNECTION}/repositories?limit=1&selected=true"),
+        &format!("/{CONNECTION}/repositories?limit=2&selected=true"),
         None,
         None,
     );
@@ -413,92 +794,51 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
 #[test]
 fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
     let (server, _dir, credential) = prepared(vec![]);
+    let add = ["repository", "add"];
+    let remove = ["repository", "remove"];
+    let target = ["--integration", CONNECTION];
     for args in [
-        vec![
-            "repository",
-            "link",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "0",
-            "--expected-version",
-            "4",
-        ],
-        vec![
-            "repository",
-            "remove",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "42",
-            "--expected-version",
-            "0",
-            "--yes",
-        ],
-        vec![
-            "repository",
-            "list",
-            ORG,
-            CONNECTION,
-            "--selected",
-            "--search",
-            "foo",
-        ],
-        vec![
-            "repository",
-            "list",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "01",
-        ],
-        vec![
-            "repository",
-            "link",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "4",
-        ],
-        vec![
-            "repository",
-            "link",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "42",
-            "--repository-id",
-            "0",
-            "--expected-version",
-            "4",
-        ],
-        vec![
-            "repository",
-            "remove",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "42",
-            "--repository-id",
-            "+43",
-            "--expected-version",
-            "4",
-            "--yes",
-        ],
-        vec![
-            "repository",
-            "link",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "42",
-            "--repository-id",
-            "9223372036854775808",
-            "--expected-version",
-            "4",
-        ],
+        [&add[..], &["0"], &target, &["--expected-version", "4"]].concat(),
+        [&add[..], &["0"], &target].concat(),
+        [
+            &remove[..],
+            &["42"],
+            &target,
+            &["--expected-version", "0", "--yes"],
+        ]
+        .concat(),
+        [&add[..], &target, &["--expected-version", "4"]].concat(),
+        [
+            &add[..],
+            &["42", "0"],
+            &target,
+            &["--expected-version", "4"],
+        ]
+        .concat(),
+        [
+            &remove[..],
+            &["42", "+43"],
+            &target,
+            &["--expected-version", "4", "--yes"],
+        ]
+        .concat(),
+        [
+            &add[..],
+            &["42", "9223372036854775808"],
+            &target,
+            &["--expected-version", "4"],
+        ]
+        .concat(),
     ] {
-        let output = run_gitlab(&server, &credential, &args);
+        let output = run_org(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    for args in [
+        &["--selected", "--search", "foo"][..],
+        &["--repository-id", "01"],
+    ] {
+        let output = list_repositories(&server, &credential, args);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(output.stdout.is_empty());
     }
@@ -512,19 +852,10 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
         }),
     );
     let (server, _dir, credential) = prepared(vec![conflict]);
-    let output = run_gitlab(
+    let output = run_org(
         &server,
         &credential,
-        &[
-            "repository",
-            "link",
-            ORG,
-            CONNECTION,
-            "--repository-id",
-            "42",
-            "--expected-version",
-            "4",
-        ],
+        &[&add[..], &["42"], &target, &["--expected-version", "4"]].concat(),
     );
     let doc = failure(&output, 6);
     assert_eq!(doc["outcome"], "conflict");
@@ -535,7 +866,7 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
     );
     assert_eq!(server.finish().len(), 1);
 
-    for verb in ["link", "remove"] {
+    for verb in ["add", "remove"] {
         let (server, _dir, credential) = prepared(vec![
             Vec::new(),
             json_http_response("200 OK", active_connection()),
@@ -544,12 +875,10 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
             vec![
                 "repository",
                 verb,
-                ORG,
-                CONNECTION,
-                "--repository-id",
                 "42",
-                "--repository-id",
                 "43",
+                "--integration",
+                CONNECTION,
                 "--expected-version",
                 "3",
                 "--idempotency-key",
@@ -562,7 +891,7 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
             },
         ]
         .concat();
-        let doc = single(&run_gitlab(&server, &credential, &args));
+        let doc = single(&run_org(&server, &credential, &args));
         assert_eq!(doc["idempotencyKey"], "replay-selection");
         let calls = server.finish();
         assert_eq!(calls.len(), 2);
@@ -573,26 +902,91 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
             &format!("/{CONNECTION}/repository-selection"),
             Some(serde_json::json!({
                 "expectedVersion":3,
-                (if verb == "link" { "addProviderRepositoryIds" } else { "removeProviderRepositoryIds" }):["42", "43"]
+                (if verb == "add" { "addProviderRepositoryIds" } else { "removeProviderRepositoryIds" }):["42", "43"]
             })),
             Some("replay-selection"),
         );
     }
 }
 
+// REQ-CONNECTION-74, REQ-CONNECTION-107
+#[test]
+fn an_omitted_expected_version_is_read_from_the_connection_and_a_given_one_is_sent_unread() {
+    // `gitlab` names the connection still in use, though a disconnected one stays listed.
+    let mut removed = disconnected_connection();
+    removed["id"] = "glc_01k0z6r1w8f4jy2m7q9v3x5xyz".into();
+    removed["version"] = 9.into();
+    let list = serde_json::json!({"items":[removed, active_connection()],"nextCursor":null});
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("200 OK", connection()),
+        json_http_response("200 OK", disconnected_connection()),
+        json_http_response("200 OK", disconnected_connection()),
+        json_http_response("200 OK", active_connection()),
+        json_http_response("200 OK", active_connection()),
+        json_http_response("200 OK", list),
+        json_http_response("200 OK", disconnected_connection()),
+    ]);
+    let key = ["--idempotency-key", "version-key"];
+    for (args, outcome) in [
+        (vec!["disconnect", CONNECTION, "--yes"], "disconnected"),
+        (
+            vec!["disconnect", CONNECTION, "--yes", "--expected-version", "3"],
+            "disconnected",
+        ),
+        (
+            vec!["repository", "add", "7", "8", "--integration", CONNECTION],
+            "linked",
+        ),
+        (vec!["disconnect", "gitlab", "--yes"], "disconnected"),
+    ] {
+        let doc = single(&run_org(&server, &credential, &[&args[..], &key].concat()));
+        assert_eq!(doc["outcome"], outcome, "{args:?}");
+        assert_eq!(doc["idempotencyKey"], "version-key", "{args:?}");
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 7);
+    let suffix = format!("/{CONNECTION}");
+    let disconnect = format!("{suffix}/disconnect");
+    request(&requests[0], "GET", &suffix, None, None);
+    assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
+    for (index, version) in [(1, 3), (2, 3), (6, 4)] {
+        request(
+            &requests[index],
+            "POST",
+            &disconnect,
+            Some(serde_json::json!({"expectedVersion":version})),
+            Some("version-key"),
+        );
+    }
+    request(&requests[3], "GET", &suffix, None, None);
+    request(
+        &requests[4],
+        "PATCH",
+        &format!("{suffix}/repository-selection"),
+        Some(serde_json::json!({"expectedVersion":4,"addProviderRepositoryIds":["7", "8"]})),
+        Some("version-key"),
+    );
+    request(&requests[5], "GET", "?limit=100", None, None);
+}
+
+// REQ-CONNECTION-105
 #[test]
 fn active_connection_rendering_uses_only_nonsecret_metadata() {
     let mut active = active_connection();
     // A malformed upstream extension cannot turn an unknown field into CLI output.
     active["token"] = SECRET.into();
-    let (server, _dir, credential) = prepared(vec![json_http_response("200 OK", active)]);
+    let (server, _dir, credential) = prepared(vec![
+        super::connection::no_authorizations(),
+        json_http_response("200 OK", active),
+    ]);
     let output = run_with_env(
         &[
-            "connection",
-            "gitlab",
+            "org",
+            "integration",
             "show",
-            ORG,
             CONNECTION,
+            "--org",
+            ORG,
             "--allow-insecure-http",
         ],
         &deployment_environment(&server.api_url, &credential),
@@ -608,27 +1002,37 @@ fn active_connection_rendering_uses_only_nonsecret_metadata() {
         assert!(text.contains(value));
     }
     assert!(!text.contains(SECRET));
-    assert_eq!(server.finish().len(), 1);
+    assert_eq!(server.finish().len(), 2);
 }
 
 #[test]
 fn human_candidate_review_shows_verified_identity_and_expiry_without_secret() {
-    let (server, _dir, credential) =
-        prepared(vec![json_http_response("200 OK", candidate("verified"))]);
+    let (server, dir, credential) = prepared(vec![
+        json_http_response("201 Created", candidate("pending")),
+        json_http_response("200 OK", candidate("verified")),
+        json_http_response("200 OK", active_connection()),
+    ]);
+    let token = token_file(&dir);
+    let reconnect = [
+        "org",
+        "integration",
+        "reconnect",
+        CONNECTION,
+        "--expected-version",
+        "3",
+        "--token-file",
+        token.as_str(),
+        "--kind",
+        "dedicated-user",
+        "--org",
+        ORG,
+        "--allow-insecure-http",
+    ];
     let output = run_with_env(
-        &[
-            "connection",
-            "gitlab",
-            "credential",
-            "show",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--allow-insecure-http",
-        ],
+        &[&reconnect[..], &CONFIRM].concat(),
         &deployment_environment(&server.api_url, &credential),
     );
-    assert!(output.status.success());
+    assert!(output.status.success(), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
     for value in [
         "automation-bot",
@@ -637,10 +1041,11 @@ fn human_candidate_review_shows_verified_identity_and_expiry_without_secret() {
         "api",
         "token expires (UTC instant): 2027-09-05T00:00:00Z",
     ] {
-        assert!(text.contains(value));
+        assert!(text.contains(value), "{text}");
     }
     assert!(!text.contains(SECRET));
-    assert_eq!(server.finish().len(), 1);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
+    assert_eq!(server.finish().len(), 3);
 }
 
 #[expect(
@@ -673,16 +1078,22 @@ fn await_terminal_prompt(
 // REQ-CONNECTION-58
 #[test]
 fn terminal_review_requires_exact_identity_and_dedication_before_activation() {
-    for (id, attestation, exit, posts) in [
-        ("41", None, 8, 0),
-        ("42", Some("not dedicated\n"), 2, 0),
-        ("42", Some("dedicated automation\n"), 0, 1),
+    for (id, attestation, exit, last) in [
+        ("41", None, 8, cancelled()),
+        ("42", Some("not dedicated\n"), 2, cancelled()),
+        (
+            "42",
+            Some("dedicated automation\n"),
+            0,
+            json_http_response("200 OK", active_connection()),
+        ),
     ] {
-        let mut responses = vec![json_http_response("200 OK", candidate("verified"))];
-        if posts == 1 {
-            responses.push(json_http_response("200 OK", active_connection()));
-        }
-        let (server, _dir, credential) = prepared(responses);
+        let (server, dir, credential) = prepared(vec![
+            json_http_response("201 Created", group_pending()),
+            json_http_response("200 OK", candidate("verified")),
+            last,
+        ]);
+        let token = token_file(&dir);
         let pty = open_test_pty(None).unwrap();
         let peer = rustix::pty::ptsname(&pty.master, Vec::new()).unwrap();
         let mut writer = fs::File::from(rustix::io::dup(&pty.master).unwrap());
@@ -691,9 +1102,10 @@ fn terminal_review_requires_exact_identity_and_dedication_before_activation() {
         let mut command = Command::new("python3");
         command.args(["-c", "import os,sys; os.setsid(); fd=os.open(sys.argv[1], os.O_RDWR); os.dup2(fd, 0); os.write(1, b'R'); os.execv(sys.argv[2], sys.argv[2:])"])
             .arg(peer.to_str().unwrap())
-            .arg(env!("CARGO_BIN_EXE_useful"))
-            .args(["connection", "gitlab", "credential", "activate", ORG,
-                CONNECTION, CANDIDATE, "--allow-insecure-http"])
+            .arg(crate::executable())
+            .args(["org", "integration", "reconnect", CONNECTION, "--expected-version", "3",
+                "--token-file", &token, "--kind", "group-access-token", "--org", ORG,
+                "--allow-insecure-http"])
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for variable in DEPLOYMENT_VARIABLES {
             command.env_remove(variable);
@@ -747,7 +1159,10 @@ fn terminal_review_requires_exact_identity_and_dedication_before_activation() {
         assert_eq!(output.status.code(), Some(exit), "{output:?}");
         assert!(!transcript.contains(SECRET));
         assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
-        assert_eq!(server.finish().len(), 1 + posts);
+        let requests = server.finish();
+        assert_eq!(requests.len(), 3);
+        let method = if exit == 0 { "POST" } else { "DELETE" };
+        assert!(requests[2].starts_with(method), "{}", requests[2]);
     }
 }
 
@@ -755,58 +1170,59 @@ fn terminal_review_requires_exact_identity_and_dedication_before_activation() {
 fn mismatched_resource_response_cannot_authorize_identity_review() {
     let mut wrong = candidate("verified");
     wrong["connectionId"] = "glc_01k0z6r1w8f4jy2m7q9v3x5abd".into();
-    let (server, _dir, credential) = prepared(vec![json_http_response("200 OK", wrong)]);
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &[
-            "credential",
-            "activate",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--expected-provider-user-id",
-            "42",
-            "--dedicated-automation",
-        ],
-    );
-    assert_eq!(failure(&output, 1)["outcome"], "invalid_response");
-    assert_eq!(server.finish().len(), 1);
+    let (server, dir, credential) = prepared(vec![
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", wrong),
+        cancelled(),
+    ]);
+    let token = token_file(&dir);
+    let documents = steps(&reconnect_gitlab(&server, &credential, &token, &[]), 1);
+    assert_eq!(outcomes(&documents), ["submitted", "invalid_response"]);
+    assert_eq!(documents[1]["cancellation"], "acknowledged");
+    let requests = server.finish();
+    request(&requests[2], "DELETE", &candidate_path(), None, None);
 }
 
 // REQ-CONNECTION-58
 #[test]
 fn help_links_public_setup_and_requires_explicit_activation_flags() {
     for args in [
-        vec!["connection", "gitlab", "--help"],
-        vec!["connection", "gitlab", "credential", "activate", "--help"],
-        vec!["connection", "gitlab", "repository", "list", "--help"],
-        vec!["connection", "gitlab", "repository", "link", "--help"],
+        vec!["org", "integration", "connect", "--help"],
+        vec!["org", "integration", "reconnect", "--help"],
+        vec!["org", "integration", "repository", "list", "--help"],
+        vec!["org", "integration", "repository", "add", "--help"],
         vec!["project", "create", "--help"],
-        vec!["project", "repository", "set", "--help"],
+        vec!["project", "update", "--help"],
     ] {
         let output = run(&args);
         assert!(output.status.success());
         assert!(
             String::from_utf8_lossy(&output.stdout)
-                .contains("https://docs.usefulmachinery.com/agent/gitlab-setup.md")
+                .contains("https://docs.usefulmachinery.com/agent/gitlab-setup.md"),
+            "{args:?}"
         );
     }
     let output = run(&[
-        "connection",
+        "org",
+        "integration",
+        "connect",
         "gitlab",
-        "credential",
-        "activate",
-        ORG,
-        CONNECTION,
-        CANDIDATE,
+        "--token-file",
+        "token",
+        "--kind",
+        "group-access-token",
         "--expected-provider-user-id",
         "42",
     ]);
     assert_eq!(output.status.code(), Some(2));
+    // The refusal is the missing attestation, not the token file that does not exist.
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--dedicated-automation"),
+        "{output:?}"
+    );
 }
 
-// REQ-CONNECTION-77
+// REQ-CONNECTION-77, REQ-CONNECTION-104
 #[test]
 fn authentication_and_candidate_conflicts_have_distinct_exits() {
     let problem = |status, code, kind| {
@@ -823,6 +1239,7 @@ fn authentication_and_candidate_conflicts_have_distinct_exits() {
         problem("503 Service Unavailable", 503, "provider-unavailable"),
         problem("500 Internal Server Error", 500, "internal"),
     ]);
+    let token = token_file(&dir);
     let service_path = dir.path().join("service.key");
     fs::write(
         &service_path,
@@ -831,27 +1248,24 @@ fn authentication_and_candidate_conflicts_have_distinct_exits() {
     .unwrap();
     fs::set_permissions(&service_path, Permissions::from_mode(0o600)).unwrap();
     for (args, exit, outcome) in [
-        (vec!["show", ORG, CONNECTION], 3, "unauthenticated"),
-        (
-            vec!["credential", "cancel", ORG, CONNECTION, CANDIDATE],
-            6,
-            "conflict",
-        ),
-        (vec!["list", ORG], 4, "service_unavailable"),
-        (
-            vec!["repository", "list", ORG, CONNECTION],
-            4,
-            "provider_unavailable",
-        ),
-        (vec!["show", ORG, CONNECTION], 4, "unreachable"),
+        (vec!["show"], 3, "unauthenticated"),
+        (vec!["reconnect"], 6, "conflict"),
+        (vec!["list"], 4, "service_unavailable"),
+        (vec!["repository"], 4, "provider_unavailable"),
+        (vec!["show"], 4, "unreachable"),
     ] {
-        let mutation = args.contains(&"cancel");
-        let args = [
-            args,
-            vec!["--service-api-key-file", service_path.to_str().unwrap()],
-        ]
-        .concat();
-        let doc = failure(&run_gitlab(&server, &credential, &args), exit);
+        let mutation = args.contains(&"reconnect");
+        let args = [args, vec!["--api-key-file", service_path.to_str().unwrap()]].concat();
+        let output = if args[0] == "list" {
+            list_gitlab(&server, &credential, &args[1..])
+        } else if args[0] == "show" {
+            show_gitlab(&server, &credential, &args[1..])
+        } else if args[0] == "repository" {
+            list_repositories(&server, &credential, &args[1..])
+        } else {
+            reconnect_gitlab(&server, &credential, &token, &args[1..])
+        };
+        let doc = failure(&output, exit);
         assert_eq!(doc["outcome"], outcome);
         assert!(doc["deployment"].as_str().is_some_and(|d| !d.is_empty()));
         if mutation {
@@ -876,21 +1290,15 @@ fn authentication_and_candidate_conflicts_have_distinct_exits() {
 #[test]
 fn a_server_error_answer_to_a_mutation_is_not_repeated() {
     // Only one answer is scripted: a repeat would find no listener and report `connection`.
-    let (server, _dir, credential) =
+    let (server, dir, credential) =
         prepared(vec![http_response("500 Internal Server Error", None, b"")]);
+    let token = token_file(&dir);
     let doc = failure(
-        &run_gitlab(
+        &reconnect_gitlab(
             &server,
             &credential,
-            &[
-                "credential",
-                "cancel",
-                ORG,
-                CONNECTION,
-                CANDIDATE,
-                "--idempotency-key",
-                "server-error-key",
-            ],
+            &token,
+            &["--idempotency-key", "server-error-key"],
         ),
         4,
     );
@@ -901,10 +1309,10 @@ fn a_server_error_answer_to_a_mutation_is_not_repeated() {
     assert_eq!(requests.len(), 1);
     request(
         &requests[0],
-        "DELETE",
-        &format!("/{CONNECTION}/credential-candidates/{CANDIDATE}"),
+        "POST",
+        &format!("/{CONNECTION}/credential-candidates"),
         None,
-        Some("server-error-key"),
+        Some("server-error-key.submit"),
     );
 }
 
@@ -927,27 +1335,25 @@ fn credential_kinds_select_only_the_approved_token_declaration() {
         let mut response = candidate("pending");
         response["kind"] = kind.into();
         response["accountUse"] = account.into();
-        let (server, dir, credential) = prepared(vec![json_http_response("201 Created", response)]);
-        let token = dir.path().join("token");
-        fs::write(&token, SECRET).unwrap();
-        fs::set_permissions(&token, Permissions::from_mode(0o600)).unwrap();
-        let output = run_gitlab(
-            &server,
-            &credential,
-            &[
-                "credential",
-                "create",
-                ORG,
-                CONNECTION,
-                "--expected-version",
-                "3",
-                "--kind",
-                flag,
-                "--token-file",
-                token.to_str().unwrap(),
-            ],
-        );
-        single(&output);
+        let mut failed = response.clone();
+        failed["state"] = "failed".into();
+        let (server, dir, credential) = prepared(vec![
+            json_http_response("201 Created", response),
+            json_http_response("200 OK", failed),
+        ]);
+        let token = token_file(&dir);
+        let reconnect = [
+            "reconnect",
+            CONNECTION,
+            "--expected-version",
+            "3",
+            "--kind",
+            flag,
+            "--token-file",
+            token.as_str(),
+        ];
+        let output = run_org(&server, &credential, &[&reconnect[..], &CONFIRM].concat());
+        assert_eq!(outcomes(&steps(&output, 7))[0], "submitted");
         let requests = server.finish();
         let body: serde_json::Value =
             serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -961,7 +1367,7 @@ fn credential_kinds_select_only_the_approved_token_declaration() {
     }
 }
 
-// REQ-CONNECTION-57
+// REQ-CONNECTION-57, REQ-CONNECTION-74
 #[test]
 fn unsafe_token_sources_and_versions_fail_before_network_use() {
     use std::os::unix::fs::symlink;
@@ -972,19 +1378,7 @@ fn unsafe_token_sources_and_versions_fail_before_network_use() {
     symlink(&token, &alias).unwrap();
     for (path, mode) in [(&token, 0o400), (&token, 0o644), (&alias, 0o600)] {
         fs::set_permissions(&token, Permissions::from_mode(mode)).unwrap();
-        let args = [
-            "credential",
-            "create",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--kind",
-            "group-access-token",
-            "--token-file",
-            path.to_str().unwrap(),
-        ];
-        let output = run_gitlab(&server, &credential, &args);
+        let output = create_gitlab(&server, &credential, path.to_str().unwrap(), &[]);
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -993,32 +1387,42 @@ fn unsafe_token_sources_and_versions_fail_before_network_use() {
         );
         assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
     }
-    fs::write(&token, vec![b'x'; 16386]).unwrap();
     fs::set_permissions(&token, Permissions::from_mode(0o600)).unwrap();
+    let path = token.to_str().unwrap();
+    // A key of 241 characters leaves no room for the suffix of a step.
+    let long_key = "k".repeat(241);
+    let output = create_gitlab(
+        &server,
+        &credential,
+        path,
+        &["--idempotency-key", &long_key],
+    );
+    assert_eq!(output.status.code(), Some(2));
     for version in ["0", "-1", "9007199254740992"] {
-        let output = run_gitlab(
+        let output = run_org(
             &server,
             &credential,
             &[
-                "credential",
-                "create",
-                ORG,
-                CONNECTION,
-                "--expected-version",
-                version,
-                "--kind",
-                "group-access-token",
-                "--token-file",
-                token.to_str().unwrap(),
-            ],
+                &[
+                    "reconnect",
+                    CONNECTION,
+                    "--expected-version",
+                    version,
+                    "--kind",
+                    "group-access-token",
+                    "--token-file",
+                    path,
+                ][..],
+                &CONFIRM,
+            ]
+            .concat(),
         );
         assert_eq!(output.status.code(), Some(2));
-        let output = run_gitlab(
+        let output = run_org(
             &server,
             &credential,
             &[
-                "remove",
-                ORG,
+                "disconnect",
                 CONNECTION,
                 "--expected-version",
                 version,
@@ -1027,28 +1431,8 @@ fn unsafe_token_sources_and_versions_fail_before_network_use() {
         );
         assert_eq!(output.status.code(), Some(2));
     }
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &[
-            "credential",
-            "create",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--kind",
-            "group-access-token",
-            "--token-file",
-            token.to_str().unwrap(),
-        ],
-    );
-    assert_eq!(output.status.code(), Some(2));
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &["credential", "activate", ORG, CONNECTION, CANDIDATE],
-    );
+    fs::write(&token, vec![b'x'; 16386]).unwrap();
+    let output = create_gitlab(&server, &credential, path, &[]);
     assert_eq!(output.status.code(), Some(2));
     assert!(server.finish().is_empty());
 }
@@ -1056,339 +1440,221 @@ fn unsafe_token_sources_and_versions_fail_before_network_use() {
 // REQ-CONNECTION-58, REQ-CONNECTION-74
 #[test]
 fn a_lost_mutation_response_replays_the_same_key_and_body() {
-    let dir = private_credential_directory();
-    let token = dir.path().join("token");
-    fs::write(&token, SECRET).unwrap();
-    fs::set_permissions(&token, Permissions::from_mode(0o600)).unwrap();
-    let cases: Vec<(Vec<&str>, Vec<Vec<u8>>)> = vec![
-        (
-            vec!["create", ORG, "https://gitlab.com"],
-            vec![json_http_response("201 Created", initial_connection())],
-        ),
-        (
-            vec![
-                "remove",
-                ORG,
-                CONNECTION,
-                "--expected-version",
-                "3",
-                "--yes",
-            ],
-            vec![json_http_response("200 OK", disconnected_connection())],
-        ),
-        (
-            vec![
-                "credential",
-                "create",
-                ORG,
-                CONNECTION,
-                "--expected-version",
-                "3",
-                "--kind",
-                "group-access-token",
-                "--token-file",
-                token.to_str().unwrap(),
-            ],
-            vec![json_http_response("201 Created", group_pending())],
-        ),
-        (
-            vec!["credential", "cancel", ORG, CONNECTION, CANDIDATE],
-            vec![http_response("204 No Content", None, b"")],
-        ),
-        (
-            vec![
-                "credential",
-                "activate",
-                ORG,
-                CONNECTION,
-                CANDIDATE,
-                "--expected-provider-user-id",
-                "42",
-                "--dedicated-automation",
-            ],
-            vec![
-                json_http_response("200 OK", candidate("verified")),
-                json_http_response("200 OK", active_connection()),
-            ],
-        ),
-    ];
-    for (args, mut responses) in cases {
-        // A closed socket with no HTTP response is an ambiguous transport result.
-        let mut script = if args.contains(&"activate") {
-            vec![responses.remove(0)]
-        } else {
-            Vec::new()
-        };
-        script.push(Vec::new());
-        script.extend(responses);
-        let (server, _dir, credential) = prepared(script);
-        let args = [args, vec!["--idempotency-key", "replay-key"]].concat();
-        single(&run_gitlab(&server, &credential, &args));
-        let requests = server.finish();
-        let writes = if args.contains(&"activate") {
-            &requests[1..]
-        } else {
-            &requests[..]
-        };
-        assert_eq!(writes.len(), 2);
-        assert_eq!(header_value(&writes[0], "idempotency-key"), "replay-key");
+    // A closed socket with no HTTP response is an ambiguous transport result.
+    let (server, dir, credential) = prepared(vec![
+        Vec::new(),
+        json_http_response("201 Created", initial_connection()),
+        Vec::new(),
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", candidate("verified")),
+        Vec::new(),
+        json_http_response("200 OK", active_connection()),
+        Vec::new(),
+        json_http_response("200 OK", disconnected_connection()),
+    ]);
+    let token = token_file(&dir);
+    let key = ["--idempotency-key", "replay-key"];
+    let created = steps(&create_gitlab(&server, &credential, &token, &key), 0);
+    assert_eq!(outcomes(&created), ["created", "submitted", "activated"]);
+    single(&run_org(
+        &server,
+        &credential,
+        &[
+            &["disconnect", CONNECTION, "--expected-version", "4", "--yes"][..],
+            &key,
+        ]
+        .concat(),
+    ));
+    let requests = server.finish();
+    for (pair, step) in [
+        (&requests[0..2], "replay-key.create"),
+        (&requests[2..4], "replay-key.submit"),
+        (&requests[5..7], "replay-key.activate"),
+        (&requests[7..9], "replay-key"),
+    ] {
+        assert_eq!(header_value(&pair[0], "idempotency-key"), step);
+        assert_eq!(header_value(&pair[1], "idempotency-key"), step);
         assert_eq!(
-            writes[0].split_once("\r\n\r\n").unwrap().1,
-            writes[1].split_once("\r\n\r\n").unwrap().1
+            pair[0].split_once("\r\n\r\n").unwrap().1,
+            pair[1].split_once("\r\n\r\n").unwrap().1
         );
         assert_eq!(
-            writes[0].split_once(" HTTP/").unwrap().0,
-            writes[1].split_once(" HTTP/").unwrap().0
+            pair[0].split_once(" HTTP/").unwrap().0,
+            pair[1].split_once(" HTTP/").unwrap().0
         );
     }
 }
 
+// REQ-CONNECTION-74
 #[test]
 fn generated_key_survives_two_lost_responses_and_recovers_on_later_invocation() {
-    let (server, _dir, credential) = prepared(vec![
+    let (server, dir, credential) = prepared(vec![
         Vec::new(),
         Vec::new(),
         json_http_response("201 Created", initial_connection()),
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", candidate("verified")),
+        json_http_response("200 OK", active_connection()),
     ]);
-    let lost = failure(
-        &run_gitlab(&server, &credential, &["create", ORG, "https://gitlab.com"]),
-        4,
-    );
+    let token = token_file(&dir);
+    let lost = failure(&create_gitlab(&server, &credential, &token, &[]), 4);
     assert_eq!(lost["outcome"], "unreachable");
     assert_eq!(lost["category"], "connection");
     let key = lost["idempotencyKey"].as_str().unwrap();
     assert!(!key.is_empty());
-    let doc = single(&run_gitlab(
-        &server,
-        &credential,
-        &[
-            "create",
-            ORG,
-            "https://gitlab.com",
-            "--idempotency-key",
-            key,
-        ],
-    ));
-    assert_eq!(doc["idempotencyKey"], key);
+    let created = steps(
+        &create_gitlab(&server, &credential, &token, &["--idempotency-key", key]),
+        0,
+    );
+    for document in &created {
+        assert_eq!(document["idempotencyKey"], key);
+    }
     let requests = server.finish();
-    assert_eq!(requests.len(), 3);
-    for request_text in &requests {
+    assert_eq!(requests.len(), 6);
+    for request_text in &requests[..3] {
         request(
             request_text,
             "POST",
             "",
             Some(serde_json::json!({"instanceUrl":"https://gitlab.com"})),
-            Some(key),
+            Some(&format!("{key}.create")),
         );
     }
 }
 
+// REQ-CONNECTION-74
 #[test]
 fn explicit_activation_replay_recovers_after_terminal_or_missing_candidate() {
-    let missing = problem_http_response(
-        "404 Not Found",
-        serde_json::json!({"type":"https://api.usefulmachinery.com/problems/not-found","title":"Not found","status":404}),
-    );
     for terminal in [
         json_http_response("200 OK", candidate("activated")),
-        missing,
+        not_found(),
     ] {
-        let (server, _dir, credential) = prepared(vec![
+        let (server, dir, credential) = prepared(vec![
+            json_http_response("201 Created", initial_connection()),
+            json_http_response("201 Created", group_pending()),
             json_http_response("200 OK", candidate("verified")),
             Vec::new(),
             Vec::new(),
+            cancelled(),
+            json_http_response("201 Created", initial_connection()),
+            json_http_response("201 Created", group_pending()),
             terminal,
             json_http_response("200 OK", active_connection()),
         ]);
-        let args = [
-            "credential",
-            "activate",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--expected-provider-user-id",
-            "42",
-            "--dedicated-automation",
-            "--idempotency-key",
-            "activation-replay-key",
-        ];
-        let first = failure(&run_gitlab(&server, &credential, &args), 4);
-        assert_eq!(first["idempotencyKey"], "activation-replay-key");
-        let replay = single(&run_gitlab(&server, &credential, &args));
-        assert_eq!(replay["result"]["state"], "active");
+        let token = token_file(&dir);
+        let key = ["--idempotency-key", "activation-replay-key"];
+        let first = steps(&create_gitlab(&server, &credential, &token, &key), 4);
+        assert_eq!(outcomes(&first), ["created", "submitted", "unreachable"]);
+        assert_eq!(first[2]["idempotencyKey"], "activation-replay-key");
+        let replay = steps(&create_gitlab(&server, &credential, &token, &key), 0);
+        assert_eq!(replay[2]["result"]["state"], "active");
         let calls = server.finish();
-        assert_eq!(calls.len(), 5);
-        for i in [1, 2, 4] {
+        assert_eq!(calls.len(), 10);
+        for i in [3, 4, 9] {
             request(
                 &calls[i],
                 "POST",
-                &format!("/{CONNECTION}/credential-candidates/{CANDIDATE}/activate"),
+                &format!("{}/activate", candidate_path()),
                 Some(serde_json::json!({"expectedProviderUserId":"42","dedicatedAutomation":true})),
-                Some("activation-replay-key"),
+                Some("activation-replay-key.activate"),
             );
         }
     }
 }
 
 #[test]
-fn cancellation_acknowledges_an_already_activated_candidate_without_claiming_a_state_change() {
-    let (server, _dir, credential) = prepared(vec![
-        http_response("204 No Content", None, b""),
-        json_http_response("200 OK", active_connection()),
-    ]);
-    let cancelled = single(&run_gitlab(
-        &server,
-        &credential,
-        &["credential", "cancel", ORG, CONNECTION, CANDIDATE],
-    ));
-    assert_eq!(cancelled["outcome"], "cancellation_acknowledged");
-    assert_eq!(
-        cancelled["result"],
-        serde_json::json!({"id":CANDIDATE,"connectionId":CONNECTION})
-    );
-    let active = single(&run_gitlab(
-        &server,
-        &credential,
-        &["show", ORG, CONNECTION],
-    ));
-    assert_eq!(active["result"]["state"], "active");
-    assert_eq!(server.finish().len(), 2);
-}
-
-#[test]
 fn vanished_candidate_is_unavailable_for_activation() {
-    let missing = problem_http_response(
-        "404 Not Found",
-        serde_json::json!({
-        "type":"https://api.usefulmachinery.com/problems/not-found",
-        "title":"Not found","status":404}),
-    );
+    let pending = || json_http_response("201 Created", group_pending());
     for script in [
-        vec![missing.clone()],
-        vec![json_http_response("200 OK", candidate("activated"))],
-        vec![json_http_response("200 OK", candidate("verified")), missing],
+        vec![pending(), not_found()],
+        vec![
+            pending(),
+            json_http_response("200 OK", candidate("activated")),
+        ],
+        vec![
+            pending(),
+            json_http_response("200 OK", candidate("verified")),
+            not_found(),
+        ],
     ] {
         let expected_calls = script.len();
-        let (server, _dir, credential) = prepared(script);
-        let output = run_gitlab(
-            &server,
-            &credential,
-            &[
-                "credential",
-                "activate",
-                ORG,
-                CONNECTION,
-                CANDIDATE,
-                "--expected-provider-user-id",
-                "42",
-                "--dedicated-automation",
-            ],
-        );
-        assert_eq!(failure(&output, 7)["outcome"], "candidate_unavailable");
+        let (server, dir, credential) = prepared(script);
+        let token = token_file(&dir);
+        let documents = steps(&reconnect_gitlab(&server, &credential, &token, &[]), 7);
+        assert_eq!(outcomes(&documents), ["submitted", "candidate_unavailable"]);
         assert_eq!(server.finish().len(), expected_calls);
     }
-    let (server, _dir, credential) =
-        prepared(vec![json_http_response("200 OK", candidate("pending"))]);
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &[
-            "credential",
-            "activate",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--expected-provider-user-id",
-            "42",
-            "--dedicated-automation",
-            "--idempotency-key",
-            "pending-is-not-a-replay",
-        ],
-    );
-    assert_eq!(output.status.code(), Some(7));
-    assert_eq!(server.finish().len(), 1);
 }
 
+// REQ-CONNECTION-77
 #[test]
 fn candidate_submission_and_activation_conflicts_do_not_retry() {
-    let conflict = problem_http_response(
-        "409 Conflict",
-        serde_json::json!({
-        "type":"https://api.usefulmachinery.com/problems/candidate-conflict",
-        "title":"Conflict","status":409,"detail":"candidate changed"}),
-    );
-    let (server, dir, credential) = prepared(vec![conflict.clone()]);
-    let token = dir.path().join("token");
-    fs::write(&token, SECRET).unwrap();
-    fs::set_permissions(&token, Permissions::from_mode(0o600)).unwrap();
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &[
-            "credential",
-            "create",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--kind",
-            "service-account",
-            "--token-file",
-            token.to_str().unwrap(),
-        ],
-    );
-    assert_eq!(failure(&output, 6)["outcome"], "conflict");
-    assert_eq!(server.finish().len(), 1);
-
-    let (server, _dir, credential) = prepared(vec![
+    let conflict = |kind: &str| {
+        problem_http_response(
+            "409 Conflict",
+            serde_json::json!({
+            "type":format!("https://api.usefulmachinery.com/problems/{kind}"),
+            "title":"Conflict","status":409,"detail":"candidate changed"}),
+        )
+    };
+    let (server, dir, credential) = prepared(vec![
+        conflict("candidate-conflict"),
+        json_http_response("201 Created", group_pending()),
         json_http_response("200 OK", candidate("verified")),
-        conflict,
+        conflict("candidate-conflict"),
+        cancelled(),
+        conflict("connection-version-conflict"),
     ]);
-    let output = run_gitlab(
+    let token = token_file(&dir);
+    let output = reconnect_gitlab(&server, &credential, &token, &[]);
+    assert_eq!(failure(&output, 6)["outcome"], "conflict");
+    let documents = steps(&reconnect_gitlab(&server, &credential, &token, &[]), 6);
+    assert_eq!(outcomes(&documents), ["submitted", "conflict"]);
+    assert_eq!(documents[1]["cancellation"], "acknowledged");
+    let output = run_org(
         &server,
         &credential,
-        &[
-            "credential",
-            "activate",
-            ORG,
-            CONNECTION,
-            CANDIDATE,
-            "--expected-provider-user-id",
-            "42",
-            "--dedicated-automation",
-        ],
+        &["disconnect", CONNECTION, "--expected-version", "3", "--yes"],
     );
     assert_eq!(failure(&output, 6)["outcome"], "conflict");
-    assert_eq!(server.finish().len(), 2);
+    assert_eq!(server.finish().len(), 6);
 }
 
 // REQ-CONNECTION-57
 #[test]
 fn token_stdin_is_exclusive_and_never_printed() {
-    let (server, _dir, credential) =
-        prepared(vec![json_http_response("201 Created", group_pending())]);
+    let mut failed = group_pending();
+    failed["state"] = "failed".into();
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("201 Created", group_pending()),
+        json_http_response("200 OK", failed),
+    ]);
     let args = [
-        "connection",
-        "gitlab",
-        "credential",
-        "create",
-        ORG,
-        CONNECTION,
-        "--expected-version",
-        "3",
-        "--kind",
-        "group-access-token",
-        "--token-file",
-        "-",
-        "--json",
-        "--allow-insecure-http",
-    ];
+        &[
+            "org",
+            "integration",
+            "reconnect",
+            CONNECTION,
+            "--expected-version",
+            "3",
+            "--kind",
+            "group-access-token",
+            "--token-file",
+            "-",
+            "--org",
+            ORG,
+            "--json",
+            "--allow-insecure-http",
+        ][..],
+        &CONFIRM,
+    ]
+    .concat();
     let output = run_with_stdin(
         &args,
         &deployment_environment(&server.api_url, &credential),
         SECRET.as_bytes(),
     );
-    assert_eq!(single(&output)["result"]["state"], "pending");
+    assert_eq!(steps(&output, 7)[0]["result"]["state"], "pending");
     let request = server.finish();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(request[0].split_once("\r\n\r\n").unwrap().1)
@@ -1396,7 +1662,7 @@ fn token_stdin_is_exclusive_and_never_printed() {
         SECRET
     );
     let (server, _dir, credential) = prepared(vec![]);
-    let args = [args.as_slice(), &["--service-api-key-file", "-"]].concat();
+    let args = [args.as_slice(), &["--api-key-file", "-"]].concat();
     let output = run_with_stdin(
         &args,
         &deployment_environment(&server.api_url, &credential),
@@ -1404,117 +1670,4 @@ fn token_stdin_is_exclusive_and_never_printed() {
     );
     assert_eq!(output.status.code(), Some(2));
     assert!(server.finish().is_empty());
-}
-
-#[test]
-fn signal_after_dispatch_reports_replay_key_without_secret() {
-    for (signal, code) in [
-        (rustix::process::Signal::INT, 130),
-        (rustix::process::Signal::TERM, 143),
-    ] {
-        let mut server =
-            ScriptedServer::respond_with_paused_first_response(vec![json_http_response(
-                "201 Created",
-                group_pending(),
-            )]);
-        let directory = private_credential_directory();
-        let path = directory.path().join("credentials.json");
-        write_credential_fixture(&path, &server.api_url, SESSION, "2999-01-01T00:00:00Z");
-        let token = directory.path().join("token");
-        fs::write(&token, SECRET).unwrap();
-        fs::set_permissions(&token, Permissions::from_mode(0o600)).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
-        command
-            .args([
-                "connection",
-                "gitlab",
-                "credential",
-                "create",
-                ORG,
-                CONNECTION,
-                "--expected-version",
-                "3",
-                "--kind",
-                "group-access-token",
-                "--token-file",
-                token.to_str().unwrap(),
-                "--idempotency-key",
-                "signal-key",
-                "--json",
-                "--allow-insecure-http",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for variable in DEPLOYMENT_VARIABLES {
-            command.env_remove(variable);
-        }
-        command.env_remove(CREDENTIALS_FILE_VARIABLE);
-        for (name, value) in deployment_environment(&server.api_url, path.to_str().unwrap()) {
-            command.env(name, value);
-        }
-        let child = command.spawn().unwrap();
-        let request = server.wait_for_request();
-        assert_eq!(header_value(&request, "idempotency-key"), "signal-key");
-        rustix::process::kill_process(
-            rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap(),
-            signal,
-        )
-        .unwrap();
-        let output = child.wait_with_output().unwrap();
-        server.release_paused_response();
-        assert_eq!(output.status.code(), Some(code));
-        assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("signal-key"));
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
-        assert!(server.finish().is_empty());
-    }
-}
-
-// REQ-CONNECTION-47, REQ-CONNECTION-77
-#[test]
-fn pending_identity_mismatch_and_conflict_have_separate_exits() {
-    let conflict = problem_http_response(
-        "409 Conflict",
-        serde_json::json!({"type":"https://api.usefulmachinery.com/problems/connection-version-conflict","title":"Conflict","status":409,"detail":"stale"}),
-    );
-    let (server, _dir, credential) = prepared(vec![
-        json_http_response("200 OK", candidate("pending")),
-        json_http_response("200 OK", candidate("verified")),
-        conflict,
-    ]);
-    for (expected, code, outcome) in [
-        ("42", 7, "candidate_unavailable"),
-        ("41", 8, "identity_mismatch"),
-    ] {
-        let output = run_gitlab(
-            &server,
-            &credential,
-            &[
-                "credential",
-                "activate",
-                ORG,
-                CONNECTION,
-                CANDIDATE,
-                "--expected-provider-user-id",
-                expected,
-                "--dedicated-automation",
-            ],
-        );
-        assert_eq!(failure(&output, code)["outcome"], outcome);
-    }
-    let output = run_gitlab(
-        &server,
-        &credential,
-        &[
-            "remove",
-            ORG,
-            CONNECTION,
-            "--expected-version",
-            "3",
-            "--yes",
-        ],
-    );
-    assert_eq!(failure(&output, 6)["outcome"], "conflict");
-    assert_eq!(server.finish().len(), 3);
 }

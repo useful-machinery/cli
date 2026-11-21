@@ -22,12 +22,18 @@ use std::time::Duration;
 
 #[path = "cli/account_deletion.rs"]
 mod account_deletion;
+#[path = "cli/account_integration.rs"]
+mod account_integration;
+#[path = "cli/account_show.rs"]
+mod account_show;
 #[path = "cli/account_signup.rs"]
 mod account_signup;
 #[path = "cli/account_update.rs"]
 mod account_update;
-#[path = "cli/agent_logins.rs"]
-mod agent_logins;
+#[path = "cli/command_tree.rs"]
+mod command_tree;
+#[path = "cli/local_journey.rs"]
+mod local_journey;
 use api_test_support::read_request;
 use useful_test_support as api_test_support;
 #[path = "cli/artifact_remote.rs"]
@@ -42,8 +48,6 @@ mod claude_code_installation;
 mod codex_installation;
 #[path = "cli/connection.rs"]
 mod connection;
-#[path = "cli/credentials.rs"]
-mod credentials;
 #[path = "cli/delegation.rs"]
 mod delegation;
 #[path = "cli/github.rs"]
@@ -52,14 +56,12 @@ mod github;
 mod gitlab;
 #[path = "cli/grant.rs"]
 mod grant;
-#[path = "cli/grants.rs"]
-mod grants;
 #[path = "cli/identities.rs"]
 mod identities;
-#[path = "cli/integration.rs"]
-mod integration;
 #[path = "cli/invitation.rs"]
 mod invitation;
+#[path = "cli/org_integration.rs"]
+mod org_integration;
 #[path = "cli/organization.rs"]
 mod organization;
 #[path = "cli/organization_audit.rs"]
@@ -80,12 +82,12 @@ mod run_command;
 mod runner_administration;
 #[path = "cli/runner_agent_login.rs"]
 mod runner_agent_login;
-#[path = "cli/runner_doctor_workflow.rs"]
-mod runner_doctor_workflow;
 #[path = "cli/runner_enrollment.rs"]
 mod runner_enrollment;
 #[path = "cli/runner_home.rs"]
 mod runner_home;
+#[path = "cli/runner_prune.rs"]
+mod runner_prune;
 #[path = "cli/runner_registration.rs"]
 mod runner_registration;
 #[path = "cli/runner_status.rs"]
@@ -98,6 +100,8 @@ mod service_principal;
 mod workflow_continue;
 #[path = "cli/workflow_definition.rs"]
 mod workflow_definition;
+#[path = "cli/workflow_doctor.rs"]
+mod workflow_doctor;
 #[path = "cli/workflow_mirror.rs"]
 mod workflow_mirror;
 #[path = "cli/workflow_nested.rs"]
@@ -123,17 +127,39 @@ mod workflow_validate;
 #[path = "cli/workflow_view.rs"]
 mod workflow_view;
 
-const BUILD_VERSION: &str = match option_env!("USEFUL_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
-const BUILD_IDENTITY: &str = match option_env!("USEFUL_RELEASE_COMMIT") {
-    Some(identity) => identity,
-    None => match option_env!("USEFUL_BUILD_IDENTITY") {
-        Some(identity) => identity,
-        None => "unknown",
-    },
-};
+#[path = "support/candidate.rs"]
+mod candidate;
+
+fn executable() -> &'static std::path::Path {
+    static EXECUTABLE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    EXECUTABLE.get_or_init(|| candidate::resolve().expect("resolve the candidate executable"))
+}
+
+fn fixture_root() -> &'static Path {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if option_env!("CARGO_BIN_EXE_useful").is_some() {
+        manifest
+    } else {
+        manifest.parent().expect("e2e fixtures live under cli/")
+    }
+}
+
+fn version() -> String {
+    std::env::var("USEFUL_TEST_VERSION").unwrap_or_else(|_| {
+        option_env!("USEFUL_VERSION")
+            .unwrap_or(env!("CARGO_PKG_VERSION"))
+            .into()
+    })
+}
+
+fn build_identity() -> String {
+    std::env::var("USEFUL_TEST_BUILD_IDENTITY").unwrap_or_else(|_| {
+        option_env!("USEFUL_RELEASE_COMMIT")
+            .or(option_env!("USEFUL_BUILD_IDENTITY"))
+            .unwrap_or("unknown")
+            .into()
+    })
+}
 
 struct TestPty {
     master: std::os::fd::OwnedFd,
@@ -184,14 +210,27 @@ fn install_interrupt_handler(handler: impl FnOnce() + Send + 'static) {
     registered.recv().unwrap();
 }
 
+// The process harness owns its clock independently of the program being timed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test clock for deadlines on child processes, locks and signals"
+)]
+fn monotonic_now() -> std::time::Instant {
+    std::time::Instant::now()
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded test waits on external process and signal observations"
+)]
+fn sleep(interval: std::time::Duration) {
+    std::thread::sleep(interval);
+}
+
 /// Polls an external boundary that has no explicit readiness signal.
 ///
 /// The internal deadline remains below nextest's 60-second integration-test slow timeout so a
 /// failed poll reports its last observation before the suite-level hang backstop takes ownership.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "shared bounded polling is limited to external boundaries without readiness signals"
-)]
 fn poll_until<T: std::fmt::Debug>(
     description: &str,
     mut observe: impl FnMut() -> T,
@@ -200,29 +239,33 @@ fn poll_until<T: std::fmt::Debug>(
     const POLL_INTERVAL: Duration = Duration::from_millis(10);
     const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
-    let deadline = std::time::Instant::now() + POLL_TIMEOUT;
+    let deadline = monotonic_now() + POLL_TIMEOUT;
     loop {
         let observation = observe();
         if condition(&observation) {
             return observation;
         }
-        if std::time::Instant::now() >= deadline {
+        if monotonic_now() >= deadline {
             panic!(
                 "{description} did not complete within {POLL_TIMEOUT:?}; last observed state: {observation:?}"
             );
         }
-        thread::sleep(POLL_INTERVAL);
+        sleep(POLL_INTERVAL);
     }
 }
 
 const ECHO_IDEMPOTENCY_KEY: &str = api_test_support::REQUEST_IDEMPOTENCY_KEY_ECHO;
 const CREDENTIALS_FILE_VARIABLE: &str = "USEFUL_CREDENTIALS_FILE";
 const USEFUL_HOME_VARIABLE: &str = "USEFUL_HOME";
-const DEPLOYMENT_VARIABLES: [&str; 4] = [
+/// The variables a launched `useful` never inherits from whoever runs the suite: the
+/// deployment, and the organization and project in effect.
+const DEPLOYMENT_VARIABLES: [&str; 6] = [
     "USEFUL_API_URL",
     "USEFUL_AUTH_ISSUER",
     "USEFUL_AUTH_AUDIENCE",
     "USEFUL_AUTH_CLIENT_ID",
+    "USEFUL_ORG",
+    "USEFUL_PROJECT",
 ];
 const RUNNER_TELEMETRY_VARIABLES: [&str; 9] = [
     "OTEL_SDK_DISABLED",
@@ -270,7 +313,7 @@ fn run_with_env(args: &[&str], environment: &[(&str, &str)]) -> Output {
 
 fn run_with_stdin(args: &[&str], environment: &[(&str, &str)], standard_input: &[u8]) -> Output {
     let useful_home = IsolatedUsefulHome::new();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args(args)
         .stdin(Stdio::piped())
@@ -314,7 +357,7 @@ fn run_with_env_from(
     let default_credential_path = credential_directory.path().join("credentials.json");
     let default_path = tempfile::tempdir().expect("temporary empty PATH should be created");
     let useful_home = IsolatedUsefulHome::new();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command.args(args).env_remove(CREDENTIALS_FILE_VARIABLE);
     for variable in DEPLOYMENT_VARIABLES
         .into_iter()
@@ -626,12 +669,8 @@ fn forbidden_problem_response() -> Vec<u8> {
 }
 
 fn header_value<'a>(request: &'a str, name: &str) -> &'a str {
-    let prefix = format!("{}: ", name.to_ascii_lowercase());
-    request
-        .lines()
-        .find_map(|line| line.strip_prefix(&prefix))
+    useful_test_support::request_header(request, name)
         .expect("request should contain expected header")
-        .trim_end_matches('\r')
 }
 
 /// Neither stream of a finished command may carry any of `secrets`.
@@ -660,11 +699,11 @@ fn private_credential_directory() -> tempfile::TempDir {
     directory
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "rust-cli-tests"))]
 fn wait_for_refresh_lock_attempt(process_id: u32) {
     let descriptor_directory = format!("/proc/{process_id}/fd");
     poll_until(
-        "second CLI process opening the deployment refresh lock",
+        "the rejected CLI process opening the deployment refresh lock",
         || {
             fs::read_dir(&descriptor_directory)
                 .into_iter()
@@ -818,7 +857,7 @@ fn write_credential_fixture_with_refresh_token(
 #[test]
 fn auth_without_a_subcommand_prints_composed_help_without_loading_deployment() {
     let output = run_with_env(
-        &["auth"],
+        &["account"],
         &[("USEFUL_API_URL", "partial-override-is-ignored")],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -831,7 +870,7 @@ fn auth_without_a_subcommand_prints_composed_help_without_loading_deployment() {
 // REQ-ONBOARD-3
 #[test]
 fn version_command_and_flag_report_the_resolved_build_version() {
-    let expected = format!("useful {BUILD_VERSION}\n");
+    let expected = format!("useful {}\n", crate::version());
 
     for args in [["version"].as_slice(), ["--version"].as_slice()] {
         let output = run(args);
@@ -846,8 +885,8 @@ fn version_command_and_flag_report_the_resolved_build_version() {
 #[test]
 fn structured_version_reports_the_resolved_build_version_contract() {
     let output = run(&["version", "--json"]);
-    let expected_executable_path = std::fs::canonicalize(env!("CARGO_BIN_EXE_useful"))
-        .expect("useful executable path should resolve");
+    let expected_executable_path =
+        std::fs::canonicalize(crate::executable()).expect("useful executable path should resolve");
     let mut actual: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("version output should be JSON");
     let actual_executable_path = actual
@@ -866,8 +905,8 @@ fn structured_version_reports_the_resolved_build_version_contract() {
     let expected = serde_json::json!({
         "schemaVersion": 1,
         "command": "useful",
-        "version": BUILD_VERSION,
-        "buildIdentity": BUILD_IDENTITY,
+        "version": crate::version(),
+        "buildIdentity": crate::build_identity(),
     });
 
     assert!(output.status.success());
@@ -927,7 +966,7 @@ fn version_inspection_ignores_deployment_credentials_and_network() {
 // INV-CLI-9
 #[test]
 fn insecure_http_flag_is_scoped_to_networked_leaf_commands() {
-    let misplaced = run(&["--allow-insecure-http", "auth", "status"]);
+    let misplaced = run(&["--allow-insecure-http", "account", "show"]);
 
     assert_eq!(misplaced.status.code(), Some(2));
     assert!(misplaced.stdout.is_empty());
@@ -939,7 +978,7 @@ fn insecure_http_flag_is_scoped_to_networked_leaf_commands() {
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = deployment_environment(&server.api_url, credential_path_string);
 
-    let output = run_with_env(&["auth", "status", "--allow-insecure-http"], &environment);
+    let output = run_with_env(&["account", "show", "--allow-insecure-http"], &environment);
 
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stderr.is_empty());
@@ -951,7 +990,7 @@ fn insecure_http_flag_is_scoped_to_networked_leaf_commands() {
 #[test]
 fn partial_deployment_override_fails_before_auth_dispatch() {
     let output = run_with_env(
-        &["auth", "status", "--json"],
+        &["account", "show", "--json"],
         &[("USEFUL_API_URL", "https://api.fixture.example")],
     );
 
@@ -968,9 +1007,9 @@ fn networked_auth_requires_http_opt_in_but_local_logout_does_not() {
     let credential_path = credential_directory.path().join("credentials.json");
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = deployment_environment(&server.api_url, credential_path_string);
-    let rejected = run_with_env(&["auth", "status"], &environment);
-    let accepted = run_with_env(&["auth", "status", "--allow-insecure-http"], &environment);
-    let local_logout = run_with_env(&["auth", "logout"], &environment);
+    let rejected = run_with_env(&["account", "show"], &environment);
+    let accepted = run_with_env(&["account", "show", "--allow-insecure-http"], &environment);
+    let local_logout = run_with_env(&["account", "logout"], &environment);
 
     assert_eq!(rejected.status.code(), Some(1));
     assert!(rejected.stdout.is_empty());
@@ -993,7 +1032,7 @@ fn status_does_not_apply_transport_policy_to_the_unused_issuer() {
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = deployment_environment(&api_url, credential_path_string);
 
-    let output = run_with_env(&["auth", "status", "--json"], &environment);
+    let output = run_with_env(&["account", "show", "--json"], &environment);
 
     assert_eq!(output.status.code(), Some(4));
     assert_eq!(
@@ -1036,10 +1075,12 @@ fn structured_status_preserves_authenticated_actions_without_interpreting_them()
         "2999-01-01T00:00:00Z",
     );
     let credential_path_string = credential_path.to_str().unwrap();
-    let environment = deployment_environment(&server.api_url, credential_path_string);
+    // The organization named, the status is the only request.
+    let mut environment = deployment_environment(&server.api_url, credential_path_string).to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1056,7 +1097,8 @@ fn structured_status_preserves_authenticated_actions_without_interpreting_them()
                 "state": "active",
                 "displayName": "Ada Lovelace"
             },
-            "actions": actions
+            "actions": actions,
+            "organizationInEffect": {"organization": "acme", "source": "environment"}
         })
     );
     assert!(output.stdout.ends_with(b"\n"));
@@ -1066,7 +1108,10 @@ fn structured_status_preserves_authenticated_actions_without_interpreting_them()
     );
     let request = server.finish();
     assert!(request.starts_with("GET /api/v1/me HTTP/1.1\r\n"));
-    assert!(request.contains("authorization: Bearer unique-authenticated-synthetic-token\r\n"));
+    assert_eq!(
+        crate::header_value(&request, "authorization"),
+        "Bearer unique-authenticated-synthetic-token"
+    );
 }
 
 // REQ-AUTH-34
@@ -1095,9 +1140,11 @@ fn human_authenticated_status_reproduces_opaque_actions() {
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
     let credential_path_string = credential_path.to_str().unwrap();
-    let environment = deployment_environment(&server.api_url, credential_path_string);
+    // The organization named, the status is the only request.
+    let mut environment = deployment_environment(&server.api_url, credential_path_string).to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
 
-    let output = run_with_env(&["auth", "status", "--allow-insecure-http"], &environment);
+    let output = run_with_env(&["account", "show", "--allow-insecure-http"], &environment);
 
     assert!(output.status.success());
     let lines: Vec<_> = String::from_utf8_lossy(&output.stdout)
@@ -1105,7 +1152,8 @@ fn human_authenticated_status_reproduces_opaque_actions() {
         .map(str::to_owned)
         .collect();
     assert!(!lines[0].is_empty());
-    let reproduced: Vec<serde_json::Value> = lines[1..]
+    // The organization and the project in effect follow the actions.
+    let reproduced: Vec<serde_json::Value> = lines[1..lines.len() - 2]
         .iter()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
@@ -1143,7 +1191,7 @@ fn structured_status_preserves_signup_actions_without_synthesizing_fields() {
     let environment = deployment_environment(&server.api_url, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1188,10 +1236,13 @@ fn structured_status_omits_absent_optional_fields() {
         let credential_directory = private_credential_directory();
         let credential_path = credential_directory.path().join("credentials.json");
         let credential_path_string = credential_path.to_str().unwrap();
-        let environment = deployment_environment(&server.api_url, credential_path_string);
+        // The organization named, the status is the only request.
+        let mut environment =
+            deployment_environment(&server.api_url, credential_path_string).to_vec();
+        environment.push(("USEFUL_ORG", "acme"));
 
         let output = run_with_env(
-            &["auth", "status", "--json", "--allow-insecure-http"],
+            &["account", "show", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -1219,7 +1270,7 @@ fn status_without_a_credential_still_contacts_the_server_without_authorization()
     let environment = deployment_environment(&server.api_url, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1234,7 +1285,7 @@ fn status_without_a_credential_still_contacts_the_server_without_authorization()
     );
     assert!(output.stderr.is_empty());
     let request = server.finish();
-    assert!(!request.contains("authorization:"));
+    assert!(useful_test_support::request_header(&request, "authorization").is_none());
 }
 
 // REQ-AUTH-31, REQ-AUTH-35, REQ-AUTH-36, REQ-AUTH-74
@@ -1255,7 +1306,7 @@ fn status_reports_a_refused_account_as_forbidden_and_keeps_the_sign_in() {
         let stored = fs::read(&credential_path).unwrap();
         let environment =
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-        let mut arguments = vec!["auth", "status", "--allow-insecure-http"];
+        let mut arguments = vec!["account", "show", "--allow-insecure-http"];
         if json {
             arguments.push("--json");
         }
@@ -1274,13 +1325,14 @@ fn status_reports_a_refused_account_as_forbidden_and_keeps_the_sign_in() {
             );
             assert!(output.stderr.is_empty());
         } else {
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains("useful account deletion cancel")
-            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("useful account restore"));
         }
         assert_eq!(fs::read(&credential_path).unwrap(), stored);
         let request = server.finish();
-        assert!(request.contains("authorization: Bearer unique-refused-account-token\r\n"));
+        assert_eq!(
+            crate::header_value(&request, "authorization"),
+            "Bearer unique-refused-account-token"
+        );
     }
 }
 
@@ -1294,14 +1346,14 @@ fn async_client_requests_name_the_cli_version_in_the_user_agent() {
     let environment = deployment_environment(&server.api_url, credential_path.to_str().unwrap());
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(
         header_value(&server.finish(), "user-agent"),
-        format!("useful/{BUILD_VERSION}")
+        format!("useful/{}", crate::version())
     );
 }
 
@@ -1335,14 +1387,17 @@ fn expired_status_credential_is_refreshed_and_rotated_before_api_use() {
         "2000-01-01T00:00:00Z",
         "unique-original-status-refresh-token",
     );
-    let environment = deployment_environment_with_issuer(
+    // The organization named, the status is the only request.
+    let mut environment = deployment_environment_with_issuer(
         &server.api_url,
         &server.issuer,
         credential_path.to_str().unwrap(),
-    );
+    )
+    .to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1367,7 +1422,10 @@ fn expired_status_credential_is_refreshed_and_rotated_before_api_use() {
             .map(String::as_str),
         Some("unique-original-status-refresh-token")
     );
-    assert!(requests[1].contains("authorization: Bearer unique-rotated-status-access-token\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[1], "authorization"),
+        "Bearer unique-rotated-status-access-token"
+    );
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&credential_path).unwrap()).unwrap();
     assert_eq!(
@@ -1420,23 +1478,32 @@ fn rejected_status_access_token_refreshes_once_and_retries_once() {
         "2999-01-01T00:00:00Z",
         "unique-rejected-status-refresh-token",
     );
-    let environment = deployment_environment_with_issuer(
+    // The organization named, the status is the only request.
+    let mut environment = deployment_environment_with_issuer(
         &server.api_url,
         &server.issuer,
         credential_path.to_str().unwrap(),
-    );
+    )
+    .to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
     assert!(output.status.success());
     let requests = server.finish();
     assert_eq!(requests.len(), 3);
-    assert!(requests[0].contains("authorization: Bearer unique-rejected-status-access-token\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[0], "authorization"),
+        "Bearer unique-rejected-status-access-token"
+    );
     assert!(requests[1].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
-    assert!(requests[2].contains("authorization: Bearer unique-recovered-status-access-token\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[2], "authorization"),
+        "Bearer unique-recovered-status-access-token"
+    );
 }
 
 // REQ-AUTH-44
@@ -1482,7 +1549,7 @@ fn a_second_status_rejection_stops_without_an_authentication_loop() {
     );
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1531,7 +1598,7 @@ fn terminal_refresh_rejection_removes_session_and_checks_anonymously() {
     );
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1542,7 +1609,7 @@ fn terminal_refresh_rejection_removes_session_and_checks_anonymously() {
     );
     let requests = server.finish();
     assert_eq!(requests.len(), 3);
-    assert!(!requests[2].contains("authorization:"));
+    assert!(useful_test_support::request_header(&requests[2], "authorization").is_none());
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&credential_path).unwrap()).unwrap();
     assert!(stored["credentials"].as_array().unwrap().is_empty());
@@ -1576,7 +1643,7 @@ fn transient_refresh_failure_preserves_the_rotating_session() {
         );
 
         let output = run_with_env(
-            &["auth", "status", "--json", "--allow-insecure-http"],
+            &["account", "show", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -1617,7 +1684,7 @@ fn connection_failure_during_refresh_preserves_the_rotating_session() {
         deployment_environment_with_issuer(api_url, &issuer, credential_path.to_str().unwrap());
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1660,14 +1727,17 @@ fn one_ambiguous_refresh_response_is_retried_and_rotated_atomically() {
         "2000-01-01T00:00:00Z",
         "unique-ambiguous-original-refresh-token",
     );
-    let environment = deployment_environment_with_issuer(
+    // The organization named, the status is the only request.
+    let mut environment = deployment_environment_with_issuer(
         &server.api_url,
         &server.issuer,
         credential_path.to_str().unwrap(),
-    );
+    )
+    .to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1692,17 +1762,23 @@ fn one_ambiguous_refresh_response_is_retried_and_rotated_atomically() {
 
 // REQ-AUTH-43
 // INV-CLI-6
-#[cfg(target_os = "linux")]
 #[test]
 fn concurrent_processes_exchange_one_rotating_refresh_token_once() {
+    let mut oauth = ScriptedServer::respond_with_paused_first_response(vec![json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "access_token": "unique-concurrent-rotated-access-token",
+            "refresh_token": "unique-concurrent-rotated-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }),
+    )]);
     let mut server = ScriptedServer::respond_with_paused_first_response(vec![
-        json_http_response(
-            "200 OK",
+        problem_http_response(
+            "401 Unauthorized",
             serde_json::json!({
-                "access_token": "unique-concurrent-rotated-access-token",
-                "refresh_token": "unique-concurrent-rotated-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 3600
+                "type": "https://api.usefulmachinery.com/problems/unauthorized",
+                "title": "Unauthorized", "status": 401
             }),
         ),
         json_http_response(
@@ -1723,20 +1799,23 @@ fn concurrent_processes_exchange_one_rotating_refresh_token_once() {
     write_credential_fixture_with_refresh_token(
         &credential_path,
         &server.api_url,
-        &server.issuer,
+        &oauth.issuer,
         "unique-concurrent-expired-access-token",
-        "2000-01-01T00:00:00Z",
+        "2999-01-01T00:00:00Z",
         "unique-concurrent-original-refresh-token",
     );
     let credential_path = credential_path.to_str().unwrap();
     let api_url = server.api_url.clone();
-    let issuer = server.issuer.clone();
-    let environment = deployment_environment_with_issuer(&api_url, &issuer, credential_path);
+    let issuer = oauth.issuer.clone();
+    // The organization named, the status is the only request.
+    let mut environment =
+        deployment_environment_with_issuer(&api_url, &issuer, credential_path).to_vec();
+    environment.push(("USEFUL_ORG", "acme"));
     let useful_home = IsolatedUsefulHome::new();
     let command = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
-            .args(["auth", "status", "--json", "--allow-insecure-http"])
+            .args(["account", "show", "--json", "--allow-insecure-http"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command
@@ -1755,14 +1834,32 @@ fn concurrent_processes_exchange_one_rotating_refresh_token_once() {
     let first = command()
         .spawn()
         .expect("first status process should start");
-    let refresh_request = server.next_request();
+    // Hold the rejected request while the other process reads the same sign-in
+    // at expiry. Both must have used the old credential before rotation can finish.
+    let rejected = server.next_request();
+    assert_eq!(
+        header_value(&rejected, "authorization"),
+        "Bearer unique-concurrent-expired-access-token"
+    );
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(credential_path).unwrap()).unwrap();
+    saved["credentials"][0]["expiresAt"] = "2000-01-01T00:00:00Z".into();
+    fs::write(credential_path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let second = command().spawn().unwrap();
+    let refresh_request = oauth.next_request();
     assert!(refresh_request.starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
-    let second = command()
-        .spawn()
-        .expect("second status process should start");
-    #[cfg(target_os = "linux")]
-    wait_for_refresh_lock_attempt(second.id());
     server.release_paused_response();
+    // The rejected process now needs the exchange the other one holds. The workspace suite
+    // on Linux watches it reach the refresh lock. Any other run gives it time to start a
+    // competing exchange, which the issuer's single response would leave unanswered, so a
+    // process that does not wait for the holder fails here instead of reading the rotated
+    // sign-in by luck.
+    #[cfg(all(target_os = "linux", feature = "rust-cli-tests"))]
+    wait_for_refresh_lock_attempt(first.id());
+    #[cfg(not(all(target_os = "linux", feature = "rust-cli-tests")))]
+    sleep(Duration::from_millis(500));
+    oauth.release_paused_response();
+    assert!(oauth.finish().is_empty());
 
     let first = first
         .wait_with_output()
@@ -1797,7 +1894,8 @@ fn concurrent_processes_exchange_one_rotating_refresh_token_once() {
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| {
         request.starts_with("GET /api/v1/me HTTP/1.1\r\n")
-            && request.contains("authorization: Bearer unique-concurrent-rotated-access-token\r\n")
+            && crate::header_value(request, "authorization")
+                == "Bearer unique-concurrent-rotated-access-token"
     }));
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(credential_path).unwrap()).unwrap();
@@ -1822,7 +1920,7 @@ fn unreachable_status_uses_unavailable_exit_code() {
         let environment = deployment_environment(&server.api_url, credential_path_string);
 
         let output = run_with_env(
-            &["auth", "status", "--json", "--allow-insecure-http"],
+            &["account", "show", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -1852,7 +1950,7 @@ fn connection_failure_uses_unavailable_exit_code_and_status() {
     let environment = deployment_environment(&api_url, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1890,7 +1988,7 @@ fn credential_failure_emits_no_status_or_network_request() {
     let environment = deployment_environment(&api_url, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1901,6 +1999,43 @@ fn credential_failure_emits_no_status_or_network_request() {
         matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );
     assert_eq!(fs::read(&credential_path).unwrap(), malformed);
+}
+
+// REQ-AUTH-41, INV-CLI-5
+#[test]
+fn account_show_refuses_unsafe_saved_credentials_before_any_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    for case in ["symlink", "readable-by-group", "public-parent"] {
+        let directory = private_credential_directory();
+        let path = directory.path().join("credentials.json");
+        let saved = directory.path().join("saved");
+        write_credential_fixture(&path, &api, "unsafe-file-token", "2999-01-01T00:00:00Z");
+        let original = fs::read(&path).unwrap();
+        match case {
+            "symlink" => {
+                fs::rename(&path, &saved).unwrap();
+                std::os::unix::fs::symlink(&saved, &path).unwrap();
+            }
+            "readable-by-group" => {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap()
+            }
+            _ => fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap(),
+        }
+        let output = run_with_env(
+            &["account", "show", "--json", "--allow-insecure-http"],
+            &deployment_environment(&api, path.to_str().unwrap()),
+        );
+        assert_eq!(output.status.code(), Some(1), "{case}: {output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("unsafe-file-token"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        if case == "symlink" {
+            assert_eq!(fs::read_link(&path).unwrap(), saved);
+        }
+        assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    }
 }
 
 // REQ-AUTH-35, REQ-AUTH-54
@@ -1921,7 +2056,7 @@ fn protocol_failure_emits_no_status_and_does_not_leak_credentials() {
     let environment = deployment_environment(&server.api_url, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1962,7 +2097,7 @@ fn malformed_unauthorized_response_deletes_the_rejected_credential() {
         deployment_environment_with_issuer(&server.api_url, &server.issuer, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
+        &["account", "show", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -1986,7 +2121,7 @@ fn human_status_writes_the_recognized_result_to_stdout() {
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = deployment_environment(&server.api_url, credential_path_string);
 
-    let output = run_with_env(&["auth", "status", "--allow-insecure-http"], &environment);
+    let output = run_with_env(&["account", "show", "--allow-insecure-http"], &environment);
 
     assert_eq!(output.status.code(), Some(3));
     assert!(!output.stdout.is_empty());
@@ -2041,11 +2176,11 @@ fn logout_revokes_and_removes_only_the_selected_renewable_session() {
         deployment_environment_with_issuer(&server.api_url, &server.issuer, credential_path_string);
 
     let first = run_with_env(
-        &["auth", "logout", "--json", "--allow-insecure-http"],
+        &["account", "logout", "--json", "--allow-insecure-http"],
         &environment,
     );
     let second = run_with_env(
-        &["auth", "logout", "--json", "--allow-insecure-http"],
+        &["account", "logout", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -2108,7 +2243,7 @@ fn logout_removes_local_session_when_revocation_is_unconfirmed() {
     );
 
     let output = run_with_env(
-        &["auth", "logout", "--json", "--allow-insecure-http"],
+        &["account", "logout", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -2145,7 +2280,7 @@ fn logout_preserves_malformed_credentials_without_leaking_contents() {
         .expect("temporary credential path should be UTF-8");
 
     let output = run_with_env(
-        &["auth", "logout", "--json"],
+        &["account", "logout", "--json"],
         &[(CREDENTIALS_FILE_VARIABLE, credential_path_string)],
     );
 
@@ -2155,23 +2290,90 @@ fn logout_preserves_malformed_credentials_without_leaking_contents() {
     assert_eq!(fs::read(credential_path).unwrap(), malformed);
 }
 
-// REQ-RUNNERENROLL-46
+const RUNNER_DOCTOR_OPT_IN_CHECKS: [&str; 5] = [
+    "execution.harness.pi-json-v1",
+    "execution.harness.claude-code-stream-json-v1",
+    "execution.harness.codex-app-server-v1",
+    "credentials.agent-logins",
+    "environment.disk-space",
+];
+
+/// The IDs of a doctor report's `checks` or `notRun` member.
+fn runner_doctor_ids(report: &serde_json::Value, member: &str) -> Vec<String> {
+    report[member]
+        .as_array()
+        .unwrap_or_else(|| panic!("{member} should be an array: {report}"))
+        .iter()
+        .map(|check| {
+            assert!(check["title"].is_string(), "{check}");
+            check["id"].as_str().unwrap().to_owned()
+        })
+        .collect()
+}
+
+// REQ-RUNNERENROLL-47
 #[test]
-fn runner_doctor_lists_registered_checks_without_running_git() {
-    let empty_path = tempfile::tempdir().expect("temporary empty PATH should be created");
-    let path = empty_path
+fn runner_doctor_reports_list_the_checks_they_did_not_run() {
+    let git_directory = fake_git("printf '%s\\n' 'git version 2.42.0'");
+    let path = git_directory
         .path()
         .to_str()
         .expect("temporary PATH should be UTF-8");
 
-    let output = run_with_env(&["runner", "doctor", "--list-checks"], &[("PATH", path)]);
-
-    assert!(output.status.success());
+    let output = run_with_env(&["runner", "doctor", "--json"], &[("PATH", path)]);
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("runner doctor report should be JSON");
     assert_eq!(
-        output.stdout,
-        b"environment.command.git\nexecution.harness.pi-json-v1\nexecution.harness.claude-code-stream-json-v1\nexecution.harness.codex-app-server-v1\ncredentials.agent-logins\nenvironment.disk-space\n"
+        runner_doctor_ids(&report, "checks"),
+        ["environment.command.git"]
     );
-    assert!(output.stderr.is_empty());
+    assert_eq!(
+        runner_doctor_ids(&report, "notRun"),
+        RUNNER_DOCTOR_OPT_IN_CHECKS
+    );
+    assert_eq!(
+        report["summary"],
+        serde_json::json!({"passed": 1, "failed": 0})
+    );
+
+    let output = run_with_env(&["runner", "doctor"], &[("PATH", path)]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for id in ["environment.command.git"]
+        .into_iter()
+        .chain(RUNNER_DOCTOR_OPT_IN_CHECKS)
+    {
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.split_whitespace().any(|word| word == id)),
+            "{id}: {stdout}"
+        );
+    }
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "doctor",
+            "--check",
+            "environment.command.git",
+            "--check",
+            "execution.harness.pi-json-v1",
+            "--json",
+        ],
+        &[("PATH", path)],
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("runner doctor report should be JSON");
+    assert_eq!(
+        runner_doctor_ids(&report, "checks"),
+        ["environment.command.git", "execution.harness.pi-json-v1"]
+    );
+    assert_eq!(
+        runner_doctor_ids(&report, "notRun"),
+        RUNNER_DOCTOR_OPT_IN_CHECKS[1..]
+    );
 }
 
 // REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-79
@@ -2234,6 +2436,19 @@ fn runner_doctor_reports_schema_one_json() {
                     "version": "2.42.0"
                 }
             }],
+            "notRun": [
+                {"id": "execution.harness.pi-json-v1", "title": "PiJsonV1 installation"},
+                {
+                    "id": "execution.harness.claude-code-stream-json-v1",
+                    "title": "ClaudeCodeStreamJsonV1 installation"
+                },
+                {
+                    "id": "execution.harness.codex-app-server-v1",
+                    "title": "CodexAppServerV1 installation"
+                },
+                {"id": "credentials.agent-logins", "title": "Agent logins"},
+                {"id": "environment.disk-space", "title": "Disk space"}
+            ],
             "summary": {
                 "passed": 1,
                 "failed": 0
@@ -2464,26 +2679,6 @@ fn runner_doctor_disk_space_check_judges_the_work_roots_disk() {
     assert!(failed.stderr.is_empty());
 }
 
-#[test]
-fn runner_doctor_list_options_conflict() {
-    for args in [
-        ["runner", "doctor", "--list-checks", "--json"].as_slice(),
-        [
-            "runner",
-            "doctor",
-            "--list-checks",
-            "--check",
-            "environment.command.git",
-        ]
-        .as_slice(),
-    ] {
-        let output = run(args);
-
-        assert_eq!(output.status.code(), Some(2));
-        assert!(output.stdout.is_empty());
-    }
-}
-
 // REQ-TELEMETRY-16
 #[test]
 fn otlp_configuration_is_ignored_outside_valid_runner_serve() {
@@ -2505,7 +2700,7 @@ fn otlp_configuration_is_ignored_outside_valid_runner_serve() {
         ["--help"].as_slice(),
         ["version"].as_slice(),
         ["runner", "--help"].as_slice(),
-        ["runner", "doctor", "--list-checks"].as_slice(),
+        ["runner", "doctor"].as_slice(),
         ["runner", "serve", "--help"].as_slice(),
         ["runner", "serve"].as_slice(),
     ] {
@@ -2594,7 +2789,11 @@ fn runner_serve_defaults_to_the_runner_home_and_rejects_removed_flags() {
     assert_eq!(unenrolled.status.code(), Some(1));
     assert!(unenrolled.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&unenrolled.stderr);
-    assert!(stderr.contains("useful runner enroll"), "{stderr}");
+    assert!(
+        stderr.contains("useful runner serve --join-key-file"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("useful runner enroll"), "{stderr}");
 
     let directory = private_credential_directory();
     let config_path =
@@ -2642,4 +2841,21 @@ fn unknown_commands_are_usage_errors() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
+}
+
+// Inspect the advisory lock from the other process, without acquiring it.
+fn lock_holder(run: &Path) -> io::Result<Option<rustix::process::Pid>> {
+    use rustix::process::{Flock, FlockOffsetType, FlockType, fcntl_getlk};
+    let lock = fs::File::open(run.join("run.lock"))?;
+    Ok(fcntl_getlk(
+        &lock,
+        &Flock {
+            start: 0,
+            length: 0,
+            pid: None,
+            typ: FlockType::WriteLock,
+            offset_type: FlockOffsetType::Set,
+        },
+    )?
+    .and_then(|holder| holder.pid))
 }

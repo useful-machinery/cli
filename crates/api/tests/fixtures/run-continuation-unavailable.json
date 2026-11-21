@@ -85,7 +85,8 @@
       "phase": "accepted",
       "cause": "retained_workspace_unavailable",
       "stopConfirmed": false,
-      "executorFault": null
+      "executorFault": null,
+      "leaseLoss": null
     },
     "failure": null,
     "rejection": null,

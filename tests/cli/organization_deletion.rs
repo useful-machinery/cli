@@ -102,9 +102,8 @@ fn organization_deletion_request_returns_the_schedule_and_retains_the_account_se
 
     let output = run_with_env(
         &[
-            "organization",
-            "deletion",
-            "request",
+            "org",
+            "delete",
             "acme-research",
             "--yes",
             "--json",
@@ -178,9 +177,8 @@ fn organization_deletion_request_preserves_owner_and_private_target_failures() {
 
         let output = run_with_env(
             &[
-                "organization",
-                "deletion",
-                "request",
+                "org",
+                "delete",
                 "private-target",
                 "--yes",
                 "--json",
@@ -215,13 +213,7 @@ fn organization_deletion_cancellation_uses_browser_proof_without_replacing_the_s
     );
 
     let output = run_with_env(
-        &[
-            "organization",
-            "deletion",
-            "cancel",
-            "acme-research",
-            "--allow-insecure-http",
-        ],
+        &["org", "restore", "acme-research", "--allow-insecure-http"],
         &environment,
     );
 
@@ -283,9 +275,8 @@ fn refused_organization_cancellation(
 
     let output = run_with_env(
         &[
-            "organization",
-            "deletion",
-            "cancel",
+            "org",
+            "restore",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -342,15 +333,9 @@ fn organization_deletion_cancellation_reports_forbidden_when_the_deployment_refu
 #[test]
 fn organization_deletion_rejects_invalid_targets_and_missing_confirmation_locally() {
     for args in [
-        &[
-            "organization",
-            "deletion",
-            "request",
-            "acme/research",
-            "--yes",
-        ][..],
-        &["organization", "deletion", "request", "acme-research"][..],
-        &["organization", "deletion", "cancel", "acme/research"][..],
+        &["org", "delete", "acme/research", "--yes"][..],
+        &["org", "delete", "acme-research"][..],
+        &["org", "restore", "acme/research"][..],
     ] {
         let output = run_with_env(
             args,

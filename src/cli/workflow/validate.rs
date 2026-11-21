@@ -1,11 +1,18 @@
+//! `useful workflow validate PATH` (REQ-WFFORMAT-12): a workflow file, bounded by
+//! `--source-root` or by the root of the Git repository that holds it, or, for a directory, the
+//! tree it holds (REQ-WFDEF-9), each with its own report.
+
+mod tree;
+
 use std::collections::BTreeMap;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use clap::Args;
 use serde::Serialize;
 
+use crate::cli::workflow::doctor::roots::Roots;
 use crate::exit_code::ExitCode;
 use useful_execution::{
     CancellationSource, RejectionDiagnostic as Diagnostic, ReplacedAgentProfileV1,
@@ -13,13 +20,25 @@ use useful_execution::{
     resolve_workflow_file_with_agent_profiles,
 };
 
-pub(super) const ABOUT: &str = "Validate a local workflow definition";
+pub(super) const ABOUT: &str = "Validate a workflow file or tree and print its digest";
 const COMMAND_NAME: &str = "useful workflow validate";
+/// The command line that names a file's boundary when no repository holds the file.
+const SOURCE_ROOT_REMEDY: &str = "useful workflow validate FILE --source-root ROOT";
 
 #[derive(Debug, Args)]
 pub(super) struct Command {
-    #[command(flatten)]
-    source: super::LocalWorkflowSource,
+    #[arg(
+        value_name = "PATH",
+        help = "Workflow file, or tree directory holding workflow.yaml, resolved from the initial working directory"
+    )]
+    path: PathBuf,
+
+    #[arg(
+        long,
+        value_name = "ROOT",
+        help = "Directory boundary for a workflow file's source files (default: the root of the Git repository that holds the file)"
+    )]
+    source_root: Option<PathBuf>,
 
     #[arg(
         long,
@@ -34,34 +53,78 @@ pub(super) struct Command {
 
 impl Command {
     pub(super) fn execute(self) -> super::super::CommandResult {
-        let replacement = match &self.agent_profiles {
-            Some(path) => Some(super::run::acquire_agent_profile_replacement(
-                path,
-                &CancellationSource::new(),
-            )?),
-            None => None,
+        if self.path.is_dir() {
+            // A tree is its own source root, and `validate_workflow_tree` takes no other
+            // boundary or replacement, so neither is accepted and ignored.
+            let refused = if self.source_root.is_some() {
+                Some("--source-root")
+            } else if self.agent_profiles.is_some() {
+                Some("--agent-profiles")
+            } else {
+                None
+            };
+            if let Some(option) = refused {
+                return Err(super::super::CommandFailure::with_exit_code(
+                    anyhow!(
+                        "{option} cannot be used with tree directory {directory}\n\n\
+                         A tree is its own source root and keeps its declared agent profiles. \
+                         Validate it without {option}:\n  \
+                         useful workflow validate {directory}",
+                        directory = self.path.display()
+                    ),
+                    ExitCode::UsageError,
+                ));
+            }
+            return tree::execute(&self.path, self.output.json);
+        }
+        let source_root = match self.source_root {
+            Some(root) => root,
+            None => Roots::of_file(&self.path, SOURCE_ROOT_REMEDY)?,
         };
-        match resolve_workflow_file_with_agent_profiles(
-            &self.source.source_root,
-            &self.source.workflow_file,
-            replacement.as_ref(),
-        ) {
-            Ok(workflow) => {
-                let result = if self.output.json {
-                    write_json_valid(&workflow)
-                } else {
-                    write_human_valid(&workflow)
-                };
-                finish_output(result, ExitCode::Success)
-            }
-            Err(failure) => {
-                let result = if self.output.json {
-                    write_json_invalid(&failure)
-                } else {
-                    write_human_invalid(&failure)
-                };
-                finish_output(result, ExitCode::GeneralFailure)
-            }
+        validate_file(
+            &source_root,
+            &self.path,
+            self.agent_profiles.as_deref(),
+            self.output.json,
+        )
+    }
+}
+
+/// Resolves the workflow file `workflow_file` under `source_root`, with the replacement document
+/// at `agent_profiles` when one is named, and prints its report.
+fn validate_file(
+    source_root: &Path,
+    workflow_file: &Path,
+    agent_profiles: Option<&Path>,
+    json: bool,
+) -> super::super::CommandResult {
+    let replacement = match agent_profiles {
+        Some(path) => Some(super::run::acquire_agent_profile_replacement(
+            path,
+            &CancellationSource::new(),
+        )?),
+        None => None,
+    };
+    match resolve_workflow_file_with_agent_profiles(
+        source_root,
+        workflow_file,
+        replacement.as_ref(),
+    ) {
+        Ok(workflow) => {
+            let result = if json {
+                write_json_valid(&workflow)
+            } else {
+                write_human_valid(&workflow)
+            };
+            finish_output(result, ExitCode::Success)
+        }
+        Err(failure) => {
+            let result = if json {
+                write_json_invalid(&failure)
+            } else {
+                write_human_invalid(&failure)
+            };
+            finish_output(result, ExitCode::GeneralFailure)
         }
     }
 }

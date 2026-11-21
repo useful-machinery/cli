@@ -6,8 +6,9 @@ use useful_support::{Availability, CredentialStatus, NextAction, is_identifier};
 
 pub(crate) const REQUEST_LIMIT: usize = 4_096;
 pub(crate) const RESPONSE_LIMIT: usize = 65_536;
-/// The bound of the two open answers, `overview` and `assignment`, including the LF
-/// (REQ-RUNNERENROLL-136); every other answer keeps `RESPONSE_LIMIT`.
+/// The bound of the four large answers, the open `overview` and `assignment` and the closed
+/// `kept` and `pruned`, including the LF (REQ-RUNNERENROLL-136, REQ-RUNNERENROLL-164,
+/// REQ-RUNNERENROLL-165); every other answer keeps `RESPONSE_LIMIT`.
 pub(crate) const OVERVIEW_RESPONSE_LIMIT: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,12 +19,15 @@ pub enum Operation {
 }
 
 /// A request the serving process reads: one of the operations `request` sends, or the
-/// `overview` or the `assignment` a client asks for by name (REQ-RUNNERENROLL-135).
+/// `overview`, the `assignment`, the `kept` report or the `prune` pass a client asks for by
+/// name (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ControlRequest {
     Operation(Operation),
     Overview,
     Assignment(AssignmentQuery),
+    Kept(PruneScope),
+    Prune(PruneScope),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -150,7 +154,7 @@ pub struct StatusSnapshot {
     pub last_connection_failure: Option<ConnectionFailure>,
     /// Each provider's readiness, once the runner has set up agent logins
     /// (REQ-RUNNERENROLL-42). Absent until the first pass records it, seconds
-    /// after the runner starts; from then on a `useful runner status` older than
+    /// after the runner starts; from then on a `useful runner show` older than
     /// agent logins refuses the answer, the replaced-binary case chapter 11
     /// documents.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,7 +221,7 @@ impl AgentLoginProvider {
     }
 
     /// An OAuth provider's name as a grant's provider, which the grant-token
-    /// route and `useful integration` take: GitLab is the instance `gitlab.com`.
+    /// route and `useful account integration` take: GitLab is the instance `gitlab.com`.
     /// `None` for an installable provider.
     pub const fn grant_provider(self) -> Option<&'static str> {
         match self {
@@ -627,13 +631,17 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<ControlRequest, ControlErro
         Some("assignment") => assignment_query(&request)
             .map(ControlRequest::Assignment)
             .ok_or(ControlError::InvalidRequest),
+        // `all` is a JSON boolean, and nothing else is admitted (REQ-RUNNERENROLL-164,
+        // REQ-RUNNERENROLL-165).
+        Some("kept") => prune_scope(&request).map(ControlRequest::Kept),
+        Some("prune") => prune_scope(&request).map(ControlRequest::Prune),
         _ => Err(ControlError::InvalidRequest),
     }
 }
 
 /// One request line's object, once it holds exactly the members its operation admits and
-/// names this version: `schemaVersion` and `operation`, and for `assignment` also
-/// `assignmentId` and, optionally, `run` and `step`.
+/// names this version: `schemaVersion` and `operation`, for `assignment` also
+/// `assignmentId` and, optionally, `run` and `step`, and for `kept` and `prune` also `all`.
 fn request_object(
     bytes: &[u8],
 ) -> Result<serde_json::Map<String, serde_json::Value>, ControlError> {
@@ -654,6 +662,7 @@ fn request_object(
                 &["schemaVersion", "operation", "assignmentId"],
                 &["run", "step"],
             ),
+            Some("kept" | "prune") => (&["schemaVersion", "operation", "all"], &[]),
             _ => (&["schemaVersion", "operation"], &[]),
         };
     if !required.iter().all(|key| object.contains_key(*key))
@@ -1432,7 +1441,7 @@ pub(crate) fn encode_overview_response(overview: &Overview) -> Result<Vec<u8>, P
     })
 }
 
-/// One open answer's line within `OVERVIEW_RESPONSE_LIMIT`, the LF included.
+/// One large answer's line within `OVERVIEW_RESPONSE_LIMIT`, the LF included.
 fn open_answer_bytes(answer: &impl Serialize) -> Result<Vec<u8>, ProtocolFailure> {
     let mut bytes = serde_json::to_vec(answer).map_err(|_| ProtocolFailure::Invalid)?;
     bytes.push(b'\n');
@@ -1878,6 +1887,408 @@ fn valid_assignment(detail: &AssignmentDetail) -> bool {
             .log
             .as_ref()
             .is_none_or(|log| log.records.len() <= MAXIMUM_LOG_RECORDS)
+}
+
+/// What a `kept` or a `prune` request covers (REQ-RUNNERENROLL-164,
+/// REQ-RUNNERENROLL-165): the kept-run bounds in force, or every kept workspace and every
+/// cache file, its request's `all`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PruneScope {
+    Bounds,
+    All,
+}
+
+impl PruneScope {
+    const fn all(self) -> bool {
+        matches!(self, Self::All)
+    }
+}
+
+/// The scope of a `kept` or `prune` request whose members are the ones it admits: `all`
+/// is a JSON boolean.
+fn prune_scope(
+    request: &serde_json::Map<String, serde_json::Value>,
+) -> Result<PruneScope, ControlError> {
+    match request.get("all") {
+        Some(serde_json::Value::Bool(true)) => Ok(PruneScope::All),
+        Some(serde_json::Value::Bool(false)) => Ok(PruneScope::Bounds),
+        _ => Err(ControlError::InvalidRequest),
+    }
+}
+
+/// The `kept` request for `scope` (REQ-RUNNERENROLL-164).
+pub(crate) fn encode_kept_request(scope: PruneScope) -> Vec<u8> {
+    encode_scoped_operation("kept", scope)
+}
+
+/// The `prune` request for `scope` (REQ-RUNNERENROLL-165).
+pub(crate) fn encode_prune_request(scope: PruneScope) -> Vec<u8> {
+    encode_scoped_operation("prune", scope)
+}
+
+fn encode_scoped_operation(operation: &str, scope: PruneScope) -> Vec<u8> {
+    let all = scope.all();
+    let mut request =
+        format!(r#"{{"schemaVersion":1,"operation":"{operation}","all":{all}}}"#).into_bytes();
+    request.push(b'\n');
+    request
+}
+
+/// The kept-run bounds in force, each `None` when that bound is off (REQ-RUNNERENROLL-157).
+/// Both members are required, null where the bound is off.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KeptRunsBounds {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub maximum_age_days: Option<u64>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub maximum_total_bytes: Option<u64>,
+}
+
+/// Why a workspace was kept (REQ-RUNNERENROLL-68), the words of the service's retention
+/// reason.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeptReason {
+    Failed,
+    Cancelled,
+    Interrupted,
+    ArtifactDeliveryFailed,
+    OutcomeUnknown,
+    ProcessStopFailed,
+    CredentialTeardownFailed,
+    ReleaseWorkerUnavailable,
+}
+
+/// What a prune would do with a kept workspace now (REQ-RUNNERENROLL-164).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeptWorkspaceState {
+    Kept,
+    Due,
+    InUse,
+    Failed,
+}
+
+/// The bound that chooses a kept directory: its age, the kept total, or an operator's
+/// `all` (REQ-RUNNERENROLL-159).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeptBound {
+    Age,
+    TotalSize,
+    Operator,
+}
+
+/// One kept workspace: its run directories, the newest attempt's first, and that
+/// attempt's IDs when its records give them. `bytes` is present exactly when `state` is
+/// `kept` or `due`, and `bound` exactly when it is `due`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KeptWorkspace {
+    pub directories: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub reason: KeptReason,
+    pub age_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    pub state: KeptWorkspaceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound: Option<KeptBound>,
+}
+
+/// What lies at a build cache's `path` (REQ-RUNNERENROLL-164): a directory measured, or
+/// why nothing there can be evicted.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeptCacheState {
+    Measured,
+    Missing,
+    NotADirectory,
+    Unreadable,
+    Protected,
+}
+
+/// One build cache the configuration names. `bytes` and `dueBytes` are present exactly
+/// when it is `measured`, `dueBytes` at most `bytes`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KeptCache {
+    pub path: String,
+    pub maximum_bytes: u64,
+    pub state: KeptCacheState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_bytes: Option<u64>,
+}
+
+/// The `kept` report (REQ-RUNNERENROLL-164): the bounds in force, the kept workspaces with
+/// the ones cut counted in `workspacesOmitted`, the build caches, and the bytes a prune
+/// would free in all, the omitted workspaces included.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KeptReport {
+    pub all: bool,
+    pub kept_runs: KeptRunsBounds,
+    pub workspaces: Vec<KeptWorkspace>,
+    pub workspaces_omitted: u64,
+    pub build_caches: Vec<KeptCache>,
+    pub due_bytes: u64,
+}
+
+/// What became of a run directory a prune chose.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrunedOutcome {
+    Removed,
+    Failed,
+}
+
+/// One run directory a prune removed or failed to remove, with its attempt's IDs when its
+/// records give them, its bytes and the bound that chose it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PrunedDirectory {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    pub bytes: u64,
+    pub bound: KeptBound,
+    pub result: PrunedOutcome,
+}
+
+/// One build cache a prune evicted from: the files and bytes removed, the files it could
+/// not remove, and the bytes the cache still occupies.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PrunedCache {
+    pub path: String,
+    pub maximum_bytes: u64,
+    pub removed_files: u64,
+    pub removed_bytes: u64,
+    pub failed_files: u64,
+    pub bytes: u64,
+}
+
+/// The `pruned` result (REQ-RUNNERENROLL-165): whether the pass finished, the directories
+/// with the ones cut counted in `directoriesOmitted`, `failedDirectories` counting every
+/// failed one, the omitted ones included, the caches, and the bytes removed in all.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PruneReport {
+    pub all: bool,
+    pub complete: bool,
+    pub directories: Vec<PrunedDirectory>,
+    pub directories_omitted: u64,
+    pub failed_directories: u64,
+    pub build_caches: Vec<PrunedCache>,
+    pub removed_bytes: u64,
+}
+
+/// What a `kept` request is answered: the report, or the closed error the serving
+/// process refused it with, `invalid_request` from an earlier release.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KeptAnswer {
+    Kept(Box<KeptReport>),
+    Refused(ControlError),
+}
+
+/// What a `prune` request is answered: the result, or the closed error the serving
+/// process refused it with, `runner_busy` while a held run is working
+/// (REQ-RUNNERENROLL-82) or `invalid_request` from an earlier release.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PruneAnswer {
+    Pruned(Box<PruneReport>),
+    Refused(ControlError),
+}
+
+/// The most workspaces a `kept` report and directories a `pruned` result list to a
+/// reader, the rest counted as omitted.
+pub(crate) const MAXIMUM_KEPT_ENTRIES: usize = 4_096;
+/// The most build caches either lists, the most a configuration names
+/// (REQ-RUNNERENROLL-160).
+const MAXIMUM_KEPT_CACHES: usize = 16;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncodedKept<'a> {
+    schema_version: u8,
+    outcome: &'static str,
+    kept: &'a KeptReport,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncodedPruned<'a> {
+    schema_version: u8,
+    outcome: &'static str,
+    pruned: &'a PruneReport,
+}
+
+/// Writes a `kept` answer within `OVERVIEW_RESPONSE_LIMIT`.
+pub(crate) fn encode_kept_response(report: &KeptReport) -> Result<Vec<u8>, ProtocolFailure> {
+    open_answer_bytes(&EncodedKept {
+        schema_version: 1,
+        outcome: "kept",
+        kept: report,
+    })
+}
+
+/// Writes a `pruned` answer within `OVERVIEW_RESPONSE_LIMIT`.
+pub(crate) fn encode_prune_response(report: &PruneReport) -> Result<Vec<u8>, ProtocolFailure> {
+    open_answer_bytes(&EncodedPruned {
+        schema_version: 1,
+        outcome: "pruned",
+        pruned: report,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DecodedKept {
+    schema_version: u8,
+    outcome: String,
+    #[serde(default)]
+    kept: Option<KeptReport>,
+    #[serde(default)]
+    error: Option<ControlError>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DecodedPruned {
+    schema_version: u8,
+    outcome: String,
+    #[serde(default)]
+    pruned: Option<PruneReport>,
+    #[serde(default)]
+    error: Option<ControlError>,
+}
+
+/// Reads the answer to a `kept` request by its `outcome` (REQ-RUNNERENROLL-164).
+pub(crate) fn decode_kept_response(bytes: &[u8]) -> Result<KeptAnswer, ProtocolFailure> {
+    let response: DecodedKept =
+        serde_json::from_slice(answer_json(bytes, OVERVIEW_RESPONSE_LIMIT)?)
+            .map_err(|_| ProtocolFailure::Invalid)?;
+    match (
+        response.schema_version,
+        response.outcome.as_str(),
+        response.kept,
+        response.error,
+    ) {
+        (1, "kept", Some(report), None) if valid_kept_report(&report) => {
+            Ok(KeptAnswer::Kept(Box::new(report)))
+        }
+        (1, "error", None, Some(error)) => Ok(KeptAnswer::Refused(error)),
+        _ => Err(ProtocolFailure::Invalid),
+    }
+}
+
+/// Reads the answer to a `prune` request by its `outcome` (REQ-RUNNERENROLL-165).
+pub(crate) fn decode_prune_response(bytes: &[u8]) -> Result<PruneAnswer, ProtocolFailure> {
+    let response: DecodedPruned =
+        serde_json::from_slice(answer_json(bytes, OVERVIEW_RESPONSE_LIMIT)?)
+            .map_err(|_| ProtocolFailure::Invalid)?;
+    match (
+        response.schema_version,
+        response.outcome.as_str(),
+        response.pruned,
+        response.error,
+    ) {
+        (1, "pruned", Some(report), None) if valid_prune_report(&report) => {
+            Ok(PruneAnswer::Pruned(Box::new(report)))
+        }
+        (1, "error", None, Some(error)) => Ok(PruneAnswer::Refused(error)),
+        _ => Err(ProtocolFailure::Invalid),
+    }
+}
+
+/// A path on the runner host a `kept` or `pruned` answer names: absolute.
+fn valid_kept_path(path: &str) -> bool {
+    path.starts_with('/')
+}
+
+/// An attempt's three IDs, all of them typed or none of them.
+fn valid_attempt_ids(
+    assignment_id: Option<&str>,
+    run_id: Option<&str>,
+    attempt_id: Option<&str>,
+) -> bool {
+    let typed = |value: &str, prefix| super::validation::valid_typed_id(value, prefix);
+    match (assignment_id, run_id, attempt_id) {
+        (None, None, None) => true,
+        (Some(assignment_id), Some(run_id), Some(attempt_id)) => {
+            typed(assignment_id, "asn_") && typed(run_id, "run_") && typed(attempt_id, "atm_")
+        }
+        _ => false,
+    }
+}
+
+fn valid_kept_report(report: &KeptReport) -> bool {
+    report
+        .kept_runs
+        .maximum_age_days
+        .is_none_or(|days| (1..=3_650).contains(&days))
+        && report.kept_runs.maximum_total_bytes != Some(0)
+        && report.workspaces.len() <= MAXIMUM_KEPT_ENTRIES
+        && report.workspaces.iter().all(valid_kept_workspace)
+        && report.build_caches.len() <= MAXIMUM_KEPT_CACHES
+        && report.build_caches.iter().all(valid_kept_cache)
+}
+
+fn valid_kept_workspace(workspace: &KeptWorkspace) -> bool {
+    use KeptWorkspaceState::{Due, Failed, InUse, Kept};
+    !workspace.directories.is_empty()
+        && workspace
+            .directories
+            .iter()
+            .all(|directory| valid_kept_path(directory))
+        && valid_attempt_ids(
+            workspace.assignment_id.as_deref(),
+            workspace.run_id.as_deref(),
+            workspace.attempt_id.as_deref(),
+        )
+        && matches!(
+            (workspace.state, workspace.bytes, workspace.bound),
+            (Kept, Some(_), None) | (Due, Some(_), Some(_)) | (InUse | Failed, None, None)
+        )
+}
+
+fn valid_kept_cache(cache: &KeptCache) -> bool {
+    valid_kept_path(&cache.path)
+        && cache.maximum_bytes > 0
+        && match (cache.state, cache.bytes, cache.due_bytes) {
+            (KeptCacheState::Measured, Some(bytes), Some(due_bytes)) => due_bytes <= bytes,
+            (KeptCacheState::Measured, _, _) => false,
+            (_, bytes, due_bytes) => bytes.is_none() && due_bytes.is_none(),
+        }
+}
+
+fn valid_prune_report(report: &PruneReport) -> bool {
+    report.directories.len() <= MAXIMUM_KEPT_ENTRIES
+        && report.directories.iter().all(|directory| {
+            valid_kept_path(&directory.path)
+                && valid_attempt_ids(
+                    directory.assignment_id.as_deref(),
+                    directory.run_id.as_deref(),
+                    directory.attempt_id.as_deref(),
+                )
+        })
+        && report.build_caches.len() <= MAXIMUM_KEPT_CACHES
+        && report
+            .build_caches
+            .iter()
+            .all(|cache| valid_kept_path(&cache.path) && cache.maximum_bytes > 0)
 }
 
 #[cfg(test)]
@@ -4033,5 +4444,559 @@ mod tests {
             )),
             Some((16, 4_096, 256))
         );
+    }
+
+    const KEPT_ID: &str = "01k0z6r1w8f4jy2m7q9v3x5abc";
+
+    fn workspace_ids(suffix: &str) -> (Option<String>, Option<String>, Option<String>) {
+        let id = |prefix: &str| Some(format!("{prefix}{}{suffix}", &KEPT_ID[..23]));
+        (id("asn_"), id("run_"), id("atm_"))
+    }
+
+    fn run_directory(suffix: &str) -> String {
+        format!("/srv/useful/work/runs/{}{suffix}", &KEPT_ID[..23])
+    }
+
+    fn kept_workspace(
+        directories: &[&str],
+        ids: Option<(&str, &str)>,
+        reason: KeptReason,
+        age_seconds: u64,
+        bytes: Option<u64>,
+        state: KeptWorkspaceState,
+        bound: Option<KeptBound>,
+    ) -> KeptWorkspace {
+        let (assignment_id, run_id, attempt_id) = match ids {
+            Some((run, attempt)) => {
+                let (assignment_id, run_id, _) = workspace_ids(run);
+                (assignment_id, run_id, workspace_ids(attempt).2)
+            }
+            None => (None, None, None),
+        };
+        KeptWorkspace {
+            directories: directories
+                .iter()
+                .map(|suffix| run_directory(suffix))
+                .collect(),
+            assignment_id,
+            run_id,
+            attempt_id,
+            reason,
+            age_seconds,
+            bytes,
+            state,
+            bound,
+        }
+    }
+
+    fn unmeasured_cache(path: &str, state: KeptCacheState) -> KeptCache {
+        KeptCache {
+            path: path.to_owned(),
+            maximum_bytes: 1_073_741_824,
+            state,
+            bytes: None,
+            due_bytes: None,
+        }
+    }
+
+    /// The report `valid/kept-response.json` states: every workspace state and every
+    /// cache state once.
+    fn stated_kept_report() -> KeptReport {
+        KeptReport {
+            all: false,
+            kept_runs: KeptRunsBounds {
+                maximum_age_days: Some(14),
+                maximum_total_bytes: Some(53_687_091_200),
+            },
+            workspaces: vec![
+                kept_workspace(
+                    &["abc"],
+                    Some(("abc", "abc")),
+                    KeptReason::Failed,
+                    86_400,
+                    Some(1_048_576),
+                    KeptWorkspaceState::Kept,
+                    None,
+                ),
+                kept_workspace(
+                    &["abe", "abd"],
+                    Some(("abd", "abe")),
+                    KeptReason::Cancelled,
+                    1_296_000,
+                    Some(2_097_152),
+                    KeptWorkspaceState::Due,
+                    Some(KeptBound::Age),
+                ),
+                kept_workspace(
+                    &["abg"],
+                    None,
+                    KeptReason::Interrupted,
+                    3_600,
+                    None,
+                    KeptWorkspaceState::InUse,
+                    None,
+                ),
+                kept_workspace(
+                    &["abf"],
+                    Some(("abf", "abf")),
+                    KeptReason::ArtifactDeliveryFailed,
+                    7_200,
+                    None,
+                    KeptWorkspaceState::Failed,
+                    None,
+                ),
+            ],
+            workspaces_omitted: 1,
+            build_caches: vec![
+                KeptCache {
+                    path: "/srv/cache/cargo-target".to_owned(),
+                    maximum_bytes: 10_737_418_240,
+                    state: KeptCacheState::Measured,
+                    bytes: Some(12_884_901_888),
+                    due_bytes: Some(2_147_483_648),
+                },
+                unmeasured_cache("/srv/cache/missing", KeptCacheState::Missing),
+                unmeasured_cache("/srv/cache/file", KeptCacheState::NotADirectory),
+                unmeasured_cache("/srv/cache/locked", KeptCacheState::Unreadable),
+                unmeasured_cache("/srv/cache/protected", KeptCacheState::Protected),
+            ],
+            due_bytes: 2_149_584_896,
+        }
+    }
+
+    fn idle_kept_report() -> KeptReport {
+        KeptReport {
+            all: false,
+            kept_runs: KeptRunsBounds {
+                maximum_age_days: None,
+                maximum_total_bytes: None,
+            },
+            workspaces: Vec::new(),
+            workspaces_omitted: 0,
+            build_caches: Vec::new(),
+            due_bytes: 0,
+        }
+    }
+
+    fn pruned_directory(
+        suffix: &str,
+        ids: bool,
+        bytes: u64,
+        bound: KeptBound,
+        result: PrunedOutcome,
+    ) -> PrunedDirectory {
+        let (assignment_id, run_id, attempt_id) = if ids {
+            workspace_ids(suffix)
+        } else {
+            (None, None, None)
+        };
+        PrunedDirectory {
+            path: run_directory(suffix),
+            assignment_id,
+            run_id,
+            attempt_id,
+            bytes,
+            bound,
+            result,
+        }
+    }
+
+    /// The result `valid/pruned-response.json` states.
+    fn stated_prune_report() -> PruneReport {
+        PruneReport {
+            all: true,
+            complete: true,
+            directories: vec![
+                pruned_directory(
+                    "abc",
+                    true,
+                    1_048_576,
+                    KeptBound::Operator,
+                    PrunedOutcome::Removed,
+                ),
+                pruned_directory(
+                    "abh",
+                    false,
+                    4_096,
+                    KeptBound::Operator,
+                    PrunedOutcome::Failed,
+                ),
+            ],
+            directories_omitted: 0,
+            failed_directories: 1,
+            build_caches: vec![PrunedCache {
+                path: "/srv/cache/cargo-target".to_owned(),
+                maximum_bytes: 10_737_418_240,
+                removed_files: 120,
+                removed_bytes: 12_884_897_792,
+                failed_files: 0,
+                bytes: 4_096,
+            }],
+            removed_bytes: 12_885_946_368,
+        }
+    }
+
+    /// The result `valid/pruned-incomplete-response.json` states.
+    fn incomplete_prune_report() -> PruneReport {
+        PruneReport {
+            all: false,
+            complete: false,
+            directories: vec![pruned_directory(
+                "abd",
+                true,
+                2_097_152,
+                KeptBound::Age,
+                PrunedOutcome::Removed,
+            )],
+            directories_omitted: 0,
+            failed_directories: 0,
+            build_caches: Vec::new(),
+            removed_bytes: 2_097_152,
+        }
+    }
+
+    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165: a `kept` or `prune` request carries
+    // exactly its scope, `all`, a JSON boolean, and no other operation carries it.
+    #[test]
+    fn kept_and_prune_requests_carry_exactly_their_scope() {
+        assert_eq!(
+            decode_request(b"{\"schemaVersion\":1,\"operation\":\"kept\",\"all\":false}\n"),
+            Ok(ControlRequest::Kept(PruneScope::Bounds))
+        );
+        assert_eq!(
+            decode_request(b"{\"schemaVersion\":1,\"operation\":\"prune\",\"all\":true}\n"),
+            Ok(ControlRequest::Prune(PruneScope::All))
+        );
+        assert_eq!(
+            encode_kept_request(PruneScope::Bounds),
+            b"{\"schemaVersion\":1,\"operation\":\"kept\",\"all\":false}\n"
+        );
+        assert_eq!(
+            encode_prune_request(PruneScope::All),
+            b"{\"schemaVersion\":1,\"operation\":\"prune\",\"all\":true}\n"
+        );
+        assert_eq!(
+            encode_kept_request(PruneScope::Bounds),
+            overview_fixture("valid/kept-request.json")
+        );
+        assert_eq!(
+            encode_kept_request(PruneScope::All),
+            overview_fixture("valid/kept-all-request.json")
+        );
+        assert_eq!(
+            encode_prune_request(PruneScope::All),
+            overview_fixture("valid/prune-request.json")
+        );
+        for scope in [PruneScope::Bounds, PruneScope::All] {
+            assert_eq!(
+                decode_request(&encode_kept_request(scope)),
+                Ok(ControlRequest::Kept(scope))
+            );
+            assert_eq!(
+                decode_request(&encode_prune_request(scope)),
+                Ok(ControlRequest::Prune(scope))
+            );
+        }
+
+        let mut refused = vec![
+            b"{\"schemaVersion\":1,\"operation\":\"status\",\"all\":false}\n".to_vec(),
+            overview_fixture("invalid/kept-request-without-all.json"),
+            overview_fixture("invalid/prune-request-extra-field.json"),
+            overview_fixture("invalid/prune-request-all-not-boolean.json"),
+        ];
+        for operation in ["kept", "prune"] {
+            for members in [
+                "",
+                r#","all":1"#,
+                r#","all":"true""#,
+                r#","all":null"#,
+                r#","all":false,"step":"build""#,
+            ] {
+                let mut request =
+                    format!(r#"{{"schemaVersion":1,"operation":"{operation}"{members}}}"#)
+                        .into_bytes();
+                request.push(b'\n');
+                refused.push(request);
+            }
+        }
+        for request in refused {
+            assert_eq!(
+                decode_request(&request),
+                Err(ControlError::InvalidRequest),
+                "{}",
+                String::from_utf8_lossy(&request)
+            );
+        }
+    }
+
+    // REQ-RUNNERENROLL-164: the `kept` answer decodes to the report it states and the
+    // report encodes to its bytes; the idle answer has no workspace, no cache and both
+    // bounds off.
+    #[test]
+    fn a_kept_report_decodes_to_what_it_states_and_encodes_to_its_bytes() {
+        for (path, report) in [
+            ("valid/kept-response.json", stated_kept_report()),
+            ("valid/kept-idle-response.json", idle_kept_report()),
+        ] {
+            let bytes = overview_fixture(path);
+            assert_eq!(
+                decode_kept_response(&bytes),
+                Ok(KeptAnswer::Kept(Box::new(report.clone()))),
+                "{path}"
+            );
+            assert_eq!(encode_kept_response(&report), Ok(bytes), "{path}");
+        }
+    }
+
+    // REQ-RUNNERENROLL-165: the `pruned` answer decodes to the result it states, finished
+    // or not, and the result encodes to its bytes.
+    #[test]
+    fn a_prune_result_decodes_to_what_it_states_and_encodes_to_its_bytes() {
+        for (path, report) in [
+            ("valid/pruned-response.json", stated_prune_report()),
+            (
+                "valid/pruned-incomplete-response.json",
+                incomplete_prune_report(),
+            ),
+        ] {
+            let bytes = overview_fixture(path);
+            assert_eq!(
+                decode_prune_response(&bytes),
+                Ok(PruneAnswer::Pruned(Box::new(report.clone()))),
+                "{path}"
+            );
+            assert_eq!(encode_prune_response(&report), Ok(bytes), "{path}");
+        }
+    }
+
+    // REQ-RUNNERENROLL-82, REQ-RUNNERENROLL-165: a `prune` refused because a held run is
+    // working is `runner_busy`, and an earlier serving process's `invalid_request` is a
+    // refusal of either request; an error word outside the closed set is unreadable.
+    #[test]
+    fn a_refused_kept_or_prune_request_is_its_closed_error() {
+        assert_eq!(
+            decode_prune_response(&overview_fixture("valid/runner-busy-response.json")),
+            Ok(PruneAnswer::Refused(ControlError::RunnerBusy))
+        );
+        let invalid_request =
+            b"{\"schemaVersion\":1,\"outcome\":\"error\",\"error\":\"invalid_request\"}\n";
+        assert_eq!(
+            decode_kept_response(invalid_request),
+            Ok(KeptAnswer::Refused(ControlError::InvalidRequest))
+        );
+        assert_eq!(
+            decode_prune_response(invalid_request),
+            Ok(PruneAnswer::Refused(ControlError::InvalidRequest))
+        );
+        let not_held =
+            b"{\"schemaVersion\":1,\"outcome\":\"error\",\"error\":\"assignment_not_held\"}\n";
+        assert_eq!(
+            decode_kept_response(not_held),
+            Err(ProtocolFailure::Invalid)
+        );
+        assert_eq!(
+            decode_prune_response(not_held),
+            Err(ProtocolFailure::Invalid)
+        );
+    }
+
+    /// A change to an answer's JSON that makes it one the reader refuses.
+    type Edit = fn(&mut serde_json::Value);
+
+    /// The JSON of a fixture, to change before it is encoded again.
+    fn fixture_value(path: &str) -> serde_json::Value {
+        serde_json::from_slice(&overview_fixture(path)).unwrap()
+    }
+
+    // REQ-RUNNERENROLL-164: a `kept` answer whose members do not pair as the report
+    // states them, or that names a path, an ID or more entries than a reader admits, is
+    // invalid.
+    #[test]
+    fn a_kept_report_the_reader_cannot_read_is_invalid() {
+        for path in [
+            "invalid/kept-due-without-bound.json",
+            "invalid/kept-in-use-with-bytes.json",
+            "invalid/kept-unknown-state.json",
+            "invalid/kept-cache-measured-without-bytes.json",
+        ] {
+            assert_eq!(
+                decode_kept_response(&overview_fixture(path)),
+                Err(ProtocolFailure::Invalid),
+                "{path}"
+            );
+        }
+
+        let stated = fixture_value("valid/kept-response.json");
+        let edits: [(&str, Edit); 15] = [
+            ("schema version", |value| value["schemaVersion"] = 2.into()),
+            ("pruned outcome", |value| value["outcome"] = "pruned".into()),
+            ("unknown member", |value| value["kept"]["extra"] = 1.into()),
+            ("absent bound", |value| {
+                value["kept"]["keptRuns"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("maximumAgeDays");
+            }),
+            ("kept with a bound", |value| {
+                value["kept"]["workspaces"][0]["bound"] = "age".into();
+            }),
+            ("failed with bytes", |value| {
+                value["kept"]["workspaces"][3]["bytes"] = 1.into();
+            }),
+            ("one ID alone", |value| {
+                value["kept"]["workspaces"][2]["runId"] = "run_01k0z6r1w8f4jy2m7q9v3x5abg".into();
+            }),
+            ("mistyped ID", |value| {
+                value["kept"]["workspaces"][0]["attemptId"] =
+                    "run_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            }),
+            ("relative directory", |value| {
+                value["kept"]["workspaces"][0]["directories"][0] = "runs/abc".into();
+            }),
+            ("no directory", |value| {
+                value["kept"]["workspaces"][0]["directories"] = serde_json::json!([]);
+            }),
+            ("unknown reason", |value| {
+                value["kept"]["workspaces"][0]["reason"] = "succeeded".into();
+            }),
+            ("relative cache", |value| {
+                value["kept"]["buildCaches"][1]["path"] = "cache".into();
+            }),
+            ("due past the cache", |value| {
+                value["kept"]["buildCaches"][0]["dueBytes"] = 12_884_901_889_u64.into();
+            }),
+            ("unmeasured with bytes", |value| {
+                value["kept"]["buildCaches"][1]["bytes"] = 0.into();
+            }),
+            ("too many caches", |value| {
+                let cache = value["kept"]["buildCaches"][1].clone();
+                value["kept"]["buildCaches"] = serde_json::Value::Array(vec![cache; 17]);
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut refused = stated.clone();
+            edit(&mut refused);
+            assert_eq!(
+                decode_kept_response(&encoded_value(&refused)),
+                Err(ProtocolFailure::Invalid),
+                "{name}"
+            );
+        }
+
+        // The workspace without IDs, so that 4097 of them still fit the byte bound.
+        let mut at_the_bounds = stated;
+        let workspace = at_the_bounds["kept"]["workspaces"][2].clone();
+        at_the_bounds["kept"]["workspaces"] = serde_json::Value::Array(vec![workspace; 4_096]);
+        let cache = at_the_bounds["kept"]["buildCaches"][1].clone();
+        at_the_bounds["kept"]["buildCaches"] = serde_json::Value::Array(vec![cache; 16]);
+        let Ok(KeptAnswer::Kept(report)) = decode_kept_response(&encoded_value(&at_the_bounds))
+        else {
+            panic!("the report at its bounds did not decode");
+        };
+        assert_eq!(
+            (report.workspaces.len(), report.build_caches.len()),
+            (4_096, 16)
+        );
+        let workspace = at_the_bounds["kept"]["workspaces"][0].clone();
+        at_the_bounds["kept"]["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(workspace);
+        assert_eq!(
+            decode_kept_response(&encoded_value(&at_the_bounds)),
+            Err(ProtocolFailure::Invalid)
+        );
+    }
+
+    // REQ-RUNNERENROLL-165: a `pruned` answer with an unknown result or bound, a lone ID,
+    // a relative path or more entries than a reader admits is invalid.
+    #[test]
+    fn a_prune_result_the_reader_cannot_read_is_invalid() {
+        assert_eq!(
+            decode_prune_response(&overview_fixture("invalid/pruned-unknown-result.json")),
+            Err(ProtocolFailure::Invalid)
+        );
+        let stated = fixture_value("valid/pruned-response.json");
+        let edits: [(&str, Edit); 8] = [
+            ("kept outcome", |value| value["outcome"] = "kept".into()),
+            ("unknown member", |value| {
+                value["pruned"]["extra"] = 1.into()
+            }),
+            ("no completion", |value| {
+                value["pruned"].as_object_mut().unwrap().remove("complete");
+            }),
+            ("unknown bound", |value| {
+                value["pruned"]["directories"][0]["bound"] = "size".into();
+            }),
+            ("one ID alone", |value| {
+                value["pruned"]["directories"][1]["assignmentId"] =
+                    "asn_01k0z6r1w8f4jy2m7q9v3x5abh".into();
+            }),
+            ("relative directory", |value| {
+                value["pruned"]["directories"][0]["path"] = "runs/abc".into();
+            }),
+            ("relative cache", |value| {
+                value["pruned"]["buildCaches"][0]["path"] = "cache".into();
+            }),
+            ("too many caches", |value| {
+                let cache = value["pruned"]["buildCaches"][0].clone();
+                value["pruned"]["buildCaches"] = serde_json::Value::Array(vec![cache; 17]);
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut refused = stated.clone();
+            edit(&mut refused);
+            assert_eq!(
+                decode_prune_response(&encoded_value(&refused)),
+                Err(ProtocolFailure::Invalid),
+                "{name}"
+            );
+        }
+
+        // The directory without IDs, so that 4097 of them still fit the byte bound.
+        let mut at_the_bounds = stated;
+        let directory = at_the_bounds["pruned"]["directories"][1].clone();
+        at_the_bounds["pruned"]["directories"] =
+            serde_json::Value::Array(vec![directory.clone(); 4_096]);
+        let Ok(PruneAnswer::Pruned(report)) = decode_prune_response(&encoded_value(&at_the_bounds))
+        else {
+            panic!("the result at its bounds did not decode");
+        };
+        assert_eq!(report.directories.len(), 4_096);
+        at_the_bounds["pruned"]["directories"]
+            .as_array_mut()
+            .unwrap()
+            .push(directory);
+        assert_eq!(
+            decode_prune_response(&encoded_value(&at_the_bounds)),
+            Err(ProtocolFailure::Invalid)
+        );
+    }
+
+    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165: both answers are read within the
+    // 1048576-byte bound of the large answers, the LF included.
+    #[test]
+    fn kept_and_pruned_answers_share_the_large_answer_bound() {
+        type Decode = fn(&[u8]) -> Result<bool, ProtocolFailure>;
+        let kept: Decode =
+            |bytes| decode_kept_response(bytes).map(|answer| matches!(answer, KeptAnswer::Kept(_)));
+        let pruned: Decode = |bytes| {
+            decode_prune_response(bytes).map(|answer| matches!(answer, PruneAnswer::Pruned(_)))
+        };
+        for (path, decode) in [
+            ("valid/kept-response.json", kept),
+            ("valid/pruned-response.json", pruned),
+        ] {
+            let mut encoded = overview_fixture(path);
+            encoded.splice(
+                encoded.len() - 1..encoded.len() - 1,
+                std::iter::repeat_n(b' ', OVERVIEW_RESPONSE_LIMIT - encoded.len()),
+            );
+            assert_eq!(encoded.len(), 1_048_576);
+            assert_eq!(decode(&encoded), Ok(true), "{path}");
+            encoded.insert(encoded.len() - 1, b' ');
+            assert_eq!(encoded.len(), 1_048_577);
+            assert_eq!(decode(&encoded), Err(ProtocolFailure::Invalid), "{path}");
+        }
     }
 }

@@ -232,7 +232,7 @@ pub(in crate::workflow) fn live_step_detail(step: &WorkflowRunStepView) -> Optio
         Some(ObservedStepTransition::OutputsCommitted { outputs, .. }) => {
             Some(output_count_detail(outputs.len()))
         }
-        Some(ObservedStepTransition::Failed { detail }) => Some(issue_detail_for_step(
+        Some(ObservedStepTransition::Failed { detail, .. }) => Some(issue_detail_for_step(
             canonical_failure_detail(detail),
             &step.definition,
             step.state,

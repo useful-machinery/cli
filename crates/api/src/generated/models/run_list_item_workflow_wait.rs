@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// RunListItemWorkflowWait : The wait a listed waiting run reported, without its questions.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunListItemWorkflowWait {
-    /// What the run waits for, an open set a client shows as given when it does not know it: today `answer`, `approval`, `repair`, `stop`, `external` or `children`.
+    /// What the run waits for, an open set a client shows as given when it does not know it: today `answer`, `approval`, `repair`, `stop`, `external`, `children` or `host`.
     #[serde(rename = "kind")]
     pub kind: String,
     #[serde(rename = "since")]

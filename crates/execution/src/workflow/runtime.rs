@@ -13,8 +13,9 @@ use super::document::{FailurePolicy, FinalizationTrigger, WaitKind, WaitRule};
 pub(crate) use super::evidence::FailurePhase;
 use super::evidence::{
     BlockedDetail, CancellationDetail, ConditionFalseDetail, EvaluatedPredicateEvidence,
-    FailedChild, FailureDetail, InheritedDetail, InputSource, NodeFailureSource, NonExecutionCode,
-    NonExecutionDetail, Prerequisite, PrimaryIssue, PrimaryIssueDetail, input_sources,
+    FailedChild, FailureClass, FailureCode, FailureDetail, InheritedDetail, InputSource,
+    NodeFailureSource, NonExecutionCode, NonExecutionDetail, Prerequisite, PrimaryIssue,
+    PrimaryIssueDetail, input_sources,
 };
 use super::finalization_context::{
     self, FinalizationContext, OrdinaryIssue, OrdinaryIssueDisposition,
@@ -259,6 +260,18 @@ pub(crate) struct ProvisionalTargetFailure<Cause> {
 pub enum RecoveryDecisionKind {
     Recheck,
     GaveUp,
+    Infrastructure,
+}
+
+impl RecoveryDecisionKind {
+    /// The decision's name in a recovery decision document and every published record.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recheck => "recheck",
+            Self::GaveUp => "gave_up",
+            Self::Infrastructure => "infrastructure",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -286,6 +299,15 @@ impl RecoveryDecision {
             reason: reason.into(),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn infrastructure(summary: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            kind: RecoveryDecisionKind::Infrastructure,
+            summary: summary.into(),
+            reason: reason.into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,6 +325,10 @@ pub(crate) enum RecoveryHandlerOutcome<Cause> {
         reason: String,
     },
     GaveUp {
+        summary: String,
+        reason: String,
+    },
+    Infrastructure {
         summary: String,
         reason: String,
     },
@@ -337,6 +363,14 @@ pub(crate) enum RecoveryTerminalDisposition {
     },
     GaveUp {
         round: RecoveryRoundNumber,
+    },
+    Infrastructure {
+        round: RecoveryRoundNumber,
+    },
+    /// The step's own exit status classified the failure of this execution, which followed
+    /// at least one round (REQ-WFRECOVERY-66).
+    InfrastructureExecution {
+        execution_number: TargetExecutionNumber,
     },
     HandlerFailed {
         round: RecoveryRoundNumber,
@@ -444,6 +478,9 @@ pub struct EnteredWait {
     /// The reason of the interruption that ended the attempt on the wait it continued from,
     /// kept rather than entered (REQ-WFEXEC-72, INV-ENGINE-32); `None` for an entered wait.
     pub(crate) kept: Option<CancellationReason>,
+    /// Whether entering the wait counts against its edge's limit: a host wait entered under
+    /// it (REQ-WFEXEC-80); false for every other wait and for a kept one.
+    pub(crate) counted: bool,
 }
 
 impl EnteredWait {
@@ -477,6 +514,13 @@ impl EnteredWait {
     /// of entering one (REQ-WFEXEC-72): its record is the one the attempt continued from.
     pub const fn kept(&self) -> Option<CancellationReason> {
         self.kept
+    }
+
+    /// The key `<step>.<outcome>` the run record counts this wait under once it is recorded
+    /// (REQ-WFEXEC-80, REQ-WFDEF-4): `Some` exactly for a host wait entered under its limit.
+    pub fn counted_edge(&self) -> Option<String> {
+        let outcome = self.outcome.as_deref().filter(|_| self.counted)?;
+        Some(edge_key(&self.step, outcome))
     }
 }
 
@@ -799,6 +843,10 @@ pub(crate) struct StepRuntimeState<Cause, Output> {
     /// captures its outputs and once it is `succeeded`, and dropped when it moves to any
     /// other state (REQ-WFEXEC-77, INV-ENGINE-42).
     pub(crate) failed_child: Option<FailedChild>,
+    /// The class of the step's failure, set when a recovery handler decided `infrastructure`
+    /// (REQ-WFRECOVERY-65) or the step's exit status classified it (REQ-WFRECOVERY-66), and
+    /// kept only while the step is `failed` (REQ-WFEXEC-79, INV-ENGINE-47).
+    pub(crate) failure_class: Option<FailureClass>,
     /// The source each `firstOf` of the step's body took, recorded each time the step is
     /// authorized and kept whatever state it then reaches; empty for a step that never
     /// started in the attempt (REQ-EVIDENCE-28).
@@ -831,6 +879,9 @@ struct RuntimeStep {
     first_of: BTreeMap<FirstOfBinding, Vec<ResolvedOutputSource>>,
     declared_outputs: BTreeSet<String>,
     recovery: Option<RuntimeRecovery>,
+    /// An ordinary `cmd` step's `infrastructureExitCodes` (REQ-WFFORMAT-109); empty for
+    /// every other step and every finalizer.
+    infrastructure_exit_codes: Arc<[u8]>,
     when: BTreeSet<FinalizationTrigger>,
     /// A `workflow` step's edges by child outcome; `None` for every other step.
     edges: Option<Arc<BTreeMap<String, RuntimeEdgeTarget>>>,
@@ -845,8 +896,9 @@ pub(crate) enum RuntimeScheduling {
 }
 
 /// Where a settled `workflow` step's recorded outcome leads: a step, an exit, a limited
-/// edge, or a wait the run enters (REQ-WFEXEC-58, REQ-WFEXEC-61, REQ-WFEXEC-64). A wait's
-/// `then` is its target as the format spells it, a step id or `exit.<name>`.
+/// edge, a wait the run enters, or a host wait it enters under its limit (REQ-WFEXEC-58,
+/// REQ-WFEXEC-61, REQ-WFEXEC-64, REQ-WFEXEC-80). A wait's `then` is its target as the format
+/// spells it, a step id or `exit.<name>`; a host wait's is the step whose edge it is.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimeEdgeTarget {
     Step(String),
@@ -861,6 +913,11 @@ pub(crate) enum RuntimeEdgeTarget {
         then: String,
         on_hand_back: Option<String>,
         rule: Option<WaitRule>,
+    },
+    HostWait {
+        then: String,
+        limit: u32,
+        else_: Box<RuntimeEdgeTarget>,
     },
 }
 
@@ -885,15 +942,20 @@ impl RuntimeEdgeTarget {
                 on_hand_back: on_hand_back.clone(),
                 rule: rule.clone(),
             },
+            ValidatedEdgeTarget::HostWait { then, limit, else_ } => Self::HostWait {
+                then: then.clone(),
+                limit: *limit,
+                else_: Box::new(Self::from_validated(else_)),
+            },
         }
     }
 }
 
 fn edge_target_text(target: &ValidatedEdgeTarget) -> String {
     match target {
-        ValidatedEdgeTarget::Step(step) | ValidatedEdgeTarget::Limited { then: step, .. } => {
-            step.clone()
-        }
+        ValidatedEdgeTarget::Step(step)
+        | ValidatedEdgeTarget::Limited { then: step, .. }
+        | ValidatedEdgeTarget::HostWait { then: step, .. } => step.clone(),
         ValidatedEdgeTarget::Exit(name) => format!("exit.{name}"),
         ValidatedEdgeTarget::Wait { then, .. } => edge_target_text(then),
     }
@@ -1001,6 +1063,21 @@ impl RuntimeDefinition {
     }
 }
 
+impl RuntimeStep {
+    /// Whether `detail`, a target execution's failure, is a `command_exit` at phase
+    /// `execution` whose exit code this ordinary step lists (REQ-WFRECOVERY-66). A launch
+    /// failure, an output capture failure and a signal never are.
+    fn classifies_as_infrastructure(&self, detail: &FailureDetail) -> bool {
+        self.role == WorkflowNodeRole::Step
+            && detail.phase == FailurePhase::Execution
+            && detail.code == FailureCode::CommandExit
+            && detail
+                .exit_code
+                .and_then(|code| u8::try_from(code).ok())
+                .is_some_and(|code| self.infrastructure_exit_codes.contains(&code))
+    }
+}
+
 fn runtime_finalizer(finalizer: &ValidatedFinalizer) -> RuntimeStep {
     runtime_step(
         WorkflowNodeRole::Finalizer,
@@ -1086,6 +1163,12 @@ fn runtime_step(
                 .as_ref()
                 .map(RecoveryHandlerKind::from_validated),
         }),
+        infrastructure_exit_codes: match step {
+            ValidatedStep::Command(command) => {
+                command.infrastructure_exit_codes.iter().copied().collect()
+            }
+            ValidatedStep::Agent(_) | ValidatedStep::Workflow(_) => Arc::from([]),
+        },
         when,
         edges: match step {
             ValidatedStep::Workflow(workflow) => Some(Arc::new(
@@ -1630,6 +1713,7 @@ where
                     condition_passed: false,
                     failure_kind: None,
                     failed_child: None,
+                    failure_class: None,
                     input_sources: Vec::new(),
                 },
             )
@@ -2134,6 +2218,7 @@ where
         rule: None,
         interrupted: None,
         kept: None,
+        counted: false,
     };
     settle_unstarted_on_wait(reduction, &step, wait);
     true
@@ -2204,6 +2289,7 @@ where
         rule: None,
         interrupted: interruption,
         kept: None,
+        counted: false,
     };
     settle_unstarted_on_wait(reduction, step, wait);
     true
@@ -2279,6 +2365,7 @@ fn kept_resumed_wait<Cause, Output, Deadline>(
     }
     state.resumed_wait.as_ref().map(|wait| EnteredWait {
         kept: Some(*reason),
+        counted: false,
         ..wait.clone()
     })
 }
@@ -3033,6 +3120,23 @@ where
     let Ok(detail) = cause.node_failure_detail(phase) else {
         return false;
     };
+    if definition.classifies_as_infrastructure(&detail) {
+        // The step's own exit status says the failure is the host's: no round starts,
+        // whatever rounds remain (REQ-WFRECOVERY-66, INV-ENGINE-47).
+        if let Some(execution_number) = activated_recovery_execution(&reduction.state, &step) {
+            set_recovery_disposition(
+                &mut reduction.state,
+                &step,
+                RecoveryTerminalDisposition::InfrastructureExecution { execution_number },
+            );
+        }
+        if let Some(runtime) = reduction.state.steps.get_mut(&step) {
+            runtime.failure_kind = Some(cause.failure_kind());
+            runtime.failure_class = Some(FailureClass::Infrastructure);
+        }
+        settle_target_failure(reduction, step, definition, detail);
+        return true;
+    }
     if definition.role == WorkflowNodeRole::Step
         && activate_recovery_round(reduction, &step, phase, detail.clone(), cause.clone())
     {
@@ -3198,9 +3302,13 @@ where
             summary: decision.summary,
             reason: decision.reason,
         },
+        RecoveryDecisionKind::Infrastructure => RecoveryHandlerOutcome::Infrastructure {
+            summary: decision.summary,
+            reason: decision.reason,
+        },
     };
     set_handler_outcome(&mut reduction.state, &step, round, outcome);
-    match decision.kind {
+    let disposition = match decision.kind {
         RecoveryDecisionKind::Recheck => {
             let Some(execution_number) = latest_target_failure(&reduction.state, &step)
                 .and_then(|failure| failure.execution_number.next())
@@ -3212,16 +3320,22 @@ where
             };
             let inputs = resolved_action_inputs(&reduction.state, &definition);
             authorize_target(reduction, step, execution_number, inputs);
+            return true;
         }
-        RecoveryDecisionKind::GaveUp => {
-            set_recovery_disposition(
-                &mut reduction.state,
-                &step,
-                RecoveryTerminalDisposition::GaveUp { round },
-            );
-            settle_latest_target_failure(reduction, step);
+        RecoveryDecisionKind::GaveUp => RecoveryTerminalDisposition::GaveUp { round },
+        RecoveryDecisionKind::Infrastructure => {
+            RecoveryTerminalDisposition::Infrastructure { round }
         }
+    };
+    if matches!(
+        disposition,
+        RecoveryTerminalDisposition::Infrastructure { .. }
+    ) && let Some(runtime) = reduction.state.steps.get_mut(&step)
+    {
+        runtime.failure_class = Some(FailureClass::Infrastructure);
     }
+    set_recovery_disposition(&mut reduction.state, &step, disposition);
+    settle_latest_target_failure(reduction, step);
     true
 }
 
@@ -4538,7 +4652,8 @@ where
 enum TakenEdge<'a> {
     Step(&'a str),
     Exit(&'a str),
-    /// The edge is a wait the run enters (REQ-WFEXEC-61).
+    /// The edge is a wait the run enters (REQ-WFEXEC-61), a host wait under its count among
+    /// them (REQ-WFEXEC-80).
     Wait(&'a RuntimeEdgeTarget),
     /// The edge names the producer itself or an earlier step, or is a limited edge's `then`
     /// under its count: the run continues from `target` in a new attempt (REQ-WFEXEC-64).
@@ -4570,17 +4685,20 @@ where
         // The count is compared before the taking: `limit: 2` continues twice and takes
         // `else` the third time (REQ-WFEXEC-64).
         Some((outcome, RuntimeEdgeTarget::Limited { then, limit, else_ })) => {
-            let count = state
-                .definition
-                .edge_counts
-                .get(&edge_key(producer, outcome))
-                .copied()
-                .unwrap_or(0);
-            if count < u64::from(*limit) {
+            if under_limit(&state.definition, producer, outcome, *limit) {
                 TakenEdge::Continue {
                     target: then,
                     counted: true,
                 }
+            } else {
+                ordinary_edge(&state.definition, producer, else_)
+            }
+        }
+        // A host wait is compared as a limited edge: under its count the run enters it,
+        // counted, and at its count it takes `else` (REQ-WFEXEC-80).
+        Some((outcome, target @ RuntimeEdgeTarget::HostWait { limit, else_, .. })) => {
+            if under_limit(&state.definition, producer, outcome, *limit) {
+                TakenEdge::Wait(target)
             } else {
                 ordinary_edge(&state.definition, producer, else_)
             }
@@ -4591,9 +4709,21 @@ where
     Some((outcome, edge))
 }
 
+/// Whether the run's count of `producer`'s `outcome` edge, from the seed, is below `limit`
+/// (REQ-WFEXEC-64, REQ-WFEXEC-80).
+fn under_limit(definition: &RuntimeDefinition, producer: &str, outcome: &str, limit: u32) -> bool {
+    definition
+        .edge_counts
+        .get(&edge_key(producer, outcome))
+        .copied()
+        .unwrap_or(0)
+        < u64::from(limit)
+}
+
 /// An edge target taken as the format spells it: a step later in document order than the
 /// producer starts in this attempt, the producer itself or an earlier step continues the run
-/// (REQ-WFEXEC-58, REQ-WFEXEC-64). Validation admits no limited edge inside another.
+/// (REQ-WFEXEC-58, REQ-WFEXEC-64). Validation admits no limited edge or host wait inside
+/// another.
 /// Whether `target` is a step later than `producer` in `order`, the document order: the
 /// comparison that makes a `Step` edge start its target in the attempt rather than continue
 /// (REQ-WFEXEC-58) and a fan-out go on to its next element (REQ-WFEXEC-66).
@@ -4620,7 +4750,9 @@ fn ordinary_edge<'a>(
         },
         RuntimeEdgeTarget::Exit(name) => TakenEdge::Exit(name),
         RuntimeEdgeTarget::Wait { .. } => TakenEdge::Wait(target),
-        RuntimeEdgeTarget::Limited { .. } => TakenEdge::Unrouted,
+        RuntimeEdgeTarget::Limited { .. } | RuntimeEdgeTarget::HostWait { .. } => {
+            TakenEdge::Unrouted
+        }
     }
 }
 
@@ -4728,7 +4860,21 @@ fn end_edge_walk<Provisional, Cause, Output, Deadline>(
                     rule: rule.clone(),
                     interrupted: interrupted.clone(),
                     kept: None,
+                    counted: false,
                 }),
+                TakenEdge::Wait(RuntimeEdgeTarget::HostWait { then, .. }) => {
+                    WalkEnding::Wait(EnteredWait {
+                        step: producer.clone(),
+                        outcome: outcome.map(str::to_owned),
+                        kind: WaitKind::Host,
+                        then: then.clone(),
+                        on_hand_back: None,
+                        rule: None,
+                        interrupted: interrupted.clone(),
+                        kept: None,
+                        counted: true,
+                    })
+                }
                 TakenEdge::Wait(_) | TakenEdge::Unrouted => WalkEnding::Unrouted(producer.clone()),
             };
             Some(ending)
@@ -5414,6 +5560,10 @@ fn transition_step<Provisional, Cause, Output, Deadline>(
             StepStateKind::CapturingOutputs | StepStateKind::Succeeded
         ) {
             runtime.failed_child = None;
+        }
+        // Only a failed step keeps its failure's class (REQ-WFEXEC-79).
+        if to_kind != StepStateKind::Failed {
+            runtime.failure_class = None;
         }
         reduction.events.push(TransitionEvent::Step {
             sequence,

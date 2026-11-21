@@ -12,7 +12,7 @@ impl ExecutionJob {
         let post_stop_fence = PostStopFence::with_workflow_git(self.accepted.workflow_git.clone());
         let cancellation = admitted.execution().cancellation().source().clone();
         if let Err(completion) = self
-            .ensure_execution_authority(&cancellation, &post_stop_fence, assignment_id, attempt_id)
+            .ensure_execution_authority(&post_stop_fence, assignment_id, attempt_id)
             .await
         {
             return completion;
@@ -40,7 +40,7 @@ impl ExecutionJob {
             );
         }
         if let Err(completion) = self
-            .ensure_execution_authority(&cancellation, &post_stop_fence, assignment_id, attempt_id)
+            .ensure_execution_authority(&post_stop_fence, assignment_id, attempt_id)
             .await
         {
             return completion;
@@ -54,12 +54,7 @@ impl ExecutionJob {
             Err(error) => {
                 self.lease_clock_failure(error);
                 return self
-                    .fail_before_execution(
-                        &cancellation,
-                        &post_stop_fence,
-                        assignment_id,
-                        attempt_id,
-                    )
+                    .fail_before_execution(&post_stop_fence, assignment_id, attempt_id)
                     .await;
             }
         };
@@ -145,7 +140,7 @@ impl ExecutionJob {
         };
 
         if let Err(completion) = self
-            .ensure_execution_authority(&cancellation, &post_stop_fence, assignment_id, attempt_id)
+            .ensure_execution_authority(&post_stop_fence, assignment_id, attempt_id)
             .await
         {
             return completion;
@@ -349,7 +344,7 @@ impl ExecutionJob {
                         viewed.clone(),
                         start,
                     )),
-                    &cancellation,
+                    &self.lease_loss,
                     &self.lease_clock,
                     self.authority_updates.clone(),
                     self.infrastructure_interruption.clone(),
@@ -380,7 +375,7 @@ impl ExecutionJob {
                         viewed.clone(),
                         start,
                     )),
-                    &cancellation,
+                    &self.lease_loss,
                     &self.lease_clock,
                     self.authority_updates.clone(),
                     self.infrastructure_interruption.clone(),
@@ -408,7 +403,10 @@ impl ExecutionJob {
                 RunOutcome::Failed { .. } => PhaseEnd::Failed,
                 RunOutcome::Cancelled {
                     reason: CancellationReason::ExecutionLeaseExpired,
-                } => PhaseEnd::TimedOut,
+                } => self
+                    .lease_loss
+                    .reason()
+                    .map_or(PhaseEnd::TimedOut, PhaseEnd::LeaseLost),
                 RunOutcome::Cancelled { .. } => PhaseEnd::Cancelled,
                 // Cloud admission refuses `workflow` steps, so no runner attempt waits or
                 // continues.
@@ -689,6 +687,7 @@ impl ExecutionJob {
         let delivery = match delivery {
             Ok(delivery) => delivery,
             Err(error) => {
+                self.lease_loss.name(LeaseLossReason::ClockFailed);
                 self.lease_clock_failure(error);
                 post_stop_fence.fence();
                 self.accepted.process_guards.begin_forced_containment();
@@ -791,10 +790,10 @@ impl ExecutionJob {
             },
             RunOutcome::Cancelled { reason } => {
                 let report = if let Some(interruption) = infrastructure_interruption {
-                    ExecutionReport::Interrupted {
-                        final_execution_event_sequence: last_sequence,
-                        reason: interruption.report_reason().to_owned(),
-                        terminal_outcome: terminal_outcome(
+                    let Some(report) = self.interruption_report(
+                        last_sequence,
+                        interruption,
+                        terminal_outcome(
                             "cancelled",
                             None,
                             Some(reason.as_str()),
@@ -803,7 +802,15 @@ impl ExecutionJob {
                             recovery_summaries,
                         ),
                         artifact_delivery,
-                    }
+                    ) else {
+                        return self.abort_retained(
+                            assignment_id,
+                            attempt_id,
+                            last_sequence,
+                            "runner_internal_failure",
+                        );
+                    };
+                    report
                 } else if matches!(
                     reason,
                     CancellationReason::UserRequest | CancellationReason::ForceAbort
@@ -882,7 +889,7 @@ impl ExecutionJob {
         let post_stop_fence = PostStopFence::with_workflow_git(self.accepted.workflow_git.clone());
         let cancellation = tree.cancellation().source().clone();
         if let Err(completion) = self
-            .ensure_execution_authority(&cancellation, &post_stop_fence, assignment_id, attempt_id)
+            .ensure_execution_authority(&post_stop_fence, assignment_id, attempt_id)
             .await
         {
             return completion;
@@ -914,12 +921,7 @@ impl ExecutionJob {
                 );
             }
             if let Err(completion) = self
-                .ensure_execution_authority(
-                    &cancellation,
-                    &post_stop_fence,
-                    assignment_id,
-                    attempt_id,
-                )
+                .ensure_execution_authority(&post_stop_fence, assignment_id, attempt_id)
                 .await
             {
                 return completion;
@@ -934,12 +936,7 @@ impl ExecutionJob {
             Err(error) => {
                 self.lease_clock_failure(error);
                 return self
-                    .fail_before_execution(
-                        &cancellation,
-                        &post_stop_fence,
-                        assignment_id,
-                        attempt_id,
-                    )
+                    .fail_before_execution(&post_stop_fence, assignment_id, attempt_id)
                     .await;
             }
         };
@@ -948,7 +945,7 @@ impl ExecutionJob {
         let execution = mark_engine_terminal(
             run_under_lease(
                 tree.drive(&report),
-                &cancellation,
+                &self.lease_loss,
                 &self.lease_clock,
                 self.authority_updates.clone(),
                 self.infrastructure_interruption.clone(),
@@ -1054,7 +1051,10 @@ impl ExecutionJob {
             TransportResult::Failed { .. } => PhaseEnd::Failed,
             TransportResult::Interrupted {
                 reason: CancellationReason::ExecutionLeaseExpired,
-            } => PhaseEnd::TimedOut,
+            } => self
+                .lease_loss
+                .reason()
+                .map_or(PhaseEnd::TimedOut, PhaseEnd::LeaseLost),
             TransportResult::Cancelled { .. } | TransportResult::Interrupted { .. } => {
                 PhaseEnd::Cancelled
             }
@@ -1087,21 +1087,30 @@ impl ExecutionJob {
         });
         let outcome = result.outcome();
         let (report, disposition) = match result {
-            TransportResult::Interrupted { reason } => (
-                ExecutionReport::Interrupted {
-                    final_execution_event_sequence: last_sequence,
-                    reason: if reason == CancellationReason::RunnerShutdown {
-                        InfrastructureInterruption::RunnerShutdown
-                    } else {
-                        InfrastructureInterruption::ExecutionLeaseExpired
-                    }
-                    .report_reason()
-                    .to_owned(),
-                    terminal_outcome: outcome,
+            TransportResult::Interrupted { reason } => {
+                let interruption = if reason == CancellationReason::RunnerShutdown {
+                    InfrastructureInterruption::RunnerShutdown
+                } else {
+                    InfrastructureInterruption::ExecutionLeaseExpired
+                };
+                let Some(report) = self.interruption_report(
+                    last_sequence,
+                    interruption,
+                    outcome,
                     artifact_delivery,
-                },
-                WorkspaceDisposition::Retain(RetentionReason::Interrupted),
-            ),
+                ) else {
+                    return self.abort_retained(
+                        assignment_id,
+                        attempt_id,
+                        last_sequence,
+                        "runner_internal_failure",
+                    );
+                };
+                (
+                    report,
+                    WorkspaceDisposition::Retain(RetentionReason::Interrupted),
+                )
+            }
             result => {
                 // A failure the runner classified itself, such as a refused first resume of
                 // an adopted run, carries its safe facts; it is an ordinary finish, so the
@@ -1133,5 +1142,25 @@ impl ExecutionJob {
             }
         };
         ExecutionCompletion::containment_gated(report, disposition)
+    }
+
+    fn interruption_report(
+        &self,
+        final_execution_event_sequence: u64,
+        interruption: InfrastructureInterruption,
+        terminal_outcome: Value,
+        artifact_delivery: Value,
+    ) -> Option<ExecutionReport> {
+        let lease_loss = match interruption {
+            InfrastructureInterruption::RunnerShutdown => None,
+            InfrastructureInterruption::ExecutionLeaseExpired => Some(self.lease_loss.reason()?),
+        };
+        Some(ExecutionReport::Interrupted {
+            final_execution_event_sequence,
+            reason: interruption.report_reason().to_owned(),
+            lease_loss,
+            terminal_outcome,
+            artifact_delivery,
+        })
     }
 }

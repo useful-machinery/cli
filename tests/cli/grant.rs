@@ -1,13 +1,6 @@
 use super::*;
 
-use super::agent_logins::{
-    AFTER_TOKEN, AMBIENT_MARKER, AmbientHome, CLAUDE_FLOW, CLAUDE_SIGN_IN_URL, CLAUDE_TOKEN,
-    CLAUDE_TOKEN_SENTINEL, CODEX_MATERIAL, DEVICE_CODE_PROMPT, FakeProgram, PASTE_CODE,
-    PASTE_PROMPT, SENTINEL as CODEX_SENTINEL, SetupToken, SignIn, encoded, private_file,
-};
-use super::runner_doctor_workflow::{
-    LINEAR_LIST, connection_page, held as held_grant, requirement,
-};
+use super::workflow_doctor::{connection_page, held as held_grant, requirement};
 
 pub(super) const TOKEN: &str = "unique-grant-list-session-token";
 pub(super) const OAUTH_GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -40,8 +33,8 @@ pub(super) fn prepared(
     (server, directory, path)
 }
 
-fn run_grant(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Output {
-    let mut arguments = vec!["grant"];
+pub(super) fn run_grant(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Output {
+    let mut arguments = vec!["account", "integration"];
     arguments.extend_from_slice(args);
     arguments.push("--allow-insecure-http");
     let environment = deployment_environment_with_issuer(
@@ -51,29 +44,6 @@ fn run_grant(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Outpu
     );
     let output = run_with_env(&arguments, &environment);
     assert_no_secret_output(&output, &[SENTINEL, TOKEN]);
-    without_notice(output, &replacement(args[0]))
-}
-
-/// The `useful integration` command that replaces the `useful grant` leaf `leaf`
-/// (REQ-INTEGRATION-15).
-pub(super) fn replacement(leaf: &str) -> String {
-    let leaf = if leaf == "create" { "connect" } else { leaf };
-    format!("useful integration {leaf}")
-}
-
-/// `output` without the notice an earlier command prints first on standard error, recognized
-/// as a first line naming `replacement`, the command that replaces it. Where no leaf ran, as
-/// when clap refuses the arguments, there is none to remove. `integration.rs` pins the notice
-/// itself, so the cases here read standard error as the command that replaces it prints it.
-pub(super) fn without_notice(mut output: Output, replacement: &str) -> Output {
-    let notice = output
-        .stderr
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .filter(|end| String::from_utf8_lossy(&output.stderr[..*end]).contains(replacement));
-    if let Some(end) = notice {
-        output.stderr.drain(..=end);
-    }
     output
 }
 
@@ -224,11 +194,11 @@ pub(super) fn json_output(output: &Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-fn stdout(output: &Output) -> String {
+pub(super) fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
 }
 
-fn request_lines(requests: &[String]) -> Vec<&str> {
+pub(super) fn request_lines(requests: &[String]) -> Vec<&str> {
     requests
         .iter()
         .map(|request| request.lines().next().unwrap())
@@ -255,30 +225,17 @@ fn not_connected(provider: &str) -> serde_json::Value {
     })
 }
 
-/// Standard error after its first line, which must be the notice an earlier command prints
-/// naming `replacement`, the command that replaces it (REQ-GRANT-77). Its wording is not a
-/// contract.
-pub(super) fn after_notice(output: &Output, replacement: &str) -> String {
-    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
-    let (notice, rest) = stderr.split_once('\n').unwrap_or((&stderr, ""));
-    assert!(
-        notice.contains(replacement),
-        "{replacement} not in\n{stderr}"
-    );
-    rest.to_owned()
-}
-
-/// Every command a printed next action names is a `useful integration` or
-/// `useful runner integration` command, and none of the earlier commands is named anywhere in
-/// `text` (REQ-GRANT-77, REQ-INTEGRATION-15).
-pub(super) fn assert_next_actions_name_the_integration_commands(text: &str) {
+/// Every command a printed next action names is a `useful account integration` command or
+/// `useful runner sync`, and none of the earlier commands is named anywhere in `text`
+/// (REQ-GRANT-53).
+pub(super) fn assert_next_actions_name_the_grant_commands(text: &str) {
     let mut commands = 0;
     for line in text.lines().filter(|line| line.contains("next action:")) {
         for command in line.split('`').skip(1).step_by(2) {
             commands += 1;
             assert!(
-                command.starts_with("useful integration ")
-                    || command.starts_with("useful runner integration "),
+                command.starts_with("useful account integration ")
+                    || command == "useful runner sync",
                 "{line}"
             );
         }
@@ -288,8 +245,7 @@ pub(super) fn assert_next_actions_name_the_integration_commands(text: &str) {
         "useful auth agent-login",
         "useful auth grant",
         "useful runner agent-login",
-        "useful grant ",
-        "useful runner grant ",
+        "useful runner grant",
     ] {
         assert!(!text.contains(earlier), "{earlier} in\n{text}");
     }
@@ -297,7 +253,7 @@ pub(super) fn assert_next_actions_name_the_integration_commands(text: &str) {
 
 // The two pages of the member's grants: an active GitHub grant, then an active Codex grant and
 // a revoked Linear grant.
-pub(super) fn two_pages() -> [Vec<u8>; 2] {
+fn two_pages() -> [Vec<u8>; 2] {
     [
         page(
             &[oauth_grant(OAUTH_GRANT_ID, "github", "active")],
@@ -324,7 +280,8 @@ const READ_USES: &str =
     "GET /api/v1/me/grants/pgr_01k0z6r1w8f4jy2m7q9v3x5abc/uses?limit=20&vocabulary=2 HTTP/1.1";
 
 // REQ-GRANT-64
-// REQ-GRANT-77
+// REQ-GRANT-53
+// REQ-INTEGRATION-13
 #[test]
 fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_rest() {
     let mut responses = Vec::new();
@@ -355,6 +312,7 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
                     "id": OAUTH_GRANT_ID,
                     "provider": "github",
                     "kind": "oauth",
+                    "side": "member",
                     "account": {"kind": "identity", "id": IDENTITY_ID, "name": EMAIL},
                     "state": "active",
                     "generation": 1,
@@ -372,6 +330,7 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
                     "id": NATIVE_GRANT_ID,
                     "provider": "codex",
                     "kind": "native",
+                    "side": "member",
                     "account": {"kind": "organization", "id": ORGANIZATION_ID, "name": "acme"},
                     "label": "build laptop",
                     "state": "active",
@@ -382,6 +341,9 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
                     "nextAction": "authorize_runner"
                 }
             ],
+            // A deployment that predates the served read serves no token service, so no token
+            // list is read (REQ-INTEGRATION-19).
+            "tokens": [],
             "notConnected": [
                 not_connected("gitlab.com"),
                 not_connected("linear"),
@@ -424,9 +386,8 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
         assert!(rest.contains(name), "missing {name:?} in\n{text}");
     }
     assert!(!text.contains(REVOKED_OAUTH_GRANT_ID), "{text}");
-    // REQ-GRANT-77
-    // REQ-INTEGRATION-15
-    assert_next_actions_name_the_integration_commands(&text);
+    // REQ-GRANT-53
+    assert_next_actions_name_the_grant_commands(&text);
 
     let requests = server.finish();
     assert_member_requests(&requests);
@@ -525,7 +486,7 @@ fn list_names_the_command_that_authorizes_a_runner_for_an_oauth_grant_with_none(
     assert_eq!(
         commands,
         [format!(
-            "useful integration authorize {OAUTH_GRANT_ID} RUNNER --yes"
+            "useful account integration authorize {OAUTH_GRANT_ID} --runner RUNNER --yes"
         )],
         "{line}"
     );
@@ -533,8 +494,9 @@ fn list_names_the_command_that_authorizes_a_runner_for_an_oauth_grant_with_none(
 }
 
 // REQ-GRANT-64
+// REQ-INTEGRATION-13
 #[test]
-fn list_grant_shows_a_native_grants_exchange_and_ended_authorizations() {
+fn show_prints_a_native_grants_exchange_and_ended_authorizations() {
     let grant = native_grant_in_use();
     let (server, _directory, credential) = prepared(vec![
         one(&grant),
@@ -542,8 +504,8 @@ fn list_grant_shows_a_native_grants_exchange_and_ended_authorizations() {
         one(&grant),
         organization(),
     ]);
-    let json = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID, "--json"]);
-    let human = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID]);
+    let json = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID, "--json"]);
+    let human = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID]);
 
     assert_eq!(
         json.status.code(),
@@ -564,6 +526,7 @@ fn list_grant_shows_a_native_grants_exchange_and_ended_authorizations() {
                 "id": NATIVE_GRANT_ID,
                 "provider": "codex",
                 "kind": "native",
+                "side": "member",
                 "account": {"kind": "organization", "id": ORGANIZATION_ID, "name": "acme"},
                 "label": "build laptop",
                 "state": "active",
@@ -612,7 +575,7 @@ fn list_grant_shows_a_native_grants_exchange_and_ended_authorizations() {
 // REQ-GRANT-64: a runner authorized again keeps its last ended authorization listed, with
 // its removal state, beside the one in force.
 #[test]
-fn list_grant_shows_a_runners_ended_authorization_beside_its_authorization_in_force() {
+fn show_prints_a_runners_ended_authorization_beside_its_authorization_in_force() {
     const ENDED_ID: &str = "aga_01k0z6r1w8f4jy2m7q9v3x5abd";
     const CONFIRMED_AT: &str = "2026-11-02T09:30:00Z";
     let mut grant = native_grant_in_use();
@@ -634,8 +597,8 @@ fn list_grant_shows_a_runners_ended_authorization_beside_its_authorization_in_fo
         one(&grant),
         organization(),
     ]);
-    let json = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID, "--json"]);
-    let human = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID]);
+    let json = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID, "--json"]);
+    let human = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID]);
 
     assert_eq!(
         json.status.code(),
@@ -663,10 +626,10 @@ fn list_grant_shows_a_runners_ended_authorization_beside_its_authorization_in_fo
     server.finish();
 }
 
-// REQ-GRANT-64: both views print the last use a runner reported for a native grant and, where
+// REQ-GRANT-64: `list` and `show` print the last use a runner reported for a native grant and, where
 // Cloud holds it, when; a last use with no time prints alone.
 #[test]
-fn list_prints_a_native_authorizations_last_use_and_when() {
+fn list_and_show_print_a_native_authorizations_last_use_and_when() {
     const LAST_USE_AT: &str = "2026-11-02T10:06:30Z";
     let untimed = native_grant_in_use();
     let mut timed = untimed.clone();
@@ -688,8 +651,8 @@ fn list_prints_a_native_authorizations_last_use_and_when() {
             predating_served(),
             organization(),
         ]);
-        let detail_json = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID, "--json"]);
-        let detail = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID]);
+        let detail_json = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID, "--json"]);
+        let detail = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID]);
         let summary_json = run_grant(&server, &credential, &["list", "--json"]);
         let summary = run_grant(&server, &credential, &["list"]);
         for output in [&detail_json, &detail, &summary_json, &summary] {
@@ -698,7 +661,7 @@ fn list_prints_a_native_authorizations_last_use_and_when() {
         let authorization = &grant["authorizations"][0];
         let report = &authorization["report"];
 
-        // `list GRANT` carries the report as Cloud showed it and prints the last use with the
+        // `show` carries the report as Cloud showed it and prints the last use with the
         // exchange.
         assert_eq!(
             json_output(&detail_json)["grant"]["authorizations"][0]["report"],
@@ -743,7 +706,7 @@ fn list_prints_a_native_authorizations_last_use_and_when() {
 
 // REQ-GRANT-64
 #[test]
-fn list_grant_shows_an_oauth_grants_scopes_last_use_and_expiries() {
+fn show_prints_an_oauth_grants_scopes_last_use_and_expiries() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
     let (server, _directory, credential) = prepared(vec![
         one(&grant),
@@ -753,8 +716,8 @@ fn list_grant_shows_an_oauth_grants_scopes_last_use_and_expiries() {
         uses(&[]),
         identities(ada()),
     ]);
-    let json = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID, "--json"]);
-    let human = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID]);
+    let json = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID, "--json"]);
+    let human = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID]);
 
     assert_eq!(json.status.code(), Some(0));
     let shown = &json_output(&json)["grant"];
@@ -801,7 +764,7 @@ fn list_grant_shows_an_oauth_grants_scopes_last_use_and_expiries() {
 // REQ-GRANT-64: a failed identity read still prints the grant, its account by identity ID,
 // and says on standard error that the names could not be read.
 #[test]
-fn list_grant_whose_identity_read_fails_prints_the_grant_and_a_diagnostic() {
+fn show_whose_identity_read_fails_prints_the_grant_and_a_diagnostic() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
     let unavailable = || problem("503 Service Unavailable", 503, "service-unavailable");
     let (server, _directory, credential) = prepared(vec![
@@ -812,8 +775,8 @@ fn list_grant_whose_identity_read_fails_prints_the_grant_and_a_diagnostic() {
         uses(&[]),
         unavailable(),
     ]);
-    let human = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID]);
-    let json = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID, "--json"]);
+    let human = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID]);
+    let json = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID, "--json"]);
 
     assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
     let text = stdout(&human);
@@ -880,13 +843,13 @@ fn three_uses() -> [serde_json::Value; 3] {
     })
 }
 
-pub(super) fn uses(items: &[serde_json::Value]) -> Vec<u8> {
+fn uses(items: &[serde_json::Value]) -> Vec<u8> {
     page(items, None)
 }
 
 // REQ-GRANT-64, REQ-GRANT-8
 #[test]
-fn list_grant_lists_the_tokens_issued_from_an_oauth_grant_newest_first() {
+fn show_lists_the_tokens_issued_from_an_oauth_grant_newest_first_as_many_as_uses_names() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
     let issued = three_uses();
     let (server, _directory, credential) = prepared(vec![
@@ -897,11 +860,11 @@ fn list_grant_lists_the_tokens_issued_from_an_oauth_grant_newest_first() {
         uses(&issued),
         identities(ada()),
     ]);
-    let json = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID, "--json"]);
+    let json = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID, "--json"]);
     let human = run_grant(
         &server,
         &credential,
-        &["list", OAUTH_GRANT_ID, "--uses", "50"],
+        &["show", OAUTH_GRANT_ID, "--uses", "50"],
     );
 
     assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
@@ -969,7 +932,7 @@ fn a_grant_named_by_its_provider_has_its_uses_read_by_its_id() {
         uses(&three_uses()),
         identities(ada()),
     ]);
-    let output = run_grant(&server, &credential, &["list", "github", "--json"]);
+    let output = run_grant(&server, &credential, &["show", "github", "--json"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
@@ -988,12 +951,12 @@ fn a_grant_named_by_its_provider_has_its_uses_read_by_its_id() {
 
 // REQ-GRANT-64: a failed uses read ends the command as a failed grant read does.
 #[test]
-fn list_grant_whose_uses_read_fails_exits_1_as_a_failed_grant_read_does() {
+fn show_whose_uses_read_fails_exits_1_as_a_failed_grant_read_does() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
     let not_found = || problem("404 Not Found", 404, "grant-not-found");
     let (server, _directory, credential) = prepared(vec![not_found(), one(&grant), not_found()]);
-    let read = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID, "--json"]);
-    let listed = run_grant(&server, &credential, &["list", OAUTH_GRANT_ID, "--json"]);
+    let read = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID, "--json"]);
+    let listed = run_grant(&server, &credential, &["show", OAUTH_GRANT_ID, "--json"]);
 
     assert_eq!(read.status.code(), Some(1));
     assert_eq!(json_output(&read)["outcome"], "grant_not_found");
@@ -1004,13 +967,17 @@ fn list_grant_whose_uses_read_fails_exits_1_as_a_failed_grant_read_does() {
     assert_eq!(requests.len(), 3);
 }
 
-// REQ-GRANT-64
+// REQ-GRANT-64: `show` takes a grant and at most 200 uses, and `list` takes neither.
 #[test]
-fn a_uses_limit_out_of_range_or_without_a_grant_exits_2_before_anything_is_sent() {
+fn show_without_a_grant_or_with_a_uses_limit_out_of_range_exits_2_before_anything_is_sent() {
     let (server, _directory, credential) = prepared(vec![]);
     for args in [
-        &["list", OAUTH_GRANT_ID, "--uses", "0"][..],
-        &["list", OAUTH_GRANT_ID, "--uses", "201"],
+        &["show", OAUTH_GRANT_ID, "--uses", "0"][..],
+        &["show", OAUTH_GRANT_ID, "--uses", "201"],
+        &["show"],
+        &["show", "--json"],
+        &["show", "--uses", "20"],
+        &["list", OAUTH_GRANT_ID, "--json"],
         &["list", "--uses", "20"],
         &["list", "--uses", "20", "--json"],
     ] {
@@ -1035,7 +1002,7 @@ fn a_provider_name_resolves_to_the_members_one_unrevoked_grant_of_it() {
         ),
         organization(),
     ]);
-    let output = run_grant(&server, &credential, &["list", "codex", "--json"]);
+    let output = run_grant(&server, &credential, &["show", "codex", "--json"]);
 
     assert_eq!(
         output.status.code(),
@@ -1068,9 +1035,9 @@ fn a_provider_name_with_no_grant_is_not_found_and_one_with_several_is_refused_na
         ),
         problem("404 Not Found", 404, "grant-not-found"),
     ]);
-    let none = run_grant(&server, &credential, &["list", "claude_code", "--json"]);
-    let several = run_grant(&server, &credential, &["list", "codex"]);
-    let unknown = run_grant(&server, &credential, &["list", NATIVE_GRANT_ID, "--json"]);
+    let none = run_grant(&server, &credential, &["show", "claude_code", "--json"]);
+    let several = run_grant(&server, &credential, &["show", "codex"]);
+    let unknown = run_grant(&server, &credential, &["show", NATIVE_GRANT_ID, "--json"]);
 
     assert_eq!(none.status.code(), Some(1));
     assert_eq!(json_output(&none)["outcome"], "grant_not_found");
@@ -1105,7 +1072,7 @@ fn a_grant_that_is_no_grant_id_nor_provider_is_refused_before_anything_is_sent()
         "1password",
         too_long.as_str(),
     ] {
-        let output = run_grant(&server, &credential, &["list", grant, "--json"]);
+        let output = run_grant(&server, &credential, &["show", grant, "--json"]);
         assert_eq!(output.status.code(), Some(2), "{grant}");
         assert!(output.stdout.is_empty(), "{grant}");
     }
@@ -1114,20 +1081,21 @@ fn a_grant_that_is_no_grant_id_nor_provider_is_refused_before_anything_is_sent()
 
 // REQ-GRANT-65
 // REQ-GRANT-96: any name of the provider id shape may name a provider, so one the member holds
-// no grant of is read for and not found.
+// no grant of is read for and not found. Such a name may also name a token service, which a
+// deployment that predates the served read serves none of (REQ-INTEGRATION-20).
 #[test]
 fn a_provider_the_member_holds_no_grant_of_is_not_found_after_the_grants_are_read() {
-    let (server, _directory, credential) = prepared(vec![page(
-        &[oauth_grant(OAUTH_GRANT_ID, "github", "active")],
-        None,
-    )]);
-    let output = run_grant(&server, &credential, &["list", "bitbucket", "--json"]);
+    let (server, _directory, credential) = prepared(vec![
+        page(&[oauth_grant(OAUTH_GRANT_ID, "github", "active")], None),
+        predating_served(),
+    ]);
+    let output = run_grant(&server, &credential, &["show", "bitbucket", "--json"]);
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert_eq!(json_output(&output)["outcome"], "grant_not_found");
     let requests = server.finish();
     assert_member_requests(&requests);
-    assert_eq!(request_lines(&requests), [LIST_FIRST_PAGE]);
+    assert_eq!(request_lines(&requests), [LIST_FIRST_PAGE, READ_SERVED]);
 }
 
 const EXAMPLE_GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abg";
@@ -1159,11 +1127,11 @@ fn a_grant_of_any_provider_is_listed_shown_and_revoked_by_its_provider() {
         deleted(),
     ]);
     let listed = run_grant(&server, &credential, &["list", "--json"]);
-    let shown = run_grant(&server, &credential, &["list", "example", "--json"]);
+    let shown = run_grant(&server, &credential, &["show", "example", "--json"]);
     let revoked = run_grant(
         &server,
         &credential,
-        &["revoke", "example", "--yes", "--json"],
+        &["disconnect", "example", "--yes", "--json"],
     );
 
     assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
@@ -1232,7 +1200,7 @@ fn list_names_each_other_oauth_provider_served_that_the_member_holds_nothing_of(
     ]);
     let json = run_grant(&server, &credential, &["list", "--json"]);
     let human = run_grant(&server, &credential, &["list"]);
-    let shown = run_grant(&server, &credential, &["list", "github", "--json"]);
+    let shown = run_grant(&server, &credential, &["show", "github", "--json"]);
 
     assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
     assert_eq!(
@@ -1256,7 +1224,7 @@ fn list_names_each_other_oauth_provider_served_that_the_member_holds_nothing_of(
     );
     let next_action = lines[at("example") + 2];
     assert!(
-        next_action.contains("`useful integration connect example`"),
+        next_action.contains("`useful account integration connect example`"),
         "{text}"
     );
     assert_eq!(shown.status.code(), Some(0), "{}", stderr(&shown));
@@ -1303,12 +1271,7 @@ fn a_service_api_key_is_refused() {
     let output = run_grant(
         &server,
         &credential,
-        &[
-            "list",
-            "--service-api-key-file",
-            key.to_str().unwrap(),
-            "--json",
-        ],
+        &["list", "--api-key-file", key.to_str().unwrap(), "--json"],
     );
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
@@ -1380,7 +1343,10 @@ fn refusal_without_yes(server: &ScriptedServer, credential: &Path, args: &[&str]
     assert!(output.stdout.is_empty(), "{args:?}");
     let text = stderr(&output);
     assert!(text.contains("--yes"), "{args:?}: {text}");
-    assert!(text.contains(&replacement(args[0])), "{args:?}: {text}");
+    assert!(
+        text.contains(&format!("useful account integration {}", args[0])),
+        "{args:?}: {text}"
+    );
     text
 }
 
@@ -1416,12 +1382,25 @@ fn authorize_states_who_can_use_the_grant_then_authorizes_the_runner_with_one_ke
     let native_run = run_grant(
         &server,
         &credential,
-        &["authorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            NATIVE_GRANT_ID,
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let oauth_run = run_grant(
         &server,
         &credential,
-        &["authorize", OAUTH_GRANT_ID, NEW_RUNNER_ID, "--yes"],
+        &[
+            "authorize",
+            OAUTH_GRANT_ID,
+            "--runner",
+            NEW_RUNNER_ID,
+            "--yes",
+        ],
     );
 
     // Before acting each states who can use the grant, as the refusal without `--yes` does:
@@ -1430,7 +1409,7 @@ fn authorize_states_who_can_use_the_grant_then_authorizes_the_runner_with_one_ke
     let refusal = refusal_without_yes(
         &server,
         &credential,
-        &["authorize", NATIVE_GRANT_ID, RUNNER_ID],
+        &["authorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID],
     );
     let native_statement = statement(&native_run, NATIVE_GRANT_ID);
     let oauth_statement = statement(&oauth_run, OAUTH_GRANT_ID);
@@ -1509,12 +1488,18 @@ fn authorize_without_yes_states_the_runs_issued_oauth_tokens_and_the_steps_readi
     let refusal = refusal_without_yes(
         &server,
         &credential,
-        &["authorize", OAUTH_GRANT_ID, NEW_RUNNER_ID],
+        &["authorize", OAUTH_GRANT_ID, "--runner", NEW_RUNNER_ID],
     );
     let acting = run_grant(
         &server,
         &credential,
-        &["authorize", OAUTH_GRANT_ID, NEW_RUNNER_ID, "--yes"],
+        &[
+            "authorize",
+            OAUTH_GRANT_ID,
+            "--runner",
+            NEW_RUNNER_ID,
+            "--yes",
+        ],
     );
     assert_eq!(acting.status.code(), Some(0), "{}", stderr(&acting));
 
@@ -1537,6 +1522,7 @@ fn authorize_without_yes_states_the_runs_issued_oauth_tokens_and_the_steps_readi
 // REQ-GRANT-66
 // REQ-GRANT-67
 // REQ-GRANT-68
+// REQ-GRANT-82
 #[test]
 fn a_missing_confirmation_or_a_malformed_target_exits_2_before_anything_is_sent() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -1546,33 +1532,57 @@ fn a_missing_confirmation_or_a_malformed_target_exits_2_before_anything_is_sent(
         assert!(output.stdout.is_empty(), "{args:?}");
     };
 
-    // Without --yes each leaf names the option and itself; what it states for each kind is
-    // the statement it makes before acting (each acting test compares the two).
+    // Without --yes, where it cannot ask, each leaf names the option and itself, before a
+    // runner's name is looked up too; what it states for each kind is the statement it makes
+    // before acting (each acting test compares the two).
     refusal_without_yes(
         &server,
         &credential,
-        &["authorize", NATIVE_GRANT_ID, RUNNER_ID],
+        &["authorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID],
     );
-    refusal_without_yes(&server, &credential, &["authorize", "--all", RUNNER_ID]);
     refusal_without_yes(
         &server,
         &credential,
-        &["deauthorize", NATIVE_GRANT_ID, RUNNER_ID],
+        &["authorize", "--all", "--runner", RUNNER_ID],
     );
-    refusal_without_yes(&server, &credential, &["revoke", "codex"]);
+    refusal_without_yes(
+        &server,
+        &credential,
+        &["deauthorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID],
+    );
+    refusal_without_yes(
+        &server,
+        &credential,
+        &["deauthorize", "codex", "--runner", "build-1"],
+    );
+    refusal_without_yes(&server, &credential, &["disconnect", "codex"]);
 
-    // GRANT and --all exclude each other, --all takes one runner, and a runner is named by its
-    // ID, also where the command would otherwise offer the runners to choose from.
-    refused(&["authorize", NATIVE_GRANT_ID, "--all", RUNNER_ID, "--yes"]);
+    // INTEGRATION and --all exclude each other and one of them is required, a leaf takes one
+    // runner, and only with --runner.
+    refused(&[
+        "authorize",
+        NATIVE_GRANT_ID,
+        "--all",
+        "--runner",
+        RUNNER_ID,
+        "--yes",
+    ]);
     refused(&["authorize", NATIVE_GRANT_ID, "--all", "--yes"]);
-    refused(&["authorize", "--all", RUNNER_ID, NEW_RUNNER_ID, "--yes"]);
-    refused(&["authorize", NATIVE_GRANT_ID, "builder", "--yes"]);
-    refused(&["authorize", "codex", "builder"]);
-    refused(&["authorize", "--all", "builder"]);
-    refused(&["deauthorize", "codex", "builder"]);
+    refused(&[
+        "authorize",
+        "--all",
+        "--runner",
+        RUNNER_ID,
+        "--runner",
+        NEW_RUNNER_ID,
+        "--yes",
+    ]);
+    refused(&["authorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes"]);
+    refused(&["deauthorize", "codex", "build-1", "--yes"]);
     refused(&["authorize", "--yes"]);
-    refused(&["authorize", RUNNER_ID, "--yes"]);
-    refused(&["revoke", "bit_bucket", "--yes"]);
+    refused(&["authorize", "--runner", RUNNER_ID, "--yes"]);
+    refused(&["deauthorize", "--runner", RUNNER_ID, "--yes"]);
+    refused(&["disconnect", "bit_bucket", "--yes"]);
 
     assert!(server.finish().is_empty());
 }
@@ -1626,6 +1636,7 @@ fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
     for _ in 0..2 {
         responses.extend([
             every_kind(),
+            predating_served(),
             authorized(LINEAR_GRANT_ID, RUNNER_ID),
             authorized(NATIVE_GRANT_ID, RUNNER_ID),
             problem("404 Not Found", 404, "grant-runner-not-found"),
@@ -1635,12 +1646,19 @@ fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
     let json = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let human = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes"],
+        &["authorize", "--all", "--runner", RUNNER_ID, "--yes"],
     );
 
     assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
@@ -1681,16 +1699,19 @@ fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
 
     let requests = server.finish();
     assert_member_requests(&requests);
+    // A deployment that predates the served read serves no token service, so no token list is
+    // read (REQ-INTEGRATION-20).
     let expected = [
         LIST_FIRST_PAGE,
+        READ_SERVED,
         AUTHORIZE_LINEAR,
         AUTHORIZE_CODEX,
         AUTHORIZE_CLAUDE_CODE,
     ];
-    assert_eq!(request_lines(&requests[..4]), expected);
-    assert_eq!(request_lines(&requests[4..]), expected);
+    assert_eq!(request_lines(&requests[..5]), expected);
+    assert_eq!(request_lines(&requests[5..]), expected);
     // Each grant's request carries a key of its own.
-    let keys: std::collections::BTreeSet<_> = requests[1..4]
+    let keys: std::collections::BTreeSet<_> = requests[2..5]
         .iter()
         .map(|request| header_value(request, "idempotency-key"))
         .collect();
@@ -1705,6 +1726,7 @@ fn authorize_all_exits_1_when_a_grant_is_refused_for_another_reason() {
     for _ in 0..2 {
         responses.extend([
             every_kind(),
+            predating_served(),
             authorized(LINEAR_GRANT_ID, RUNNER_ID),
             problem("409 Conflict", 409, "grant-runner-conflict"),
             problem("404 Not Found", 404, "grant-runner-not-found"),
@@ -1714,12 +1736,19 @@ fn authorize_all_exits_1_when_a_grant_is_refused_for_another_reason() {
     let json = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let human = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes"],
+        &["authorize", "--all", "--runner", RUNNER_ID, "--yes"],
     );
 
     assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
@@ -1741,8 +1770,11 @@ fn authorize_all_exits_1_when_a_grant_is_refused_for_another_reason() {
     assert_eq!(human.status.code(), Some(1));
     let text = format!("{}{}", stdout(&human), stderr(&human));
     assert!(text.contains("runner_holds_login"), "{text}");
-    assert!(text.contains("useful integration deauthorize"), "{text}");
-    assert_eq!(server.finish().len(), 8);
+    assert!(
+        text.contains("useful account integration deauthorize"),
+        "{text}"
+    );
+    assert_eq!(server.finish().len(), 10);
 }
 
 // REQ-GRANT-65
@@ -1761,17 +1793,30 @@ fn authorize_all_tells_a_codex_grant_authorized_elsewhere_from_one_authorized_he
         )
     };
     let elsewhere = || problem("409 Conflict", 409, "grant-already-authorized");
-    let (server, _directory, credential) =
-        prepared(vec![grants(), elsewhere(), grants(), elsewhere()]);
+    let (server, _directory, credential) = prepared(vec![
+        grants(),
+        predating_served(),
+        elsewhere(),
+        grants(),
+        predating_served(),
+        elsewhere(),
+    ]);
     let json = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let human = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes"],
+        &["authorize", "--all", "--runner", RUNNER_ID, "--yes"],
     );
 
     assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
@@ -1809,7 +1854,7 @@ fn authorize_all_tells_a_codex_grant_authorized_elsewhere_from_one_authorized_he
     );
     // The refusal's remedy names the command that frees the grant.
     assert!(
-        stderr(&human).contains("useful integration deauthorize"),
+        stderr(&human).contains("useful account integration deauthorize"),
         "{}",
         stderr(&human)
     );
@@ -1820,8 +1865,10 @@ fn authorize_all_tells_a_codex_grant_authorized_elsewhere_from_one_authorized_he
         request_lines(&requests),
         [
             LIST_FIRST_PAGE,
+            READ_SERVED,
             AUTHORIZE_CODEX,
             LIST_FIRST_PAGE,
+            READ_SERVED,
             AUTHORIZE_CODEX
         ]
     );
@@ -1835,13 +1882,21 @@ fn authorize_all_reports_runner_not_found_when_no_grant_finds_the_runner() {
     let not_found = || problem("404 Not Found", 404, "grant-runner-not-found");
     let (server, _directory, credential) = prepared(vec![
         page(&[linear, native_grant(NATIVE_GRANT_ID, "active")], None),
+        predating_served(),
         not_found(),
         not_found(),
     ]);
     let output = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", NEW_RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            NEW_RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -1850,7 +1905,12 @@ fn authorize_all_reports_runner_not_found_when_no_grant_finds_the_runner() {
     assert_member_requests(&requests);
     assert_eq!(
         request_lines(&requests),
-        [LIST_FIRST_PAGE, AUTHORIZE_LINEAR, AUTHORIZE_CODEX]
+        [
+            LIST_FIRST_PAGE,
+            READ_SERVED,
+            AUTHORIZE_LINEAR,
+            AUTHORIZE_CODEX
+        ]
     );
 }
 
@@ -1894,6 +1954,7 @@ fn authorize_all_reports_the_authorizations_made_before_a_failure_that_ends_it()
     for _ in 0..2 {
         responses.extend([
             grants(),
+            predating_served(),
             authorized(LINEAR_GRANT_ID, RUNNER_ID),
             authorized(NATIVE_GRANT_ID, RUNNER_ID),
             rate_limited(),
@@ -1903,12 +1964,19 @@ fn authorize_all_reports_the_authorizations_made_before_a_failure_that_ends_it()
     let json = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let human = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes"],
+        &["authorize", "--all", "--runner", RUNNER_ID, "--yes"],
     );
 
     assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
@@ -1954,12 +2022,13 @@ fn authorize_all_reports_the_authorizations_made_before_a_failure_that_ends_it()
     assert_member_requests(&requests);
     let expected = [
         LIST_FIRST_PAGE,
+        READ_SERVED,
         AUTHORIZE_LINEAR,
         AUTHORIZE_CODEX,
         AUTHORIZE_CLAUDE_CODE,
     ];
-    assert_eq!(request_lines(&requests[..4]), expected);
-    assert_eq!(request_lines(&requests[4..]), expected);
+    assert_eq!(request_lines(&requests[..5]), expected);
+    assert_eq!(request_lines(&requests[5..]), expected);
 }
 
 // A Codex grant whose authorization for the runner ended while it was serving a run, as the
@@ -1998,12 +2067,25 @@ fn deauthorize_ends_a_native_grants_authorization_and_reports_its_removal_and_st
     let json = run_grant(
         &server,
         &credential,
-        &["deauthorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes", "--json"],
+        &[
+            "deauthorize",
+            NATIVE_GRANT_ID,
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let human = run_grant(
         &server,
         &credential,
-        &["deauthorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes"],
+        &[
+            "deauthorize",
+            NATIVE_GRANT_ID,
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+        ],
     );
 
     assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
@@ -2014,7 +2096,7 @@ fn deauthorize_ends_a_native_grants_authorization_and_reports_its_removal_and_st
         &refusal_without_yes(
             &server,
             &credential,
-            &["deauthorize", NATIVE_GRANT_ID, RUNNER_ID],
+            &["deauthorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID],
         ),
     );
     assert_eq!(
@@ -2069,13 +2151,24 @@ fn deauthorize_ends_an_oauth_grants_authorization_without_a_stop() {
     let output = run_grant(
         &server,
         &credential,
-        &["deauthorize", "github", RUNNER_ID, "--yes", "--json"],
+        &[
+            "deauthorize",
+            "github",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_stated_by_the_refusal(
         &statement(&output, OAUTH_GRANT_ID),
-        &refusal_without_yes(&server, &credential, &["deauthorize", "github", RUNNER_ID]),
+        &refusal_without_yes(
+            &server,
+            &credential,
+            &["deauthorize", "github", "--runner", RUNNER_ID],
+        ),
     );
     // No removal and no stop: the document is the authorization ended and nothing else.
     assert_eq!(
@@ -2129,17 +2222,17 @@ fn revoke_erases_a_native_grant_and_reports_each_runners_removal_and_stop() {
         deleted(),
         one(&after),
     ]);
-    let human = run_grant(&server, &credential, &["revoke", "codex", "--yes"]);
+    let human = run_grant(&server, &credential, &["disconnect", "codex", "--yes"]);
     let json = run_grant(
         &server,
         &credential,
-        &["revoke", NATIVE_GRANT_ID, "--yes", "--json"],
+        &["disconnect", NATIVE_GRANT_ID, "--yes", "--json"],
     );
 
     assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
     assert_stated_by_the_refusal(
         &statement(&human, NATIVE_GRANT_ID),
-        &refusal_without_yes(&server, &credential, &["revoke", "codex"]),
+        &refusal_without_yes(&server, &credential, &["disconnect", "codex"]),
     );
     let text = stdout(&human);
     for name in [
@@ -2170,7 +2263,7 @@ fn revoke_erases_a_native_grant_and_reports_each_runners_removal_and_stop() {
         notes
             .iter()
             .flat_map(|note| note.lines())
-            .any(|line| line.trim() == "useful run cancel ORGANIZATION RUN --wait"),
+            .any(|line| line.trim() == "useful workflow run cancel RUN --wait"),
         "{text}"
     );
 
@@ -2210,13 +2303,13 @@ fn revoke_revokes_an_oauth_grant_without_reading_it_after() {
     let output = run_grant(
         &server,
         &credential,
-        &["revoke", OAUTH_GRANT_ID, "--yes", "--json"],
+        &["disconnect", OAUTH_GRANT_ID, "--yes", "--json"],
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_stated_by_the_refusal(
         &statement(&output, OAUTH_GRANT_ID),
-        &refusal_without_yes(&server, &credential, &["revoke", OAUTH_GRANT_ID]),
+        &refusal_without_yes(&server, &credential, &["disconnect", OAUTH_GRANT_ID]),
     );
     assert_eq!(
         json_output(&output),
@@ -2242,6 +2335,7 @@ fn revoke_revokes_an_oauth_grant_without_reading_it_after() {
     assert!(requests[1].ends_with("\r\n\r\n"), "{}", requests[1]);
 }
 
+// REQ-GRANT-31
 // REQ-GRANT-65
 // REQ-GRANT-66
 // REQ-GRANT-67
@@ -2249,16 +2343,16 @@ fn revoke_revokes_an_oauth_grant_without_reading_it_after() {
 #[test]
 fn each_refusal_these_leaves_meet_exits_1_with_its_remedy() {
     let native = || one(&native_grant(NATIVE_GRANT_ID, "active"));
-    let authorize: &[&str] = &["authorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes"];
+    let authorize: &[&str] = &["authorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID, "--yes"];
     // The arguments, Cloud's answers in order, the outcome, and the command its remedy names,
     // if it names one.
     type Case<'a> = (&'a [&'a str], Vec<Vec<u8>>, &'a str, Option<&'a str>);
     let cases: [Case; 5] = [
         (
-            &["revoke", NATIVE_GRANT_ID, "--yes"],
+            &["disconnect", NATIVE_GRANT_ID, "--yes"],
             vec![problem("404 Not Found", 404, "grant-not-found")],
             "grant_not_found",
-            Some("useful integration list"),
+            Some("useful account integration list"),
         ),
         (
             authorize,
@@ -2286,14 +2380,20 @@ fn each_refusal_these_leaves_meet_exits_1_with_its_remedy() {
                 problem("409 Conflict", 409, "grant-runner-conflict"),
             ],
             "runner_holds_login",
-            Some("useful integration deauthorize"),
+            Some("useful account integration deauthorize"),
         ),
         // The runner holds no authorization in force, so nothing is deleted.
         (
-            &["deauthorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes"],
+            &[
+                "deauthorize",
+                NATIVE_GRANT_ID,
+                "--runner",
+                RUNNER_ID,
+                "--yes",
+            ],
             vec![native()],
             "authorization_not_found",
-            Some("useful integration list"),
+            Some("useful account integration show"),
         ),
     ];
     for (args, responses, outcome, remedy) in cases {
@@ -2341,7 +2441,7 @@ fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_
         ]
     };
     let (server, _directory, credential) = prepared([answers(), answers()].concat());
-    let args = ["authorize", NATIVE_GRANT_ID, RUNNER_ID, "--yes"];
+    let args = ["authorize", NATIVE_GRANT_ID, "--runner", RUNNER_ID, "--yes"];
     let json = run_grant(&server, &credential, &[&args[..], &["--json"]].concat());
     let human = run_grant(&server, &credential, &args);
 
@@ -2350,12 +2450,15 @@ fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_
     assert_eq!(human.status.code(), Some(1));
     let text = stderr(&human);
     assert!(
-        text.contains("useful integration deauthorize INTEGRATION RUNNER --yes"),
+        text.contains("useful account integration deauthorize INTEGRATION --runner RUNNER --yes"),
         "{text}"
     );
     // Another sign-in cannot serve the other runner: the held grant is refused or replaced
     // in place (REQ-GRANT-73).
-    assert!(!text.contains("useful integration connect codex"), "{text}");
+    assert!(
+        !text.contains("useful account integration connect codex"),
+        "{text}"
+    );
     let requests = server.finish();
     assert_member_requests(&requests);
     assert_eq!(requests.len(), 4);
@@ -2366,8 +2469,8 @@ fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_
     );
 }
 
-// `useful grant authorize` and `deauthorize` given no `RUNNER`, run here with a null standard
-// input, where they cannot prompt (REQ-GRANT-81).
+// `useful account integration authorize` and `deauthorize` given no `--runner`, which name the runners
+// they can act on in its place, on a terminal or not (REQ-GRANT-81).
 const GLOBEX_RUNNER_ID: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abf";
 pub(super) const LIST_ACME_RUNNERS: &str = "GET /api/v1/organizations/org_01k0z6r1w8f4jy2m7q9v3x5abc/runner-registrations?limit=200 HTTP/1.1";
 const LIST_GLOBEX_RUNNERS: &str = "GET /api/v1/organizations/org_01k0z6r1w8f4jy2m7q9v3x5abe/runner-registrations?limit=200 HTTP/1.1";
@@ -2414,7 +2517,7 @@ fn acme_runners() -> Vec<u8> {
 }
 
 // The runners `--json` names, by ID and name, in the order it names them.
-fn offered(document: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+pub(super) fn offered(document: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
     document["runners"]
         .as_array()
         .unwrap()
@@ -2430,7 +2533,7 @@ fn offered(document: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
 
 // Where in `output`'s standard error each runner is named, by the line that holds both its ID
 // and its name; the runner each line names, in the order the lines come.
-fn named_runners(output: &Output, runners: &[(&str, &str, &str)]) -> Vec<String> {
+pub(super) fn named_runners(output: &Output, runners: &[(&str, &str, &str)]) -> Vec<String> {
     let text = stderr(output);
     let mut named: Vec<_> = runners
         .iter()
@@ -2448,7 +2551,7 @@ fn named_runners(output: &Output, runners: &[(&str, &str, &str)]) -> Vec<String>
 
 // REQ-GRANT-81
 #[test]
-fn authorize_without_a_runner_where_it_cannot_prompt_names_each_runner_it_offers() {
+fn authorize_without_a_runner_names_each_runner_it_can_act_on() {
     let grants = || page(&[native_grant(NATIVE_GRANT_ID, "active")], None);
     let (server, _directory, credential) =
         prepared(vec![grants(), acme_runners(), grants(), acme_runners()]);
@@ -2467,7 +2570,7 @@ fn authorize_without_a_runner_where_it_cannot_prompt_names_each_runner_it_offers
     let text = stderr(&human);
     let last = text.lines().last().unwrap_or_default();
     assert!(
-        last.contains("useful integration authorize")
+        last.contains("useful account integration authorize")
             && last.contains(RUNNER_ID)
             && last.contains("--yes"),
         "{text}"
@@ -2680,32 +2783,232 @@ fn a_command_with_no_runner_to_offer_exits_1_with_why() {
     }
 }
 
-// `useful grant authorize` and `deauthorize` given no `RUNNER` on a terminal, where they show the
-// runners as a list to choose from (REQ-GRANT-82).
+// A runner named `build-1` in Acme, and one of the same name in Globex.
+const BUILD_1: (&str, &str, &str) = (RUNNER_ID, ORGANIZATION_ID, "build-1");
+const GLOBEX_BUILD_1: (&str, &str, &str) = (GLOBEX_RUNNER_ID, GLOBEX_ORGANIZATION_ID, "build-1");
 
-/// `useful grant` with `args`, to run on a terminal: as the leader of a new session whose
+// Acme's runners: an offline one, an online draining one, and `build-1`.
+fn acme_runners_with_build_1() -> Vec<u8> {
+    registrations(&[
+        registration(ALPHA, "offline", "enabled"),
+        registration(BRAVO, "online", "draining"),
+        registration(BUILD_1, "online", "enabled"),
+    ])
+}
+
+const AUTHORIZE_NATIVE: &str =
+    "POST /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations HTTP/1.1";
+const AUTHORIZE_OAUTH: &str =
+    "POST /api/v1/me/grants/pgr_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations HTTP/1.1";
+const READ_NATIVE: &str =
+    "GET /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1";
+const READ_OAUTH: &str =
+    "GET /api/v1/me/grants/pgr_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1";
+
+// REQ-GRANT-65
+// REQ-GRANT-66
+// REQ-GRANT-67
+#[test]
+fn a_runner_named_by_its_exact_name_is_sent_by_the_id_of_the_one_runner_that_has_it() {
+    // An OAuth grant already authorized for `build-1`, which the name still finds: Cloud
+    // answers that the grant is authorized for it already.
+    let oauth = oauth_grant(OAUTH_GRANT_ID, "github", "active");
+    // The arguments, Cloud's answers in order, the exit status, and the requests made.
+    type Case<'a> = (&'a [&'a str], Vec<Vec<u8>>, i32, Vec<&'a str>);
+    let cases: [Case; 4] = [
+        (
+            &["authorize", NATIVE_GRANT_ID, "--runner", "build-1", "--yes"],
+            vec![
+                one(&native_grant(NATIVE_GRANT_ID, "active")),
+                acme_runners_with_build_1(),
+                authorized(NATIVE_GRANT_ID, RUNNER_ID),
+            ],
+            0,
+            vec![READ_NATIVE, LIST_ACME_RUNNERS, AUTHORIZE_NATIVE],
+        ),
+        (
+            &["authorize", OAUTH_GRANT_ID, "--runner", "build-1", "--yes"],
+            vec![
+                one(&oauth),
+                only_acme(),
+                acme_runners_with_build_1(),
+                problem("409 Conflict", 409, "grant-already-authorized"),
+            ],
+            1,
+            vec![
+                READ_OAUTH,
+                LIST_MEMBERSHIPS,
+                LIST_ACME_RUNNERS,
+                AUTHORIZE_OAUTH,
+            ],
+        ),
+        (
+            &["authorize", "--all", "--runner", "build-1", "--yes"],
+            vec![
+                only_acme(),
+                acme_runners_with_build_1(),
+                page(&[native_grant(NATIVE_GRANT_ID, "active")], None),
+                predating_served(),
+                authorized(NATIVE_GRANT_ID, RUNNER_ID),
+            ],
+            0,
+            vec![
+                LIST_MEMBERSHIPS,
+                LIST_ACME_RUNNERS,
+                LIST_FIRST_PAGE,
+                READ_SERVED,
+                AUTHORIZE_NATIVE,
+            ],
+        ),
+        (
+            &[
+                "deauthorize",
+                NATIVE_GRANT_ID,
+                "--runner",
+                "build-1",
+                "--yes",
+            ],
+            vec![
+                one(&native_grant_in_use()),
+                acme_runners_with_build_1(),
+                deleted(),
+                one(&native_grant_deauthorized()),
+            ],
+            0,
+            vec![
+                READ_NATIVE,
+                LIST_ACME_RUNNERS,
+                DEAUTHORIZE_NATIVE,
+                READ_NATIVE,
+            ],
+        ),
+    ];
+    for (args, responses, status, expected) in cases {
+        let (server, _directory, credential) = prepared(responses);
+        let output = run_grant(&server, &credential, &[args, &["--json"]].concat());
+
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        let requests = server.finish();
+        assert_member_requests(&requests);
+        assert_eq!(request_lines(&requests), expected, "{args:?}");
+        // What is sent names the runner by its ID, as the command line with that ID would.
+        if let Some(post) = requests.iter().find(|request| request.starts_with("POST ")) {
+            assert_eq!(
+                request_body(post),
+                serde_json::json!({"runnerId": RUNNER_ID}),
+                "{args:?}"
+            );
+        }
+        let document = json_output(&output);
+        if status == 1 {
+            assert_eq!(document["outcome"], "already_authorized", "{args:?}");
+        } else {
+            assert!(document.to_string().contains(RUNNER_ID), "{document}");
+        }
+    }
+}
+
+// REQ-GRANT-65
+#[test]
+fn a_runner_name_that_names_no_runner_or_several_sends_nothing() {
+    let organizations = || {
+        memberships(&[
+            (ORGANIZATION_ID, "acme"),
+            (GLOBEX_ORGANIZATION_ID, "globex"),
+        ])
+    };
+    let globex = || registrations(&[registration(GLOBEX_BUILD_1, "online", "enabled")]);
+    let (server, _directory, credential) = prepared(vec![
+        organizations(),
+        acme_runners_with_build_1(),
+        globex(),
+        organizations(),
+        acme_runners_with_build_1(),
+        globex(),
+        one(&native_grant(NATIVE_GRANT_ID, "active")),
+        acme_runners_with_build_1(),
+        one(&native_grant(NATIVE_GRANT_ID, "active")),
+        acme_runners_with_build_1(),
+    ]);
+    let several = ["authorize", "--all", "--runner", "build-1", "--yes"];
+    let human = run_grant(&server, &credential, &several);
+    let json = run_grant(&server, &credential, &[&several[..], &["--json"]].concat());
+    let none = ["authorize", NATIVE_GRANT_ID, "--runner", "build-9", "--yes"];
+    let none_human = run_grant(&server, &credential, &none);
+    let none_json = run_grant(&server, &credential, &[&none[..], &["--json"]].concat());
+
+    // Two runners of different organizations named `build-1`: exit 2, naming each by its
+    // name and ID with its organization, on a line of its own.
+    assert_eq!(human.status.code(), Some(2), "{}", stderr(&human));
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    for (id, organization_id, _) in [BUILD_1, GLOBEX_BUILD_1] {
+        assert!(
+            text.lines().any(|line| line.contains(id)
+                && line.contains(organization_id)
+                && line.contains("build-1")),
+            "{id} not in\n{text}"
+        );
+    }
+    assert_eq!(json.status.code(), Some(2), "{}", stderr(&json));
+    let document = json_output(&json);
+    assert_eq!(document["outcome"], "runner_required");
+    let mut named = offered(&document);
+    named.sort_by(|(left, _), (right, _)| left.cmp(right));
+    assert_eq!(
+        named,
+        [
+            (RUNNER_ID.to_owned(), "build-1".into()),
+            (GLOBEX_RUNNER_ID.to_owned(), "build-1".into()),
+        ]
+    );
+
+    // A name no runner the command read has is `runner_not_found`.
+    assert_eq!(none_human.status.code(), Some(1), "{}", stderr(&none_human));
+    assert!(none_human.stdout.is_empty());
+    assert_eq!(none_json.status.code(), Some(1));
+    assert_eq!(json_output(&none_json)["outcome"], "runner_not_found");
+
+    let requests = server.finish();
+    assert_member_requests(&requests);
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_MEMBERSHIPS,
+            LIST_ACME_RUNNERS,
+            LIST_GLOBEX_RUNNERS,
+            LIST_MEMBERSHIPS,
+            LIST_ACME_RUNNERS,
+            LIST_GLOBEX_RUNNERS,
+            READ_NATIVE,
+            LIST_ACME_RUNNERS,
+            READ_NATIVE,
+            LIST_ACME_RUNNERS,
+        ]
+    );
+}
+
+// `useful account integration authorize` and `deauthorize` on a terminal, where they show no list and
+// ask only whether to go on (REQ-GRANT-81, REQ-GRANT-82).
+
+/// `useful account integration` with `args`, to run on a terminal: as the leader of a new session whose
 /// controlling terminal is its standard input, the terminal the list measures to draw on. The
 /// CLI test environment includes Python.
 fn grant_on_terminal(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Command {
-    family_on_terminal("grant", server, credential, args)
-}
-
-/// `useful FAMILY args`, for a pseudo-terminal to run as the command's controlling terminal,
-/// which the runner list draws on.
-pub(super) fn family_on_terminal(
-    family: &str,
-    server: &ScriptedServer,
-    credential: &Path,
-    args: &[&str],
-) -> Command {
     let mut command = Command::new("python3");
     command
         .args([
             "-c",
             "import fcntl, os, sys, termios; os.setsid(); \
              fcntl.ioctl(0, termios.TIOCSCTTY, 0); os.execv(sys.argv[1], sys.argv[1:])",
-            env!("CARGO_BIN_EXE_useful"),
-            family,
+            crate::executable().to_str().unwrap(),
+            "account",
+            "integration",
         ])
         .args(args)
         .arg("--allow-insecure-http");
@@ -2723,385 +3026,117 @@ pub(super) fn family_on_terminal(
     command
 }
 
-const AUTHORIZE_NATIVE: &str =
-    "POST /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations HTTP/1.1";
-// Ctrl-C, as the list reads it from a terminal in raw mode.
-const INTERRUPT: &str = "\x03";
+// REQ-GRANT-81
+// INV-CLI-16
+#[test]
+fn on_a_terminal_a_leaf_given_no_runner_names_the_runners_and_asks_nothing() {
+    let grants = || page(&[native_grant(NATIVE_GRANT_ID, "active")], None);
+    let (server, _directory, credential) =
+        prepared(vec![grants(), acme_runners(), grants(), acme_runners()]);
+    // Nothing is typed: the command neither draws a list nor asks, with or without `--json`.
+    let (shown, human) = on_terminal(
+        grant_on_terminal(&server, &credential, &["authorize", "codex"]),
+        &[],
+    );
+    let (json_shown, json) = on_terminal(
+        grant_on_terminal(&server, &credential, &["authorize", "codex", "--json"]),
+        &[],
+    );
+
+    assert_eq!(human.status.code(), Some(2), "{shown}");
+    assert!(human.stdout.is_empty());
+    for (id, _, name) in [ALPHA, BRAVO, CHARLIE] {
+        assert!(
+            shown
+                .lines()
+                .any(|line| line.contains(id) && line.contains(name)),
+            "{name} not in\n{shown}"
+        );
+    }
+    assert!(!shown.contains("[y/N]"), "{shown}");
+
+    assert_eq!(json.status.code(), Some(2), "{json_shown}");
+    let document = json_output(&json);
+    assert_eq!(document["outcome"], "runner_required");
+    assert_eq!(offered(&document).len(), 3);
+    assert!(!json_shown.contains(RUNNER_ID), "{json_shown}");
+
+    assert_eq!(
+        request_lines(&server.finish()),
+        [
+            LIST_FIRST_PAGE,
+            LIST_ACME_RUNNERS,
+            LIST_FIRST_PAGE,
+            LIST_ACME_RUNNERS
+        ]
+    );
+}
 
 // REQ-GRANT-82
 // INV-CLI-16
 #[test]
-fn authorize_on_a_terminal_without_a_runner_chooses_it_from_the_list_then_asks() {
-    // The keys typed at the list and at the question, whether `--yes` is given, and whether
-    // the runner is authorized; the exit status follows.
-    let cases: [(&str, Option<&str>, bool, bool); 5] = [
-        ("\r", Some("y\n"), false, true),
-        ("\r", Some("n\n"), false, false),
-        ("\r", None, true, true),
-        // Esc leaves the list without a choice.
-        ("\x1b", None, false, false),
-        // Ctrl-C at the list interrupts the command.
-        (INTERRUPT, None, false, false),
+fn without_yes_on_a_terminal_a_leaf_states_what_acting_does_then_asks_whether_to_go_on() {
+    // The runner as `--runner` names it, the answer typed, and whether the runner is
+    // authorized; the exit status follows.
+    let cases = [
+        ("build-1", "y\n", true),
+        (RUNNER_ID, "y\n", true),
+        (RUNNER_ID, "n\n", false),
+        (RUNNER_ID, "\n", false),
     ];
-    for (at_list, at_question, yes, authorized_runner) in cases {
-        let case = format!("{at_list:?} {at_question:?} --yes {yes}");
-        let mut responses = vec![
-            page(&[native_grant(NATIVE_GRANT_ID, "active")], None),
-            // An offline runner, an online disabled one, and the one online and enabled.
-            registrations(&[
-                registration(ALPHA, "offline", "enabled"),
-                registration(BRAVO, "online", "disabled"),
-                registration(CHARLIE, "online", "enabled"),
-            ]),
-        ];
-        if authorized_runner {
+    for (runner, answer, authorizes) in cases {
+        let case = format!("{runner} {answer:?}");
+        let by_name = !runner.starts_with("rnr_");
+        let mut responses = vec![one(&native_grant(NATIVE_GRANT_ID, "active"))];
+        if by_name {
+            responses.push(acme_runners_with_build_1());
+        }
+        if authorizes {
             responses.push(authorized(NATIVE_GRANT_ID, RUNNER_ID));
         }
         let (server, _directory, credential) = prepared(responses);
-        let mut args = vec!["authorize", "codex"];
-        if yes {
-            args.push("--yes");
-        }
-        // The list is shown once its last runner is.
-        let mut steps = vec![(NEW_RUNNER_ID, at_list)];
-        steps.extend(at_question.map(|answer| ("[y/N]", answer)));
-        let (shown, output) = on_terminal(grant_on_terminal(&server, &credential, &args), &steps);
+        let command = grant_on_terminal(
+            &server,
+            &credential,
+            &["authorize", NATIVE_GRANT_ID, "--runner", runner],
+        );
+        let (asked, output) = answered(command, answer);
+
+        // Before the question, the statement names the grant and the runner, by its name and
+        // ID when named by its name.
+        let heading = asked
+            .lines()
+            .find(|line| line.contains(NATIVE_GRANT_ID))
+            .unwrap_or_else(|| panic!("{case}: no statement in\n{asked}"));
+        assert!(heading.contains(RUNNER_ID), "{case}: {heading}");
+        assert_eq!(heading.contains("build-1"), by_name, "{case}: {heading}");
+        assert!(asked.ends_with("[y/N]"), "{case}\n{asked}");
 
         let requests = server.finish();
         assert_member_requests(&requests);
-        let mut expected = vec![LIST_FIRST_PAGE, LIST_ACME_RUNNERS];
-        if authorized_runner {
+        let mut expected = vec![READ_NATIVE];
+        if by_name {
+            expected.push(LIST_ACME_RUNNERS);
+        }
+        if authorizes {
             expected.push(AUTHORIZE_NATIVE);
         }
-        assert_eq!(request_lines(&requests), expected, "{case}\n{shown}");
+        assert_eq!(request_lines(&requests), expected, "{case}");
         let text = stdout(&output);
-        // The list is drawn on the terminal, standard error, and standard output holds only the
-        // result: the authorization of the runner chosen, the first, online and enabled.
-        for listed in [ENDED_RUNNER_ID, NEW_RUNNER_ID, "alpha", "bravo"] {
-            assert!(!text.contains(listed), "{case}: {listed} in\n{text}");
-        }
-        if authorized_runner {
-            assert_eq!(output.status.code(), Some(0), "{case}\n{shown}");
-            assert_eq!(
-                request_body(&requests[2]),
-                serde_json::json!({"runnerId": RUNNER_ID})
-            );
+        if authorizes {
+            assert_eq!(output.status.code(), Some(0), "{case}");
             assert!(
                 text.contains("aga_01k0z6r1w8f4jy2m7q9v3x5abf"),
                 "{case}: {text}"
             );
         } else {
-            let status = if at_list == INTERRUPT { 130 } else { 2 };
-            assert_eq!(output.status.code(), Some(status), "{case}\n{shown}");
+            assert_eq!(output.status.code(), Some(2), "{case}");
             assert!(text.is_empty(), "{case}: {text}");
         }
-        // With `--yes`, or with no runner chosen, no question is asked.
-        assert_eq!(
-            shown.contains("[y/N]"),
-            at_question.is_some(),
-            "{case}\n{shown}"
-        );
-        if at_question.is_some() {
-            // The list comes first, then the statement, naming the grant and the runner chosen
-            // by its name and ID, then the question.
-            let before = &shown[..shown.find("[y/N]").unwrap()];
-            let heading = before.rfind(NATIVE_GRANT_ID).unwrap();
-            let start = before[..heading].rfind('\n').map_or(0, |at| at + 1);
-            let end = before[heading..]
-                .find('\n')
-                .map_or(before.len(), |at| heading + at);
-            let line = &before[start..end];
-            assert!(
-                before.find(ENDED_RUNNER_ID).unwrap() < start,
-                "{case}\n{shown}"
-            );
-            assert!(
-                line.contains("charlie") && line.contains(RUNNER_ID),
-                "{case}: {line:?}"
-            );
-        }
     }
 }
 
-// REQ-GRANT-81
-// INV-CLI-16
-#[test]
-fn json_on_a_terminal_shows_no_list_and_names_the_runners_offered() {
-    let (server, _directory, credential) = prepared(vec![
-        page(&[native_grant(NATIVE_GRANT_ID, "active")], None),
-        acme_runners(),
-    ]);
-    let command = grant_on_terminal(&server, &credential, &["authorize", "codex", "--json"]);
-    // Nothing is typed: with `--json` the command never prompts, on a terminal too.
-    let (shown, output) = on_terminal(command, &[]);
-
-    assert_eq!(output.status.code(), Some(2), "{shown}");
-    let document = json_output(&output);
-    assert_eq!(document["outcome"], "runner_required");
-    assert_eq!(offered(&document).len(), 3);
-    assert!(!shown.contains(RUNNER_ID), "{shown}");
-    assert_eq!(
-        request_lines(&server.finish()),
-        [LIST_FIRST_PAGE, LIST_ACME_RUNNERS]
-    );
-}
-
-// REQ-GRANT-82
-// INV-CLI-16
-#[test]
-fn deauthorize_on_a_terminal_without_a_runner_offers_only_the_authorized_runner() {
-    let (server, _directory, credential) = prepared(vec![
-        one(&native_grant_in_use()),
-        acme_runners(),
-        deleted(),
-        one(&native_grant_deauthorized()),
-    ]);
-    let command = grant_on_terminal(&server, &credential, &["deauthorize", NATIVE_GRANT_ID]);
-    let (shown, output) = on_terminal(command, &[(RUNNER_ID, "\r"), ("[y/N]", "y\n")]);
-
-    assert_eq!(output.status.code(), Some(0), "{shown}");
-    for other in [ENDED_RUNNER_ID, NEW_RUNNER_ID] {
-        assert!(!shown.contains(other), "{other} offered in\n{shown}");
-    }
-    let requests = server.finish();
-    assert_member_requests(&requests);
-    assert_eq!(
-        request_lines(&requests),
-        [
-            "GET /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1",
-            LIST_ACME_RUNNERS,
-            DEAUTHORIZE_NATIVE,
-            "GET /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1",
-        ]
-    );
-}
-
-// `useful grant authorize` and `deauthorize` given no `RUNNER` on a terminal, offered more than one
-// runner, also offer all of them as one choice (REQ-GRANT-83).
-
-// How the list's last entry, the one that stands for all the runners, begins.
-const ALL_RUNNERS: &str = "All ";
-// The keys that move down the list `count` entries.
-fn down(count: usize) -> String {
-    "\x1b[B".repeat(count)
-}
-
-// A Claude Code grant, which can serve several runners, authorized for none.
-fn claude_code_grant() -> serde_json::Value {
-    let mut grant = native_grant(NATIVE_GRANT_ID, "active");
-    grant["provider"] = "claude_code".into();
-    grant
-}
-
-// Acme's three runners, all online and enabled, so offered by name: alpha, bravo, charlie.
-fn three_ready_runners() -> Vec<u8> {
-    registrations(&[
-        registration(CHARLIE, "online", "enabled"),
-        registration(ALPHA, "online", "enabled"),
-        registration(BRAVO, "online", "enabled"),
-    ])
-}
-
-// REQ-GRANT-83
-#[test]
-fn authorize_with_all_runners_chosen_authorizes_each_under_its_own_key() {
-    let runners = [ENDED_RUNNER_ID, NEW_RUNNER_ID, RUNNER_ID];
-    // Whether Cloud refuses the second runner, which holds another Claude Code login.
-    for refused in [false, true] {
-        let second = if refused {
-            problem("409 Conflict", 409, "grant-runner-conflict")
-        } else {
-            authorized(NATIVE_GRANT_ID, NEW_RUNNER_ID)
-        };
-        let (server, _directory, credential) = prepared(vec![
-            page(&[claude_code_grant()], None),
-            three_ready_runners(),
-            authorized(NATIVE_GRANT_ID, ENDED_RUNNER_ID),
-            second,
-            authorized(NATIVE_GRANT_ID, RUNNER_ID),
-        ]);
-        let command =
-            grant_on_terminal(&server, &credential, &["authorize", "claude_code", "--yes"]);
-        // The last runner offered is charlie; the entry for all follows it.
-        let (shown, output) = on_terminal(command, &[(RUNNER_ID, &format!("{}\r", down(3)))]);
-
-        assert!(shown.contains(ALL_RUNNERS), "{shown}");
-        let requests = server.finish();
-        assert_member_requests(&requests);
-        assert_eq!(
-            request_lines(&requests),
-            [
-                LIST_FIRST_PAGE,
-                LIST_ACME_RUNNERS,
-                AUTHORIZE_NATIVE,
-                AUTHORIZE_NATIVE,
-                AUTHORIZE_NATIVE
-            ],
-            "{shown}"
-        );
-        let posts = &requests[2..];
-        for (request, runner_id) in posts.iter().zip(runners) {
-            assert_eq!(
-                request_body(request),
-                serde_json::json!({"runnerId": runner_id})
-            );
-        }
-        let keys: std::collections::BTreeSet<_> = posts
-            .iter()
-            .map(|request| header_value(request, "idempotency-key"))
-            .collect();
-        assert_eq!(keys.len(), 3, "one key per runner");
-        assert!(!keys.contains(""));
-        // One outcome per runner: the authorization of each runner authorized on standard
-        // output, the refusal on the terminal naming the runner refused, with its remedy.
-        let text = stdout(&output);
-        for runner_id in runners {
-            assert_eq!(
-                text.contains(runner_id),
-                !refused || runner_id != NEW_RUNNER_ID,
-                "{runner_id} in\n{text}"
-            );
-        }
-        if refused {
-            assert_eq!(output.status.code(), Some(1), "{shown}");
-            let after = &shown[shown.rfind(NEW_RUNNER_ID).unwrap()..];
-            assert!(
-                after.contains("useful integration deauthorize INTEGRATION RUNNER --yes"),
-                "{shown}"
-            );
-        } else {
-            assert_eq!(output.status.code(), Some(0), "{shown}");
-        }
-    }
-}
-
-// REQ-GRANT-83
-#[test]
-fn a_failure_that_is_not_one_runners_refusal_ends_the_command_at_that_runner() {
-    // Alpha is authorized, bravo's request is rate limited, and charlie after it is never
-    // tried.
-    let (server, _directory, credential) = prepared(vec![
-        page(&[claude_code_grant()], None),
-        three_ready_runners(),
-        authorized(NATIVE_GRANT_ID, ENDED_RUNNER_ID),
-        rate_limited(),
-    ]);
-    let command = grant_on_terminal(&server, &credential, &["authorize", "claude_code", "--yes"]);
-    let (shown, output) = on_terminal(command, &[(RUNNER_ID, &format!("{}\r", down(3)))]);
-
-    assert_eq!(output.status.code(), Some(1), "{shown}");
-    let requests = server.finish();
-    assert_member_requests(&requests);
-    assert_eq!(
-        request_lines(&requests),
-        [
-            LIST_FIRST_PAGE,
-            LIST_ACME_RUNNERS,
-            AUTHORIZE_NATIVE,
-            AUTHORIZE_NATIVE
-        ],
-        "{shown}"
-    );
-    // The outcome before the failure is printed, then the failure, naming the runner it ended
-    // at: after the statement, which names the grant, the terminal names bravo alone.
-    let text = stdout(&output);
-    assert!(text.contains(ENDED_RUNNER_ID), "{text}");
-    assert!(!text.contains(NEW_RUNNER_ID), "{text}");
-    let after = &shown[shown.rfind(NATIVE_GRANT_ID).unwrap()..];
-    assert!(after.contains(NEW_RUNNER_ID), "{shown}");
-    assert!(!after.contains(RUNNER_ID), "{shown}");
-}
-
-// REQ-GRANT-83
-#[test]
-fn deauthorize_with_all_runners_chosen_ends_each_authorization() {
-    let mut grant = claude_code_grant();
-    grant["authorizations"] = serde_json::json!([
-        {
-            "id": "aga_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "runnerId": RUNNER_ID,
-            "organizationId": ORGANIZATION_ID,
-            "createdAt": "2026-11-02T10:05:00Z"
-        },
-        {
-            "id": "aga_01k0z6r1w8f4jy2m7q9v3x5abe",
-            "runnerId": NEW_RUNNER_ID,
-            "organizationId": ORGANIZATION_ID,
-            "createdAt": "2026-11-02T10:06:00Z"
-        }
-    ]);
-    let (server, _directory, credential) = prepared(vec![
-        one(&grant),
-        acme_runners(),
-        deleted(),
-        one(&grant),
-        deleted(),
-        one(&grant),
-    ]);
-    let command = grant_on_terminal(
-        &server,
-        &credential,
-        &["deauthorize", NATIVE_GRANT_ID, "--yes"],
-    );
-    // Offered charlie, online and enabled, then bravo, then the entry for all.
-    let (shown, output) = on_terminal(command, &[(NEW_RUNNER_ID, &format!("{}\r", down(2)))]);
-
-    assert_eq!(output.status.code(), Some(0), "{shown}");
-    let read = "GET /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1";
-    let requests = server.finish();
-    assert_member_requests(&requests);
-    assert_eq!(
-        request_lines(&requests),
-        [
-            read,
-            LIST_ACME_RUNNERS,
-            DEAUTHORIZE_NATIVE,
-            read,
-            "DELETE /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations/aga_01k0z6r1w8f4jy2m7q9v3x5abe HTTP/1.1",
-            read,
-        ],
-        "{shown}"
-    );
-    assert_ne!(
-        header_value(&requests[2], "idempotency-key"),
-        header_value(&requests[4], "idempotency-key")
-    );
-    let text = stdout(&output);
-    for runner_id in [RUNNER_ID, NEW_RUNNER_ID] {
-        assert!(text.contains(runner_id), "{runner_id} not in\n{text}");
-    }
-}
-
-// REQ-GRANT-83
-#[test]
-fn a_codex_grants_list_and_a_list_of_one_runner_offer_no_choice_of_all() {
-    let one_runner = || registrations(&[registration(CHARLIE, "online", "enabled")]);
-    let cases = [
-        (
-            native_grant(NATIVE_GRANT_ID, "active"),
-            three_ready_runners(),
-        ),
-        (claude_code_grant(), one_runner()),
-    ];
-    for (grant, runners) in cases {
-        let provider = grant["provider"].as_str().unwrap().to_owned();
-        let (server, _directory, credential) = prepared(vec![page(&[grant], None), runners]);
-        let command = grant_on_terminal(&server, &credential, &["authorize", &provider]);
-        // Esc leaves the list once its last runner, charlie, is shown.
-        let (shown, output) = on_terminal(command, &[(RUNNER_ID, "\x1b")]);
-
-        assert_eq!(output.status.code(), Some(2), "{provider}: {shown}");
-        assert!(!shown.contains(ALL_RUNNERS), "{provider}: {shown}");
-        let requests = server.finish();
-        assert_eq!(
-            request_lines(&requests),
-            [LIST_FIRST_PAGE, LIST_ACME_RUNNERS],
-            "{provider}"
-        );
-    }
-}
-
-// `useful grant create`. Each case sets in its own environment whether this machine has a
+// `useful account integration connect`. Each case sets in its own environment whether this machine has a
 // browser, so no case can open a real one: the only opener on `PATH` is a fake that records
 // what it is given.
 
@@ -3125,7 +3160,7 @@ pub(super) const LIST_OAUTH: &str =
     "GET /api/v1/me/grants?kind=oauth&limit=200&vocabulary=2 HTTP/1.1";
 pub(super) const START_CONSENT: &str = "POST /api/v1/me/grants?vocabulary=2 HTTP/1.1";
 
-/// Where `useful grant create` runs.
+/// Where `useful account integration connect` runs.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Place {
     /// No SSH variable, and on Linux a display.
@@ -3204,10 +3239,10 @@ impl Opener {
     }
 }
 
-/// The leading words of `useful grant create`.
-const GRANT_CREATE: &[&str] = &["grant", "create"];
-/// The leading words of `useful runner doctor`.
-const RUNNER_DOCTOR: &[&str] = &["runner", "doctor"];
+/// The leading words of `useful account integration connect`.
+const GRANT_CREATE: &[&str] = &["account", "integration", "connect"];
+/// The leading words of `useful workflow doctor`.
+const WORKFLOW_DOCTOR: &[&str] = &["workflow", "doctor"];
 
 fn create_command(
     server: &ScriptedServer,
@@ -3234,7 +3269,7 @@ pub(super) fn opener_command(
     place: Place,
     arguments: &[&str],
 ) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command.args(arguments).arg("--allow-insecure-http");
     for variable in DEPLOYMENT_VARIABLES
         .into_iter()
@@ -3261,7 +3296,7 @@ pub(super) fn opener_command(
     command
 }
 
-/// Runs `useful grant create` with standard input that is not a terminal.
+/// Runs `useful account integration connect` with standard input that is not a terminal.
 fn run_create(
     server: &ScriptedServer,
     credential: &Path,
@@ -3274,7 +3309,7 @@ fn run_create(
         .output()
         .unwrap();
     assert_no_secret_output(&output, &[SENTINEL, TOKEN]);
-    without_notice(output, &replacement("create"))
+    output
 }
 
 // The Linear consent as the API presents it, carrying material the CLI must drop.
@@ -3306,7 +3341,7 @@ fn session(status: &str) -> serde_json::Value {
     session
 }
 
-pub(super) fn started() -> Vec<u8> {
+fn started() -> Vec<u8> {
     json_http_response("201 Created", session("pending"))
 }
 
@@ -3487,6 +3522,72 @@ fn create_without_waiting_returns_after_the_start_event() {
     assert_eq!(request_lines(&server.finish()), [LIST_OAUTH, START_CONSENT]);
 }
 
+// REQ-GRANT-1, REQ-GRANT-69
+#[test]
+fn create_replays_its_key_once_after_a_lost_start_response() {
+    let (server, _directory, credential) = prepared(vec![nothing_held(), Vec::new(), started()]);
+    let opener = Opener::new(0);
+    let output = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["linear", "--no-wait", "--json"],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let events = events(&output);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["outcome"], "pending");
+    let requests = server.finish();
+    assert_eq!(
+        request_lines(&requests),
+        [LIST_OAUTH, START_CONSENT, START_CONSENT]
+    );
+    let key = header_value(&requests[1], "idempotency-key");
+    assert!(!key.is_empty());
+    assert_eq!(key, header_value(&requests[2], "idempotency-key"));
+}
+
+// REQ-GRANT-1, REQ-GRANT-69
+#[test]
+fn create_waits_out_a_rate_limited_poll_and_then_reports_the_grant() {
+    let limited = http_response_with_headers(
+        "429 Too Many Requests",
+        Some("application/problem+json"),
+        &[("Retry-After", "1")],
+        &serde_json::to_vec(&serde_json::json!({
+            "type": "https://api.usefulmachinery.com/problems/rate-limit-exceeded",
+            "title": "Slow down",
+            "status": 429
+        }))
+        .unwrap(),
+    );
+    let (server, _directory, credential) = prepared(vec![
+        nothing_held(),
+        started(),
+        limited,
+        polled(session("completed")),
+    ]);
+    let opener = Opener::new(0);
+    let output = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["linear", "--json"],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let events = events(&output);
+    assert_eq!(events.last().unwrap()["outcome"], "completed");
+    let poll = poll_line();
+    assert_eq!(
+        request_lines(&server.finish()),
+        [LIST_OAUTH, START_CONSENT, poll.as_str(), poll.as_str()]
+    );
+}
+
 // REQ-GRANT-69
 #[test]
 fn create_reports_a_consent_that_did_not_complete_with_its_reason() {
@@ -3565,8 +3666,51 @@ fn create_reports_a_refused_consent_without_polling() {
 }
 
 // REQ-GRANT-73
+// REQ-GRANT-69
 #[test]
-fn create_without_a_terminal_replaces_a_held_grant_only_with_replace() {
+fn a_consent_that_did_not_complete_names_the_command_that_started_it() {
+    let mut denied = session("failed");
+    denied["reasonCode"] = "consent_denied".into();
+    let (server, _directory, credential) =
+        prepared(vec![nothing_held(), started(), polled(denied.clone())]);
+    let opener = Opener::new(0);
+    let created = run_create(&server, &credential, &opener, Place::Remote, &["linear"]);
+
+    assert_eq!(created.status.code(), Some(1), "{}", stderr(&created));
+    let text = stdout(&created);
+    assert!(
+        text.contains("useful account integration connect linear"),
+        "{text}"
+    );
+    server.finish();
+
+    let (server, _directory, credential) = prepared(vec![
+        one(&oauth_grant(OAUTH_GRANT_ID, "linear", "active")),
+        started(),
+        polled(denied),
+    ]);
+    let reconnected = run_reconnect_consent(&server, &credential, &["reconnect", OAUTH_GRANT_ID]);
+
+    assert_eq!(
+        reconnected.status.code(),
+        Some(1),
+        "{}",
+        stderr(&reconnected)
+    );
+    let text = stdout(&reconnected);
+    assert!(text.contains(&reconnect_line(OAUTH_GRANT_ID)), "{text}");
+    assert!(!text.contains("grant create"), "{text}");
+    server.finish();
+}
+
+/// The command line that signs in to the grant `id` again, as a refusal names it.
+fn reconnect_line(id: &str) -> String {
+    format!("useful account integration reconnect {id}")
+}
+
+// REQ-GRANT-73
+#[test]
+fn create_never_replaces_a_held_grant_and_names_the_reconnect_of_each() {
     for state in ["active", "reconnect_required"] {
         let held = page(
             &[
@@ -3575,27 +3719,24 @@ fn create_without_a_terminal_replaces_a_held_grant_only_with_replace() {
             ],
             None,
         );
-        let (server, _directory, credential) = prepared(vec![held.clone(), held, started()]);
+        let (server, _directory, credential) = prepared(vec![held.clone(), held]);
         let opener = Opener::new(0);
-        let refused = run_create(&server, &credential, &opener, Place::Remote, &["linear"]);
-        let replaced = run_create(
-            &server,
-            &credential,
-            &opener,
-            Place::Remote,
-            &["linear", "--replace", "--no-wait", "--json"],
-        );
+        for args in [&["linear"][..], &["linear", "--no-wait", "--json"]] {
+            let refused = run_create(&server, &credential, &opener, Place::Remote, args);
 
-        assert_eq!(refused.status.code(), Some(2), "{state}");
-        let text = stderr(&refused);
-        assert!(text.contains("--replace"), "{state}: {text}");
-        assert!(text.contains(OAUTH_GRANT_ID), "{state}: {text}");
-        assert!(refused.stdout.is_empty(), "{state}");
-        assert_eq!(replaced.status.code(), Some(0), "{state}");
-        assert_eq!(events(&replaced)[0]["sessionId"], SESSION_ID);
+            assert_eq!(refused.status.code(), Some(2), "{state}: {args:?}");
+            let text = stderr(&refused);
+            assert!(
+                text.contains(&reconnect_line(OAUTH_GRANT_ID)),
+                "{state}: {text}"
+            );
+            assert!(!text.contains(REVOKED_OAUTH_GRANT_ID), "{state}: {text}");
+            assert!(refused.stdout.is_empty(), "{state}");
+        }
+        assert!(opener.opened(0).is_empty(), "{state}");
         assert_eq!(
             request_lines(&server.finish()),
-            [LIST_OAUTH, LIST_OAUTH, START_CONSENT],
+            [LIST_OAUTH, LIST_OAUTH],
             "{state}"
         );
     }
@@ -3627,7 +3768,7 @@ fn create_does_not_hold_a_revoked_grant_or_one_of_another_provider_against_a_con
     assert_eq!(request_lines(&server.finish()), [LIST_OAUTH, START_CONSENT]);
 }
 
-/// The five providers `useful grant create` has a built-in name for.
+/// The five providers `useful account integration connect` has a built-in name for.
 const BUILT_IN: [&str; 5] = ["github", "gitlab.com", "linear", "claude_code", "codex"];
 
 /// The answer of a deployment that serves the five and `example`, an OAuth provider titled
@@ -3775,45 +3916,51 @@ fn a_provider_the_deployment_does_not_serve_as_oauth_is_refused_naming_those_tha
 
 // REQ-GRANT-69
 // REQ-GRANT-73
+// REQ-GRANT-96
 #[test]
-fn create_replaces_a_held_grant_of_a_served_provider_only_with_replace() {
+fn a_held_grant_of_a_served_provider_is_refused_by_create_and_consented_to_by_reconnect() {
     let held = page(&[oauth_grant(EXAMPLE_GRANT_ID, "example", "active")], None);
     let (server, _directory, credential) = prepared(vec![
         serving_example(None),
         held.clone(),
-        serving_example(None),
         held,
+        serving_example(Some("Example Cloud")),
         json_http_response("201 Created", consent_of("example", "pending")),
     ]);
     let opener = Opener::new(0);
     let refused = run_create(&server, &credential, &opener, Place::Remote, &["example"]);
-    let replaced = run_create(
+    let reconnected = run_reconnect_consent(
         &server,
         &credential,
-        &opener,
-        Place::Remote,
-        &["example", "--replace", "--no-wait", "--json"],
+        &["reconnect", "example", "--no-wait", "--json"],
     );
 
     assert_eq!(refused.status.code(), Some(2));
     assert!(refused.stdout.is_empty());
     let text = stderr(&refused);
-    assert!(text.contains(EXAMPLE_GRANT_ID), "{text}");
-    assert!(text.contains("--replace"), "{text}");
-    assert_eq!(replaced.status.code(), Some(0), "{}", stderr(&replaced));
-    let events = events(&replaced);
+    assert!(text.contains(&reconnect_line(EXAMPLE_GRANT_ID)), "{text}");
+    assert_eq!(
+        reconnected.status.code(),
+        Some(0),
+        "{}",
+        stderr(&reconnected)
+    );
+    let events = events(&reconnected);
+    assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["sessionId"], SESSION_ID);
     assert_eq!(events[0]["provider"], "example");
+    let requests = server.finish();
     assert_eq!(
-        request_lines(&server.finish()),
+        request_lines(&requests),
         [
             READ_SERVED,
             LIST_OAUTH,
+            LIST_EVERY_KIND,
             READ_SERVED,
-            LIST_OAUTH,
             START_CONSENT
         ]
     );
+    assert_eq!(start_body(&requests[4]), "example");
 }
 
 /// Runs `command` with a pseudo-terminal as its standard input and standard error, waits for
@@ -3893,56 +4040,185 @@ pub(super) fn on_terminal(mut command: Command, steps: &[(&str, &str)]) -> (Stri
 
 // REQ-GRANT-73
 #[test]
-fn create_on_a_terminal_asks_before_it_replaces_a_held_grant() {
-    for (answer, replaced) in [("y\n", true), ("n\n", false)] {
-        let mut responses = vec![page(
-            &[oauth_grant(OAUTH_GRANT_ID, "linear", "active")],
-            None,
-        )];
-        if replaced {
-            responses.push(started());
-        }
-        let (server, _directory, credential) = prepared(responses);
-        let opener = Opener::new(0);
-        let command = create_command(
-            &server,
-            &credential,
-            &opener,
-            Place::Remote,
-            &["linear", "--no-wait"],
-        );
-        let (transcript, output) = answered(command, answer);
+fn create_on_a_terminal_asks_nothing_and_refuses_a_held_grant() {
+    let (server, _directory, credential) = prepared(vec![page(
+        &[oauth_grant(OAUTH_GRANT_ID, "linear", "active")],
+        None,
+    )]);
+    let opener = Opener::new(0);
+    let command = create_command(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["linear", "--no-wait"],
+    );
+    let (transcript, output) = on_terminal(command, &[]);
 
-        assert!(transcript.contains(OAUTH_GRANT_ID), "{transcript}");
+    assert_eq!(output.status.code(), Some(2), "{transcript}");
+    assert!(!transcript.contains("[y/N]"), "{transcript}");
+    assert!(
+        transcript.contains(&reconnect_line(OAUTH_GRANT_ID)),
+        "{transcript}"
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(request_lines(&server.finish()), [LIST_OAUTH]);
+}
+
+// `useful account integration reconnect INTEGRATION` of an OAuth grant: the provider's consent, which the
+// account the member consents as decides.
+
+/// Runs `useful account integration` with `args` where this machine has no browser and standard input
+/// is no terminal.
+fn run_reconnect_consent(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Output {
+    let opener = Opener::new(0);
+    let output = opener_command(
+        server,
+        credential,
+        &opener,
+        Place::Remote,
+        &[&["account", "integration"][..], args].concat(),
+    )
+    .stdin(Stdio::null())
+    .output()
+    .unwrap();
+    assert_no_secret_output(&output, &[SENTINEL, TOKEN]);
+    assert!(opener.opened(0).is_empty());
+    output
+}
+
+/// The answers to a consent of `provider` that settles with the grant `made`.
+fn approved_as(provider: &str, made: &str) -> [Vec<u8>; 2] {
+    let mut completed = consent_of(provider, "completed");
+    completed["resultGrant"]["id"] = made.into();
+    [
+        json_http_response("201 Created", consent_of(provider, "pending")),
+        polled(completed),
+    ]
+}
+
+// REQ-GRANT-73
+// REQ-GRANT-2
+#[test]
+fn reconnect_consents_again_and_exits_1_when_the_consent_made_another_grant() {
+    let held = || one(&oauth_grant(OAUTH_GRANT_ID, "github", "active"));
+    for json in [true, false] {
+        // The consent was given as the account the grant is linked to, so it renewed that grant.
+        let mut responses = vec![held()];
+        responses.extend(approved_as("github", OAUTH_GRANT_ID));
+        // It was given as another account, which got a grant of its own.
+        responses.push(held());
+        responses.extend(approved_as("github", EXAMPLE_GRANT_ID));
+        let (server, _directory, credential) = prepared(responses);
+        let mut args = vec!["reconnect", OAUTH_GRANT_ID];
+        if json {
+            args.push("--json");
+        }
+        let reconnected = run_reconnect_consent(&server, &credential, &args);
+        let other = run_reconnect_consent(&server, &credential, &args);
+
         assert_eq!(
-            output.status.code(),
-            Some(if replaced { 0 } else { 2 }),
-            "{answer:?}"
+            reconnected.status.code(),
+            Some(0),
+            "{}",
+            stderr(&reconnected)
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).contains(CONSENT_URL),
-            replaced
-        );
-        let requests = server.finish();
-        let expected: &[&str] = if replaced {
-            &[LIST_OAUTH, START_CONSENT]
+        assert_eq!(other.status.code(), Some(1), "{}", stderr(&other));
+        if json {
+            let reconnected = events(&reconnected);
+            assert_eq!(reconnected.len(), 2, "{reconnected:?}");
+            assert_eq!(reconnected[1]["outcome"], "completed");
+            assert_eq!(reconnected[1]["grant"]["id"], OAUTH_GRANT_ID);
+            let other = events(&other);
+            assert_eq!(other.len(), 3, "{other:?}");
+            assert_eq!(other[1]["grant"]["id"], EXAMPLE_GRANT_ID);
+            assert_eq!(other[2]["event"], "reconnect_result");
+            assert_eq!(other[2]["outcome"], "not_reconnected");
+            assert_eq!(other[2]["provider"], "github");
+            assert_eq!(other[2]["grantId"], OAUTH_GRANT_ID);
         } else {
-            &[LIST_OAUTH]
-        };
-        assert_eq!(request_lines(&requests), expected, "{answer:?}");
+            assert!(
+                stdout(&reconnected).contains(&format!("grant: {OAUTH_GRANT_ID}")),
+                "{}",
+                stdout(&reconnected)
+            );
+            assert!(stderr(&reconnected).is_empty(), "{}", stderr(&reconnected));
+            let text = stderr(&other);
+            for fact in [OAUTH_GRANT_ID, EXAMPLE_GRANT_ID] {
+                assert!(text.contains(fact), "{fact}: {text}");
+            }
+            // The remedy's command is a line of its own, indented as every remedy's is.
+            let again = format!("  useful account integration reconnect {OAUTH_GRANT_ID}");
+            assert!(text.lines().any(|line| line == again), "{text}");
+        }
+        let requests = server.finish();
+        assert_member_requests(&requests);
+        let poll = poll_line();
+        assert_eq!(
+            request_lines(&requests),
+            [
+                READ_OAUTH,
+                START_CONSENT,
+                poll.as_str(),
+                READ_OAUTH,
+                START_CONSENT,
+                poll.as_str()
+            ]
+        );
+        assert_eq!(start_body(&requests[1]), "github");
     }
 }
 
-// `useful grant create codex`: Codex's own sign-in in a private home, or an auth.json the member
-// names, imported for one organization. The fake `codex` and the member's home with its
-// ambient Codex login are the `useful auth agent-login` tests'.
+// REQ-GRANT-73
+// REQ-GRANT-65
+#[test]
+fn reconnect_refuses_a_revoked_grant_and_an_option_its_provider_does_not_take() {
+    let directory = tempfile::tempdir().unwrap();
+    let login = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
+    let login = login.to_str().unwrap();
+    let (server, _directory, credential) = prepared(vec![
+        one(&oauth_grant(OAUTH_GRANT_ID, "github", "revoked")),
+        one(&oauth_grant(OAUTH_GRANT_ID, "github", "active")),
+        one(&oauth_grant(OAUTH_GRANT_ID, "github", "active")),
+        one(&native_grant(NATIVE_GRANT_ID, "active")),
+    ]);
+    let revoked = run_grant(
+        &server,
+        &credential,
+        &["reconnect", OAUTH_GRANT_ID, "--json"],
+    );
+    assert_eq!(revoked.status.code(), Some(1), "{}", stderr(&revoked));
+    assert_eq!(events(&revoked)[0]["outcome"], "grant_not_found");
+    for args in [
+        &["reconnect", OAUTH_GRANT_ID, "--from-file", login][..],
+        &["reconnect", OAUTH_GRANT_ID, "--device"],
+        &["reconnect", NATIVE_GRANT_ID, "--no-wait"],
+    ] {
+        let output = run_grant(&server, &credential, args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
+    assert_eq!(
+        request_lines(&server.finish()),
+        [READ_OAUTH, READ_OAUTH, READ_OAUTH, READ_NATIVE]
+    );
+}
+
+// `useful account integration connect codex`: Codex's own sign-in in a private home, or an auth.json the
+// member names, imported for one organization. The fake `codex` and the member's home with its
+// ambient Codex login are at the end of this file.
 
 const GLOBEX_ORGANIZATION_ID: &str = "org_01k0z6r1w8f4jy2m7q9v3x5abe";
 const THIRD_NATIVE_GRANT_ID: &str = "agl_01k0z6r1w8f4jy2m7q9v3x5abe";
 pub(super) const LIST_MEMBERSHIPS: &str = "GET /api/v1/me/memberships?limit=200 HTTP/1.1";
 const LIST_NATIVE: &str = "GET /api/v1/me/grants?kind=native&limit=200&vocabulary=2 HTTP/1.1";
 const IMPORT_GRANT: &str = "POST /api/v1/me/grant-imports HTTP/1.1";
-const READ_ACME: &str = "GET /api/v1/organizations/acme HTTP/1.1";
+pub(super) const READ_ACME: &str = "GET /api/v1/organizations/acme HTTP/1.1";
 
 fn replace_line(grant_id: &str) -> String {
     format!("POST /api/v1/me/grants/{grant_id}/generations HTTP/1.1")
@@ -3951,22 +4227,17 @@ fn replace_line(grant_id: &str) -> String {
 // The member's memberships: an active one in each organization named, and an ended one, which
 // names no slug and makes no organization the member's.
 pub(super) fn memberships(organizations: &[(&str, &str)]) -> Vec<u8> {
-    memberships_as(organizations, "member")
-}
-
-/// The member's memberships, as [`memberships`] makes them, with the active ones in `role`.
-pub(super) fn memberships_as(organizations: &[(&str, &str)], role: &str) -> Vec<u8> {
     let mut items: Vec<_> = organizations
         .iter()
         .enumerate()
         .map(|(index, (id, slug))| {
             serde_json::json!({
-                "id": format!("mbr_01k0z6r1w8f4jy2m7q9v3x5ab{index}"),
+                "id": format!("mem_01k0z6r1w8f4jy2m7q9v3x5ab{index}"),
                 "organizationId": id,
                 "organizationState": "active",
                 "organizationDisplayName": slug,
                 "organizationSlug": slug,
-                "role": role,
+                "role": "member",
                 "state": "active",
                 "createdAt": "2026-11-01T08:00:00Z",
                 "updatedAt": "2026-11-01T08:00:00Z"
@@ -3974,7 +4245,7 @@ pub(super) fn memberships_as(organizations: &[(&str, &str)], role: &str) -> Vec<
         })
         .collect();
     items.push(serde_json::json!({
-        "id": "mbr_01k0z6r1w8f4jy2m7q9v3x5abz",
+        "id": "mem_01k0z6r1w8f4jy2m7q9v3x5abz",
         "organizationId": OTHER_ORGANIZATION_ID,
         "organizationState": "active",
         "role": "member",
@@ -4037,10 +4308,10 @@ fn stored_in(
     )
 }
 
-/// Runs `useful grant create` from the member's `home` with the fake `program`, when there is one,
-/// and the opener on `PATH`, and standard input `input`. Whatever the outcome, the
-/// member's home is as it was, the temporary sign-in directory is gone and no login reached
-/// the output (REQ-GRANT-74, INV-CLI-13, INV-CLI-14).
+/// Runs `useful account integration connect` from the member's `home` with the fake `program`, when there
+/// is one, and the opener on `PATH`, and standard input `input`. Whatever the outcome, the member's
+/// home is as it was, the temporary sign-in directory is gone and no login reached the output
+/// (REQ-GRANT-74, INV-CLI-13, INV-CLI-14).
 fn run_native(
     server: &ScriptedServer,
     credential: &Path,
@@ -4055,6 +4326,41 @@ fn run_native(
         environment: &[],
     };
     run_fake(server, credential, home, fake, place, args, input)
+}
+
+/// The leading words of `useful account integration reconnect`.
+const GRANT_RECONNECT: &[&str] = &["account", "integration", "reconnect"];
+
+/// Runs `useful account integration reconnect` with `args` as [`run_native`] runs `create`, where this
+/// machine has a browser.
+fn run_reconnect(
+    server: &ScriptedServer,
+    credential: &Path,
+    home: &AmbientHome,
+    program: Option<&FakeProgram>,
+    args: &[&str],
+    input: Input<'_>,
+) -> Output {
+    let opener = Opener::new(0);
+    let programs: Vec<_> = program.into_iter().collect();
+    let fakes = Fakes {
+        opener: &opener,
+        programs: &programs,
+        environment: &[],
+        checkout: None,
+    };
+    let arguments = [GRANT_RECONNECT, args].concat();
+    let output = run_programs(
+        server,
+        credential,
+        home,
+        fakes,
+        Place::Desktop,
+        &arguments,
+        input,
+    );
+    assert!(opener.opened(0).is_empty());
+    output
 }
 
 /// The fake sign-in program on `PATH`, when there is one, and the variables that choose how it
@@ -4194,11 +4500,7 @@ fn run_programs(
         ],
     );
     home.assert_untouched_and_clean();
-    if arguments.starts_with(GRANT_CREATE) {
-        without_notice(output, &replacement("create"))
-    } else {
-        output
-    }
+    output
 }
 
 fn assert_imported(request: &str, organization: &str, (provider, material): Login) {
@@ -4330,6 +4632,7 @@ fn create_codex_signs_in_by_device_code_with_device_or_where_this_machine_has_no
     }
 }
 
+// REQ-GRANT-32
 // REQ-GRANT-70
 #[test]
 fn create_codex_imports_a_named_file_or_standard_input_without_running_codex() {
@@ -4368,11 +4671,221 @@ fn create_codex_imports_a_named_file_or_standard_input_without_running_codex() {
     }
 }
 
+// REQ-GRANT-32
+// REQ-GRANT-73
+// INV-CLI-13
+#[test]
+fn reconnect_stores_a_named_codex_file_or_standard_input_as_the_grants_next_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
+    for (path, input) in [
+        (file.to_str().unwrap(), Input::Null),
+        ("-", Input::Piped(CODEX_MATERIAL.as_bytes())),
+    ] {
+        let (server, _directory, credential) = prepared(vec![
+            one(&codex_grant(NATIVE_GRANT_ID, ORGANIZATION_ID, "active")),
+            stored(CODEX, "200 OK", 3),
+        ]);
+        let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
+        let home = AmbientHome::new();
+        let output = run_reconnect(
+            &server,
+            &credential,
+            &home,
+            Some(&codex),
+            &[NATIVE_GRANT_ID, "--from-file", path],
+            input,
+        );
+
+        assert_eq!(output.status.code(), Some(0), "{path}: {}", stderr(&output));
+        let text = stdout(&output);
+        for fact in [&format!("grant: {NATIVE_GRANT_ID}"), "generation: 3"] {
+            assert!(text.contains(fact), "{path}: {fact}: {text}");
+        }
+        assert_eq!(codex.recorded("arguments"), None, "{path}");
+        let requests = server.finish();
+        let replace = replace_line(NATIVE_GRANT_ID);
+        assert_eq!(request_lines(&requests), [READ_NATIVE, replace.as_str()]);
+        assert_eq!(
+            request_body(&requests[1]),
+            serde_json::json!({
+                "recordSchemaVersion": 1,
+                "material": encoded(CODEX_MATERIAL.as_bytes())
+            })
+        );
+    }
+}
+
+// REQ-GRANT-70
+// REQ-GRANT-73
+// `create codex` refuses a held grant, so the remedy of a sign-in `reconnect` started names
+// `reconnect` with the file, not the `create` that would send the member back here.
+#[test]
+fn reconnect_whose_codex_sign_in_fails_names_reconnect_with_a_file_as_the_remedy() {
+    let (server, _directory, credential) = prepared(vec![
+        one(&codex_grant(NATIVE_GRANT_ID, ORGANIZATION_ID, "active")),
+        serving_every(),
+    ]);
+    let home = AmbientHome::new();
+    // No `codex` is on `PATH`.
+    let output = run_reconnect(
+        &server,
+        &credential,
+        &home,
+        None,
+        &[NATIVE_GRANT_ID],
+        Input::Null,
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    let again =
+        format!("  useful account integration reconnect {NATIVE_GRANT_ID} --from-file PATH");
+    assert!(text.lines().any(|line| line == again), "{text}");
+    assert!(!text.contains("grant create"), "{text}");
+    assert_eq!(request_lines(&server.finish()), [READ_NATIVE, READ_SERVED]);
+}
+
+// REQ-GRANT-32
+// REQ-GRANT-33
+// REQ-GRANT-73
+// INV-CLI-13
+#[test]
+fn reconnect_checks_a_named_file_before_any_request_and_its_provider_before_any_sign_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let login = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
+    let login = login.to_str().unwrap();
+    let token = private_file(directory.path(), "token", CLAUDE_TOKEN.as_bytes());
+    let token = token.to_str().unwrap();
+    let malformed = private_file(directory.path(), "malformed", b"not a token\n");
+    let malformed = malformed.to_str().unwrap();
+    let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
+    let claude = FakeProgram::claude(SetupToken::Prints);
+    let home = AmbientHome::new();
+
+    // A malformed file is refused before anything is sent.
+    let (server, _directory, credential) = prepared(vec![]);
+    let output = run_reconnect(
+        &server,
+        &credential,
+        &home,
+        Some(&claude),
+        &["claude_code", "--token-file", malformed],
+        Input::Null,
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(server.finish().is_empty());
+
+    // A Codex login is no Claude Code grant's, nor a Claude Code token a Codex grant's.
+    let (server, _directory, credential) = prepared(vec![
+        page(&[claude_grant(NATIVE_GRANT_ID, "active")], None),
+        one(&codex_grant(NATIVE_GRANT_ID, ORGANIZATION_ID, "active")),
+    ]);
+    for (program, args) in [
+        (&claude, &["claude_code", "--from-file", login][..]),
+        (&codex, &[NATIVE_GRANT_ID, "--token-file", token]),
+    ] {
+        let output = run_reconnect(
+            &server,
+            &credential,
+            &home,
+            Some(program),
+            args,
+            Input::Null,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert_eq!(program.recorded("arguments"), None, "{args:?}");
+    }
+    assert_eq!(
+        request_lines(&server.finish()),
+        [LIST_EVERY_KIND, READ_NATIVE]
+    );
+}
+
+// REQ-GRANT-31
+// REQ-GRANT-65
+#[test]
+fn create_reports_an_import_cloud_refuses_with_exit_1_and_its_remedy() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
+    let file = file.to_str().unwrap();
+    for (refusal, outcome, remedy) in [
+        (
+            problem("400 Bad Request", 400, "grant-material-invalid"),
+            "material_invalid",
+            None,
+        ),
+        (
+            problem("409 Conflict", 409, "quantity-limit-reached"),
+            "limit_reached",
+            Some("useful account integration disconnect"),
+        ),
+    ] {
+        for json in [false, true] {
+            let (server, _directory, credential) =
+                prepared(vec![only_acme(), nothing_held(), refusal.clone()]);
+            let home = AmbientHome::new();
+            let mut args = vec!["codex", "--from-file", file];
+            if json {
+                args.push("--json");
+            }
+            let output = run_native(
+                &server,
+                &credential,
+                &home,
+                None,
+                Place::Desktop,
+                &args,
+                Input::Null,
+            );
+
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{outcome}: {}",
+                stderr(&output)
+            );
+            if json {
+                let events = events(&output);
+                assert_eq!(events.last().unwrap()["outcome"], outcome, "{events:?}");
+            } else {
+                let text = stderr(&output);
+                let commands: Vec<_> = text
+                    .lines()
+                    .map(str::trim_start)
+                    .filter(|line| line.starts_with("useful "))
+                    .collect();
+                match remedy {
+                    Some(command) => assert!(
+                        commands.iter().any(|line| line.starts_with(command)),
+                        "{outcome}: {text}"
+                    ),
+                    None => assert!(commands.is_empty(), "{outcome}: {text}"),
+                }
+            }
+            assert_eq!(
+                request_lines(&server.finish()),
+                [LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT],
+                "{outcome}"
+            );
+        }
+    }
+}
+
+// REQ-GRANT-32
+// REQ-GRANT-33
 // REQ-GRANT-70
 // REQ-GRANT-71
 // REQ-GRANT-72
 #[test]
 fn create_refuses_an_unsafe_file_or_an_option_the_provider_does_not_take_before_any_request() {
+    use std::os::unix::fs::symlink;
     let directory = tempfile::tempdir().unwrap();
     let path = |name: &str, contents: &[u8], mode: u32| {
         let file = private_file(directory.path(), name, contents);
@@ -4380,21 +4893,40 @@ fn create_refuses_an_unsafe_file_or_an_option_the_provider_does_not_take_before_
         file.to_str().unwrap().to_owned()
     };
     let readable = path("readable.json", CODEX_MATERIAL.as_bytes(), 0o644);
+    let read_only = path("read-only.json", CODEX_MATERIAL.as_bytes(), 0o400);
     let oversized = path("oversized.json", &vec![b' '; 32 * 1024 + 1], 0o600);
     let array = path(
         "array.json",
         format!("[\"{CODEX_SENTINEL}\"]").as_bytes(),
         0o600,
     );
+    let string = path(
+        "string.json",
+        format!("\"{CODEX_SENTINEL}\"").as_bytes(),
+        0o600,
+    );
     let login = path("auth.json", CODEX_MATERIAL.as_bytes(), 0o600);
-    let cases: [&[&str]; 13] = [
+    let alias = directory.path().join("alias.json");
+    symlink(&login, &alias).unwrap();
+    let alias = alias.to_str().unwrap().to_owned();
+    // A token that is not one line of 1 to 4096 printable characters without spaces.
+    let spaced = path("spaced", format!("{CLAUDE_TOKEN} more\n").as_bytes(), 0o600);
+    let empty = path("empty", b"", 0o600);
+    let wide = path("wide", "x".repeat(4097).as_bytes(), 0o600);
+    let cases: [&[&str]; 19] = [
         &["codex", "--from-file", &readable],
+        &["codex", "--from-file", &read_only],
+        &["codex", "--from-file", &alias],
         &["codex", "--from-file", &oversized],
         &["codex", "--from-file", &array],
+        &["codex", "--from-file", &string],
+        &["claude_code", "--token-file", &spaced],
+        &["claude_code", "--token-file", &empty],
+        &["claude_code", "--token-file", &wide],
         &["codex", "--token-file", &login],
         &["codex", "--login", "--device"],
         &["codex", "--from-file", &login, "--login"],
-        &["github", "--organization", "acme"],
+        &["github", "--org", "acme"],
         &["linear", "--from-file", &login],
         &["gitlab.com", "--device"],
         &["github", "--token-file", &login],
@@ -4436,6 +4968,7 @@ fn a_codex_sign_in_that_fails_stores_nothing_and_reports_provider_login_failed()
         ("exits nonzero", Some(SignIn::Exits(3))),
         ("writes no login", Some(SignIn::WritesNothing)),
         ("is interrupted", Some(SignIn::Interrupts)),
+        ("cannot be started", Some(SignIn::CannotStart)),
         ("is not on PATH", None),
     ];
     for (case, sign_in) in cases {
@@ -4501,7 +5034,7 @@ fn create_codex_imports_for_the_named_organization_and_needs_one_when_the_member
 
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
     let text = stderr(&refused);
-    for fact in ["--organization", "acme", "globex"] {
+    for fact in ["--org ORG", "acme", "globex"] {
         assert!(text.contains(fact), "{fact}: {text}");
     }
     assert_eq!(codex.recorded("arguments"), None);
@@ -4522,7 +5055,7 @@ fn create_codex_imports_for_the_named_organization_and_needs_one_when_the_member
         &home,
         Some(&codex),
         Place::Desktop,
-        &["codex", "--organization", "acme"],
+        &["codex", "--org", "acme"],
         Input::Null,
     );
 
@@ -4536,9 +5069,154 @@ fn create_codex_imports_for_the_named_organization_and_needs_one_when_the_member
     assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
 }
 
+// REQ-GRANT-72
+// REQ-ORG-87
+#[test]
+fn create_codex_imports_for_the_organization_in_effect() {
+    let directory = tempfile::tempdir().unwrap();
+    let login = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
+    let login = login.to_str().unwrap();
+    let home = AmbientHome::new();
+
+    // `--org` or else `USEFUL_ORG` names Acme by its slug, so no membership is read.
+    for (option, environment) in [
+        (&["--org", "acme"][..], &[][..]),
+        (&[][..], &[("USEFUL_ORG", "acme")][..]),
+    ] {
+        let (server, _directory, credential) = prepared(vec![
+            acme(),
+            nothing_held(),
+            stored(CODEX, "201 Created", 1),
+        ]);
+        let fake = Fake {
+            program: None,
+            environment,
+        };
+        let args = [&["codex", "--from-file", login][..], option].concat();
+        let output = run_fake(
+            &server,
+            &credential,
+            &home,
+            fake,
+            Place::Desktop,
+            &args,
+            Input::Null,
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{environment:?}: {}",
+            stderr(&output)
+        );
+        let requests = server.finish();
+        assert_eq!(
+            request_lines(&requests),
+            [READ_ACME, LIST_NATIVE, IMPORT_GRANT],
+            "{environment:?}"
+        );
+        assert_imported(&requests[2], ORGANIZATION_ID, CODEX);
+    }
+
+    // Neither: the member of two organizations works in a checkout whose remote names the
+    // repository of Globex's project, which names the organization.
+    let git = fake_git(
+        "if [ \"$1 $2\" = 'remote -v' ]; then\n\
+         printf 'origin\\tgit@github.com:globex/rockets.git (fetch)\\n'\n\
+         else exit 1; fi",
+    );
+    let checkout = tempfile::tempdir().unwrap();
+    let (server, _directory, credential) = prepared(vec![
+        memberships(&[
+            (ORGANIZATION_ID, "acme"),
+            (GLOBEX_ORGANIZATION_ID, "globex"),
+        ]),
+        super::organization::projects_of(
+            ORGANIZATION_ID,
+            "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "acme/widgets",
+        ),
+        super::organization::projects_of(
+            GLOBEX_ORGANIZATION_ID,
+            "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+            "globex/rockets",
+        ),
+        nothing_held(),
+        stored_in(GLOBEX_ORGANIZATION_ID, CODEX, "201 Created", 1),
+    ]);
+    let opener = Opener::new(0);
+    let fakes = Fakes {
+        opener: &opener,
+        programs: &[],
+        environment: &[],
+        checkout: Some(Checkout {
+            directory: checkout.path(),
+            git: git.path(),
+        }),
+    };
+    let output = run_programs(
+        &server,
+        &credential,
+        &home,
+        fakes,
+        Place::Desktop,
+        &[GRANT_CREATE, &["codex", "--from-file", login]].concat(),
+        Input::Null,
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let requests = server.finish();
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_MEMBERSHIPS,
+            &format!("GET /api/v1/organizations/{ORGANIZATION_ID}/projects HTTP/1.1"),
+            &format!("GET /api/v1/organizations/{GLOBEX_ORGANIZATION_ID}/projects HTTP/1.1"),
+            LIST_NATIVE,
+            IMPORT_GRANT
+        ]
+    );
+    assert_imported(&requests[4], GLOBEX_ORGANIZATION_ID, CODEX);
+}
+
+// REQ-GRANT-72
+#[test]
+fn create_of_an_oauth_provider_reads_no_organization_the_variable_names() {
+    // The variable is not an option: it is neither refused nor read, valid or not.
+    for variable in ["acme", "Not an organization"] {
+        let (server, _directory, credential) =
+            prepared([vec![nothing_held()], approved("github").to_vec()].concat());
+        let opener = Opener::new(0);
+        let output = create_command(
+            &server,
+            &credential,
+            &opener,
+            Place::Remote,
+            &["github", "--json"],
+        )
+        .env("USEFUL_ORG", variable)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{variable}: {}",
+            stderr(&output)
+        );
+        let poll = poll_line();
+        assert_eq!(
+            request_lines(&server.finish()),
+            [LIST_OAUTH, START_CONSENT, poll.as_str()],
+            "{variable}"
+        );
+    }
+}
+
 // REQ-GRANT-73
 #[test]
-fn create_codex_stores_the_grant_held_in_that_organization_as_its_next_generation() {
+fn create_codex_refuses_the_grant_held_in_that_organization_and_reconnect_renews_it() {
     let held = || {
         page(
             &[
@@ -4564,8 +5242,7 @@ fn create_codex_stores_the_grant_held_in_that_organization_as_its_next_generatio
     );
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
     let text = stderr(&refused);
-    assert!(text.contains("--replace"), "{text}");
-    assert!(text.contains(NATIVE_GRANT_ID), "{text}");
+    assert!(text.contains(&reconnect_line(NATIVE_GRANT_ID)), "{text}");
     assert!(!text.contains(OTHER_NATIVE_GRANT_ID), "{text}");
     assert_eq!(codex.recorded("arguments"), None);
     assert_eq!(
@@ -4573,25 +5250,48 @@ fn create_codex_stores_the_grant_held_in_that_organization_as_its_next_generatio
         [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE]
     );
 
-    // A lost answer is replayed once under the same key.
+    // On a terminal too, with no question.
+    let (server, _directory, credential) = prepared(vec![serving_every(), only_acme(), held()]);
+    let opener = Opener::new(0);
+    let mut command = create_command(&server, &credential, &opener, Place::Desktop, &["codex"]);
+    command
+        .env(
+            "PATH",
+            std::env::join_paths([opener.directory.path(), codex.bin.as_path()]).unwrap(),
+        )
+        .envs(home.variables());
+    let (transcript, output) = on_terminal(command, &[]);
+    assert_eq!(output.status.code(), Some(2), "{transcript}");
+    assert!(!transcript.contains("[y/N]"), "{transcript}");
+    assert!(
+        transcript.contains(&reconnect_line(NATIVE_GRANT_ID)),
+        "{transcript}"
+    );
+    assert_eq!(codex.recorded("arguments"), None);
+    assert_eq!(
+        request_lines(&server.finish()),
+        [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE]
+    );
+
+    // `reconnect` runs the sign-in and stores it as the grant's next generation; a lost answer
+    // is replayed once under the same key.
     let (server, _directory, credential) = prepared(vec![
+        one(&codex_grant(NATIVE_GRANT_ID, ORGANIZATION_ID, "active")),
         serving_every(),
-        only_acme(),
-        held(),
         Vec::new(),
         stored(CODEX, "200 OK", 3),
     ]);
-    let replaced = run_native(
+    let replaced = run_reconnect(
         &server,
         &credential,
         &home,
         Some(&codex),
-        Place::Desktop,
-        &["codex", "--replace", "--json"],
+        &[NATIVE_GRANT_ID, "--json"],
         Input::Null,
     );
     assert_eq!(replaced.status.code(), Some(0), "{}", stderr(&replaced));
     let events = events(&replaced);
+    assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["outcome"], "replaced");
     assert_eq!(events[0]["grant"]["id"], NATIVE_GRANT_ID);
     assert_eq!(events[0]["grant"]["generation"], 3);
@@ -4600,15 +5300,9 @@ fn create_codex_stores_the_grant_held_in_that_organization_as_its_next_generatio
     let replace = replace_line(NATIVE_GRANT_ID);
     assert_eq!(
         request_lines(&requests),
-        [
-            READ_SERVED,
-            LIST_MEMBERSHIPS,
-            LIST_NATIVE,
-            &replace,
-            &replace
-        ]
+        [READ_NATIVE, READ_SERVED, &replace, &replace]
     );
-    for request in &requests[3..] {
+    for request in &requests[2..] {
         assert_eq!(
             request_body(request),
             serde_json::json!({
@@ -4618,8 +5312,8 @@ fn create_codex_stores_the_grant_held_in_that_organization_as_its_next_generatio
         );
     }
     assert_eq!(
-        header_value(&requests[3], "idempotency-key"),
-        header_value(&requests[4], "idempotency-key")
+        header_value(&requests[2], "idempotency-key"),
+        header_value(&requests[3], "idempotency-key")
     );
 }
 
@@ -4645,14 +5339,14 @@ fn create_codex_names_the_several_grants_held_in_that_organization_and_starts_no
         &home,
         Some(&codex),
         Place::Desktop,
-        &["codex", "--replace"],
+        &["codex"],
         Input::Null,
     );
 
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
     let text = stderr(&output);
     for id in [NATIVE_GRANT_ID, OTHER_NATIVE_GRANT_ID] {
-        assert!(text.contains(id), "{id}: {text}");
+        assert!(text.contains(&reconnect_line(id)), "{id}: {text}");
     }
     assert_eq!(codex.recorded("arguments"), None);
     assert_eq!(
@@ -4686,8 +5380,8 @@ fn create_codex_starts_no_sign_in_without_a_session() {
     assert!(server.finish().is_empty());
 }
 
-// `useful grant create claude_code`: `claude setup-token` on a terminal `useful` owns, its prompts
-// passed through and the token it prints taken out of what the member sees, or a token the
+// `useful account integration connect claude_code`: `claude setup-token` on a terminal `useful` owns, its
+// prompts passed through and the token it prints taken out of what the member sees, or a token the
 // member names, imported for one organization.
 
 fn claude_grant(id: &str, state: &str) -> serde_json::Value {
@@ -4859,9 +5553,9 @@ fn create_claude_code_without_a_terminal_starts_no_sign_in_and_names_the_token_f
     assert_eq!(claude.recorded("arguments"), None);
 }
 
-/// `useful grant create claude_code` with the fake `claude` on `PATH` in the browser flow, standard
-/// input `input`, a terminal's secondary side, and its outputs piped, started but not waited
-/// for.
+/// `useful account integration connect claude_code` with the fake `claude` on `PATH` in the browser flow,
+/// standard input `input`, a terminal's secondary side, and its outputs piped, started but not
+/// waited for.
 fn spawn_claude_sign_in(
     server: &ScriptedServer,
     credential: &Path,
@@ -5077,6 +5771,7 @@ fn the_claude_sign_in_leads_its_own_session_with_the_terminal_useful_owns_as_its
     home.assert_untouched_and_clean();
 }
 
+// REQ-GRANT-33
 // REQ-GRANT-71
 #[test]
 fn create_claude_code_imports_a_named_token_file_or_standard_input_without_running_claude() {
@@ -5118,23 +5813,22 @@ fn create_claude_code_imports_a_named_token_file_or_standard_input_without_runni
 }
 
 // REQ-GRANT-73
+// REQ-GRANT-71
 #[test]
-fn create_claude_code_stores_the_token_as_the_held_grants_next_generation_with_replace() {
+fn reconnect_claude_code_runs_setup_token_and_stores_the_token_as_the_grants_next_generation() {
     let (server, _directory, credential) = prepared(vec![
-        serving_every(),
-        only_acme(),
         page(&[claude_grant(NATIVE_GRANT_ID, "active")], None),
+        serving_every(),
         stored(CLAUDE_CODE, "200 OK", 3),
     ]);
     let claude = FakeProgram::claude(SetupToken::Prints);
     let home = AmbientHome::new();
-    let output = run_native(
+    let output = run_reconnect(
         &server,
         &credential,
         &home,
         Some(&claude),
-        Place::Desktop,
-        &["claude_code", "--replace", "--json"],
+        &["claude_code", "--json"],
         Input::Typed(b""),
     );
 
@@ -5143,14 +5837,15 @@ fn create_claude_code_stores_the_token_as_the_held_grants_next_generation_with_r
     assert_eq!(events[0]["outcome"], "replaced");
     assert_eq!(events[0]["grant"]["id"], NATIVE_GRANT_ID);
     assert_eq!(events[0]["grant"]["generation"], 3);
+    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
     let requests = server.finish();
     let replace = replace_line(NATIVE_GRANT_ID);
     assert_eq!(
         request_lines(&requests),
-        [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, &replace]
+        [LIST_EVERY_KIND, READ_SERVED, &replace]
     );
     assert_eq!(
-        request_body(&requests[3]),
+        request_body(&requests[2]),
         serde_json::json!({
             "recordSchemaVersion": 1,
             "material": encoded(CLAUDE_TOKEN.as_bytes())
@@ -5158,7 +5853,69 @@ fn create_claude_code_stores_the_token_as_the_held_grants_next_generation_with_r
     );
 }
 
-// `useful grant create` with no provider: every provider the member lacks, one after another.
+// REQ-GRANT-33
+// REQ-GRANT-71
+// REQ-GRANT-73
+#[test]
+fn reconnect_claude_code_takes_a_token_file_and_without_one_needs_a_terminal() {
+    let directory = tempfile::tempdir().unwrap();
+    let token = private_file(
+        directory.path(),
+        "token",
+        format!("{CLAUDE_TOKEN}\n").as_bytes(),
+    );
+    let token = token.to_str().unwrap();
+    let held = || one(&claude_grant(NATIVE_GRANT_ID, "active"));
+    let (server, _directory, credential) =
+        prepared(vec![held(), stored(CLAUDE_CODE, "200 OK", 3), held()]);
+    let claude = FakeProgram::claude(SetupToken::Prints);
+    let home = AmbientHome::new();
+    let stored = run_reconnect(
+        &server,
+        &credential,
+        &home,
+        Some(&claude),
+        &[NATIVE_GRANT_ID, "--token-file", token],
+        Input::Null,
+    );
+    let refused = run_reconnect(
+        &server,
+        &credential,
+        &home,
+        Some(&claude),
+        &[NATIVE_GRANT_ID],
+        Input::Null,
+    );
+
+    assert_eq!(stored.status.code(), Some(0), "{}", stderr(&stored));
+    assert!(stdout(&stored).contains(&format!("grant: {NATIVE_GRANT_ID}")));
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let text = stderr(&refused);
+    assert!(
+        text.contains(&format!(
+            "{} --token-file -",
+            reconnect_line(NATIVE_GRANT_ID)
+        )),
+        "{text}"
+    );
+    assert_eq!(claude.recorded("arguments"), None);
+    let requests = server.finish();
+    let replace = replace_line(NATIVE_GRANT_ID);
+    assert_eq!(
+        request_lines(&requests),
+        [READ_NATIVE, replace.as_str(), READ_NATIVE]
+    );
+    assert_eq!(
+        request_body(&requests[1]),
+        serde_json::json!({
+            "recordSchemaVersion": 1,
+            "material": encoded(CLAUDE_TOKEN.as_bytes())
+        })
+    );
+}
+
+// `useful account integration connect` with no provider: every provider the member lacks, one after
+// another.
 
 pub(super) const LIST_EVERY_KIND: &str = LIST_FIRST_PAGE;
 
@@ -5205,8 +5962,8 @@ pub(super) fn holding(oauth: &[&str], natives: bool) -> Vec<u8> {
     page(&grants, None)
 }
 
-/// Runs `useful grant create` with the fake opener, `codex` and `claude` on `PATH` and a terminal as
-/// its standard input.
+/// Runs `useful account integration connect` with the fake opener, `codex` and `claude` on `PATH` and a
+/// terminal as its standard input.
 fn run_every(
     server: &ScriptedServer,
     credential: &Path,
@@ -5237,7 +5994,7 @@ fn run_in(
     )
 }
 
-/// [`run_in`] for the command whose leading words are `command`, such as [`RUNNER_DOCTOR`].
+/// [`run_in`] for the command whose leading words are `command`, such as [`WORKFLOW_DOCTOR`].
 fn run_command_in(
     server: &ScriptedServer,
     credential: &Path,
@@ -5297,74 +6054,97 @@ fn outcomes(entries: &[(&str, &str)]) -> Vec<(String, String)> {
 
 // REQ-GRANT-75
 #[test]
-fn create_without_a_provider_signs_in_to_each_provider_the_member_lacks_in_order() {
-    for args in [&[][..], &["--all"]] {
-        let (server, _directory, credential) = prepared(
-            [
-                vec![holding(&["github"], false), serving_every(), only_acme()],
-                approved("gitlab.com").to_vec(),
-                approved("linear").to_vec(),
-                vec![
-                    stored(CLAUDE_CODE, "201 Created", 1),
-                    stored(CODEX, "201 Created", 1),
-                ],
-            ]
-            .concat(),
-        );
-        let opener = Opener::new(0);
-        let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-        let claude = FakeProgram::claude(SetupToken::Prints);
-        let output = run_every(&server, &credential, &opener, &[&codex, &claude], args);
+fn create_without_a_provider_all_or_workflow_exits_2_naming_the_three() {
+    let (server, _directory, credential) = prepared(vec![]);
+    let opener = Opener::new(0);
+    for args in [&[][..], &["--json"]] {
+        let output = run_every(&server, &credential, &opener, &[], args);
 
         assert_eq!(
             output.status.code(),
-            Some(0),
+            Some(2),
             "{args:?}: {}",
             stderr(&output)
         );
-        assert_eq!(
-            opener.opened(2),
-            [
-                format!("1 {}", consent_url("gitlab.com")),
-                format!("1 {}", consent_url("linear"))
-            ],
-            "{args:?}"
-        );
-        assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
-        assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
-        let text = stdout(&output);
-        for fact in [
-            "gitlab.com: created",
-            "linear: created",
-            "claude_code: created",
-            "codex: created",
-        ] {
-            assert!(text.contains(fact), "{args:?}: {fact}: {text}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let text = stderr(&output);
+        for named in ["PROVIDER", "--all", "--workflow"] {
+            assert!(text.contains(named), "{args:?}: {named}: {text}");
         }
-        assert!(!text.contains("github:"), "{args:?}: {text}");
-        let requests = server.finish();
-        assert_member_requests(&requests);
-        let poll = poll_line();
-        assert_eq!(
-            request_lines(&requests),
-            [
-                LIST_EVERY_KIND,
-                READ_SERVED,
-                LIST_MEMBERSHIPS,
-                START_CONSENT,
-                poll.as_str(),
-                START_CONSENT,
-                poll.as_str(),
-                IMPORT_GRANT,
-                IMPORT_GRANT
-            ],
-            "{args:?}"
-        );
-        assert_eq!(start_body(&requests[3]), "gitlab.com");
-        assert_eq!(start_body(&requests[5]), "linear");
-        assert_imported(&requests[7], ORGANIZATION_ID, CLAUDE_CODE);
-        assert_imported(&requests[8], ORGANIZATION_ID, CODEX);
     }
+    assert!(opener.opened(0).is_empty());
+    assert!(server.finish().is_empty());
+}
+
+// REQ-GRANT-75
+#[test]
+fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
+    let args: &[&str] = &["--all"];
+    let (server, _directory, credential) = prepared(
+        [
+            vec![holding(&["github"], false), serving_every(), only_acme()],
+            approved("gitlab.com").to_vec(),
+            approved("linear").to_vec(),
+            vec![
+                stored(CLAUDE_CODE, "201 Created", 1),
+                stored(CODEX, "201 Created", 1),
+            ],
+        ]
+        .concat(),
+    );
+    let opener = Opener::new(0);
+    let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
+    let claude = FakeProgram::claude(SetupToken::Prints);
+    let output = run_every(&server, &credential, &opener, &[&codex, &claude], args);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{args:?}: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        opener.opened(2),
+        [
+            format!("1 {}", consent_url("gitlab.com")),
+            format!("1 {}", consent_url("linear"))
+        ],
+        "{args:?}"
+    );
+    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
+    assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
+    let text = stdout(&output);
+    for fact in [
+        "gitlab.com: created",
+        "linear: created",
+        "claude_code: created",
+        "codex: created",
+    ] {
+        assert!(text.contains(fact), "{args:?}: {fact}: {text}");
+    }
+    assert!(!text.contains("github:"), "{args:?}: {text}");
+    let requests = server.finish();
+    assert_member_requests(&requests);
+    let poll = poll_line();
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_EVERY_KIND,
+            READ_SERVED,
+            LIST_MEMBERSHIPS,
+            START_CONSENT,
+            poll.as_str(),
+            START_CONSENT,
+            poll.as_str(),
+            IMPORT_GRANT,
+            IMPORT_GRANT
+        ],
+        "{args:?}"
+    );
+    assert_eq!(start_body(&requests[3]), "gitlab.com");
+    assert_eq!(start_body(&requests[5]), "linear");
+    assert_imported(&requests[7], ORGANIZATION_ID, CLAUDE_CODE);
+    assert_imported(&requests[8], ORGANIZATION_ID, CODEX);
 }
 
 // REQ-GRANT-75
@@ -5393,7 +6173,7 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
         &credential,
         &opener,
         &[&codex, &claude],
-        &["--json"],
+        &["--all", "--json"],
     );
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -5456,7 +6236,7 @@ fn without_a_terminal_the_claude_sign_in_fails_and_the_codex_sign_in_after_it_st
         environment: &[],
         checkout: None,
     };
-    let arguments = [GRANT_CREATE, &["--json"]].concat();
+    let arguments = [GRANT_CREATE, &["--all", "--json"]].concat();
     let output = run_programs(
         &server,
         &credential,
@@ -5510,8 +6290,8 @@ fn signalled_claude(then: &str) -> tempfile::TempDir {
 // REQ-GRANT-71
 #[test]
 fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
-    // How the sign-in ends, and the status and outcome it stops `useful grant create` with: the
-    // member's interrupt reaches the sign-in's own terminal, so `claude` alone receives it,
+    // How the sign-in ends, and the status and outcome it stops `useful account integration connect` with:
+    // the member's interrupt reaches the sign-in's own terminal, so `claude` alone receives it,
     // while a signal sent to `useful` is passed to `claude`.
     let cases = [
         ("kill -INT $$", 130, "interrupted"),
@@ -5543,7 +6323,7 @@ fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
             serving_every(),
             only_acme(),
         ]);
-        let output = run(&server, &credential, &["--json"]);
+        let output = run(&server, &credential, &["--all", "--json"]);
         assert_eq!(
             output.status.code(),
             Some(status),
@@ -5593,7 +6373,7 @@ fn a_provider_the_deployment_does_not_serve_is_reported_and_passed_over_without_
         .concat(),
     );
     let opener = Opener::new(0);
-    let output = run_every(&server, &credential, &opener, &[], &["--json"]);
+    let output = run_every(&server, &credential, &opener, &[], &["--all", "--json"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let events = events(&output);
@@ -5712,7 +6492,7 @@ fn a_coding_agent_the_deployment_does_not_serve_is_passed_over_before_its_sign_i
         &credential,
         &opener,
         &[&codex, &claude],
-        &["--json"],
+        &["--all", "--json"],
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -5787,7 +6567,7 @@ fn a_deployment_that_predates_the_served_providers_read_is_signed_in_to_as_befor
         &credential,
         &opener,
         &[&codex, &claude],
-        &["--json"],
+        &["--all", "--json"],
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -5848,7 +6628,7 @@ fn create_without_a_provider_consents_to_each_other_oauth_provider_served_after_
         }
         let (server, _directory, credential) = prepared(responses);
         let opener = Opener::new(0);
-        let output = run_every(&server, &credential, &opener, &[], &["--json"]);
+        let output = run_every(&server, &credential, &opener, &[], &["--all", "--json"]);
 
         assert_eq!(
             output.status.code(),
@@ -5889,7 +6669,7 @@ fn create_without_a_provider_consents_to_each_other_oauth_provider_served_after_
     responses.extend(approved("example"));
     let (server, _directory, credential) = prepared(responses);
     let opener = Opener::new(0);
-    let output = run_every(&server, &credential, &opener, &[], &[]);
+    let output = run_every(&server, &credential, &opener, &[], &["--all"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let approval = approval_line(&stdout(&output), &consent_url("example"));
@@ -5897,8 +6677,8 @@ fn create_without_a_provider_consents_to_each_other_oauth_provider_served_after_
     assert_eq!(server.finish().len(), 4);
 }
 
-/// The report that ends the human output of `useful grant create` without a provider, whose first
-/// outcome line names `first`: its verdict line, then the lines after it.
+/// The report that ends the human output of `useful account integration connect` without a provider, whose
+/// first outcome line names `first`: its verdict line, then the lines after it.
 fn summary_report<'a>(text: &'a str, first: &str) -> Vec<&'a str> {
     let lines: Vec<_> = text.lines().collect();
     let entry = lines
@@ -5932,7 +6712,7 @@ fn a_summary_with_a_provider_passed_over_is_no_success_verdict_and_names_it() {
         .concat(),
     );
     let opener = Opener::new(0);
-    let output = run_every(&server, &credential, &opener, &[], &[]);
+    let output = run_every(&server, &credential, &opener, &[], &["--all"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let text = stdout(&output);
@@ -5970,7 +6750,7 @@ fn a_summary_of_consents_only_started_is_no_success_verdict_and_names_where_to_s
         json_http_response("201 Created", consent_of("linear", "pending")),
     ]);
     let opener = Opener::new(0);
-    let output = run_every(&server, &credential, &opener, &[], &["--no-wait"]);
+    let output = run_every(&server, &credential, &opener, &[], &["--all", "--no-wait"]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let text = stdout(&output);
@@ -5980,7 +6760,7 @@ fn a_summary_of_consents_only_started_is_no_success_verdict_and_names_where_to_s
     assert!(
         remedies(&report)
             .iter()
-            .any(|line| line.trim() == "useful integration list"),
+            .any(|line| line.trim() == "useful account integration list"),
         "{text}"
     );
     assert_eq!(
@@ -6001,7 +6781,7 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
     let opener = Opener::new(0);
     // `claude` alone is on `PATH`.
     let claude = FakeProgram::claude(SetupToken::Prints);
-    let output = run_every(&server, &credential, &opener, &[&claude], &[]);
+    let output = run_every(&server, &credential, &opener, &[&claude], &["--all"]);
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let text = stdout(&output);
@@ -6018,8 +6798,8 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
         "{text}"
     );
     for command in [
-        "useful integration connect codex --from-file PATH",
-        "useful integration connect",
+        "useful account integration connect codex --from-file PATH",
+        "useful account integration connect --all",
     ] {
         assert!(
             remedies.iter().any(|line| line.trim() == command),
@@ -6041,7 +6821,11 @@ fn a_member_who_holds_every_provider_is_told_so_after_the_list_and_the_served_re
             predating_served(),
         ]);
         let opener = Opener::new(0);
-        let args: &[&str] = if json { &["--json"] } else { &[] };
+        let args: &[&str] = if json {
+            &["--all", "--json"]
+        } else {
+            &["--all"]
+        };
         let output = run_every(&server, &credential, &opener, &[], args);
 
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -6088,7 +6872,11 @@ fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_sti
             let opener = Opener::new(0);
             let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
             let claude = FakeProgram::claude(SetupToken::Prints);
-            let args: &[&str] = if json { &["--json"] } else { &[] };
+            let args: &[&str] = if json {
+                &["--all", "--json"]
+            } else {
+                &["--all"]
+            };
             let output = run_every(&server, &credential, &opener, &[&codex, &claude], args);
 
             // The grants made count as they do beside a provider the deployment does not serve.
@@ -6125,7 +6913,7 @@ fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_sti
             } else {
                 let text = stderr(&output);
                 assert!(
-                    text.contains("useful integration connect --organization ORGANIZATION"),
+                    text.contains("useful account integration connect --all --org ORG"),
                     "{case}: {text}"
                 );
             }
@@ -6154,7 +6942,7 @@ fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_sti
             organizations,
         ]);
         let opener = Opener::new(0);
-        let output = run_every(&server, &credential, &opener, &[], &["--json"]);
+        let output = run_every(&server, &credential, &opener, &[], &["--all", "--json"]);
 
         assert_eq!(output.status.code(), Some(1), "{case}: {}", stderr(&output));
         assert_eq!(
@@ -6205,7 +6993,7 @@ fn a_coding_agent_held_only_in_another_organization_is_selected_for_the_one_name
         &credential,
         &opener,
         &[&codex, &claude],
-        &["--organization", GLOBEX_ORGANIZATION_ID, "--json"],
+        &["--all", "--org", GLOBEX_ORGANIZATION_ID, "--json"],
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -6224,17 +7012,18 @@ fn a_coding_agent_held_only_in_another_organization_is_selected_for_the_one_name
 }
 
 // REQ-GRANT-75
-// REQ-GRANT-79
 #[test]
 fn an_option_that_needs_a_provider_or_all_with_one_exits_2_before_any_request() {
     let directory = tempfile::tempdir().unwrap();
     let login = private_file(directory.path(), "auth.json", CODEX_MATERIAL.as_bytes());
     let login = login.to_str().unwrap();
+    // A file is one coding agent's login, so it needs `PROVIDER`; each other selector is refused
+    // beside it, since a bare `create` is refused whatever else it is given.
     let cases: [&[&str]; 6] = [
-        &["--from-file", login],
-        &["--token-file", login],
-        &["--replace"],
-        &["--all", "--replace"],
+        &["--all", "--from-file", login],
+        &["--all", "--token-file", login],
+        &["--workflow", "workflow.yaml", "--from-file", login],
+        &["--workflow", "workflow.yaml", "--token-file", login],
         &["--all", "linear"],
         &["codex", "--all"],
     ];
@@ -6298,7 +7087,7 @@ fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_
     assert!(
         shown
             .lines()
-            .any(|line| line.trim() == "useful integration connect claude_code"),
+            .any(|line| line.trim() == "useful account integration connect claude_code"),
         "{shown}"
     );
 
@@ -6313,7 +7102,7 @@ fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_
         &credential,
         &opener,
         &programs,
-        &["--no-wait", "--json"],
+        &["--all", "--no-wait", "--json"],
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
@@ -6337,7 +7126,7 @@ fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_
         &credential,
         &opener,
         &programs,
-        &["--timeout", "30s", "--json"],
+        &["--all", "--timeout", "30s", "--json"],
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
@@ -6554,10 +7343,16 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
     for absent in ["github:", "gitlab.com:", "codex:"] {
         assert!(!text.contains(absent), "{absent}: {text}");
     }
-    // Git is asked for the repository's root and its `origin` remote, and nothing else.
+    // Git is asked for the repository's root and its `origin` remote, then, since no option
+    // names the organization of the Claude Code grant, for the checkout's remotes, which name
+    // none here, so the only membership does (REQ-GRANT-72, REQ-ORG-87); nothing else.
     assert_eq!(
         git.invocations(),
-        ["rev-parse --show-toplevel", "remote get-url origin"]
+        [
+            "rev-parse --show-toplevel",
+            "remote get-url origin",
+            "remote -v"
+        ]
     );
     let requests = server.finish();
     assert_member_requests(&requests);
@@ -6666,17 +7461,19 @@ fn needing_reconnect() -> Vec<u8> {
 
 // REQ-GRANT-79
 // REQ-GRANT-76
-// REQ-GRANT-73
 #[test]
-fn create_workflow_replaces_a_grant_that_needs_reconnecting_off_a_terminal_only_with_replace() {
+fn create_workflow_passes_over_each_grant_that_needs_reconnecting_naming_its_reconnect() {
     let tree = Tree::linear_and_claude_code(true);
     let git = Git::new();
     let opener = Opener::new(0);
-
-    // Without --replace nothing is settled: both are passed over, and no sign-in starts.
-    let (server, _directory, credential) = prepared(vec![needing_reconnect(), serving_every()]);
     let claude = FakeProgram::claude(SetupToken::Prints);
-    let kept = run_in(
+    let (server, _directory, credential) = prepared(vec![
+        needing_reconnect(),
+        serving_every(),
+        needing_reconnect(),
+        serving_every(),
+    ]);
+    let json = run_in(
         &server,
         &credential,
         &opener,
@@ -6684,35 +7481,7 @@ fn create_workflow_replaces_a_grant_that_needs_reconnecting_off_a_terminal_only_
         git.in_tree(&tree),
         &["--workflow", "root.yaml", "--json"],
     );
-
-    assert_eq!(kept.status.code(), Some(1), "{}", stderr(&kept));
-    let kept_events = events(&kept);
-    let plan = &kept_events[0];
-    assert_eq!(plan["event"], "workflow_requirements", "{kept_events:?}");
-    assert!(providers_of(plan, "selected").is_empty(), "{plan}");
-    assert!(providers_of(plan, "reconnect").is_empty(), "{plan}");
-    assert_eq!(providers_of(plan, "held"), ["linear", "claude_code"]);
-    assert_eq!(kept_events.len(), 2, "{kept_events:?}");
-    assert_eq!(
-        summary(&kept_events),
-        (
-            "failed".to_owned(),
-            outcomes(&[
-                ("linear", "reconnect_required"),
-                ("claude_code", "reconnect_required")
-            ])
-        )
-    );
-    assert_eq!(claude.recorded("arguments"), None);
-    assert!(opener.opened(0).is_empty());
-    assert_eq!(
-        request_lines(&server.finish()),
-        [LIST_EVERY_KIND, READ_SERVED]
-    );
-
-    // The report names the command that replaces each grant passed over.
-    let (server, _directory, credential) = prepared(vec![needing_reconnect(), serving_every()]);
-    let told = run_in(
+    let human = run_in(
         &server,
         &credential,
         &opener,
@@ -6721,42 +7490,11 @@ fn create_workflow_replaces_a_grant_that_needs_reconnecting_off_a_terminal_only_
         &["--workflow", "root.yaml"],
     );
 
-    assert_eq!(told.status.code(), Some(1), "{}", stderr(&told));
-    let report = stdout(&told);
-    for provider in ["linear", "claude_code"] {
-        assert!(
-            report.contains(&format!("useful integration connect {provider} --replace")),
-            "{report}"
-        );
-    }
-    assert_eq!(
-        request_lines(&server.finish()),
-        [LIST_EVERY_KIND, READ_SERVED]
-    );
-
-    // With --replace the Linear consent runs and the Claude Code sign-in is stored as the held
-    // grant's next generation, not as a new import.
-    let (server, _directory, credential) = prepared(
-        [
-            vec![needing_reconnect(), serving_every()],
-            approved("linear").to_vec(),
-            vec![stored(CLAUDE_CODE, "200 OK", 3)],
-        ]
-        .concat(),
-    );
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    let replaced = run_in(
-        &server,
-        &credential,
-        &opener,
-        &[&claude],
-        git.in_tree(&tree),
-        &["--workflow", "root.yaml", "--replace", "--json"],
-    );
-
-    assert_eq!(replaced.status.code(), Some(0), "{}", stderr(&replaced));
-    let events = events(&replaced);
+    // Both are passed over: the plan names them as needing reconnecting, and no sign-in starts.
+    assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
+    let events = events(&json);
     let plan = &events[0];
+    assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
     assert!(providers_of(plan, "selected").is_empty(), "{plan}");
     assert!(providers_of(plan, "held").is_empty(), "{plan}");
     assert_eq!(
@@ -6766,125 +7504,92 @@ fn create_workflow_replaces_a_grant_that_needs_reconnecting_off_a_terminal_only_
             ("claude_code".to_owned(), origins(CLAUDE_CODE_ORIGINS))
         ]
     );
-    let import = events
-        .iter()
-        .find(|event| event["event"] == "import_result")
-        .unwrap();
-    assert_eq!(import["outcome"], "replaced");
-    assert_eq!(import["grant"]["id"], NATIVE_GRANT_ID);
+    assert_eq!(events.len(), 2, "{events:?}");
     assert_eq!(
         summary(&events),
         (
-            "completed".to_owned(),
-            outcomes(&[("linear", "replaced"), ("claude_code", "replaced")])
+            "failed".to_owned(),
+            outcomes(&[
+                ("linear", "reconnect_required"),
+                ("claude_code", "reconnect_required")
+            ])
         )
     );
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
-    assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
-    let requests = server.finish();
-    let poll = poll_line();
-    let replace = replace_line(NATIVE_GRANT_ID);
+    // The report names the command that signs in to each grant again.
+    assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+    let report = stdout(&human);
+    for grant in [OAUTH_GRANT_ID, NATIVE_GRANT_ID] {
+        assert!(report.contains(&reconnect_line(grant)), "{report}");
+    }
+    assert_eq!(claude.recorded("arguments"), None);
+    assert!(opener.opened(0).is_empty());
     assert_eq!(
-        request_lines(&requests),
-        [
-            LIST_EVERY_KIND,
-            READ_SERVED,
-            START_CONSENT,
-            poll.as_str(),
-            replace.as_str()
-        ]
-    );
-    assert_eq!(start_body(&requests[2]), "linear");
-    assert_eq!(
-        request_body(&requests[4]),
-        serde_json::json!({
-            "recordSchemaVersion": 1,
-            "material": encoded(CLAUDE_TOKEN.as_bytes())
-        })
+        request_lines(&server.finish()),
+        [LIST_EVERY_KIND, READ_SERVED, LIST_EVERY_KIND, READ_SERVED]
     );
 }
 
 // REQ-GRANT-79
-// REQ-GRANT-73
 #[test]
-fn create_workflow_on_a_terminal_asks_before_it_replaces_a_grant_that_needs_reconnecting() {
+fn create_workflow_on_a_terminal_asks_nothing_and_passes_over_a_grant_that_needs_reconnecting() {
     let tree = Tree::linear_and_claude_code(true);
     let git = Git::new();
-    for (answer, replaced) in [("y\n", true), ("\n", false)] {
-        // The Claude Code grant is healthy, so it is held and never asked about.
-        let mut responses = vec![page(
+    for json in [true, false] {
+        // The Claude Code grant is healthy, so it is held.
+        let (server, _directory, credential) = prepared(vec![page(
             &[
                 oauth_grant(OAUTH_GRANT_ID, "linear", "reconnect_required"),
                 claude_grant_of(NATIVE_GRANT_ID),
             ],
             None,
-        )];
-        if replaced {
-            responses.extend(approved("linear"));
-        }
-        let (server, _directory, credential) = prepared(responses);
+        )]);
         let opener = Opener::new(0);
-        let mut command = create_command(
-            &server,
-            &credential,
-            &opener,
-            Place::Remote,
-            &["--workflow", "root.yaml", "--json"],
-        );
+        let mut args = vec!["--workflow", "root.yaml"];
+        if json {
+            args.push("--json");
+        }
+        let mut command = create_command(&server, &credential, &opener, Place::Remote, &args);
         command
             .env(
                 "PATH",
                 std::env::join_paths([opener.directory.path(), git.0.path()]).unwrap(),
             )
             .current_dir(&tree.root);
-        let (transcript, output) = answered(command, answer);
+        let (transcript, output) = on_terminal(command, &[]);
 
-        assert!(transcript.contains(OAUTH_GRANT_ID), "{transcript}");
-        // The question precedes the plan and any sign-in.
+        assert_eq!(output.status.code(), Some(1), "{json}: {transcript}");
+        assert!(!transcript.contains("[y/N]"), "{transcript}");
         assert!(!transcript.contains("── linear ──"), "{transcript}");
-        assert_eq!(
-            output.status.code(),
-            Some(if replaced { 0 } else { 1 }),
-            "{answer:?}"
-        );
-        let events = events(&output);
-        let plan = &events[0];
-        assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
-        let (reconnect, held, outcome, summary_outcome): (&[&str], &[&str], _, _) = if replaced {
-            (&["linear"], &["claude_code"], "replaced", "completed")
+        if json {
+            let events = events(&output);
+            let plan = &events[0];
+            assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
+            assert_eq!(providers_of(plan, "reconnect"), ["linear"]);
+            assert_eq!(providers_of(plan, "held"), ["claude_code"]);
+            assert_eq!(
+                summary(&events),
+                (
+                    "failed".to_owned(),
+                    outcomes(&[("linear", "reconnect_required")])
+                )
+            );
         } else {
-            (
-                &[],
-                &["linear", "claude_code"],
-                "reconnect_required",
-                "failed",
-            )
-        };
-        assert_eq!(providers_of(plan, "reconnect"), reconnect, "{answer:?}");
-        assert_eq!(providers_of(plan, "held"), held, "{answer:?}");
-        assert_eq!(
-            summary(&events),
-            (summary_outcome.to_owned(), outcomes(&[("linear", outcome)])),
-            "{answer:?}"
-        );
-        let poll = poll_line();
-        let expected: &[&str] = if replaced {
-            &[LIST_EVERY_KIND, START_CONSENT, poll.as_str()]
-        } else {
-            &[LIST_EVERY_KIND]
-        };
-        assert_eq!(request_lines(&server.finish()), expected, "{answer:?}");
+            let report = stdout(&output);
+            assert!(report.contains("linear: reconnect_required"), "{report}");
+            assert!(report.contains(&reconnect_line(OAUTH_GRANT_ID)), "{report}");
+        }
+        assert!(opener.opened(0).is_empty());
+        assert_eq!(request_lines(&server.finish()), [LIST_EVERY_KIND], "{json}");
     }
 }
 
 // REQ-GRANT-79
 #[test]
-fn create_workflow_never_replaces_a_provider_held_healthy_beside_one_that_needs_reconnecting() {
+fn create_workflow_holds_a_provider_with_a_healthy_grant_beside_one_that_needs_reconnecting() {
     let tree = Tree::linear_and_claude_code(true);
     let git = Git::new();
-    // Linear is held through one working grant and one whose consent lapsed; Claude Code
-    // through two grants in Acme that both need reconnecting, between which the command
-    // cannot choose.
+    // Linear is held through one working grant and one whose consent lapsed, so it is held;
+    // Claude Code through two grants in Acme that both need reconnecting, so it is passed over.
     let (server, _directory, credential) = prepared(vec![
         page(
             &[
@@ -6905,14 +7610,14 @@ fn create_workflow_never_replaces_a_provider_held_healthy_beside_one_that_needs_
         &opener,
         &[&claude],
         git.in_tree(&tree),
-        &["--workflow", "root.yaml", "--replace", "--json"],
+        &["--workflow", "root.yaml", "--json"],
     );
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let events = events(&output);
     let plan = &events[0];
-    assert!(providers_of(plan, "reconnect").is_empty(), "{plan}");
-    assert_eq!(providers_of(plan, "held"), ["linear", "claude_code"]);
+    assert_eq!(providers_of(plan, "reconnect"), ["claude_code"]);
+    assert_eq!(providers_of(plan, "held"), ["linear"]);
     assert_eq!(
         summary(&events),
         (
@@ -6926,6 +7631,226 @@ fn create_workflow_never_replaces_a_provider_held_healthy_beside_one_that_needs_
         request_lines(&server.finish()),
         [LIST_EVERY_KIND, READ_SERVED]
     );
+}
+
+// A Claude Code grant in Acme that needs reconnecting, since another runner reported it refused at
+// its last use (REQ-GRANT-53), and that is authorized for `RUNNER_ID` too, which last reported
+// that its host holds a Claude Code sign-in of its own (REQ-GRANT-27).
+fn claude_grant_on_a_signed_in_host() -> serde_json::Value {
+    let mut grant = claude_grant_refused(NATIVE_GRANT_ID);
+    let mut on_host = grant["authorizations"][0].clone();
+    grant["authorizations"][0]["runnerId"] = NEW_RUNNER_ID.into();
+    on_host["id"] = "aga_01k0z6r1w8f4jy2m7q9v3x5abe".into();
+    on_host["report"] = serde_json::json!({
+        "state": "foreign_login",
+        "reportedAt": "2026-11-02T10:07:00Z"
+    });
+    grant["authorizations"]
+        .as_array_mut()
+        .unwrap()
+        .push(on_host);
+    grant
+}
+
+// REQ-GRANT-76
+// REQ-GRANT-65
+#[test]
+fn create_workflow_runner_passes_over_a_coding_agent_the_runners_host_supplies() {
+    let tree = Tree::linear_and_claude_code(true);
+    let git = Git::new();
+    let grants = || page(&[claude_grant_on_a_signed_in_host()], None);
+    let host = |reads: Vec<Vec<u8>>| [reads, approved("linear").to_vec()].concat();
+    let poll = poll_line();
+    // The runner, Cloud's answers in order, the requests made, and whether the host supplies
+    // Claude Code. Without `--runner`, or with a runner the grant is not authorized for, the
+    // grant is passed over as needing reconnecting, as ever.
+    type Case<'a> = (Option<&'a str>, Vec<Vec<u8>>, Vec<&'a str>, bool);
+    let cases: [Case; 4] = [
+        (
+            Some(RUNNER_ID),
+            host(vec![grants()]),
+            vec![LIST_EVERY_KIND, START_CONSENT, poll.as_str()],
+            true,
+        ),
+        (
+            None,
+            host(vec![grants(), serving_every()]),
+            vec![LIST_EVERY_KIND, READ_SERVED, START_CONSENT, poll.as_str()],
+            false,
+        ),
+        (
+            Some(GLOBEX_RUNNER_ID),
+            host(vec![grants(), serving_every()]),
+            vec![LIST_EVERY_KIND, READ_SERVED, START_CONSENT, poll.as_str()],
+            false,
+        ),
+        // A name is looked up among the runners of the member's organizations first.
+        (
+            Some("build-1"),
+            host(vec![only_acme(), acme_runners_with_build_1(), grants()]),
+            vec![
+                LIST_MEMBERSHIPS,
+                LIST_ACME_RUNNERS,
+                LIST_EVERY_KIND,
+                START_CONSENT,
+                poll.as_str(),
+            ],
+            true,
+        ),
+    ];
+    for (runner, responses, expected, supplied) in cases {
+        let (server, _directory, credential) = prepared(responses);
+        let opener = Opener::new(0);
+        let claude = FakeProgram::claude(SetupToken::Prints);
+        let mut args = vec!["--workflow", "root.yaml", "--json"];
+        args.extend(runner.iter().flat_map(|runner| ["--runner", runner]));
+        let output = run_in(
+            &server,
+            &credential,
+            &opener,
+            &[&claude],
+            git.in_tree(&tree),
+            &args,
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{runner:?}: {}",
+            stderr(&output)
+        );
+        let events = events(&output);
+        let plan = &events[0];
+        assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
+        assert_eq!(providers_of(plan, "selected"), ["linear"], "{runner:?}");
+        assert!(providers_of(plan, "held").is_empty(), "{plan}");
+        let (host, reconnect) = if supplied {
+            (
+                vec![("claude_code".to_owned(), origins(CLAUDE_CODE_ORIGINS))],
+                vec![],
+            )
+        } else {
+            (
+                vec![],
+                vec![("claude_code".to_owned(), origins(CLAUDE_CODE_ORIGINS))],
+            )
+        };
+        assert_eq!(planned(plan, "host"), host, "{runner:?}");
+        assert_eq!(planned(plan, "reconnect"), reconnect, "{runner:?}");
+        let mut ended = vec![("linear", "created")];
+        if !supplied {
+            ended.push(("claude_code", "reconnect_required"));
+        }
+        assert_eq!(
+            summary(&events),
+            ("completed".to_owned(), outcomes(&ended)),
+            "{runner:?}"
+        );
+        assert_eq!(claude.recorded("arguments"), None, "{runner:?}");
+        let requests = server.finish();
+        assert_member_requests(&requests);
+        assert_eq!(request_lines(&requests), expected, "{runner:?}");
+        assert_eq!(start_body(&requests[expected.len() - 2]), "linear");
+    }
+}
+
+// REQ-GRANT-65
+// REQ-GRANT-76
+#[test]
+fn create_workflow_runner_refuses_a_name_no_runner_or_several_have_before_the_plan() {
+    let tree = Tree::linear_and_claude_code(true);
+    let git = Git::new();
+    let globex = || registrations(&[registration(GLOBEX_BUILD_1, "online", "enabled")]);
+    let organizations = || {
+        memberships(&[
+            (ORGANIZATION_ID, "acme"),
+            (GLOBEX_ORGANIZATION_ID, "globex"),
+        ])
+    };
+    let (server, _directory, credential) = prepared(vec![
+        organizations(),
+        acme_runners_with_build_1(),
+        globex(),
+        organizations(),
+        acme_runners_with_build_1(),
+        globex(),
+    ]);
+    let opener = Opener::new(0);
+    let claude = FakeProgram::claude(SetupToken::Prints);
+    let run = |runner: &str| {
+        run_in(
+            &server,
+            &credential,
+            &opener,
+            &[&claude],
+            git.in_tree(&tree),
+            &["--workflow", "root.yaml", "--runner", runner, "--json"],
+        )
+    };
+    let several = run("build-1");
+    let none = run("build-9");
+
+    // Each refusal is the one event the stream holds, the summary, and no grant is read.
+    assert_eq!(several.status.code(), Some(2), "{}", stderr(&several));
+    let refusal = events(&several);
+    assert_eq!(refusal.len(), 1, "{refusal:?}");
+    assert_eq!(summary(&refusal), ("runner_required".to_owned(), vec![]));
+    let mut named = offered(&refusal[0]);
+    named.sort_by(|(left, _), (right, _)| left.cmp(right));
+    assert_eq!(
+        named,
+        [
+            (RUNNER_ID.to_owned(), "build-1".into()),
+            (GLOBEX_RUNNER_ID.to_owned(), "build-1".into()),
+        ]
+    );
+    assert_eq!(none.status.code(), Some(1), "{}", stderr(&none));
+    let refusal = events(&none);
+    assert_eq!(refusal.len(), 1, "{refusal:?}");
+    assert_eq!(summary(&refusal), ("runner_not_found".to_owned(), vec![]));
+    assert_eq!(claude.recorded("arguments"), None);
+    assert!(opener.opened(0).is_empty());
+    let requests = server.finish();
+    assert_member_requests(&requests);
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_MEMBERSHIPS,
+            LIST_ACME_RUNNERS,
+            LIST_GLOBEX_RUNNERS,
+            LIST_MEMBERSHIPS,
+            LIST_ACME_RUNNERS,
+            LIST_GLOBEX_RUNNERS,
+        ]
+    );
+}
+
+// REQ-GRANT-76
+#[test]
+fn create_takes_runner_only_with_workflow() {
+    let (server, _directory, credential) = prepared(vec![]);
+    let opener = Opener::new(0);
+    for args in [
+        &["github", "--runner", RUNNER_ID][..],
+        &["--all", "--runner", RUNNER_ID],
+        &["--all", "--runner", RUNNER_ID, "--json"],
+        // `--source-root` bounds the `--workflow` files alone.
+        &["github", "--source-root", "."],
+        &["--all", "--source-root", "."],
+    ] {
+        let output = run_every(&server, &credential, &opener, &[], args);
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(stderr(&output).contains("--workflow"), "{args:?}");
+    }
+    assert!(opener.opened(0).is_empty());
+    assert!(server.finish().is_empty());
 }
 
 // REQ-GRANT-75
@@ -6965,576 +7890,6 @@ fn create_all_selects_nothing_for_a_grant_that_needs_reconnecting() {
         request_lines(&server.finish()),
         [LIST_EVERY_KIND, READ_SERVED]
     );
-}
-
-// `useful runner doctor --workflow FILE --connect`: the flow of `useful grant create --workflow` over the
-// doctor's derivation, then the doctor's report of the member's grants, read again.
-
-/// What one command run in a checkout of a tree left: its output, the requests its deployment
-/// saw, and the fake `claude` it found.
-struct Ran {
-    output: Output,
-    requests: Vec<String>,
-    claude: FakeProgram,
-}
-
-/// Runs the command whose leading words are `command` with `args` in a checkout of `tree`,
-/// against a deployment answering `script`, with `claude` and the opener on `PATH`.
-fn ran_in(
-    tree: &Tree,
-    claude: FakeProgram,
-    script: Vec<Vec<u8>>,
-    command: &[&str],
-    args: &[&str],
-) -> Ran {
-    let git = Git::new();
-    let opener = Opener::new(0);
-    let (server, _directory, credential) = prepared(script);
-    let output = run_command_in(
-        &server,
-        &credential,
-        &opener,
-        &[&claude],
-        git.in_tree(tree),
-        command,
-        args,
-    );
-    Ran {
-        output,
-        requests: server.finish(),
-        claude,
-    }
-}
-
-/// The events of `output`, each with its `deployment` set aside, since two scripted deployments
-/// have different addresses.
-fn events_elsewhere(output: &Output) -> Vec<serde_json::Value> {
-    events(output)
-        .into_iter()
-        .map(|mut event| {
-            event.as_object_mut().unwrap().remove("deployment");
-            event
-        })
-        .collect()
-}
-
-/// The `report` event that ends the doctor's output, once each event before it is checked to
-/// be the one `useful grant create` printed in its place against the same script (INV-CLI-15).
-fn report_after(create: &Output, doctor: &Output) -> serde_json::Value {
-    let mut events = events(doctor);
-    let report = events.pop().unwrap();
-    assert_eq!(report["event"], "report", "{report}");
-    let flow: Vec<_> = events_elsewhere(doctor)
-        .into_iter()
-        .take(events.len())
-        .collect();
-    assert_eq!(flow, events_elsewhere(create));
-    report
-}
-
-/// The doctor's events but the last, which is its report.
-fn flow_events(output: &Output) -> Vec<serde_json::Value> {
-    let mut events = events(output);
-    assert_eq!(events.pop().unwrap()["event"], "report", "{events:?}");
-    events
-}
-
-/// The doctor's deployment saw the requests `create`'s saw, then one more grants list for the
-/// report.
-fn assert_flow_requests_then_a_list(doctor: &Ran, create: &Ran) {
-    let lines = request_lines(&doctor.requests);
-    let (last, flow) = lines.split_last().unwrap();
-    assert_eq!(flow, request_lines(&create.requests));
-    assert_eq!(*last, LIST_EVERY_KIND);
-}
-
-/// The member's grants once a Linear consent and a Claude Code sign-in made one of each, no
-/// runner authorized for either.
-fn made_unauthorized() -> Vec<u8> {
-    let mut linear = oauth_grant(OAUTH_GRANT_ID, "linear", "active");
-    linear["authorizations"] = serde_json::json!([]);
-    page(&[linear, claude_grant_of(NATIVE_GRANT_ID)], None)
-}
-
-/// The script of a member who holds nothing the tree calls for: the grants list, the providers
-/// served, the one membership, the Linear consent approved and the Claude Code import.
-fn signing_in_to_both() -> Vec<Vec<u8>> {
-    [
-        vec![nothing_held(), serving_every(), only_acme()],
-        approved("linear").to_vec(),
-        vec![stored(CLAUDE_CODE, "201 Created", 1)],
-    ]
-    .concat()
-}
-
-/// A grant `grant` of a report's requirement carries with no runner authorized: none reported,
-/// and its own status `not_connected` with `authorize_runner` (REQ-CREDREADY-23).
-fn assert_authorizes_no_runner(grant: &serde_json::Value) {
-    assert_eq!(grant["authorizations"], serde_json::json!([]), "{grant}");
-    assert_eq!(grant["availability"], "not_connected", "{grant}");
-    assert_eq!(grant["nextAction"], "authorize_runner", "{grant}");
-}
-
-const CONNECT: [&str; 4] = ["--workflow", "root.yaml", "--connect", "--json"];
-
-// REQ-CREDREADY-24
-// REQ-CREDREADY-25
-// INV-CLI-15
-#[test]
-fn doctor_connect_runs_the_grant_flow_then_reports_the_grants_read_again() {
-    let tree = Tree::linear_and_claude_code(true);
-    let create = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        signing_in_to_both(),
-        GRANT_CREATE,
-        &["--workflow", "root.yaml", "--json"],
-    );
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        [signing_in_to_both(), vec![made_unauthorized()]].concat(),
-        RUNNER_DOCTOR,
-        &CONNECT,
-    );
-
-    assert_eq!(
-        create.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&create.output)
-    );
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&doctor.output)
-    );
-    let report = report_after(&create.output, &doctor.output);
-    let flow = flow_events(&doctor.output);
-    assert_eq!(flow[0]["event"], "workflow_requirements", "{flow:?}");
-    assert_eq!(
-        summary(&flow),
-        (
-            "completed".to_owned(),
-            outcomes(&[("linear", "created"), ("claude_code", "created")])
-        )
-    );
-    assert_eq!(report["schemaVersion"], 1);
-    assert_eq!(
-        report["workflows"],
-        serde_json::json!(["child.yaml", "root.yaml"])
-    );
-    for (kind, id) in [("linear", OAUTH_GRANT_ID), ("claude_code", NATIVE_GRANT_ID)] {
-        let grant = held_grant(&report, kind);
-        assert_eq!(grant["id"], id, "{kind}");
-        assert_authorizes_no_runner(grant);
-    }
-    assert_eq!(
-        doctor.claude.recorded("arguments").unwrap(),
-        "setup-token\n"
-    );
-    assert_member_requests(&doctor.requests);
-    assert_flow_requests_then_a_list(&doctor, &create);
-}
-
-// The workflow of one command step, which calls for no kind.
-const NO_KIND_WORKFLOW: &str = r#"schemaVersion: 1
-steps:
-  build:
-    kind: cmd
-    command:
-      argv: ["./build"]
-"#;
-
-// REQ-CREDREADY-25
-// REQ-CREDREADY-9
-#[test]
-fn doctor_connect_for_a_member_who_holds_each_kind_starts_no_sign_in_and_still_reports() {
-    let tree = Tree::linear_and_claude_code(true);
-    let held = || holding(&["linear"], true);
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        vec![held(), held()],
-        RUNNER_DOCTOR,
-        &CONNECT,
-    );
-
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&doctor.output)
-    );
-    let flow = flow_events(&doctor.output);
-    assert_eq!(flow.len(), 2, "{flow:?}");
-    assert_eq!(summary(&flow), ("nothing_to_create".to_owned(), Vec::new()));
-    let report = events(&doctor.output).pop().unwrap();
-    assert_eq!(held_grant(&report, "linear")["id"], OAUTH_GRANT_ID);
-    assert_eq!(
-        held_grant(&report, "claude_code")["id"],
-        OTHER_NATIVE_GRANT_ID
-    );
-    assert_eq!(doctor.claude.recorded("arguments"), None);
-    assert_eq!(
-        request_lines(&doctor.requests),
-        [LIST_EVERY_KIND, LIST_EVERY_KIND]
-    );
-
-    // Without --json the report follows the flow's on standard output.
-    let human = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        vec![held(), held()],
-        RUNNER_DOCTOR,
-        &CONNECT[..3],
-    );
-    assert_eq!(
-        human.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&human.output)
-    );
-    let text = stdout(&human.output);
-    for fact in [OAUTH_GRANT_ID, OTHER_NATIVE_GRANT_ID, RUNNER_ID] {
-        assert!(text.contains(fact), "{fact}: {text}");
-    }
-    assert_eq!(
-        request_lines(&human.requests),
-        [LIST_EVERY_KIND, LIST_EVERY_KIND]
-    );
-
-    // A tree that calls for no kind takes the flow's path for nothing to create, and neither the
-    // flow nor the report asks Cloud anything.
-    let tree = Tree::new(&[("build.yaml", NO_KIND_WORKFLOW)], true);
-    let nothing = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        Vec::new(),
-        RUNNER_DOCTOR,
-        &["--workflow", "build.yaml", "--connect", "--json"],
-    );
-    assert_eq!(
-        nothing.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&nothing.output)
-    );
-    let flow = flow_events(&nothing.output);
-    assert_eq!(summary(&flow), ("nothing_to_create".to_owned(), Vec::new()));
-    let report = events(&nothing.output).pop().unwrap();
-    assert_eq!(report["requirements"], serde_json::json!([]));
-    assert_eq!(report["deployment"], serde_json::Value::Null);
-    assert!(nothing.requests.is_empty(), "{:?}", nothing.requests);
-}
-
-// REQ-CREDREADY-25
-#[test]
-fn doctor_connect_whose_sign_in_fails_exits_1_and_still_reports() {
-    let tree = Tree::linear_and_claude_code(true);
-    let mut linear = oauth_grant(OAUTH_GRANT_ID, "linear", "active");
-    linear["authorizations"] = serde_json::json!([]);
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Exits(1)),
-        [
-            vec![nothing_held(), serving_every(), only_acme()],
-            approved("linear").to_vec(),
-            vec![page(&[linear], None)],
-        ]
-        .concat(),
-        RUNNER_DOCTOR,
-        &CONNECT,
-    );
-
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(1),
-        "{}",
-        stderr(&doctor.output)
-    );
-    assert_eq!(
-        summary(&flow_events(&doctor.output)),
-        (
-            "failed".to_owned(),
-            outcomes(&[("linear", "created"), ("claude_code", "failed")])
-        )
-    );
-    let report = events(&doctor.output).pop().unwrap();
-    assert_authorizes_no_runner(held_grant(&report, "linear"));
-    assert_eq!(
-        requirement(&report, "claude_code")["grant"],
-        serde_json::json!({"provider": "claude_code", "grants": [], "availability": "not_connected", "nextAction": "connect"})
-    );
-    let poll = poll_line();
-    assert_eq!(
-        request_lines(&doctor.requests),
-        [
-            LIST_EVERY_KIND,
-            READ_SERVED,
-            LIST_MEMBERSHIPS,
-            START_CONSENT,
-            poll.as_str(),
-            LIST_EVERY_KIND
-        ]
-    );
-}
-
-// REQ-CREDREADY-25
-#[test]
-fn doctor_connect_without_a_session_ends_as_grant_create_does_with_no_report() {
-    let tree = Tree::linear_and_claude_code(true);
-    let git = Git::new();
-    let opener = Opener::new(0);
-    let signed_out = |command: &[&str], args: &[&str]| {
-        let server = ScriptedServer::respond(Vec::new());
-        let directory = private_credential_directory();
-        let credential = directory.path().join("credentials.json");
-        let claude = FakeProgram::claude(SetupToken::Prints);
-        let output = run_command_in(
-            &server,
-            &credential,
-            &opener,
-            &[&claude],
-            git.in_tree(&tree),
-            command,
-            args,
-        );
-        assert_eq!(claude.recorded("arguments"), None);
-        assert!(server.finish().is_empty());
-        output
-    };
-
-    let create = signed_out(GRANT_CREATE, &["--workflow", "root.yaml", "--json"]);
-    let doctor = signed_out(RUNNER_DOCTOR, &CONNECT);
-
-    assert_eq!(create.status.code(), Some(3), "{}", stderr(&create));
-    assert_eq!(
-        doctor.status.code(),
-        create.status.code(),
-        "{}",
-        stderr(&doctor)
-    );
-    assert_eq!(events_elsewhere(&doctor), events_elsewhere(&create));
-    assert!(
-        events(&doctor)
-            .iter()
-            .all(|event| event["event"] != "report"),
-        "{}",
-        stdout(&doctor)
-    );
-}
-
-// REQ-CREDREADY-25
-// REQ-GRANT-75
-#[test]
-fn a_signal_that_ends_the_claude_sign_in_ends_doctor_connect_with_its_status_and_no_report() {
-    let tree = Tree::linear_and_claude_code(true);
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Interrupts),
-        vec![holding(&["linear"], false), serving_every(), only_acme()],
-        RUNNER_DOCTOR,
-        &CONNECT,
-    );
-
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(143),
-        "{}",
-        stderr(&doctor.output)
-    );
-    let events = events(&doctor.output);
-    assert_eq!(
-        summary(&events),
-        (
-            "terminated".to_owned(),
-            outcomes(&[("claude_code", "terminated")])
-        )
-    );
-    assert_eq!(
-        request_lines(&doctor.requests),
-        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS]
-    );
-}
-
-// REQ-CREDREADY-25
-// REQ-CREDREADY-17
-#[test]
-fn doctor_connect_with_readiness_reads_the_connections_after_the_sign_ins() {
-    let tree = Tree::linear_and_claude_code(true);
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        [
-            vec![nothing_held(), serving_every(), acme()],
-            approved("linear").to_vec(),
-            vec![
-                stored(CLAUDE_CODE, "201 Created", 1),
-                connection_page(&[], None),
-                acme(),
-                made_unauthorized(),
-            ],
-        ]
-        .concat(),
-        RUNNER_DOCTOR,
-        &[&CONNECT[..], &["--readiness", "--organization-id", "acme"]].concat(),
-    );
-
-    // The sign-ins made both grants, and the missing Linear connection fails the report.
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(1),
-        "{}",
-        stderr(&doctor.output)
-    );
-    assert_eq!(
-        summary(&flow_events(&doctor.output)),
-        (
-            "completed".to_owned(),
-            outcomes(&[("linear", "created"), ("claude_code", "created")])
-        )
-    );
-    let report = events(&doctor.output).pop().unwrap();
-    assert_eq!(report["summary"]["missing"], 1, "{report}");
-    assert_authorizes_no_runner(held_grant(&report, "linear"));
-    let lines = request_lines(&doctor.requests);
-    let poll = poll_line();
-    assert_eq!(
-        lines[..6],
-        [
-            LIST_EVERY_KIND,
-            READ_SERVED,
-            READ_ACME,
-            START_CONSENT,
-            poll.as_str(),
-            IMPORT_GRANT
-        ]
-    );
-    assert!(lines[6].starts_with(LINEAR_LIST), "{lines:?}");
-    assert_eq!(lines[7..], [READ_ACME, LIST_EVERY_KIND]);
-}
-
-// REQ-CREDREADY-24
-// REQ-GRANT-79
-// INV-CLI-15
-#[test]
-fn doctor_connect_with_replace_replaces_as_grant_create_does() {
-    let tree = Tree::linear_and_claude_code(true);
-    let script = || {
-        [
-            vec![needing_reconnect(), serving_every()],
-            approved("linear").to_vec(),
-            vec![stored(CLAUDE_CODE, "200 OK", 3)],
-        ]
-        .concat()
-    };
-    let create = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        script(),
-        GRANT_CREATE,
-        &["--workflow", "root.yaml", "--replace", "--json"],
-    );
-    let doctor = ran_in(
-        &tree,
-        FakeProgram::claude(SetupToken::Prints),
-        [script(), vec![made_unauthorized()]].concat(),
-        RUNNER_DOCTOR,
-        &[&CONNECT[..], &["--replace"]].concat(),
-    );
-
-    assert_eq!(
-        doctor.output.status.code(),
-        Some(0),
-        "{}",
-        stderr(&doctor.output)
-    );
-    report_after(&create.output, &doctor.output);
-    assert_eq!(
-        summary(&flow_events(&doctor.output)),
-        (
-            "completed".to_owned(),
-            outcomes(&[("linear", "replaced"), ("claude_code", "replaced")])
-        )
-    );
-    assert_flow_requests_then_a_list(&doctor, &create);
-}
-
-// REQ-CREDREADY-23
-#[test]
-fn doctor_connect_with_a_runner_reports_each_grant_on_that_runner_alone() {
-    let tree = Tree::linear_and_claude_code(true);
-    let held = || holding(&["linear"], true);
-    let on = |runner: &str| {
-        let doctor = ran_in(
-            &tree,
-            FakeProgram::claude(SetupToken::Prints),
-            vec![held(), held()],
-            RUNNER_DOCTOR,
-            &[&CONNECT[..], &["--runner-id", runner]].concat(),
-        );
-        assert_eq!(
-            doctor.output.status.code(),
-            Some(0),
-            "{}",
-            stderr(&doctor.output)
-        );
-        events(&doctor.output).pop().unwrap()
-    };
-
-    let named = on(RUNNER_ID);
-    let other = on(NEW_RUNNER_ID);
-
-    assert_eq!(
-        held_grant(&named, "linear")["authorizations"],
-        serde_json::json!([{"runnerId": RUNNER_ID, "availability": "available", "nextAction": "none"}])
-    );
-    assert_authorizes_no_runner(held_grant(&other, "linear"));
-}
-
-// REQ-CREDREADY-24
-#[test]
-fn doctor_connect_refuses_options_it_does_not_take_before_anything_is_asked() {
-    let tree = Tree::linear_and_claude_code(true);
-    // Each case is otherwise a command the doctor accepts, so only the rule it names refuses
-    // it: the harness adds --allow-insecure-http, which alone needs a mode that contacts Cloud,
-    // and a service API key alone needs --readiness.
-    let cases: [&[&str]; 3] = [
-        &["--connect", "--json"],
-        &["--workflow", "root.yaml", "--grants", "--replace", "--json"],
-        &[
-            "--workflow",
-            "root.yaml",
-            "--connect",
-            "--readiness",
-            "--organization-id",
-            ORGANIZATION_ID,
-            "--service-api-key-file",
-            "/dev/null/key",
-            "--json",
-        ],
-    ];
-    for args in cases {
-        let doctor = ran_in(
-            &tree,
-            FakeProgram::claude(SetupToken::Prints),
-            Vec::new(),
-            RUNNER_DOCTOR,
-            args,
-        );
-
-        assert_eq!(
-            doctor.output.status.code(),
-            Some(2),
-            "{args:?}: {}",
-            stderr(&doctor.output)
-        );
-        assert!(doctor.output.stdout.is_empty(), "{args:?}");
-        assert_eq!(doctor.claude.recorded("arguments"), None, "{args:?}");
-        assert!(doctor.requests.is_empty(), "{args:?}");
-    }
 }
 
 // SC-GRANT-4's workflow: GitHub through the `gh` it requires, Linear through a forwarded
@@ -7600,24 +7955,25 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         })
         .collect();
     let (server, _directory, credential) = prepared(vec![
-        // useful grant create --workflow workflow.yaml
+        // useful account integration connect --workflow workflow.yaml
         page(&[github], None),
         serving_every(),
         only_acme(),
         json_http_response("201 Created", consent_of("linear", "pending")),
         polled(consented),
         stored(CLAUDE_CODE, "201 Created", 1),
-        // useful grant list
+        // useful account integration list
         page(&held, None),
         predating_served(),
         organization(),
         identities(ada()),
-        // useful grant authorize --all RUNNER --yes
+        // useful account integration authorize --all --runner RUNNER --yes
         page(&held, None),
+        predating_served(),
         authorized(OAUTH_GRANT_ID, RUNNER_ID),
         authorized(LINEAR_GRANT_ID, RUNNER_ID),
         authorized(NATIVE_GRANT_ID, RUNNER_ID),
-        // useful grant list
+        // useful account integration list
         page(&after, None),
         predating_served(),
         organization(),
@@ -7639,7 +7995,14 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     let authorized_all = run_grant(
         &server,
         &credential,
-        &["authorize", "--all", RUNNER_ID, "--yes", "--json"],
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
     );
     let listed_after = run_grant(&server, &credential, &["list", "--json"]);
 
@@ -7746,7 +8109,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     ]
     .into_iter()
     .chain(list)
-    .chain([LIST_FIRST_PAGE])
+    .chain([LIST_FIRST_PAGE, READ_SERVED])
     .chain(authorizations.iter().map(String::as_str))
     .chain(list)
     .collect();
@@ -7754,7 +8117,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     assert_eq!(start_body(&requests[3]), "linear");
     // The Claude Code grant is made for Acme, which Ada did not name (REQ-GRANT-72).
     assert_imported(&requests[5], ORGANIZATION_ID, CLAUDE_CODE);
-    for request in &requests[11..14] {
+    for request in &requests[12..15] {
         assert_eq!(
             request_body(request),
             serde_json::json!({"runnerId": RUNNER_ID})
@@ -7792,31 +8155,40 @@ fn codex_refused_at(generation: i64) -> serde_json::Value {
     grant
 }
 
-/// The fields of each requirement of `report` that a grant never changes, and its summary.
-fn requirement_states(report: &serde_json::Value) -> Vec<serde_json::Value> {
-    let mut states: Vec<_> = report["requirements"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|requirement| {
-            serde_json::json!([
-                requirement["kind"],
-                requirement["state"],
-                requirement["code"],
-                requirement["cloud"],
-                requirement["nextAction"]
-            ])
-        })
-        .collect();
-    states.push(report["summary"].clone());
-    states
+/// A grant `grant` of a report's requirement carries with no runner authorized: none reported,
+/// and its own status `not_connected` with `authorize_runner` (REQ-CREDREADY-23).
+fn assert_authorizes_no_runner(grant: &serde_json::Value) {
+    assert_eq!(grant["authorizations"], serde_json::json!([]), "{grant}");
+    assert_eq!(grant["availability"], "not_connected", "{grant}");
+    assert_eq!(grant["nextAction"], "authorize_runner", "{grant}");
 }
 
-// SC-CREDREADY-3, REQ-CREDREADY-22, REQ-CREDREADY-23, REQ-CREDREADY-18, REQ-CREDREADY-24,
-// REQ-GRANT-79, REQ-CREDREADY-25, REQ-CREDREADY-9
+/// The state, code and what meets it of the requirement of `kind` in a doctor's `report`.
+fn judged(report: &serde_json::Value, kind: &str) -> (String, String, Option<String>) {
+    let requirement = requirement(report, kind);
+    let text = |field: &str| requirement[field].as_str().map(str::to_owned);
+    (text("state").unwrap(), text("code").unwrap(), text("metBy"))
+}
+
+fn met_by(by: &str, code: &str) -> (String, String, Option<String>) {
+    ("met".to_owned(), code.to_owned(), Some(by.to_owned()))
+}
+
+fn failing(state: &str, code: &str) -> (String, String, Option<String>) {
+    (state.to_owned(), code.to_owned(), None)
+}
+
+// The request lines of the doctor's reads in `acme`: the organization's GitHub installations
+// and Linear connections, then the member's grants.
+const LIST_ACME_INSTALLATIONS: &str =
+    "GET /api/v1/organizations/acme/github/installations HTTP/1.1";
+const LIST_ACME_LINEAR: &str =
+    "GET /api/v1/organizations/acme/connections/linear?limit=100 HTTP/1.1";
+
+// SC-CREDREADY-3, REQ-CREDREADY-22, REQ-CREDREADY-23, REQ-CREDREADY-26, REQ-GRANT-76,
+// REQ-GRANT-79, REQ-GRANT-73, REQ-CREDREADY-9, INV-CLI-15
 #[test]
 fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_the_runner() {
-    let elsewhere = tempfile::tempdir().unwrap();
     let tree = Tree::new(
         &[
             ("workflow.yaml", CONNECTING_WORKFLOW),
@@ -7828,119 +8200,154 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     );
     let git = Git::new();
     // Ada, a member of Acme alone, holds a GitHub grant and a Codex grant authorized for the
-    // runner, where Codex was refused at its last use.
+    // runner, where Codex was refused at its last use. Acme has no GitHub installation and no
+    // Linear connection.
     let github = oauth_grant(OAUTH_GRANT_ID, "github", "active");
     let before = page(&[github.clone(), codex_refused_at(2)], None);
-    // The Linear consent makes a grant with no runner authorized, and the Codex sign-in is
-    // stored as the grant's generation 3, which the runner has not yet reported installing.
+    // The Linear consent makes a grant with no runner authorized, and `reconnect` stores the
+    // Codex sign-in as the grant's generation 3, which the runner has not yet reported
+    // installing.
     let mut linear = oauth_grant(LINEAR_GRANT_ID, "linear", "active");
     linear["authorizations"] = serde_json::json!([]);
     let mut consented = consent_of("linear", "completed");
     consented["resultGrant"]["id"] = LINEAR_GRANT_ID.into();
+    let connected_page = page(&[github.clone(), linear.clone(), codex_refused_at(2)], None);
     let after = page(&[github, linear, codex_refused_at(3)], None);
-    let (server, _directory, credential) = prepared(vec![
-        // useful runner doctor --workflow workflow.yaml --grants --runner-id RUNNER
-        before.clone(),
-        // useful runner doctor --workflow workflow.yaml --connect --replace --runner-id RUNNER
-        before,
-        serving_every(),
-        json_http_response("201 Created", consent_of("linear", "pending")),
-        polled(consented),
-        stored(CODEX, "200 OK", 3),
-        after,
-    ]);
+    let doctor_reads = |grants: Vec<u8>| {
+        vec![
+            connection_page(&[], None),
+            connection_page(&[], None),
+            organization(),
+            grants,
+        ]
+    };
+    let (server, _directory, credential) = prepared(
+        [
+            // useful workflow doctor workflow.yaml --org acme --runner RUNNER
+            doctor_reads(before.clone()),
+            // useful account integration connect --workflow workflow.yaml --runner RUNNER
+            vec![
+                before,
+                serving_every(),
+                json_http_response("201 Created", consent_of("linear", "pending")),
+                polled(consented),
+            ],
+            // useful workflow doctor workflow.yaml --org acme --runner RUNNER
+            doctor_reads(connected_page),
+            // useful account integration reconnect INTEGRATION
+            vec![
+                one(&codex_refused_at(2)),
+                serving_every(),
+                stored(CODEX, "200 OK", 3),
+            ],
+            // useful workflow doctor workflow.yaml --org acme --runner RUNNER
+            doctor_reads(after),
+        ]
+        .concat(),
+    );
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
     // run_command_in checks that no output carries the login and that Ada's own Codex home is
     // untouched (REQ-GRANT-74).
-    let doctor = |args: &[&str]| {
+    let run = |command: &[&str], args: &[&str], status: i32| {
         let output = run_command_in(
             &server,
             &credential,
             &opener,
             &[&codex],
             git.in_tree(&tree),
-            RUNNER_DOCTOR,
-            &[&["--workflow", "workflow.yaml"], args, &["--json"]].concat(),
+            command,
+            &[args, &["--json"]].concat(),
         );
         assert_eq!(
             output.status.code(),
-            Some(0),
-            "{args:?}: {}",
+            Some(status),
+            "{command:?} {args:?}: {}",
             stderr(&output)
         );
         output
     };
+    let doctor = |status: i32| {
+        json_output(&run(
+            WORKFLOW_DOCTOR,
+            &["workflow.yaml", "--org", "acme", "--runner", RUNNER_ID],
+            status,
+        ))
+    };
 
-    // The report without a grant read, which contacts nothing.
-    let offline = Command::new(env!("CARGO_BIN_EXE_useful"))
-        .args(["runner", "doctor", "--workflow", "workflow.yaml", "--json"])
-        .current_dir(&tree.root)
-        .env_clear()
-        .env("PATH", git.0.path())
-        .env("HOME", elsewhere.path())
-        .output()
-        .unwrap();
-    assert_eq!(offline.status.code(), Some(0), "{}", stderr(&offline));
-    let offline = json_output(&offline);
-    let grants = json_output(&doctor(&["--grants", "--runner-id", RUNNER_ID]));
+    let report = doctor(1);
 
-    // GitHub is available on the runner, Linear lacks a grant and Codex needs reconnecting
-    // there, and no requirement's state changes (REQ-CREDREADY-22, REQ-CREDREADY-23,
-    // REQ-CREDREADY-18).
-    assert_eq!(requirement_states(&grants), requirement_states(&offline));
+    // GitHub is met by the grant the runner can use; Linear is missing, as the organization's
+    // connections show it, and the member holds no grant of it; Codex needs reconnecting on the
+    // runner (REQ-CREDREADY-22, REQ-CREDREADY-23, REQ-CREDREADY-26).
+    assert_eq!(judged(&report, "github"), met_by("grant", "grant_usable"));
     assert_eq!(
-        held_grant(&grants, "github")["authorizations"],
-        serde_json::json!([{"runnerId": RUNNER_ID, "availability": "available", "nextAction": "none"}])
+        judged(&report, "linear"),
+        failing("missing", "not_connected")
     );
     assert_eq!(
-        requirement(&grants, "linear")["grant"],
+        judged(&report, "codex"),
+        failing("reconnect_required", "grant_reconnect_required")
+    );
+    assert_eq!(
+        requirement(&report, "linear")["grant"],
         serde_json::json!({"provider": "linear", "grants": [], "availability": "not_connected", "nextAction": "connect"})
     );
-    let codex_grant = held_grant(&grants, "codex");
-    assert_eq!(codex_grant["generation"], 2);
     assert_eq!(
-        codex_grant["authorizations"],
+        held_grant(&report, "codex")["authorizations"],
         serde_json::json!([{"runnerId": RUNNER_ID, "availability": "reconnect_required", "nextAction": "reconnect"}])
     );
 
-    let connected = doctor(&["--connect", "--replace", "--runner-id", RUNNER_ID]);
+    let connected = run(
+        GRANT_CREATE,
+        &["--workflow", "workflow.yaml", "--runner", RUNNER_ID],
+        0,
+    );
 
-    // The plan names Linear to sign in, Codex to reconnect and GitHub as held; the Linear
-    // consent is approved and the Codex sign-in replaces the held grant (REQ-CREDREADY-24,
+    // The plan names Linear to sign in, Codex as needing reconnecting and GitHub as held; the
+    // Linear consent is approved and Codex is passed over, asking nothing (REQ-GRANT-76,
     // REQ-GRANT-79).
-    let flow = flow_events(&connected);
+    let flow = events(&connected);
     let plan = &flow[0];
     assert_eq!(plan["event"], "workflow_requirements", "{flow:?}");
     assert_eq!(providers_of(plan, "selected"), ["linear"]);
     assert_eq!(providers_of(plan, "reconnect"), ["codex"]);
     assert_eq!(providers_of(plan, "held"), ["github"]);
     assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
-    // `codex` was last started for the sign-in, so the tree's agent step did not run once the
-    // sign-ins ended (REQ-CREDREADY-9).
-    assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
-    let import = flow
-        .iter()
-        .find(|event| event["event"] == "import_result")
-        .unwrap();
-    assert_eq!(import["outcome"], "replaced");
-    assert_eq!(import["grant"]["id"], NATIVE_GRANT_ID);
-    assert_eq!(import["grant"]["generation"], 3);
+    assert_eq!(codex.recorded("arguments"), None);
     assert_eq!(
         summary(&flow),
         (
             "completed".to_owned(),
-            outcomes(&[("linear", "created"), ("codex", "replaced")])
+            outcomes(&[("linear", "created"), ("codex", "reconnect_required")])
         )
     );
 
-    // The report that follows reads the grants again: Linear's has no runner authorized, and
-    // Codex is pending on the runner at its next generation (REQ-CREDREADY-25).
-    let report = events(&connected).pop().unwrap();
-    assert_eq!(requirement_states(&report), requirement_states(&offline));
+    // The doctor again: the Linear grant has no runner authorized, and Linear still reads as the
+    // organization's connections show it.
+    let report = doctor(1);
+    assert_eq!(
+        judged(&report, "linear"),
+        failing("missing", "not_connected")
+    );
     let linear_grant = held_grant(&report, "linear");
     assert_eq!(linear_grant["id"], LINEAR_GRANT_ID);
     assert_authorizes_no_runner(linear_grant);
+
+    // Ada signs in to Codex again, which stores the grant's next generation (REQ-GRANT-73).
+    // `codex` was last started for the sign-in, so the tree's agent step did not run
+    // (REQ-CREDREADY-9).
+    let reconnected = run(GRANT_RECONNECT, &[NATIVE_GRANT_ID], 0);
+    assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
+    let import = events(&reconnected).pop().unwrap();
+    assert_eq!(import["event"], "import_result");
+    assert_eq!(import["outcome"], "replaced");
+    assert_eq!(import["grant"]["id"], NATIVE_GRANT_ID);
+    assert_eq!(import["grant"]["generation"], 3);
+
+    // Codex is pending on the runner at its next generation, which meets the need.
+    let report = doctor(1);
+    assert_eq!(judged(&report, "codex"), met_by("grant", "grant_usable"));
     let codex_grant = held_grant(&report, "codex");
     assert_eq!(codex_grant["id"], NATIVE_GRANT_ID);
     assert_eq!(codex_grant["generation"], 3);
@@ -7953,21 +8360,26 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     assert_member_requests(&requests);
     let poll = poll_line();
     let replace = replace_line(NATIVE_GRANT_ID);
+    let doctor_lines = [
+        LIST_ACME_INSTALLATIONS,
+        LIST_ACME_LINEAR,
+        READ_ACME,
+        LIST_EVERY_KIND,
+    ];
     assert_eq!(
         request_lines(&requests),
         [
-            LIST_EVERY_KIND,
-            LIST_EVERY_KIND,
-            READ_SERVED,
-            START_CONSENT,
-            poll.as_str(),
-            replace.as_str(),
-            LIST_EVERY_KIND
+            &doctor_lines[..],
+            &[LIST_EVERY_KIND, READ_SERVED, START_CONSENT, poll.as_str()],
+            &doctor_lines,
+            &[READ_NATIVE, READ_SERVED, replace.as_str()],
+            &doctor_lines,
         ]
+        .concat()
     );
-    assert_eq!(start_body(&requests[3]), "linear");
+    assert_eq!(start_body(&requests[6]), "linear");
     assert_eq!(
-        request_body(&requests[5]),
+        request_body(&requests[14]),
         serde_json::json!({
             "recordSchemaVersion": 1,
             "material": encoded(CODEX_MATERIAL.as_bytes())
@@ -8015,6 +8427,53 @@ fn a_tree_that_calls_for_gitlab_selects_gitlab_com() {
         [LIST_EVERY_KIND, START_CONSENT, poll.as_str()]
     );
     assert_eq!(start_body(&requests[1]), "gitlab.com");
+}
+
+// REQ-GRANT-76
+#[test]
+fn a_tree_directory_is_planned_from_its_root_file() {
+    // The tree's root file calls for GitLab; the directory is its own boundary, so no Git is
+    // asked for a repository root.
+    let tree = Tree::new(&[("workflow.yaml", GITLAB_WORKFLOW)], false);
+    let git = Git::new();
+    let (server, _directory, credential) =
+        prepared([vec![nothing_held()], approved("gitlab.com").to_vec()].concat());
+    let opener = Opener::new(0);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let output = run_in(
+        &server,
+        &credential,
+        &opener,
+        &[],
+        Some(Checkout {
+            directory: elsewhere.path(),
+            git: git.0.path(),
+        }),
+        &["--workflow", tree.root.to_str().unwrap(), "--json"],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let events = events(&output);
+    assert_eq!(
+        planned(&events[0], "selected"),
+        [(
+            "gitlab.com".to_owned(),
+            serde_json::json!([{"declaration": "required_tool", "workflow": "workflow.yaml", "name": "glab"}])
+        )]
+    );
+    assert!(
+        !git.invocations()
+            .iter()
+            .any(|invocation| invocation.starts_with("rev-parse")),
+        "{:?}",
+        git.invocations()
+    );
+    let requests = server.finish();
+    let poll = poll_line();
+    assert_eq!(
+        request_lines(&requests),
+        [LIST_EVERY_KIND, START_CONSENT, poll.as_str()]
+    );
 }
 
 // REQ-GRANT-76
@@ -8292,5 +8751,270 @@ fn git_missing_from_path_or_failing_is_reported_as_that_and_starts_nothing() {
         assert!(text.contains("--source-root"), "{text}");
         assert!(opener.opened(0).is_empty());
         assert!(server.finish().is_empty());
+    }
+}
+
+// The fake coding agent programs and the member's home a sign-in `useful` runs is checked
+// against (REQ-GRANT-70, REQ-GRANT-71, REQ-GRANT-74).
+
+// The Codex login's sentinel, which `CODEX_MATERIAL` carries.
+const CODEX_SENTINEL: &str = "private-agent-login-material-sentinel";
+
+// The material a member imports: a Codex `auth.json` whose bytes, trailing newline and
+// spacing included, are what Cloud must receive.
+const CODEX_MATERIAL: &str =
+    "{\"tokens\": {\"access_token\": \"private-agent-login-material-sentinel\"}}\n";
+
+fn encoded(material: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(material)
+}
+
+pub(super) fn private_file(directory: &Path, name: &str, contents: &[u8]) -> std::path::PathBuf {
+    let path = directory.join(name);
+    fs::write(&path, contents).unwrap();
+    fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+    path
+}
+
+// How the fake `codex` behaves after it records its invocation.
+enum SignIn {
+    // Writes this auth.json into $CODEX_HOME with a group- and world-readable mode, as a
+    // file codex writes need not be 0600 for useful to read it.
+    Writes(&'static str),
+    Exits(u8),
+    WritesNothing,
+    // Asks useful to terminate, as a member's interrupt would, and waits to be stopped.
+    Interrupts,
+    // Is executable and cannot be started: its interpreter does not exist.
+    CannotStart,
+}
+
+// A fake coding agent program, alone in `bin` so that it is the only program on PATH, that
+// records what it saw under `record`.
+struct FakeProgram {
+    _directory: tempfile::TempDir,
+    bin: std::path::PathBuf,
+    record: std::path::PathBuf,
+}
+
+const DEVICE_CODE_PROMPT: &str = "codex-device-code-prompt";
+
+// How the fake `claude setup-token` ends after it records its invocation and shows the sign-in
+// URL; it takes the flow, a browser or a pasted code, from `CLAUDE_FLOW` (REQ-GRANT-71).
+enum SetupToken {
+    // Prints the token in colour, as its own line, and a line after it.
+    Prints,
+    Exits(u8),
+    PrintsNothing,
+    // Asks useful to terminate, as a member's interrupt would, and waits to be stopped.
+    Interrupts,
+}
+
+// The token the fake `claude` prints, in the form `CLAUDE_CODE_OAUTH_TOKEN` takes; the part
+// after `sk-ant-` is a sentinel of its own.
+const CLAUDE_TOKEN: &str = "sk-ant-oat01-private_claude_code_token-sentinel";
+const CLAUDE_TOKEN_SENTINEL: &str = "private_claude_code_token-sentinel";
+const CLAUDE_SIGN_IN_URL: &str =
+    "https://claude.example.test/oauth/authorize?code=true&state=public-fixture-state";
+const CLAUDE_FLOW: &str = "USEFUL_TEST_CLAUDE_FLOW";
+const PASTE_PROMPT: &str = "Paste code here if prompted > ";
+const PASTE_CODE: &str = "public-fixture-paste-code";
+const AFTER_TOKEN: &str = "claude-after-token";
+
+impl FakeProgram {
+    // A fake `codex` that records its arguments, CODEX_HOME, that home's mode and its
+    // config.toml, and prints a line on standard output: the device code to enter when it is
+    // given `--device-auth`, as Codex's device sign-in does.
+    fn codex(sign_in: SignIn) -> Self {
+        use super::pi_installation::quote;
+        let then = match sign_in {
+            SignIn::Writes(material) => format!(
+                "umask 022\nprintf '%s' {} > \"$CODEX_HOME/auth.json\"",
+                quote(material)
+            ),
+            SignIn::Exits(status) => format!("exit {status}"),
+            SignIn::WritesNothing => "exit 0".to_owned(),
+            SignIn::Interrupts => "kill -TERM \"$PPID\"\nexec sleep 30".to_owned(),
+            SignIn::CannotStart => String::new(),
+        };
+        let interpreter = if matches!(sign_in, SignIn::CannotStart) {
+            "/nonexistent/useful-test-interpreter"
+        } else {
+            "/bin/sh"
+        };
+        Self::new("codex", interpreter, |record| {
+            format!(
+                "printf '%s\\n' \"$*\" > {arguments}\n\
+                 printf '%s' \"$CODEX_HOME\" > {home}\n\
+                 ls -ld \"$CODEX_HOME\" > {mode}\n\
+                 cp \"$CODEX_HOME/config.toml\" {config}\n\
+                 case \" $* \" in *\" --device-auth \"*) echo {DEVICE_CODE_PROMPT} ;; \
+                 *) echo codex-sign-in-prompt ;; esac\n\
+                 {then}\n",
+                arguments = record("arguments"),
+                home = record("home"),
+                mode = record("mode"),
+                config = record("config.toml"),
+            )
+        })
+    }
+
+    // A fake `claude` that records its arguments, CLAUDE_CONFIG_DIR, that directory's mode and
+    // whether its standard input is its controlling terminal, then shows the sign-in URL. In
+    // the paste flow it then prompts without a line ending and reads a code from its terminal,
+    // going on only when the code is `PASTE_CODE`; in the browser flow it waits a moment, as
+    // the browser's callback would make it.
+    fn claude(setup_token: SetupToken) -> Self {
+        use super::pi_installation::quote;
+        let then = match setup_token {
+            SetupToken::Prints => format!(
+                "printf '\\033[32m%s\\033[0m\\n' {}\necho {AFTER_TOKEN}",
+                quote(CLAUDE_TOKEN)
+            ),
+            SetupToken::Exits(status) => format!("exit {status}"),
+            SetupToken::PrintsNothing => "echo claude-printed-no-token".to_owned(),
+            SetupToken::Interrupts => "kill -TERM \"$PPID\"\nexec sleep 30".to_owned(),
+        };
+        Self::new("claude", "/bin/sh", |record| {
+            format!(
+                "printf '%s\\n' \"$*\" > {arguments}\n\
+                 printf '%s' \"$CLAUDE_CONFIG_DIR\" > {config}\n\
+                 ls -ld \"$CLAUDE_CONFIG_DIR\" > {mode}\n\
+                 if [ -t 0 ] && : < /dev/tty; then echo yes; else echo no; fi > {terminal}\n\
+                 echo {url}\n\
+                 if [ \"${CLAUDE_FLOW}\" = paste ]; then\n\
+                 printf '%s' {prompt}\n\
+                 IFS= read -r code\n\
+                 [ \"$code\" = {PASTE_CODE} ] || {{ echo claude-rejected-the-code; exit 1; }}\n\
+                 else sleep 0.2; fi\n\
+                 {then}\n",
+                arguments = record("arguments"),
+                config = record("config"),
+                mode = record("mode"),
+                terminal = record("terminal"),
+                url = quote(CLAUDE_SIGN_IN_URL),
+                prompt = quote(PASTE_PROMPT),
+            )
+        })
+    }
+
+    // Writes `bin/NAME` as a script for `interpreter` whose body `script` makes, given a
+    // function that quotes the path of a record. useful runs it with only `bin` on PATH; the
+    // script's own `ls`, `cp` and `sleep` come from the test's PATH, since a build sandbox
+    // may have nothing under /usr/bin or /bin.
+    fn new(
+        name: &str,
+        interpreter: &str,
+        script: impl FnOnce(&dyn Fn(&str) -> String) -> String,
+    ) -> Self {
+        use super::pi_installation::quote;
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        let record = directory.path().join("record");
+        fs::create_dir(&bin).unwrap();
+        fs::create_dir(&record).unwrap();
+        let tools = std::env::var("PATH").unwrap_or_default();
+        let body = script(&|name| quote(record.join(name).to_str().unwrap()));
+        let executable = bin.join(name);
+        fs::write(
+            &executable,
+            format!(
+                "#!{interpreter}\nPATH={tools}\nexport PATH\n{body}",
+                tools = quote(&tools)
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, Permissions::from_mode(0o755)).unwrap();
+        Self {
+            _directory: directory,
+            bin,
+            record,
+        }
+    }
+
+    fn recorded(&self, name: &str) -> Option<String> {
+        fs::read_to_string(self.record.join(name)).ok()
+    }
+}
+
+// A member's home with an ambient Codex login and an ambient Claude Code configuration, which a
+// sign-in `useful` runs must neither read nor change.
+struct AmbientHome {
+    home: tempfile::TempDir,
+    // Where the command may create its temporary Codex home or Claude Code configuration.
+    temporary: tempfile::TempDir,
+}
+
+const AMBIENT_MARKER: &str = "ambient-member-login-marker";
+
+// Each ambient login: its directory under HOME, the variable naming it and its one file.
+const AMBIENT_LOGINS: [(&str, &str, &str); 2] = [
+    (".codex", "CODEX_HOME", "auth.json"),
+    (".claude", "CLAUDE_CONFIG_DIR", ".credentials.json"),
+];
+
+fn ambient_login() -> String {
+    format!("{{\"marker\": \"{AMBIENT_MARKER}\"}}")
+}
+
+impl AmbientHome {
+    fn new() -> Self {
+        let home = tempfile::tempdir().unwrap();
+        for (directory, _, file) in AMBIENT_LOGINS {
+            let directory = home.path().join(directory);
+            fs::create_dir(&directory).unwrap();
+            private_file(&directory, file, ambient_login().as_bytes());
+        }
+        Self {
+            home,
+            temporary: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn ambient_codex(&self) -> std::path::PathBuf {
+        self.home.path().join(".codex")
+    }
+
+    fn ambient_claude(&self) -> std::path::PathBuf {
+        self.home.path().join(".claude")
+    }
+
+    // The member's HOME, CODEX_HOME and CLAUDE_CONFIG_DIR, and the temporary directory the
+    // command may use.
+    fn variables(&self) -> [(&'static str, std::path::PathBuf); 4] {
+        [
+            ("HOME", self.home.path().to_owned()),
+            ("CODEX_HOME", self.ambient_codex()),
+            ("CLAUDE_CONFIG_DIR", self.ambient_claude()),
+            ("TMPDIR", self.temporary.path().to_owned()),
+        ]
+    }
+
+    // The member's home and ambient logins are untouched and the command left nothing in its
+    // temporary directory.
+    fn assert_untouched_and_clean(&self) {
+        assert_eq!(
+            fs::read_dir(self.home.path()).unwrap().count(),
+            AMBIENT_LOGINS.len(),
+            "HOME gained an entry"
+        );
+        for (directory, variable, file) in AMBIENT_LOGINS {
+            let ambient = self.home.path().join(directory);
+            assert_eq!(
+                fs::read_dir(&ambient).unwrap().count(),
+                1,
+                "the ambient {variable} gained an entry"
+            );
+            assert_eq!(
+                fs::read_to_string(ambient.join(file)).unwrap(),
+                ambient_login()
+            );
+        }
+        assert_eq!(
+            fs::read_dir(self.temporary.path()).unwrap().count(),
+            0,
+            "a temporary sign-in directory was left behind"
+        );
     }
 }

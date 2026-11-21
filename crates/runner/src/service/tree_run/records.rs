@@ -9,7 +9,7 @@
 //! the result, its run's mirror writes, every attempt's, as `mirror` and the departure the
 //! attempt's own outcome write confirmed as `claimRelease`. An adopted run
 //! (REQ-RUNNERENROLL-89) whose record already read `exited` is concluded by the result its
-//! current attempt recorded, and one whose first `resume --from` the runtime refused ends
+//! current attempt recorded, and one whose first `retry --from` the runtime refused ends
 //! `failed` with the refusal's code, as does a run whose `create` the runtime refused
 //! (REQ-RUNNERENROLL-91).
 
@@ -254,7 +254,7 @@ fn answer_questions(payload: &Map<String, Value>) -> Option<TreeProgressWaitQues
     TreeProgressWaitQuestions::new(questions)
 }
 
-/// The failed child a wait's `payload` records, read as `useful workflow run status` reads
+/// The failed child a wait's `payload` records, read as `useful workflow run show` reads
 /// it (REQ-RUNNERENROLL-125) and reduced to the outcome, the failing node's `id` and role,
 /// its state and, for a failed node, its phase and code; `None` when the payload records
 /// none or the reduction breaks a bound Cloud admits, so the wait is reported without it
@@ -594,14 +594,14 @@ fn confirms_departure(write: &MirrorWrite) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) enum ClassifiedEnd {
     /// The runtime refused `command`, the run's first, with its first diagnostic's `code`,
-    /// so `step` did not start: the first named step of a `resume --from`, or the root
+    /// so `step` did not start: the first named step of a `retry --from`, or the root
     /// workflow's first step for a `create`.
     Refused {
         command: RefusedCommand,
         step: String,
         code: Option<String>,
     },
-    /// `cancellation` reached the first `resume --from` before it started an engine
+    /// `cancellation` reached the first `retry --from` before it started an engine
     /// attempt: the record still reads `exited` as the earlier attempt left it.
     Unstarted { cancellation: CancellationReason },
 }
@@ -611,7 +611,7 @@ pub(in crate::service) enum ClassifiedEnd {
 pub(in crate::service) enum RefusedCommand {
     /// `useful workflow run create`, which made no run.
     Create,
-    /// An adopted run's `useful workflow run resume --from`.
+    /// An adopted run's `useful workflow run retry --from`.
     Resume,
 }
 

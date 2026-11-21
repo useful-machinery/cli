@@ -65,7 +65,7 @@ fn account_update_sets_the_display_name_through_the_profile_patch() {
         &[
             "account",
             "update",
-            "--display-name",
+            "--name",
             "\u{2003}Countess of Lovelace\u{2003}",
             "--allow-insecure-http",
         ],
@@ -125,7 +125,7 @@ fn account_update_clears_the_display_name_with_an_explicit_null() {
         &[
             "account",
             "update",
-            "--clear-display-name",
+            "--clear-name",
             "--json",
             "--allow-insecure-http",
         ],
@@ -169,7 +169,7 @@ fn account_clear_rejects_a_current_membership() {
         &[
             "account",
             "update",
-            "--clear-display-name",
+            "--clear-name",
             "--json",
             "--allow-insecure-http",
         ],
@@ -246,7 +246,7 @@ fn account_update_reports_meaningful_api_failures_without_problem_prose() {
             &[
                 "account",
                 "update",
-                "--display-name",
+                "--name",
                 "Ada",
                 "--json",
                 "--allow-insecure-http",
@@ -280,13 +280,7 @@ fn rejected_display_name_has_a_stable_human_remedy() {
         deployment_environment_with_issuer(&server.api_url, &server.issuer, &credential_path);
 
     let output = run_with_env(
-        &[
-            "account",
-            "update",
-            "--display-name",
-            " ",
-            "--allow-insecure-http",
-        ],
+        &["account", "update", "--name", " ", "--allow-insecure-http"],
         &environment,
     );
 
@@ -304,13 +298,7 @@ fn rejected_display_name_has_a_stable_human_remedy() {
 fn account_update_requires_exactly_one_display_name_operation() {
     for args in [
         &["account", "update"][..],
-        &[
-            "account",
-            "update",
-            "--display-name",
-            "Ada",
-            "--clear-display-name",
-        ][..],
+        &["account", "update", "--name", "Ada", "--clear-name"][..],
     ] {
         let output = run(args);
         assert_eq!(output.status.code(), Some(2));

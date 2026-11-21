@@ -1,0 +1,82 @@
+use anyhow::anyhow;
+use clap::Args;
+
+use crate::exit_code::ExitCode;
+use useful_api::{create_organization, create_organization_with_delegator};
+use useful_human_auth::Deployment;
+
+use super::{LeafOptions, output};
+
+pub(super) const ABOUT: &str = "Create an organization";
+
+#[derive(Debug, Args)]
+pub(super) struct Command {
+    #[arg(long, help = "Set the organization display name")]
+    name: String,
+
+    #[arg(long, help = "Request an exact organization slug")]
+    slug: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "PRINCIPAL",
+        value_parser = parse_principal_id,
+        requires = "api_key_file",
+        help = "Attribute delegated service creation to an exact human principal"
+    )]
+    delegator_principal_id: Option<String>,
+
+    // Clap input ownership remains operation-local; shared execution policy lives in LeafOptions.
+    #[command(flatten)]
+    options: LeafOptions,
+}
+
+impl Command {
+    pub(super) fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+        let Self {
+            name,
+            slug,
+            delegator_principal_id,
+            options,
+        } = self;
+        if options.authentication.api_key_file.is_some() && delegator_principal_id.is_none() {
+            return Err(anyhow!(
+                "--delegator-principal-id is required when --api-key-file is used for organization creation"
+            ));
+        }
+        options.execute_mutation(
+            deployment,
+            |client, api_url, access_token, idempotency_key| {
+                if let Some(delegator_principal_id) = delegator_principal_id.as_deref() {
+                    create_organization_with_delegator(
+                        client,
+                        api_url,
+                        access_token,
+                        idempotency_key,
+                        &name,
+                        slug.as_deref(),
+                        Some(delegator_principal_id),
+                    )
+                } else {
+                    create_organization(
+                        client,
+                        api_url,
+                        access_token,
+                        idempotency_key,
+                        &name,
+                        slug.as_deref(),
+                    )
+                }
+            },
+            output::write_create,
+        )
+    }
+}
+
+fn parse_principal_id(value: &str) -> Result<String, String> {
+    if useful_support::valid_typed_id(value, "prn_") {
+        Ok(value.to_owned())
+    } else {
+        Err("must be an exact human principal ID".to_owned())
+    }
+}

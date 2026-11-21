@@ -20,15 +20,16 @@ the common choices:
 
 | Decision | Rule |
 |---|---|
-| Available leaf verb | Use only `accept`, `begin`, `cancel`, `complete`, `create`, `decline`, `delete`, `disable`, `doctor`, `download`, `drain`, `enable`, `end`, `enroll`, `history`, `issue`, `leave`, `link`, `list`, `login`, `logout`, `move`, `preview`, `propose`, `reference`, `remove`, `rename`, `request`, `retire`, `retry`, `revoke`, `run`, `schema`, `seal`, `serve`, `set`, `show`, `signup`, `status`, `update`, `upload`, `validate`, `version`, `view`, or `wait`. Amend the style guide before introducing another verb; an existing command is not precedent. `detach` and `disconnect` are prohibited command verbs. |
-| Print one / print many / interact | Use `show` / `list` / `view`. Use `validate`, `run`, and `retry` for those literal operations. |
+| Available leaf verb | Use only a verb in the [Verb lexicon](docs/output-style.md#command-names), the closed set the grammar suite admits. Amend the style guide before introducing another verb; an existing command is not precedent. `detach` is a prohibited command verb. |
+| Print one / print many / interact | Use `show` / `list` / `view`. Use `validate` and `retry` for those literal operations. |
 | Mint an entity | Use `issue` when the immediate sibling family contains `revoke`; otherwise use `create`. |
-| Change attributes | Use `rename` only when the complete mutable set is `{name}`; use `update` when two or more attributes are mutable. Never offer both in one family. |
-| Sever a binding | Use `remove`, never `detach` or `disconnect`. |
+| Change attributes | Use `update`, also when the name is the only attribute it changes (`runner pool update POOL --name NAME`); there is no `rename` verb. |
+| Join or end an integration | Use `connect` for a leaf that joins a service to its owner and `disconnect` for the leaf that ends it. |
+| Sever a binding | Use `remove`, never `detach`. |
 
 Compose recurring flags from the shared argument types in `src/cli.rs`: `JsonArgs` for
 `--json`, `HttpOptions` for `--allow-insecure-http`, `PrincipalAuthenticationArgs` or
-`RequiredServiceAuthenticationArgs` for `--service-api-key-file`, `PaginationArgs` for
+`RequiredServiceAuthenticationArgs` for `--api-key-file`, `PaginationArgs` for
 `--limit` plus `--cursor`, `WaitTimeoutArgs` for `--timeout`, and `NamedInputArgs` for
 named inputs. Use `CommonArgs` wherever JSON, authentication, and HTTP policy co-occur so
 their relative order remains structural. Help equality follows this semantic option
@@ -38,10 +39,12 @@ same help, while `JsonArgs` result families, streaming JSON output, and
 recur and has no shared type yet, introduce one rather than declaring the flag on each
 leaf.
 
-Require `--yes` for leaves ending in `delete`, `decline`, `end`, `leave`, `remove`,
-`revoke`, or `retire`, and for `account deletion request` and
-`organization deletion request`; no other leaf takes it. Reversible modes such as
-`runner disable` and `runner drain` do not take `--yes`.
+Require `--yes` for leaves ending in `delete`, `decline`, `disconnect`, `end`, `leave`,
+`remove`, or `revoke`, except `project webhook secret revoke`, which takes none. Of other
+leaves only `authorize` and `deauthorize` of `account integration` and `org integration`
+take it, and `project update` for `--clear-repository` alone. Those and
+`account integration disconnect` check it themselves.
+Reversible modes such as `runner disable` and `runner drain` do not take `--yes`.
 
 Every `list` leaf paginates unless the API-limited exception is recorded in
 [`docs/output-style.md`](docs/output-style.md). For a paginated leaf, expose
@@ -84,6 +87,79 @@ and runs the same formatting, linting, testing, source-boundary, and release pac
 used by CI. The canonical check performs a
 locked npm install before checking the extension; run
 `./scripts/check-pi-json-v1-extension` for that focused path.
+
+To qualify a replacement `useful` executable, run the process suite from this directory.
+Supply the installed executable or a launcher that forwards arguments, signals, standard
+streams and exit status to the implementation.
+
+```sh
+devenv shell -- scripts/test-e2e /absolute/path/to/useful
+```
+
+The standalone Cargo project under `tests/` builds the Rust test driver and its fixtures.
+It has no production crate dependency. The driver launches the supplied file for commands,
+snapshots, PTYs and runner sessions. It reads expected release metadata from
+`USEFUL_TEST_VERSION` and `USEFUL_TEST_BUILD_IDENTITY` (development defaults
+`0.0.0-dev` and `unknown`). Set these to the version and identity used to build a release.
+Pass nextest filters after the executable to run a subset. Run the full selection on each
+supported OS to exercise its platform-specific cases. Some fixtures replace `PATH`
+with test tools, so a script launcher should use an absolute interpreter path.
+The public suite runs a selection against its extracted release archive. The private
+`cli-nix` check also runs the standalone launcher against the installed package.
+
+The driver observes the candidate from outside, so it also relies on three properties
+that no command prints:
+
+- `version --json` names the launched file. Its `executablePath` and the supplied path
+  must be the same file once both are canonicalized, so a launcher reports itself and not
+  the interpreter or bundle it starts.
+- The launched process is the one that owns a run. While it owns a run it holds an
+  exclusive POSIX record lock (`fcntl` `F_SETLK`) on the whole of the run directory's
+  `run.lock`. The driver reads the holder's process ID with `F_GETLK` and takes the same
+  lock to stand in for a live process. A launcher therefore replaces itself with the
+  implementation instead of waiting on a child.
+- `USEFUL_TEST_POLL_INTERVAL_MILLISECONDS` is an upper bound on the interval between a
+  waiting command's polls of Cloud. The driver sets it on most commands. A build that
+  ignores it reaches the same results at the production cadence, where about fifty cases
+  take 5 s or more and two take over half of nextest's two-minute limit. The Rust CLI
+  honors it in a build with `test-fixtures`, which `--all-features` enables.
+
+The reviewed command inventory is `tests/fixtures/command-tree.txt`. The driver probes
+retired options on each path, including hidden commands. It executes the 13 design
+scenarios in `tests/fixtures/command-scenarios.json` in a disposable signed-out checkout.
+Stateful cases separately use the IDs, key files, artifacts and receipts earlier commands
+produced.
+
+Fifteen additional cases force an exact ordering between workflow processes. A
+qualification build of either implementation can run them with
+`scripts/test-e2e /absolute/path/to/useful --features candidate-checkpoints`. Build the Rust
+qualification executable with `cargo build --locked --workspace --all-features --bins
+--example internal-worker`. The driver supplies a path in one of these
+variables. At the named point the candidate creates an empty sibling file with the
+listed extension and waits until the supplied path exists. A candidate that waits 30 s
+without seeing the path fails the command instead of hanging.
+
+| Variable | Extension | Point in the command |
+| --- | --- | --- |
+| `USEFUL_TEST_RUN_LOCK_GATE` | `.inspected` | After inspecting a run, before taking its lock |
+| `USEFUL_TEST_CHILD_START_GATE` | `.starting` | Before preparing a stage's child |
+| `USEFUL_TEST_SETTLED_GATE` | `.settled` | After execution settles, before the first read of withdrawals, in an attempt that is not a quiet child |
+| `USEFUL_TEST_RELEASE_GATE` | `.releasing` | In an attempt that ends the run: under the controls lock, after spending withdrawals, before the final record |
+| `USEFUL_TEST_BEGIN_GATE` | `.beginning` | Before a new attempt that does not continue an edge takes the controls lock to check for an outstanding withdrawal |
+
+The release suite also exercises approval, upgrade, interruption and cancellation
+through the installed CLI. Two workspace tests inspect the injected Rust TUI lifecycle
+and the Linux guard's private registration handshake. PTY and process-lifecycle
+tests cover their user-visible behavior in the executable suite.
+
+From the platform root, the three pinned-harness scripts accept
+`--cli /absolute/path/to/useful`. Run `scripts/pi-json-v1-conformance`,
+`scripts/claude-code-stream-json-v1-conformance` and
+`scripts/codex-app-server-v1-conformance` to qualify the candidate with the pinned
+executables. The candidate tests drive Pi's mixed workflow and Codex and Claude
+Code response exports with local provider fixtures. The default native gates also
+exercise the implementation's internal adapters. Real-service runner and workflow
+qualification adds Gateway and Coordinator interoperability evidence.
 
 Rust unit and integration tests run through cargo-nextest with the checked-in
 `.config/nextest.toml` policy. Both `./scripts/check` and the production Nix package select the

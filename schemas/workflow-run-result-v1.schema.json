@@ -72,7 +72,11 @@
             "useful workflow run create",
             "useful workflow run retry",
             "useful workflow run resume",
-            "useful workflow run restart"
+            "useful workflow run restart",
+            "useful workflow run upgrade",
+            "useful workflow run answer",
+            "useful workflow run approve",
+            "useful workflow run hand-back"
           ]
         },
         "outcome": {
@@ -136,7 +140,7 @@
       ]
     },
     "UnattemptedResume": {
-      "description": "A resume without --from, or a retry of a run waiting for repair, that created no attempt: a wait no control resolves, with its record, or a run a control withdrew.",
+      "description": "A resume, or a retry or a control command continuing the run, that created no attempt: a wait no control resolves, with its record, or a run a control withdrew.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -154,7 +158,10 @@
         "command": {
           "enum": [
             "useful workflow run resume",
-            "useful workflow run retry"
+            "useful workflow run retry",
+            "useful workflow run answer",
+            "useful workflow run approve",
+            "useful workflow run hand-back"
           ]
         },
         "outcome": {
@@ -355,7 +362,10 @@
             "useful workflow run retry",
             "useful workflow run resume",
             "useful workflow run restart",
-            "useful workflow run upgrade"
+            "useful workflow run upgrade",
+            "useful workflow run answer",
+            "useful workflow run approve",
+            "useful workflow run hand-back"
           ]
         },
         "outcome": {
@@ -689,7 +699,10 @@
             "useful workflow run retry",
             "useful workflow run resume",
             "useful workflow run restart",
-            "useful workflow run upgrade"
+            "useful workflow run upgrade",
+            "useful workflow run answer",
+            "useful workflow run approve",
+            "useful workflow run hand-back"
           ]
         },
         "outcome": {
@@ -751,9 +764,13 @@
           "properties": {
             "command": {
               "enum": [
+                "useful workflow run retry",
                 "useful workflow run resume",
                 "useful workflow run restart",
-                "useful workflow run upgrade"
+                "useful workflow run upgrade",
+                "useful workflow run answer",
+                "useful workflow run approve",
+                "useful workflow run hand-back"
               ]
             },
             "phase": {
@@ -1006,9 +1023,13 @@
         },
         "command": {
           "enum": [
+            "useful workflow run retry",
             "useful workflow run resume",
             "useful workflow run restart",
-            "useful workflow run upgrade"
+            "useful workflow run upgrade",
+            "useful workflow run answer",
+            "useful workflow run approve",
+            "useful workflow run hand-back"
           ]
         },
         "outcome": {

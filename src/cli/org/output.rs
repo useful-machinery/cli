@@ -1,0 +1,1228 @@
+use std::io::{self, Write};
+
+use anyhow::Context;
+use serde::Serialize;
+
+use crate::cli::context::InEffect;
+use crate::exit_code::{ExitCode, OutcomeClass};
+use useful_api::{
+    AuditActor, AuditProjectionWarning, AuditProjectionWarningReason, CommonOrganizationFailure,
+    CreateOrganizationOutcome, CurrentPrincipalMembership, DirectoryPrincipalState,
+    GetOrganizationOutcome, ListCurrentPrincipalMembershipsOutcome,
+    ListOrganizationAuditRecordsOutcome, ListOrganizationMembershipHistoryOutcome,
+    ListOrganizationMembershipsOutcome, MembershipTerminationOutcome, NameState, Organization,
+    OrganizationAuditRecord, OrganizationAuditSubjectKind, OrganizationMembershipDirectoryEntry,
+    OrganizationMembershipHistoryEntry, OrganizationState, PrincipalType,
+    UpdateOrganizationMembershipOutcome, UpdateOrganizationOutcome,
+};
+
+use super::super::{membership_role, membership_state, write_page_footer};
+
+pub(super) fn write_create(
+    deployment: &str,
+    outcome: &CreateOrganizationOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        CreateOrganizationOutcome::Created(organization) => {
+            write_organization_success(deployment, "created", organization, json)?;
+            Ok(ExitCode::Success)
+        }
+        CreateOrganizationOutcome::Common(common) => write_common(
+            deployment,
+            common,
+            authentication,
+            json,
+            "Organization creation could not be confirmed",
+        ),
+        CreateOrganizationOutcome::CreationNotPermitted => write_failure(
+            deployment,
+            "creation_not_permitted",
+            None,
+            None,
+            "! Organization creation is not permitted for this account.",
+            OutcomeClass::Forbidden,
+            json,
+        ),
+        CreateOrganizationOutcome::HumanDisplayNameRequired => write_failure(
+            deployment,
+            "human_display_name_required",
+            None,
+            None,
+            if authentication == super::super::PrincipalAuthenticationKind::ServiceApiKey {
+                "! The nominated human owner needs a display name.\n\nAsk them to set their account display name, then retry."
+            } else {
+                "! Your account needs a display name.\n\nSet it with useful account update --name, then retry."
+            },
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CreateOrganizationOutcome::SlugUnavailable => write_failure(
+            deployment,
+            "slug_unavailable",
+            None,
+            None,
+            "! The requested organization slug is unavailable.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CreateOrganizationOutcome::QuantityLimitReached => write_failure(
+            deployment,
+            "quantity_limit_reached",
+            None,
+            None,
+            "! The organization quantity limit has been reached.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CreateOrganizationOutcome::MembershipLimitReached => write_failure(
+            deployment,
+            "membership_limit_reached",
+            None,
+            None,
+            "! The founding owner already holds the maximum number of organization memberships.\n\nLeave an organization the owner no longer needs, then retry.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CreateOrganizationOutcome::RateLimited { retry_after } => write_failure(
+            deployment,
+            "rate_limited",
+            None,
+            Some(*retry_after),
+            &format!(
+                "! Organization creation is rate limited. Try again in {retry_after} seconds."
+            ),
+            OutcomeClass::RateLimited,
+            json,
+        ),
+        CreateOrganizationOutcome::IdempotencyConflict => write_failure(
+            deployment,
+            "idempotency_conflict",
+            None,
+            None,
+            "! The organization request identity conflicted with another request.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+    }
+}
+
+pub(super) fn write_show(
+    deployment: &str,
+    outcome: &GetOrganizationOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        GetOrganizationOutcome::Found(organization) => {
+            write_organization_success(deployment, "found", organization, json)?;
+            Ok(ExitCode::Success)
+        }
+        GetOrganizationOutcome::Common(common) => write_common(
+            deployment,
+            common,
+            authentication,
+            json,
+            "The Useful Machinery deployment could not be reached",
+        ),
+        GetOrganizationOutcome::NotFound => write_not_found(deployment, json),
+    }
+}
+
+pub(super) fn write_update(
+    deployment: &str,
+    outcome: &UpdateOrganizationOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        UpdateOrganizationOutcome::Updated(organization) => {
+            write_organization_success(deployment, "updated", organization, json)?;
+            Ok(ExitCode::Success)
+        }
+        UpdateOrganizationOutcome::Common(common) => write_common(
+            deployment,
+            common,
+            authentication,
+            json,
+            "Organization update could not be confirmed",
+        ),
+        UpdateOrganizationOutcome::NotFound => write_not_found(deployment, json),
+        UpdateOrganizationOutcome::SlugUnavailable => write_failure(
+            deployment,
+            "slug_unavailable",
+            None,
+            None,
+            "! The requested organization slug is unavailable.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        UpdateOrganizationOutcome::IdempotencyConflict => write_failure(
+            deployment,
+            "idempotency_conflict",
+            None,
+            None,
+            "! The organization request identity conflicted with another request.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+    }
+}
+
+/// `useful org list`'s page, marking the organization in effect when one is (REQ-ORG-88).
+pub(super) fn write_list(
+    deployment: &str,
+    outcome: &ListCurrentPrincipalMembershipsOutcome,
+    in_effect: Option<&InEffect>,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        ListCurrentPrincipalMembershipsOutcome::Listed(page) => {
+            if json {
+                super::super::write_pretty_json(&MembershipListResult {
+                    list: super::super::CloudListResult::listed(
+                        1,
+                        deployment,
+                        &page.items,
+                        page.next_cursor.as_deref(),
+                    ),
+                    organization_in_effect: in_effect,
+                })
+                .context("write JSON organization list result")?;
+            } else {
+                write_current_memberships_human(
+                    deployment,
+                    &page.items,
+                    page.next_cursor.as_deref(),
+                    in_effect,
+                )?;
+            }
+            Ok(ExitCode::Success)
+        }
+        ListCurrentPrincipalMembershipsOutcome::Common(common) => {
+            write_current_membership_failure(deployment, common, authentication, json)
+        }
+    }
+}
+
+pub(super) fn write_members_list(
+    deployment: &str,
+    outcome: &ListOrganizationMembershipsOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        ListOrganizationMembershipsOutcome::Listed(page) => {
+            if json {
+                write_members_list_json(deployment, &page.items, page.next_cursor.as_deref())?;
+            } else {
+                write_members_human(deployment, &page.items, page.next_cursor.as_deref())?;
+            }
+            Ok(ExitCode::Success)
+        }
+        ListOrganizationMembershipsOutcome::Common(common) => write_common(
+            deployment,
+            common,
+            authentication,
+            json,
+            "The Useful Machinery deployment could not be reached",
+        ),
+        ListOrganizationMembershipsOutcome::NotFound => write_not_found(deployment, json),
+    }
+}
+
+pub(super) fn write_members_history(
+    deployment: &str,
+    outcome: &ListOrganizationMembershipHistoryOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        ListOrganizationMembershipHistoryOutcome::Listed(page) => {
+            if json {
+                write_members_list_json(deployment, &page.items, page.next_cursor.as_deref())?;
+            } else {
+                write_membership_history_human(
+                    "✓ Organization membership history listed.",
+                    deployment,
+                    &page.items,
+                    page.next_cursor.as_deref(),
+                )?;
+            }
+            Ok(ExitCode::Success)
+        }
+        ListOrganizationMembershipHistoryOutcome::Common(common) => {
+            write_membership_common_failure(deployment, common, authentication, json)
+        }
+        ListOrganizationMembershipHistoryOutcome::NotFound => {
+            write_membership_not_found(deployment, json)
+        }
+    }
+}
+
+pub(super) fn write_audit_list(
+    deployment: &str,
+    outcome: &ListOrganizationAuditRecordsOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        ListOrganizationAuditRecordsOutcome::Listed(page) => {
+            if json {
+                write_json(&AuditListResult {
+                    schema_version: 1,
+                    deployment,
+                    outcome: "listed",
+                    items: &page.items,
+                    next_cursor: page.next_cursor.as_deref(),
+                    warnings: page.warnings.as_deref(),
+                })?;
+            } else {
+                write_audit_records_human(
+                    deployment,
+                    &page.items,
+                    page.next_cursor.as_deref(),
+                    page.warnings.as_deref(),
+                )?;
+            }
+            Ok(ExitCode::Success)
+        }
+        ListOrganizationAuditRecordsOutcome::Common(common) => {
+            write_common_organization_operation_failure(
+                deployment,
+                common,
+                &AUDIT_FAILURE_PRESENTATION,
+                authentication,
+                json,
+            )
+        }
+        ListOrganizationAuditRecordsOutcome::NotFound => write_organization_operation_failure(
+            deployment,
+            "not_found",
+            None,
+            "error: organization audit records not found or unavailable\n\nCheck the organization reference and your access, then try again.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+    }
+}
+
+pub(super) fn write_members_update(
+    deployment: &str,
+    outcome: &UpdateOrganizationMembershipOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        UpdateOrganizationMembershipOutcome::Updated(membership) => {
+            if json {
+                write_json(&MembershipResult {
+                    schema_version: 1,
+                    deployment,
+                    outcome: "updated",
+                    membership,
+                })?;
+            } else {
+                write_membership_history_human(
+                    "✓ Organization member updated.",
+                    deployment,
+                    std::slice::from_ref(membership),
+                    None,
+                )?;
+            }
+            Ok(ExitCode::Success)
+        }
+        UpdateOrganizationMembershipOutcome::Common(common) => {
+            write_membership_common_failure(deployment, common, authentication, json)
+        }
+        UpdateOrganizationMembershipOutcome::NotFound => {
+            write_membership_not_found(deployment, json)
+        }
+        UpdateOrganizationMembershipOutcome::TransitionUnavailable => {
+            write_membership_conflict(deployment, MembershipConflict::TransitionUnavailable, json)
+        }
+        UpdateOrganizationMembershipOutcome::HumanOwnerRequired => {
+            write_membership_conflict(deployment, MembershipConflict::HumanOwnerRequired, json)
+        }
+        UpdateOrganizationMembershipOutcome::IdempotencyConflict => {
+            write_membership_conflict(deployment, MembershipConflict::IdempotencyConflict, json)
+        }
+    }
+}
+
+pub(super) fn write_member_removal(
+    deployment: &str,
+    organization: &str,
+    membership_id: &str,
+    outcome: &MembershipTerminationOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_membership_termination(
+        MembershipTerminationOutput {
+            deployment,
+            organization,
+            membership_id: Some(membership_id),
+            success_outcome: "removed",
+            heading: "✓ Organization member removed.",
+            authentication,
+            json,
+        },
+        outcome,
+    )
+}
+
+/// The failure of `member update` or `member remove` whose address named no membership
+/// (REQ-MEMBER-48): the `not_found` or common failure each writes when the change itself is
+/// answered so, which keeps both documents.
+pub(super) fn write_member_unresolved(
+    deployment: &str,
+    unresolved: &super::member::Unresolved,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match unresolved {
+        super::member::Unresolved::NotFound => write_membership_not_found(deployment, json),
+        super::member::Unresolved::Common(common) => {
+            write_membership_common_failure(deployment, common, authentication, json)
+        }
+    }
+}
+
+// Leaving omits a membership ID while owner removal requires one; explicit wrappers keep each
+// machine outcome and human heading attached to the command that owns it.
+pub(super) fn write_leave(
+    deployment: &str,
+    organization: &str,
+    outcome: &MembershipTerminationOutcome,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_membership_termination(
+        MembershipTerminationOutput {
+            deployment,
+            organization,
+            membership_id: None,
+            success_outcome: "left",
+            heading: "✓ Organization membership ended.",
+            authentication,
+            json,
+        },
+        outcome,
+    )
+}
+
+fn write_audit_records_human(
+    deployment: &str,
+    items: &[OrganizationAuditRecord],
+    next_cursor: Option<&str>,
+    warnings: Option<&[AuditProjectionWarning]>,
+) -> anyhow::Result<()> {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "✓ Organization audit records listed.\n")?;
+    for item in items {
+        match item {
+            OrganizationAuditRecord::DetailsAvailable {
+                id,
+                occurred_at,
+                retention,
+                actor,
+                delegating_principal_id,
+                action,
+                subject,
+                changes,
+            } => {
+                writeln!(stdout, "record: {id}")?;
+                writeln!(stdout, "time: {occurred_at}")?;
+                writeln!(stdout, "details: available")?;
+                write_audit_actor(&mut stdout, actor)?;
+                if let Some(principal_id) = delegating_principal_id {
+                    writeln!(stdout, "delegating principal: {principal_id}")?;
+                }
+                writeln!(stdout, "action: {action}")?;
+                writeln!(
+                    stdout,
+                    "target: {} {}",
+                    audit_subject_kind(subject.kind),
+                    subject.id
+                )?;
+                writeln!(stdout, "changes: {}", changes.len())?;
+                writeln!(
+                    stdout,
+                    "retention: {} · retain until: {}\n",
+                    retention.identifier, retention.retain_until
+                )?;
+            }
+            OrganizationAuditRecord::DetailsUnavailable {
+                id,
+                occurred_at,
+                retention,
+            } => {
+                writeln!(stdout, "record: {id}")?;
+                writeln!(stdout, "time: {occurred_at}")?;
+                writeln!(stdout, "details: unavailable")?;
+                writeln!(
+                    stdout,
+                    "retention: {} · retain until: {}\n",
+                    retention.identifier, retention.retain_until
+                )?;
+            }
+        }
+    }
+    if let Some(warnings) = warnings {
+        for warning in warnings {
+            writeln!(
+                stdout,
+                "warning: {} · reason: {}",
+                warning.record_id,
+                audit_warning_reason(warning.reason)
+            )?;
+        }
+        if !warnings.is_empty() {
+            writeln!(stdout)?;
+        }
+    }
+    write_page_footer(&mut stdout, deployment, next_cursor)?;
+    Ok(())
+}
+
+fn write_audit_actor(output: &mut impl Write, actor: &AuditActor) -> io::Result<()> {
+    match actor {
+        AuditActor::Principal { principal_id } => {
+            writeln!(output, "actor: principal {principal_id}")
+        }
+        AuditActor::Runner { runner_id } => writeln!(output, "actor: runner {runner_id}"),
+        AuditActor::System => writeln!(output, "actor: system"),
+    }
+}
+
+const fn audit_subject_kind(kind: OrganizationAuditSubjectKind) -> &'static str {
+    match kind {
+        OrganizationAuditSubjectKind::Organization => "organization",
+        OrganizationAuditSubjectKind::ArtifactSet => "artifact_set",
+        OrganizationAuditSubjectKind::Run => "run",
+        OrganizationAuditSubjectKind::Publication => "publication",
+        OrganizationAuditSubjectKind::RunInputSet => "run_input_set",
+        OrganizationAuditSubjectKind::Membership => "membership",
+        OrganizationAuditSubjectKind::Invitation => "invitation",
+        OrganizationAuditSubjectKind::RunnerPool => "runner_pool",
+        OrganizationAuditSubjectKind::RunnerRegistration => "runner_registration",
+        OrganizationAuditSubjectKind::RunnerActivation => "runner_activation",
+        OrganizationAuditSubjectKind::RunnerCredential => "runner_credential",
+        OrganizationAuditSubjectKind::RunnerJoinKey => "runner_join_key",
+        OrganizationAuditSubjectKind::IntegrationToken => "integration_token",
+        OrganizationAuditSubjectKind::ConnectionAuthorization => "connection_authorization",
+        OrganizationAuditSubjectKind::GithubInstallation => "github_installation",
+        OrganizationAuditSubjectKind::GitlabConnection => "gitlab_connection",
+        OrganizationAuditSubjectKind::GitlabCandidate => "gitlab_candidate",
+        OrganizationAuditSubjectKind::Project => "project",
+        OrganizationAuditSubjectKind::WebhookSubscription => "webhook_subscription",
+        OrganizationAuditSubjectKind::WebhookDelivery => "webhook_delivery",
+        OrganizationAuditSubjectKind::RepositoryConnection => "repository_connection",
+        OrganizationAuditSubjectKind::Assignment => "assignment",
+        OrganizationAuditSubjectKind::LinearAuthorizationSession => "linear_authorization_session",
+        OrganizationAuditSubjectKind::LinearConnection => "linear_connection",
+        OrganizationAuditSubjectKind::LinearEvaluation => "linear_evaluation",
+        OrganizationAuditSubjectKind::LinearTrigger => "linear_trigger",
+        OrganizationAuditSubjectKind::LinearLifecycleUpdate => "linear_lifecycle_update",
+        OrganizationAuditSubjectKind::LinearLifecycleBinding => "linear_lifecycle_binding",
+        OrganizationAuditSubjectKind::Schedule => "schedule",
+        OrganizationAuditSubjectKind::WorkflowDefinition => "workflow_definition",
+    }
+}
+
+const fn audit_warning_reason(reason: AuditProjectionWarningReason) -> &'static str {
+    match reason {
+        AuditProjectionWarningReason::UnknownAction => "unknown_action",
+        AuditProjectionWarningReason::MalformedRecord => "malformed_record",
+        AuditProjectionWarningReason::Redacted => "redacted",
+    }
+}
+
+struct CommonFailurePresentation {
+    unauthenticated: &'static str,
+    forbidden: &'static str,
+    invalid_input_subject: &'static str,
+    invalid_input_remedy: &'static str,
+}
+
+const AUDIT_FAILURE_PRESENTATION: CommonFailurePresentation = CommonFailurePresentation {
+    unauthenticated: "error: organization audit records require sign-in\n\nSign in first:\n  useful account login",
+    forbidden: "error: organization audit records unavailable for this account\n\nUse an active organization owner account.",
+    invalid_input_subject: "organization audit request",
+    invalid_input_remedy: "Check the organization reference, limit, and cursor, then try again.",
+};
+
+const MEMBERSHIP_FAILURE_PRESENTATION: CommonFailurePresentation = CommonFailurePresentation {
+    unauthenticated: "error: organization membership management requires sign-in\n\nSign in first:\n  useful account login",
+    forbidden: "error: organization membership operation not permitted\n\nUse an active organization owner account.",
+    invalid_input_subject: "organization membership input",
+    invalid_input_remedy: "Check the organization reference, membership ID, and cursor, then try again.",
+};
+
+const CONTEXT_FAILURE_PRESENTATION: CommonFailurePresentation = CommonFailurePresentation {
+    unauthenticated: "error: finding the organization in effect requires sign-in\n\nSign in first:\n  useful account login",
+    forbidden: "error: organization memberships unavailable for this account\n\nName the organization with --org.",
+    invalid_input_subject: "organization membership or project list request",
+    invalid_input_remedy: "Name the organization with --org, then try again.",
+};
+
+struct MembershipTerminationOutput<'a> {
+    deployment: &'a str,
+    organization: &'a str,
+    membership_id: Option<&'a str>,
+    success_outcome: &'static str,
+    heading: &'static str,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+}
+
+fn write_membership_termination(
+    output: MembershipTerminationOutput<'_>,
+    outcome: &MembershipTerminationOutcome,
+) -> anyhow::Result<ExitCode> {
+    let MembershipTerminationOutput {
+        deployment,
+        organization,
+        membership_id,
+        success_outcome,
+        heading,
+        authentication,
+        json,
+    } = output;
+    match outcome {
+        MembershipTerminationOutcome::Ended => {
+            if json {
+                write_json(&MembershipTerminationResult {
+                    schema_version: 1,
+                    deployment,
+                    outcome: success_outcome,
+                    organization,
+                    membership_id,
+                })?;
+            } else {
+                let mut stdout = io::stdout().lock();
+                writeln!(stdout, "{heading}\n")?;
+                writeln!(stdout, "organization: {organization}")?;
+                if let Some(membership_id) = membership_id {
+                    writeln!(stdout, "membership: {membership_id}")?;
+                }
+                writeln!(stdout, "deployment: {deployment}")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        MembershipTerminationOutcome::Common(common) => {
+            write_membership_common_failure(deployment, common, authentication, json)
+        }
+        MembershipTerminationOutcome::NotFound => write_membership_not_found(deployment, json),
+        MembershipTerminationOutcome::TransitionUnavailable => {
+            write_membership_conflict(deployment, MembershipConflict::TransitionUnavailable, json)
+        }
+        MembershipTerminationOutcome::HumanOwnerRequired => {
+            write_membership_conflict(deployment, MembershipConflict::HumanOwnerRequired, json)
+        }
+        MembershipTerminationOutcome::IdempotencyConflict => {
+            write_membership_conflict(deployment, MembershipConflict::IdempotencyConflict, json)
+        }
+    }
+}
+
+/// A failed read of the organization in effect (REQ-ORG-87), written as every leaf of the family
+/// writes a common failure: JSON on standard output, the diagnostic on standard error, and the
+/// outcome's exit code.
+pub(super) fn write_context_failure(
+    deployment: &str,
+    failure: &CommonOrganizationFailure,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_common_organization_operation_failure(
+        deployment,
+        failure,
+        &CONTEXT_FAILURE_PRESENTATION,
+        authentication,
+        json,
+    )
+}
+
+fn write_membership_common_failure(
+    deployment: &str,
+    failure: &CommonOrganizationFailure,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_common_organization_operation_failure(
+        deployment,
+        failure,
+        &MEMBERSHIP_FAILURE_PRESENTATION,
+        authentication,
+        json,
+    )
+}
+
+fn write_common_organization_operation_failure(
+    deployment: &str,
+    failure: &CommonOrganizationFailure,
+    presentation: &CommonFailurePresentation,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let (outcome, category, message, class) = match failure {
+        CommonOrganizationFailure::Unauthenticated => (
+            "unauthenticated",
+            None,
+            authentication
+                .rejected_error(presentation.unauthenticated)
+                .to_owned(),
+            OutcomeClass::Unauthenticated,
+        ),
+        CommonOrganizationFailure::Forbidden => (
+            "forbidden",
+            None,
+            presentation.forbidden.to_owned(),
+            OutcomeClass::Forbidden,
+        ),
+        CommonOrganizationFailure::InvalidInput => (
+            "invalid_input",
+            None,
+            format!(
+                "error: {} rejected by {deployment}\n\n{}",
+                presentation.invalid_input_subject, presentation.invalid_input_remedy
+            ),
+            OutcomeClass::GeneralFailure,
+        ),
+        CommonOrganizationFailure::Unreachable(category) => {
+            organization_operation_unreachable(deployment, *category)
+        }
+    };
+    write_organization_operation_failure(deployment, outcome, category, &message, class, json)
+}
+
+fn organization_operation_unreachable(
+    deployment: &str,
+    category: useful_api::UnreachableCategory,
+) -> (&'static str, Option<&'static str>, String, OutcomeClass) {
+    (
+        "unreachable",
+        Some(category.as_str()),
+        format!(
+            "error: contact Useful Machinery API at {deployment}: {}\n\nCheck network access to the deployment and try again.",
+            category.as_str()
+        ),
+        super::super::unreachable_outcome_class(category),
+    )
+}
+
+fn write_membership_not_found(deployment: &str, json: bool) -> anyhow::Result<ExitCode> {
+    write_organization_operation_failure(
+        deployment,
+        "not_found",
+        None,
+        "error: organization or membership not found or unavailable\n\nCheck the organization reference and your access, then try again.",
+        OutcomeClass::GeneralFailure,
+        json,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum MembershipConflict {
+    TransitionUnavailable,
+    HumanOwnerRequired,
+    IdempotencyConflict,
+}
+
+fn write_membership_conflict(
+    deployment: &str,
+    conflict: MembershipConflict,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let (outcome, message) = match conflict {
+        MembershipConflict::TransitionUnavailable => (
+            "transition_unavailable",
+            "error: membership transition unavailable\n\nList membership history and choose an active or suspended membership.",
+        ),
+        MembershipConflict::HumanOwnerRequired => (
+            "human_owner_required",
+            "error: organization must retain an active human owner\n\nMake another active human member an owner first.",
+        ),
+        MembershipConflict::IdempotencyConflict => (
+            "idempotency_conflict",
+            "error: organization membership request identity conflicted with another request\n\nRun the command again to use a new request identity.",
+        ),
+    };
+    write_organization_operation_failure(
+        deployment,
+        outcome,
+        None,
+        message,
+        OutcomeClass::GeneralFailure,
+        json,
+    )
+}
+
+fn write_organization_operation_failure(
+    deployment: &str,
+    outcome: &'static str,
+    category: Option<&'static str>,
+    message: &str,
+    class: OutcomeClass,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    if json {
+        write_cloud_failure_json(deployment, outcome, category, None)?;
+    } else {
+        writeln!(io::stderr().lock(), "{message}")?;
+    }
+    Ok(class.exit_code())
+}
+
+fn write_not_found(deployment: &str, json: bool) -> anyhow::Result<ExitCode> {
+    write_failure(
+        deployment,
+        "not_found",
+        None,
+        None,
+        "! Organization not found or unavailable.",
+        OutcomeClass::GeneralFailure,
+        json,
+    )
+}
+
+fn write_common(
+    deployment: &str,
+    outcome: &CommonOrganizationFailure,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+    unreachable_message: &'static str,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        CommonOrganizationFailure::Unauthenticated => write_failure(
+            deployment,
+            "unauthenticated",
+            None,
+            None,
+            authentication.rejected_notice(
+                "! You must sign in before managing Useful Machinery organizations.\n\nRun:\n  useful account login",
+            ),
+            OutcomeClass::Unauthenticated,
+            json,
+        ),
+        CommonOrganizationFailure::Forbidden => write_failure(
+            deployment,
+            "forbidden",
+            None,
+            None,
+            "! This account is not permitted to perform that organization operation.",
+            OutcomeClass::Forbidden,
+            json,
+        ),
+        CommonOrganizationFailure::InvalidInput => write_failure(
+            deployment,
+            "invalid_input",
+            None,
+            None,
+            "! The organization input was rejected by the deployment.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CommonOrganizationFailure::Unreachable(category) => write_failure(
+            deployment,
+            "unreachable",
+            Some(category.as_str()),
+            None,
+            &format!("! {unreachable_message} ({}).", category.as_str()),
+            super::super::unreachable_outcome_class(*category),
+            json,
+        ),
+    }
+}
+
+fn write_organization_success(
+    deployment: &str,
+    outcome: &'static str,
+    organization: &Organization,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        write_json(&OrganizationResult {
+            schema_version: 1,
+            deployment,
+            outcome,
+            organization,
+        })
+    } else {
+        let heading = match outcome {
+            "created" => "✓ Organization created.",
+            "found" => "✓ Organization found.",
+            "updated" => "✓ Organization updated.",
+            _ => "✓ Organization available.",
+        };
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        writeln!(stdout, "{heading}\n")?;
+        writeln!(stdout, "  Organization: {}", organization.id)?;
+        writeln!(stdout, "  Name:         {}", organization.display_name)?;
+        writeln!(stdout, "  Slug:         {}", organization.slug)?;
+        writeln!(
+            stdout,
+            "  State:        {}",
+            organization_state(organization.state)
+        )?;
+        writeln!(stdout, "  Deployment:   {deployment}")?;
+        Ok(())
+    }
+}
+
+/// The list document every list writes, with the organization in effect, which only this list
+/// carries and omits when none is in effect.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MembershipListResult<'a> {
+    #[serde(flatten)]
+    list: super::super::CloudListResult<'a, CurrentPrincipalMembership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    organization_in_effect: Option<&'a InEffect>,
+}
+
+/// Whether `membership` is of the organization in effect, which it names by ID or by slug.
+fn is_in_effect(membership: &CurrentPrincipalMembership, in_effect: &InEffect) -> bool {
+    membership.organization_id == in_effect.organization
+        || membership.organization_slug.as_deref() == Some(in_effect.organization.as_str())
+}
+
+fn write_current_memberships_human(
+    deployment: &str,
+    items: &[CurrentPrincipalMembership],
+    next_cursor: Option<&str>,
+    in_effect: Option<&InEffect>,
+) -> anyhow::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    writeln!(stdout, "✓ Organization memberships listed.\n")?;
+    for item in items {
+        writeln!(
+            stdout,
+            "membership: {} · role: {} · membership state: {}",
+            item.id,
+            membership_role(item.role),
+            membership_state(item.state)
+        )?;
+        writeln!(
+            stdout,
+            "organization: {} · organization state: {}",
+            item.organization_id,
+            organization_state(item.organization_state)
+        )?;
+        if let Some(display_name) = &item.organization_display_name {
+            writeln!(stdout, "organization name: {display_name}")?;
+        }
+        if let Some(slug) = &item.organization_slug {
+            writeln!(stdout, "organization slug: {slug}")?;
+        }
+        if let Some(in_effect) = in_effect.filter(|in_effect| is_in_effect(item, in_effect)) {
+            writeln!(stdout, "in effect: {}", in_effect.source.label())?;
+        }
+        write_membership_times(&mut stdout, item)?;
+    }
+    match in_effect {
+        None => writeln!(stdout, "organization in effect: none")?,
+        Some(in_effect) if !items.iter().any(|item| is_in_effect(item, in_effect)) => writeln!(
+            stdout,
+            "organization in effect: {} · source: {}",
+            in_effect.organization,
+            in_effect.source.label()
+        )?,
+        Some(_) => {}
+    }
+    write_page_footer(&mut stdout, deployment, next_cursor)?;
+    Ok(())
+}
+
+trait MembershipTimes {
+    fn created_at(&self) -> &str;
+    fn updated_at(&self) -> &str;
+    fn terminal_at(&self) -> Option<&str>;
+}
+
+macro_rules! impl_membership_times {
+    ($membership:ty) => {
+        impl MembershipTimes for $membership {
+            fn created_at(&self) -> &str {
+                &self.created_at
+            }
+
+            fn updated_at(&self) -> &str {
+                &self.updated_at
+            }
+
+            fn terminal_at(&self) -> Option<&str> {
+                self.terminal_at.as_deref()
+            }
+        }
+    };
+}
+
+impl_membership_times!(CurrentPrincipalMembership);
+impl_membership_times!(OrganizationMembershipHistoryEntry);
+
+fn write_membership_times(
+    output: &mut impl Write,
+    membership: &impl MembershipTimes,
+) -> io::Result<()> {
+    writeln!(output, "created: {}", membership.created_at())?;
+    writeln!(output, "updated: {}", membership.updated_at())?;
+    if let Some(terminal_at) = membership.terminal_at() {
+        writeln!(output, "terminal: {terminal_at}")?;
+    }
+    writeln!(output)
+}
+
+fn write_members_list_json(
+    deployment: &str,
+    items: &[impl Serialize],
+    next_cursor: Option<&str>,
+) -> anyhow::Result<()> {
+    super::super::write_cloud_list_json_version(2, deployment, items, next_cursor)
+        .context("write JSON organization membership list result")
+}
+
+fn write_linked_emails(
+    output: &mut impl Write,
+    links: Option<&Vec<useful_api::LinkedEmail>>,
+) -> io::Result<()> {
+    if let Some(links) = links {
+        for link in links {
+            let verification = match link.verified {
+                Some(true) => "verified",
+                Some(false) => "unverified",
+                None => "verification unknown",
+            };
+            writeln!(output, "    Email: {} ({verification})", link.email)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_members_human(
+    deployment: &str,
+    items: &[OrganizationMembershipDirectoryEntry],
+    next_cursor: Option<&str>,
+) -> anyhow::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    writeln!(stdout, "✓ Organization members listed.\n")?;
+    for item in items {
+        write!(
+            stdout,
+            "  Membership: {}  Principal: {}  Type: {}  Role: {}",
+            item.id,
+            item.principal_id,
+            principal_type(item.principal_type),
+            membership_role(item.role)
+        )?;
+        if let Some(display_name) = &item.display_name {
+            write!(stdout, "  Name: {display_name}")?;
+        }
+        writeln!(stdout, "  State: {}", membership_state(item.state))?;
+        if item.principal_state == DirectoryPrincipalState::Suspended {
+            writeln!(stdout, "    Principal state: suspended")?;
+        }
+        write_linked_emails(&mut stdout, item.linked_emails.as_ref())?;
+    }
+    if !items.is_empty() {
+        writeln!(stdout)?;
+    }
+    if let Some(next_cursor) = next_cursor {
+        writeln!(stdout, "  Next cursor: {next_cursor}")?;
+    }
+    writeln!(stdout, "  Deployment: {deployment}")?;
+    Ok(())
+}
+
+fn write_membership_history_human(
+    heading: &str,
+    deployment: &str,
+    items: &[OrganizationMembershipHistoryEntry],
+    next_cursor: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{heading}\n")?;
+    for item in items {
+        writeln!(
+            stdout,
+            "membership: {} · role: {} · state: {}",
+            item.id,
+            membership_role(item.role),
+            membership_state(item.state)
+        )?;
+        writeln!(
+            stdout,
+            "principal: {} · type: {}",
+            item.principal_id.as_deref().unwrap_or("unavailable"),
+            principal_type(item.principal_type)
+        )?;
+        match item.name_state {
+            NameState::Live | NameState::Snapshot => {
+                if let Some(display_name) = &item.display_name {
+                    writeln!(stdout, "name: {display_name}")?;
+                }
+            }
+            NameState::Missing => writeln!(stdout, "name: missing")?,
+            NameState::Unavailable => writeln!(stdout, "name: unavailable")?,
+        }
+        write_linked_emails(&mut stdout, item.linked_emails.as_ref())?;
+        writeln!(stdout, "organization: {}", item.organization_id)?;
+        write_membership_times(&mut stdout, item)?;
+    }
+    write_page_footer(&mut stdout, deployment, next_cursor)?;
+    Ok(())
+}
+
+fn write_current_membership_failure(
+    deployment: &str,
+    failure: &CommonOrganizationFailure,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let (outcome, category, human, outcome_class) = match failure {
+        CommonOrganizationFailure::Unauthenticated => (
+            "unauthenticated",
+            None,
+            authentication
+                .rejected_error(
+                    "error: organization membership history requires sign-in\n\nSign in first:\n  useful account login",
+                )
+                .to_owned(),
+            OutcomeClass::Unauthenticated,
+        ),
+        CommonOrganizationFailure::Forbidden => (
+            "forbidden",
+            None,
+            "error: organization membership history unavailable for this account\n\nAsk the deployment operator to restore account access.".to_owned(),
+            OutcomeClass::Forbidden,
+        ),
+        CommonOrganizationFailure::InvalidInput => (
+            "invalid_input",
+            None,
+            format!(
+                "error: organization membership cursor rejected by {deployment}\n\nRestart the listing without --cursor."
+            ),
+            OutcomeClass::GeneralFailure,
+        ),
+        CommonOrganizationFailure::Unreachable(category) => {
+            organization_operation_unreachable(deployment, *category)
+        }
+    };
+    if json {
+        write_json(&super::super::ApiFailureResult::new(
+            deployment, outcome, category,
+        ))?;
+    } else {
+        writeln!(io::stderr().lock(), "{human}")?;
+    }
+    Ok(outcome_class.exit_code())
+}
+
+// Organization mutation failures retain their established stdout human-report contract;
+// the shared service/project failure renderer writes human diagnostics to stderr.
+fn write_failure(
+    deployment: &str,
+    outcome: &'static str,
+    category: Option<&'static str>,
+    retry_after: Option<u64>,
+    human: &str,
+    outcome_class: OutcomeClass,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    if json {
+        write_json(&super::super::ApiFailureResult::with_retry_after(
+            deployment,
+            outcome,
+            category,
+            retry_after,
+        ))?;
+    } else {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        writeln!(stdout, "{human}")?;
+    }
+    Ok(outcome_class.exit_code())
+}
+
+fn write_cloud_failure_json(
+    deployment: &str,
+    outcome: &'static str,
+    category: Option<&'static str>,
+    retry_after: Option<u64>,
+) -> anyhow::Result<()> {
+    write_json(&super::super::ApiFailureResult::with_retry_after(
+        deployment,
+        outcome,
+        category,
+        retry_after,
+    ))
+}
+
+fn write_json(value: &impl Serialize) -> anyhow::Result<()> {
+    super::super::write_pretty_json(value).context("write JSON organization result")
+}
+
+const fn organization_state(state: OrganizationState) -> &'static str {
+    match state {
+        OrganizationState::Active => "active",
+        OrganizationState::Suspended => "suspended",
+        OrganizationState::DeletionPending => "deletion_pending",
+        OrganizationState::Deleted => "deleted",
+    }
+}
+
+const fn principal_type(principal_type: PrincipalType) -> &'static str {
+    match principal_type {
+        PrincipalType::Human => "human",
+        PrincipalType::Service => "service",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditListResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    items: &'a [OrganizationAuditRecord],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warnings: Option<&'a [AuditProjectionWarning]>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrganizationResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    organization: &'a Organization,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MembershipResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    membership: &'a OrganizationMembershipHistoryEntry,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MembershipTerminationResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    organization: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    membership_id: Option<&'a str>,
+}

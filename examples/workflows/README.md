@@ -141,22 +141,24 @@ run through both status and archived-view commands:
     --max-parallel 4 \
     --json
 
-  useful workflow run status "$run_dir" --json
+  useful workflow run show "$run_dir" --json
   useful workflow run view "$run_dir" --plain
 )
 ```
 
-`workflow run create` refuses to overwrite an existing run directory. To retry a retained run
-whose latest attempt failed or was cancelled, first use `workflow run status` to confirm
-that it is eligible, then run:
+`workflow run create` refuses to overwrite an existing run directory. To rerun every step of
+a retained run whose latest attempt failed or was cancelled, first use `workflow run show` to
+confirm that it is eligible, then run:
 
 ```sh
 useful workflow run retry \
   "$run_dir" \
+  --all \
   --execution-root "$execution_root" \
   --json
 ```
 
-Retry uses the retained workflow definition and named values. A successful run is not
+Without `--execution-root` the attempt runs in the previous attempt's execution root. Retry
+uses the retained workflow definition and named values. A successful run is not
 retry-eligible. See the main [`cli/README.md`](../../README.md) for the complete command,
 retention, and output contracts.

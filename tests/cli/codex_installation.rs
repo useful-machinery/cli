@@ -47,7 +47,7 @@ impl CodexFixture {
         let executable = directory.path().join("codex-real");
         let path_executable = directory.path().join("codex");
         let probe_log = directory.path().join("probes.log");
-        let schema_fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let schema_fixture = crate::fixture_root()
             .join("crates/execution/tests/fixtures/codex-app-server-v1-schema");
         let mut file = OpenOptions::new()
             .write(true)
@@ -177,7 +177,7 @@ fn doctor_reports_exact_codex_identity_without_credentials_or_native_configurati
     let config = codex_home.path().join("config.toml");
     let native_config = b"model_provider = \"native-sentinel\"\n";
     fs::write(&config, native_config).unwrap();
-    let fixture = CodexFixture::new("0.163.0", true, true);
+    let fixture = CodexFixture::new("0.171.0", true, true);
     let unselected = CodexFixture::new("0.147.23", true, true);
     let path =
         std::env::join_paths([fixture.path_directory(), unselected.path_directory()]).unwrap();
@@ -203,10 +203,10 @@ fn doctor_reports_exact_codex_identity_without_credentials_or_native_configurati
     let check = &report["checks"][0];
     assert_eq!(check["id"], CODEX_CHECK_ID);
     assert_eq!(check["status"], "pass");
-    assert_eq!(check["details"]["version"], "0.163.0");
+    assert_eq!(check["details"]["version"], "0.171.0");
     assert_eq!(check["details"]["profile"], "CodexAppServerV1");
-    assert_eq!(check["details"]["supportedRange"], ">=0.147.0 <0.164.0");
-    assert_eq!(check["details"]["qualificationVersion"], "0.163.0");
+    assert_eq!(check["details"]["supportedRange"], ">=0.147.0 <0.172.0");
+    assert_eq!(check["details"]["qualificationVersion"], "0.171.0");
     assert_eq!(check["details"]["capabilities"], REQUIRED_CAPABILITIES);
     assert_eq!(
         Path::new(check["details"]["executablePath"].as_str().unwrap()),
@@ -231,8 +231,8 @@ fn doctor_reports_exact_codex_identity_without_credentials_or_native_configurati
 fn doctor_accepts_the_reviewed_codex_range_endpoints() {
     // The in-process installation unit test admits every reviewed minor line;
     // the command only needs to prove it reports the range's endpoints. The
-    // upper endpoint is newer than the 0.163.0 anchor, so it is untested.
-    for (version, qualification) in [("0.147.0", "supported_range"), ("0.163.999", "untested")] {
+    // upper endpoint is newer than the 0.171.0 anchor, so it is untested.
+    for (version, qualification) in [("0.147.0", "supported_range"), ("0.171.999", "untested")] {
         let fixture = CodexFixture::new(version, true, true);
         let output = doctor_json(fixture.path_directory(), &[]);
         assert!(output.status.success(), "{version}");
@@ -251,9 +251,9 @@ fn doctor_accepts_the_reviewed_codex_range_endpoints() {
 #[test]
 fn doctor_passes_a_newer_codex_as_untested_and_reports_qualification() {
     for (version, qualification) in [
-        ("0.164.0", "untested"),
+        ("0.172.0", "untested"),
         ("1.0.0", "untested"),
-        ("0.163.0", "supported_range"),
+        ("0.171.0", "supported_range"),
     ] {
         let fixture = CodexFixture::new(version, true, true);
         let output = doctor_json(fixture.path_directory(), &[]);
@@ -266,7 +266,7 @@ fn doctor_passes_a_newer_codex_as_untested_and_reports_qualification() {
             check["details"]["qualification"], qualification,
             "{version}"
         );
-        assert_eq!(check["details"]["qualificationVersion"], "0.163.0");
+        assert_eq!(check["details"]["qualificationVersion"], "0.171.0");
         assert_eq!(fixture.recorded_probes(), CLOSED_PROBES, "{version}");
     }
 }
@@ -276,7 +276,7 @@ fn doctor_passes_a_newer_codex_as_untested_and_reports_qualification() {
 #[test]
 fn doctor_does_not_fall_back_after_the_first_path_candidate_fails() {
     let incompatible = CodexFixture::new("0.146.99", true, true);
-    let fallback = CodexFixture::new("0.163.0", true, true);
+    let fallback = CodexFixture::new("0.171.0", true, true);
     let path =
         std::env::join_paths([incompatible.path_directory(), fallback.path_directory()]).unwrap();
 
@@ -360,14 +360,14 @@ fn doctor_rejects_out_of_range_decorated_and_schema_incompatible_codex() {
             b"--version\n".as_slice(),
         ),
         (
-            "0.163.0-rc.1",
+            "0.171.0-rc.1",
             true,
             true,
             "malformed_codex_version",
             b"--version\n".as_slice(),
         ),
         (
-            "0.163.0+vendor",
+            "0.171.0+vendor",
             true,
             true,
             "malformed_codex_version",

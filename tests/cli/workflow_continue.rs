@@ -10,8 +10,10 @@ use super::workflow_run::{
     failed_source_revision_run, git, initialize_git_repository, input_sources, isolated_command,
     run_record, workflow_run_schema,
 };
+use super::workflow_run_control::control_command;
 use super::workflow_run_control::{
-    control_command, control_count, control_file, recorded_as, refused, run_control,
+    WITHDRAW, control_count, control_file, file_tree, live_run_held_at_design, recorded_as,
+    refused, run_control,
 };
 use super::workflow_run_list::shown_plain;
 
@@ -30,11 +32,12 @@ exports:
   branch: {ref: outputs.capture.branch}
 "#;
 
+/// `useful workflow run retry RUN --from STEP… --json`, or `resume RUN --json` with no step.
 fn continue_args(run: &Path, from: &[&str]) -> Vec<String> {
     let mut args = vec![
         "workflow".to_owned(),
         "run".to_owned(),
-        "resume".to_owned(),
+        if from.is_empty() { "resume" } else { "retry" }.to_owned(),
         run.to_string_lossy().into_owned(),
     ];
     for id in from {
@@ -532,7 +535,7 @@ fn replacement_resolution_failure_uses_the_continuation_diagnostic_vocabulary() 
     assert_eq!(output.status.code(), Some(1));
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(workflow_run_schema().is_valid(&result), "{result}");
-    assert_eq!(result["command"], "useful workflow run resume");
+    assert_eq!(result["command"], "useful workflow run retry");
     assert_eq!(result["phase"], "continuation");
     assert_eq!(
         result["diagnostics"][0]["code"],
@@ -1316,11 +1319,8 @@ fn inherited_zero_delta_git_keeps_original_producer_without_carrier() {
     assert!(view.status.success());
     let view: serde_json::Value = serde_json::from_slice(&view.stdout).unwrap();
     let schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-view-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-view-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&view));
@@ -1445,6 +1445,7 @@ finalizers:
         "run".to_owned(),
         "retry".to_owned(),
         run.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         bundle.execution_root().to_string_lossy().into_owned(),
         "--json".to_owned(),
@@ -1681,7 +1682,7 @@ fn replacement_definition_and_root_are_selected_independently() {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -1689,11 +1690,8 @@ fn replacement_definition_and_root_are_selected_independently() {
     .unwrap();
     let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
     let schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-status-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-status-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     assert!(
@@ -1782,11 +1780,8 @@ fn chained_continuation_keeps_original_producer_and_reruns_finalizers() {
     assert!(view.status.success());
     let view: serde_json::Value = serde_json::from_slice(&view.stdout).unwrap();
     let schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-view-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-view-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&view));
@@ -1836,6 +1831,9 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
         continuation["continuation"]["reexecutedSteps"],
         serde_json::json!(["second"])
     );
+    // `retry --from` records the reason `resume`, the record vocabulary of a continuation from
+    // named steps.
+    assert_eq!(continuation["continuation"]["reason"], "resume");
     assert_eq!(continuation["progress"]["steps"][0]["state"], "inherited");
     assert_eq!(continuation["progress"]["steps"][1]["state"], "succeeded");
     let event: serde_json::Value =
@@ -1844,7 +1842,7 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
     assert_eq!(event["continuation"], continuation["continuation"]);
     let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
-    assert_eq!(terminal["command"], "useful workflow run resume");
+    assert_eq!(terminal["command"], "useful workflow run retry");
     assert_eq!(
         terminal["result"]["continuation"],
         continuation["continuation"]
@@ -1874,7 +1872,7 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -1891,11 +1889,8 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
         continuation["continuation"]["workspace"]["modified"]
     );
     let schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-status-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-status-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     let status_validator = jsonschema::validator_for(&schema).unwrap();
@@ -1941,11 +1936,8 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
     assert!(plain.contains("inherited"));
     assert!(plain.contains("workspace modified"));
     let view_schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-view-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-view-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     let validator = jsonschema::validator_for(&view_schema).unwrap();
@@ -1983,6 +1975,168 @@ fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
         "continuation_disposition_ineligible"
     );
     assert_eq!(fs::read(run.join("state.json")).unwrap(), before);
+}
+
+/// `useful workflow run retry RUN --json`, with neither `--from` nor `--all`.
+fn retry_args(run: &Path) -> Vec<String> {
+    vec![
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "retry".to_owned(),
+        run.to_string_lossy().into_owned(),
+        "--json".to_owned(),
+    ]
+}
+
+// REQ-LOCALRUN-184, REQ-CONTINUE-81: `retry RUN` of an exited run whose latest attempt failed
+// continues it, reexecuting the steps the attempt left other than `succeeded`, `skipped` or
+// `inherited` and inheriting the rest, its documents naming `retry`; a run that names no step
+// to continue from, whose failure was a finalizer's alone, is refused
+// `continuation_step_required`, naming `--from` and `--all`, with nothing written.
+#[test]
+fn retry_of_an_ended_run_continues_from_the_steps_its_attempt_left() {
+    let bundle = RunBundle::new(
+        "schemaVersion: 1\nsteps:\n  first:\n    kind: cmd\n    command: {argv: [\"sh\", \"-c\", \"echo first >> calls\"]}\n  second:\n    kind: cmd\n    dependsOn: [first]\n    command: {argv: [\"sh\", \"-c\", \"echo second >> calls; test \\\"$PHASE\\\" = retry\"]}\n",
+    );
+    let run = bundle.result("ended-failed");
+    let mut initial = bundle.args(&run);
+    initial.insert(initial.len() - 1, "--json".to_owned());
+    let first = isolated_command(&initial)
+        .env("PHASE", "initial")
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(1), "{first:?}");
+
+    let output = isolated_command(&retry_args(&run))
+        .env("PHASE", "retry")
+        .output()
+        .unwrap();
+    let terminal = completed(&output);
+    assert_eq!(terminal["command"], "useful workflow run retry");
+    assert_eq!(terminal["attemptNumber"], 2);
+    let event = partition_event(&output);
+    assert_eq!(
+        event["continuation"]["fromSteps"],
+        serde_json::json!(["second"])
+    );
+    assert_eq!(event["continuation"]["reason"], "resume");
+    let state = read_json(&run.join("state.json"));
+    let attempt = &state["attempts"][1];
+    assert_eq!(attempt["progress"]["steps"][0]["state"], "inherited");
+    assert_eq!(attempt["progress"]["steps"][1]["state"], "succeeded");
+    assert_eq!(
+        fs::read_to_string(bundle.execution_root().join("calls")).unwrap(),
+        "first\nsecond\nsecond\n"
+    );
+
+    let finalized = RunBundle::new(
+        "schemaVersion: 1\nsteps:\n  work:\n    kind: cmd\n    command: {argv: [\"true\"]}\nfinalizers:\n  cleanup:\n    kind: cmd\n    command: {argv: [\"false\"]}\n",
+    );
+    let run = finalized.result("finalizer-failed");
+    let mut initial = finalized.args(&run);
+    initial.insert(initial.len() - 1, "--json".to_owned());
+    assert_eq!(
+        isolated_command(&initial).output().unwrap().status.code(),
+        Some(1)
+    );
+    let before = fs::read(run.join("state.json")).unwrap();
+    let output = isolated_command(&retry_args(&run)).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let rejection: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&rejection), "{rejection}");
+    assert_eq!(rejection["command"], "useful workflow run retry");
+    assert_eq!(rejection["phase"], "continuation");
+    let diagnostic = &rejection["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "continuation_step_required");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(
+        message.contains("--from") && message.contains("--all"),
+        "{message}"
+    );
+    assert_eq!(attempt_count(&run), 1);
+    assert_eq!(
+        read_json(&run.join("state.json"))["attempts"],
+        serde_json::from_slice::<serde_json::Value>(&before).unwrap()["attempts"]
+    );
+}
+
+// REQ-LOCALRUN-184: `retry RUN` of a `running` run whose process is gone is refused
+// `run_not_live`, naming `resume`; once the run ended, an edge-scheduled run continues from
+// the stage its latest attempt started last, which its record's `position` named.
+#[test]
+fn retry_of_an_ended_edge_scheduled_run_continues_from_its_position() {
+    let bundle = wait_tree();
+    let (mut live, run) = live_run_held_at_design(&bundle, "ended-at-design");
+    live.process.kill().unwrap();
+    live.process.wait().unwrap();
+    let refusal = poll_until(
+        "the abandoned run's retry refusal",
+        || run_control(None, "retry", &run, &[]),
+        |output| {
+            serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                .is_ok_and(|document| document["diagnostics"][0]["code"] == "run_not_live")
+        },
+    );
+    let refusal = refused(&refusal, "retry", "run_not_live");
+    assert!(
+        refusal["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("resume"),
+        "{refusal}"
+    );
+    assert_eq!(attempt_count(&run), 1);
+
+    fs::write(&live.release, "").unwrap();
+    poll_until(
+        "the abandoned run's cancellation",
+        || run_control(None, "cancel", &run, &[]),
+        |output| output.status.success(),
+    );
+    let record = run_record(&run);
+    assert_eq!(record["state"], "exited", "{record}");
+    assert_eq!(record["outcome"], "canceled", "{record}");
+
+    decide(&bundle, "review", "approve");
+    let output = run_control(None, "retry", &run, &[]);
+    let terminal = completed(&output);
+    assert_eq!(terminal["command"], "useful workflow run retry");
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
+    let event = partition_event(&output);
+    assert_eq!(
+        event["continuation"]["fromSteps"],
+        serde_json::json!(["design"])
+    );
+    assert_eq!(event["continuation"]["reason"], "resume");
+    assert_eq!(attempt_count(&run), 2);
+}
+
+// REQ-LOCALRUN-184, REQ-LOCALRUN-186: a run withdrawn at the wait after a later stage is
+// continued by `retry RUN` from that stage, the step its latest attempt started last, and
+// the stages before it are not run again.
+#[test]
+fn retry_of_a_run_withdrawn_past_its_first_stage_continues_from_the_stage_it_stood_at() {
+    let bundle = wait_tree();
+    decide(&bundle, "review", "approve");
+    let (run, terminal) = waiting_run(&bundle, "withdrawn-at-review", "planned");
+    assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
+    let withdrawn = run_control(None, "cancel", &run, &[]);
+    assert!(withdrawn.status.success(), "{withdrawn:?}");
+    assert_eq!(run_record(&run)["outcome"], "withdrawn");
+    let attempts = attempt_count(&run);
+
+    // A `design` that ran again would now wait on an answer.
+    decide(&bundle, "design", "blocked");
+    let output = run_control(None, "retry", &run, &[]);
+    let terminal = completed(&output);
+    assert_eq!(terminal["command"], "useful workflow run retry");
+    assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
+    assert_eq!(
+        partition_event(&output)["continuation"]["fromSteps"],
+        serde_json::json!(["review"])
+    );
+    assert_eq!(attempt_count(&run), attempts + 1);
 }
 
 // REQ-AGENT-59
@@ -2114,7 +2268,7 @@ fn a_continuation_of_a_tree_run_verifies_and_rebinds_the_copy() {
     assert_eq!(rejected.status.code(), Some(1));
     let rejection: serde_json::Value = serde_json::from_slice(&rejected.stdout).unwrap();
     assert!(workflow_run_schema().is_valid(&rejection), "{rejection}");
-    assert_eq!(rejection["command"], "useful workflow run resume");
+    assert_eq!(rejection["command"], "useful workflow run retry");
     assert_eq!(rejection["phase"], "tree");
     assert_eq!(rejection["diagnostics"][0]["code"], "tree_copy_modified");
     assert!(!run_directory.join("attempts/000002").exists());
@@ -2515,10 +2669,10 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
 
     // REQ-CONTINUE-74: a held wait changes nothing and answers quickly.
     let before = fs::read(run.join("run.json")).unwrap();
-    let started = useful_support::monotonic_now();
+    let started = crate::monotonic_now();
     let held = completed(&resume(&run));
     assert!(
-        useful_support::monotonic_now().saturating_duration_since(started)
+        crate::monotonic_now().saturating_duration_since(started)
             < std::time::Duration::from_secs(2)
     );
     assert_eq!(held["outcome"], "waiting", "{held}");
@@ -2802,15 +2956,10 @@ fn a_fan_out_waits_at_its_element_and_resumes_the_same_element() {
     );
     assert!(!run.join("children/build/000003").exists());
 
-    let output = run_control(
-        None,
-        "answer",
-        &run,
-        &["--question", "1", "--text", "split"],
-    );
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    // The answer completes the wait and continues the run itself (REQ-LOCALRUN-182).
     fs::write(root.join("verdict-build-b"), "built").unwrap();
-    let terminal = completed(&resume(&run));
+    let terminal = completed(&run_control(None, "answer", &run, &["--text", "split"]));
+    assert_eq!(terminal["command"], "useful workflow run answer");
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
     let record = run_record(&run);
     assert_eq!(record["state"], "exited");
@@ -3087,10 +3236,13 @@ fn a_resumed_workflow_step_receives_an_inherited_childs_json_export() {
     let run = fs::canonicalize(&destination).unwrap();
     fs::remove_file(root.join("seen-parts.json")).unwrap();
 
-    let output = run_control(None, "answer", &run, &["--question", "1", "--text", "go"]);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
     fs::write(root.join("verdict-build.txt"), "built").unwrap();
-    let terminal = completed(&resume(&run));
+    let terminal = completed(&run_control(
+        None,
+        "answer",
+        &run,
+        &["--question", "1", "--text", "go"],
+    ));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
     assert_eq!(run_record(&run)["outcome"], "landed");
     assert_eq!(read_json(&root.join("seen-parts.json")), parts);
@@ -3368,12 +3520,12 @@ pub(super) fn chained(output: &std::process::Output) -> Vec<serde_json::Value> {
     documents
 }
 
-/// `useful workflow run status RUN --json`, valid against its schema.
+/// `useful workflow run show RUN --json`, valid against its schema.
 pub(super) fn status_document(run: &Path) -> serde_json::Value {
     let output = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -3381,11 +3533,8 @@ pub(super) fn status_document(run: &Path) -> serde_json::Value {
     .unwrap();
     let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let schema: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-status-result-v1.schema.json"
-        ))
-        .unwrap(),
+        &fs::read(crate::fixture_root().join("schemas/workflow-status-result-v1.schema.json"))
+            .unwrap(),
     )
     .unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
@@ -3395,6 +3544,248 @@ pub(super) fn status_document(run: &Path) -> serde_json::Value {
         validator.iter_errors(&status).collect::<Vec<_>>()
     );
     status
+}
+
+/// A stage whose `decide` writes `planned` and exits with the code in the execution root's
+/// `exit-code`, whose 71 marks its failure as the host's and takes `host_failed`.
+pub(super) const HOST_FAILING_STAGE: &str = "schemaVersion: 1
+outcomes: [planned, failed, host_failed]
+outcome:
+  from: outputs.decide.verdict
+  onFailure: failed
+  onInfrastructure: host_failed
+steps:
+  decide:
+    kind: cmd
+    infrastructureExitCodes: [71]
+    command:
+      argv: [decide]
+    outputs:
+      verdict:
+        kind: text
+        from: path
+        path: verdict.txt
+";
+
+/// `bin/decide` for `HOST_FAILING_STAGE`.
+pub(super) const HOST_FAILING_PROGRAM: &str =
+    "#!/bin/sh\nset -eu\nprintf planned > verdict.txt\nexit \"$(cat exit-code)\"\n";
+
+/// The rule a `host` wait derives (REQ-WFEXEC-80).
+pub(super) fn host_rule() -> serde_json::Value {
+    serde_json::json!({
+        "source": "host",
+        "event": ["host.healthy"],
+        "where": "event.run == run.id and event.wait == wait.id",
+    })
+}
+
+// REQ-WFEXEC-80, REQ-WFDEF-4, REQ-WFDEF-5: a stage that fails on its host takes its host
+// wait: the run waits on a `host` wait at the stage with the derived rule, and the `run.json`
+// write that reads `waiting` counts the edge.
+#[test]
+fn a_host_failed_stage_enters_a_host_wait_counted_in_the_run_record() {
+    let bundle = TreeBundle::new(
+        "schemaVersion: 1
+programs: [bin]
+outcomes: [landed, failed]
+steps:
+  build:
+    kind: workflow
+    workflow: stage.yaml
+    on:
+      planned: exit.landed
+      failed: exit.failed
+      host_failed:
+        wait: host
+        then: build
+        limit: 2
+        else:
+          wait: repair
+          then: build
+",
+    );
+    bundle.write_source("stage.yaml", HOST_FAILING_STAGE);
+    bundle.write_program("bin/decide", HOST_FAILING_PROGRAM);
+    fs::write(bundle.execution_root().join("exit-code"), "71").unwrap();
+    let destination = bundle.result("host-waiting");
+    let terminal = completed(
+        &isolated_command(&bundle.args(&destination))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    let run = fs::canonicalize(&destination).unwrap();
+
+    let wait = read_json(&run.join("wait.json"));
+    assert!(
+        super::workflow_definition::schema("workflow-run-wait-v1.schema.json").is_valid(&wait),
+        "{wait}"
+    );
+    assert_eq!(wait["kind"], "host", "{wait}");
+    assert_eq!(wait["step"], serde_json::json!(["build"]), "{wait}");
+    assert_eq!(wait["then"], "build", "{wait}");
+    assert_eq!(wait["rule"], host_rule(), "{wait}");
+    assert_eq!(wait["payload"]["child"], "children/build/000001", "{wait}");
+    assert_eq!(
+        wait["payload"]["failedChild"]["outcome"], "host_failed",
+        "{wait}"
+    );
+    assert_eq!(
+        wait["payload"]["failedChild"]["primaryIssue"]["node"]["id"], "decide",
+        "{wait}"
+    );
+
+    let record = run_record(&run);
+    assert_eq!(record["state"], "waiting", "{record}");
+    assert_eq!(
+        record["edges"],
+        serde_json::json!({"build.host_failed": 1}),
+        "{record}"
+    );
+
+    let status = status_document(&run);
+    assert_eq!(status["wait"]["kind"], "host", "{status}");
+}
+
+/// A root whose `build` stage (`HOST_FAILING_STAGE`) routes `host_failed` to a host wait
+/// under a limit of two, then to a `repair` wait, and whose `requires.check` is
+/// `HOST_CHECK_PROGRAM` (REQ-WFEXEC-80, REQ-WFEXEC-81).
+pub(super) const HOST_CHECK_ROOT: &str = "schemaVersion: 1
+programs: [bin]
+requires:
+  check:
+    argv: [host-check]
+outcomes: [landed, failed]
+steps:
+  build:
+    kind: workflow
+    workflow: stage.yaml
+    on:
+      planned: exit.landed
+      failed: exit.failed
+      host_failed:
+        wait: host
+        then: build
+        limit: 2
+        else:
+          wait: repair
+          then: build
+";
+
+/// `bin/host-check` for `HOST_CHECK_ROOT`: healthy once the execution root holds `healthy`.
+pub(super) const HOST_CHECK_PROGRAM: &str = "#!/bin/sh\ntest -e healthy\n";
+
+/// `HOST_CHECK_ROOT`'s tree with its stage and programs; the stage exits with the code in the
+/// execution root's `exit-code`, which the caller writes.
+pub(super) fn host_check_tree() -> TreeBundle {
+    let bundle = TreeBundle::new(HOST_CHECK_ROOT);
+    bundle.write_source("stage.yaml", HOST_FAILING_STAGE);
+    bundle.write_program("bin/decide", HOST_FAILING_PROGRAM);
+    bundle.write_program("bin/host-check", HOST_CHECK_PROGRAM);
+    bundle
+}
+
+/// Creates `bundle`'s run `name` with the stage exiting 71, which waits for its host.
+pub(super) fn host_waiting_run(bundle: &TreeBundle, name: &str) -> std::path::PathBuf {
+    fs::write(bundle.execution_root().join("exit-code"), "71").unwrap();
+    let destination = bundle.result(name);
+    let terminal = completed(
+        &isolated_command(&bundle.args(&destination))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    assert_eq!(terminal["wait"]["kind"], "host", "{terminal}");
+    fs::canonicalize(&destination).unwrap()
+}
+
+// REQ-WFEXEC-81, REQ-CONTINUE-74, REQ-CONTINUE-77: `resume` evaluates a host wait through the
+// root's `requires.check`: while it fails the wait holds and nothing in the run directory
+// changes; once it passes the run continues at the stage with reason `host`. A host that
+// stays failing takes the edge's `else` once the limit is reached.
+#[test]
+fn a_host_wait_holds_while_the_check_fails_and_continues_once_it_passes() {
+    let bundle = host_check_tree();
+    let root = bundle.execution_root();
+    let run = host_waiting_run(&bundle, "host-held");
+    let before = file_tree(&run);
+    let held = completed(&resume(&run));
+    assert_eq!(held["outcome"], "waiting", "{held}");
+    assert_eq!(held["wait"]["kind"], "host", "{held}");
+    assert_eq!(held["wait"]["rule"], host_rule(), "{held}");
+    assert_eq!(file_tree(&run), before);
+
+    fs::write(root.join("healthy"), "").unwrap();
+    fs::write(root.join("exit-code"), "0").unwrap();
+    let terminal = completed(&resume(&run));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    let status = status_document(&run);
+    let attempts = status["state"]["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2, "{status}");
+    assert_eq!(attempts[1]["continuation"]["reason"], "host", "{status}");
+    let record = run_record(&run);
+    assert_eq!(record["state"], "exited", "{record}");
+    assert_eq!(record["outcome"], "landed", "{record}");
+    assert_eq!(
+        record["edges"],
+        serde_json::json!({"build.host_failed": 1}),
+        "{record}"
+    );
+
+    // A host that the check finds healthy but on which the stage keeps failing is waited
+    // for twice, and the third failure takes `else`.
+    let run = host_waiting_run(&bundle, "host-exhausted");
+    for expected in ["host", "repair"] {
+        let terminal = completed(&resume(&run));
+        assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+        assert_eq!(terminal["wait"]["kind"], expected, "{terminal}");
+    }
+    let record = run_record(&run);
+    assert_eq!(
+        record["edges"],
+        serde_json::json!({"build.host_failed": 2}),
+        "{record}"
+    );
+    let status = status_document(&run);
+    let reasons = status["state"]["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(1)
+        .map(|attempt| attempt["continuation"]["reason"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(reasons, ["host", "host"], "{status}");
+}
+
+// REQ-CONTINUE-93, REQ-CONTINUE-75: a failed child continued by hand to success after the host
+// wait began is adopted when the host condition resolves the wait: the stage does not run
+// again, here where it would now fail, and the run lands with reason `host`.
+#[test]
+fn a_resolved_host_wait_adopts_its_independently_completed_child() {
+    let bundle = host_check_tree();
+    let root = bundle.execution_root();
+    let run = host_waiting_run(&bundle, "host-adopted");
+    let child = run.join("children/build/000001");
+    fs::write(root.join("exit-code"), "0").unwrap();
+    let repaired = completed(
+        &isolated_command(&continue_args(&child, &["decide"]))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(repaired["outcome"], "succeeded", "{repaired}");
+    assert_eq!(run_record(&child)["outcome"], "planned");
+
+    // Only the child's retained result can finish the stage now; a new attempt would fail.
+    fs::write(root.join("exit-code"), "1").unwrap();
+    fs::write(root.join("healthy"), "").unwrap();
+    let terminal = completed(&resume(&run));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(terminal["result"]["continuation"]["reason"], "host");
+    let record = run_record(&run);
+    assert_eq!(record["outcome"], "landed", "{record}");
+    assert_eq!(ordinals_of(&run.join("children/build")), ["000001"]);
+    assert_eq!(attempt_count(&child), 2);
 }
 
 // REQ-WFEXEC-64, REQ-CONTINUE-77, REQ-LOCALRUN-126: a limited hand-back ends the attempt
@@ -3623,7 +4014,7 @@ fn resume_continues_a_run_whose_latest_attempt_continued() {
     assert_eq!(record["edges"], serde_json::json!({"review.hand_back": 1}));
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-WFEXEC-73: `withdraw` of a run whose process ended
+// REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal of a run whose process ended
 // between chained attempts ends it `withdrawn` and spends the withdrawal it records, so a later
 // `retry` of the run is not withdrawn by it: the retry's attempt runs its stages.
 #[test]
@@ -3631,8 +4022,8 @@ fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
     let bundle = loop_tree();
     let run = interrupted_chain(&bundle, "withdrawn-chain");
 
-    let output = run_control(None, "withdraw", &run, &[]);
-    let document = recorded_as(&output, "withdraw", "withdrawn", &run);
+    let output = run_control(None, "cancel", &run, &WITHDRAW);
+    let document = recorded_as(&output, "cancel", "withdrawn", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     control_file(&run, &document);
@@ -3649,6 +4040,7 @@ fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
         "run".to_owned(),
         "retry".to_owned(),
         run.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         bundle.execution_root().to_string_lossy().into_owned(),
         "--json".to_owned(),
@@ -3675,11 +4067,15 @@ fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
     assert!(record["attempts"].as_u64().unwrap() >= 3, "{record}");
 }
 
-// REQ-LOCALRUN-214, INV-ENGINE-39, REQ-LOCALRUN-186, REQ-WFEXEC-73: a `withdraw` that arrives
+// REQ-LOCALRUN-214, INV-ENGINE-39, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal that arrives
 // after the process released the run for one chained attempt and before it took the run for the
 // next waits for the process, which keeps the run's controls lock across that gap; it then finds
 // the run held, appends `control.withdraw` naming no wait and answers `recorded`, and the chained
 // attempt honors it: the run ends `withdrawn` after 2 attempts, never by the `withdraw` itself.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_between_chained_attempts_waits_for_the_process_and_is_recorded() {
     let bundle = loop_tree();
@@ -3705,24 +4101,18 @@ fn a_withdraw_between_chained_attempts_waits_for_the_process_and_is_recorded() {
     );
     let run = fs::canonicalize(&destination).unwrap();
     // Attempt 1 ended `continued`, the run lock is free and the record reads `running`.
-    let inspection = useful_execution::inspect_wait(&run, &useful_execution::NoConditions)
-        .unwrap()
-        .inspection;
-    assert!(
-        matches!(
-            inspection,
-            useful_execution::WaitInspection::Continued { .. }
-        ),
-        "{inspection:?}"
-    );
+    assert!(crate::lock_holder(&run).unwrap().is_none());
+    assert_eq!(run_record(&run)["state"], "running");
+    let state = read_json(&run.join("state.json"));
+    assert_eq!(state["attempts"][0]["state"], "continued");
 
-    let mut withdraw = control_command(None, "withdraw", &run, &[])
+    let mut withdraw = control_command(None, "cancel", &run, &WITHDRAW)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    useful_support::sleep(std::time::Duration::from_millis(500));
+    crate::sleep(std::time::Duration::from_millis(500));
     if withdraw.try_wait().unwrap().is_some() {
         panic!(
             "the withdraw did not wait for the chaining process: {:?}",
@@ -3733,7 +4123,7 @@ fn a_withdraw_between_chained_attempts_waits_for_the_process_and_is_recorded() {
 
     fs::write(&gate, "").unwrap();
     let output = withdraw.wait_with_output().unwrap();
-    let document = recorded_as(&output, "withdraw", "recorded", &run);
+    let document = recorded_as(&output, "cancel", "recorded", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     control_file(&run, &document);
@@ -3747,8 +4137,8 @@ fn a_withdraw_between_chained_attempts_waits_for_the_process_and_is_recorded() {
     assert_eq!(attempt_count(&run), 2);
     assert_eq!(control_count(&run), 1);
     refused(
-        &run_control(None, "withdraw", &run, &[]),
-        "withdraw",
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
         "run_exited",
     );
 }
@@ -4280,8 +4670,9 @@ fn the_engineering_shape_loops_repairs_and_lands_through_the_queue() {
     );
 }
 
-/// `useful workflow run resume RUN --cloud ORGANIZATION` against the scripted Cloud the
-/// `useful run continue` tests use (REQ-CONTINUE-85).
+/// `useful workflow run retry RUN --org ORGANIZATION --from STEP…` and `useful workflow run
+/// resume RUN --org ORGANIZATION` of a Cloud run against the scripted Cloud the Cloud
+/// continuation tests use (REQ-CONTINUE-55, REQ-CONTINUE-85).
 mod cloud {
     use std::process::Output;
 
@@ -4295,8 +4686,10 @@ mod cloud {
         (output, requests)
     }
 
+    /// `retry RUN --org acme --from STEP…`, or `resume RUN --org acme` with no step.
     fn resume_in(steps: &[&str], from: &[&str], json: bool, home: &str) -> (Output, Vec<String>) {
-        let mut args = vec!["workflow", "run", "resume", RUN_ID, "--cloud", "acme"];
+        let leaf = if from.is_empty() { "resume" } else { "retry" };
+        let mut args = vec!["workflow", "run", leaf, RUN_ID, "--org", "acme"];
         for step in from {
             args.extend(["--from", step]);
         }
@@ -4315,7 +4708,7 @@ mod cloud {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
-    // REQ-CONTINUE-85, REQ-CONTINUE-56
+    // REQ-CONTINUE-55, REQ-CONTINUE-56
     #[test]
     fn named_steps_post_one_inherited_continuation_and_report_its_receipt() {
         let (output, requests) = resume(&["submitted"], &["build", "review"], true);
@@ -4354,9 +4747,9 @@ mod cloud {
         }
     }
 
-    // REQ-CONTINUE-85
+    // REQ-CONTINUE-85: `resume` of a Cloud run sends the continuation request with no step.
     #[test]
-    fn without_from_the_request_names_no_step_and_the_home_stays_empty() {
+    fn resume_requests_a_continuation_naming_no_step_and_the_home_stays_empty() {
         let home = tempfile::tempdir().unwrap();
         let (output, requests) =
             resume_in(&["submitted"], &[], true, home.path().to_str().unwrap());
@@ -4419,7 +4812,7 @@ mod cloud {
         }
     }
 
-    // REQ-CONTINUE-85, REQ-CONTINUE-57
+    // REQ-CONTINUE-55, REQ-CONTINUE-57
     #[test]
     fn a_lost_response_leaves_acceptance_unknown_under_one_key() {
         let (output, requests) = resume(&["lost", "lost"], &["build"], true);
@@ -4433,7 +4826,7 @@ mod cloud {
         assert!(result["request"].is_null());
     }
 
-    // REQ-CONTINUE-85
+    // REQ-CONTINUE-55
     #[test]
     fn a_malformed_step_is_a_usage_error_before_any_request() {
         let (output, requests) = resume(&[], &["Build"], true);

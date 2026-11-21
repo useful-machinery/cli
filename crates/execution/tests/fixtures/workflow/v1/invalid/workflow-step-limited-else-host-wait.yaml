@@ -1,0 +1,16 @@
+schemaVersion: 1
+steps:
+  build:
+    kind: workflow
+    workflow: build.yaml
+    on:
+      host_failed:
+        then: build
+        limit: 2
+        else:
+          wait: host
+          then: build
+          limit: 2
+          else: exit.failed
+      succeeded: exit.succeeded
+      failed: exit.failed

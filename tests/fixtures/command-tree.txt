@@ -1,0 +1,180 @@
+account
+account delegation
+account delegation accept
+account delegation end
+account delegation list
+account delegation propose
+account delegation show
+account delete
+account identity
+account identity link
+account identity list
+account identity remove
+account integration
+account integration authorize
+account integration connect
+account integration deauthorize
+account integration disconnect
+account integration list
+account integration reconnect
+account integration show
+account invitation
+account invitation accept
+account invitation decline
+account invitation list
+account invitation show
+account login
+account logout
+account restore
+account service
+account service create
+account service key
+account service key issue
+account service key list
+account service key revoke
+account show
+account signup
+account update
+org
+org audit
+org audit list
+org create
+org delete
+org integration
+org integration authorize
+org integration connect
+org integration deauthorize
+org integration disconnect
+org integration list
+org integration reconnect
+org integration repository
+org integration repository add
+org integration repository list
+org integration repository remove
+org integration show
+org integration team
+org integration team list
+org integration team show
+org invitation
+org invitation issue
+org invitation list
+org invitation revoke
+org leave
+org list
+org member
+org member event
+org member event list
+org member list
+org member remove
+org member update
+org restore
+org show
+org update
+project
+project archive
+project create
+project list
+project pool
+project pool add
+project pool remove
+project show
+project unarchive
+project update
+project webhook
+project webhook create
+project webhook delete
+project webhook delivery
+project webhook delivery list
+project webhook delivery replay
+project webhook delivery show
+project webhook disable
+project webhook enable
+project webhook list
+project webhook secret
+project webhook secret revoke
+project webhook secret rotate
+project webhook show
+project webhook test
+project webhook update
+runner
+runner credential
+runner credential list
+runner credential revoke
+runner delete
+runner disable
+runner doctor
+runner drain
+runner enable
+runner join-key
+runner join-key issue
+runner join-key list
+runner join-key revoke
+runner list
+runner pool
+runner pool create
+runner pool delete
+runner pool list
+runner pool show
+runner pool update
+runner prune
+runner serve
+runner show
+runner sync
+runner update
+runner watch
+version
+workflow
+workflow definition
+workflow definition archive
+workflow definition delete
+workflow definition disable
+workflow definition enable
+workflow definition evaluation
+workflow definition evaluation list
+workflow definition evaluation show
+workflow definition list
+workflow definition publish
+workflow definition show
+workflow definition unarchive
+workflow definition update
+workflow doctor
+workflow input-set
+workflow input-set create
+workflow input-set delete
+workflow input-set seal
+workflow input-set show
+workflow input-set upload
+workflow reference
+workflow run
+workflow run answer
+workflow run approve
+workflow run artifact
+workflow run artifact download
+workflow run artifact list
+workflow run artifact validate
+workflow run cancel
+workflow run create
+workflow run event
+workflow run hand-back
+workflow run input
+workflow run input delete
+workflow run input download
+workflow run input show
+workflow run interrupt
+workflow run linear
+workflow run linear list
+workflow run list
+workflow run pause
+workflow run publication
+workflow run publication create
+workflow run publication list
+workflow run publication show
+workflow run release
+workflow run resume
+workflow run retry
+workflow run show
+workflow run unpause
+workflow run upgrade
+workflow run view
+workflow schema
+workflow validate

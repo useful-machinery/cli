@@ -3,7 +3,9 @@
 //! than the claim's admission observation; the issue is then read fresh through the mirror's
 //! Linear target, and the fresh state, never the event's own `to`, is `event.to` for the
 //! control's `when`, read from the run's revision tree against the revision's resolution
-//! record. `then` or `else` ends the run through `end.rs`'s `cancel` or `withdraw` path.
+//! record. `then` or `else` ends the run through `end.rs`'s `cancel` or `withdraw` path. The
+//! command is hidden: the runner passes it a run directory under its home, which is looked up
+//! there alone (REQ-LOCALRUN-180).
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -29,6 +31,8 @@ use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str = "Apply a delivered provider event to a run's control trigger";
 const COMMAND: &str = "useful workflow run event";
+/// What a `RUN` the home does not hold is told (REQ-LOCALRUN-180).
+const ELSEWHERE: &str = "A Cloud run's events are applied by the runner executing it.";
 /// The most bytes the command reads of the event or the claim file.
 const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024;
 const ROOT_WORKFLOW_FILE: &str = "workflow.yaml";
@@ -36,7 +40,7 @@ const ROOT_WORKFLOW_FILE: &str = "workflow.yaml";
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
+    run: super::target::RunArg,
 
     #[arg(
         long,
@@ -151,9 +155,10 @@ struct Applied {
 impl Command {
     pub(super) fn execute(self) -> super::super::super::CommandResult {
         let json = self.output.json;
-        let run_directory = match self.run.resolve() {
+        let run_directory = match self.run.home_only() {
             Ok(run_directory) => run_directory,
             Err(error) => {
+                let error = super::control::home_miss(error, ELSEWHERE);
                 return write_refused(
                     None,
                     &Refusal::new(error.code, error.message),

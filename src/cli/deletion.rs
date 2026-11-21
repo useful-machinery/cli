@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use anyhow::{Context, anyhow};
-use clap::{Args, Subcommand};
+use clap::Args;
 use serde::Serialize;
 use time::OffsetDateTime;
 
@@ -10,89 +10,15 @@ use useful_api::{
     CancelDeletionOutcome, CommonLifecycleFailure, DeletionSchedule, HttpClient,
     HttpTransportPolicy, LifecycleApiError, LifecycleTransition, RequestDeletionOutcome,
     UnreachableCategory, cancel_current_principal_deletion, cancel_organization_deletion,
-    request_current_principal_deletion, request_organization_deletion,
 };
 use useful_human_auth::Cancellation;
 use useful_human_auth::Deployment;
-use useful_human_auth::{self, LocalCredentialState, RequiredOperationWithBinding, SessionBinding};
+use useful_human_auth::{self, RequiredOperationWithBinding, SessionBinding};
 use useful_human_auth::{AuthorizationError, DeviceAuthorization};
 use useful_human_auth::{DeviceFlowError, DeviceFlowOutcome, DeviceFlowPhase};
 
-use super::OrganizationArg;
-
-const ACCOUNT_ABOUT: &str = "Manage your account deletion schedule";
-const ORGANIZATION_ABOUT: &str = "Manage an organization deletion schedule";
-const ACCOUNT_REQUEST_AFTER_HELP: &str = "Behavior:\n  A human request schedules deletion and removes this deployment's local credential.\n  A service request authenticated with --service-api-key-file deletes the service immediately.\n  Human cancellation requires a fresh browser proof from the same linked identity before the deadline.";
-const ORGANIZATION_REQUEST_AFTER_HELP: &str = "Authorization:\n  Only a current active human owner can request organization deletion.\n\nAccount access:\n  A confirmed organization request leaves the local human credential unchanged.";
-const ACCOUNT_CANCEL_AFTER_HELP: &str = "Proof:\n  This command starts a fresh browser sign-in for the same linked identity.\n  The proof is sent only as the cancellation bearer and is not stored as a local session.";
-const ORGANIZATION_CANCEL_AFTER_HELP: &str = "Authorization:\n  Cancellation requires a current active human owner using the same linked identity that requested deletion.\n\nProof:\n  This command starts a fresh browser sign-in. The proof is not stored as a local session.";
-
 #[derive(Debug, Args)]
-pub(super) struct AccountCommand {
-    #[command(subcommand)]
-    command: Option<AccountDeletionCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-enum AccountDeletionCommand {
-    #[command(about = "Cancel account deletion", after_help = ACCOUNT_CANCEL_AFTER_HELP)]
-    Cancel(CancelCommand),
-    #[command(about = "Request account deletion", after_help = ACCOUNT_REQUEST_AFTER_HELP)]
-    Request(AccountRequestCommand),
-}
-
-#[derive(Debug, Args)]
-pub(super) struct OrganizationCommand {
-    #[command(subcommand)]
-    command: Option<OrganizationDeletionCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-enum OrganizationDeletionCommand {
-    #[command(
-        about = "Cancel organization deletion",
-        after_help = ORGANIZATION_CANCEL_AFTER_HELP
-    )]
-    Cancel(OrganizationCancelCommand),
-    #[command(
-        about = "Request organization deletion",
-        after_help = ORGANIZATION_REQUEST_AFTER_HELP
-    )]
-    Request(OrganizationRequestCommand),
-}
-
-#[derive(Debug, Args)]
-struct AccountRequestCommand {
-    #[command(flatten)]
-    request: RequestOptions<super::PrincipalAuthenticationArgs>,
-}
-
-#[derive(Debug, Args)]
-struct OrganizationRequestCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization_ref: OrganizationArg,
-
-    #[command(flatten)]
-    request: RequestOptions<super::NoAuthenticationArgs>,
-}
-
-#[derive(Debug, Args)]
-struct CancelCommand {
-    #[command(flatten)]
-    options: CancellationOptions,
-}
-
-#[derive(Debug, Args)]
-struct OrganizationCancelCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization_ref: OrganizationArg,
-
-    #[command(flatten)]
-    options: CancellationOptions,
-}
-
-#[derive(Debug, Args)]
-struct RequestOptions<A: Args> {
+pub(super) struct RequestOptions<A: Args> {
     #[command(flatten)]
     confirmation: super::ConfirmationArgs,
 
@@ -108,162 +34,17 @@ impl<A: Args> std::ops::Deref for RequestOptions<A> {
     }
 }
 
-type CancellationOptions = super::CommonArgs<super::StreamingJson, super::NoAuthenticationArgs>;
+pub(super) type CancellationOptions =
+    super::CommonArgs<super::StreamingJson, super::NoAuthenticationArgs>;
 
-// Account deletion keeps its own nested command path and credential cleanup while organization
-// deletion retains target-bound authorization, so the two family dispatchers stay explicit.
-impl AccountCommand {
-    pub(super) fn execute(self) -> super::CommandResult {
-        super::execute_deployment_command(
-            self.command,
-            &["account", "deletion"],
-            "configure Useful Machinery account deletion",
-            |command, deployment| match command {
-                AccountDeletionCommand::Request(command) => command
-                    .execute(deployment)
-                    .map_err(super::CommandFailure::from),
-                AccountDeletionCommand::Cancel(command) => {
-                    command.execute(deployment, DeletionTarget::Account)
-                }
-            },
-        )
-    }
-}
-
-impl OrganizationCommand {
-    pub(super) fn execute(self) -> super::CommandResult {
-        super::execute_deployment_command(
-            self.command,
-            &["organization", "deletion"],
-            "configure Useful Machinery organization deletion",
-            |command, deployment| match command {
-                OrganizationDeletionCommand::Request(command) => command
-                    .execute(deployment)
-                    .map_err(super::CommandFailure::from),
-                OrganizationDeletionCommand::Cancel(command) => command.options.execute(
-                    deployment,
-                    DeletionTarget::Organization(command.organization_ref.into_string()),
-                ),
-            },
-        )
-    }
-}
-
-impl AccountRequestCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let idempotency_key = useful_support::generate_idempotency_key()
-            .context("generate account deletion request identity")?;
-        let client = HttpClient::new(self.request.http.transport_policy())
-            .map_err(|error| anyhow!(error))
-            .context("prepare account deletion networking")?;
-        let (outcome, binding) = request_deletion_with_credential(
-            &client,
-            deployment,
-            &self.request.authentication,
-            format!(
-                "request account deletion through {}",
-                deployment.fingerprint().api_url()
-            ),
-            |client, api_url, access_token| {
-                request_current_principal_deletion(client, api_url, access_token, &idempotency_key)
-            },
-        )?;
-        let (credential, cleanup_error) = if matches!(outcome, RequestDeletionOutcome::Scheduled(_))
-        {
-            match binding {
-                Some(binding) => {
-                    match useful_human_auth::remove_bound_credential(deployment, &binding) {
-                        Ok(LocalCredentialState::Removed) => {
-                            (Some(LocalCredentialDisposition::Removed), None)
-                        }
-                        Ok(LocalCredentialState::Retained) => {
-                            (Some(LocalCredentialDisposition::Changed), None)
-                        }
-                        Err(error) => (
-                            Some(LocalCredentialDisposition::RemovalUnconfirmed),
-                            Some(anyhow!(error).context(
-                                "remove the local credential after scheduling account deletion",
-                            )),
-                        ),
-                    }
-                }
-                None => (
-                    Some(LocalCredentialDisposition::RemovalUnconfirmed),
-                    Some(anyhow!(
-                        "the requesting human session binding is unavailable"
-                    )),
-                ),
-            }
-        } else {
-            (None, None)
-        };
-        let exit_code = write_request_outcome(
-            &DeletionTarget::Account,
-            deployment.fingerprint().api_url(),
-            &outcome,
-            credential,
-            self.request.authentication.kind(),
-            self.request.json,
-        )?;
-        if let Some(error) = cleanup_error {
-            let mut stderr = io::stderr().lock();
-            writeln!(stderr, "error: {error:#}")?;
-            writeln!(
-                stderr,
-                "\nRemove the deployment's local credential before continuing:\n  useful auth logout"
-            )?;
-            return Ok(ExitCode::GeneralFailure);
-        }
-        Ok(exit_code)
-    }
-}
-
-impl OrganizationRequestCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let organization_ref = self.organization_ref.into_string();
-        let idempotency_key = useful_support::generate_idempotency_key()
-            .context("generate organization deletion request identity")?;
-        let client = HttpClient::new(self.request.http.transport_policy())
-            .map_err(|error| anyhow!(error))
-            .context("prepare organization deletion networking")?;
-        let (outcome, _binding) = request_deletion_with_credential(
-            &client,
-            deployment,
-            &super::PrincipalAuthenticationArgs::default(),
-            format!(
-                "request organization deletion through {}",
-                deployment.fingerprint().api_url()
-            ),
-            |client, api_url, access_token| {
-                request_organization_deletion(
-                    client,
-                    api_url,
-                    access_token,
-                    &organization_ref,
-                    &idempotency_key,
-                )
-            },
-        )?;
-        write_request_outcome(
-            &DeletionTarget::Organization(organization_ref),
-            deployment.fingerprint().api_url(),
-            &outcome,
-            matches!(outcome, RequestDeletionOutcome::Scheduled(_))
-                .then_some(LocalCredentialDisposition::Unchanged),
-            super::PrincipalAuthenticationKind::HumanSession,
-            self.request.json,
-        )
-    }
-}
-
-impl CancelCommand {
-    fn execute(self, deployment: &Deployment, target: DeletionTarget) -> super::CommandResult {
-        self.options.execute(deployment, target)
-    }
-}
-
+// Account and organization deletion parse in `account` (`delete`, `restore`) and `org`
+// (`delete`, `restore`); both call the lifecycle below.
 impl CancellationOptions {
-    fn execute(self, deployment: &Deployment, target: DeletionTarget) -> super::CommandResult {
+    pub(super) fn execute(
+        self,
+        deployment: &Deployment,
+        target: DeletionTarget,
+    ) -> super::CommandResult {
         let deployment = deployment.clone();
         let context = target.signal_context();
         super::execute_cancellable_with_signals(context, move |cancellation| {
@@ -278,7 +59,7 @@ impl CancellationOptions {
     }
 }
 
-fn request_deletion_with_credential(
+pub(super) fn request_deletion_with_credential(
     client: &HttpClient,
     deployment: &Deployment,
     authentication: &super::PrincipalAuthenticationArgs,
@@ -360,7 +141,7 @@ fn lifecycle_credential_rejected(
 }
 
 #[derive(Clone, Debug)]
-enum DeletionTarget {
+pub(super) enum DeletionTarget {
     Account,
     Organization(String),
 }
@@ -396,18 +177,18 @@ impl DeletionTarget {
 
     fn cancellation_command(&self) -> String {
         match self {
-            Self::Account => "useful account deletion cancel".to_owned(),
+            Self::Account => "useful account restore".to_owned(),
             Self::Organization(organization_ref) => {
-                format!("useful organization deletion cancel {organization_ref}")
+                format!("useful org restore {organization_ref}")
             }
         }
     }
 
     fn status_command(&self) -> String {
         match self {
-            Self::Account => "useful auth status".to_owned(),
+            Self::Account => "useful account show".to_owned(),
             Self::Organization(organization_ref) => {
-                format!("useful organization show {organization_ref}")
+                format!("useful org show {organization_ref}")
             }
         }
     }
@@ -588,7 +369,7 @@ fn cancellation_flow_context(deployment: &Deployment, phase: DeviceFlowPhase) ->
 }
 
 #[derive(Clone, Copy)]
-enum LocalCredentialDisposition {
+pub(super) enum LocalCredentialDisposition {
     Removed,
     Changed,
     Unchanged,
@@ -606,7 +387,7 @@ impl LocalCredentialDisposition {
     }
 }
 
-fn write_request_outcome(
+pub(super) fn write_request_outcome(
     target: &DeletionTarget,
     deployment: &str,
     outcome: &RequestDeletionOutcome,
@@ -1032,7 +813,7 @@ impl<'a> CancellationOutput<'a> {
             if matches!(self.target, DeletionTarget::Account) {
                 writeln!(
                     stdout,
-                    "\nSign in to establish a renewable local session:\n  useful auth login"
+                    "\nSign in to establish a renewable local session:\n  useful account login"
                 )?;
             }
         } else {
@@ -1078,7 +859,7 @@ fn common_lifecycle_failure(
             FailureOperation::Request => unauthenticated_failure(
                 target,
                 "requires sign-in",
-                "Sign in first:\n  useful auth login",
+                "Sign in first:\n  useful account login",
             ),
             FailureOperation::Cancellation => unauthenticated_failure(
                 target,
@@ -1089,7 +870,7 @@ fn common_lifecycle_failure(
         CommonLifecycleFailure::Forbidden => FailurePresentation::new(
             "forbidden",
             match (operation, target) {
-                (FailureOperation::Request, DeletionTarget::Account) => "error: account deletion not permitted\n\nCheck why the deployment refuses the account:\n  useful auth status".to_owned(),
+                (FailureOperation::Request, DeletionTarget::Account) => "error: account deletion not permitted\n\nCheck why the deployment refuses the account:\n  useful account show".to_owned(),
                 (FailureOperation::Request, DeletionTarget::Organization(_)) => "error: organization deletion not permitted\n\nUse a current active human owner account.".to_owned(),
                 (FailureOperation::Cancellation, _) => format!(
                     "error: {} deletion cancellation not permitted\n\nUse the required linked identity and active owner account.",
@@ -1256,12 +1037,4 @@ fn write_json(value: &impl Serialize) -> anyhow::Result<()> {
 
 fn write_json_line(value: &impl Serialize) -> anyhow::Result<()> {
     super::write_json_line(value).context("write JSON deletion event")
-}
-
-pub(super) const fn account_about() -> &'static str {
-    ACCOUNT_ABOUT
-}
-
-pub(super) const fn organization_about() -> &'static str {
-    ORGANIZATION_ABOUT
 }

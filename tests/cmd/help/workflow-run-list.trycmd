@@ -1,0 +1,71 @@
+```console
+$ useful workflow run list --help
+List workflow runs under the useful home and in Cloud
+
+Usage: useful workflow run list [OPTIONS]
+
+Options:
+      --on <PLACE>
+          List only the runs of one place (default: every place)
+
+          Possible values:
+          - local:    The useful home
+          - personal: Cloud, a run with an owner, placed on its owner's runners
+          - project:  Cloud, a run with no owner, placed on the project's pools
+
+      --all
+          List every run, the exited ones included
+
+      --waiting
+          List only runs that wait
+
+      --drift
+          List only live runs behind their definition's current revision
+
+      --owner <OWNER>
+          List only the runs of OWNER; `me` is the invoking user
+
+      --definition <ID>
+          List only the runs of the definition ID
+
+      --state-group <STATE_GROUP>
+          Filter by run state group
+          
+          [possible values: active, terminal]
+
+      --created-after <RFC3339>
+          List runs created strictly after this time
+
+      --integration-context <KEY=VALUE>
+          Match an exact integration context entry (repeatable)
+
+      --limit <LIMIT>
+          Maximum runs to return (1-100)
+
+      --cursor <CURSOR>
+          Opaque continuation cursor
+
+      --org <ORG>
+          Organization ID or exact slug to act in (default: USEFUL_ORG, then the project of this checkout, then your only organization)
+
+      --project <PROJECT>
+          Project ID or exact name to act in (default: USEFUL_PROJECT, then the project of this checkout)
+
+      --json
+          Print the workflow result as JSON
+
+      --api-key-file <PATH|->
+          Authenticate with a service API key from a private file, or - for standard input
+
+      --allow-insecure-http
+          Allow this command's Useful Machinery requests over insecure HTTP connections
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+The runs under the useful home are listed first, and then one page of the Cloud runs of the organization in effect, those of the project in effect when one is. --owner, --definition and --drift select among the runs under the home, so they list those alone. --limit and --cursor page the Cloud runs: the runs under the home are listed with the first page alone.
+
+Pagination:
+  This command returns one page. Pass --cursor <CURSOR> to continue.
+
+```

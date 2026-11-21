@@ -252,13 +252,15 @@ pub(super) fn workflow_event(
                                 json!(match decision {
                                     RecoveryDecisionKind::Recheck => "recheck",
                                     RecoveryDecisionKind::GaveUp => "gave_up",
+                                    RecoveryDecisionKind::Infrastructure => "infrastructure",
                                 }),
                             );
                         }
                         event.insert("recoveryProgress".to_owned(), Value::Object(progress));
                     }
                     ObservedStepTransition::OutputsCommitted { .. } => {}
-                    ObservedStepTransition::Failed { detail } => {
+                    // The frame carries no failure class; Cloud reads none.
+                    ObservedStepTransition::Failed { detail, .. } => {
                         event.insert("detail".to_owned(), json!(detail));
                     }
                     ObservedStepTransition::Blocked { detail } => {

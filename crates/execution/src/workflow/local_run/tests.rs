@@ -1531,6 +1531,14 @@ impl crate::workflow::wait::ConditionSource for ScriptedConditions {
         self.observed.set(self.observed.get() + 1);
         self.answer.clone()
     }
+
+    fn observe_host(
+        &self,
+        _run_directory: &Path,
+        wait: &WaitRecord,
+    ) -> Result<Vec<crate::workflow::wait::ExternalEvent>, LocalRunDirectoryError> {
+        panic!("the host condition was asked for {}", wait.id())
+    }
 }
 
 const QUEUED_PULL_REQUEST: &str = "https://github.com/useful-machinery/platform/pull/3958";
@@ -1612,6 +1620,58 @@ async fn inspect_wait_asks_the_condition_source_for_an_external_wait_alone() {
         WaitInspection::Held { wait }
     );
     assert_eq!(conditions.observed.get(), 0);
+}
+
+// REQ-CONTINUE-74, INV-ENGINE-48: a `host` wait's controls are read before its condition, by
+// the repair rule on `um`: a `control.retry` or `control.withdraw` naming the wait resolves
+// it without the host condition being asked, and with no control a source that observes no
+// host event holds it.
+#[tokio::test]
+async fn inspect_wait_reads_a_host_waits_controls_before_its_condition() {
+    let fixture = edge_tree_fixture();
+    let host_wait = |stop| WaitRecord {
+        kind: crate::workflow::wait::WaitKind::Host,
+        rule: crate::workflow::wait::derive_rule(crate::workflow::wait::WaitKind::Host, false)
+            .unwrap(),
+        ..stop
+    };
+    for event in [
+        crate::workflow::wait::CONTROL_RETRY,
+        crate::workflow::wait::CONTROL_WITHDRAW,
+    ] {
+        let (run_path, wait, _writable) =
+            waiting_tree_run_on(&fixture, &event.replace('.', "-"), host_wait).await;
+        let control = crate::workflow::wait::ControlEvent {
+            source: "um".to_owned(),
+            event: event.to_owned(),
+            run: run_record_document(&run_path)["id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            by: "saeed".to_owned(),
+            at: "2026-11-21T09:00:00Z".to_owned(),
+            wait: Some(wait.id()),
+            payload: None,
+        };
+        crate::workflow::wait::append_control(&run_path, &control).unwrap();
+        assert_eq!(
+            inspect_wait(&run_path, &ScriptedConditions::answering(Ok(Vec::new())))
+                .unwrap()
+                .inspection,
+            WaitInspection::Satisfied {
+                wait,
+                by: ResolvedBy::Control(control),
+            }
+        );
+    }
+
+    let (run_path, wait, _writable) = waiting_tree_run_on(&fixture, "held", host_wait).await;
+    assert_eq!(
+        inspect_wait(&run_path, &crate::workflow::wait::NoConditions)
+            .unwrap()
+            .inspection,
+        WaitInspection::Held { wait }
+    );
 }
 
 fn run_record_document(run_path: &Path) -> Value {
@@ -1905,8 +1965,8 @@ fn spending_withdrawals_takes_settled_at_again_only_for_a_later_withdrawal() {
     assert!(!retried.withdrawal_pending().unwrap());
 }
 
-/// A `control.withdraw` naming no wait recorded at `at`, as `useful workflow run withdraw` of a run
-/// that does not wait appends it.
+/// A `control.withdraw` naming no wait recorded at `at`, as `useful workflow run cancel
+/// --control withdraw` of a run that does not wait appends it.
 fn withdrawal_at(at: &str) -> crate::workflow::wait::ControlEvent {
     crate::workflow::wait::ControlEvent {
         source: "um".to_owned(),
@@ -2441,7 +2501,9 @@ fn a_successors_imported_wait_copy_resolves_by_the_control_recorded_under_its_ru
     let (predecessor_path, predecessor_record, _predecessor_writable) =
         answered_predecessor(&fixture, "predecessor");
     let answers = json!({"1": "keep"});
-    let predecessor_controls = attempt_controls(&predecessor_path, 2).unwrap().controls;
+    let predecessor_controls = attempt_controls(&predecessor_path, 2, None)
+        .unwrap()
+        .controls;
     assert_eq!(
         predecessor_controls
             .answers
@@ -2465,7 +2527,7 @@ fn a_successors_imported_wait_copy_resolves_by_the_control_recorded_under_its_ru
     drop(pending);
 
     // The copied control names the predecessor and resolves the imported attempt's copy.
-    let controls = attempt_controls(&successor_path, 2).unwrap().controls;
+    let controls = attempt_controls(&successor_path, 2, None).unwrap().controls;
     assert_eq!(
         controls
             .answers
@@ -2491,6 +2553,126 @@ fn a_successors_imported_wait_copy_resolves_by_the_control_recorded_under_its_ru
         })
     );
     assert_eq!(relocated[0].definition, state.attempts[0].definition);
+}
+
+/// A `host` wait `second` entered at its second element, continuing at `second`.
+fn host_wait_at_the_second_element() -> WaitRecord {
+    serde_json::from_value(json!({
+        "kind": "host",
+        "since": "2026-11-06T16:40:00Z",
+        "step": ["second", {"item": 2}],
+        "then": "second",
+        "rule": {
+            "source": "host",
+            "event": ["host.healthy"],
+            "where": "event.run == run.id and event.wait == wait.id"
+        },
+        "payload": {"outcome": "host_failed"}
+    }))
+    .unwrap()
+}
+
+// REQ-WFEXEC-63, REQ-CONTINUE-93: a `host` wait copy that no control resolved, followed by an
+// attempt with reason `host`, was resolved by the host condition: the attempt after it starts
+// with the `wait.<field>` values the attempt that entered the wait had at the step, here an
+// answer's, and at the element it waited at. That holds for a recorded next attempt and for
+// the reason a caller supplies for one not yet begun; a `--from` (`resume`) or a `restart`
+// keeps nothing.
+#[test]
+fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_resolved() {
+    let fixture = tree_fixture();
+    let host_waiting = |name: &str| {
+        let answer = answer_wait_record();
+        let (run_path, record, writable) = predecessor_waiting_on(&fixture, name, &answer);
+        let control = crate::workflow::wait::ControlEvent {
+            source: "um".to_owned(),
+            event: crate::workflow::wait::CONTROL_ANSWER.to_owned(),
+            run: record.id.clone(),
+            by: "saeed".to_owned(),
+            at: "2026-11-06T16:31:00Z".to_owned(),
+            wait: Some(answer.id()),
+            payload: json!({
+                "question": "1",
+                "text": "keep",
+                "complete": true,
+                "answers": {"1": "keep"},
+                "summary": "ship it"
+            })
+            .as_object()
+            .cloned(),
+        };
+        crate::workflow::wait::append_control(&run_path, &control).unwrap();
+        let owner = acquired(&run_path)
+            .begin(
+                &fixture.admitted,
+                vec!["second".to_owned()],
+                ContinuationDefinitionMode::Inherited,
+                crate::workflow::publication::ContinuationReasonV1::Resume,
+                None,
+            )
+            .unwrap();
+        settle_waiting_before_second_on(&owner, &host_wait_at_the_second_element());
+        drop(owner);
+        (run_path, writable)
+    };
+    let entering = BTreeMap::from([
+        ("question".to_owned(), "1".to_owned()),
+        ("summary".to_owned(), "ship it".to_owned()),
+        ("text".to_owned(), "keep".to_owned()),
+    ]);
+    let continued = |run_path: &Path, reason| {
+        let controls = attempt_controls(run_path, 3, reason).unwrap().controls;
+        (controls.wait, controls.resume_item)
+    };
+    let kept = (
+        Some(("second".to_owned(), entering)),
+        Some(("second".to_owned(), 2)),
+    );
+    let (run_path, _writable) = host_waiting("host-supplied");
+    assert_eq!(
+        continued(
+            &run_path,
+            Some(crate::workflow::publication::ContinuationReasonV1::Host)
+        ),
+        kept
+    );
+    for reason in [
+        crate::workflow::publication::ContinuationReasonV1::Resume,
+        crate::workflow::publication::ContinuationReasonV1::Restart,
+    ] {
+        assert_eq!(
+            continued(&run_path, Some(reason)),
+            (None, None),
+            "{reason:?}"
+        );
+    }
+
+    // Once attempt 3 is recorded, its own reason decides.
+    for (name, reason, expected) in [
+        (
+            "host-recorded",
+            crate::workflow::publication::ContinuationReasonV1::Host,
+            kept.clone(),
+        ),
+        (
+            "resume-recorded",
+            crate::workflow::publication::ContinuationReasonV1::Resume,
+            (None, None),
+        ),
+    ] {
+        let (run_path, _writable) = host_waiting(name);
+        let owner = acquired(&run_path)
+            .begin(
+                &fixture.admitted,
+                vec!["second".to_owned()],
+                ContinuationDefinitionMode::Inherited,
+                reason,
+                None,
+            )
+            .unwrap();
+        drop(owner);
+        assert_eq!(continued(&run_path, None), expected, "{reason:?}");
+    }
 }
 
 // REQ-WFEXEC-63, REQ-LOCALRUN-195, REQ-LOCALRUN-197: a wait carried by `upgrade` is resolved
@@ -2535,7 +2717,7 @@ fn a_chains_successor_carries_the_answer_recorded_on_the_run_that_carried_the_wa
     };
     crate::workflow::wait::append_control(&carrier_path, &answer).unwrap();
     let carried = |run_path: &Path| {
-        let controls = attempt_controls(run_path, 2).unwrap().controls;
+        let controls = attempt_controls(run_path, 2, None).unwrap().controls;
         (
             controls
                 .answers
@@ -2709,7 +2891,7 @@ fn a_successor_begun_by_resume_records_reason_restart() {
     .unwrap();
     pending.supersede(&record.id).unwrap();
 
-    // A restart interrupted before its first own attempt is finished by `resume --from`.
+    // A restart interrupted before its first own attempt is finished by `retry --from`.
     let owned = acquired(&successor_path)
         .begin(
             &revised.admitted,
@@ -3043,7 +3225,7 @@ fn an_upgraded_successor_carries_the_wait_position_and_edges() {
         }
     );
     assert_eq!(
-        attempt_controls(&successor_path, 2)
+        attempt_controls(&successor_path, 2, None)
             .unwrap()
             .controls
             .wait
@@ -3528,6 +3710,60 @@ fn a_run_id_locates_its_run_under_the_home_and_the_home_lists_every_run() {
     );
     assert_eq!(listing.unreadable.len(), 1, "{:?}", listing.unreadable);
     assert_eq!(listing.unreadable[0].0.file_name(), unreadable.file_name());
+}
+
+// REQ-LOCALRUN-180, REQ-LOCALRUN-188, REQ-WFDEF-17
+#[test]
+fn the_homes_own_runs_are_listed_beside_a_definitions_and_located_by_id() {
+    let fixture = tree_fixture();
+    let home_root = fixture.run_path("home");
+    let home = WorkflowHome::from_lookup(|name| {
+        (name == "USEFUL_HOME").then(|| home_root.clone().into_os_string())
+    })
+    .unwrap();
+    let mut created = Vec::new();
+    // A definition's run, a `--path` run named by its ID and one a caller named with
+    // `--run-dir` under the home's `runs/`.
+    for (definition, name) in [
+        (Some(HOME_DEFINITION), None),
+        (None, None),
+        (None, Some("named-by-hand")),
+    ] {
+        let record = tree_record(&fixture, definition.map(|id| (id.to_owned(), 1)));
+        let runs = match definition {
+            Some(id) => home.runs_directory(id),
+            None => home.home_runs_directory(),
+        };
+        fs::create_dir_all(&runs).unwrap();
+        let directory = runs.join(name.unwrap_or(&record.id));
+        let writable = WritableTreeCopyOnDrop(directory.clone());
+        drop(
+            InitialLocalRun::create_with_record(&directory, &fixture.admitted, Some(&record))
+                .unwrap(),
+        );
+        created.push((directory.canonicalize().unwrap(), record, writable));
+    }
+    // A directory a run with no record was created in is no run, and the listing passes it by.
+    fs::create_dir(home.home_runs_directory().join("first-workflow-001")).unwrap();
+
+    for (directory, record, _) in &created {
+        assert_eq!(locate_run(&home, &record.id).as_ref(), Ok(directory));
+    }
+    let listing = list_runs(&home).unwrap();
+    let mut expected = created
+        .iter()
+        .map(|(directory, record, _)| (directory.clone(), record.clone()))
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| left.1.id.cmp(&right.1.id));
+    assert_eq!(
+        listing
+            .runs
+            .into_iter()
+            .map(|run| (run.directory, run.record))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(listing.unreadable.is_empty(), "{:?}", listing.unreadable);
 }
 
 // REQ-LOCALRUN-177
@@ -5292,6 +5528,7 @@ fn a_nodes_start_is_recorded_once_when_it_becomes_active() {
                         condition_passed: false,
                         failure_kind: None,
                         failed_child: None,
+                        failure_class: None,
                         input_sources: Vec::new(),
                     },
                 )
@@ -5557,6 +5794,7 @@ async fn cloud_continuation_recovers_unexported_output_across_three_attempts() {
             withdrawn: false,
             exit_outcome: None,
             failed_children: BTreeMap::new(),
+            failure_classes: BTreeMap::new(),
             input_sources: BTreeMap::new(),
         };
     retain_cloud_completed_steps(
@@ -5628,6 +5866,7 @@ async fn cloud_continuation_recovers_unexported_output_across_three_attempts() {
             withdrawn: false,
             exit_outcome: None,
             failed_children: BTreeMap::new(),
+            failure_classes: BTreeMap::new(),
             input_sources: BTreeMap::new(),
         };
     retain_cloud_completed_steps(

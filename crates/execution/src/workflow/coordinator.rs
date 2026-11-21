@@ -176,6 +176,7 @@ where
             digest.write_tag(match decision.kind {
                 RecoveryDecisionKind::Recheck => 0,
                 RecoveryDecisionKind::GaveUp => 1,
+                RecoveryDecisionKind::Infrastructure => 2,
             });
             digest.write_bytes(decision.summary.as_bytes());
             digest.write_bytes(decision.reason.as_bytes());

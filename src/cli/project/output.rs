@@ -17,21 +17,49 @@ pub(super) fn write_project(
     json: bool,
 ) -> anyhow::Result<ExitCode> {
     match result {
-        Ok(project) => {
-            if json {
-                write_json(&ProjectResult {
-                    schema_version: 1,
-                    deployment,
-                    outcome,
-                    project: &project,
-                })?;
-            } else {
-                write_project_human(deployment, heading, &project)?;
-            }
-            Ok(ExitCode::Success)
-        }
+        Ok(project) => write_success(deployment, outcome, heading, None, &project, json),
         Err(failure) => write_failure(deployment, failure, authentication, json),
     }
+}
+
+/// The result of `useful project update`: outcome `updated` with `applied`, what it sent and
+/// succeeded in order, and the project as its last request returned it (REQ-PROJECT-102).
+pub(super) fn write_updated(
+    deployment: &str,
+    applied: &[&'static str],
+    project: &Project,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_success(
+        deployment,
+        "updated",
+        "✓ Project updated.",
+        Some(applied),
+        project,
+        json,
+    )
+}
+
+fn write_success(
+    deployment: &str,
+    outcome: &'static str,
+    heading: &'static str,
+    applied: Option<&[&'static str]>,
+    project: &Project,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    if json {
+        write_json(&ProjectResult {
+            schema_version: 1,
+            deployment,
+            outcome,
+            applied,
+            project,
+        })?;
+    } else {
+        write_project_human(deployment, heading, project)?;
+    }
+    Ok(ExitCode::Success)
 }
 
 pub(super) fn write_project_list(
@@ -77,66 +105,6 @@ pub(super) fn write_project_list(
                     page.next_cursor.as_deref(),
                     deployment,
                 )?;
-            }
-            Ok(ExitCode::Success)
-        }
-        Err(failure) => write_failure(deployment, failure, authentication, json),
-    }
-}
-
-pub(super) fn write_repository(
-    deployment: &str,
-    result: Result<ProjectRepository, ProjectFailure>,
-    authentication: super::super::PrincipalAuthenticationKind,
-    json: bool,
-) -> anyhow::Result<ExitCode> {
-    match result {
-        Ok(repository) => {
-            if json {
-                write_json(&RepositoryResult {
-                    schema_version: 1,
-                    deployment,
-                    outcome: "found",
-                    repository: &repository,
-                })?;
-            } else {
-                let mut stdout = io::stdout().lock();
-                writeln!(stdout, "✓ Project repository found.\n")?;
-                writeln!(
-                    stdout,
-                    "repository connection: {}",
-                    repository.connection_id
-                )?;
-                writeln!(
-                    stdout,
-                    "provider: {}",
-                    enum_text(&repository.provider_kind)?
-                )?;
-                if let Some(installation) = &repository.installation_binding_id {
-                    writeln!(stdout, "installation: {installation}")?;
-                }
-                if let Some(connection) = &repository.gitlab_connection_id {
-                    writeln!(stdout, "GitLab connection: {connection}")?;
-                }
-                if let Some(instance_url) = &repository.instance_url {
-                    writeln!(stdout, "GitLab instance: {instance_url}")?;
-                }
-                writeln!(stdout, "repository: {}", repository.full_name)?;
-                writeln!(
-                    stdout,
-                    "provider repository: {}",
-                    repository.provider_repository_id
-                )?;
-                writeln!(stdout, "default branch: {}", repository.default_branch)?;
-                if admission_closed(&repository) {
-                    writeln!(stdout, "admission: GitLab run admission is closed")?;
-                }
-                writeln!(
-                    stdout,
-                    "availability: {}",
-                    enum_text(&repository.availability)?
-                )?;
-                writeln!(stdout, "deployment: {deployment}")?;
             }
             Ok(ExitCode::Success)
         }
@@ -194,12 +162,20 @@ fn write_project_human(deployment: &str, heading: &str, project: &Project) -> an
                 "repository connection: {}",
                 repository.connection_id
             )?;
+            if let Some(installation) = &repository.installation_binding_id {
+                writeln!(stdout, "installation: {installation}")?;
+            }
             if let Some(connection) = &repository.gitlab_connection_id {
                 writeln!(stdout, "GitLab connection: {connection}")?;
             }
             if let Some(instance_url) = &repository.instance_url {
                 writeln!(stdout, "GitLab instance: {instance_url}")?;
             }
+            writeln!(
+                stdout,
+                "provider repository: {}",
+                repository.provider_repository_id
+            )?;
             writeln!(stdout, "default branch: {}", repository.default_branch)?;
             if admission_closed(repository) {
                 writeln!(stdout, "admission: GitLab run admission is closed")?;
@@ -258,19 +234,81 @@ fn enum_text(value: &impl Serialize) -> anyhow::Result<String> {
     }
 }
 
-fn write_failure(
+pub(super) fn write_failure(
     deployment: &str,
     failure: ProjectFailure,
     authentication: super::super::PrincipalAuthenticationKind,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
-    let (outcome, category, human, class) = match failure {
+    let failure = Failure::of(deployment, &failure, authentication);
+    super::super::write_api_failure(
+        deployment,
+        failure.outcome,
+        failure.category,
+        failure.retry_after,
+        &failure.human,
+        failure.class,
+        json,
+    )
+    .context("write project failure")
+}
+
+/// A request that failed after an earlier request of the same command succeeded, whose change
+/// stays (REQ-PROJECT-76): the command exits with the failure's code. Under `--json` the result
+/// is the failure's document with `applied`, what was sent and succeeded in order, and
+/// `project`, the project as the last successful request returned it; in human output the
+/// failure's diagnostic is followed by `kept`, what stays and how to finish.
+pub(super) fn write_partial_failure(
+    deployment: &str,
+    failure: ProjectFailure,
+    applied: &[&'static str],
+    project: &Project,
+    kept: &str,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let failure = Failure::of(deployment, &failure, authentication);
+    if json {
+        write_json(&PartialFailure {
+            failure: super::super::ApiFailureResult::with_retry_after(
+                deployment,
+                failure.outcome,
+                failure.category,
+                failure.retry_after,
+            ),
+            applied,
+            project,
+        })?;
+    } else {
+        writeln!(io::stderr().lock(), "{}\n\n{kept}", failure.human)
+            .context("write project failure")?;
+    }
+    Ok(failure.class.exit_code())
+}
+
+/// A project failure as its closed outcome, its category and retry delay, its human
+/// diagnostic and its outcome class.
+struct Failure {
+    outcome: &'static str,
+    category: Option<&'static str>,
+    retry_after: Option<u64>,
+    human: String,
+    class: OutcomeClass,
+}
+
+impl Failure {
+    fn of(
+        deployment: &str,
+        failure: &ProjectFailure,
+        authentication: super::super::PrincipalAuthenticationKind,
+    ) -> Self {
+        let (outcome, category, human, class) = match *failure {
         ProjectFailure::Unauthenticated => (
             "unauthenticated",
             None,
             authentication
                 .rejected_error(
-                    "error: Useful Machinery access requires sign-in\n\nSign in first:\n  useful auth login",
+                    "error: Useful Machinery access requires sign-in\n\nSign in first:\n  useful account login",
                 )
                 .to_owned(),
             OutcomeClass::Unauthenticated,
@@ -296,7 +334,7 @@ fn write_failure(
         ProjectFailure::RepositoryNotBound => (
             "repository_not_bound",
             None,
-            "error: project has no repository binding\n\nBind a repository first:\n  useful project repository set <ORGANIZATION> <PROJECT> --installation-id <INSTALLATION> --repository-id <REPOSITORY>".to_owned(),
+            "error: project has no repository binding\n\nBind a repository first:\n  useful project update PROJECT --repository REPOSITORY".to_owned(),
             OutcomeClass::GeneralFailure,
         ),
         ProjectFailure::NameUnavailable => (
@@ -348,7 +386,7 @@ fn write_failure(
         ProjectFailure::ProjectArchived => (
             "project_archived",
             None,
-            "error: project is archived\n\nAs an organization owner, unarchive the project first:\n  useful project unarchive <ORGANIZATION> <PROJECT>".to_owned(),
+            "error: project is archived\n\nAs an organization owner, unarchive the project first:\n  useful project unarchive PROJECT".to_owned(),
             OutcomeClass::GeneralFailure,
         ),
         ProjectFailure::Conflict => (
@@ -373,21 +411,19 @@ fn write_failure(
             OutcomeClass::Protocol,
         ),
     };
-    let retry_after = match failure {
-        ProjectFailure::RateLimited { retry_after }
-        | ProjectFailure::ProviderUnavailable { retry_after } => Some(retry_after),
-        _ => None,
-    };
-    super::super::write_api_failure(
-        deployment,
-        outcome,
-        category,
-        retry_after,
-        &human,
-        class,
-        json,
-    )
-    .context("write project failure")
+        let retry_after = match *failure {
+            ProjectFailure::RateLimited { retry_after }
+            | ProjectFailure::ProviderUnavailable { retry_after } => Some(retry_after),
+            _ => None,
+        };
+        Self {
+            outcome,
+            category,
+            retry_after,
+            human,
+            class,
+        }
+    }
 }
 
 fn write_json(value: &impl Serialize) -> anyhow::Result<()> {
@@ -400,14 +436,15 @@ struct ProjectResult<'a> {
     schema_version: u8,
     deployment: &'a str,
     outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    applied: Option<&'a [&'static str]>,
     project: &'a Project,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RepositoryResult<'a> {
-    schema_version: u8,
-    deployment: &'a str,
-    outcome: &'static str,
-    repository: &'a ProjectRepository,
+struct PartialFailure<'a> {
+    #[serde(flatten)]
+    failure: super::super::ApiFailureResult<'a>,
+    applied: &'a [&'static str],
+    project: &'a Project,
 }

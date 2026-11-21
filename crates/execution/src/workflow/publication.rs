@@ -32,7 +32,8 @@ use super::artifact_set;
 use super::diagnostic::{CapturedDiagnosticStream, StepDiagnostic};
 use super::document::{FailurePolicy, FinalizationTrigger};
 use super::evidence::{
-    FailedChild, FailureDetail, InputSource, NodeDetail, PrimaryIssue, deserialize_non_null_option,
+    FailedChild, FailureClass, FailureDetail, InputSource, NodeDetail, PrimaryIssue,
+    deserialize_non_null_option,
 };
 use super::execution_root::open_directory;
 use super::export_presentation::{ContentReason, Field, resolve_text};
@@ -62,7 +63,6 @@ use super::workspace_snapshot::WorkspaceSnapshotV1;
 const COMMAND: &str = "useful workflow run create";
 const RETRY_COMMAND: &str = "useful workflow run retry";
 const RESUME_COMMAND: &str = "useful workflow run resume";
-const RESTART_COMMAND: &str = "useful workflow run restart";
 const UPGRADE_COMMAND: &str = "useful workflow run upgrade";
 const RESULT_FILE: &str = "result.json";
 const EXPORT_DIRECTORY: &str = "exports";
@@ -110,6 +110,9 @@ pub struct WorkflowRunStep {
     /// The failed child a `succeeded` `workflow` step recorded (REQ-WFEXEC-77); `None` for
     /// any other step.
     pub failed_child: Option<FailedChild>,
+    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79); `None` for any other
+    /// step and for every finalizer.
+    pub failure_class: Option<FailureClass>,
     /// The source each `firstOf` of the step's body took; empty for a step that did not
     /// start in the attempt and a step with no `firstOf` (REQ-EVIDENCE-28).
     pub input_sources: Vec<InputSource>,
@@ -148,14 +151,16 @@ pub struct ContinuationRecordV1 {
 }
 
 /// A continuation's `reason` (REQ-CONTINUE-77): `retry` for a `repair` wait resolved by
-/// `control.retry`, `edge` for an attempt a backward or limited edge started, `restart` for
-/// the first own attempt of a successor run (REQ-CONTINUE-79), `resume` for every other
-/// local continuation.
+/// `control.retry`, `host` for a `host` wait the host condition resolved (REQ-WFEXEC-81),
+/// `edge` for an attempt a backward or limited edge started, `restart` for the first own
+/// attempt of a successor run (REQ-CONTINUE-79), `resume` for every other local
+/// continuation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContinuationReasonV1 {
     Resume,
     Retry,
+    Host,
     Edge,
     Restart,
 }
@@ -734,16 +739,17 @@ impl WorkflowRunTerminalResultV1 {
         self.command = RESUME_COMMAND;
     }
 
-    /// Names `useful workflow run restart`, whose successor's first own attempt this is
-    /// (REQ-LOCALRUN-194).
-    pub fn mark_restart(&mut self) {
-        self.command = RESTART_COMMAND;
-    }
-
-    /// Names `useful workflow run upgrade`, which starts no attempt of its own; an attempt of an
-    /// upgraded successor is a `resume` or `retry` (REQ-LOCALRUN-197).
+    /// Names `useful workflow run upgrade`: with `--from` the successor's first own attempt is
+    /// the command's (REQ-LOCALRUN-194); without it the command starts no attempt of its own,
+    /// and an attempt of the upgraded successor is a `resume` or `retry` (REQ-LOCALRUN-197).
     pub fn mark_upgrade(&mut self) {
         self.command = UPGRADE_COMMAND;
+    }
+
+    /// Names the control command that continued the run (REQ-LOCALRUN-182,
+    /// REQ-LOCALRUN-183).
+    pub fn mark_control(&mut self, control: super::presentation::ContinuingControl) {
+        self.command = control.command();
     }
 
     /// Carries the wait record the attempt wrote (REQ-LOCALRUN-127).
@@ -1099,6 +1105,13 @@ pub struct WorkflowStepV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) failed_child: Option<FailedChild>,
+    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) failure_class: Option<FailureClass>,
     /// The source each `firstOf` of a step that started took (REQ-EVIDENCE-28); absent
     /// from a result an earlier `useful` published.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1239,6 +1252,7 @@ pub(crate) struct RecoveryFailedExecutionV1 {
 pub(crate) enum RecoveryHandlerOutcomeV1 {
     Recheck,
     GaveUp,
+    Infrastructure,
     Failed,
     Cancelled,
 }
@@ -1282,6 +1296,21 @@ pub(crate) enum RecoveryTerminationV1 {
     },
     GaveUp {
         round: u8,
+    },
+    Infrastructure {
+        #[serde(
+            default,
+            deserialize_with = "deserialize_non_null_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        round: Option<u8>,
+        #[serde(
+            rename = "executionNumber",
+            default,
+            deserialize_with = "deserialize_non_null_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        execution_number: Option<u8>,
     },
     HandlerFailed {
         round: u8,
@@ -3244,6 +3273,11 @@ fn step_v1(step: &WorkflowRunStep, local: bool) -> Result<WorkflowStepV1, LocalP
         StepState::Succeeded { .. } => step.failed_child.clone(),
         _ => None,
     };
+    // REQ-WFEXEC-79: only a `failed` entry carries its failure's class.
+    let failure_class = match &step.state {
+        StepState::Failed { .. } => step.failure_class,
+        _ => None,
+    };
     let command_output = step
         .command_output
         .as_ref()
@@ -3272,6 +3306,7 @@ fn step_v1(step: &WorkflowRunStep, local: bool) -> Result<WorkflowStepV1, LocalP
         detail,
         diagnostic,
         failed_child,
+        failure_class,
         input_sources: step.input_sources.clone(),
         command_output,
     })
@@ -3337,6 +3372,18 @@ pub fn step_recovery_summary_v1(
         }
         RecoveryTerminalDisposition::GaveUp { round } => {
             RecoveryTerminationV1::GaveUp { round: round.get() }
+        }
+        RecoveryTerminalDisposition::Infrastructure { round } => {
+            RecoveryTerminationV1::Infrastructure {
+                round: Some(round.get()),
+                execution_number: None,
+            }
+        }
+        RecoveryTerminalDisposition::InfrastructureExecution { execution_number } => {
+            RecoveryTerminationV1::Infrastructure {
+                round: None,
+                execution_number: Some(execution_number.get()),
+            }
         }
         RecoveryTerminalDisposition::HandlerFailed { round, phase } => {
             let failure = recovery
@@ -3404,6 +3451,12 @@ pub(crate) fn recovery_round_summaries_v1(
                         ),
                         RecoveryHandlerOutcome::GaveUp { summary, reason } => (
                             RecoveryHandlerOutcomeV1::GaveUp,
+                            Some(summary.clone()),
+                            Some(reason.clone()),
+                            None,
+                        ),
+                        RecoveryHandlerOutcome::Infrastructure { summary, reason } => (
+                            RecoveryHandlerOutcomeV1::Infrastructure,
                             Some(summary.clone()),
                             Some(reason.clone()),
                             None,

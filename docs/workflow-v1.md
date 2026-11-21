@@ -36,8 +36,8 @@ repository changes.
 
 - A definition is one closed YAML 1.2 document with `schemaVersion: 1`. Unknown fields,
   kinds, references, and enum values are invalid.
-- The workflow source root is an explicit validation boundary containing the YAML and
-  retained static files. It is not inferred from a checkout or the YAML directory.
+- The source root bounds validation and holds the YAML and retained static files:
+  `--source-root`, or the YAML's Git repository root when `workflow validate` gets none.
 - The execution root is separate. Commands, agents, working directories, and runtime
   outputs operate below it when a run is separately authorized.
 - Ordinary steps form a DAG. After all ordinary steps are terminal, matching finalizers
@@ -64,7 +64,7 @@ repository changes.
 | `finalizers` | no | Nodes considered after the ordinary phase. |
 | `exports` | no | Stable names selecting declared outputs. |
 | `outcomes`, `outcome` | no | Declared run outcome names and the `text` output that chooses one; declared together. |
-| `programs`, `exclude`, `requires`, `bindings`, `triggers`, `mirror` | no | Root only: program directories, digest excludes, required `tools` and declared `integrations`, typed bindings (kinds include `definition`) with optional text `default`, triggers on a `$binding` or integration source's event (Linear issue, GitHub `push`) or a `$binding` definition's run outcome, and a run's Linear writes. |
+| `programs`, `exclude`, `requires`, `bindings`, `triggers`, `mirror` | no | Root only: program directories, digest excludes, required `tools`, a host `check` and declared `integrations`, typed bindings (kinds include `definition`) with optional text `default`, triggers on a `$binding` or integration source's event (Linear issue, GitHub `push`) or a `$binding` definition's run outcome, and a run's Linear writes. |
 
 Identifiers use lower camel case, contain 1 through 64 ASCII letters or digits, and
 match `^[a-z][A-Za-z0-9]*$`. Ordinary step and finalizer IDs share a namespace. V1
@@ -73,7 +73,7 @@ multiple YAML documents, `%YAML` and unknown directives, and floating-point numb
 (write `1`, not `1.0`). A workflow file is at most 1 MiB and nests values at most
 100 levels deep.
 
-Root `requires` holds at least one of `tools`, `as`, and `integrations`, which declares
+Root `requires` holds at least one of `tools`, `check`, `as`, and `integrations`, which declares
 needed services by provider id: `github`, `gitlab.com`, `linear`, `claude_code`, `codex`,
 `mergify`, or `buildkite`. `as` is `member` or `org`; an entry's own `as` overrides
 `requires.as`. An entry's `bindings` map names to `{kind, default?}`: `team` or `state`
@@ -82,17 +82,19 @@ one as `$<id>.<name>` (`$linear.done`; a `linear` `state` can be a mirror state)
 a declared integration as a trigger's `source: linear`. A flat `bindings` key naming an
 integration's binding, or the id of one with bindings, is `binding_declared_twice`. A
 publish's `--bindings` file gives an integration's values under its id,
-`{"linear": {"team": "AUTO"}}`, beside the flat members. `useful runner doctor --workflow`
-reports the declared integrations; `useful run show` prints where a Cloud run got each
+`{"linear": {"team": "AUTO"}}`, beside the flat members. `useful workflow doctor` reports
+declared integrations; `useful workflow run show` prints where a Cloud run got each
 credential. Every step, finalizer, and recovery handler gets each declared integration's
 variables, whatever `environmentPassthrough` says (missing ones are unset): `GH_TOKEN`,
 `GITLAB_TOKEN`, `USEFUL_LINEAR_ACCESS_TOKEN`, `MERGIFY_TOKEN`, and `BUILDKITE_API_TOKEN`,
 each with a `_FILE` twin, `CLAUDE_CODE_OAUTH_TOKEN`, and `CODEX_HOME`. A tree's root
 declaration covers every file. Unless its host sets them, a Cloud run gets the
 organization's `mergify` or `buildkite` token with `as: org`, else its member's. Runs read
-no other `as` or `bindings`; only `tools` is probed. Another workflow file of a tree may
-carry `requires` without `tools` as an override; `useful workflow definition validate` and
-`publish` refuse one naming an integration the root does not declare
+no other `as` or `bindings`; only `tools` is probed at admission. `check: {argv: [host-check]}`
+is one command whose `argv[0]` is a program name without `/`, found on `programs` and `PATH`;
+only `useful workflow run resume` runs it, for a run waiting on a host wait (below). Another
+workflow file of a tree may carry `requires` without `tools` or `check` as an override; `useful workflow validate` of the tree
+and `publish` refuse one naming an integration the root does not declare
 (`integration_undeclared`).
 
 ```yaml
@@ -125,10 +127,13 @@ or may be `advisory`. `recovery.retries` is 1 through 10. It either omits `handl
 an immediate unchanged target recheck, names one closed command handler, or names one
 fresh-agent handler with an existing profile and retained prompt. A command handler
 reads the bounded private Recovery Context Schema 1 path from `USEFUL_RECOVERY_CONTEXT` and
-writes exactly one closed, at-most-16-KiB `recheck` or `gave_up` decision document to
-the fresh private `USEFUL_RECOVERY_RESULT` path. An agent handler's profile and compatible
-installed harness are admission and runner-placement requirements even when recovery
-never activates.
+writes exactly one closed, at-most-16-KiB `recheck`, `gave_up` or `infrastructure`
+decision document to the fresh private `USEFUL_RECOVERY_RESULT` path. An agent handler's
+profile and compatible installed harness are admission and runner-placement requirements
+even when recovery never activates. An ordinary `cmd` step may also list
+`infrastructureExitCodes`, 1 to 16 distinct exit codes from 1 to 255, with or without
+`recovery`: an execution that exits with one fails classified `infrastructure`, the host's
+failure, and starts no recovery round.
 
 - `dependsOn` names unique ordinary steps and creates control-only ordering.
 - An `outputs.<step>.<output>` reference creates a direct inferred data edge. Naming
@@ -143,8 +148,10 @@ never activates.
   policy, or nested recovery. Only terminal target success commits outputs; finalizers
   cannot declare recovery and wait for ordinary recovery quiescence.
 - Rechecks and handlers are fresh physical invocations in the same execution root.
-  `gave_up` or handler failure stops recovery. Recovery has no condition-specific retry,
-  delay/backoff, handler retry, capture-only retry, rollback, or session continuation.
+  `gave_up`, `infrastructure` or handler failure stops recovery. `infrastructure` ends
+  recovery as `gave_up` does and says that the failure was the host's: no change to the
+  workspace repairs it. Recovery has no condition-specific retry, delay/backoff, handler
+  retry, capture-only retry, rollback, or session continuation.
 - Recovery effects are at-least-once. Authors supply stable domain idempotency keys
   through existing explicit inputs or admitted environment, not Useful Machinery lifecycle IDs.
 
@@ -154,10 +161,10 @@ To call GitHub, GitLab.com, or Linear as the person who started the run, declare
 `requires.integrations` or pass its two variables (above) in the root
 `environmentPassthrough`; a step's own list must keep passed names. A runner that sets
 either name of a provider itself keeps both; the run acts as the host. Otherwise the token
-is the run's member's, issued only if they hold a grant (`useful integration connect`) and
-authorized the runner (`useful integration authorize`); a run acting for nobody (a service
-principal's or a schedule's) gets none. A local run uses its environment. The variable is
-fixed when the runner takes the run; the file stays current. Tokens live about 8 hours
+is the run's member's, issued only if they hold a grant and authorized the runner (`useful
+account integration connect`, then `authorize`); a run acting for nobody (a service
+principal's or a schedule's) gets none. A local run uses its environment. The
+variable is fixed when the runner takes the run; the file stays current. Tokens live about 8 hours
 (GitHub), 2 (GitLab.com), or 24 (Linear) and are replaced a fifth of that before expiry,
 ending the old one, so a long step rereads the file. For Git (user `oauth2` and
 `$GITLAB_TOKEN_FILE` for GitLab.com):
@@ -356,14 +363,17 @@ the name a failed run takes. Declare both keys or neither; `onFailure` must be o
 (else `invalid_outcome_declaration`). Each source must be a declared `text`
 output of a required ordinary step, without a `condition` unless in a `firstOf` (else
 `invalid_outcome_source`). A `firstOf` gives the text of the first that succeeded, or
-`onFailure` if all skipped. Without the declaration a workflow has the implicit outcomes
-`succeeded` and `failed`.
+`onFailure` if all skipped. An optional `onInfrastructure`, also one of `outcomes` and
+possibly equal to `onFailure`, is the name a failed run takes instead when its failing step
+was the host's: one whose `failureClass` is `infrastructure`. Without the declaration a
+workflow has the implicit outcomes `succeeded` and `failed`.
 
 ```yaml
-outcomes: [planned, blocked, failed]
+outcomes: [planned, blocked, failed, host_failed]
 outcome:
   from: outputs.decide.verdict
   onFailure: failed
+  onInfrastructure: host_failed
 ```
 
 Finalizers replace ordinary `dependsOn` with:
@@ -413,7 +423,7 @@ steps:
   failure there is `child_workflow_invalid`, whose remedy names the child's own code and
   location. A child declares `workflow` steps only as a nested workflow (below) and may
   not carry `name`, `version`, `subject`, or a root-only block
-  (`child_workflow_root_blocks`), except a `requires` without `tools`, whose
+  (`child_workflow_root_blocks`), except a `requires` without `tools` or `check`, whose
   integrations are judged against the tree's root, not here. The child file and the static files it names join the
   parent's closure and digest. These failures are at location `step_workflow`.
 - `inputs` maps the child's input names to references of the parent's inputs or of an
@@ -438,22 +448,35 @@ steps:
   child's `file` or `git_branch` exports, fail `unknown_output` where they are referenced.
 - `on` maps each of the child's outcomes (its `outcomes`, or `succeeded` and `failed`) to
   one target: a step ID, `exit.<outcome>` naming one of this workflow's outcomes
-  (`succeeded` or `failed` when it declares none), a limited edge, or a wait
+  (`succeeded` or `failed` when it declares none), a limited edge, a host wait, or a wait
   `{wait: answer|approval|repair|external, then: <target>}`. An `approval`
   wait also names `onHandBack: <step>`, the step a hand-back continues at
   (`wait_hand_back_required` without it); any other wait may not
   (`wait_hand_back_unsupported`). Validation reports `edge_outcome_undeclared`,
   `edge_outcome_missing`, `edge_target_unknown`, `edge_exit_undeclared`,
   `edge_limit_target_invalid`, `wait_rule_required`, `wait_rule_unsupported`,
-  `wait_rule_invalid` and `wait_rule_reference_invalid` at location `step_edge`, which
-  names the step and the outcome. A wait's `then` and `onHandBack` are checked as
-  targets; a step reached only through one of them, or through a limited edge's `then`
-  or `else`, is reachable.
+  `wait_rule_invalid`, `wait_rule_reference_invalid`, `wait_host_target_invalid` and
+  `wait_limit_required` at location `step_edge`, which names the step and the outcome. A
+  wait's `then` and `onHandBack` are checked as targets; a step reached only through one
+  of them, through a limited edge's `then` or `else`, or through a host wait's `else`, is
+  reachable.
 - A step target may be a later step, which starts in the same attempt, or the step
   itself or an earlier step, from which the run continues in a new attempt.
 - A limited edge `{then: <step>, limit: <1..64>, else: <target>}` takes `then` while the
   run has taken it fewer than `limit` times, then `else`: a step ID, an exit or a wait,
-  never another limited edge. An exit as `then` is `edge_limit_target_invalid`.
+  never another limited edge nor a host wait. An exit as `then` is
+  `edge_limit_target_invalid`, and a `limit` on any other wait is structurally invalid.
+- A host wait `{wait: host, then: <step>, limit: <1..64>, else: <target>}` waits for the
+  run's host while the run has entered it fewer than `limit` times, then takes `else`: a
+  step ID, an exit or a wait of another kind, never a limited edge or a host wait. `then`
+  must name the step whose edge it is (`wait_host_target_invalid`), and a host wait
+  without `limit` or `else` is `wait_limit_required`. It carries no `onHandBack` and no
+  `rule`; its rule is `host.healthy` on source `host`. Each entry is counted in the run
+  record's `edges` when the run starts waiting. `useful workflow run resume` resolves it
+  once every root `requires.tools` name resolves and the root's `requires.check`, run in
+  the execution root with a root step's environment and standard input closed, exits 0
+  within 60 seconds; otherwise the wait holds. A resolved host wait continues at `then`
+  with reason `host`.
 - An `external` wait carries `rule: {source, event, where}` and no other wait may
   (`wait_rule_required`, `wait_rule_unsupported`). `source` names a provider other than
   `um`, `event` one event name or a list, and `where` equalities joined by ` and ` over
@@ -491,8 +514,9 @@ A child that declares `workflow` steps is a nested workflow: an edge-scheduled f
 whose steps run stages. The chain is at most two deep from the file being validated, so
 a nested workflow's children declare no `workflow` step; a deeper child, a cycle
 included, is `child_workflow_nested` at the outer file's step. A nested workflow declares
-no `forEach`, waits only for `answer` or `repair`, and a wait's `then` is the step whose
-edge enters it, directly or as a limited edge's `else`; any other shape is
+no `forEach`, waits only for `answer`, `repair` or `host`, and a wait's `then` is the step
+whose edge enters it, directly, as a limited edge's `else` or as a host wait's `else`; any
+other shape is
 `nested_workflow_unsupported` at the parent's step, its remedy naming the nested step.
 A nested workflow's stages run inside the parent's step, and the root run holds its
 waits and controls.

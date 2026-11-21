@@ -38,10 +38,9 @@ use super::workflow_run::{
 };
 
 pub(super) fn workflow_view_schema() -> jsonschema::Validator {
-    let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/schemas/workflow-view-result-v1.schema.json"
-    )))
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../schemas/workflow-view-result-v1.schema.json"
+    ))
     .unwrap();
     jsonschema::draft202012::new(&schema).unwrap()
 }
@@ -64,6 +63,7 @@ fn retry_args(run_directory: &Path, execution_root: &Path) -> Vec<String> {
         "run".to_owned(),
         "retry".to_owned(),
         run_directory.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         execution_root.to_string_lossy().into_owned(),
         "--plain".to_owned(),
@@ -77,7 +77,7 @@ fn status_args(run_directory: &Path) -> Vec<String> {
     vec![
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run_directory.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ]
@@ -238,7 +238,7 @@ fn automatic_and_explicit_plain_and_json_are_complete_frozen_snapshots() {
 #[test]
 fn closed_workflow_view_schema_accepts_valid_and_rejects_invalid_fixtures() {
     let validator = workflow_view_schema();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workflow-view/v1");
+    let root = crate::fixture_root().join("tests/fixtures/workflow-view/v1");
     for (category, valid) in [("valid", true), ("invalid", false)] {
         let mut fixtures = std::fs::read_dir(root.join(category))
             .unwrap()
@@ -424,17 +424,28 @@ fn plain_view_shows_the_source_a_first_of_took_and_refuses_one_the_state_does_no
     );
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-166
+// REQ-LOCALRUN-180, REQ-LOCALRUN-166: `view` looks under the home alone, so an ID the home
+// lacks is `run_not_found` naming `useful workflow run show`, which reads a Cloud run, and
+// nothing is sent to the deployment in effect.
 #[test]
 fn json_view_refuses_an_unknown_run_id_with_its_error_document() {
     let home = tempfile::tempdir().unwrap();
-    let output = isolated_command(&view_args(
+    let server = super::ScriptedServer::respond(Vec::new());
+    let credentials = super::private_credential_directory();
+    let credential_path = credentials.path().join("credentials.json");
+    let mut command = isolated_command(&view_args(
         Path::new("run_7zzzzzzzzzzzzzzzzzzzzzzzzz"),
         &["--json"],
-    ))
-    .env("USEFUL_HOME", home.path())
-    .output()
-    .unwrap();
+    ));
+    command
+        .env("USEFUL_HOME", home.path())
+        .env("USEFUL_ORG", "acme-research");
+    for (name, value) in
+        super::deployment_environment(&server.api_url, credential_path.to_str().unwrap())
+    {
+        command.env(name, value);
+    }
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -442,7 +453,14 @@ fn json_view_refuses_an_unknown_run_id_with_its_error_document() {
     assert_eq!(error["command"], "useful workflow run view");
     assert_eq!(error["outcome"], "error");
     assert_eq!(error["error"]["code"], "run_not_found", "{error}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("useful workflow run show")),
+        "{error}"
+    );
     assert!(error.get("runDirectory").is_none(), "{error}");
+    assert!(server.finish().is_empty());
 }
 
 // REQ-LOCALRUN-63, REQ-LOCALRUN-152
@@ -850,6 +868,8 @@ fn stream_at_live_tui_cap_is_published_validated_and_viewable() {
     );
 
     let validation = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         result_directory.to_string_lossy().into_owned(),

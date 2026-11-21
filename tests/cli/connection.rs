@@ -14,6 +14,19 @@ fn prepared(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile::TempDir, Stri
     write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
     (server, directory, path.to_str().unwrap().to_owned())
 }
+/// The organization's connection authorizations in force: none (REQ-INTEGRATION-34).
+pub(super) fn no_authorizations() -> Vec<u8> {
+    json_http_response("200 OK", serde_json::json!({"items": []}))
+}
+/// The answer of a deployment that predates the served-providers read, which serves no token
+/// service (REQ-INTEGRATION-19).
+pub(super) fn serving_nothing() -> Vec<u8> {
+    problem_http_response(
+        "404 Not Found",
+        serde_json::json!({"type":"https://api.usefulmachinery.com/problems/not-found",
+            "title":"Not found","status":404}),
+    )
+}
 pub(super) fn session(status: &str) -> serde_json::Value {
     let mut value = serde_json::json!({"id": SESSION, "organizationId": ORG_ID, "operation":"connect", "status":status,
         "createdAt":"2026-09-05T12:00:00Z", "expiresAt":"2026-09-05T12:15:00Z", "verifier":SECRET});
@@ -54,24 +67,31 @@ fn lines(output: &Output) -> Vec<serde_json::Value> {
 
 // REQ-CONNECTION-40, REQ-CONNECTION-87
 #[test]
-fn write_consent_flag_and_effective_session_scopes_are_visible() {
+fn create_linear_with_state_updates_connects_and_waits_for_the_session() {
     let mut pending = session("pending");
     pending.as_object_mut().unwrap().insert(
         "requestedScopes".into(),
         serde_json::json!(["read", "write"]),
     );
-    let (server, _dir, credential) = prepared(vec![json_http_response("201 Created", pending)]);
+    let mut done = session("completed");
+    done.as_object_mut()
+        .unwrap()
+        .insert("resultConnection".into(), connection());
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("201 Created", pending),
+        json_http_response("200 OK", done),
+    ]);
     let output = env_run(
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
-            "--enable-state-updates",
-            "--no-wait",
+            "--state-updates",
             "--json",
             "--allow-insecure-http",
         ],
@@ -81,19 +101,40 @@ fn write_consent_flag_and_effective_session_scopes_are_visible() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let response = lines(&output);
+    let events = lines(&output);
     assert_eq!(
-        response[0]["session"]["requestedScopes"],
+        events
+            .iter()
+            .map(|line| line["outcome"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["pending", "completed"]
+    );
+    assert!(
+        events[0]["session"]["authorizationUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://linear.example/")
+    );
+    assert_eq!(
+        events[0]["session"]["requestedScopes"],
         serde_json::json!(["read", "write"])
     );
+    assert_no_secret_output(&output, &[TOKEN, SECRET]);
     let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(&format!(
+        "POST /api/v1/organizations/{ORG}/connections/linear/authorization-sessions "
+    )));
     let body: serde_json::Value =
         serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["operation"], "connect");
     assert_eq!(body["enableStateUpdates"], true);
+    assert!(requests[1].contains(&format!("/authorization-sessions/{SESSION} ")));
 }
 
+// REQ-CONNECTION-87
 #[test]
-fn team_and_state_discovery_preserve_paging_and_full_set_suggestions() {
+fn team_list_and_show_page_discovery_and_print_full_set_suggestions() {
     let (server, _dir, credential) = prepared(vec![
         json_http_response(
             "200 OK",
@@ -110,14 +151,17 @@ fn team_and_state_discovery_preserve_paging_and_full_set_suggestions() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
+            "org",
+            "integration",
             "team",
             "list",
-            ORG,
             CONNECTION,
             "--limit",
-            "1",
+            "2",
+            "--cursor",
+            "C",
+            "--org",
+            ORG,
             "--json",
             "--allow-insecure-http",
         ],
@@ -127,20 +171,29 @@ fn team_and_state_discovery_preserve_paging_and_full_set_suggestions() {
         "{}",
         String::from_utf8_lossy(&teams.stderr)
     );
-    assert_eq!(lines(&teams)[0]["nextCursor"], "teams-page");
+    assert_eq!(
+        lines(&teams),
+        [
+            serde_json::json!({"schemaVersion":1,"deployment":server.api_url,"organizationRef":ORG,
+            "connectionId":CONNECTION,"outcome":"listed","items":[{"id":"team","name":"Example"}],
+            "nextCursor":"teams-page"})
+        ]
+    );
     let states = env_run(
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "state",
-            "list",
-            ORG,
-            CONNECTION,
+            "org",
+            "integration",
             "team",
-            "--cursor",
-            "teams-page",
+            "show",
+            "team",
+            "--integration",
+            CONNECTION,
+            "--limit",
+            "2",
+            "--org",
+            ORG,
             "--json",
             "--allow-insecure-http",
         ],
@@ -150,14 +203,24 @@ fn team_and_state_discovery_preserve_paging_and_full_set_suggestions() {
         "{}",
         String::from_utf8_lossy(&states.stderr)
     );
+    let document = &lines(&states)[0];
+    assert_eq!(document["outcome"], "listed");
+    assert_eq!(document["organizationRef"], ORG);
+    assert_eq!(document["connectionId"], CONNECTION);
+    assert_eq!(document["teamId"], "team");
+    assert_eq!(document["items"][0]["id"], "first");
+    assert_eq!(document["nextCursor"], "states-page");
     assert_eq!(
-        lines(&states)[0]["presetSuggestions"]["succeeded"]["stateId"],
+        document["presetSuggestions"]["succeeded"]["stateId"],
         "outside-page"
     );
     let requests = server.finish();
-    assert!(requests[0].contains(&format!("/connections/linear/{CONNECTION}/teams?limit=1")));
-    assert!(requests[1].contains(&format!(
-        "/connections/linear/{CONNECTION}/teams/team/states?cursor=teams-page"
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear/{CONNECTION}/teams?limit=2&cursor=C HTTP/1.1\r\n"
+    )));
+    assert!(requests[1].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear/{CONNECTION}/teams/team/states?limit=2 HTTP/1.1\r\n"
     )));
 }
 
@@ -174,13 +237,15 @@ fn discovery_rejects_open_or_inconsistent_suggestion_records() {
             &server,
             &credential,
             &[
-                "connection",
-                "linear",
-                "state",
-                "list",
-                ORG,
-                CONNECTION,
+                "org",
+                "integration",
                 "team",
+                "show",
+                "team",
+                "--integration",
+                CONNECTION,
+                "--org",
+                ORG,
                 "--json",
                 "--allow-insecure-http",
             ],
@@ -195,6 +260,7 @@ fn discovery_rejects_open_or_inconsistent_suggestion_records() {
     }
 }
 
+// REQ-CONNECTION-105
 #[test]
 fn consent_handoff_and_later_authorization_inspection_are_nonsecret() {
     let (server, _dir, credential) = prepared(vec![
@@ -205,10 +271,11 @@ fn consent_handoff_and_later_authorization_inspection_are_nonsecret() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--no-wait",
             "--json",
@@ -230,12 +297,12 @@ fn consent_handoff_and_later_authorization_inspection_are_nonsecret() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "authorization",
+            "org",
+            "integration",
             "show",
-            ORG,
             SESSION,
+            "--org",
+            ORG,
             "--json",
             "--allow-insecure-http",
         ],
@@ -273,10 +340,11 @@ fn polling_completion_uses_the_same_session_and_shows_connection_metadata() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--json",
             "--allow-insecure-http",
@@ -304,46 +372,105 @@ fn polling_completion_uses_the_same_session_and_shows_connection_metadata() {
     assert!(requests[1].contains(&format!("/authorization-sessions/{SESSION} ")));
 }
 
-// REQ-CONNECTION-40
-#[test]
-fn reauthorization_targets_only_the_requested_connection() {
+fn reauthorizing(connection: &str) -> serde_json::Value {
     let mut reauthorized = session("pending");
+    reauthorized["operation"] = "reauthorize".into();
+    reauthorized["connectionId"] = connection.into();
     reauthorized
-        .as_object_mut()
-        .unwrap()
-        .insert("operation".into(), "reauthorize".into());
-    reauthorized
-        .as_object_mut()
-        .unwrap()
-        .insert("connectionId".into(), CONNECTION.into());
-    let (server, _dir, credential) =
-        prepared(vec![json_http_response("201 Created", reauthorized)]);
-    let output = env_run(
-        &server,
-        &credential,
+}
+fn reconnect(server: &ScriptedServer, credential: &str, connection: &str) -> Output {
+    env_run(
+        server,
+        credential,
         &[
-            "connection",
-            "linear",
-            "authorization",
-            "create",
+            "org",
+            "integration",
+            "reconnect",
+            connection,
+            "--org",
             ORG,
-            "--connection-id",
-            CONNECTION,
             "--no-wait",
             "--json",
             "--allow-insecure-http",
         ],
-    );
+    )
+}
+fn request_body(request: &str) -> serde_json::Value {
+    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+// REQ-CONNECTION-108
+#[test]
+fn reauthorization_targets_only_the_requested_connection() {
+    let (server, _dir, credential) = prepared(vec![json_http_response(
+        "201 Created",
+        reauthorizing(CONNECTION),
+    )]);
+    let output = reconnect(&server, &credential, CONNECTION);
     assert!(output.status.success());
+    assert_eq!(lines(&output)[0]["outcome"], "pending");
     assert_eq!(lines(&output)[0]["session"]["connectionId"], CONNECTION);
     assert_eq!(lines(&output)[0]["session"]["operation"], "reauthorize");
     let requests = server.finish();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(requests[0].split_once("\r\n\r\n").unwrap().1)
-            .unwrap()["operation"],
-        "reauthorize"
-    );
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with(&format!(
+        "POST /api/v1/organizations/{ORG}/connections/linear/authorization-sessions "
+    )));
+    assert_eq!(request_body(&requests[0])["operation"], "reauthorize");
+    assert_eq!(request_body(&requests[0])["connectionId"], CONNECTION);
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
+}
+
+// REQ-CONNECTION-107, REQ-CONNECTION-108
+#[test]
+fn reconnect_of_the_provider_reauthorizes_the_connection_its_list_names() {
+    let (server, _dir, credential) = prepared(vec![
+        linear_list(&[
+            linear_connection(SECOND_CONNECTION, "deleted"),
+            linear_connection(CONNECTION, "recovery_required"),
+        ]),
+        json_http_response("201 Created", reauthorizing(CONNECTION)),
+    ]);
+    let output = reconnect(&server, &credential, "linear");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(lines(&output)[0]["session"]["connectionId"], CONNECTION);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(linear_list_request(&requests[0]), "{}", requests[0]);
+    assert_eq!(request_body(&requests[1])["operation"], "reauthorize");
+    assert_eq!(request_body(&requests[1])["connectionId"], CONNECTION);
+}
+
+// REQ-CONNECTION-106
+#[test]
+fn reconnect_of_a_linear_connection_refuses_gitlab_token_options_without_contacting_the_deployment()
+{
+    let (server, _dir, credential) = prepared(Vec::new());
+    let output = env_run(
+        &server,
+        &credential,
+        &[
+            "org",
+            "integration",
+            "reconnect",
+            CONNECTION,
+            "--token-file",
+            "t",
+            "--kind",
+            "group-access-token",
+            "--org",
+            ORG,
+            "--json",
+            "--allow-insecure-http",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(server.finish().is_empty());
 }
 
 #[test]
@@ -364,13 +491,12 @@ fn reauthorization_conflict_and_role_loss_have_distinct_outcomes() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "authorization",
-            "create",
-            ORG,
-            "--connection-id",
+            "org",
+            "integration",
+            "reconnect",
             CONNECTION,
+            "--org",
+            ORG,
             "--no-wait",
             "--json",
             "--allow-insecure-http",
@@ -382,12 +508,12 @@ fn reauthorization_conflict_and_role_loss_have_distinct_outcomes() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "authorization",
+            "org",
+            "integration",
             "show",
-            ORG,
             SESSION,
+            "--org",
+            ORG,
             "--json",
             "--allow-insecure-http",
         ],
@@ -415,10 +541,11 @@ fn lost_start_response_reuses_one_key_and_does_not_create_second_session() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--no-wait",
             "--json",
@@ -443,10 +570,11 @@ fn unresolved_start_retries_only_within_this_invocation() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--no-wait",
             "--json",
@@ -476,10 +604,11 @@ fn ambiguous_poll_response_keeps_known_session_without_restarting_consent() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--json",
             "--allow-insecure-http",
@@ -513,10 +642,11 @@ fn polling_stops_on_owner_role_loss_without_restarting_consent() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--json",
             "--allow-insecure-http",
@@ -553,13 +683,13 @@ fn rejected_service_credential_does_not_expose_a_token() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "authorization",
+            "org",
+            "integration",
             "show",
-            ORG,
             SESSION,
-            "--service-api-key-file",
+            "--org",
+            ORG,
+            "--api-key-file",
             service_path.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -580,18 +710,10 @@ fn rejected_service_credential_does_not_expose_a_token() {
 
 // REQ-CONNECTION-39
 #[test]
-fn authorization_help_and_destructive_confirmation_are_available() {
-    let help = run(&["connection", "linear", "authorization", "--help"]);
-    assert!(help.status.success());
-    let text = String::from_utf8(help.stdout).unwrap();
-    for leaf in ["create", "show", "wait"] {
-        assert!(text.contains(leaf));
-    }
-    let create_help = run(&["connection", "linear", "authorization", "create", "--help"]);
-    assert!(create_help.status.success());
-    assert!(!String::from_utf8_lossy(&create_help.stdout).contains("--idempotency-key"));
-    for leaf in ["remove", "delete"] {
-        let output = run(&["connection", "linear", leaf, ORG, CONNECTION]);
+fn remove_of_a_linear_connection_requires_confirmation() {
+    for release in [&[][..], &["--release-workspace"]] {
+        let remove = ["org", "integration", "disconnect", CONNECTION, "--org", ORG];
+        let output = run(&[&remove[..], release].concat());
         assert_eq!(output.status.code(), Some(2));
         assert!(String::from_utf8_lossy(&output.stderr).contains("--yes"));
     }
@@ -622,10 +744,11 @@ fn polling_respects_rate_limit_and_reports_recovery_required() {
         &server,
         &credential,
         &[
-            "connection",
+            "org",
+            "integration",
+            "connect",
             "linear",
-            "authorization",
-            "create",
+            "--org",
             ORG,
             "--json",
             "--allow-insecure-http",
@@ -660,11 +783,12 @@ fn ambiguous_disconnect_reuses_exact_key_and_target() {
         &server,
         &credential,
         &[
-            "connection",
-            "linear",
-            "remove",
-            ORG,
+            "org",
+            "integration",
+            "disconnect",
             CONNECTION,
+            "--org",
+            ORG,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -684,11 +808,13 @@ fn ambiguous_disconnect_reuses_exact_key_and_target() {
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
 }
 
-// REQ-CONNECTION-39
+// REQ-CONNECTION-39, REQ-CONNECTION-104, REQ-CONNECTION-105
 #[test]
 fn list_show_disconnect_and_delete_use_nonsecret_projections() {
     let (server, _dir, credential) = prepared(vec![
         json_http_response("200 OK", serde_json::json!({"items":[connection()]})),
+        no_authorizations(),
+        no_authorizations(),
         json_http_response("200 OK", connection()),
         json_http_response("200 OK", {
             let mut c = connection();
@@ -700,14 +826,50 @@ fn list_show_disconnect_and_delete_use_nonsecret_projections() {
         http_response("204 No Content", None, b""),
     ]);
     let commands: [(&[&str], &str); 4] = [
-        (&["list", ORG], "listed"),
-        (&["show", ORG, CONNECTION], "shown"),
-        (&["remove", ORG, CONNECTION, "--yes"], "disconnected"),
-        (&["delete", ORG, CONNECTION, "--yes"], "deleted"),
+        (
+            &[
+                "org",
+                "integration",
+                "list",
+                "--provider",
+                "linear",
+                "--org",
+                ORG,
+            ],
+            "listed",
+        ),
+        (
+            &["org", "integration", "show", CONNECTION, "--org", ORG],
+            "shown",
+        ),
+        (
+            &[
+                "org",
+                "integration",
+                "disconnect",
+                CONNECTION,
+                "--org",
+                ORG,
+                "--yes",
+            ],
+            "disconnected",
+        ),
+        (
+            &[
+                "org",
+                "integration",
+                "disconnect",
+                CONNECTION,
+                "--org",
+                ORG,
+                "--yes",
+                "--release-workspace",
+            ],
+            "deleted",
+        ),
     ];
     for (args, outcome) in commands {
-        let mut command = vec!["connection", "linear"];
-        command.extend(args);
+        let mut command = args.to_vec();
         command.extend(["--json", "--allow-insecure-http"]);
         let output = env_run(&server, &credential, &command);
         assert!(
@@ -718,47 +880,7 @@ fn list_show_disconnect_and_delete_use_nonsecret_projections() {
         assert_eq!(lines(&output)[0]["outcome"], outcome);
         assert_no_secret_output(&output, &[TOKEN, SECRET]);
     }
-    assert_eq!(server.finish().len(), 4);
-}
-
-// REQ-CONNECTION-39
-#[test]
-fn linear_list_rejects_limits_above_server_maximum_before_dispatch() {
-    let (server, _dir, credential) = prepared(vec![json_http_response(
-        "200 OK",
-        serde_json::json!({"items":[]}),
-    )]);
-    let args = [
-        "connection",
-        "linear",
-        "list",
-        ORG,
-        "--limit",
-        "100",
-        "--json",
-        "--allow-insecure-http",
-    ];
-    let accepted = env_run(&server, &credential, &args);
-    assert!(accepted.status.success());
-    assert_eq!(lines(&accepted)[0]["outcome"], "listed");
-    let rejected = env_run(
-        &server,
-        &credential,
-        &[
-            "connection",
-            "linear",
-            "list",
-            ORG,
-            "--limit",
-            "101",
-            "--json",
-            "--allow-insecure-http",
-        ],
-    );
-    assert_eq!(rejected.status.code(), Some(2));
-    let requests = server.finish();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].contains("limit=100"));
+    assert_eq!(server.finish().len(), 6);
 }
 
 #[cfg(target_os = "linux")]
@@ -771,14 +893,15 @@ fn interrupted_removal_reports_unknown_commitment_without_retrying() {
     let directory = private_credential_directory();
     let path = directory.path().join("credentials.json");
     write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "connection",
-            "linear",
-            "remove",
-            ORG,
+            "org",
+            "integration",
+            "disconnect",
             CONNECTION,
+            "--org",
+            ORG,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -828,13 +951,14 @@ fn interruption_after_start_preserves_session_for_later_inspection() {
         let directory = private_credential_directory();
         let path = directory.path().join("credentials.json");
         write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args([
-                "connection",
+                "org",
+                "integration",
+                "connect",
                 "linear",
-                "authorization",
-                "create",
+                "--org",
                 ORG,
                 "--json",
                 "--allow-insecure-http",
@@ -890,13 +1014,14 @@ fn interruption_before_start_response_preserves_request_identity() {
         let directory = private_credential_directory();
         let path = directory.path().join("credentials.json");
         write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args([
-                "connection",
+                "org",
+                "integration",
+                "connect",
                 "linear",
-                "authorization",
-                "create",
+                "--org",
                 ORG,
                 "--json",
                 "--allow-insecure-http",
@@ -928,4 +1053,572 @@ fn interruption_before_start_response_preserves_request_identity() {
         assert_no_secret_output(&output, &[TOKEN, SECRET]);
         assert!(server.finish().is_empty());
     }
+}
+
+const INSTALLATION: &str = "ghi_01k0z6r1w8f4jy2m7q9v3x5abc";
+const GITLAB_CONNECTION: &str = "glc_01k0z6r1w8f4jy2m7q9v3x5abc";
+const SECOND_CONNECTION: &str = "lcn_01k0z6r1w8f4jy2m7q9v3x5abd";
+
+pub(super) fn installation() -> serde_json::Value {
+    serde_json::json!({"id":INSTALLATION,"providerInstallationId":"713","providerAccountId":"829",
+        "providerAccountLogin":"acme","providerAccountType":"Organization","state":"active",
+        "createdAt":"2026-09-05T12:00:00Z","updatedAt":"2026-09-05T12:01:00Z"})
+}
+pub(super) fn gitlab_connection() -> serde_json::Value {
+    serde_json::json!({"id":GITLAB_CONNECTION,"organizationId":ORG_ID,
+        "instanceUrl":"https://gitlab.com","state":"credential_required","credentialReason":"not-configured",
+        "version":3,"providerUser":null,"credential":null,"selectedRepositoryIds":[],
+        "support":{"state":"unverified","observedVersion":null},
+        "createdAt":"2026-09-05T12:00:00Z","updatedAt":"2026-09-05T12:01:00Z"})
+}
+fn refused(status: &str, code: u16, kind: &str) -> Vec<u8> {
+    problem_http_response(
+        status,
+        serde_json::json!({"type":format!("https://api.usefulmachinery.com/problems/{kind}"),
+            "title":"Refused","status":code,"detail":SECRET}),
+    )
+}
+fn list_connections(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    let mut command = vec!["org", "integration", "list", "--org", ORG];
+    command.extend_from_slice(args);
+    command.extend_from_slice(&["--json", "--allow-insecure-http"]);
+    env_run(server, credential, &command)
+}
+
+// REQ-CONNECTION-104
+#[test]
+fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
+    let mut second = connection();
+    second["id"] = SECOND_CONNECTION.into();
+    second["status"] = "disconnected".into();
+    second["workspaceName"] = "Platform".into();
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("200 OK", serde_json::json!({"items":[installation()]})),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items":[gitlab_connection()],"nextCursor":null}),
+        ),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items":[connection()],"nextCursor":"linear-page-2"}),
+        ),
+        json_http_response("200 OK", serde_json::json!({"items":[second]})),
+        no_authorizations(),
+        serving_nothing(),
+    ]);
+
+    let output = list_connections(&server, &credential, &[]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let documents = lines(&output);
+    assert_eq!(documents.len(), 1, "{documents:?}");
+    let document = &documents[0];
+    assert_eq!(document["schemaVersion"], 1);
+    assert_eq!(document["deployment"], server.api_url);
+    assert_eq!(document["organizationRef"], ORG);
+    assert_eq!(document["outcome"], "listed");
+    assert_eq!(document["unlisted"], serde_json::json!([]));
+    let items = document["items"].as_array().unwrap();
+    let summaries: Vec<_> = items
+        .iter()
+        .map(|item| {
+            (
+                item["provider"].as_str().unwrap(),
+                item["id"].as_str().unwrap(),
+                item["state"].as_str().unwrap(),
+                item["name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summaries,
+        [
+            ("github", INSTALLATION, "active", "acme"),
+            (
+                "gitlab",
+                GITLAB_CONNECTION,
+                "credential_required",
+                "https://gitlab.com"
+            ),
+            ("linear", CONNECTION, "active", "Research"),
+            ("linear", SECOND_CONNECTION, "disconnected", "Platform"),
+        ]
+    );
+    assert_eq!(items[0]["connection"]["providerInstallationId"], "713");
+    assert_eq!(items[1]["connection"]["version"], 3);
+    assert_eq!(items[2]["connection"]["workspaceId"], "workspace-1");
+    assert_no_secret_output(&output, &[TOKEN, SECRET]);
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 6);
+    assert!(requests[0].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/github/installations HTTP/1.1\r\n"
+    )));
+    assert!(requests[1].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/gitlab?limit=100 HTTP/1.1\r\n"
+    )));
+    assert!(requests[2].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear?limit=100 HTTP/1.1\r\n"
+    )));
+    let last = requests[3].lines().next().unwrap();
+    assert!(
+        last.starts_with(&format!(
+            "GET /api/v1/organizations/{ORG}/connections/linear?"
+        )) && last.contains("limit=100")
+            && last.contains("cursor=linear-page-2"),
+        "{last}"
+    );
+}
+
+// REQ-CONNECTION-104
+#[test]
+fn org_connection_list_of_one_provider_reads_that_provider_alone() {
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items":[gitlab_connection()],"nextCursor":null}),
+        ),
+        no_authorizations(),
+    ]);
+
+    let output = list_connections(&server, &credential, &["--provider", "gitlab"]);
+
+    assert!(output.status.success(), "{output:?}");
+    let document = &lines(&output)[0];
+    assert_eq!(document["items"][0]["provider"], "gitlab");
+    assert_eq!(document["items"].as_array().unwrap().len(), 1);
+    assert_eq!(document["unlisted"], serde_json::json!([]));
+    // `--provider` keeps one provider's connections, and no token (REQ-INTEGRATION-19).
+    assert_eq!(document["tokens"], serde_json::json!([]));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/gitlab?limit=100 HTTP/1.1\r\n"
+    )));
+}
+
+// REQ-CONNECTION-104
+#[test]
+fn org_connection_list_takes_no_limit() {
+    let (server, _dir, credential) = prepared(Vec::new());
+
+    let output = list_connections(&server, &credential, &["--limit", "5"]);
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(server.finish().is_empty());
+}
+
+// REQ-CONNECTION-104
+#[test]
+fn org_connection_list_names_the_providers_it_could_not_list() {
+    let (server, _dir, credential) = prepared(vec![
+        refused("403 Forbidden", 403, "forbidden"),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items":[gitlab_connection()],"nextCursor":null}),
+        ),
+        refused("503 Service Unavailable", 503, "service-unavailable"),
+        no_authorizations(),
+        serving_nothing(),
+    ]);
+
+    let output = list_connections(&server, &credential, &[]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let document = &lines(&output)[0];
+    assert_eq!(document["outcome"], "listed");
+    let items = document["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["provider"], "gitlab");
+    assert_eq!(
+        document["unlisted"],
+        serde_json::json!([
+            {"provider":"github","reason":"forbidden"},
+            {"provider":"linear","reason":"service_unavailable"},
+        ])
+    );
+    assert_no_secret_output(&output, &[TOKEN, SECRET]);
+    assert_eq!(server.finish().len(), 5);
+}
+
+// REQ-CONNECTION-104
+#[test]
+fn org_connection_list_with_every_provider_refused_ends_with_the_first_failure() {
+    let (server, _dir, credential) = prepared(vec![
+        refused("403 Forbidden", 403, "forbidden"),
+        refused("403 Forbidden", 403, "forbidden"),
+        refused("503 Service Unavailable", 503, "service-unavailable"),
+    ]);
+
+    let output = list_connections(&server, &credential, &[]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "forbidden");
+    assert_eq!(document["organizationRef"], ORG);
+    assert!(document.get("items").is_none(), "{document}");
+    assert_no_secret_output(&output, &[TOKEN, SECRET]);
+    assert_eq!(server.finish().len(), 3);
+}
+
+fn show_connection(server: &ScriptedServer, credential: &str, connection: &str) -> Output {
+    env_run(
+        server,
+        credential,
+        &[
+            "org",
+            "integration",
+            "show",
+            connection,
+            "--org",
+            ORG,
+            "--json",
+            "--allow-insecure-http",
+        ],
+    )
+}
+fn linear_connection(id: &str, status: &str) -> serde_json::Value {
+    let mut value = connection();
+    value["id"] = id.into();
+    value["status"] = status.into();
+    value
+}
+fn linear_list(items: &[serde_json::Value]) -> Vec<u8> {
+    json_http_response("200 OK", serde_json::json!({ "items": items }))
+}
+fn linear_list_request(request: &str) -> bool {
+    request.starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear?limit=100 HTTP/1.1\r\n"
+    ))
+}
+
+// REQ-CONNECTION-107, REQ-CONNECTION-105
+#[test]
+fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
+    let (server, _dir, credential) = prepared(vec![
+        linear_list(&[
+            linear_connection(SECOND_CONNECTION, "deleted"),
+            connection(),
+        ]),
+        no_authorizations(),
+        json_http_response("200 OK", connection()),
+    ]);
+
+    let output = show_connection(&server, &credential, "linear");
+
+    assert!(output.status.success(), "{output:?}");
+    let document = &lines(&output)[0];
+    assert_eq!(document["outcome"], "shown");
+    assert_eq!(document["organizationRef"], ORG);
+    assert_eq!(document["connectionId"], CONNECTION);
+    assert_eq!(document["connection"]["status"], "active");
+    assert_no_secret_output(&output, &[TOKEN, SECRET]);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    assert!(linear_list_request(&requests[0]), "{}", requests[0]);
+    assert!(requests[2].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear/{CONNECTION} HTTP/1.1\r\n"
+    )));
+}
+
+// REQ-CONNECTION-107
+#[test]
+fn org_connection_show_of_a_provider_with_one_removed_connection_shows_it() {
+    let (server, _dir, credential) = prepared(vec![
+        linear_list(&[linear_connection(SECOND_CONNECTION, "disconnected")]),
+        no_authorizations(),
+        json_http_response(
+            "200 OK",
+            linear_connection(SECOND_CONNECTION, "disconnected"),
+        ),
+    ]);
+
+    let output = show_connection(&server, &credential, "linear");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(lines(&output)[0]["connectionId"], SECOND_CONNECTION);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].contains(&format!("/connections/linear/{SECOND_CONNECTION} ")));
+}
+
+// REQ-CONNECTION-107
+#[test]
+fn org_connection_show_of_a_provider_naming_several_connections_names_them_and_sends_nothing_more()
+{
+    let (server, _dir, credential) = prepared(vec![linear_list(&[
+        connection(),
+        linear_connection(SECOND_CONNECTION, "active"),
+    ])]);
+
+    let output = show_connection(&server, &credential, "linear");
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for id in [CONNECTION, SECOND_CONNECTION] {
+        assert!(stderr.contains(id), "{stderr}");
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert!(linear_list_request(&requests[0]), "{}", requests[0]);
+}
+
+// REQ-CONNECTION-107
+#[test]
+fn org_connection_show_of_a_provider_with_no_connection_names_create() {
+    let (server, _dir, credential) = prepared(vec![linear_list(&[])]);
+
+    let output = show_connection(&server, &credential, "linear");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("useful org integration connect"),
+        "{output:?}"
+    );
+    assert_eq!(server.finish().len(), 1);
+}
+
+// REQ-CONNECTION-107, REQ-CONNECTION-105
+#[test]
+fn org_connection_show_of_an_id_sends_that_connection_request_alone() {
+    let (server, _dir, credential) = prepared(vec![
+        no_authorizations(),
+        json_http_response("200 OK", connection()),
+    ]);
+
+    let output = show_connection(&server, &credential, CONNECTION);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(lines(&output)[0]["connectionId"], CONNECTION);
+    // The connection's authorizations in force are read first (REQ-INTEGRATION-34).
+    assert_eq!(lines(&output)[0]["authorizations"], serde_json::json!([]));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connection-authorizations?limit=200&connectionId={CONNECTION} HTTP/1.1\r\n"
+    )));
+    assert!(requests[1].starts_with(&format!(
+        "GET /api/v1/organizations/{ORG}/connections/linear/{CONNECTION} HTTP/1.1\r\n"
+    )));
+}
+
+// REQ-CONNECTION-107
+#[test]
+fn org_connection_show_refuses_a_malformed_connection_without_contacting_the_deployment() {
+    let (server, _dir, credential) = prepared(Vec::new());
+
+    for connection in ["Bogus", "lcn_short"] {
+        let output = show_connection(&server, &credential, connection);
+
+        assert_eq!(output.status.code(), Some(2), "{connection}: {output:?}");
+        assert!(output.stdout.is_empty(), "{connection}: {output:?}");
+    }
+    assert!(server.finish().is_empty());
+
+    // A lowercase word may name a token service, so what the deployment serves is read first;
+    // one it serves as none, a typo of a provider among them, is refused naming the providers,
+    // and no token is read (REQ-INTEGRATION-17).
+    let (server, _dir, credential) = prepared(vec![serving_nothing()]);
+    let output = show_connection(&server, &credential, "gihub");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for provider in ["github", "gitlab", "linear"] {
+        assert!(stderr.contains(provider), "{provider}: {stderr}");
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        requests[0].starts_with("GET /api/v1/me/grant-providers HTTP/1.1\r\n"),
+        "{}",
+        requests[0]
+    );
+}
+
+// REQ-CONNECTION-106
+#[test]
+fn org_connection_reads_refuse_another_providers_connection_or_option_without_contacting_the_deployment()
+ {
+    let (server, _dir, credential) = prepared(Vec::new());
+    let mut cases: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["repository", "list", "linear"], "GitLab"),
+        (vec!["repository", "list", CONNECTION], "GitLab"),
+        (vec!["team", "list", INSTALLATION], "Linear"),
+        (
+            vec!["team", "show", "team", "--integration", GITLAB_CONNECTION],
+            "Linear",
+        ),
+    ];
+    for option in [
+        &["--limit", "5"][..],
+        &["--cursor", "C"],
+        &["--search", "widget"],
+        &["--repository-id", "42"],
+        &["--selected"],
+    ] {
+        for connection in [INSTALLATION, "github"] {
+            cases.push((
+                [&["repository", "list", connection][..], option].concat(),
+                "GitLab",
+            ));
+        }
+    }
+
+    for (args, needed) in cases {
+        let mut command = vec!["org", "integration"];
+        command.extend(&args);
+        command.extend(["--org", ORG, "--json", "--allow-insecure-http"]);
+        let output = env_run(&server, &credential, &command);
+
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(needed),
+            "{args:?}: {output:?}"
+        );
+    }
+    assert!(server.finish().is_empty());
+}
+
+// REQ-CONNECTION-39
+#[test]
+fn org_connection_remove_disconnects_a_linear_connection_or_with_release_workspace_deletes_it() {
+    let mut disconnected = connection();
+    disconnected["status"] = "disconnected".into();
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("200 OK", disconnected),
+        http_response("204 No Content", None, b""),
+    ]);
+
+    for (release, outcome) in [
+        (&[][..], "disconnected"),
+        (&["--release-workspace"][..], "deleted"),
+    ] {
+        let remove = [
+            "org",
+            "integration",
+            "disconnect",
+            CONNECTION,
+            "--org",
+            ORG,
+            "--yes",
+        ];
+        let command = [&remove[..], release, &["--json", "--allow-insecure-http"]].concat();
+        let output = env_run(&server, &credential, &command);
+
+        assert!(output.status.success(), "{outcome}: {output:?}");
+        assert_eq!(lines(&output)[0]["outcome"], outcome);
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    let path = format!("/api/v1/organizations/{ORG}/connections/linear/{CONNECTION}");
+    assert!(
+        requests[0].starts_with(&format!("POST {path}/disconnect HTTP/1.1\r\n")),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[1].starts_with(&format!("DELETE {path} HTTP/1.1\r\n")),
+        "{}",
+        requests[1]
+    );
+}
+
+// REQ-CONNECTION-106
+#[test]
+fn org_connection_mutations_refuse_another_providers_connection_or_option_without_contacting_the_deployment()
+ {
+    let (server, _dir, credential) = prepared(Vec::new());
+    let cases: [(&[&str], &str); 9] = [
+        (
+            &["disconnect", INSTALLATION, "--yes", "--release-workspace"],
+            "Linear",
+        ),
+        (
+            &[
+                "disconnect",
+                GITLAB_CONNECTION,
+                "--yes",
+                "--release-workspace",
+            ],
+            "Linear",
+        ),
+        (
+            &["repository", "add", "7", "--integration", INSTALLATION],
+            "GitLab",
+        ),
+        (
+            &[
+                "repository",
+                "remove",
+                "7",
+                "--integration",
+                "github",
+                "--yes",
+            ],
+            "GitLab",
+        ),
+        (
+            &["repository", "add", "7", "--integration", CONNECTION],
+            "GitLab",
+        ),
+        (
+            &["disconnect", CONNECTION, "--yes", "--expected-version", "3"],
+            "GitLab",
+        ),
+        (
+            &[
+                "disconnect",
+                INSTALLATION,
+                "--yes",
+                "--idempotency-key",
+                "key",
+            ],
+            "GitLab",
+        ),
+        (
+            &[
+                "disconnect",
+                "linear",
+                "--yes",
+                "--delegator-principal-id",
+                "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ],
+            "GitLab",
+        ),
+        (
+            &[
+                "repository",
+                "add",
+                "7",
+                "--integration",
+                "github",
+                "--expected-version",
+                "3",
+            ],
+            "GitLab",
+        ),
+    ];
+
+    for (args, needed) in cases {
+        let mut command = vec!["org", "integration"];
+        command.extend(args);
+        command.extend(["--org", ORG, "--json", "--allow-insecure-http"]);
+        let output = env_run(&server, &credential, &command);
+
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(needed),
+            "{args:?}: {output:?}"
+        );
+    }
+    assert!(server.finish().is_empty());
 }

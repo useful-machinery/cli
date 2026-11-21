@@ -197,7 +197,7 @@ fn retained_input(run_directory: &Path, name: &str) -> Vec<u8> {
     fs::read(run_directory.join("workflow").join(file)).unwrap()
 }
 
-// REQ-LOCALRUN-173, REQ-LOCALRUN-175, SC-LOCALRUN-9
+// REQ-LOCALRUN-173, REQ-LOCALRUN-175, REQ-LOCALRUN-76, SC-LOCALRUN-9
 #[test]
 fn a_definition_run_starts_the_current_revision_under_the_home() {
     let published = Published::engineering();
@@ -212,7 +212,7 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
     assert_eq!(record["state"], "exited");
     assert_eq!(record["attempts"], 1);
 
-    let status = published.run(&["status", run_directory.to_str().unwrap(), "--json"]);
+    let status = published.run(&["show", run_directory.to_str().unwrap(), "--json"]);
     assert_eq!(status.status.code(), Some(0), "{status:?}");
 
     // A stage file run by hand is an ordinary run that names no parent.
@@ -226,6 +226,15 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
     assert_eq!(stage["workflow"], "design.yaml");
     assert_eq!(stage["parent"], Value::Null);
     assert_eq!(stage["definition"], published.id.as_str());
+
+    // `--on local`, the default, takes the definition by its name too (REQ-LOCALRUN-76).
+    let by_name = succeeded(&published.create(
+        "engineering",
+        &["--on", "local", "--input-text", "ticket", "AUTO-3"],
+    ));
+    let by_name =
+        read_json(&PathBuf::from(by_name["runDirectory"].as_str().unwrap()).join("run.json"));
+    assert_eq!(by_name["definition"], published.id.as_str());
 
     // The first run still holds the slot for AUTO-1 (REQ-WFDEF-28).
     published.home.json(&["disable", &published.id]);
@@ -247,6 +256,33 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
         .map(str::to_owned),
     );
     assert!(!published.scratch.path().join("elsewhere").exists());
+}
+
+const MARKING_ROOT_WORKFLOW: &str = "schemaVersion: 1\nname: marking\nsteps:\n  mark:\n    kind: cmd\n    command:\n      argv: [\"touch\", \"marked\"]\n";
+
+// REQ-LOCALRUN-76
+#[test]
+fn a_run_given_no_execution_root_executes_in_the_working_directory() {
+    let tree = Tree::engineering();
+    tree.write("workflow.yaml", MARKING_ROOT_WORKFLOW);
+    let home = Home::new();
+    let report = home.publish(&tree, &[]);
+    let id = report["definition"]["id"].as_str().unwrap();
+    let working = tempfile::tempdir().unwrap();
+
+    let mut command =
+        isolated_command(&["workflow", "run", "create", id, "--json"].map(str::to_owned));
+    command
+        .env("USEFUL_HOME", home.path())
+        .current_dir(working.path());
+    let terminal = succeeded(&command.output().unwrap());
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(
+        terminal["result"]["execution"]["executionRoot"],
+        working.path().canonicalize().unwrap().to_str().unwrap(),
+        "{terminal}"
+    );
+    assert!(working.path().join("marked").is_file(), "{terminal}");
 }
 
 // INV-TESTING-20
@@ -280,7 +316,7 @@ fn the_useful_binary_of_a_test_build_is_its_own_worker_when_none_is_supplied() {
     );
 }
 
-// REQ-LOCALRUN-173
+// REQ-LOCALRUN-173, REQ-CLOUDDEF-42
 #[test]
 fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     let published = Published::engineering();
@@ -289,7 +325,15 @@ fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     let unknown = "def_01jzzzzzzzzzzzzzzzzzzzzzzz";
     let not_found = published.refused(unknown, &ticket, "definition_not_found");
     assert_eq!(not_found["definition"], unknown);
-    published.refused("engineering", &ticket, "definition_id_invalid");
+    // A name is read under the home alone (REQ-CLOUDDEF-42): one nobody has is
+    // `definition_not_found` saying Cloud was not asked.
+    let output = published.create("review", &ticket);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let refusal: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refusal["command"], "useful workflow run create");
+    assert_eq!(refusal["diagnostics"][0]["code"], "definition_not_found");
+    assert_eq!(refusal["diagnostics"][0]["cloud"]["reason"], "local_only");
+    published.home.assert_no_runs();
 
     // A file the tree does not name as a workflow file is refused as the path form does.
     let rejection = tree_rejection(&published.create(
@@ -578,8 +622,8 @@ fn a_malformed_source_revision_is_a_usage_error_that_creates_no_run() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 }
 
-/// `useful workflow run create ID --cloud ORGANIZATION --project PROJECT` against a scripted Cloud
-/// (REQ-RUN-94).
+/// `useful workflow run create DEFINITION --on personal|project` against a scripted Cloud, in the
+/// organization and project in effect (REQ-RUN-94).
 mod cloud {
     use std::path::Path;
     use std::process::Output;
@@ -588,7 +632,7 @@ mod cloud {
 
     use super::super::{
         ECHO_IDEMPOTENCY_KEY, ScriptedServer, deployment_environment, header_value,
-        http_response_with_headers, private_credential_directory, run_with_env,
+        http_response_with_headers, json_http_response, private_credential_directory, run_with_env,
         write_credential_fixture,
     };
 
@@ -596,6 +640,7 @@ mod cloud {
     const ORGANIZATION: &str = "acme-research";
     const PROJECT: &str = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
     const DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abc";
+    const OTHER_DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abd";
     const RUN_ID: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
     const INPUT_SET_ID: &str = "ris_01k0z6r1w8f4jy2m7q9v3x5abc";
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -629,9 +674,15 @@ mod cloud {
 
         /// `useful workflow run create ARGS --allow-insecure-http` with the home as `USEFUL_HOME`.
         fn create(&self, args: &[&str]) -> Output {
+            let mut args = args.to_vec();
+            args.push("--allow-insecure-http");
+            self.create_as_given(&args)
+        }
+
+        /// `useful workflow run create ARGS` with the home as `USEFUL_HOME`.
+        fn create_as_given(&self, args: &[&str]) -> Output {
             let mut full = vec!["workflow", "run", "create"];
             full.extend_from_slice(args);
-            full.push("--allow-insecure-http");
             let mut environment =
                 deployment_environment(&self.server.api_url, &self.credential_path).to_vec();
             environment.push(("USEFUL_HOME", self.home.path().to_str().unwrap()));
@@ -672,10 +723,48 @@ mod cloud {
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
     }
 
-    fn definition_args<'a>(options: &[&'a str]) -> Vec<&'a str> {
-        let mut args = vec![DEFINITION, "--cloud", ORGANIZATION, "--project", PROJECT];
+    /// `DEFINITION --on PLACE --org ORGANIZATION --project PROJECT OPTIONS`: the organization
+    /// and a project ID given cost no request (INV-CLI-20).
+    fn on_args<'a>(definition: &'a str, place: &'a str, options: &[&'a str]) -> Vec<&'a str> {
+        let mut args = vec![
+            definition,
+            "--on",
+            place,
+            "--org",
+            ORGANIZATION,
+            "--project",
+            PROJECT,
+        ];
         args.extend_from_slice(options);
         args
+    }
+
+    fn definition_args<'a>(options: &[&'a str]) -> Vec<&'a str> {
+        on_args(DEFINITION, "personal", options)
+    }
+
+    /// One page of the project's definitions, each `(id, name)`.
+    fn definitions(definitions: &[(&str, &str)]) -> Vec<u8> {
+        let items = definitions
+            .iter()
+            .map(|(id, name)| {
+                serde_json::json!({
+                    "id": id,
+                    "projectId": PROJECT,
+                    "name": name,
+                    "state": "active",
+                    "automaticStarts": false,
+                    "executionPrincipalId": null,
+                    "currentRevision": 1,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "updatedAt": "2026-01-01T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": items, "nextCursor": null}),
+        )
     }
 
     // REQ-RUN-94, REQ-RUN-55, REQ-RUN-56
@@ -745,7 +834,7 @@ mod cloud {
             COMMIT,
             "--display-name",
             "Release checks",
-            "--input-set-id",
+            "--input-set",
             INPUT_SET_ID,
             "--max-parallel",
             "4",
@@ -767,44 +856,131 @@ mod cloud {
         );
     }
 
-    // REQ-RUN-94, REQ-RUN-99
+    // REQ-RUN-94, REQ-RUN-97, REQ-RUN-99
     #[test]
-    fn no_owner_asks_for_an_unowned_run_and_its_absence_leaves_the_owner_to_cloud() {
-        for (options, owner) in [
-            (
-                &["--no-owner", "--json"][..],
-                Some(serde_json::json!("none")),
-            ),
-            (&["--json"], None),
+    fn on_project_asks_for_an_unowned_run_and_on_personal_leaves_the_owner_to_cloud() {
+        for (place, owner) in [
+            ("project", Some(serde_json::json!("none"))),
+            ("personal", None),
         ] {
             let cloud = Cloud::respond(vec![accepted()]);
-            let output = cloud.create(&definition_args(options));
-            assert_eq!(output.status.code(), Some(0), "{options:?}: {output:?}");
-            let request = cloud.finish().pop().unwrap();
-            assert_eq!(body(&request).get("owner"), owner.as_ref(), "{options:?}");
+            let output = cloud.create(&on_args(DEFINITION, place, &["--json"]));
+            assert_eq!(output.status.code(), Some(0), "{place}: {output:?}");
+            let requests = cloud.finish();
+            assert_eq!(requests.len(), 1, "{place}: {requests:?}");
+            assert!(
+                requests[0].starts_with(&format!(
+                    "POST /api/v1/organizations/{ORGANIZATION}/runs HTTP/1.1\r\n"
+                )),
+                "{place}: {}",
+                requests[0]
+            );
+            assert_eq!(body(&requests[0]).get("owner"), owner.as_ref(), "{place}");
         }
+    }
+
+    // REQ-RUN-94, REQ-CLOUDDEF-42
+    #[test]
+    fn a_name_is_the_one_definition_of_the_project_with_it() {
+        let cloud = Cloud::respond(vec![
+            definitions(&[(OTHER_DEFINITION, "review"), (DEFINITION, "engineering")]),
+            accepted(),
+        ]);
+        let output = cloud.create(&on_args("engineering", "project", &["--json"]));
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let requests = cloud.finish();
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        assert!(
+            requests[0].starts_with(&format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/projects/{PROJECT}/workflow-definitions"
+            )),
+            "{}",
+            requests[0]
+        );
+        assert_eq!(
+            body(&requests[1]),
+            serde_json::json!({
+                "projectId": PROJECT,
+                "definition": {"definitionId": DEFINITION},
+                "owner": "none"
+            })
+        );
+
+        // Two of the name: exit 2 naming both, and no create.
+        let cloud = Cloud::respond(vec![definitions(&[
+            (DEFINITION, "engineering"),
+            (OTHER_DEFINITION, "engineering"),
+        ])]);
+        let output = cloud.create(&on_args("engineering", "project", &["--json"]));
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        for id in [DEFINITION, OTHER_DEFINITION] {
+            assert!(stderr.contains(id), "{stderr}");
+        }
+        let requests = cloud.finish();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert!(requests[0].starts_with("GET "), "{}", requests[0]);
+    }
+
+    // REQ-RUN-94, REQ-PROJECT-100, INV-CLI-20
+    #[test]
+    fn a_cloud_place_with_no_project_in_effect_exits_2_before_a_request_of_its_own() {
+        let cloud = Cloud::respond(Vec::new());
+        let output = cloud.create(&[
+            "engineering",
+            "--on",
+            "personal",
+            "--org",
+            ORGANIZATION,
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(cloud.finish().is_empty());
+    }
+
+    // REQ-RUN-94, REQ-LOCALRUN-76, REQ-CLOUDDEF-42
+    #[test]
+    fn a_name_without_on_is_read_under_the_home_alone() {
+        let cloud = Cloud::respond(Vec::new());
+        let output = cloud.create_as_given(&["engineering", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let refusal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            refusal["command"], "useful workflow run create",
+            "{refusal}"
+        );
+        let diagnostic = &refusal["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "definition_not_found", "{refusal}");
+        assert_eq!(diagnostic["definition"], "engineering", "{refusal}");
+        assert_eq!(
+            diagnostic["cloud"],
+            serde_json::json!({"asked": false, "reason": "local_only"}),
+            "{refusal}"
+        );
+        assert!(cloud.finish().is_empty());
     }
 
     // REQ-RUN-94, REQ-LOCALRUN-80, REQ-LOCALRUN-217
     #[test]
-    fn a_local_option_beside_cloud_or_a_cloud_option_without_it_is_a_usage_error() {
+    fn a_local_option_beside_a_cloud_place_or_a_cloud_option_without_one_is_a_usage_error() {
         let scratch = tempfile::tempdir().unwrap();
         let scratch = scratch.path().to_str().unwrap();
-        let cloud_with = |options: &[&'static str]| -> Vec<String> {
+        let cloud_with = |options: &[&str]| -> Vec<String> {
             let mut args = definition_args(options)
                 .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
-            args.push("--json".to_owned());
+            args.extend(["--json".to_owned(), "--allow-insecure-http".to_owned()]);
             args
         };
         let mut refused: Vec<Vec<String>> = [
             &["--path", "."][..],
             &["--run-dir", "run"],
+            &["--execution-root", scratch],
             &["--agent-profiles", "profiles.json"],
-            &["--stop-before", "build"],
+            &["--pause-before", "build"],
             &["--owner", "alice"],
-            &["--no-owner", "--owner", "alice"],
             &["--external", "url=a"],
             &[
                 "--source-revision",
@@ -817,57 +993,51 @@ mod cloud {
         .into_iter()
         .map(cloud_with)
         .collect();
-        refused.push({
-            let mut args = cloud_with(&[]);
-            args.extend(["--execution-root".to_owned(), scratch.to_owned()]);
-            args
-        });
-        // `--cloud` without `--project`.
         refused.push(
-            [DEFINITION, "--cloud", ORGANIZATION, "--json"]
-                .map(str::to_owned)
-                .to_vec(),
+            on_args(
+                DEFINITION,
+                "project",
+                &["--owner", "alice", "--json", "--allow-insecure-http"],
+            )
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         );
         for options in [
-            &["--project", PROJECT][..],
+            &["--org", "acme"][..],
+            &["--project", PROJECT],
             &["--source-branch", "main"],
             &["--workspace-branch", "main"],
             &["--workspace-commit", COMMIT],
-            &["--display-name", "Release checks"],
-            &["--input-set-id", INPUT_SET_ID],
+            &["--display-name", "x"],
+            &["--input-set", INPUT_SET_ID],
             &["--integration-context-file", "context.json"],
             &["--wait"],
-            &["--no-owner"],
+            &["--api-key-file", "key"],
+            &["--allow-insecure-http"],
         ] {
-            let mut args = [DEFINITION, "--execution-root", scratch, "--json"]
-                .map(str::to_owned)
-                .to_vec();
-            args.extend(options.iter().map(|option| (*option).to_owned()));
-            refused.push(args);
+            for place in [&[][..], &["--on", "local"]] {
+                let mut args = [DEFINITION, "--execution-root", scratch, "--json"]
+                    .map(str::to_owned)
+                    .to_vec();
+                args.extend(place.iter().map(|option| (*option).to_owned()));
+                args.extend(options.iter().map(|option| (*option).to_owned()));
+                refused.push(args);
+            }
         }
         for args in refused {
             let cloud = Cloud::respond(Vec::new());
             let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-            let output = cloud.create(&args);
+            let output = cloud.create_as_given(&args);
             assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
             assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
             assert!(cloud.finish().is_empty(), "{args:?}");
         }
     }
-
-    // REQ-LOCALRUN-76
-    #[test]
-    fn without_cloud_the_execution_root_is_still_required() {
-        let cloud = Cloud::respond(Vec::new());
-        let output = cloud.create(&[DEFINITION, "--json"]);
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert!(output.stdout.is_empty(), "{output:?}");
-        assert!(cloud.finish().is_empty());
-    }
 }
 
-/// What `useful workflow run create --cloud` does around acceptance, driven against the scripted
-/// Cloud of `cli/tests/cli/run.rs`: one idempotency key per invocation and the single resend
+/// What `useful workflow run create --on personal` does around acceptance, driven against the
+/// scripted Cloud of `cli/tests/cli/run.rs`: one idempotency key per invocation and the single resend
 /// (REQ-RUN-55 to REQ-RUN-57), `--wait` (REQ-RUN-58), the definite source-admission rejection
 /// (REQ-RUN-80), the named inputs staged and sealed before creation (REQ-RUNINPUT-53,
 /// REQ-RUNINPUT-54, REQ-RUNINPUT-76) and the integration context (REQ-TRIGGER-54).
@@ -996,7 +1166,7 @@ mod cloud_acceptance {
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
         let mut args = create_args(true);
         args.insert(args.len() - 1, "--wait");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args(args)
             .stdin(Stdio::null())
@@ -1373,7 +1543,7 @@ mod cloud_acceptance {
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = create_args(true);
         let insertion = arguments.len() - 1;
-        arguments.splice(insertion..insertion, ["--input-set-id", INPUT_SET_ID]);
+        arguments.splice(insertion..insertion, ["--input-set", INPUT_SET_ID]);
 
         let output = run_with_env(&arguments, &environment);
 
@@ -1458,7 +1628,7 @@ mod cloud_acceptance {
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = create_args(true);
         let insertion = arguments.len() - 1;
-        arguments.splice(insertion..insertion, ["--input-set-id", INPUT_SET_ID]);
+        arguments.splice(insertion..insertion, ["--input-set", INPUT_SET_ID]);
         let output = run_with_env(&arguments, &environment);
         assert_eq!(output.status.code(), Some(1));
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1516,7 +1686,7 @@ mod cloud_acceptance {
                 let environment = deployment_environment(&server.api_url, &credential_path);
                 let mut arguments = create_args(json);
                 let insertion = arguments.len() - 1;
-                arguments.splice(insertion..insertion, ["--input-set-id", INPUT_SET_ID]);
+                arguments.splice(insertion..insertion, ["--input-set", INPUT_SET_ID]);
                 let output = run_with_env(&arguments, &environment);
                 assert_eq!(output.status.code(), Some(1), "{kind}");
                 if json {
@@ -1555,17 +1725,19 @@ mod cloud_acceptance {
     // REQ-RUNINPUT-57
     #[test]
     fn explicit_input_set_conflicts_with_acquired_inputs_before_cloud_access() {
-        let output = Command::new(env!("CARGO_BIN_EXE_useful"))
+        let output = Command::new(crate::executable())
             .args([
                 "workflow",
                 "run",
                 "create",
                 DEFINITION_ID,
-                "--cloud",
+                "--on",
+                "personal",
+                "--org",
                 ORGANIZATION,
                 "--project",
                 PROJECT_ID,
-                "--input-set-id",
+                "--input-set",
                 INPUT_SET_ID,
                 "--input-text",
                 "request",
@@ -1673,7 +1845,7 @@ mod cloud_acceptance {
             assert!(mutation_keys.iter().all(|key| key.len() == 64));
             assert_ne!(mutation_keys[0], mutation_keys[1]);
             assert_ne!(mutation_keys[1], mutation_keys[2]);
-            assert!(!requests[1].contains("idempotency-key:"));
+            assert!(useful_test_support::request_header(&requests[1], "idempotency-key").is_none());
 
             let upload = storage.finish();
             assert!(upload.starts_with("PUT /api/private/request?signature="));
@@ -2448,8 +2620,8 @@ mod cloud_acceptance {
         assert!(requests[1].contains("/upload-capabilities HTTP/1.1"));
         assert!(requests[2].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
         assert!(requests[3].contains("/upload-capabilities HTTP/1.1"));
-        assert!(!requests[1].contains("idempotency-key:"));
-        assert!(!requests[3].contains("idempotency-key:"));
+        assert!(useful_test_support::request_header(&requests[1], "idempotency-key").is_none());
+        assert!(useful_test_support::request_header(&requests[3], "idempotency-key").is_none());
         assert_eq!(
             header_value(&requests[1], "authorization"),
             format!("Bearer {TOKEN}")
@@ -2460,7 +2632,7 @@ mod cloud_acceptance {
         );
         let upload = storage.finish();
         assert!(upload.starts_with("PUT "));
-        assert!(!upload.contains("authorization:"));
+        assert!(useful_test_support::request_header(&upload, "authorization").is_none());
         assert_eq!(
             upload.split_once("\r\n\r\n").unwrap().1.as_bytes(),
             input_bytes
@@ -2564,7 +2736,7 @@ mod cloud_acceptance {
         assert_eq!(output.status.code(), Some(1));
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostic.contains(&format!("input set: {INPUT_SET_ID}")));
-        assert!(diagnostic.contains("run input-set show"));
+        assert!(diagnostic.contains("workflow input-set show"));
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["outcome"], "error");
         assert_eq!(result["error"]["code"], "submission_failed");
@@ -2583,7 +2755,7 @@ mod cloud_acceptance {
         assert_eq!(server.finish().len(), 2);
         let upload = storage.finish_one();
         assert!(upload.starts_with("PUT "));
-        assert!(!upload.contains("authorization:"));
+        assert!(useful_test_support::request_header(&upload, "authorization").is_none());
     }
 
     // REQ-RUNINPUT-58
@@ -2615,7 +2787,7 @@ mod cloud_acceptance {
         assert!(output.stdout.is_empty());
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostic.contains(&format!("input set: {INPUT_SET_ID}")));
-        assert!(diagnostic.contains("run input-set show"));
+        assert!(diagnostic.contains("workflow input-set show"));
         assert_no_secret_output(&output, &[TOKEN, std::str::from_utf8(input_bytes).unwrap()]);
         let requests = server.finish();
         assert_eq!(requests.len(), 2);
@@ -2716,7 +2888,7 @@ mod cloud_acceptance {
                 )]);
             let mut arguments = create_args(json);
             let insertion = arguments.len() - 1;
-            arguments.splice(insertion..insertion, ["--input-set-id", INPUT_SET_ID]);
+            arguments.splice(insertion..insertion, ["--input-set", INPUT_SET_ID]);
             let output = run_with_env(
                 &arguments,
                 &deployment_environment(&server.api_url, &credential_path),
@@ -2974,7 +3146,7 @@ mod cloud_acceptance {
                 );
                 let environment =
                     deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-                let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+                let mut command = Command::new(crate::executable());
                 command
                     .args(create_args(json))
                     .stdin(Stdio::null())
@@ -3045,7 +3217,7 @@ mod cloud_acceptance {
                 upload_capability_response(input_bytes, &signed_url),
             ]);
             let environment = deployment_environment(&server.api_url, &credential_path);
-            let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+            let mut command = Command::new(crate::executable());
             command
                 .args(create_args_with_text_input(
                     "request",
@@ -3065,7 +3237,7 @@ mod cloud_acceptance {
             let child = command.spawn().unwrap();
             let upload = storage.next_request();
             assert!(upload.starts_with("PUT "));
-            assert!(!upload.contains("authorization:"));
+            assert!(useful_test_support::request_header(&upload, "authorization").is_none());
 
             rustix::process::kill_process(
                 rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap(),
@@ -3078,7 +3250,7 @@ mod cloud_acceptance {
             assert_eq!(output.status.code(), Some(130));
             let diagnostic = String::from_utf8_lossy(&output.stderr);
             assert!(diagnostic.contains(&format!("input set: {INPUT_SET_ID}")));
-            assert!(diagnostic.contains("run input-set show"));
+            assert!(diagnostic.contains("workflow input-set show"));
             if json {
                 let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
                 assert_eq!(result["outcome"], "acceptance_unknown");

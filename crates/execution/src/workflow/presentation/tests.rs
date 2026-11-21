@@ -324,6 +324,7 @@ impl Fixture {
                     recovery: None,
                     invocations: Vec::new(),
                     failed_child: None,
+                    failure_class: None,
                     input_sources: Vec::new(),
                 })
                 .collect(),
@@ -1093,6 +1094,7 @@ steps:
         recovery: None,
         invocations: Vec::new(),
         failed_child: None,
+        failure_class: None,
         input_sources: Vec::new(),
     };
     let (_, summary_detail, _) = summary_step(&step, StepSuccessPresentation::Agent).unwrap();
@@ -2352,6 +2354,7 @@ async fn a_waiting_stage_whose_child_failed_is_summarized_as_failed() {
             rule: None,
             interrupted: None,
             kept: None,
+            counted: false,
         },
     };
     let step = &mut run.steps[0];

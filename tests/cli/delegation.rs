@@ -119,6 +119,7 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let proposed = run_with_env(
         &[
+            "account",
             "delegation",
             "propose",
             SERVICE_PRINCIPAL_ID,
@@ -135,13 +136,14 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let listed = run_with_env(
         &[
+            "account",
             "delegation",
             "list",
             "--limit",
             "1",
             "--cursor",
             "delegations-page-one",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -157,6 +159,7 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let shown = run_with_env(
         &[
+            "account",
             "delegation",
             "show",
             DELEGATION_ID,
@@ -174,10 +177,11 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let accepted = run_with_env(
         &[
+            "account",
             "delegation",
             "accept",
             DELEGATION_ID,
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -192,11 +196,12 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let ended = run_with_env(
         &[
+            "account",
             "delegation",
             "end",
             DELEGATION_ID,
             "--yes",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -217,10 +222,11 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 
     let shown_ended = run_with_env(
         &[
+            "account",
             "delegation",
             "show",
             DELEGATION_ID,
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -278,15 +284,16 @@ fn delegation_workflow_preserves_actor_separation_history_and_pagination() {
 // REQ-DELEGATION-1, REQ-DELEGATION-6
 #[test]
 fn acceptance_requires_explicit_service_authentication_and_proposal_rejects_it() {
-    let accept = run(&["delegation", "accept", DELEGATION_ID]);
+    let accept = run(&["account", "delegation", "accept", DELEGATION_ID]);
     assert_eq!(accept.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&accept.stderr).contains("--service-api-key-file <PATH|->"));
+    assert!(String::from_utf8_lossy(&accept.stderr).contains("--api-key-file <PATH|->"));
 
     let propose = run(&[
+        "account",
         "delegation",
         "propose",
         SERVICE_PRINCIPAL_ID,
-        "--service-api-key-file",
+        "--api-key-file",
         "service.key",
     ]);
     assert_eq!(propose.status.code(), Some(2));
@@ -328,10 +335,11 @@ fn ended_and_inaccessible_delegations_have_stable_failures() {
 
     let ended = run_with_env(
         &[
+            "account",
             "delegation",
             "accept",
             DELEGATION_ID,
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -347,6 +355,7 @@ fn ended_and_inaccessible_delegations_have_stable_failures() {
 
     let end_ended = run_with_env(
         &[
+            "account",
             "delegation",
             "end",
             DELEGATION_ID,
@@ -365,6 +374,7 @@ fn ended_and_inaccessible_delegations_have_stable_failures() {
 
     let inaccessible = run_with_env(
         &[
+            "account",
             "delegation",
             "show",
             DELEGATION_ID,
@@ -382,6 +392,7 @@ fn ended_and_inaccessible_delegations_have_stable_failures() {
 
     let retryable = run_with_env(
         &[
+            "account",
             "delegation",
             "propose",
             SERVICE_PRINCIPAL_ID,
@@ -416,6 +427,7 @@ fn proposal_at_the_per_principal_limit_reports_quantity_limit_reached() {
 
     let output = run_with_env(
         &[
+            "account",
             "delegation",
             "propose",
             SERVICE_PRINCIPAL_ID,

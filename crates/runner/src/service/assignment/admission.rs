@@ -77,6 +77,7 @@ impl AssignmentManager {
             deferred_offer_failure: None,
             fenced_final_graces: BTreeSet::new(),
             guard_processes,
+            run_ended: Arc::new(Notify::new()),
         }
     }
 

@@ -583,12 +583,8 @@ fn thread_scoped_warning_may_precede_thread_response() {
         }}),
     )
     .unwrap();
-    assert_eq!(
-        feed(&mut mismatched, thread_start_response("native-provider"),).unwrap_err(),
-        AgentFailureCause::HarnessSetupFailed {
-            stage: AgentHarnessSetupStage::ThreadStart,
-        }
-    );
+    feed(&mut mismatched, thread_start_response("native-provider")).unwrap();
+    assert_eq!(take_json(&mut mismatched)["method"], "turn/start");
 }
 
 #[test]
@@ -680,11 +676,10 @@ fn matching_turn_notification_acknowledges_start_after_the_response_in_either_or
             }
         }),
         json!({
-            "method": "item/started",
+            "method": "turn/completed",
             "params": {
-                "threadId": "other-thread",
-                "turnId": "turn-1",
-                "item": {"id": "item-1", "type": "agentMessage", "text": ""},
+                "threadId": THREAD_ID,
+                "turn": {"id": "unknown-turn", "status": "completed", "items": []},
             }
         }),
     ];
@@ -823,17 +818,12 @@ fn turn_frames_that_overtake_the_turn_start_response_are_parsed_after_it() {
     assert!(!unanswered.start_acknowledged());
 
     let mut running = running_parser(AgentValueKind::None, 1024);
-    let running_failure = feed(
-        &mut running,
-        user_message_item("item/started", "other-turn"),
-    )
-    .unwrap_err();
+    let mut wrong_turn = item_completed("foreign", "unexpected", json!("final_answer"));
+    wrong_turn["params"]["turnId"] = json!("other-turn");
+    let running_failure = feed(&mut running, wrong_turn.clone()).unwrap_err();
     let mut cross_turn = parser(AgentValueKind::None, 1024, None);
     turn_started_ahead_of_its_response(&mut cross_turn);
-    held_feed(
-        &mut cross_turn,
-        user_message_item("item/started", "other-turn"),
-    );
+    held_feed(&mut cross_turn, wrong_turn);
     assert_eq!(
         feed(&mut cross_turn, first_turn_start_response()).unwrap_err(),
         running_failure
@@ -882,8 +872,172 @@ fn turn_frames_that_overtake_the_turn_start_response_are_parsed_after_it() {
     }
 }
 
+// REQ-AGENT-90, REQ-AGENT-25, REQ-AGENT-26
+// INV-HARNESS-26
 #[test]
-fn stale_duplicate_cross_thread_cross_turn_and_cross_item_identities_fail_closed() {
+fn a_thread_other_than_the_leads_decides_nothing_announced_or_not() {
+    const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    let child_turn = json!({"id": "child-turn", "items": [], "status": "inProgress"});
+    for frame in [
+        json!({"method": "thread/started", "params": {"thread": {"id": CHILD}}}),
+        json!({"method": "turn/started", "params": {"threadId": CHILD, "turn": child_turn}}),
+        json!({"method": "item/completed", "params": {"threadId": CHILD, "turnId": "child-turn",
+            "item": {"id": "answer", "type": "agentMessage", "phase": "final_answer",
+                "text": result_envelope(json!("child"))}}}),
+        json!({"method": "error", "params": {"threadId": CHILD, "turnId": "child-turn",
+            "error": {"message": "child error"}, "willRetry": false}}),
+        json!({"method": "turn/completed", "params": {"threadId": CHILD,
+            "turn": {"id": "child-turn", "items": [], "status": "completed"}}}),
+    ] {
+        feed(&mut parser, frame)
+            .unwrap_or_else(|err| panic!("{err:?}: {}", rejection_reason(&parser)));
+    }
+    feed(
+        &mut parser,
+        json!({"id": 12, "method": "item/commandExecution/requestApproval",
+        "params": {"threadId": CHILD, "turnId": "child-turn", "itemId": "child-command"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        take_json(&mut parser),
+        json!({"id": 12, "result": {"decision": "decline"}})
+    );
+    assert_eq!(parser.state, SetupState::Running);
+    assert!(parser.pending_result_candidate.is_none());
+
+    let mut missing = parser.clone();
+    feed(&mut missing, turn_completed(vec![], "completed")).unwrap();
+    assert_eq!(
+        missing.finish(true),
+        AgentOutcome::Failed(AgentFailureCause::MissingResult.into())
+    );
+    let mut failed = parser.clone();
+    let mut terminal = turn_completed(vec![], "failed");
+    terminal["params"]["turn"]["error"] = json!({"message": "lead failed"});
+    feed(&mut failed, terminal).unwrap();
+    assert!(matches!(failed.finish(true), AgentOutcome::Failed(failure)
+        if matches!(failure.cause(), AgentFailureCause::HarnessFailed { .. })));
+
+    let mut announced = parser.clone();
+    let mut spawn = item_started("spawn", "collabAgentToolCall");
+    spawn["params"]["item"]["tool"] = json!("spawnAgent");
+    spawn["params"]["item"]["senderThreadId"] = json!(THREAD_ID);
+    feed(&mut announced, spawn.clone()).unwrap();
+    spawn["method"] = json!("item/completed");
+    spawn["params"]["item"]["receiverThreadIds"] = json!([]);
+    feed(&mut announced, spawn).unwrap();
+    for mut lead in [parser, announced] {
+        feed(&mut lead, item_started("answer", "agentMessage")).unwrap();
+        let message = item_completed(
+            "answer",
+            &result_envelope(json!("parent")),
+            json!("final_answer"),
+        );
+        feed(&mut lead, message.clone()).unwrap();
+        feed(
+            &mut lead,
+            turn_completed(vec![message["params"]["item"].clone()], "completed"),
+        )
+        .unwrap();
+        assert_eq!(
+            lead.pending_result_candidate.as_deref(),
+            Some(&json!("parent"))
+        );
+    }
+}
+
+// REQ-AGENT-90
+#[test]
+fn subagent_activity_and_early_child_status_decide_nothing() {
+    const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    feed(
+        &mut parser,
+        json!({"method":"thread/status/changed", "params":{"threadId": CHILD}}),
+    )
+    .unwrap();
+    let mut activity = item_started("activity", "subAgentActivity");
+    activity["params"]["item"]["agentThreadId"] = json!(CHILD);
+    activity["params"]["item"]["kind"] = json!("started");
+    feed(&mut parser, activity.clone()).unwrap();
+    activity["method"] = json!("item/completed");
+    feed(&mut parser, activity).unwrap();
+    let mut child_completion = turn_completed(vec![], "completed");
+    child_completion["params"]["threadId"] = json!(CHILD);
+    feed(&mut parser, child_completion).unwrap();
+    assert_eq!(parser.state, SetupState::Running);
+    assert!(parser.pending_result_candidate.is_none());
+}
+
+// REQ-AGENT-90, REQ-AGENT-25, REQ-AGENT-26
+#[test]
+fn a_delegated_codex_thread_cannot_settle_the_leads_turn() {
+    const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    let mut spawn = item_started("spawn", "collabAgentToolCall");
+    spawn["params"]["item"]["tool"] = json!("spawnAgent");
+    spawn["params"]["item"]["senderThreadId"] = json!(THREAD_ID);
+    feed(&mut parser, spawn.clone()).unwrap();
+
+    // Native Codex may publish child status while a spawn is in progress.
+    feed(
+        &mut parser,
+        json!({"method":"thread/status/changed", "params":{"threadId": CHILD}}),
+    )
+    .unwrap();
+    spawn["method"] = json!("item/completed");
+    let mut unmatched = parser.clone();
+    spawn["params"]["item"]["receiverThreadIds"] = json!([]);
+    feed(&mut unmatched, spawn.clone()).unwrap();
+    feed(&mut unmatched, turn_completed(vec![], "completed")).unwrap();
+    assert_eq!(
+        unmatched.finish(true),
+        AgentOutcome::Failed(AgentFailureCause::MissingResult.into())
+    );
+    spawn["params"]["item"]["receiverThreadIds"] = json!([CHILD]);
+    feed(&mut parser, spawn).unwrap();
+
+    feed(
+        &mut parser,
+        json!({"id": 12, "method":"item/commandExecution/requestApproval",
+        "params":{"threadId":CHILD,"turnId":"child-turn","itemId":"child-command"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        take_json(&mut parser)["result"],
+        json!({"decision":"decline"})
+    );
+    let mut child_message = item_completed(
+        "answer",
+        &result_envelope(json!("child")),
+        json!("final_answer"),
+    );
+    child_message["params"]["threadId"] = json!(CHILD);
+    let mut child_done = turn_completed(vec![], "completed");
+    child_done["params"]["threadId"] = json!(CHILD);
+    feed(&mut parser, child_message).unwrap();
+    feed(&mut parser, child_done).unwrap();
+    assert!(parser.pending_result_candidate.is_none());
+    assert_eq!(parser.state, SetupState::Running);
+
+    let parent_text = result_envelope(json!("parent"));
+    feed(&mut parser, item_started("answer", "agentMessage")).unwrap();
+    let parent_message = item_completed("answer", &parent_text, json!("final_answer"));
+    feed(&mut parser, parent_message.clone()).unwrap();
+    feed(
+        &mut parser,
+        turn_completed(vec![parent_message["params"]["item"].clone()], "completed"),
+    )
+    .unwrap();
+    assert_eq!(
+        parser.pending_result_candidate.as_deref(),
+        Some(&json!("parent"))
+    );
+}
+
+#[test]
+fn stale_and_duplicate_responses_fail_even_when_progress_is_ignored() {
     let mut stale = parser(AgentValueKind::None, 1024, None);
     initialize(&mut stale);
     assert_eq!(
@@ -894,55 +1048,9 @@ fn stale_duplicate_cross_thread_cross_turn_and_cross_item_identities_fail_closed
     );
 
     let mut cross_thread = running_parser(AgentValueKind::None, 1024);
-    assert_eq!(
-        feed(
-            &mut cross_thread,
-            json!({
-                "method": "item/started",
-                "params": {"threadId": "other", "turnId": "turn-1", "item": {
-                    "id": "item-1", "type": "agentMessage", "text": ""
-                }}
-            })
-        )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
-    );
-
-    let mut cross_turn = running_parser(AgentValueKind::None, 1024);
-    assert_eq!(
-        feed(
-            &mut cross_turn,
-            json!({
-                "method": "item/started",
-                "params": {"threadId": "thread-1", "turnId": "other", "item": {
-                    "id": "item-1", "type": "agentMessage", "text": ""
-                }}
-            })
-        )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
-    );
-
-    let mut cross_item = running_parser(AgentValueKind::None, 1024);
-    feed(&mut cross_item, item_started("item-1", "agentMessage")).unwrap();
-    assert_eq!(
-        feed(
-            &mut cross_item,
-            json!({
-                "method": "item/agentMessage/delta",
-                "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "other", "delta": "x"}
-            })
-        )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
-    );
-
-    let mut duplicate = running_parser(AgentValueKind::None, 1024);
-    feed(&mut duplicate, item_started("item-1", "agentMessage")).unwrap();
-    assert_eq!(
-        feed(&mut duplicate, item_started("item-1", "agentMessage")).unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
-    );
+    let mut child = item_started("item-1", "agentMessage");
+    child["params"]["threadId"] = json!("other");
+    feed(&mut cross_thread, child).unwrap();
 
     let mut duplicate_response = running_parser(AgentValueKind::None, 1024);
     assert_eq!(
@@ -999,7 +1107,7 @@ fn completed_final_answer_is_authoritative_and_deltas_are_observations_only() {
 }
 
 #[test]
-fn partial_answers_remain_correlated_but_have_no_response_or_result_authority() {
+fn partial_answers_have_no_response_or_result_authority() {
     for value_kind in [AgentValueKind::Response, AgentValueKind::Result] {
         for final_follows in [false, true] {
             let mut parser = running_parser(value_kind, 5);
@@ -1076,140 +1184,49 @@ fn partial_answers_remain_correlated_but_have_no_response_or_result_authority() 
         item_completed("partial", "provisional", json!("partial_answer")),
     )
     .unwrap();
-    assert_eq!(
-        feed(
-            &mut mismatched,
-            turn_completed(
-                vec![json!({
-                    "id": "partial", "type": "agentMessage", "text": "provisional",
-                    "phase": "final_answer",
-                })],
-                "completed",
-            ),
-        )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed,
-    );
-    assert_eq!(rejection_reason(&mismatched), "turn_summary_invalid");
-}
-
-#[test]
-fn not_loaded_turn_summary_uses_completed_streamed_agent_message() {
-    let mut parser = running_parser(AgentValueKind::Response, 1024);
-    feed(&mut parser, item_started("final", "agentMessage")).unwrap();
     feed(
-        &mut parser,
-        item_completed("final", "settled response", json!("final_answer")),
-    )
-    .unwrap();
-    let (progress, _) = feed(
-        &mut parser,
-        turn_completed_with_items_view(vec![], "completed", "notLoaded"),
-    )
-    .unwrap();
-
-    assert!(progress.close_standard_input);
-    let AgentOutcome::Completed(CompletedAgentInvocation::Response(response)) = parser.finish(true)
-    else {
-        panic!("a non-loaded terminal summary must preserve the streamed response");
-    };
-    assert_eq!(response.as_str(), "settled response");
-}
-
-#[test]
-fn summary_turn_view_accepts_a_correlated_subset() {
-    let mut parser = running_parser(AgentValueKind::None, 1024);
-    for (id, text) in [("first", "first response"), ("second", "second response")] {
-        feed(&mut parser, item_started(id, "agentMessage")).unwrap();
-        feed(&mut parser, item_completed(id, text, json!("final_answer"))).unwrap();
-    }
-
-    feed(
-        &mut parser,
-        turn_completed_with_items_view(
+        &mut mismatched,
+        turn_completed(
             vec![json!({
-                "id": "second",
-                "type": "agentMessage",
-                "text": "second response",
-                "phase": "final_answer",
+                "id":"partial","type":"agentMessage","text":"provisional","phase":"final_answer"
             })],
             "completed",
-            "summary",
         ),
     )
     .unwrap();
-
     assert_eq!(
-        parser.finish(true),
-        AgentOutcome::Completed(CompletedAgentInvocation::NoValue)
+        mismatched.finish(true),
+        AgentOutcome::Completed(CompletedAgentInvocation::NoResponse)
     );
 }
 
 #[test]
-fn full_and_absent_turn_views_remain_exhaustive() {
-    for items_view in [None, Some("full")] {
-        let mut parser = running_parser(AgentValueKind::None, 1024);
-        feed(&mut parser, item_started("final", "agentMessage")).unwrap();
-        feed(
-            &mut parser,
-            item_completed("final", "settled response", json!("final_answer")),
-        )
-        .unwrap();
-        let completed = match items_view {
-            Some(items_view) => turn_completed_with_items_view(vec![], "completed", items_view),
-            None => turn_completed(vec![], "completed"),
-        };
-
-        assert_eq!(
-            feed(&mut parser, completed).unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed,
-            "itemsView={items_view:?}",
-        );
-        assert_eq!(rejection_reason(&parser), "turn_summary_invalid");
-    }
-}
-
-#[test]
-fn terminal_item_views_fail_closed_on_inconsistent_or_unknown_values() {
-    for (items, items_view) in [
-        (
-            vec![json!({
-                "id": "final",
-                "type": "agentMessage",
-                "text": "settled response",
-                "phase": "final_answer",
-            })],
-            "notLoaded",
-        ),
-        (
-            vec![json!({
-                "id": "final",
-                "type": "agentMessage",
-                "text": "mismatched response",
-                "phase": "final_answer",
-            })],
-            "summary",
-        ),
-        (vec![], "future"),
+fn the_streamed_message_decides_regardless_of_the_terminal_items_view() {
+    for view in [
+        None,
+        Some("full"),
+        Some("summary"),
+        Some("notLoaded"),
+        Some("future"),
     ] {
-        let mut parser = running_parser(AgentValueKind::None, 1024);
-        feed(&mut parser, item_started("final", "agentMessage")).unwrap();
+        let mut parser = running_parser(AgentValueKind::Response, 1024);
         feed(
             &mut parser,
-            item_completed("final", "settled response", json!("final_answer")),
+            item_completed("final", "streamed response", json!("final_answer")),
         )
         .unwrap();
-
-        assert_eq!(
-            feed(
-                &mut parser,
-                turn_completed_with_items_view(items, "completed", items_view),
-            )
-            .unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed,
-            "itemsView={items_view}",
-        );
-        assert_eq!(rejection_reason(&parser), "turn_summary_invalid");
+        let items = vec![json!({"id":"final", "type":"agentMessage", "text":"another response"})];
+        let completed = match view {
+            Some(view) => turn_completed_with_items_view(items, "completed", view),
+            None => turn_completed(items, "completed"),
+        };
+        feed(&mut parser, completed).unwrap();
+        let AgentOutcome::Completed(CompletedAgentInvocation::Response(response)) =
+            parser.finish(true)
+        else {
+            panic!("expected the streamed response for {view:?}");
+        };
+        assert_eq!(response.as_str(), "streamed response");
     }
 }
 
@@ -1493,6 +1510,7 @@ fn async_delivery_cannot_survive_native_failure() {
 #[test]
 fn project_and_strict_review_notifications_are_bounded_nonsettling_metadata() {
     let mut parser = running_parser(AgentValueKind::Response, 1024);
+    let mut project_changes = Vec::new();
     for change_type in ["created", "updated", "deleted"] {
         let (progress, observations) = feed(
             &mut parser,
@@ -1504,11 +1522,13 @@ fn project_and_strict_review_notifications_are_bounded_nonsettling_metadata() {
         )
         .unwrap();
         assert_eq!(progress, ParserProgress::default());
-        assert!(matches!(
-            observations.as_slice(),
-            [AgentObservation::UnrecognizedHarnessEvent { .. }]
-        ));
+        project_changes.extend(observations);
     }
+    assert!(matches!(
+        project_changes.as_slice(),
+        [AgentObservation::UnrecognizedHarnessEvent { event }]
+            if event["params"]["changeType"] == "created"
+    ));
     let (progress, observations) = feed(
         &mut parser,
         json!({
@@ -1593,22 +1613,13 @@ fn project_and_strict_review_notifications_are_bounded_nonsettling_metadata() {
         AgentFailureCause::HarnessProtocolFailed,
     );
 
-    for mismatch in [
-        json!({
-            "method": "autoApprovalReview/strictReviewRequired",
-            "params": {"threadId": "other", "turnId": "turn-1"},
-        }),
-        json!({
-            "method": "autoApprovalReview/strictReviewRequired",
-            "params": {"threadId": "thread-1", "turnId": "other"},
-        }),
-    ] {
-        let mut parser = running_parser(AgentValueKind::None, 1024);
-        assert_eq!(
-            feed(&mut parser, mismatch).unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed
-        );
-    }
+    let mut review = json!({"method": "autoApprovalReview/strictReviewRequired",
+        "params": {"threadId": "other", "turnId": "turn-1"}});
+    let mut parser = running_parser(AgentValueKind::None, 1024);
+    feed(&mut parser, review.clone()).unwrap();
+    review["params"] = json!({"threadId": "thread-1", "turnId": "other"});
+    let (progress, _) = feed(&mut parser, review).unwrap();
+    assert_eq!(progress, ParserProgress::default());
 }
 
 #[test]
@@ -1805,15 +1816,12 @@ fn candidate_additive_events_are_bounded_nonsettling_observations() {
         }),
     ] {
         let mut mismatched = running_parser(AgentValueKind::None, 1024);
-        assert_eq!(
-            feed(&mut mismatched, event).unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed,
-        );
+        feed(&mut mismatched, event).unwrap();
     }
 }
 
 #[test]
-fn realtime_item_completion_rejects_different_session_identity() {
+fn realtime_items_with_different_session_ids_remain_progress() {
     let mut parser = running_parser(AgentValueKind::None, 1024);
     let started_item = json!({
         "id": "realtime-item",
@@ -1832,21 +1840,18 @@ fn realtime_item_completion_rejects_different_session_identity() {
     .unwrap();
     let mut completed_item = started_item;
     completed_item["realtimeSessionId"] = json!("session-b");
-    assert_eq!(
-        feed(
-            &mut parser,
-            json!({
-                "method": "thread/realtime/item/completed",
-                "params": {"threadId": "thread-1", "item": completed_item},
-            }),
-        )
-        .expect_err("a different realtime session must not complete the active item"),
-        AgentFailureCause::HarnessProtocolFailed,
-    );
+    let (progress, observations) = feed(&mut parser, json!({
+        "method":"thread/realtime/item/completed", "params":{"threadId":"thread-1","item":completed_item}
+    })).unwrap();
+    assert_eq!(progress, ParserProgress::default());
+    assert!(matches!(
+        observations.as_slice(),
+        [AgentObservation::UnrecognizedHarnessEvent { .. }]
+    ));
 }
 
 #[test]
-fn interrupted_turn_hooks_settle_before_terminal_and_commit_no_provisional_value() {
+fn interrupted_turns_with_finished_or_unfinished_hooks_commit_no_provisional_value() {
     let started_hook = json!({
         "id": "interrupt-hook",
         "eventName": "interrupt",
@@ -1937,9 +1942,15 @@ fn interrupted_turn_hooks_settle_before_terminal_and_commit_no_provisional_value
         }),
     )
     .unwrap();
+    feed(&mut premature, turn_completed(Vec::new(), "interrupted")).unwrap();
     assert_eq!(
-        feed(&mut premature, turn_completed(Vec::new(), "interrupted"),).unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed,
+        premature.finish(true),
+        AgentOutcome::Failed(
+            AgentFailureCause::HarnessFailed {
+                detail: AgentHarnessFailureDetail::ModelAborted,
+            }
+            .into()
+        )
     );
 }
 
@@ -1984,7 +1995,7 @@ fn completed_turn_with_native_error_fails_closed_without_committing_response() {
 }
 
 #[test]
-fn unsupported_completed_tool_status_fails_closed() {
+fn unsupported_tool_status_is_observed_as_unrecognized() {
     for (kind, status) in [
         ("commandExecution", "unsupported"),
         ("fileChange", "unsupported"),
@@ -2013,51 +2024,40 @@ fn unsupported_completed_tool_status_fails_closed() {
         )
         .unwrap();
 
-        assert_eq!(
-            feed(
-                &mut parser,
-                json!({
-                    "method": "item/completed",
-                    "params": {
-                        "threadId": "thread-1",
-                        "turnId": "turn-1",
-                        "item": tool(status),
-                    },
-                }),
-            )
-            .unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed,
-            "{kind}:{status}",
-        );
+        let (_, observations) = feed(
+            &mut parser,
+            json!({
+                "method": "item/completed",
+                "params": {"threadId":"thread-1","turnId":"turn-1","item":tool(status)},
+            }),
+        )
+        .unwrap();
+        assert!(matches!(
+            observations.as_slice(),
+            [AgentObservation::UnrecognizedHarnessEvent { .. }]
+        ));
     }
 }
 
 #[test]
-fn aggregate_retained_agent_message_text_is_bounded() {
-    let mut parser = running_parser(AgentValueKind::Response, 1024);
-    parser.limits.maximum_retained_agent_message_bytes = NonZeroU64::new(5).unwrap();
-    feed(&mut parser, item_started("first", "agentMessage")).unwrap();
-    feed(
-        &mut parser,
-        item_completed("first", "123", json!("final_answer")),
-    )
-    .unwrap();
-    feed(&mut parser, item_started("second", "agentMessage")).unwrap();
-
-    assert_eq!(
+fn repeated_result_message_replaces_the_retained_text() {
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    for number in [1, 7] {
         feed(
             &mut parser,
-            item_completed("second", "456", json!("commentary")),
+            item_completed(
+                "final",
+                &result_envelope(json!(number)),
+                json!("final_answer"),
+            ),
         )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
-    );
-    assert_eq!(
-        parser.finish(true),
-        AgentOutcome::Failed(AgentFailureCause::HarnessProtocolFailed.into())
-    );
+        .unwrap();
+    }
+    feed(&mut parser, turn_completed(vec![], "completed")).unwrap();
+    assert_eq!(parser.take_result_candidate().as_deref(), Some(&json!(7)));
 }
 
+// REQ-AGENT-27
 #[test]
 fn absent_empty_oversized_delta_only_and_failed_outputs_never_commit() {
     for messages in [
@@ -2103,9 +2103,10 @@ fn absent_empty_oversized_delta_only_and_failed_outputs_never_commit() {
         }),
     )
     .unwrap();
+    feed(&mut delta_only, turn_completed(vec![], "completed")).unwrap();
     assert_eq!(
-        feed(&mut delta_only, turn_completed(vec![], "completed")).unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed
+        delta_only.finish(true),
+        AgentOutcome::Completed(CompletedAgentInvocation::NoResponse)
     );
 
     for status in ["failed", "interrupted"] {
@@ -2132,8 +2133,9 @@ fn absent_empty_oversized_delta_only_and_failed_outputs_never_commit() {
     }
 }
 
+// REQ-AGENT-31
 #[test]
-fn malformed_wrapped_duplicate_and_missing_result_candidates_never_commit() {
+fn malformed_or_ambiguous_submissions_get_a_correction_but_absent_submissions_end() {
     for text in [
         "not-json",
         "```json\n{\"result\":\"1\"}\n```",
@@ -2149,49 +2151,36 @@ fn malformed_wrapped_duplicate_and_missing_result_candidates_never_commit() {
             item_completed("result", text, json!("final_answer")),
         )
         .unwrap();
-        assert_eq!(
-            feed(
-                &mut parser,
-                turn_completed(
-                    vec![json!({
-                        "id": "result",
-                        "type": "agentMessage",
-                        "text": text,
-                        "phase": "final_answer",
-                    })],
-                    "completed",
-                ),
-            )
-            .unwrap_err(),
-            AgentFailureCause::HarnessProtocolFailed,
-            "{text}",
-        );
-        assert!(matches!(parser.finish(true), AgentOutcome::Failed(_)));
-    }
-
-    let mut duplicate = running_parser(AgentValueKind::Result, 1024);
-    for id in ["first", "second"] {
-        feed(&mut duplicate, item_started(id, "agentMessage")).unwrap();
         feed(
-            &mut duplicate,
-            item_completed(id, "{\"result\":\"1\"}", json!("final_answer")),
-        )
-        .unwrap();
-    }
-    assert_eq!(
-        feed(
-            &mut duplicate,
+            &mut parser,
             turn_completed(
-                vec![
-                    json!({"id": "first", "type": "agentMessage", "text": "{\"result\":\"1\"}", "phase": "final_answer"}),
-                    json!({"id": "second", "type": "agentMessage", "text": "{\"result\":\"1\"}", "phase": "final_answer"}),
-                ],
+                vec![json!({
+                    "id": "result",
+                    "type": "agentMessage",
+                    "text": text,
+                    "phase": "final_answer",
+                })],
                 "completed",
             ),
         )
-        .unwrap_err(),
-        AgentFailureCause::HarnessProtocolFailed,
-    );
+        .unwrap();
+        assert!(parser.take_result_candidate().is_none());
+        let correction = take_json(&mut parser);
+        assert_eq!(correction["method"], "turn/start", "{text}");
+        assert_eq!(correction["params"]["threadId"], THREAD_ID);
+    }
+
+    let mut duplicate = running_parser(AgentValueKind::Result, 1024);
+    let mut items = Vec::new();
+    for id in ["first", "second"] {
+        feed(&mut duplicate, item_started(id, "agentMessage")).unwrap();
+        let completed = item_completed(id, r#"{"result":"1"}"#, json!("final_answer"));
+        items.push(completed["params"]["item"].clone());
+        feed(&mut duplicate, completed).unwrap();
+    }
+    feed(&mut duplicate, turn_completed(items, "completed")).unwrap();
+    assert!(duplicate.take_result_candidate().is_none());
+    assert_eq!(take_json(&mut duplicate)["method"], "turn/start");
 
     let mut missing = running_parser(AgentValueKind::Result, 1024);
     let (progress, _) = feed(&mut missing, turn_completed(vec![], "completed")).unwrap();
@@ -2462,6 +2451,11 @@ fn malformed_oversized_truncated_and_correlation_inputs_are_bounded_by_phase() {
         }
     );
 
+    assert_eq!(
+        rejection_reason(&correlation_limited),
+        "retained_correlation_limit_exceeded"
+    );
+
     let mut diagnostic_limited = running_parser(AgentValueKind::None, 1024);
     diagnostic_limited.limits.maximum_retained_diagnostic_bytes = NonZeroU64::new(5).unwrap();
     let (_, observations) = feed(
@@ -2523,15 +2517,13 @@ fn malformed_diagnostic_payloads_are_observed_without_failing() {
     }
 
     let mut mismatch = running_parser(AgentValueKind::None, 1024);
-    assert!(
-        feed(
-            &mut mismatch,
-            json!({"method": "warning", "params": {
-                "threadId": "other-thread", "message": "warning"
-            }}),
-        )
-        .is_err()
-    );
+    feed(
+        &mut mismatch,
+        json!({"method": "warning", "params": {
+            "threadId": "other-thread", "message": "warning"
+        }}),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -2560,64 +2552,48 @@ fn protocol_rejections_identify_distinct_failure_conditions() {
     assert!(malformed.push_stdout(b"not-json\n", |_| {}).is_err());
     assert_eq!(rejection_reason(&malformed), "frame_decode_failed");
 
-    let mut thread_mismatch = running_parser(AgentValueKind::None, 1024);
+    let mut missing_thread = running_parser(AgentValueKind::None, 1024);
+    let mut completed = turn_completed(vec![], "completed");
+    completed["params"]
+        .as_object_mut()
+        .unwrap()
+        .remove("threadId");
+    assert!(feed(&mut missing_thread, completed).is_err());
+    assert_eq!(
+        rejection_reason(&missing_thread),
+        "thread_correlation_invalid"
+    );
+
+    let mut malformed_request = running_parser(AgentValueKind::None, 1024);
     assert!(
         feed(
-            &mut thread_mismatch,
+            &mut malformed_request,
             json!({
-                "method": "future/notification",
-                "params": {"threadId": "other", "turnId": "turn-1"},
-            }),
+                "id": "request",
+                "method": "item/commandExecution/requestApproval",
+            })
         )
         .is_err()
     );
     assert_eq!(
-        rejection_reason(&thread_mismatch),
-        "thread_correlation_invalid"
+        rejection_reason(&malformed_request),
+        "server_request_envelope_invalid"
     );
-
-    let mut item_mismatch = running_parser(AgentValueKind::None, 1024);
-    assert!(
-        feed(
-            &mut item_mismatch,
-            json!({
-                "id": "request",
-                "method": "item/commandExecution/requestApproval",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "turn-1",
-                    "itemId": "missing",
-                },
-            }),
-        )
-        .is_err()
-    );
-    assert_eq!(rejection_reason(&item_mismatch), "item_correlation_invalid");
 }
 
 #[test]
-fn turn_summary_rejection_is_not_replaced_by_nested_message_validation() {
-    let mut parser = running_parser(AgentValueKind::None, 1024);
-    feed(&mut parser, item_started("message", "agentMessage")).unwrap();
+fn a_summary_without_a_streamed_message_has_no_authority() {
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    let summary = json!({"id":"message", "type":"agentMessage", "text":result_envelope(json!(7)), "phase":"final_answer"});
     feed(
         &mut parser,
-        item_completed("message", "settled response", json!("final_answer")),
+        turn_completed(vec![summary.clone(), summary], "completed"),
     )
     .unwrap();
-    let summary = json!({
-        "id": "message",
-        "type": "agentMessage",
-        "text": "settled response",
-        "phase": "final_answer",
-    });
-    assert!(
-        feed(
-            &mut parser,
-            turn_completed(vec![summary.clone(), summary], "completed"),
-        )
-        .is_err()
+    assert_eq!(
+        parser.finish(true),
+        AgentOutcome::Failed(AgentFailureCause::MissingResult.into())
     );
-    assert_eq!(rejection_reason(&parser), "turn_summary_invalid");
 }
 
 #[test]
@@ -2746,6 +2722,18 @@ fn structured_codex_failures_project_safe_runner_diagnostics() {
         (
             json!("usageLimitExceeded"),
             json!({"harnessError": "usage_limit_exceeded", "harnessFailure": "model_error"}),
+        ),
+        (
+            json!("rateLimitExceeded"),
+            json!({"harnessError": "rate_limited", "harnessFailure": "model_error"}),
+        ),
+        (
+            json!("modelNotFound"),
+            json!({"harnessError": "bad_request", "harnessFailure": "model_error"}),
+        ),
+        (
+            json!("inferenceHookDenied"),
+            json!({"harnessError": "other", "harnessFailure": "model_error"}),
         ),
         (
             json!("unauthorized"),
@@ -2881,96 +2869,55 @@ fn flex_unavailable_preserves_native_failure_and_retry_correlation() {
     );
 }
 
-// REQ-AGENT-25
+// REQ-AGENT-25, REQ-AGENT-90
 // INV-HARNESS-6
 #[test]
-fn declined_server_requests_enforce_only_correlation_identity() {
-    for (method, item_kind, params, expected) in [
+fn server_requests_are_answered_whatever_they_name() {
+    let mut parser = running_parser(AgentValueKind::None, 1024);
+    let params = json!({"threadId": THREAD_ID, "turnId": "other-turn", "itemId": "unseen",
+        "futureField": {"nested": true}});
+    // Codex's input is closed once the invocation is terminal: a request is recorded,
+    // gets no answer and leaves the outcome alone.
+    let mut closed = parser.clone();
+    feed(&mut closed, turn_completed(vec![], "completed")).unwrap();
+    for (id, method) in [(13, "item/tool/requestUserInput"), (14, "future/request")] {
+        let (_, observations) = feed(
+            &mut closed,
+            json!({"id": id, "method": method, "params": params}),
+        )
+        .unwrap();
+        assert!(matches!(
+            observations.as_slice(),
+            [AgentObservation::UnrecognizedHarnessEvent { .. }]
+        ));
+        assert!(closed.take_outbound().is_none());
+    }
+    assert_eq!(
+        closed.finish(true),
+        AgentOutcome::Completed(CompletedAgentInvocation::NoValue)
+    );
+    for (method, expected) in [
         (
             "item/commandExecution/requestApproval",
-            Some("reasoning"),
-            json!({
-                "threadId": "thread-1",
-                "turnId": "turn-1",
-                "itemId": "interactive",
-                "startedAtMs": "future-timestamp-shape",
-                "futureField": {"nested": true},
-            }),
             json!({"decision": "decline"}),
         ),
         (
             "item/fileChange/requestApproval",
-            Some("reasoning"),
-            json!({
-                "threadId": "thread-1",
-                "turnId": "turn-1",
-                "itemId": "interactive",
-                "futureField": true,
-            }),
             json!({"decision": "decline"}),
         ),
         (
             "item/permissions/requestApproval",
-            None,
-            json!({
-                "threadId": "thread-1",
-                "turnId": "turn-1",
-                "itemId": "interactive",
-                "permissions": "future-permission-shape",
-            }),
             json!({"permissions": {}}),
         ),
-        (
-            "item/tool/requestUserInput",
-            None,
-            json!({
-                "threadId": "thread-1",
-                "turnId": "turn-1",
-                "itemId": "interactive",
-                "isBlocking": false,
-                "questions": [{
-                    "id": "structured-question",
-                    "header": "Choice",
-                    "question": "Select an option",
-                    "options": [{"label": "A", "description": "first"}],
-                    "isOther": true,
-                    "isSecret": false,
-                }],
-            }),
-            json!({"answers": {}}),
-        ),
+        ("item/tool/requestUserInput", json!({"answers": {}})),
         (
             "mcpServer/elicitation/request",
-            None,
-            json!({
-                "threadId": "thread-1",
-                "turnId": "turn-1",
-                "serverName": "fixture-mcp",
-                "mode": "form",
-                "message": "Provide structured input",
-                "requestedSchema": {
-                    "type": "object",
-                    "properties": {
-                        "choice": {"type": "string", "enum": ["A", "B"]},
-                    },
-                    "required": ["choice"],
-                },
-            }),
             json!({"action": "decline"}),
         ),
     ] {
-        let mut parser = running_parser(AgentValueKind::None, 1024);
-        if let Some(item_kind) = item_kind {
-            feed(&mut parser, item_started("interactive", item_kind)).unwrap();
-        }
         let (_, observations) = feed(
             &mut parser,
-            json!({
-                "id": "additive-request",
-                "method": method,
-                "params": params,
-                "futureEnvelopeField": true,
-            }),
+            json!({"id": method, "method": method, "params": params}),
         )
         .unwrap();
         assert!(matches!(
@@ -2979,10 +2926,17 @@ fn declined_server_requests_enforce_only_correlation_identity() {
         ));
         assert_eq!(
             take_json(&mut parser),
-            json!({"id": "additive-request", "result": expected}),
-            "{method}",
+            json!({"id": method, "result": expected})
         );
     }
+    let unknown = json!({"id": 12, "method": "future/request", "params": params});
+    feed(&mut parser, unknown.clone()).unwrap();
+    assert_eq!(take_json(&mut parser)["error"]["code"], -32601);
+    assert_eq!(
+        feed(&mut parser, unknown).unwrap_err(),
+        AgentFailureCause::HarnessProtocolFailed
+    );
+    assert_eq!(rejection_reason(&parser), "server_request_repeated");
 }
 
 #[test]
@@ -2996,6 +2950,7 @@ fn mcp_elicitation_with_explicit_null_turn_id_is_declined() {
             "params": {
                 "threadId": "thread-1",
                 "turnId": null,
+                "itemId": "other-item",
                 "serverName": "fixture-mcp",
                 "mode": "form",
                 "message": "Provide structured input",
@@ -3018,6 +2973,62 @@ fn mcp_elicitation_with_explicit_null_turn_id_is_declined() {
             "result": {"action": "decline"},
         }),
     );
+}
+
+// REQ-AGENT-38, INV-HARNESS-28
+#[test]
+fn each_method_useful_cannot_show_is_recorded_once() {
+    fn records(parser: &mut CodexAppServerV1Parser, frame: Value) -> Vec<Value> {
+        let (progress, observations) = feed(parser, frame).unwrap();
+        assert_eq!(progress, ParserProgress::default());
+        observations
+            .into_iter()
+            .map(|event| match event {
+                AgentObservation::UnrecognizedHarnessEvent { event } => (*event).clone(),
+                other => panic!("unexpected lead activity: {other:?}"),
+            })
+            .collect()
+    }
+
+    let mut parser = running_parser(AgentValueKind::None, 1024);
+    let mut delta = json!({"method": "item/agentMessage/delta", "params": {
+        "threadId": "builder", "turnId": "builder-turn", "itemId": "message", "delta": "first"
+    }});
+    let first = delta.clone();
+    let mut observed = records(&mut parser, first.clone());
+    delta["params"]["delta"] = json!("later");
+    for _ in 1..100 {
+        observed.extend(records(&mut parser, delta.clone()));
+    }
+    let completed = json!({"method": "turn/completed", "params": {
+        "threadId": "builder", "turn": {"id": "builder-turn", "status": "completed"}
+    }});
+    observed.extend(records(&mut parser, completed.clone()));
+    let status = json!({"method": "thread/status/changed", "params": {"threadId": THREAD_ID}});
+    for _ in 0..2 {
+        observed.extend(records(&mut parser, status.clone()));
+    }
+    assert_eq!(observed, [first, completed, status]);
+
+    let mut bounded = running_parser(AgentValueKind::None, 1024);
+    let methods = (0..70).map(|n| json!({"method": format!("future/{n}")}));
+    let expected: Vec<_> = methods.clone().take(65).collect();
+    let observed: Vec<_> = methods
+        .flat_map(|frame| records(&mut bounded, frame))
+        .collect();
+    assert_eq!(observed, expected);
+    for id in [7, 8] {
+        let request = json!({"id": id, "method": "future/0"});
+        assert_eq!(records(&mut bounded, request.clone()), [request]);
+        assert_eq!(take_json(&mut bounded)["error"]["code"], -32601);
+    }
+
+    let mut invalid = running_parser(AgentValueKind::None, 1024);
+    let long = json!({"method": "m".repeat(65)});
+    assert_eq!(records(&mut invalid, long.clone()), [long]);
+    assert!(records(&mut invalid, json!({"method": "invalid method"})).is_empty());
+    let valid = json!({"method": "m".repeat(64)});
+    assert_eq!(records(&mut invalid, valid.clone()), [valid]);
 }
 
 // REQ-AGENT-38
@@ -3082,51 +3093,35 @@ fn method_only_unknown_notifications_and_requests_are_observed() {
 }
 
 #[test]
-fn relaxed_routes_reject_every_present_correlation_mismatch() {
-    let cases = [
-        (
-            "thread project turn",
-            json!({
-                "method": "thread/project/updated",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "other-turn",
-                    "projectId": "project-1",
-                },
-            }),
-        ),
-        (
-            "thread project item",
-            json!({
-                "method": "thread/project/updated",
-                "params": {
-                    "threadId": "thread-1",
-                    "itemId": "other-item",
-                    "projectId": "project-1",
-                },
-            }),
-        ),
-        (
-            "MCP elicitation item",
-            json!({
-                "id": "mcp-request",
-                "method": "mcpServer/elicitation/request",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "turn-1",
-                    "itemId": "other-item",
-                },
-            }),
-        ),
-    ];
-    let accepted = cases
-        .into_iter()
-        .filter_map(|(case, event)| {
-            let mut parser = running_parser(AgentValueKind::None, 1024);
-            feed(&mut parser, event).is_ok().then_some(case)
-        })
-        .collect::<Vec<_>>();
-    assert!(accepted.is_empty(), "accepted mismatches: {accepted:?}");
+fn root_project_updates_remain_fatal_and_elicitation_is_declined() {
+    for mismatch in [
+        json!({"turnId": "other-turn"}),
+        json!({"itemId": "other-item"}),
+    ] {
+        let mut params = mismatch;
+        params["threadId"] = json!(THREAD_ID);
+        params["projectId"] = json!("project-1");
+        let mut parser = running_parser(AgentValueKind::None, 1024);
+        assert_eq!(
+            feed(
+                &mut parser,
+                json!({"method": "thread/project/updated", "params": params})
+            )
+            .unwrap_err(),
+            AgentFailureCause::HarnessProtocolFailed
+        );
+    }
+    let mut parser = running_parser(AgentValueKind::None, 1024);
+    feed(
+        &mut parser,
+        json!({"id": "mcp-request", "method": "mcpServer/elicitation/request",
+        "params": {"threadId": THREAD_ID, "turnId": "turn-1", "itemId": "other-item"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        take_json(&mut parser)["result"],
+        json!({"action": "decline"})
+    );
 }
 
 #[test]
@@ -3259,4 +3254,193 @@ fn contradictory_native_and_terminal_error_identity_fails_closed() {
         parser.finish(true),
         AgentOutcome::Failed(AgentFailureCause::HarnessProtocolFailed.into()),
     );
+}
+
+// REQ-AGENT-91, REQ-AGENT-26, REQ-AGENT-31
+#[test]
+fn the_leads_result_is_the_same_with_or_without_progress_noise() {
+    let noise = progress_noise("thread-1", "turn-1");
+    for kind in [AgentValueKind::Result, AgentValueKind::Response] {
+        check_noisy_turn(kind, &[], false);
+        for frames in &noise {
+            check_noisy_turn(kind, frames, false);
+        }
+        check_noisy_turn(kind, &[], true);
+        check_noisy_turn(kind, &noise.concat(), true);
+    }
+}
+
+pub(super) fn progress_noise(thread: &str, turn: &str) -> Vec<Vec<Value>> {
+    let frame = |method: &str, mut params: Value| {
+        params["threadId"] = json!(thread);
+        params["turnId"] = json!(turn);
+        json!({"method": method, "params": params})
+    };
+    let delta = json!({"itemId":"unannounced", "delta":"progress"});
+    let mut other_turn = frame("item/agentMessage/delta", delta.clone());
+    other_turn["params"]["turnId"] = json!("another-turn");
+    let command = frame(
+        "item/started",
+        json!({"item":{"id":"open", "type":"commandExecution"}}),
+    );
+    vec![
+        vec![frame("thread/tokenUsage/updated", json!({"tokenUsage":{}}))],
+        vec![frame("item/agentMessage/delta", delta.clone())],
+        vec![frame("item/reasoning/textDelta", delta)],
+        vec![other_turn],
+        vec![frame(
+            "hook/started",
+            json!({"run":{"id":"unfinished", "eventName":"Stop"}}),
+        )],
+        vec![command.clone()],
+        vec![frame(
+            "item/completed",
+            json!({"item":{"id":"orphan","type":"commandExecution","status":"completed"}}),
+        )],
+        vec![frame(
+            "item/completed",
+            json!({"item":{"id":"surprise","type":"commandExecution","status":"future"}}),
+        )],
+        vec![command.clone(), command],
+        vec![frame(
+            "thread/realtime/item/completed",
+            json!({"sessionId":"s", "itemId":"unseen"}),
+        )],
+        // A completion that is not an assistant message decides nothing, whatever it omits.
+        ["/params/threadId", "/params/turnId", "/params/item/id"]
+            .into_iter()
+            .map(|omitted| {
+                let mut completion = frame(
+                    "item/completed",
+                    json!({"item":{"id":"partial","type":"commandExecution","status":"completed"}}),
+                );
+                let (parent, key) = omitted.rsplit_once('/').unwrap();
+                let fields = completion.pointer_mut(parent).unwrap();
+                fields.as_object_mut().unwrap().remove(key);
+                completion
+            })
+            .collect(),
+    ]
+}
+
+fn check_noisy_turn(kind: AgentValueKind, noise: &[Value], noisy_summary: bool) {
+    let mut parser = running_parser(kind, 1024);
+    for frame in noise {
+        feed(&mut parser, frame.clone()).unwrap();
+    }
+    let text = result_envelope(json!(7));
+    let message = item_completed("lead", &text, json!("final_answer"));
+    feed(&mut parser, item_started("lead", "agentMessage")).unwrap();
+    feed(&mut parser, message.clone()).unwrap();
+    let mut terminal = turn_completed(vec![message["params"]["item"].clone()], "completed");
+    if noisy_summary {
+        terminal["params"]["turn"]["items"] = json!([{"id":"unseen","type":"future"}]);
+        terminal["params"]["turn"]["itemsView"] = json!("future");
+    }
+    feed(&mut parser, terminal).unwrap();
+    if kind == AgentValueKind::Result {
+        let candidate = parser.take_result_candidate().unwrap();
+        assert_eq!(*candidate, json!(7));
+        let result = CapturedJson::fixture(candidate);
+        parser.accept_result(result.clone()).unwrap();
+        assert_eq!(
+            parser.finish(true),
+            AgentOutcome::Completed(CompletedAgentInvocation::Result(result))
+        );
+    } else {
+        let AgentOutcome::Completed(CompletedAgentInvocation::Response(response)) =
+            parser.finish(true)
+        else {
+            panic!("expected a response");
+        };
+        assert_eq!(response.as_str(), text);
+    }
+}
+
+// REQ-AGENT-91, INV-HARNESS-27
+#[test]
+fn deciding_notifications_on_the_leads_thread_are_read_strictly() {
+    let message = item_completed("lead", &result_envelope(json!(7)), json!("final_answer"));
+    let terminal = turn_completed(vec![], "completed");
+    let error = json!({"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"failed"}}});
+    let started =
+        json!({"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}});
+    for (frame, pointer) in [
+        (&message, "/params/turnId"),
+        (&error, "/params/turnId"),
+        (&terminal, "/params/turn/id"),
+        (&started, "/params/turn/id"),
+    ] {
+        for turn in [Value::Null, json!("unexpected")] {
+            let mut parser = running_parser(AgentValueKind::Result, 1024);
+            let mut invalid = frame.clone();
+            *invalid.pointer_mut(pointer).unwrap() = turn;
+            feed(&mut parser, invalid).unwrap_err();
+            assert_eq!(rejection_reason(&parser), "turn_correlation_invalid");
+        }
+    }
+    for (field, invalid) in [("text", json!(7)), ("phase", json!("future"))] {
+        let mut parser = running_parser(AgentValueKind::Result, 1024);
+        let mut unreadable = message.clone();
+        unreadable["params"]["item"][field] = invalid;
+        feed(&mut parser, unreadable).unwrap_err();
+        assert_eq!(rejection_reason(&parser), "message_invalid");
+    }
+    // A completion whose type cannot be read may be the lead's message, and a message
+    // needs its id.
+    for field in ["type", "id"] {
+        let mut parser = running_parser(AgentValueKind::Result, 1024);
+        let mut unreadable = message.clone();
+        unreadable["params"]["item"][field] = json!(7);
+        feed(&mut parser, unreadable).unwrap_err();
+        assert_eq!(rejection_reason(&parser), "item_correlation_invalid");
+    }
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    feed(&mut parser, message.clone()).unwrap();
+    feed(&mut parser, terminal.clone()).unwrap();
+    for frame in [&terminal, &error, &message] {
+        feed(&mut parser, frame.clone()).unwrap();
+        assert_eq!(parser.native_terminal, Some(NativeTerminal::Completed));
+        assert_eq!(parser.pending_result_candidate.as_deref(), Some(&json!(7)));
+    }
+    parser.take_result_candidate().unwrap();
+    parser.reject_result(Arc::from("try again")).unwrap();
+    for frame in [terminal, error, message] {
+        feed(&mut parser, frame).unwrap();
+        assert_eq!(parser.state, SetupState::TurnStart);
+        assert!(parser.native_terminal.is_none());
+        assert!(parser.pending_result_candidate.is_none());
+    }
+}
+
+// INV-HARNESS-27, REQ-AGENT-91
+#[test]
+fn a_long_lead_turn_exhausts_no_budget() {
+    let mut parser = running_parser(AgentValueKind::Result, 1024);
+    parser.limits = CodexAppServerV1ProtocolLimits::with_limits(
+        NonZeroU64::new(2048).unwrap(),
+        NonZeroU64::new(256).unwrap(),
+    );
+    for index in 0..1000 {
+        let id = format!("command-{index}");
+        feed(&mut parser, item_started(&id, "commandExecution")).unwrap();
+        feed(&mut parser, json!({"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":id,"type":"commandExecution","status":"completed"}}})).unwrap();
+        for method in ["hook/started", "hook/completed"] {
+            feed(&mut parser, json!({"method":method,"params":{"threadId":"thread-1","turnId":"turn-1","run":{"id":format!("hook-{index}"),"eventName":"Stop","status":"completed"}}})).unwrap();
+        }
+        let id = format!("commentary-{index}");
+        feed(&mut parser, item_started(&id, "agentMessage")).unwrap();
+        feed(
+            &mut parser,
+            item_completed(&id, "working", json!("commentary")),
+        )
+        .unwrap();
+    }
+    feed(
+        &mut parser,
+        item_completed("final", &result_envelope(json!(7)), json!("final_answer")),
+    )
+    .unwrap();
+    feed(&mut parser, turn_completed(vec![], "completed")).unwrap();
+    assert_eq!(parser.take_result_candidate().as_deref(), Some(&json!(7)));
 }

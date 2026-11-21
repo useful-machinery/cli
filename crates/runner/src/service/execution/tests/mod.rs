@@ -246,6 +246,7 @@ struct SupervisedLeaseFixture {
     task: tokio::task::JoinHandle<LeaseExecution<&'static str>>,
     waits: tokio::sync::mpsc::UnboundedReceiver<(Duration, LeaseTimerRelease)>,
     cancellation: CancellationSource,
+    lease_loss: LeaseLoss,
     fence: PostStopFence,
     guards: AssignmentProcessGuards,
     _authority: tokio::sync::watch::Sender<LeaseAuthority>,
@@ -255,6 +256,7 @@ struct SupervisedLeaseFixture {
 struct SupervisedExecution<Output> {
     task: tokio::task::JoinHandle<LeaseExecution<Output>>,
     cancellation: CancellationSource,
+    lease_loss: LeaseLoss,
     fence: PostStopFence,
     guards: AssignmentProcessGuards,
     authority: tokio::sync::watch::Sender<LeaseAuthority>,
@@ -290,7 +292,8 @@ where
     Output: Send + 'static,
 {
     let cancellation = CancellationSource::new();
-    let observed_cancellation = cancellation.clone();
+    let lease_loss = LeaseLoss::new(cancellation.clone(), RunEvent::default());
+    let observed_lease_loss = lease_loss.clone();
     let outbox = ObservationOutbox::new();
     let observed_outbox = outbox.clone();
     let fence = PostStopFence::with_workflow_git(None);
@@ -303,7 +306,7 @@ where
     let task = tokio::spawn(async move {
         run_under_lease(
             execution,
-            &cancellation,
+            &lease_loss,
             &lease_clock,
             authority_updates,
             infrastructure_updates,
@@ -319,7 +322,8 @@ where
     });
     SupervisedExecution {
         task,
-        cancellation: observed_cancellation,
+        cancellation,
+        lease_loss: observed_lease_loss,
         fence: observed_fence,
         guards: observed_guards,
         authority: authority_sender,
@@ -340,6 +344,7 @@ fn supervised_lease_fixture() -> SupervisedLeaseFixture {
         task: supervised.task,
         waits,
         cancellation: supervised.cancellation,
+        lease_loss: supervised.lease_loss,
         fence: supervised.fence,
         guards: supervised.guards,
         _authority: supervised.authority,
@@ -650,6 +655,7 @@ async fn runner_shutdown_is_retained_separately_from_sticky_user_cancellation() 
     );
 }
 
+// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_loss_is_retained_separately_from_sticky_user_cancellation() {
     let mut fixture = supervised_lease_fixture();
@@ -682,8 +688,87 @@ async fn lease_loss_is_retained_separately_from_sticky_user_cancellation() {
         fixture.cancellation.cancellation_reason(),
         Some(CancellationReason::UserRequest)
     );
+    assert_eq!(
+        fixture.lease_loss.reason(),
+        Some(LeaseLossReason::RenewalUnreachable)
+    );
 }
 
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn supervision_started_after_cancellation_deadline_names_start_late() {
+    let (clock, control, _waits) = controlled_lease_clock();
+    let authority = lease_authority(clock.now().unwrap());
+    control.advance(Duration::from_secs(5));
+    let supervised = supervise_execution(clock, authority, async {});
+    with_watchdog(supervised.task).await.unwrap().unwrap();
+    assert_eq!(
+        supervised.lease_loss.reason(),
+        Some(LeaseLossReason::StartLate)
+    );
+}
+
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn unnumberable_renewal_request_names_unreachable() {
+    let (clock, _control, mut waits) = controlled_lease_clock();
+    let mut authority = lease_authority(clock.now().unwrap());
+    authority.sequence = u64::MAX;
+    let (done, wait) = tokio::sync::oneshot::channel();
+    let supervised = supervise_execution(clock, authority, wait);
+    lease_wait_request(&mut waits, Duration::from_secs(2))
+        .await
+        .release();
+    with_watchdog(supervised.cancellation.wait_for_cancellation())
+        .await
+        .unwrap();
+    done.send(()).unwrap();
+    with_watchdog(supervised.task).await.unwrap().unwrap();
+    assert_eq!(
+        supervised.lease_loss.reason(),
+        Some(LeaseLossReason::RenewalUnreachable)
+    );
+}
+
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn closed_authority_channel_names_authority_missing() {
+    let (clock, _control, _waits) = controlled_lease_clock();
+    let authority = lease_authority(clock.now().unwrap());
+    let (done, wait) = tokio::sync::oneshot::channel();
+    let supervised = supervise_execution(clock, authority, wait);
+    drop(supervised.authority);
+    with_watchdog(supervised.cancellation.wait_for_cancellation())
+        .await
+        .unwrap();
+    done.send(()).unwrap();
+    with_watchdog(supervised.task).await.unwrap().unwrap();
+    assert_eq!(
+        supervised.lease_loss.reason(),
+        Some(LeaseLossReason::AuthorityMissing)
+    );
+}
+
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn renewal_deadline_preserves_earlier_cloud_revocation() {
+    let mut fixture = supervised_lease_fixture();
+    lease_wait_request(&mut fixture.waits, Duration::from_secs(2))
+        .await
+        .release();
+    let deadline = lease_wait_request(&mut fixture.waits, Duration::from_secs(2)).await;
+    fixture.lease_loss.lose(LeaseLossReason::RevokedByCloud);
+    deadline.release();
+    let _force_stop = lease_wait_request(&mut fixture.waits, Duration::from_secs(1)).await;
+    fixture.result.send("revoked").unwrap();
+    with_watchdog(fixture.task).await.unwrap().unwrap();
+    assert_eq!(
+        fixture.lease_loss.reason(),
+        Some(LeaseLossReason::RevokedByCloud)
+    );
+}
+
+// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_timer_failure_contains_without_accepting_ready_progress() {
     let (lease_clock, authority) = unavailable_timer_fixture();
@@ -692,8 +777,10 @@ async fn lease_timer_failure_contains_without_accepting_ready_progress() {
         result.await.expect("fixture result")
     });
 
+    let loss = supervised.lease_loss.clone();
     assert_lease_clock_failure(supervised).await;
     assert!(result_sender.send("ready-late").is_err());
+    assert_eq!(loss.reason(), Some(LeaseLossReason::ClockFailed));
 }
 
 #[tokio::test]
@@ -760,6 +847,7 @@ async fn exact_stop_boundary_fences_before_a_ready_late_result() {
     ));
 }
 
+// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn overlong_suspend_contains_before_ready_completion() {
     let (lease_clock, control, mut waits) = controlled_lease_clock();
@@ -781,6 +869,10 @@ async fn overlong_suspend_contains_before_ready_completion() {
         .expect("lease supervision timed out")
         .expect("lease supervision task failed");
     assert!(matches!(outcome, LeaseExecution::Completed { .. }));
+    assert_eq!(
+        supervised.lease_loss.reason(),
+        Some(LeaseLossReason::RenewalUnreachable)
+    );
     assert_eq!(
         supervised.cancellation.cancellation_reason(),
         Some(CancellationReason::ExecutionLeaseExpired),
@@ -1283,6 +1375,7 @@ fn invalid_result_publication_retains_the_original_command_failure() {
         recovery: None,
         invocations: Vec::new(),
         failed_child: None,
+        failure_class: None,
         input_sources: Vec::new(),
     };
     retain_result_publication_failure(
@@ -1735,6 +1828,7 @@ async fn step_execution_outcome_follows_the_settlement_kind() {
                     "phase": "execution", "code": "command_exit", "exitCode": 1,
                 }))
                 .unwrap(),
+                failure_class: None,
             }),
             ExecutionSettlement::Failed(StepFailureKind::RecoveryHandler),
             "failure",

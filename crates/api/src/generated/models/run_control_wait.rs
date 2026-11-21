@@ -44,6 +44,8 @@ pub enum Kind {
     RunControlWaitExternal,
     #[serde(rename = "children")]
     RunControlWaitChildren,
+    #[serde(rename = "host")]
+    RunControlWaitHost,
 }
 
 impl Default for Kind {

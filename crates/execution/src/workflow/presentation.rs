@@ -19,7 +19,7 @@ use super::admission::{AdmissionFailure, CancellationReason};
 use super::definition_store::DefinitionError;
 use super::document::FailurePolicy;
 use super::evidence::{
-    BlockedDetail, FailedChild, FailureDetail, Prerequisite, PrimaryIssueDetail,
+    BlockedDetail, FailedChild, FailureClass, FailureDetail, Prerequisite, PrimaryIssueDetail,
 };
 use super::local_run::{
     CarryMiss, LocalRetryRejection, RetryIneligibilityReason, TreeCopyMismatch,
@@ -58,8 +58,28 @@ use crate::harness_installation::UntestedHarnessAdvisory;
 const RUN_COMMAND: &str = "useful workflow run create";
 const RETRY_COMMAND: &str = "useful workflow run retry";
 const RESUME_COMMAND: &str = "useful workflow run resume";
-const RESTART_COMMAND: &str = "useful workflow run restart";
 const UPGRADE_COMMAND: &str = "useful workflow run upgrade";
+
+/// A control command that continues the run whose wait it resolves, as `useful workflow run
+/// resume` would, and names itself on the continuation's documents (REQ-LOCALRUN-182,
+/// REQ-LOCALRUN-183).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContinuingControl {
+    Answer,
+    Approve,
+    HandBack,
+}
+
+impl ContinuingControl {
+    /// The command the documents name.
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Answer => "useful workflow run answer",
+            Self::Approve => "useful workflow run approve",
+            Self::HandBack => "useful workflow run hand-back",
+        }
+    }
+}
 const EVENT_TOKEN_WIDTH: usize = 10;
 const MIN_INLINE_DETAIL_WIDTH: usize = 24;
 const STACKED_DETAIL_INDENT: usize = 2;
@@ -324,6 +344,9 @@ pub struct WorkflowRunOutput<StandardOutput, StandardError> {
     standard_output: StandardOutput,
     standard_error: StandardError,
     command: &'static str,
+    /// Whether the documents are a continuation's: phase `continuation` for a refusal at the
+    /// run's latest attempt, under `command`.
+    continuing: bool,
     retry_run_directory: Option<String>,
 }
 
@@ -342,43 +365,61 @@ where
             standard_output,
             standard_error,
             command: RUN_COMMAND,
+            continuing: false,
             retry_run_directory: None,
         }
     }
 
+    /// The documents of `useful workflow run retry --all` of the run at `run_directory`, a
+    /// new attempt of every step (REQ-LOCALRUN-78): phase `retry`.
     pub fn for_retry(mut self, run_directory: &Path) -> Self {
         self.command = RETRY_COMMAND;
         self.retry_run_directory = run_directory.to_str().map(str::to_owned);
         self
     }
 
+    /// The documents of `useful workflow run retry` continuing the run at `run_directory`
+    /// from named steps, the stage an ended run stood at or a wait for repair
+    /// (REQ-LOCALRUN-184): reported as `resume` reports a continuation, under `retry`'s name.
+    pub fn for_retry_continuation(mut self, run_directory: &Path) -> Self {
+        self.command = RETRY_COMMAND;
+        self.continuing = true;
+        self.retry_run_directory = run_directory.to_str().map(str::to_owned);
+        self
+    }
+
     pub fn for_resume(mut self, run_directory: &Path) -> Self {
         self.command = RESUME_COMMAND;
+        self.continuing = true;
         self.retry_run_directory = run_directory.to_str().map(str::to_owned);
         self
     }
 
-    /// The documents of `useful workflow run restart` of the run at `run_directory`, the
-    /// predecessor until the successor exists (REQ-LOCALRUN-194).
-    pub fn for_restart(mut self, run_directory: &Path) -> Self {
-        self.command = RESTART_COMMAND;
-        self.retry_run_directory = run_directory.to_str().map(str::to_owned);
-        self
-    }
-
-    /// The documents of `useful workflow run upgrade` of the run at `run_directory`, the
-    /// predecessor until the successor exists (REQ-LOCALRUN-197).
+    /// The documents of `useful workflow run upgrade` of the run at `run_directory`, with or
+    /// without `--from`, the predecessor until the successor exists (REQ-LOCALRUN-194,
+    /// REQ-LOCALRUN-197).
     pub fn for_upgrade(mut self, run_directory: &Path) -> Self {
         self.command = UPGRADE_COMMAND;
+        self.continuing = true;
         self.retry_run_directory = run_directory.to_str().map(str::to_owned);
         self
     }
 
-    /// The command a continuation's refusal names: `restart` and `upgrade` report a refused
-    /// continuation as `resume` does, under their own names (REQ-LOCALRUN-194,
-    /// REQ-LOCALRUN-197).
+    /// The documents of `control`'s continuation of the run at `run_directory`
+    /// (REQ-LOCALRUN-182, REQ-LOCALRUN-183).
+    pub fn for_control(mut self, control: ContinuingControl, run_directory: &Path) -> Self {
+        self.command = control.command();
+        self.continuing = true;
+        self.retry_run_directory = run_directory.to_str().map(str::to_owned);
+        self
+    }
+
+    /// The command a continuation's refusal names: the continuing command's own, and
+    /// `resume`'s for a command that does not continue the run itself, whose attempt chained
+    /// into a continuation (REQ-LOCALRUN-182, REQ-LOCALRUN-183, REQ-LOCALRUN-184,
+    /// REQ-LOCALRUN-194, REQ-LOCALRUN-197).
     fn continuation_command(&self) -> &'static str {
-        if self.command == RESTART_COMMAND || self.command == UPGRADE_COMMAND {
+        if self.continuing {
             self.command
         } else {
             RESUME_COMMAND
@@ -543,7 +584,7 @@ where
         })
     }
 
-    /// A run refused before admission for the step its `--stop-before` names, which the
+    /// A run refused before admission for the step its `--pause-before` names, which the
     /// engine does not hold before (REQ-LOCALRUN-185): phase `definition` with the one
     /// `code`, its `message`, and the definition and revision when the run is of one.
     pub fn render_stop_rejection(
@@ -556,8 +597,8 @@ where
         self.render_subject_rejection(code, message, definition, revision, None)
     }
 
-    /// A `useful workflow run restart` or `upgrade` refused before the successor exists
-    /// (REQ-LOCALRUN-194, REQ-LOCALRUN-197): phase `successor` with the one `code`, its
+    /// A `useful workflow run upgrade`, with or without `--from`, refused before the successor
+    /// exists (REQ-LOCALRUN-194, REQ-LOCALRUN-197): phase `successor` with the one `code`, its
     /// `message` and `run`, the predecessor's id when it has a run record.
     pub fn render_successor_refusal(
         self,
@@ -748,7 +789,7 @@ where
                 PresentationFailureOperation::InvalidTerminalResult,
             ));
         };
-        let continuing = [RESUME_COMMAND, RESTART_COMMAND, UPGRADE_COMMAND].contains(&self.command);
+        let continuing = self.continuing;
         let superseded;
         let message = if rejection.reason() == RetryIneligibilityReason::RunSuperseded {
             superseded = superseded_rejection_message(rejection.successor());
@@ -1106,7 +1147,7 @@ struct TreeRejectionDiagnosticV1<'a> {
     message: String,
     location: TreeRejectionLocationV1<'a>,
     /// Where inside a workflow file a per-file resolution failure sits, as
-    /// `useful workflow definition validate` reports it.
+    /// `useful workflow validate` of a tree reports it.
     #[serde(skip_serializing_if = "Option::is_none")]
     workflow_location: Option<super::rejection::RejectionLocation<'a>>,
 }
@@ -2861,8 +2902,11 @@ impl StepRecords<'_> {
             }
             StepStateKind::Failed => {
                 let detail = match observed {
-                    Some(ObservedStepTransition::Failed { detail }) => {
-                        canonical_failure_detail(&detail)
+                    Some(ObservedStepTransition::Failed {
+                        detail,
+                        failure_class,
+                    }) => {
+                        classified_failure_detail(canonical_failure_detail(&detail), failure_class)
                     }
                     _ => "authoritative step failure".to_owned(),
                 };
@@ -3133,10 +3177,7 @@ pub(crate) fn recovery_progress_detail(
     };
     if let Some(decision) = decision {
         detail.push_str(" · decision ");
-        detail.push_str(match decision {
-            RecoveryDecisionKind::Recheck => "recheck",
-            RecoveryDecisionKind::GaveUp => "gave_up",
-        });
+        detail.push_str(decision.as_str());
     }
     detail
 }
@@ -3152,6 +3193,18 @@ pub(crate) fn finalization_trigger(
         crate::workflow::document::FinalizationTrigger::Succeeded => "succeeded",
         crate::workflow::document::FinalizationTrigger::Failed => "failed",
         crate::workflow::document::FinalizationTrigger::Cancelled => "cancelled",
+    }
+}
+
+/// A failed step's detail with its failure's class appended, when it has one
+/// (REQ-WFEXEC-79).
+pub(crate) fn classified_failure_detail(
+    detail: String,
+    failure_class: Option<FailureClass>,
+) -> String {
+    match failure_class {
+        Some(class) => format!("{detail} · {}", class.as_str()),
+        None => detail,
     }
 }
 
@@ -3303,7 +3356,10 @@ fn summary_step(
         )),
         StepState::Failed { detail } => Some((
             "failed",
-            issue_detail(canonical_failure_detail(detail), step.failure_policy),
+            issue_detail(
+                classified_failure_detail(canonical_failure_detail(detail), step.failure_class),
+                step.failure_policy,
+            ),
             TokenRole::Failure,
         )),
         StepState::Blocked { detail } => Some((
@@ -3365,6 +3421,16 @@ pub(crate) fn terminal_recovery_detail(
         super::publication::RecoveryTerminationV1::GaveUp { round } => {
             format!("recovery gave_up at round {round}")
         }
+        super::publication::RecoveryTerminationV1::Infrastructure {
+            round,
+            execution_number,
+        } => match (round, execution_number) {
+            (Some(round), _) => format!("recovery infrastructure at round {round}"),
+            (None, Some(execution_number)) => {
+                format!("recovery infrastructure at target execution {execution_number}")
+            }
+            (None, None) => "recovery infrastructure".to_owned(),
+        },
         super::publication::RecoveryTerminationV1::HandlerFailed { round, .. } => {
             format!("recovery handler failed at round {round}")
         }

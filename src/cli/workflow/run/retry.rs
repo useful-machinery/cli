@@ -1,38 +1,34 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use clap::Args;
 
 use useful_execution::{
-    CONTROL_RETRY, CancellationSource, LocalRetryBeginError, LocalRetryOpen, PendingLocalRetry,
-    WITHDRAWN_OUTCOME, WaitInspection, WaitKind, WorkflowRunOutput, acquire_local_retry,
-    admit_local_workflow, await_begin_gate, await_run_lock_gate,
+    CONTROL_RETRY, CancellationSource, LocalRetryBeginError, LocalRetryOpen, NoConditions,
+    PendingLocalRetry, RunState, WITHDRAWN_OUTCOME, WaitInspection, WaitKind, WorkflowRunOutput,
+    acquire_local_retry, admit_local_workflow, await_begin_gate, await_run_lock_gate, inspect_wait,
     reconcile_current_result_publication,
 };
 
+use super::cloud_api::{RunWaitArgs, parse_continuation_step};
 use super::control::{ControlFailure, ControlTarget, Refusal};
+use super::target::{Found, InCloud, RunArg};
+use crate::cli::context::OrgArgs;
+use crate::cli::{HttpOptions, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
 
-pub(super) const ABOUT: &str =
-    "Retry a local workflow run, or a Cloud run waiting for repair with --cloud";
-pub(super) const AFTER_HELP: &str = "Retry eligibility:
-  Retry is available when the latest attempt did not succeed or end in rejection, no
-  execution owner holds the run, and prior process ownership can be proven safe. A retry
-  executes every workflow step as a new attempt and requires --execution-root.
+pub(super) const ABOUT: &str = "Rerun steps of a run, on this machine or in Cloud";
+pub(super) const AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
 
-A run waiting for repair is retried from the stage that failed: the retry is recorded,
-with the replacement profiles of --agent-profiles when given, and the run continues as
-resume continues it, in the previous attempt's execution root unless --execution-root
-names another. A stage whose child run failed continues that child in place, inheriting
-its completed steps and rerunning the rest; in another execution root the stage starts
-afresh. No separate resume is needed.
+With --from STEP, repeatable, the run continues from the named ordinary steps: their downstream ordinary dependents run again, other eligible ordinary steps are inherited, and every finalizer runs again. --workflow names a replacement workflow file within the run's original source root.
 
-With --cloud ORGANIZATION, RUN is a Cloud run ID waiting for repair: the command reads that
-run and asks Cloud, under one request key sent again if the response is lost, to carry the
-retry for its current wait to the runner executing it, which retries the run as this command
-retries a local run. It takes no --execution-root or --agent-profiles. Cloud's acceptance is
-not the runner's application. It reads and writes no local run.";
+With --all, every step runs again as a new attempt, from the run's retained workflow and inputs. The attempt runs in --execution-root, or in the previous attempt's execution root when it is omitted, and a root an earlier attempt used is reported with a warning.
+
+With neither, a run waiting for repair or for its host is retried from the stage that failed: the retry is recorded, with the replacement profiles of --agent-profiles when given, and the run continues in the same command; a host wait's retry runs no requires.check. On either wait, a stage whose child run failed continues that child in place, inheriting its completed steps and rerunning the rest. An ended run that did not succeed continues from the stage it stood at: for a workflow of edges the step its latest attempt started last, for a Cloud run the step of the position it reported, and otherwise every step its latest attempt left unfinished; a run that names none is refused, naming --from and --all. In any other state, a run that is running or waits on another kind of wait, the command changes nothing and names the commands that apply.
+
+A run under the home runs in the previous attempt's execution root unless --execution-root names another. For a Cloud run the command asks Cloud for the continuation, the retry, or the repair the runner applies, under one request key sent again if the response is lost; --expected-version requires the run's version, and --wait follows a continuation until it settles, within --timeout. A retry with --all is always followed. Cloud's acceptance is not the runner's application.";
 
 const COMMAND: &str = "useful workflow run retry";
 
@@ -40,75 +36,251 @@ const COMMAND: &str = "useful workflow run retry";
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
+    run: RunArg,
+
+    #[arg(
+        long = "from",
+        value_name = "STEP",
+        help = "Ordinary step to rerun from (repeatable)"
+    )]
+    from_steps: Vec<String>,
+
+    #[arg(
+        long,
+        conflicts_with_all = ["from_steps", "workflow"],
+        help = "Rerun every step as a new attempt"
+    )]
+    all: bool,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Replacement workflow file within the run's original source root, for a run under the useful home"
+    )]
+    workflow: Option<PathBuf>,
 
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with = "cloud",
-        help = "Directory for workflow execution (must already exist); required unless the run waits for repair"
+        help = "Existing execution root, for a run under the useful home; defaults to the previous attempt's root"
     )]
     execution_root: Option<PathBuf>,
 
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with = "cloud",
+        conflicts_with_all = ["from_steps", "all"],
         help = "Replace declared agent profiles with the closed replacement document at PATH"
     )]
     agent_profiles: Option<PathBuf>,
+
+    #[arg(long, value_name = "VERSION", value_parser = clap::value_parser!(i64).range(1..),
+        help = "Require this positive run version at admission, for a Cloud run")]
+    expected_version: Option<i64>,
+
+    #[arg(long, help = "Observe a Cloud run's continuation until it settles")]
+    wait: bool,
+
+    #[arg(long, value_name = "DURATION", value_parser = super::super::super::parse_wait_timeout,
+        help = super::super::super::WAIT_TIMEOUT_HELP)]
+    timeout: Option<Duration>,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     presentation: super::PresentationOptions,
 
     #[command(flatten)]
-    cloud: super::CloudSelector,
+    authentication: PrincipalAuthenticationArgs,
+
+    #[command(flatten)]
+    http: HttpOptions,
+}
+
+/// What a local `retry` reruns.
+enum Rerun {
+    /// `--from`: a continuation from the named steps (REQ-CONTINUE-1).
+    From(Vec<String>),
+    /// `--all`: a new attempt of every step (REQ-LOCALRUN-78).
+    All,
+    /// Neither: a repair wait's retry or an ended run's continuation (REQ-LOCALRUN-184).
+    Default,
 }
 
 impl Command {
+    /// Finds the run and reruns it: a run under the home as `rerun` selects, and a Cloud run
+    /// through the API (REQ-LOCALRUN-210, REQ-CONTINUE-55, REQ-RETRY-30). An option the place
+    /// the run is found in does not read is a usage error, exit 2.
     pub(super) fn execute(mut self) -> super::super::super::CommandResult {
-        if let Some(organization) = self.cloud.organization.take() {
-            return super::cloud::CloudRun::new(
-                self.run,
-                organization,
-                self.cloud,
-                self.presentation.output.json,
-            )?
-            .control(super::cloud::Control::Retry);
+        let json = self.presentation.output.json;
+        let found = match super::control::find(
+            COMMAND,
+            &self.run,
+            &self.org,
+            &self.authentication,
+            &self.http,
+            json,
+        ) {
+            Ok(found) => found,
+            Err(result) => return result,
+        };
+        let run = match found {
+            Found::Home(run_directory) => run_directory,
+            Found::Cloud(run) => return self.in_cloud(*run),
+        };
+        if let Some(option) = [
+            self.expected_version.map(|_| "--expected-version"),
+            self.wait.then_some("--wait"),
+            self.timeout.map(|_| "--timeout"),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        {
+            return Err(usage(format!(
+                "{option} applies to a Cloud run, and RUN names a run under the useful home\n\n\
+                 Leave out {option}: the command reruns a run under the home itself."
+            )));
         }
+        let rerun = if self.all {
+            Rerun::All
+        } else if self.from_steps.is_empty() {
+            Rerun::Default
+        } else {
+            Rerun::From(std::mem::take(&mut self.from_steps))
+        };
         super::create::execute_with_runtime(
             "start local workflow retry runtime",
-            self.execute_async(),
+            self.execute_async(run, rerun),
         )
     }
 
-    async fn execute_async(self) -> super::super::super::CommandResult {
-        let run_directory = self.run.resolve().map_err(anyhow::Error::new)?;
+    /// Reruns the Cloud run the lookup found: `--from` as the continuation request, `--all` as
+    /// the retry request, and neither as `CloudRun::retry` chooses.
+    fn in_cloud(self, run: InCloud) -> super::super::super::CommandResult {
+        if let Some(option) = [
+            self.workflow.as_ref().map(|_| "--workflow"),
+            self.execution_root.as_ref().map(|_| "--execution-root"),
+            self.agent_profiles.as_ref().map(|_| "--agent-profiles"),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        {
+            return Err(usage(format!(
+                "{option} applies to a run under the useful home, and RUN names a Cloud run\n\n\
+                 Leave out {option}: the runner executing the Cloud run reruns it."
+            )));
+        }
+        // REQ-RETRY-44: a retry of every step is always followed; a continuation only with
+        // `--wait`.
+        if !self.all && self.timeout.is_some() && !self.wait {
+            return Err(usage(
+                "--timeout bounds --wait, and --wait is not given\n\n\
+                 Give --wait with --timeout, or leave out --timeout."
+                    .to_owned(),
+            ));
+        }
+        for step in &self.from_steps {
+            parse_continuation_step(step).map_err(|reason| {
+                usage(format!(
+                    "invalid value '{step}' for '--from <STEP>': {reason}"
+                ))
+            })?;
+        }
+        let json = self.presentation.output.json;
+        let cloud = super::cloud::CloudRun::found(run, self.authentication, self.http, json, false);
+        let wait = RunWaitArgs {
+            wait: self.wait,
+            timeout: self.timeout,
+        };
+        if self.all {
+            cloud.rerun(self.expected_version, self.timeout)
+        } else if self.from_steps.is_empty() {
+            cloud.retry(self.expected_version, wait)
+        } else {
+            cloud.continue_from(COMMAND, self.from_steps, self.expected_version, wait)
+        }
+    }
+
+    async fn execute_async(
+        self,
+        run_directory: PathBuf,
+        rerun: Rerun,
+    ) -> super::super::super::CommandResult {
         let presentation_config = super::create::presentation_config(&self.presentation);
+        let json = self.presentation.output.json;
+        match rerun {
+            Rerun::From(from_steps) => {
+                return self
+                    .continue_from(run_directory, from_steps, presentation_config)
+                    .await;
+            }
+            Rerun::All => {}
+            Rerun::Default => {
+                let inspected = {
+                    let run_directory = run_directory.clone();
+                    tokio::task::spawn_blocking(move || inspect_wait(&run_directory, &NoConditions))
+                        .await
+                        .map_err(anyhow::Error::new)?
+                        .map_err(anyhow::Error::new)?
+                };
+                let refuse = |refusal: &Refusal| {
+                    super::control::write_refusal(
+                        COMMAND,
+                        Some(&inspected.run_directory),
+                        refusal,
+                        json,
+                    )
+                };
+                return match &inspected.inspection {
+                    WaitInspection::Held { .. }
+                    | WaitInspection::Satisfied { .. }
+                    | WaitInspection::RuleInvalid { .. }
+                    | WaitInspection::ConditionUnavailable { .. } => {
+                        let target = super::control::open(&run_directory);
+                        self.retry_wait(&run_directory, target, presentation_config)
+                            .await
+                    }
+                    WaitInspection::Locked(_) => refuse(&super::control::run_locked()),
+                    // REQ-LOCALRUN-184: a run whose process is gone continues with `resume`.
+                    WaitInspection::NoWait {
+                        state: Some(RunState::Running),
+                        ..
+                    }
+                    | WaitInspection::Continued { .. } => refuse(&super::control::run_not_live()),
+                    WaitInspection::NoWait {
+                        state: Some(RunState::Waiting),
+                        ..
+                    } => refuse(&Refusal::new(
+                        "wait_record_missing",
+                        "The run reads waiting but holds no wait record; rerun it from a step with --from STEP.",
+                    )),
+                    WaitInspection::NoWait { .. } => {
+                        self.continue_from(run_directory, Vec::new(), presentation_config)
+                            .await
+                    }
+                };
+            }
+        }
+        // REQ-LOCALRUN-78: `--all` of a run that waits is refused before anything is written,
+        // naming its state and the verbs that apply (REQ-LOCALRUN-223).
         let waiting = {
             let run_directory = run_directory.clone();
-            tokio::task::spawn_blocking(move || super::control::open_if_waiting(&run_directory))
+            tokio::task::spawn_blocking(move || super::control::waiting(&run_directory))
                 .await
                 .map_err(anyhow::Error::new)?
         };
-        if let Some(target) = waiting {
-            return self
-                .retry_wait(&run_directory, target, presentation_config)
-                .await;
+        if let Some(standing) = waiting {
+            return super::control::write_refusal(
+                COMMAND,
+                Some(&run_directory),
+                &standing.refusal("run_waiting", super::control::Placed::Home),
+                json,
+            );
         }
-        // REQ-LOCALRUN-78, REQ-LOCALRUN-80: a run that does not wait starts a new attempt.
-        if self.agent_profiles.is_some() {
-            return Err(super::super::super::CommandFailure::with_exit_code(
-                anyhow!("--agent-profiles is accepted only for a run waiting for repair"),
-                ExitCode::UsageError,
-            ));
-        }
-        let Some(execution_root) = self.execution_root.clone() else {
-            return Err(super::super::super::CommandFailure::with_exit_code(
-                anyhow!("--execution-root is required for a run that does not wait"),
-                ExitCode::UsageError,
-            ));
-        };
+        let execution_root = self.execution_root.clone();
         let cancellation = CancellationSource::new();
         let signal_task = super::create::start_signal_observation(
             cancellation.clone(),
@@ -143,6 +315,18 @@ impl Command {
                 signal_task.abort();
                 return Err(error.into());
             }
+        };
+        // REQ-LOCALRUN-78: with no `--execution-root` the attempt runs where the previous one
+        // ran, which the reuse warning then names (REQ-LOCALRUN-79).
+        let execution_root = match execution_root {
+            Some(execution_root) => execution_root,
+            None => match pending.prior_execution_root() {
+                Ok(execution_root) => execution_root,
+                Err(error) => {
+                    signal_task.abort();
+                    return super::create::diagnose(error);
+                }
+            },
         };
         // REQ-LOCALRUN-213, REQ-LOCALRUN-186: a withdrawal no process honored over the run's
         // open latest attempt ends the run `withdrawn` without an attempt, as `resume` ends it;
@@ -333,7 +517,45 @@ impl Command {
 }
 
 impl Command {
-    /// `retry` on a waiting run (REQ-LOCALRUN-184): on a `repair` wait, records
+    /// `retry --from` (REQ-CONTINUE-1), or `retry` of an ended run with `from_steps` empty,
+    /// which continues from the stage it stood at (REQ-LOCALRUN-184): the continuation
+    /// `resume::continue_run` starts, its documents naming `retry`.
+    async fn continue_from(
+        &self,
+        run_directory: PathBuf,
+        from_steps: Vec<String>,
+        config: useful_execution::PresentationConfig,
+    ) -> super::super::super::CommandResult {
+        if from_steps.is_empty() && self.agent_profiles.is_some() {
+            return Err(usage(
+                "--agent-profiles replaces the profiles of a retry of a run waiting for repair, and the run does not wait\n\n\
+                 Leave out --agent-profiles."
+                    .to_owned(),
+            ));
+        }
+        let cancellation = CancellationSource::new();
+        let signal_task = super::create::start_signal_observation(
+            cancellation.clone(),
+            super::create::UnixSignals::new()?,
+        );
+        super::resume::continue_run(
+            super::resume::Continuation {
+                run_directory,
+                from_steps,
+                workflow: self.workflow.clone(),
+                execution_root: self.execution_root.clone(),
+                leaf: super::create::ExecutionLeaf::Retry,
+                edge: None,
+                bridge: None,
+            },
+            config,
+            cancellation,
+            signal_task,
+        )
+        .await
+    }
+
+    /// `retry` on a waiting run (REQ-LOCALRUN-184): on a `repair` or `host` wait, records
     /// `control.retry` naming it and continues the run as `resume` does.
     async fn retry_wait(
         &self,
@@ -355,12 +577,9 @@ impl Command {
             | WaitInspection::Satisfied { wait, .. }
             | WaitInspection::RuleInvalid { wait, .. }
             | WaitInspection::ConditionUnavailable { wait, .. }
-                if wait.kind != WaitKind::Repair =>
+                if !matches!(wait.kind, WaitKind::Repair | WaitKind::Host) =>
             {
-                return refuse(
-                    &target.run_directory,
-                    &super::control::wait_kind_mismatch(wait),
-                );
+                return refuse(&target.run_directory, &target.refusal("wait_kind_mismatch"));
             }
             WaitInspection::Held { wait } => Some(wait),
             WaitInspection::RuleInvalid { .. } | WaitInspection::ConditionUnavailable { .. } => {
@@ -404,7 +623,7 @@ impl Command {
             super::resume::Continuation {
                 run_directory: target.run_directory,
                 from_steps: Vec::new(),
-                workflow: None,
+                workflow: self.workflow.clone(),
                 execution_root: self.execution_root.clone(),
                 leaf: super::create::ExecutionLeaf::Retry,
                 edge: None,
@@ -416,6 +635,11 @@ impl Command {
         )
         .await
     }
+}
+
+/// A usage error, exit 2.
+fn usage(message: String) -> super::super::super::CommandFailure {
+    super::super::super::CommandFailure::with_exit_code(anyhow!(message), ExitCode::UsageError)
 }
 
 /// The `control.retry` payload for the replacement document at `path` (REQ-AGENT-57): its

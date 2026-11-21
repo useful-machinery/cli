@@ -1,6 +1,6 @@
 //! Cloud workflow definitions and the trees they publish (REQ-CLOUDDEF-1 to REQ-CLOUDDEF-11),
-//! for `useful workflow definition publish --cloud` (REQ-CLOUDDEF-14) and the `useful workflow
-//! definition cloud` group (REQ-CLOUDDEF-15).
+//! for `useful workflow definition publish --on project` (REQ-CLOUDDEF-14) and the `useful
+//! workflow definition` leaves that read or change a Cloud definition (REQ-CLOUDDEF-15).
 //!
 //! As for the other resource clients, requests go through the generated configuration and
 //! models with a hand-written client: the generated one drops error headers, so here a keyed

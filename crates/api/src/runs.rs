@@ -177,6 +177,7 @@ impl From<&models::RunWorkflowWait> for RunControlWait {
             Progress::RunWorkflowWaitStop => Control::RunControlWaitStop,
             Progress::RunWorkflowWaitExternal => Control::RunControlWaitExternal,
             Progress::RunWorkflowWaitChildren => Control::RunControlWaitChildren,
+            Progress::RunWorkflowWaitHost => Control::RunControlWaitHost,
         };
         Self::new(kind, wait.since.clone())
     }
@@ -2067,17 +2068,24 @@ fn valid_interruption(
     };
     match interruption.cause {
         models::run_interruption::Cause::ExecutorFault => {
-            interruption.stop_confirmed && interruption.executor_fault.is_some()
+            interruption.stop_confirmed
+                && interruption.executor_fault.is_some()
+                && interruption.lease_loss.is_none()
         }
         models::run_interruption::Cause::ExecutorShutdown => {
-            interruption.stop_confirmed && interruption.executor_fault.is_none()
+            interruption.stop_confirmed
+                && interruption.executor_fault.is_none()
+                && interruption.lease_loss.is_none()
         }
         models::run_interruption::Cause::ExecutionLeaseExpired => {
             interruption.executor_fault.is_none()
+                && (interruption.lease_loss.is_none() || interruption.stop_confirmed)
         }
         models::run_interruption::Cause::RetainedWorkspaceUnavailable
         | models::run_interruption::Cause::OwnershipUnproven => {
-            !interruption.stop_confirmed && interruption.executor_fault.is_none()
+            !interruption.stop_confirmed
+                && interruption.executor_fault.is_none()
+                && interruption.lease_loss.is_none()
         }
     }
 }

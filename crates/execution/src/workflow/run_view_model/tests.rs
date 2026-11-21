@@ -881,6 +881,7 @@ async fn terminal_result_and_local_lifecycle_do_not_enable_quit() {
         Some(ObservedStepTransition::Failed {
             detail: crate::workflow::evidence::failure_detail(FailurePhase::Execution, &cause)
                 .unwrap(),
+            failure_class: None,
         }),
     ))
     .await;
@@ -1046,6 +1047,7 @@ steps:
             recovery: None,
             invocations: Vec::new(),
             failed_child: None,
+            failure_class: None,
             input_sources: Vec::new(),
             committed_outputs: None,
         };
@@ -1131,6 +1133,7 @@ fn succeeded_run_result(workflow: &ResolvedWorkflow, base: Instant) -> WorkflowR
                 recovery: None,
                 invocations: Vec::new(),
                 failed_child: None,
+                failure_class: None,
                 input_sources: Vec::new(),
             },
             super::super::publication::WorkflowRunStep {
@@ -1152,6 +1155,7 @@ fn succeeded_run_result(workflow: &ResolvedWorkflow, base: Instant) -> WorkflowR
                 recovery: None,
                 invocations: Vec::new(),
                 failed_child: None,
+                failure_class: None,
                 input_sources: Vec::new(),
             },
         ],

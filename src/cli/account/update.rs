@@ -162,7 +162,7 @@ fn write_human_result(
         ),
         UpdateProfileOutcome::Unauthenticated => writeln!(
             stdout,
-            "! You're not signed in to Useful Machinery.\n\nSign in to update your account:\n  useful auth login"
+            "! You're not signed in to Useful Machinery.\n\nSign in to update your account:\n  useful account login"
         ),
         UpdateProfileOutcome::Forbidden => writeln!(
             stdout,
@@ -182,7 +182,7 @@ fn write_human_result(
         ),
         UpdateProfileOutcome::Unreachable(category) => writeln!(
             stdout,
-            "! Your account display name update is unconfirmed ({}).\n\nCheck your account before trying again:\n  useful auth status",
+            "! Your account display name update is unconfirmed ({}).\n\nCheck your account before trying again:\n  useful account show",
             category.as_str()
         ),
     }

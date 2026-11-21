@@ -1,10 +1,18 @@
 //! The condition sources `useful workflow run resume` evaluates an `external` wait's rule
 //! against (REQ-WFEXEC-65, REQ-CONTINUE-74): each `(source, event)` pair this CLI observes
-//! and how. Admission refuses an `external` wait on any other pair (REQ-WFEXEC-59).
+//! and how. Admission refuses an `external` wait on any other pair (REQ-WFEXEC-59). A `host`
+//! wait is evaluated by the execution crate's host condition (REQ-WFEXEC-81), from this
+//! process's environment.
 
 mod github;
 
-use useful_execution::{ConditionError, ConditionSource, ExternalEvent, WaitRecord};
+use std::env;
+use std::path::Path;
+
+use useful_execution::{
+    ConditionError, ConditionSource, EnvironmentSnapshot, ExternalEvent, HOST_CHECK_BOUND,
+    LocalRunDirectoryError, WaitRecord, observe_host_condition,
+};
 
 type Observe = fn(&WaitRecord) -> Result<Vec<ExternalEvent>, ConditionError>;
 
@@ -65,5 +73,18 @@ impl ConditionSource for Conditions {
             events.extend(observe(wait)?);
         }
         Ok(events)
+    }
+
+    fn observe_host(
+        &self,
+        run_directory: &Path,
+        wait: &WaitRecord,
+    ) -> Result<Vec<ExternalEvent>, LocalRunDirectoryError> {
+        observe_host_condition(
+            run_directory,
+            wait,
+            &EnvironmentSnapshot::new(env::vars_os()),
+            HOST_CHECK_BOUND,
+        )
     }
 }

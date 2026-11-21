@@ -1,5 +1,7 @@
-//! What every control command shares (REQ-LOCALRUN-181): opening the run `RUN` names,
-//! appending one control event, and the recorded and refused documents.
+//! What every control command shares (REQ-LOCALRUN-181): finding the run `RUN` names, opening
+//! a run under the home, appending one control event, continuing the run a resolving control
+//! completes the wait of (REQ-LOCALRUN-182, REQ-LOCALRUN-183), the run's state and the verbs it
+//! takes (REQ-LOCALRUN-223), and the recorded and refused documents.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -9,13 +11,27 @@ use anyhow::{Context, anyhow};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use useful_execution::{
-    ControlEvent, LocalRunDirectoryError, NoConditions, ResolvedWorkflow, RunState, ValidatedStep,
-    WaitInspection, WaitKind, WaitRecord, WorkflowRunRecord, append_control, inspect_wait,
-    normalize_terminal_path, normalize_terminal_scalar, read_local_run_status,
-    resolve_workflow_file,
+    CancellationSource, ContinuingControl, ControlEvent, LocalRunDirectoryError, NoConditions,
+    ResolvedWorkflow, RunState, ValidatedStep, WaitInspection, WaitKind, WaitRecord,
+    WorkflowRunRecord, append_control, inspect_wait, normalize_terminal_path,
+    normalize_terminal_scalar, read_local_run_status, resolve_workflow_file,
 };
 
+use super::super::{RUN_NOT_FOUND, RunAddressError};
+use super::target::{Found, RunArg, Unfound};
+use crate::cli::context::OrgArgs;
+use crate::cli::{HttpOptions, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
+
+/// The `after_help` paragraph of `answer`, `approve` and `hand-back` (REQ-LOCALRUN-180,
+/// REQ-LOCALRUN-182, REQ-LOCALRUN-183, REQ-LOCALRUN-210, REQ-LOCALRUN-223).
+pub(super) const RESOLVING_AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
+
+answer applies to a run waiting for an answer, and approve and hand-back to a run waiting for approval; in any other state the command changes nothing and names the commands that apply.
+
+For a run under the home the command records the control and, once the run's wait is resolved, continues the run as useful workflow run resume would. With --record-only it records the control alone and leaves the run for resume.
+
+For a Cloud run the command reads the run and asks Cloud, under one request key sent again if the response is lost, to carry the control for the run's current wait to the runner executing it, which applies it and continues the run. Cloud's acceptance is not the runner's application.";
 
 /// A control command's `--json` option.
 pub(super) type JsonOutput = super::super::super::JsonArgs<super::super::super::WorkflowJson>;
@@ -26,7 +42,7 @@ pub(super) type JsonOutput = super::super::super::JsonArgs<super::super::super::
 pub(super) struct ControlTarget {
     pub(super) run_directory: PathBuf,
     pub(super) record: WorkflowRunRecord,
-    /// The run's `state.json`, as `useful workflow run status` reads it.
+    /// The run's `state.json`, as `useful workflow run show` reads it.
     pub(super) state: Value,
     pub(super) inspection: WaitInspection,
     /// The run's copy of the tree it was admitted from (REQ-LOCALRUN-170).
@@ -49,10 +65,138 @@ impl Refusal {
     }
 }
 
+/// A run's state as REQ-LOCALRUN-223 names it, which decides the control verbs that apply.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Standing {
+    /// A process or a runner executes the run's steps.
+    Running,
+    /// The run waits on a wait of this kind; a `stop` wait is the run paused at a hold.
+    Waiting(WaitKind),
+    /// A run under the home whose process is gone or whose wait a recorded control resolves.
+    Abandoned,
+    /// The run ended, `succeeded` when its latest attempt succeeded.
+    Ended { succeeded: bool },
+}
+
+/// Where the run a refusal names executes: Cloud carries no `interrupt` and no `upgrade`
+/// (REQ-LOCALRUN-180, REQ-LOCALRUN-223).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Placed {
+    Home,
+    Cloud,
+}
+
+impl Standing {
+    /// The state of the run under the home `inspection` found (REQ-LOCALRUN-223): a run a live
+    /// process holds is running, a held wait is waiting on its kind, a run whose wait a control
+    /// resolves or whose process is gone is abandoned, and an exited one ended, succeeded when
+    /// `succeeded` says its latest attempt did.
+    pub(super) fn of(inspection: &WaitInspection, succeeded: impl FnOnce() -> bool) -> Self {
+        match inspection {
+            WaitInspection::Locked(_) => Self::Running,
+            WaitInspection::Held { wait }
+            | WaitInspection::RuleInvalid { wait, .. }
+            | WaitInspection::ConditionUnavailable { wait, .. } => Self::Waiting(wait.kind),
+            WaitInspection::NoWait {
+                state: Some(RunState::Exited),
+                ..
+            } => Self::Ended {
+                succeeded: succeeded(),
+            },
+            WaitInspection::Satisfied { .. }
+            | WaitInspection::Continued { .. }
+            | WaitInspection::NoWait { .. } => Self::Abandoned,
+        }
+    }
+
+    /// The state as a refusal names it.
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Running => "is running",
+            Self::Waiting(WaitKind::Answer) => "is waiting for an answer",
+            Self::Waiting(WaitKind::Approval) => "is waiting for approval",
+            Self::Waiting(WaitKind::Repair) => "is waiting for repair",
+            Self::Waiting(WaitKind::Host) => "is waiting for its host",
+            Self::Waiting(WaitKind::Stop) => "is paused at a hold",
+            Self::Waiting(WaitKind::External) => "is waiting on an external condition",
+            Self::Waiting(WaitKind::Children) => "is waiting on its child runs",
+            Self::Abandoned => {
+                "is abandoned: its process is gone or a recorded control resolves its wait"
+            }
+            Self::Ended { succeeded: true } => "has ended and succeeded",
+            Self::Ended { succeeded: false } => "has ended",
+        }
+    }
+
+    /// The control verbs of `useful workflow run` that apply to a run in this state where it
+    /// is `placed` (REQ-LOCALRUN-223): the state's own, `pause` in every state but ended, and
+    /// neither `interrupt` nor `upgrade` for a Cloud run.
+    pub(super) fn verbs(self, placed: Placed) -> Vec<&'static str> {
+        let own: &[&'static str] = match self {
+            Self::Running => &["interrupt", "pause", "cancel"],
+            Self::Waiting(WaitKind::Answer) => &["answer", "upgrade", "pause", "cancel"],
+            Self::Waiting(WaitKind::Approval) => {
+                &["approve", "hand-back", "upgrade", "pause", "cancel"]
+            }
+            Self::Waiting(WaitKind::Repair) => &["retry", "upgrade", "pause", "cancel"],
+            Self::Waiting(WaitKind::Host) => &["resume", "retry", "upgrade", "pause", "cancel"],
+            Self::Waiting(WaitKind::Stop) => &["unpause", "upgrade", "pause", "cancel"],
+            Self::Waiting(WaitKind::External | WaitKind::Children) => {
+                &["resume", "upgrade", "pause", "cancel"]
+            }
+            Self::Abandoned => &["resume", "pause", "cancel"],
+            Self::Ended { succeeded: true } => &["release"],
+            Self::Ended { succeeded: false } => &["retry", "release"],
+        };
+        own.iter()
+            .copied()
+            .filter(|verb| placed == Placed::Home || !matches!(*verb, "interrupt" | "upgrade"))
+            .collect()
+    }
+
+    /// The refusal `code` of a verb that does not apply in this state: one sentence naming the
+    /// state and the verbs that apply (REQ-LOCALRUN-223).
+    pub(super) fn refusal(self, code: &'static str, placed: Placed) -> Refusal {
+        Refusal::new(code, self.message(placed))
+    }
+
+    /// The sentence [`Standing::refusal`] writes.
+    pub(super) fn message(self, placed: Placed) -> String {
+        let verbs = self.verbs(placed);
+        let listed = match verbs.as_slice() {
+            [first @ .., last] if !first.is_empty() => format!("{} or {last}", first.join(", ")),
+            verbs => verbs.join(""),
+        };
+        format!(
+            "The run {}, where useful workflow run {listed} applies; nothing was changed.",
+            self.description()
+        )
+    }
+}
+
+/// The refusal of an `answer` with no `--question` whose wait leaves several questions
+/// open, naming their ids; nothing is appended or sent (REQ-LOCALRUN-182, REQ-LOCALRUN-210).
+pub(super) fn question_ambiguous<'a>(ids: impl Iterator<Item = &'a str>) -> Refusal {
+    let ids = ids
+        .map(|id| normalize_terminal_scalar(id.as_bytes()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Refusal::new(
+        "question_ambiguous",
+        format!("The wait asks several open questions ({ids}); name one with --question ID."),
+    )
+}
+
 /// Why a control command did not act: a refusal, or an operational failure.
 pub(super) enum ControlFailure {
     Refused(Refusal),
     Failed(anyhow::Error),
+}
+
+impl From<RunAddressError> for Refusal {
+    fn from(error: RunAddressError) -> Self {
+        Self::new(error.code, error.message)
+    }
 }
 
 impl From<Refusal> for ControlFailure {
@@ -115,10 +259,7 @@ impl ControlTarget {
         let wait = match &self.inspection {
             WaitInspection::Locked(_) => return Err(run_locked()),
             WaitInspection::NoWait { .. } | WaitInspection::Continued { .. } => {
-                return Err(Refusal::new(
-                    "run_not_waiting",
-                    "The run does not wait, so there is nothing to resolve.",
-                ));
+                return Err(self.refusal("run_not_waiting"));
             }
             WaitInspection::Held { wait }
             | WaitInspection::Satisfied { wait, .. }
@@ -126,12 +267,22 @@ impl ControlTarget {
             | WaitInspection::ConditionUnavailable { wait, .. } => wait,
         };
         if wait.kind != kind {
-            return Err(wait_kind_mismatch(wait));
+            return Err(self.refusal("wait_kind_mismatch"));
         }
         if matches!(self.inspection, WaitInspection::Satisfied { .. }) {
             return Err(wait_resolved());
         }
         Ok(wait)
+    }
+
+    /// The run's state (REQ-LOCALRUN-223).
+    pub(super) fn standing(&self) -> Standing {
+        Standing::of(&self.inspection, || latest_attempt_succeeded(&self.state))
+    }
+
+    /// The refusal `code` of a verb that does not apply in the run's state (REQ-LOCALRUN-223).
+    pub(super) fn refusal(&self, code: &'static str) -> Refusal {
+        self.standing().refusal(code, Placed::Home)
     }
 
     /// The ids a stop may name and the ids the run knows (REQ-LOCALRUN-185), read from the
@@ -218,11 +369,32 @@ pub(super) fn current_wait(run_directory: &Path) -> Result<Option<WaitRecord>, C
     Ok(inspected_wait(&probe.inspection).cloned())
 }
 
+/// Whether the latest attempt `state`, a run's `state.json`, lists succeeded.
+pub(super) fn latest_attempt_succeeded(state: &Value) -> bool {
+    state["attempts"]
+        .as_array()
+        .and_then(|attempts| attempts.last())
+        .is_some_and(|attempt| attempt["state"] == "succeeded")
+}
+
+/// The state of the exited run at `run_directory` (REQ-LOCALRUN-223), succeeded when its
+/// `state.json` says its latest attempt did; a run that cannot be read did not.
+pub(super) fn ended(run_directory: &Path) -> Standing {
+    Standing::Ended {
+        succeeded: read_local_run_status(run_directory)
+            .is_ok_and(|snapshot| latest_attempt_succeeded(&snapshot.state)),
+    }
+}
+
+/// A run a live process holds, which is running (REQ-LOCALRUN-223).
 pub(super) fn run_locked() -> Refusal {
-    Refusal::new(
-        "run_locked",
-        "A live process holds the run; wait for it to finish or cancel it.",
-    )
+    Standing::Running.refusal("run_locked", Placed::Home)
+}
+
+/// A `running` run no live process holds, which is abandoned, refused as `interrupt` and
+/// `retry` refuse it (REQ-LOCALRUN-184, REQ-LOCALRUN-202).
+pub(super) fn run_not_live() -> Refusal {
+    Standing::Abandoned.refusal("run_not_live", Placed::Home)
 }
 
 /// A live run that already holds a withdrawal its process has not yet honored
@@ -234,21 +406,10 @@ pub(super) fn withdraw_pending() -> Refusal {
     )
 }
 
-pub(super) fn wait_kind_mismatch(wait: &WaitRecord) -> Refusal {
-    Refusal::new(
-        "wait_kind_mismatch",
-        format!(
-            "The run waits on {}, which this command does not resolve.",
-            wait.kind_name()
-        ),
-    )
-}
-
+/// A wait a recorded control already resolves, which leaves the run abandoned until it is
+/// resumed (REQ-LOCALRUN-223).
 pub(super) fn wait_resolved() -> Refusal {
-    Refusal::new(
-        "wait_resolved",
-        "A recorded control already resolves the run's wait; resume the run instead.",
-    )
+    Standing::Abandoned.refusal("wait_resolved", Placed::Home)
 }
 
 /// Opens the run at `run_directory` (REQ-LOCALRUN-181): a run without a run record is
@@ -342,56 +503,163 @@ pub(super) fn nested_step_ids(workflow: &ResolvedWorkflow) -> Vec<String> {
         .collect()
 }
 
-/// The run at `run_directory` opened as `open` does when it waits, or `None` when it does not
-/// wait or cannot be probed, for a command that acts on a waiting run and otherwise does what
-/// it did before the run could wait (`retry`, REQ-LOCALRUN-184).
-pub(super) fn open_if_waiting(run_directory: &Path) -> Option<Result<ControlTarget, Refusal>> {
+/// The state of the run at `run_directory` when it waits, as `inspect_wait` reads it without
+/// the run lock: its wait's kind, or abandoned for a wait a recorded control resolves; `None`
+/// when it does not wait or cannot be probed. `retry --all` refuses a run that waits
+/// (REQ-LOCALRUN-78).
+pub(super) fn waiting(run_directory: &Path) -> Option<Standing> {
     let probe = inspect_wait(run_directory, &NoConditions).ok()?;
-    matches!(
-        probe.inspection,
-        WaitInspection::Held { .. }
-            | WaitInspection::Satisfied { .. }
-            | WaitInspection::RuleInvalid { .. }
-            | WaitInspection::ConditionUnavailable { .. }
-    )
-    .then(|| open(run_directory))
+    match probe.inspection {
+        WaitInspection::Held { wait }
+        | WaitInspection::RuleInvalid { wait, .. }
+        | WaitInspection::ConditionUnavailable { wait, .. } => Some(Standing::Waiting(wait.kind)),
+        WaitInspection::Satisfied { .. } => Some(Standing::Abandoned),
+        WaitInspection::Locked(_)
+        | WaitInspection::NoWait { .. }
+        | WaitInspection::Continued { .. } => None,
+    }
 }
 
-/// Runs control command `command` on `RUN` and prints its document: `act` appends the
-/// control or refuses, after `RUN` resolves and the run opens.
-pub(super) fn execute(
+/// Runs control command `command` on `RUN`, looked up under the home alone (REQ-LOCALRUN-180),
+/// and prints its document: `act` appends the control or refuses, after `RUN` resolves and the
+/// run opens. A `RUN` the home does not hold is `run_not_found`, its message ending with
+/// `elsewhere`, which says that a Cloud run takes no such command.
+pub(super) fn execute_at_home(
     command: &'static str,
-    run: &super::ExistingLocalRun,
+    run: &RunArg,
+    elsewhere: &str,
     json: bool,
     act: impl FnOnce(&ControlTarget) -> Result<Acted, ControlFailure>,
 ) -> super::super::super::CommandResult {
-    let run_directory = match run.resolve() {
-        Ok(run_directory) => run_directory,
-        Err(error) => {
-            return write_refusal(
-                command,
-                None,
-                &Refusal::new(error.code, error.message),
-                json,
-            );
-        }
-    };
-    let target = match open(&run_directory) {
+    match run.home_only() {
+        Ok(run_directory) => match act_on(command, &run_directory, json, act) {
+            Ok((target, acted)) => write_recorded(command, &target, &acted, json),
+            Err(result) => result,
+        },
+        Err(error) => write_refusal(
+            command,
+            None,
+            &Refusal::from(home_miss(error, elsewhere)),
+            json,
+        ),
+    }
+}
+
+/// `error`, the lookup under the home alone, with `elsewhere` added to a `run_not_found`: the
+/// sentence that says a Cloud run takes no such command (REQ-LOCALRUN-180).
+pub(super) fn home_miss(mut error: RunAddressError, elsewhere: &str) -> RunAddressError {
+    if error.code == RUN_NOT_FOUND {
+        error.message.push(' ');
+        error.message.push_str(elsewhere);
+    }
+    error
+}
+
+/// The run control command `command` names, found under the home and then in Cloud
+/// (REQ-LOCALRUN-180): a lookup that found none ends the leaf with its `refused` document,
+/// exit 1, or, when Cloud failed a read the lookup made, with that failure's code and exit
+/// status, and nothing is appended (REQ-LOCALRUN-181).
+pub(super) fn find(
+    command: &'static str,
+    run: &RunArg,
+    org: &OrgArgs,
+    authentication: &PrincipalAuthenticationArgs,
+    http: &HttpOptions,
+    json: bool,
+) -> Result<Found, super::super::super::CommandResult> {
+    run.everywhere(org, authentication, http)
+        .map_err(|unfound| match unfound {
+            Unfound::Refused(error) => write_refusal(command, None, &Refusal::from(error), json),
+            Unfound::Cloud { failure, .. } => {
+                let (code, message, exit) = super::cloud::failure_diagnostic(command, &failure);
+                write_refusal_exiting(command, None, &Refusal::new(code, message), json, exit)
+            }
+            Unfound::Failed(failure) => Err(failure),
+        })
+}
+
+/// Opens the run at `run_directory` for control command `command` and lets `act` append the
+/// control or refuse: the run and what `act` did, or the command's result once a refusal or
+/// a failure was reported.
+pub(super) fn act_on<A>(
+    command: &'static str,
+    run_directory: &Path,
+    json: bool,
+    act: impl FnOnce(&ControlTarget) -> Result<A, ControlFailure>,
+) -> Result<(ControlTarget, A), super::super::super::CommandResult> {
+    let target = match open(run_directory) {
         Ok(target) => target,
-        Err(refusal) => return write_refusal(command, Some(&run_directory), &refusal, json),
+        Err(refusal) => return Err(write_refusal(command, Some(run_directory), &refusal, json)),
     };
     match act(&target) {
-        Ok(acted) => write_recorded(command, &target, &acted, json),
-        Err(ControlFailure::Refused(refusal)) => {
-            write_refusal(command, Some(&target.run_directory), &refusal, json)
-        }
-        Err(ControlFailure::Failed(error)) => Err(error
+        Ok(acted) => Ok((target, acted)),
+        Err(ControlFailure::Refused(refusal)) => Err(write_refusal(
+            command,
+            Some(&target.run_directory),
+            &refusal,
+            json,
+        )),
+        Err(ControlFailure::Failed(error)) => Err(Err(error
             .context(format!(
                 "{command} {}",
                 normalize_terminal_path(&target.run_directory)
             ))
-            .into()),
+            .into())),
     }
+}
+
+/// What `answer`, `approve` or `hand-back` did to a run under the home: the control it
+/// appended, and whether the control completes the run's wait.
+pub(super) struct Resolved {
+    pub(super) acted: Acted,
+    pub(super) completes: bool,
+}
+
+/// Runs `control` on the run at `run_directory` (REQ-LOCALRUN-182, REQ-LOCALRUN-183): `act`
+/// appends the control or refuses, and a control that completes the wait continues the run
+/// in this command as `useful workflow run resume` would, from the wait the control
+/// resolved, in the previous attempt's execution root, its documents naming `control`'s
+/// command. With `record_only`, and for a control that leaves the wait open, the command
+/// prints the `recorded` document and continues nothing.
+pub(super) fn resolve(
+    control: ContinuingControl,
+    run_directory: &Path,
+    record_only: bool,
+    presentation: &super::PresentationOptions,
+    act: impl FnOnce(&ControlTarget) -> Result<Resolved, ControlFailure>,
+) -> super::super::super::CommandResult {
+    let command = control.command();
+    let json = presentation.output.json;
+    let (target, resolved) = match act_on(command, run_directory, json, act) {
+        Ok(acted) => acted,
+        Err(result) => return result,
+    };
+    if record_only || !resolved.completes {
+        return write_recorded(command, &target, &resolved.acted, json);
+    }
+    let config = super::create::presentation_config(presentation);
+    super::create::execute_with_runtime("start local workflow continuation runtime", async {
+        let cancellation = CancellationSource::new();
+        let signal_task = super::create::start_signal_observation(
+            cancellation.clone(),
+            super::create::UnixSignals::new()?,
+        );
+        super::resume::continue_run(
+            super::resume::Continuation {
+                run_directory: target.run_directory,
+                from_steps: Vec::new(),
+                workflow: None,
+                execution_root: None,
+                leaf: super::create::ExecutionLeaf::Control(control),
+                edge: None,
+                bridge: None,
+            },
+            config,
+            cancellation,
+            signal_task,
+        )
+        .await
+    })
 }
 
 #[derive(Serialize)]
@@ -407,7 +675,7 @@ struct RecordedDocument<'a> {
     wait: Option<&'a WaitRecord>,
 }
 
-fn write_recorded(
+pub(super) fn write_recorded(
     command: &'static str,
     target: &ControlTarget,
     acted: &Acted,
@@ -475,12 +743,29 @@ pub(super) fn write_refusal(
     refusal: &Refusal,
     json: bool,
 ) -> super::super::super::CommandResult {
+    write_refusal_exiting(
+        command,
+        run_directory,
+        refusal,
+        json,
+        ExitCode::GeneralFailure,
+    )
+}
+
+/// [`write_refusal`] exiting `exit`.
+fn write_refusal_exiting(
+    command: &'static str,
+    run_directory: Option<&Path>,
+    refusal: &Refusal,
+    json: bool,
+    exit: ExitCode,
+) -> super::super::super::CommandResult {
     if json {
         super::super::super::write_pretty_json(&RefusedDocument {
             schema_version: 1,
             command,
             outcome: "refused",
-            exit_status: ExitCode::GeneralFailure.as_u8(),
+            exit_status: exit.as_u8(),
             run_directory: run_directory.and_then(Path::to_str),
             diagnostics: [RefusalDiagnostic {
                 code: refusal.code,
@@ -498,7 +783,7 @@ pub(super) fn write_refusal(
         .and_then(|()| stderr.flush())
         .with_context(|| format!("write {command} output"))?;
     }
-    Ok(ExitCode::GeneralFailure)
+    Ok(exit)
 }
 
 /// Whether the run's record reads `exited`.

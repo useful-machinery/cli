@@ -839,6 +839,24 @@ impl PrimaryIssue {
     }
 }
 
+/// The class of a failed ordinary step's failure (REQ-WFEXEC-79): `infrastructure` says the
+/// failure was the host's, as a recovery handler decided (REQ-WFRECOVERY-65) or the step's own
+/// listed exit status said (REQ-WFRECOVERY-66).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureClass {
+    Infrastructure,
+}
+
+impl FailureClass {
+    /// The class as `failureClass` spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Infrastructure => "infrastructure",
+        }
+    }
+}
+
 /// The failure of the child a `workflow` step succeeded on, when the child's published
 /// result is `failed` (REQ-WFEXEC-77): the outcome the child recorded, for a fan-out the
 /// one-based element whose child ended the step, and the `primaryIssue` of the child's

@@ -110,10 +110,10 @@ Pi maps canonical stable versions in `>=0.84.2 <0.88.0` or exactly `0.99.1`, `1.
 `ValidatedPiInstallation`; the repository separately qualifies exact release `1.3.0`.
 Claude Code maps canonical stable versions in
 `>=2.1.234 <2.2.0` into `ValidatedClaudeCodeInstallation`; the repository separately
-qualifies exact release `2.1.321`. Codex maps stable `>=0.147.0 <0.164.0`
+qualifies exact release `2.1.321`. Codex maps stable `>=0.147.0 <0.172.0`
 installations with the maintained App Server schema capabilities into
 `ValidatedCodexInstallation`; the repository separately qualifies exact release
-`0.163.0`. Each harness also maps a capability-compatible stable release strictly newer
+`0.171.0`. Each harness also maps a capability-compatible stable release strictly newer
 than its qualification release into the same validated type as untested; the shared
 validator computes that qualification (`supported_range` or `untested`) from the anchor,
 and the version probe still gates the capability probe. Each immutable value carries the
@@ -210,9 +210,11 @@ API failure does not require another browser flow. Login alone never creates a p
 An onboarding agent may invoke the separate signup command only after reporting that
 signup is required and obtaining explicit human
 approval. `useful account signup` uses the existing human credential, creates
-one opaque idempotency key per invocation, and retries an ambiguous transport failure
+one opaque idempotency key per signup request, and retries an ambiguous transport failure
 once with that same key. It reports an authenticated principal only from the signup
-response and never begins another device authorization transaction.
+response. With `--json` it never begins a device authorization transaction; without
+`--json`, on a device that holds no sign-in the deployment accepts, it first runs the
+sign-in `useful account login` runs and then sends the signup request.
 
 Human-only operations, including login, logout, signup, service-principal creation,
 account-deletion cancellation, and organization-deletion request or cancellation, use
@@ -246,11 +248,12 @@ organization authority. The API boundary may carry redacted service-key values o
 show-once delivery, while the command boundary owns secret destination policy.
 
 The runner uses the current `rrc_` machine credential and Cloud-issued connection URL
-from protected enrollment state. `runner enroll` and `runner serve` consume one closed
-operator configuration; startup validates and locks the owner-only state directory,
+from protected enrollment state. `runner serve`, which enrolls a host with no state from a
+key of either kind before it serves and never serves under `--replace-credential`, consumes
+one closed operator configuration; startup validates and locks the owner-only state directory,
 reads the bounded non-symlink state file, and accepts no endpoint or credential override.
 Initial and replacement enrollment journals, pending staging, and promotion writes use
-one kernel-held state lock. Replacement enrollment verifies the activation and Cloud
+one kernel-held state lock. Replacement enrollment verifies the single-runner key and Cloud
 response against the protected runner ID, keeps current and pending material across
 interruption, and invokes only the configured secret-free local reload operation. Runner
 Serve welcomes a pending credential on a second same-boot connection before atomically
@@ -435,9 +438,9 @@ metadata, and execution dispatch; parent modules compose those commands so parsi
 rendered help come from the same structure. Bare command groups may print their composed
 help, but only an explicit leaf command may start long-running behavior.
 
-Organization parsing and credential policy live in `src/cli/organization.rs`; its
-`audit.rs`, `create.rs`, `list.rs`, `show.rs`, `update.rs`, `leave.rs`, and `members.rs` children own
-leaf arguments and API calls. `output.rs` exhaustively maps route-specific outcomes to
+Organization parsing and credential policy live in `src/cli/org.rs`; its `audit.rs`,
+`create.rs`, `delete.rs`, `invitation.rs`, `leave.rs`, `list.rs`, `member.rs`, `restore.rs`,
+`show.rs` and `update.rs` children own leaf arguments and API calls. `output.rs` exhaustively maps route-specific outcomes to
 human text, schema-version-1 JSON, and process status. The command modules never expose
 generated DTOs or map raw HTTP statuses independently.
 

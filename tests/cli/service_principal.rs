@@ -16,14 +16,14 @@ fn service_environment<'a>(api_url: &'a str, credentials: &'a str) -> [(&'static
     deployment_environment(api_url, credentials)
 }
 
-fn created_service_response() -> Vec<u8> {
+pub(super) fn created_service_response() -> Vec<u8> {
     http_response_with_headers(
         "201 Created",
         Some("application/json"),
         &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
         &serde_json::to_vec(&serde_json::json!({
             "principal": {
-                "id": "prn_service",
+                "id": "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
                 "type": "service",
                 "state": "active",
                 "displayName": "Build agent"
@@ -70,7 +70,7 @@ fn run_with_failing_key_file(args: &[&str], environment: &[(&str, &str)]) -> Out
     command
         .arg("-c")
         .arg("ulimit -f 0 && trap '' XFSZ && exec \"$0\" \"$@\"")
-        .arg(env!("CARGO_BIN_EXE_useful"))
+        .arg(crate::executable())
         .args(args)
         .stdin(Stdio::null())
         .env_remove(CREDENTIALS_FILE_VARIABLE);
@@ -101,11 +101,12 @@ fn rejected_display_name_reports_invalid_display_name_and_removes_the_reserved_f
 
     let output = run_with_env(
         &[
-            "service-principal",
+            "account",
+            "service",
             "create",
-            "--display-name",
+            "--name",
             "Build agent",
-            "--api-key-file",
+            "--key-file",
             destination.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -127,17 +128,13 @@ fn json_with_standard_output_key_destination_is_refused_before_any_request() {
     let directory = private_credential_directory();
     let service_key = service_key_file(&directory);
     for args in [
+        &["account", "service", "create", "--name", "Build agent"][..],
         &[
-            "service-principal",
-            "create",
-            "--display-name",
-            "Build agent",
-        ][..],
-        &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "issue",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
         ][..],
     ] {
@@ -145,7 +142,7 @@ fn json_with_standard_output_key_destination_is_refused_before_any_request() {
         let credential_directory = private_credential_directory();
         let credentials = human_credentials_for(&server, &credential_directory);
         let mut arguments = args.to_vec();
-        arguments.extend(["--api-key-file", "-", "--json", "--allow-insecure-http"]);
+        arguments.extend(["--key-file", "-", "--json", "--allow-insecure-http"]);
 
         let output = run_with_env(
             &arguments,
@@ -165,21 +162,17 @@ fn failed_key_delivery_keeps_the_credential_and_names_the_recovery() {
     let service_key = service_key_file(&directory);
     for (args, response, recovery) in [
         (
-            &[
-                "service-principal",
-                "create",
-                "--display-name",
-                "Build agent",
-            ][..],
+            &["account", "service", "create", "--name", "Build agent"][..],
             created_service_response(),
             "operator_recovery_required",
         ),
         (
             &[
-                "service-principal",
-                "credential",
+                "account",
+                "service",
+                "key",
                 "issue",
-                "--service-api-key-file",
+                "--api-key-file",
                 &service_key,
             ][..],
             issued_credential_response(),
@@ -192,7 +185,7 @@ fn failed_key_delivery_keeps_the_credential_and_names_the_recovery() {
         let destination = directory.path().join(format!("{recovery}.key"));
         let mut arguments = args.to_vec();
         arguments.extend([
-            "--api-key-file",
+            "--key-file",
             destination.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -221,10 +214,10 @@ fn failed_key_delivery_keeps_the_credential_and_names_the_recovery() {
 // REQ-SERVICEPRINCIPAL-14
 #[test]
 fn credential_management_requires_an_explicit_service_key() {
-    let output = run(&["service-principal", "credential", "list"]);
+    let output = run(&["account", "service", "key", "list"]);
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--service-api-key-file <PATH|->"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--api-key-file <PATH|->"));
 }
 
 // REQ-SERVICEPRINCIPAL-1, REQ-SERVICEPRINCIPAL-5, REQ-SERVICEPRINCIPAL-8, REQ-SERVICEPRINCIPAL-29
@@ -246,11 +239,12 @@ fn service_principal_creation_writes_the_key_only_to_the_protected_destination()
 
     let output = run_with_env(
         &[
-            "service-principal",
+            "account",
+            "service",
             "create",
-            "--display-name",
+            "--name",
             "Build agent",
-            "--api-key-file",
+            "--key-file",
             &destination_text,
             "--json",
             "--allow-insecure-http",
@@ -293,12 +287,13 @@ fn issuance_to_stdout_emits_only_the_api_key_on_stdout() {
 
     let output = run_with_env(
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "issue",
-            "--service-api-key-file",
-            &service_key,
             "--api-key-file",
+            &service_key,
+            "--key-file",
             "-",
             "--allow-insecure-http",
         ],
@@ -323,15 +318,16 @@ fn issuance_delivers_the_committed_key_when_interrupted_after_dispatch() {
     let missing_human_credentials = directory.path().join("human.json");
     let environment =
         service_environment(&server.api_url, missing_human_credentials.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "issue",
-            "--service-api-key-file",
-            &service_key,
             "--api-key-file",
+            &service_key,
+            "--key-file",
             &destination_text,
             "--json",
             "--allow-insecure-http",
@@ -395,12 +391,13 @@ fn issuance_replay_reports_unrecoverable_secret_and_removes_the_reserved_file() 
 
     let output = run_with_env(
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "issue",
-            "--service-api-key-file",
-            &service_key,
             "--api-key-file",
+            &service_key,
+            "--key-file",
             &destination_text,
             "--json",
             "--allow-insecure-http",
@@ -450,10 +447,11 @@ fn rejected_service_key_uses_the_authentication_exit_and_structured_outcome() {
 
     let output = run_with_env(
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "list",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -491,10 +489,11 @@ fn service_credential_list_is_non_secret_and_rejects_public_key_files_locally() 
 
     let output = run_with_env(
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "list",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--json",
             "--allow-insecure-http",
@@ -512,10 +511,11 @@ fn service_credential_list_is_non_secret_and_rejects_public_key_files_locally() 
     fs::set_permissions(&service_key, Permissions::from_mode(0o644)).unwrap();
     let output = run_with_env(
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "list",
-            "--service-api-key-file",
+            "--api-key-file",
             &service_key,
             "--allow-insecure-http",
         ],
@@ -524,4 +524,92 @@ fn service_credential_list_is_non_secret_and_rejects_public_key_files_locally() 
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("file mode must be 0600"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains(API_KEY));
+}
+
+// REQ-SERVICEPRINCIPAL-14, REQ-SERVICEPRINCIPAL-19, REQ-SERVICEPRINCIPAL-20,
+// REQ-SERVICEPRINCIPAL-21, REQ-SERVICEPRINCIPAL-22
+#[test]
+fn revoke_uses_only_the_service_key_and_reports_the_target_outcome() {
+    const OTHER: &str = "crd_01k0z6r1w8f4jy2m7q9v3x5abd";
+    let directory = private_credential_directory();
+    let key = service_key_file(&directory);
+    for (target, status, reason, outcome, exit) in [
+        (OTHER, "204 No Content", "", "revoked", 0),
+        (
+            CREDENTIAL_ID,
+            "409 Conflict",
+            "credential-removal-unavailable",
+            "credential_removal_unavailable",
+            1,
+        ),
+        (OTHER, "404 Not Found", "not-found", "not_found", 1),
+    ] {
+        let response = if exit == 0 {
+            http_response_with_headers(
+                status,
+                None,
+                &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
+                b"",
+            )
+        } else {
+            problem_http_response(
+                status,
+                serde_json::json!({
+                    "type": format!("https://api.usefulmachinery.com/problems/{reason}"),
+                    "title": reason, "status": if target == OTHER {404} else {409}
+                }),
+            )
+        };
+        let server = ScriptedServer::respond(vec![response]);
+        let output = run_with_env(
+            &[
+                "account",
+                "service",
+                "key",
+                "revoke",
+                target,
+                "--yes",
+                "--api-key-file",
+                &key,
+                "--json",
+                "--allow-insecure-http",
+            ],
+            &service_environment(&server.api_url, "/dev/null/no-human-session"),
+        );
+        assert_no_secret_output(&output, &[API_KEY]);
+        assert_eq!(output.status.code(), Some(exit), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["outcome"], outcome);
+        if exit == 0 {
+            assert_eq!(json["credentialId"], target);
+        }
+        let requests = server.finish();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with(&format!(
+            "DELETE /api/v1/me/credentials/{target} HTTP/1.1\r\n"
+        )));
+        assert_eq!(
+            header_value(&requests[0], "authorization"),
+            format!("Bearer {API_KEY}")
+        );
+        assert!(!header_value(&requests[0], "idempotency-key").is_empty());
+    }
+    for required in [vec!["--api-key-file", &key], vec!["--yes"]] {
+        let server = ScriptedServer::respond(vec![]);
+        let mut args = vec![
+            "account",
+            "service",
+            "key",
+            "revoke",
+            OTHER,
+            "--allow-insecure-http",
+        ];
+        args.extend(required);
+        let output = run_with_env(
+            &args,
+            &service_environment(&server.api_url, "/dev/null/no-human-session"),
+        );
+        assert_eq!(output.status.code(), Some(2));
+        assert!(server.finish().is_empty());
+    }
 }

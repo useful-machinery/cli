@@ -130,6 +130,23 @@ impl LocalStatusStateView {
         Ok(())
     }
 
+    /// The class of each classified failure of the current attempt's steps, a line each
+    /// naming the step and the class; nothing for an attempt that has none (REQ-WFEXEC-79,
+    /// REQ-LOCALRUN-145).
+    pub fn write_failure_classes(&self, writer: &mut impl Write) -> io::Result<()> {
+        for step in &self.current()?.progress.steps {
+            if let Some(class) = step.failure_class {
+                writeln!(
+                    writer,
+                    "failure class: {} · {}",
+                    safe_text(&step.id),
+                    class.as_str()
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn write_recovery(
         &self,
         writer: &mut impl Write,
@@ -240,6 +257,19 @@ fn recovery_detail(
         RecoveryTerminationV1::GaveUp { round } => {
             format!("gave_up · round {round} · no output owner")
         }
+        RecoveryTerminationV1::Infrastructure {
+            round: Some(round),
+            execution_number: None,
+        } => format!("infrastructure · round {round} · no output owner"),
+        RecoveryTerminationV1::Infrastructure {
+            round: None,
+            execution_number: Some(execution_number),
+        } => format!("infrastructure · target execution {execution_number} · no output owner"),
+        RecoveryTerminationV1::Infrastructure { .. } => {
+            return Err(io::Error::other(
+                "infrastructure termination names neither or both of a round and an execution",
+            ));
+        }
         RecoveryTerminationV1::HandlerFailed { round, .. } => {
             format!("handler_failed · round {round} · no output owner")
         }
@@ -260,7 +290,9 @@ fn recovery_detail(
     if let Some(handler) = latest.and_then(|round| round.handler.as_ref()) {
         let prefix = if matches!(
             handler.outcome,
-            RecoveryHandlerOutcomeV1::Recheck | RecoveryHandlerOutcomeV1::GaveUp
+            RecoveryHandlerOutcomeV1::Recheck
+                | RecoveryHandlerOutcomeV1::GaveUp
+                | RecoveryHandlerOutcomeV1::Infrastructure
         ) {
             " · decision "
         } else {

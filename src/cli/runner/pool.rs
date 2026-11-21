@@ -3,8 +3,7 @@ use clap::{Args, Subcommand};
 use useful_api::RunnerFailure;
 
 use super::{
-    CloudOptions, Deployment, ExitCode, OrganizationArg, PaginationArgs, PoolArg, cloud,
-    generate_idempotency_key,
+    CloudOptions, Deployment, OrgArgs, PaginationArgs, PoolArg, cloud, generate_idempotency_key,
 };
 
 pub(super) const ABOUT: &str = "Manage Useful Machinery runner pools";
@@ -27,19 +26,19 @@ enum PoolCommand {
     Delete(DeleteCommand),
     #[command(about = "List runner pools")]
     List(ListCommand),
-    #[command(about = "Rename a runner pool")]
-    Rename(RenameCommand),
     #[command(about = "Show a runner pool")]
     Show(ShowCommand),
+    #[command(about = "Rename a runner pool")]
+    Update(UpdateCommand),
 }
 
 #[derive(Debug, Args)]
 struct CreateCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(long, help = "Set the exact runner pool name")]
+    #[arg(value_name = "NAME", help = "Exact runner pool name")]
     name: String,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     options: CloudOptions,
@@ -49,11 +48,11 @@ struct CreateCommand {
 // nouns, value names, and help remain exact without a metadata abstraction.
 #[derive(Debug, Args)]
 struct ListCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
     #[command(flatten)]
     pagination: PaginationArgs,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     options: CloudOptions,
@@ -61,21 +60,18 @@ struct ListCommand {
 
 #[derive(Debug, Args)]
 struct ShowCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
     #[arg(value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
     pool: PoolArg,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     options: CloudOptions,
 }
 
 #[derive(Debug, Args)]
-struct RenameCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
+struct UpdateCommand {
     #[arg(value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
     pool: PoolArg,
 
@@ -83,16 +79,19 @@ struct RenameCommand {
     name: String,
 
     #[command(flatten)]
+    org: OrgArgs,
+
+    #[command(flatten)]
     options: CloudOptions,
 }
 
 #[derive(Debug, Args)]
 struct DeleteCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
     #[arg(value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
     pool: PoolArg,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     confirmation: super::super::ConfirmationArgs,
@@ -107,120 +106,139 @@ impl Command {
             return super::super::print_help(COMMAND_PATH);
         };
         match command {
-            PoolCommand::Create(command) => super::execute_cloud(command, CreateCommand::execute),
-            PoolCommand::List(command) => super::execute_cloud(command, ListCommand::execute),
-            PoolCommand::Show(command) => super::execute_cloud(command, ShowCommand::execute),
-            PoolCommand::Rename(command) => super::execute_cloud(command, RenameCommand::execute),
+            PoolCommand::Create(command) => {
+                super::execute_in_cloud(command, CreateCommand::execute)
+            }
+            PoolCommand::List(command) => super::execute_in_cloud(command, ListCommand::execute),
+            PoolCommand::Show(command) => super::execute_in_cloud(command, ShowCommand::execute),
+            PoolCommand::Update(command) => {
+                super::execute_in_cloud(command, UpdateCommand::execute)
+            }
             PoolCommand::Delete(command) => command.execute(),
         }
     }
 }
 
 impl CreateCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let key =
-            generate_idempotency_key().context("generate runner pool creation request identity")?;
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| api.create_pool(&self.organization, &key, &self.name),
-        )?;
-        // Pool creation uses the shared runner failure contract but retains its own result body.
-        cloud::write_pool_create(
-            deployment.fingerprint().api_url(),
-            &result,
-            self.options.authentication.kind(),
-            self.options.json,
-        )
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self { name, org, options } = self;
+        super::execute_in(org, options, deployment, |options, organization| {
+            let key = generate_idempotency_key()
+                .context("generate runner pool creation request identity")?;
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| api.create_pool(organization, &key, &name),
+            )?;
+            // Pool creation uses the shared runner failure contract but retains its own result body.
+            cloud::write_pool_create(
+                deployment.fingerprint().api_url(),
+                &result,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
 impl ListCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                api.list_pools(
-                    &self.organization,
-                    self.pagination.limit,
-                    self.pagination.cursor.as_deref(),
-                )
-            },
-        )?;
-        cloud::write_pool_list(
-            deployment.fingerprint().api_url(),
-            &result,
-            self.options.authentication.kind(),
-            self.options.json,
-        )
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self {
+            pagination,
+            org,
+            options,
+        } = self;
+        super::execute_in(org, options, deployment, |options, organization| {
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| api.list_pools(organization, pagination.limit, pagination.cursor.as_deref()),
+            )?;
+            cloud::write_pool_list(
+                deployment.fingerprint().api_url(),
+                &result,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
 impl ShowCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                let pool = api.get_pool(&self.organization, &self.pool)?;
-                let status = match api.get_pool_status(&self.organization, &pool.id) {
-                    Ok(status) => Some(status),
-                    // A Cloud release before the status read answers 404; show the pool alone.
-                    Err(RunnerFailure::NotFound) => None,
-                    Err(failure) => return Err(failure),
-                };
-                Ok((pool, status))
-            },
-        )?;
-        let shown = result.as_ref().map(|(pool, status)| {
-            let status = status.as_ref().map(|status| cloud::PoolStatus {
-                document: status,
-                queued_runs: status.queued_runs,
-                online: status.runners.online,
-                busy: status.runners.busy,
-                idle: status.runners.idle,
-                offline: status.runners.offline,
-                held_runs: status
-                    .held_runs
-                    .as_ref()
-                    .map(|held| (held.working, held.waiting)),
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self { pool, org, options } = self;
+        super::execute_in(org, options, deployment, |options, organization| {
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| {
+                    let pool = api.get_pool(organization, &pool)?;
+                    let status = match api.get_pool_status(organization, &pool.id) {
+                        Ok(status) => Some(status),
+                        // A Cloud release before the status read answers 404; show the pool alone.
+                        Err(RunnerFailure::NotFound) => None,
+                        Err(failure) => return Err(failure),
+                    };
+                    Ok((pool, status))
+                },
+            )?;
+            let shown = result.as_ref().map(|(pool, status)| {
+                let status = status.as_ref().map(|status| cloud::PoolStatus {
+                    document: status,
+                    queued_runs: status.queued_runs,
+                    online: status.runners.online,
+                    busy: status.runners.busy,
+                    idle: status.runners.idle,
+                    offline: status.runners.offline,
+                    held_runs: status
+                        .held_runs
+                        .as_ref()
+                        .map(|held| (held.working, held.waiting)),
+                });
+                (pool, status)
             });
-            (pool, status)
-        });
-        cloud::write_pool_show(
-            deployment.fingerprint().api_url(),
-            shown,
-            self.options.authentication.kind(),
-            self.options.json,
-        )
+            cloud::write_pool_show(
+                deployment.fingerprint().api_url(),
+                shown,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
-impl RenameCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let key =
-            generate_idempotency_key().context("generate runner pool rename request identity")?;
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| api.rename_pool(&self.organization, &self.pool, &key, &self.name),
-        )?;
-        cloud::write_pool_rename(
-            deployment.fingerprint().api_url(),
-            &result,
-            self.options.authentication.kind(),
-            self.options.json,
-        )
+impl UpdateCommand {
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self {
+            pool,
+            name,
+            org,
+            options,
+        } = self;
+        super::execute_in(org, options, deployment, |options, organization| {
+            let key = generate_idempotency_key()
+                .context("generate runner pool rename request identity")?;
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| api.rename_pool(organization, &pool, &key, &name),
+            )?;
+            cloud::write_pool_rename(
+                deployment.fingerprint().api_url(),
+                &result,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
 impl DeleteCommand {
     fn execute(self) -> super::super::CommandResult {
-        super::execute_pool_deletion(self.organization, self.pool, self.options)
+        super::execute_pool_deletion(self.org, self.pool, self.options)
     }
 }

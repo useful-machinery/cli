@@ -13,7 +13,7 @@ fn embedded_schema_is_emitted_unchanged_without_external_state() {
     let api_url = format!("http://{}/api", listener.local_addr().unwrap());
     let entries_before = directory_entries(working_directory.path());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let output = Command::new(crate::executable())
         .env_clear()
         .current_dir(working_directory.path())
         .args(["workflow", "schema"])
@@ -35,10 +35,7 @@ fn embedded_schema_is_emitted_unchanged_without_external_state() {
     assert!(output.status.success());
     assert_eq!(
         output.stdout,
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/schemas/workflow-v1.schema.json"
-        ))
+        include_bytes!("../../schemas/workflow-v1.schema.json")
     );
     assert!(output.stderr.is_empty());
     let schema: serde_json::Value =

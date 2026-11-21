@@ -260,11 +260,13 @@ fn missing_artifact_directory_is_operational_for_humans_and_structured_for_json(
     let missing = temporary.path().join("missing-artifact");
     let argument = missing.to_str().unwrap();
 
-    let human = run(&["artifact", "validate", argument]);
+    let human = run(&["workflow", "run", "artifact", "validate", argument]);
 
     assert_eq!(human.status.code(), Some(1));
     assert!(human.stdout.is_empty());
-    let structured = run(&["artifact", "validate", "--json", argument]);
+    let structured = run(&[
+        "workflow", "run", "artifact", "validate", "--json", argument,
+    ]);
 
     assert_eq!(structured.status.code(), Some(1));
     assert!(structured.stderr.is_empty());
@@ -277,24 +279,39 @@ fn missing_artifact_directory_is_operational_for_humans_and_structured_for_json(
 }
 
 // REQ-ARTIFACTSET-1, REQ-ARTIFACTSET-2, REQ-ARTIFACTSET-3, REQ-ARTIFACTSET-8, REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-13, REQ-ARTIFACTSET-21, REQ-ARTIFACTSET-24, REQ-ARTIFACTSET-25
+// `run` gives the command an empty `useful` home and no deployment, so it validates with no
+// stored session and no request.
 #[test]
 fn copied_local_profile_set_validates_in_human_and_json_modes_without_mutation() {
     let artifact = ArtifactSet::valid();
     let before = byte_snapshot(&artifact.root);
 
-    let human = run(&["artifact", "validate", artifact.argument()]);
+    let human = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        artifact.argument(),
+    ]);
     assert!(human.status.success());
     assert!(!human.stdout.is_empty());
     assert!(human.stderr.is_empty());
 
-    let structured = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let structured = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     assert!(structured.status.success());
     let report: Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(
         report,
         json!({
             "schemaVersion": 1,
-            "command": "useful artifact validate",
+            "command": "useful workflow run artifact validate",
             "outcome": "valid",
             "exitStatus": 0,
             "artifactSetVersion": 1,
@@ -335,7 +352,14 @@ fn finalization_summary_is_validated_without_mutating_portable_artifact() {
     artifact.replace_result(&result);
     let before = fs::read(artifact.root.join("result.json")).unwrap();
 
-    let valid = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let valid = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert!(
         valid.status.success(),
@@ -349,7 +373,14 @@ fn finalization_summary_is_validated_without_mutating_portable_artifact() {
         "impact": "required"
     }]);
     artifact.replace_result(&result);
-    let invalid = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let invalid = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&invalid.stdout).unwrap();
 
     assert_eq!(invalid.status.code(), Some(1));
@@ -381,7 +412,14 @@ fn finalization_cancellation_reason_must_match_cancelled_finalizers() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert_eq!(
         output.status.code(),
@@ -433,7 +471,14 @@ fn cancelled_outcome_rejects_required_finalization_issues() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert_eq!(output.status.code(), Some(1));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -458,7 +503,14 @@ fn cloud_metadata_only_and_carrier_bearing_sets_validate() {
     for (artifact, declared_exports, referenced_carriers) in
         [(carrier_bearing, 5, 3), (metadata_only, 0, 0)]
     {
-        let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+        let output = run(&[
+            "workflow",
+            "run",
+            "artifact",
+            "validate",
+            "--json",
+            artifact.argument(),
+        ]);
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
         assert!(output.status.success(), "{report:#}");
@@ -479,7 +531,13 @@ fn missing_carrier_remedy_names_the_resolved_path() {
         .unwrap()
         .join("exports/0002");
 
-    let output = run(&["artifact", "validate", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        artifact.argument(),
+    ]);
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -499,7 +557,14 @@ fn corruption_is_reported_completely_in_normative_order() {
     result["exports"]["document"]["mediaType"] = Value::String("text/plain".to_owned());
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert_eq!(output.status.code(), Some(1));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -542,7 +607,14 @@ fn alias_and_current_kind_content_failures_are_reported_together() {
         Value::String("application/x-portable".to_owned());
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -566,7 +638,14 @@ fn carrier_symlinks_and_unsafe_metadata_paths_are_never_followed() {
     fs::remove_file(linked.root.join("exports/0003")).unwrap();
     symlink(&outside, linked.root.join("exports/0003")).unwrap();
 
-    let linked_output = run(&["artifact", "validate", "--json", linked.argument()]);
+    let linked_output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        linked.argument(),
+    ]);
     let linked_report: Value = serde_json::from_slice(&linked_output.stdout).unwrap();
     assert_eq!(linked_output.status.code(), Some(1));
     assert!(diagnostic_codes(&linked_report).contains(&"carrier_symbolic_link"));
@@ -577,7 +656,14 @@ fn carrier_symlinks_and_unsafe_metadata_paths_are_never_followed() {
     result["exports"]["payloadCopy"]["path"] = Value::String("../outside-secret".to_owned());
     unsafe_set.replace_result(&result);
 
-    let unsafe_output = run(&["artifact", "validate", "--json", unsafe_set.argument()]);
+    let unsafe_output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        unsafe_set.argument(),
+    ]);
     let unsafe_report: Value = serde_json::from_slice(&unsafe_output.stdout).unwrap();
     assert_eq!(unsafe_output.status.code(), Some(1));
     assert_eq!(
@@ -599,22 +685,45 @@ fn unsupported_artifact_kinds_and_usage_errors_are_closed() {
     result["exports"]["data"]["kind"] = Value::String("git_branch".to_owned());
     artifact.replace_result(&result);
 
-    let unsupported = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let unsupported = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&unsupported.stdout).unwrap();
     assert_eq!(unsupported.status.code(), Some(1));
     assert!(diagnostic_codes(&report).contains(&"export_entry_invalid"));
 
     for args in [
-        vec!["artifact", "validate"],
-        vec!["artifact", "validate", artifact.argument(), "extra"],
+        vec!["workflow", "run", "artifact", "validate"],
         vec![
+            "workflow",
+            "run",
+            "artifact",
+            "validate",
+            artifact.argument(),
+            "extra",
+        ],
+        vec![
+            "workflow",
+            "run",
             "artifact",
             "validate",
             "--json",
             "--json",
             artifact.argument(),
         ],
-        vec!["artifact", "validate", "--plain", artifact.argument()],
+        vec![
+            "workflow",
+            "run",
+            "artifact",
+            "validate",
+            "--plain",
+            artifact.argument(),
+        ],
     ] {
         let usage = run(&args);
         assert_eq!(usage.status.code(), Some(2));
@@ -631,7 +740,14 @@ fn successful_command_without_required_output_metadata_is_rejected() {
     result["steps"][0]["kind"] = Value::String("cmd".to_owned());
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -651,7 +767,14 @@ fn contradictory_workflow_outcome_and_step_state_is_rejected() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -670,7 +793,14 @@ fn canonical_json_with_a_large_rfc_8259_number_is_valid() {
         available_export("json", "application/json", "exports/0001", json_bytes);
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert!(
         output.status.success(),
@@ -691,7 +821,14 @@ fn canonical_json_at_the_nesting_limit_is_valid() {
         available_export("json", "application/json", "exports/0001", json_bytes);
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
 
     assert!(
         output.status.success(),
@@ -726,7 +863,14 @@ fn malformed_export_does_not_hide_its_usable_carrier_reference() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -763,7 +907,14 @@ fn malformed_unresolved_reference_delta_is_rejected() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1), "{report:#}");
@@ -800,7 +951,14 @@ fn unresolved_delta_chain_over_the_profile_limit_is_rejected() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1), "{report:#}");
@@ -837,7 +995,14 @@ fn zero_delta_carrier_diagnostic_does_not_hide_other_shape_errors() {
     });
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let codes = diagnostic_codes(&report);
 
@@ -865,7 +1030,14 @@ fn duplicate_code_and_location_diagnostics_are_deduplicated() {
     )
     .unwrap();
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let boundary_name_diagnostics = report["diagnostics"]
         .as_array()
@@ -914,7 +1086,14 @@ fn export_limit_does_not_skip_later_authoritative_references() {
     result["exports"] = Value::Object(exports);
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -957,7 +1136,14 @@ fn carrier_limit_does_not_skip_later_authoritative_references() {
     result["exports"] = Value::Object(exports);
     artifact.replace_result(&result);
 
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
@@ -984,7 +1170,14 @@ fn extend_sparse(path: &Path, size: u64) {
 }
 
 fn validate_json(artifact: &ArtifactSet) -> (Option<i32>, Value) {
-    let output = run(&["artifact", "validate", "--json", artifact.argument()]);
+    let output = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "validate",
+        "--json",
+        artifact.argument(),
+    ]);
     (
         output.status.code(),
         serde_json::from_slice(&output.stdout).unwrap(),
@@ -1075,7 +1268,7 @@ fn human_output_escapes_hostile_directory_and_location_names() {
     let hostile_argument = hostile_root.to_str().unwrap();
     let forbidden = ['\u{1b}', '\u{202e}', '\u{7}'];
 
-    let valid = run(&["artifact", "validate", hostile_argument]);
+    let valid = run(&["workflow", "run", "artifact", "validate", hostile_argument]);
     assert!(valid.status.success());
     let stdout = String::from_utf8(valid.stdout).unwrap();
     assert!(!stdout.contains(forbidden), "{stdout:?}");
@@ -1096,7 +1289,7 @@ fn human_output_escapes_hostile_directory_and_location_names() {
         b"unexpected",
     )
     .unwrap();
-    let invalid = run(&["artifact", "validate", hostile_argument]);
+    let invalid = run(&["workflow", "run", "artifact", "validate", hostile_argument]);
     assert_eq!(invalid.status.code(), Some(1));
     let stdout = String::from_utf8(invalid.stdout).unwrap();
     assert!(!stdout.contains(forbidden), "{stdout:?}");
@@ -1128,8 +1321,15 @@ fn interruption_during_output_exits_with_the_signal_status_and_no_result() {
         fs::write(artifact.root.join(format!("unexpected-{ordinal:04}")), b"x").unwrap();
     }
     let before = byte_snapshot(&artifact.root);
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_useful"))
-        .args(["artifact", "validate", "--json", artifact.argument()])
+    let mut child = std::process::Command::new(crate::executable())
+        .args([
+            "workflow",
+            "run",
+            "artifact",
+            "validate",
+            "--json",
+            artifact.argument(),
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

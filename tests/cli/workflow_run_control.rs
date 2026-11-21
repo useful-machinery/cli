@@ -8,8 +8,9 @@ use rustix::process::{Pid, Signal, kill_process};
 
 use super::workflow_continue::{
     COMMAND_TREE_ROOT, FAN_OUT_TREE_ROOT, WAIT_TREE_ROOT, append_control, attempt_count, chained,
-    completed, control, decide, decide_each, fan_out_tree, ordinals_of, partition_event, read_json,
-    resume, status_document, wait_tree, wait_tree_with_json_questions, waiting_run,
+    completed, control, decide, decide_each, fan_out_tree, host_check_tree, host_waiting_run,
+    ordinals_of, partition_event, read_json, resume, status_document, wait_tree,
+    wait_tree_with_json_questions, waiting_run,
 };
 use super::workflow_definition::{Home, NESTED_ROOT, nested_bindings};
 use super::workflow_mirror::{LinearStub, nested_resolution, resolution, write_resolution};
@@ -20,9 +21,14 @@ use super::workflow_run::{
 #[cfg(target_os = "linux")]
 use super::workflow_run::{open_tui_pty, spawn_tui_run};
 use super::workflow_run_list::shown_plain;
+use super::workflow_status::show_error;
 
 /// The login name every control command in these tests runs as (REQ-LOCALRUN-181).
 pub(super) const OPERATOR: &str = "control-operator";
+
+/// `cancel`'s hidden option that records a withdrawal whatever the run's state, as the runner
+/// passes it (REQ-LOCALRUN-186, REQ-RUNNERENROLL-123).
+pub(super) const WITHDRAW: [&str; 2] = ["--control", "withdraw"];
 
 /// `useful workflow run LEAF RUN ARGS --json` as `OPERATOR`, with `USEFUL_HOME` set when `home` is.
 pub(super) fn run_control(
@@ -132,9 +138,15 @@ fn wait_id(wait: &serde_json::Value) -> String {
     )
 }
 
-/// Answers the wait tree's text question, whose payload has no question list.
+/// Records the answer to the wait tree's text question, whose payload has no question list,
+/// leaving the run for `resume`.
 fn answer_the_one_question(run: &Path) {
-    let output = run_control(None, "answer", run, &["--question", "1", "--text", "keep"]);
+    let output = run_control(
+        None,
+        "answer",
+        run,
+        &["--question", "1", "--text", "keep", "--record-only"],
+    );
     let document = recorded(&output, "answer", run);
     assert_eq!(control_file(run, &document)["payload"]["complete"], true);
 }
@@ -178,7 +190,12 @@ fn answers_accumulate_until_every_question_is_answered() {
     refused(&unknown, "answer", "question_unknown");
     assert_eq!(control_count(&run), 1);
 
-    let output = run_control(None, "answer", &run, &["--question", "q2", "--text", "no"]);
+    let output = run_control(
+        None,
+        "answer",
+        &run,
+        &["--question", "q2", "--text", "no", "--record-only"],
+    );
     let document = recorded(&output, "answer", &run);
     assert_eq!(document["control"]["path"], "controls/0002-answer.json");
     let control = control_file(&run, &document);
@@ -216,8 +233,82 @@ fn answers_accumulate_until_every_question_is_answered() {
     assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
 }
 
-// REQ-LOCALRUN-183: `approve` continues at the approval's `then` and `hand-back` at its
-// `onHandBack` with the notes.
+// REQ-LOCALRUN-182: `answer` with no `--question` answers the one open question, and an
+// answer that completes the wait continues the run in the answering command; `--record-only`,
+// and an answer that leaves a question open, records the control alone for `resume`.
+#[test]
+fn an_answer_that_completes_the_wait_continues_the_run() {
+    let bundle = wait_tree();
+    decide(&bundle, "review", "approve");
+    let (run, terminal) = waiting_run(&bundle, "continued", "blocked");
+    assert_eq!(terminal["wait"]["kind"], "answer", "{terminal}");
+    decide(&bundle, "design", "planned");
+    let output = run_control(None, "answer", &run, &["--text", "keep"]);
+    let continued = completed(&output);
+    assert_eq!(continued["command"], "useful workflow run answer");
+    assert_eq!(continued["wait"]["kind"], "approval", "{continued}");
+    assert_eq!(
+        partition_event(&output)["continuation"]["fromSteps"],
+        serde_json::json!(["design"])
+    );
+    assert_eq!(attempt_count(&run), 2);
+    let shown = status_document(&run);
+    assert_eq!(shown["wait"]["kind"], "approval", "{shown}");
+    let controls = shown["controls"].as_array().unwrap();
+    assert!(
+        controls
+            .iter()
+            .any(|control| control["event"] == "control.answer"
+                && control["payload"]["question"] == "1"),
+        "{shown}"
+    );
+
+    let (run, _) = waiting_run(&bundle, "recorded", "blocked");
+    decide(&bundle, "design", "planned");
+    let output = run_control(None, "answer", &run, &["--text", "keep", "--record-only"]);
+    let document = recorded(&output, "answer", &run);
+    assert_eq!(control_file(&run, &document)["payload"]["complete"], true);
+    assert_eq!(run_record(&run)["state"], "waiting");
+    assert_eq!(attempt_count(&run), 1);
+    let resumed = completed(&resume(&run));
+    assert_eq!(resumed["command"], "useful workflow run resume");
+    assert_eq!(resumed["wait"]["kind"], "approval", "{resumed}");
+
+    let questions = serde_json::json!([
+        {"id": "q1", "text": "keep the cache?"},
+        {"id": "q2", "text": "name?"},
+    ]);
+    let bundle = wait_tree_with_json_questions(&questions);
+    decide(&bundle, "review", "approve");
+    let (run, _) = waiting_run(&bundle, "two-questions", "blocked");
+    let ambiguous = refused(
+        &run_control(None, "answer", &run, &["--text", "x"]),
+        "answer",
+        "question_ambiguous",
+    );
+    let message = ambiguous["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("q1") && message.contains("q2"),
+        "{message}"
+    );
+    assert_eq!(control_count(&run), 0);
+    let output = run_control(None, "answer", &run, &["--question", "q1", "--text", "x"]);
+    let document = recorded(&output, "answer", &run);
+    assert_eq!(control_file(&run, &document)["payload"]["complete"], false);
+    decide(&bundle, "design", "planned");
+    let output = run_control(None, "answer", &run, &["--text", "y"]);
+    let continued = completed(&output);
+    assert_eq!(continued["command"], "useful workflow run answer");
+    assert_eq!(continued["wait"]["kind"], "approval", "{continued}");
+    assert_eq!(
+        read_json(&bundle.execution_root().join("seen-answers")),
+        serde_json::json!({"q1": "x", "q2": "y"})
+    );
+}
+
+// REQ-LOCALRUN-183: `approve` continues the run at the approval's `then` and `hand-back` at
+// its `onHandBack` with the notes, each in the calling command; with `--record-only` each
+// records its control alone.
 #[test]
 fn an_approval_wait_is_approved_or_handed_back() {
     let bundle = wait_tree();
@@ -229,27 +320,27 @@ fn an_approval_wait_is_approved_or_handed_back() {
     );
     assert_eq!(control_count(&run), 0);
     assert_eq!(terminal["wait"]["kind"], "answer");
-    answer_the_one_question(&run);
     decide(&bundle, "design", "planned");
     decide(&bundle, "review", "approve");
-    let approval = completed(&resume(&run))["wait"].clone();
+    let approval =
+        completed(&run_control(None, "answer", &run, &["--text", "keep"]))["wait"].clone();
     assert_eq!(approval["kind"], "approval", "{approval}");
 
-    let output = run_control(None, "hand-back", &run, &["--notes", "tighten it"]);
-    let document = recorded(&output, "hand-back", &run);
-    assert_eq!(document["control"]["event"], "control.hand_back");
-    assert_eq!(document["control"]["wait"], wait_id(&approval));
-    assert_eq!(
-        control_file(&run, &document)["payload"],
-        serde_json::json!({"notes": "tighten it"})
-    );
     decide(&bundle, "fix", "built");
     decide(&bundle, "merge", "landed");
-    let output = resume(&run);
+    let output = run_control(None, "hand-back", &run, &["--notes", "tighten it"]);
     let terminal = completed(&output);
+    assert_eq!(terminal["command"], "useful workflow run hand-back");
     assert_eq!(
         partition_event(&output)["continuation"]["fromSteps"],
         serde_json::json!(["fix"])
+    );
+    let hand_back = read_json(&run.join("controls/0002-hand_back.json"));
+    assert_eq!(hand_back["event"], "control.hand_back");
+    assert_eq!(hand_back["wait"], wait_id(&approval));
+    assert_eq!(
+        hand_back["payload"],
+        serde_json::json!({"notes": "tighten it"})
     );
     assert_eq!(
         fs::read_to_string(bundle.execution_root().join("seen-notes")).unwrap(),
@@ -261,17 +352,28 @@ fn an_approval_wait_is_approved_or_handed_back() {
     let approval = &terminal["wait"];
     assert_eq!(approval["kind"], "approval", "{terminal}");
     let output = run_control(None, "approve", &run, &[]);
-    let document = recorded(&output, "approve", &run);
-    assert_eq!(document["control"]["event"], "control.approve");
-    assert_eq!(document["control"]["wait"], wait_id(approval));
-    assert!(control_file(&run, &document).get("payload").is_none());
-    let output = resume(&run);
     let terminal = completed(&output);
+    assert_eq!(terminal["command"], "useful workflow run approve");
     assert_eq!(
         partition_event(&output)["continuation"]["fromSteps"],
         serde_json::json!(["merge"])
     );
+    let approve = read_json(&run.join("controls/0001-approve.json"));
+    assert_eq!(approve["event"], "control.approve");
+    assert_eq!(approve["wait"], wait_id(approval));
+    assert!(approve.get("payload").is_none());
     assert_eq!(run_record(&run)["outcome"], "landed", "{terminal}");
+
+    for (leaf, args) in [
+        ("approve", &["--record-only"][..]),
+        ("hand-back", &["--notes", "again", "--record-only"][..]),
+    ] {
+        let (run, _) = waiting_run(&bundle, &format!("{leaf}-recorded"), "planned");
+        let document = recorded(&run_control(None, leaf, &run, args), leaf, &run);
+        control_file(&run, &document);
+        assert_eq!(run_record(&run)["state"], "waiting");
+        assert_eq!(attempt_count(&run), 1);
+    }
 }
 
 // REQ-LOCALRUN-184: `retry` on a repair wait records the retry with the replacement and
@@ -340,19 +442,72 @@ fn a_repair_wait_is_retried_by_the_retry_command() {
     assert_eq!(attempt_count(&run), 1);
 }
 
-// REQ-LOCALRUN-185: a stop parks the run before its step until `lift` names it, and
-// `create --stop-before` sets one before the first step starts.
+// REQ-LOCALRUN-184: `retry` on a run waiting for its host records the retry naming the wait
+// and continues it as for a repair wait, without running the root's `requires.check`;
+// `cancel` ends such a run.
+#[test]
+fn a_host_wait_is_retried_without_reading_its_check() {
+    let bundle = host_check_tree();
+    bundle.write_program(
+        "bin/host-check",
+        "#!/bin/sh\ntouch checked\ntest -e healthy\n",
+    );
+    let root = bundle.execution_root();
+    let checked = root.join("checked");
+    let run = host_waiting_run(&bundle, "host-retried");
+    let wait = read_json(&run.join("wait.json"));
+    // The marker is what a run of the check leaves: a `resume` that holds the wait writes it.
+    let held = super::workflow_continue::completed(&super::workflow_continue::resume(&run));
+    assert_eq!(held["outcome"], "waiting", "{held}");
+    assert!(checked.exists());
+    fs::remove_file(&checked).unwrap();
+    fs::write(root.join("exit-code"), "0").unwrap();
+    let output = run_control(None, "retry", &run, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let last = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<serde_json::Value>()
+        .map(Result::unwrap)
+        .last()
+        .unwrap();
+    assert!(workflow_run_schema().is_valid(&last), "{last}");
+    assert_eq!(last["command"], "useful workflow run retry", "{last}");
+    assert_eq!(last["outcome"], "succeeded", "{last}");
+    assert_eq!(last["result"]["continuation"]["reason"], "retry", "{last}");
+    let control = read_json(&run.join("controls/0001-retry.json"));
+    assert_eq!(control["event"], "control.retry");
+    assert_eq!(control["wait"], wait_id(&wait));
+    assert!(wait_id(&wait).starts_with("host@"), "{wait}");
+    let record = run_record(&run);
+    assert_eq!(record["state"], "exited", "{record}");
+    assert_eq!(record["outcome"], "landed", "{record}");
+    assert_eq!(attempt_count(&run), 2);
+    assert!(!checked.exists());
+
+    let run = host_waiting_run(&bundle, "host-withdrawn");
+    let output = run_control(None, "cancel", &run, &[]);
+    let document = recorded_as(&output, "cancel", "withdrawn", &run);
+    assert_eq!(
+        document["control"]["wait"],
+        wait_id(&read_json(&run.join("attempts/000001/wait.json")))
+    );
+    let record = run_record(&run);
+    assert_eq!(record["outcome"], "withdrawn", "{record}");
+    assert!(!checked.exists());
+}
+
+// REQ-LOCALRUN-185: `pause` parks the run before its step until `unpause` names it, and
+// `create --pause-before` sets a stop before the first step starts.
 #[test]
 fn a_stop_parks_a_run_until_it_is_lifted() {
     let bundle = wait_tree();
     let (run, terminal) = waiting_run(&bundle, "stopped", "blocked");
     let output = run_control(
         None,
-        "stop",
+        "pause",
         &run,
         &["--before", "review", "--reason", "freeze"],
     );
-    let document = recorded(&output, "stop", &run);
+    let document = recorded(&output, "pause", &run);
     assert_eq!(document["control"]["event"], "control.stop");
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     assert_eq!(document["wait"], terminal["wait"]);
@@ -362,18 +517,23 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
         serde_json::json!({"before": "review", "reason": "freeze"})
     );
     refused(
-        &run_control(None, "stop", &run, &["--before", "review", "--reason", "x"]),
-        "stop",
+        &run_control(
+            None,
+            "pause",
+            &run,
+            &["--before", "review", "--reason", "x"],
+        ),
+        "pause",
         "stop_in_force",
     );
     refused(
         &run_control(
             None,
-            "stop",
+            "pause",
             &run,
             &["--before", "nowhere", "--reason", "x"],
         ),
-        "stop",
+        "pause",
         "step_unknown",
     );
     assert_eq!(control_count(&run), 1);
@@ -386,8 +546,8 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
     assert_eq!(wait["kind"], "stop", "{parked}");
     assert_eq!(wait["step"], serde_json::json!(["review"]));
 
-    let output = run_control(None, "lift", &run, &[]);
-    let document = recorded(&output, "lift", &run);
+    let output = run_control(None, "unpause", &run, &[]);
+    let document = recorded(&output, "unpause", &run);
     assert_eq!(document["control"]["event"], "control.lift");
     assert_eq!(document["control"]["wait"], wait_id(wait));
     assert_eq!(
@@ -395,8 +555,8 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
         serde_json::json!({"before": "review", "stop": stop["at"]})
     );
     refused(
-        &run_control(None, "lift", &run, &[]),
-        "lift",
+        &run_control(None, "unpause", &run, &[]),
+        "unpause",
         "stop_not_in_force",
     );
     decide(&bundle, "review", "approve");
@@ -410,31 +570,31 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
 
     for (step, reason) in [("fix", "hold fix"), ("merge", "hold merge")] {
         recorded(
-            &run_control(None, "stop", &run, &["--before", step, "--reason", reason]),
-            "stop",
+            &run_control(None, "pause", &run, &["--before", step, "--reason", reason]),
+            "pause",
             &run,
         );
     }
     refused(
-        &run_control(None, "lift", &run, &[]),
-        "lift",
+        &run_control(None, "unpause", &run, &[]),
+        "unpause",
         "stop_ambiguous",
     );
     let lifted = recorded(
-        &run_control(None, "lift", &run, &["--before", "merge"]),
-        "lift",
+        &run_control(None, "unpause", &run, &["--before", "merge"]),
+        "unpause",
         &run,
     );
     assert_eq!(lifted["control"]["wait"], serde_json::Value::Null);
     assert_eq!(control_file(&run, &lifted)["payload"]["before"], "merge");
 
-    // `create --stop-before` parks the first attempt before `review`.
+    // `create --pause-before` parks the first attempt before `review`.
     decide(&bundle, "design", "planned");
     let destination = bundle.result("created-stopped");
     let mut args = bundle.args(&destination);
     args.splice(
         args.len() - 1..args.len() - 1,
-        ["--stop-before".to_owned(), "review".to_owned()],
+        ["--pause-before".to_owned(), "review".to_owned()],
     );
     let terminal = completed(
         &isolated_command(&args)
@@ -457,15 +617,15 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
     let mut args = bundle.args(&destination);
     args.splice(
         args.len() - 1..args.len() - 1,
-        ["--stop-before".to_owned(), "nowhere".to_owned()],
+        ["--pause-before".to_owned(), "nowhere".to_owned()],
     );
     assert_usage_error(&args);
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-185: `stop` before a step of the run's workflow that is not a `workflow` step,
+// REQ-LOCALRUN-185: `pause` before a step of the run's workflow that is not a `workflow` step,
 // which the engine never holds before, is refused `step_not_holdable` with nothing appended,
-// and `lift` still clears such a stop an earlier release recorded.
+// and `unpause` still clears such a stop an earlier release recorded.
 #[test]
 fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
     let tree = EngineeringWaitTree::publish_root(COMMAND_TREE_ROOT);
@@ -476,10 +636,10 @@ fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
         &tree.run(
             &stub,
             &[
-                "stop", "AUTO-1", "--before", "decide", "--reason", "x", "--json",
+                "pause", "AUTO-1", "--before", "decide", "--reason", "x", "--json",
             ],
         ),
-        "stop",
+        "pause",
         "step_not_holdable",
     );
     let run = PathBuf::from(document["runDirectory"].as_str().unwrap());
@@ -493,8 +653,8 @@ fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
     );
     super::workflow_continue::append_control(&run, &earlier);
     let lifted = recorded(
-        &tree.run(&stub, &["lift", "AUTO-1", "--json"]),
-        "lift",
+        &tree.run(&stub, &["unpause", "AUTO-1", "--json"]),
+        "unpause",
         &run,
     );
     assert_eq!(control_file(&run, &lifted)["payload"]["before"], "decide");
@@ -504,7 +664,7 @@ fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
     assert_eq!(run_record(&run)["state"], "exited");
 }
 
-// REQ-LOCALRUN-185, REQ-RUNNERENROLL-91: `create --stop-before` a step of the workflow that is
+// REQ-LOCALRUN-185, REQ-RUNNERENROLL-91: `create --pause-before` a step of the workflow that is
 // not a `workflow` step is a `definition`-phase rejection, the document the runner's refusal
 // reads, printed before the run directory exists and before any step runs.
 #[test]
@@ -524,7 +684,7 @@ fn create_refuses_a_stop_before_a_step_the_engine_does_not_hold() {
             "--input-text",
             "ticket",
             "AUTO-1",
-            "--stop-before",
+            "--pause-before",
             "decide",
             "--json",
         ],
@@ -547,14 +707,20 @@ fn create_refuses_a_stop_before_a_step_the_engine_does_not_hold() {
     assert!(!execution.join("verdict-design.txt").exists());
 }
 
-// REQ-LOCALRUN-186, REQ-LOCALRUN-187, REQ-LOCALRUN-185: `withdraw` and `cancel` end a
-// waiting run themselves, and `release` records an exited run's release once.
+// REQ-LOCALRUN-186, REQ-LOCALRUN-187, REQ-LOCALRUN-185: `cancel` ends a waiting run
+// `withdrawn` itself, `--control cancel` ends one `canceled`, `--force` is a Cloud run's, and
+// `release` records an exited run's release once.
 #[test]
-fn withdraw_cancel_and_release_end_and_release_runs() {
+fn cancel_and_release_end_and_release_runs() {
     let bundle = wait_tree();
     let (run, terminal) = waiting_run(&bundle, "withdrawn", "blocked");
-    let output = run_control(None, "withdraw", &run, &[]);
-    let document = recorded_as(&output, "withdraw", "withdrawn", &run);
+    let forced = run_control(None, "cancel", &run, &["--force"]);
+    assert_eq!(forced.status.code(), Some(2), "{forced:?}");
+    assert!(forced.stdout.is_empty(), "{forced:?}");
+    assert_eq!(control_count(&run), 0);
+    assert_eq!(run_record(&run)["state"], "waiting");
+    let output = run_control(None, "cancel", &run, &[]);
+    let document = recorded_as(&output, "cancel", "withdrawn", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], wait_id(&terminal["wait"]));
     assert_eq!(document["wait"], serde_json::Value::Null);
@@ -566,13 +732,18 @@ fn withdraw_cancel_and_release_end_and_release_runs() {
     assert!(!run.join("wait.json").exists());
     assert_eq!(attempt_count(&run), 1);
     refused(
-        &run_control(None, "withdraw", &run, &[]),
-        "withdraw",
+        &run_control(None, "cancel", &run, &[]),
+        "cancel",
         "run_exited",
     );
     refused(
-        &run_control(None, "stop", &run, &["--before", "review", "--reason", "x"]),
-        "stop",
+        &run_control(
+            None,
+            "pause",
+            &run,
+            &["--before", "review", "--reason", "x"],
+        ),
+        "pause",
         "run_exited",
     );
 
@@ -582,7 +753,7 @@ fn withdraw_cancel_and_release_end_and_release_runs() {
         "release",
         "run_live",
     );
-    let output = run_control(None, "cancel", &canceled, &[]);
+    let output = run_control(None, "cancel", &canceled, &["--control", "cancel"]);
     let document = recorded_as(&output, "cancel", "canceled", &canceled);
     assert_eq!(document["control"]["event"], "control.cancel");
     assert_eq!(document["control"]["wait"], wait_id(&terminal["wait"]));
@@ -680,7 +851,7 @@ fn cancel_ends_a_live_run() {
 
 /// Starts the wait tree with its `design` stage held and planned, and waits until a live
 /// process holds the run at that stage: the live run and its run directory.
-fn live_run_held_at_design(bundle: &TreeBundle, name: &str) -> (LiveRun, PathBuf) {
+pub(super) fn live_run_held_at_design(bundle: &TreeBundle, name: &str) -> (LiveRun, PathBuf) {
     let execution = bundle.execution_root();
     fs::write(execution.join("hold-design"), "").unwrap();
     decide(bundle, "design", "planned");
@@ -698,7 +869,7 @@ fn live_run_held_at_design(bundle: &TreeBundle, name: &str) -> (LiveRun, PathBuf
         "the live run's held step",
         || {
             execution.join("held-design").exists()
-                && useful_execution::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
+                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
         },
         |held| *held,
     );
@@ -724,16 +895,16 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
     let bundle = wait_tree();
     let (mut live, run) = live_run_held_at_design(&bundle, "live-withdrawn");
 
-    let output = run_control(None, "withdraw", &run, &[]);
-    let document = recorded(&output, "withdraw", &run);
+    let output = run_control(None, "cancel", &run, &WITHDRAW);
+    let document = recorded(&output, "cancel", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     assert_eq!(document["wait"], serde_json::Value::Null);
     control_file(&run, &document);
     assert_eq!(run_record(&run)["state"], "running");
     refused(
-        &run_control(None, "withdraw", &run, &[]),
-        "withdraw",
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
         "withdraw_pending",
     );
     assert_eq!(control_count(&run), 1);
@@ -777,8 +948,8 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
     let shown = json(&run_control(None, "show", &run, &[]));
     assert_eq!(shown["attempts"][0]["state"], "cancelled", "{shown}");
     refused(
-        &run_control(None, "withdraw", &run, &[]),
-        "withdraw",
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
         "run_exited",
     );
 
@@ -789,6 +960,7 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
         "run".to_owned(),
         "retry".to_owned(),
         run.to_str().unwrap().to_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         bundle.execution_root().to_str().unwrap().to_owned(),
         "--json".to_owned(),
@@ -812,7 +984,11 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
 fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     let bundle = wait_tree();
     let (mut live, run) = live_run_held_at_design(&bundle, "preparing-withdrawn");
-    recorded(&run_control(None, "withdraw", &run, &[]), "withdraw", &run);
+    recorded(
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
+        &run,
+    );
     fs::write(&live.release, "").unwrap();
     let status = poll_until(
         "the withdrawn run's process exit",
@@ -825,14 +1001,18 @@ fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     assert_eq!(record["outcome"], "withdrawn", "{record}");
 
     let held = hold_lock(&run);
-    let document = recorded(&run_control(None, "withdraw", &run, &[]), "withdraw", &run);
+    let document = recorded(
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
+        &run,
+    );
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     control_file(&run, &document);
     assert_eq!(control_count(&run), 2);
     refused(
-        &run_control(None, "withdraw", &run, &[]),
-        "withdraw",
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
         "withdraw_pending",
     );
     assert_eq!(control_count(&run), 2);
@@ -844,6 +1024,7 @@ fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
             "run".to_owned(),
             "retry".to_owned(),
             run.to_str().unwrap().to_owned(),
+            "--all".to_owned(),
             "--execution-root".to_owned(),
             bundle.execution_root().to_str().unwrap().to_owned(),
             "--json".to_owned(),
@@ -879,16 +1060,27 @@ fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() 
     let stub = LinearStub::start();
     let run = tree.waiting(&stub, "AUTO-1");
     let wait = read_json(&run.join("wait.json"));
-    let withdraw = || tree.run(&stub, &["withdraw", run.to_str().unwrap(), "--json"]);
+    let withdraw = || {
+        tree.run(
+            &stub,
+            &[
+                "cancel",
+                run.to_str().unwrap(),
+                "--control",
+                "withdraw",
+                "--json",
+            ],
+        )
+    };
 
     let held = hold_lock(&run);
-    let pending = recorded(&withdraw(), "withdraw", &run);
+    let pending = recorded(&withdraw(), "cancel", &run);
     assert_eq!(pending["control"]["wait"], serde_json::Value::Null);
     drop(held);
     assert_eq!(run_record(&run)["state"], "waiting");
     assert_eq!(control_count(&run), 1);
 
-    let ended = recorded_as(&withdraw(), "withdraw", "withdrawn", &run);
+    let ended = recorded_as(&withdraw(), "cancel", "withdrawn", &run);
     assert_eq!(ended["control"]["wait"], wait_id(&wait));
     let record = run_record(&run);
     assert_eq!(record["state"], "exited", "{record}");
@@ -902,7 +1094,7 @@ fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() 
     assert_eq!(outcomes, 1);
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-186, REQ-LOCALRUN-191: a live run withdrawn while the stage that
+// REQ-WFEXEC-73, REQ-LOCALRUN-186, REQ-LOCALRUN-191: a live run a withdrawal reaches while the stage that
 // ends its attempt in a wait runs is not left waiting: the attempt ends `withdrawn` with no
 // wait record and no `onWait`, the stage keeps its outputs, and `onOutcome.withdrawn` fires once.
 #[test]
@@ -910,7 +1102,7 @@ fn withdraw_ends_a_live_run_whose_running_stage_ends_in_a_wait() {
     withdraw_ends_a_live_run_at_its_running_stage(WAIT_TREE_ROOT, "blocked", "waiting");
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-186, REQ-LOCALRUN-191: a live run withdrawn while its last stage
+// REQ-WFEXEC-73, REQ-LOCALRUN-186, REQ-LOCALRUN-191: a live run a withdrawal reaches while its last stage
 // runs ends `withdrawn`, not with the exit the stage's outcome leads to, and fires
 // `onOutcome.withdrawn` once in place of that exit's.
 #[test]
@@ -998,6 +1190,10 @@ fn withdraw_ends_a_live_run_withdrawn_while_its_attempt_finishes() {
 // attempt finishes, after it settled and before it ends the run, is answered `recorded` and
 // spent by that ending: the run still ends `canceled`, `cancel` exits 0, and a retry of the
 // run is not withdrawn by it.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdrawal_recorded_while_a_canceled_attempt_finishes_is_spent() {
     let tree = EngineeringWaitTree::publish();
@@ -1053,6 +1249,10 @@ fn a_withdrawal_recorded_while_a_canceled_attempt_finishes_is_spent() {
 // on the run's controls lock until the process released the run, appending nothing on that
 // process's account, and then ends the run as the waiting run it finds: one control naming the
 // wait.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_waits_for_a_process_releasing_the_run_after_its_last_read() {
     let tree = EngineeringWaitTree::publish();
@@ -1085,7 +1285,7 @@ fn a_withdraw_waits_for_a_process_releasing_the_run_after_its_last_read() {
         },
         |reached| *reached,
     );
-    useful_support::sleep(std::time::Duration::from_millis(500));
+    crate::sleep(std::time::Duration::from_millis(500));
     assert!(
         withdraw.process.try_wait().unwrap().is_none(),
         "the withdraw did not wait for the release: {:?}",
@@ -1096,7 +1296,7 @@ fn a_withdraw_waits_for_a_process_releasing_the_run_after_its_last_read() {
 
     fs::write(&gate, "").unwrap();
     let output = withdraw.output();
-    let document = recorded_as(&output, "withdraw", "withdrawn", &run);
+    let document = recorded_as(&output, "cancel", "withdrawn", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], wait_id(&wait));
     control_file(&run, &document);
@@ -1107,6 +1307,10 @@ fn a_withdraw_waits_for_a_process_releasing_the_run_after_its_last_read() {
 // REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal recorded after a live
 // attempt settled and before its first read of the withdrawals ends the run `withdrawn` at
 // that read, and the attempt spends it as it ends the run: a retry is not withdrawn again.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdrawal_honored_at_the_first_read_is_spent() {
     let tree = EngineeringWaitTree::publish();
@@ -1142,6 +1346,10 @@ fn a_withdrawal_honored_at_the_first_read_is_spent() {
 // it ends a waiting run: one `control.withdraw` naming the wait, the run `exited` `withdrawn`
 // with no wait record, and `onOutcome.withdrawn` after the `onWait` once. That control is
 // honored once: a retry of the withdrawn run is not withdrawn at its first boundary.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn withdraw_ends_a_live_run_its_process_releases_waiting() {
     let tree = EngineeringWaitTree::publish();
@@ -1153,7 +1361,7 @@ fn withdraw_ends_a_live_run_its_process_releases_waiting() {
         wait = Some(read_json(&run.join("wait.json")));
     });
 
-    let document = recorded_as(&output, "withdraw", "withdrawn", &run);
+    let document = recorded_as(&output, "cancel", "withdrawn", &run);
     assert_eq!(document["control"]["event"], "control.withdraw");
     assert_eq!(document["control"]["wait"], wait_id(&wait.unwrap()));
     assert_eq!(document["control"]["path"], "controls/0001-withdraw.json");
@@ -1175,6 +1383,10 @@ fn withdraw_ends_a_live_run_its_process_releases_waiting() {
 // `withdraw` to answer as it does for an exited run: `run_exited`, with no control appended and
 // the record and the mirror's writes unchanged, so the next retry of that `failed` run is not
 // withdrawn.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn withdraw_of_a_live_run_its_process_releases_exited_is_run_exited() {
     let tree = EngineeringWaitTree::publish_root(COMMAND_TREE_ROOT);
@@ -1190,7 +1402,7 @@ fn withdraw_of_a_live_run_its_process_releases_exited_is_run_exited() {
         released = Some((record, super::workflow_mirror::mirror_writes(run)));
     });
 
-    refused(&output, "withdraw", "run_exited");
+    refused(&output, "cancel", "run_exited");
     assert_eq!(control_count(&run), 0);
     let (record, writes) = released.unwrap();
     assert_eq!(run_record(&run), record);
@@ -1210,6 +1422,10 @@ fn withdraw_of_a_live_run_its_process_releases_exited_is_run_exited() {
 // releases `waiting` before a `withdraw` without `LINEAR_API_KEY` finds it held is refused
 // `mirror_credentials_unavailable` as a waiting run is, with no control appended; the same
 // command again appends none, and with the key it ends the run `withdrawn` on one control.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_refused_credentials_across_release_appends_nothing() {
     let tree = EngineeringWaitTree::publish();
@@ -1219,13 +1435,15 @@ fn a_withdraw_refused_credentials_across_release_appends_nothing() {
         assert_eq!(run_record(run)["state"], "waiting");
     });
 
-    refused(&output, "withdraw", "mirror_credentials_unavailable");
+    refused(&output, "cancel", "mirror_credentials_unavailable");
     assert_eq!(control_count(&run), 0);
     let mut command = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "withdraw".to_owned(),
+        "cancel".to_owned(),
         "AUTO-1".to_owned(),
+        "--control".to_owned(),
+        "withdraw".to_owned(),
         "--json".to_owned(),
     ]);
     command.env("USEFUL_HOME", tree.home.path());
@@ -1235,13 +1453,16 @@ fn a_withdraw_refused_credentials_across_release_appends_nothing() {
         .env_remove("LINEAR_API_KEY")
         .output()
         .unwrap();
-    refused(&output, "withdraw", "mirror_credentials_unavailable");
+    refused(&output, "cancel", "mirror_credentials_unavailable");
     assert_eq!(control_count(&run), 0);
     assert_eq!(run_record(&run)["state"], "waiting");
 
     recorded_as(
-        &tree.run(&stub, &["withdraw", "AUTO-1", "--json"]),
-        "withdraw",
+        &tree.run(
+            &stub,
+            &["cancel", "AUTO-1", "--control", "withdraw", "--json"],
+        ),
+        "cancel",
         "withdrawn",
         &run,
     );
@@ -1251,13 +1472,17 @@ fn a_withdraw_refused_credentials_across_release_appends_nothing() {
 // REQ-LOCALRUN-181, REQ-LOCALRUN-186: `withdraw` of a waiting run refused `run_locked`, because
 // a process took the run between the inspection and the run lock, or `wait_changed`, because
 // the run's wait changed there, appends nothing.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_refused_at_the_run_lock_appends_nothing() {
     let bundle = wait_tree();
     let (run, _) = waiting_run(&bundle, "locked", "blocked");
     let mut held = None;
     let output = withdrawn_at_the_lock(&bundle, &run, || held = Some(hold_lock(&run)));
-    refused(&output, "withdraw", "run_locked");
+    refused(&output, "cancel", "run_locked");
     assert_eq!(control_count(&run), 0);
     drop(held);
     assert_eq!(run_record(&run)["state"], "waiting");
@@ -1273,20 +1498,20 @@ fn a_withdraw_refused_at_the_run_lock_appends_nothing() {
         );
         before = control_count(&run);
     });
-    refused(&output, "withdraw", "wait_changed");
+    refused(&output, "cancel", "wait_changed");
     assert_eq!(control_count(&run), before);
     assert_eq!(before, 1);
     assert_eq!(run_record(&run)["state"], "waiting");
 }
 
-/// `useful workflow run withdraw RUN` of the waiting run `run`, held between its inspection and
+/// `useful workflow run cancel RUN --control withdraw` of the waiting run `run`, held between its inspection and
 /// the run lock (`USEFUL_TEST_RUN_LOCK_GATE`) while `between` acts on the run: its output.
 fn withdrawn_at_the_lock(bundle: &TreeBundle, run: &Path, between: impl FnOnce()) -> Output {
     let gate = bundle.result("withdraw-lock-gate");
     fs::create_dir_all(gate.parent().unwrap()).unwrap();
     let _ = fs::remove_file(&gate);
     let _ = fs::remove_file(gate.with_extension("inspected"));
-    let withdraw = control_command(None, "withdraw", run, &[])
+    let withdraw = control_command(None, "cancel", run, &WITHDRAW)
         .env("USEFUL_TEST_RUN_LOCK_GATE", &gate)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1303,7 +1528,7 @@ fn withdrawn_at_the_lock(bundle: &TreeBundle, run: &Path, between: impl FnOnce()
     withdraw.wait_with_output().unwrap()
 }
 
-/// `useful workflow run retry` of `run` in the tree's execution root, as `OPERATOR` pointed at
+/// `useful workflow run retry --all` of `run` in the tree's execution root, as `OPERATOR` pointed at
 /// `stub`: its terminal document.
 fn retried(tree: &EngineeringWaitTree, stub: &LinearStub, run: &Path) -> serde_json::Value {
     let execution_root = tree.bundle.execution_root();
@@ -1312,6 +1537,7 @@ fn retried(tree: &EngineeringWaitTree, stub: &LinearStub, run: &Path) -> serde_j
         &[
             "retry",
             run.to_str().unwrap(),
+            "--all",
             "--execution-root",
             execution_root.to_str().unwrap(),
             "--json",
@@ -1319,7 +1545,7 @@ fn retried(tree: &EngineeringWaitTree, stub: &LinearStub, run: &Path) -> serde_j
     ))
 }
 
-/// `useful workflow run withdraw AUTO-1` of the run `live` holds, held after its inspection
+/// `useful workflow run cancel AUTO-1 --control withdraw` of the run `live` holds, held after its inspection
 /// (`USEFUL_TEST_RUN_LOCK_GATE`) while `live`'s held step is released and its process exits, with
 /// `LINEAR_API_KEY` set when `key` is; calls `released` with the run directory before opening
 /// the gate. The command's output and the run directory.
@@ -1358,7 +1584,7 @@ fn withdrawn_across_release(
     (withdraw.output(), run)
 }
 
-/// `useful workflow run withdraw AUTO-1` spawned under the tree's home as `OPERATOR` pointed at
+/// `useful workflow run cancel AUTO-1 --control withdraw` spawned under the tree's home as `OPERATOR` pointed at
 /// `stub`, with `LINEAR_API_KEY` set when `key` is, held after its inspection until `gate`
 /// exists (`USEFUL_TEST_RUN_LOCK_GATE`); dropping it opens the gate.
 fn withdraw_at_lock_gate(
@@ -1370,8 +1596,10 @@ fn withdraw_at_lock_gate(
     let mut command = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "withdraw".to_owned(),
+        "cancel".to_owned(),
         "AUTO-1".to_owned(),
+        "--control".to_owned(),
+        "withdraw".to_owned(),
         "--json".to_owned(),
     ]);
     command
@@ -1390,12 +1618,17 @@ fn withdraw_at_lock_gate(
     }
 }
 
-/// `useful workflow run withdraw AUTO-1` of the run a live process holds, once it answers
-/// `recorded`: the run directory.
+/// `useful workflow run cancel AUTO-1 --control withdraw` of the run a live process holds, once
+/// it answers `recorded`: the run directory.
 fn withdrawn_live(tree: &EngineeringWaitTree, stub: &LinearStub) -> PathBuf {
     let output = poll_until(
         "the live run's withdraw",
-        || tree.run(stub, &["withdraw", "AUTO-1", "--json"]),
+        || {
+            tree.run(
+                stub,
+                &["cancel", "AUTO-1", "--control", "withdraw", "--json"],
+            )
+        },
         |output| output.status.code() == Some(0),
     );
     let document = json(&output);
@@ -1405,7 +1638,7 @@ fn withdrawn_live(tree: &EngineeringWaitTree, stub: &LinearStub) -> PathBuf {
 
 /// Waits for the live run's process to exit and checks the run ended `withdrawn` on its one
 /// attempt with its one withdrawal honored: no wait record, `waits` `onWait` writes and one
-/// `onOutcome.withdrawn` write after them, and a later `withdraw` refused `run_exited`. The
+/// `onOutcome.withdrawn` write after them, and a later `cancel` refused `run_exited`. The
 /// attempt's published result, the one it reached.
 fn ended_withdrawn_once(
     tree: &EngineeringWaitTree,
@@ -1449,8 +1682,8 @@ fn ended_withdrawn_once(
         "{writes:?}"
     );
     refused(
-        &tree.run(stub, &["withdraw", run.to_str().unwrap(), "--json"]),
-        "withdraw",
+        &tree.run(stub, &["cancel", run.to_str().unwrap(), "--json"]),
+        "cancel",
         "run_exited",
     );
     read_json(&run.join("attempts/000001/result/result.json"))
@@ -1462,7 +1695,11 @@ fn ended_withdrawn_once(
 fn resume_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     let bundle = wait_tree();
     let (mut live, run) = live_run_held_at_design(&bundle, "abandoned-withdrawn");
-    recorded(&run_control(None, "withdraw", &run, &[]), "withdraw", &run);
+    recorded(
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
+        &run,
+    );
     live.process.kill().unwrap();
     live.process.wait().unwrap();
     fs::write(&live.release, "").unwrap();
@@ -1490,12 +1727,20 @@ fn resume_ends_an_abandoned_run_whose_withdrawal_is_pending() {
 fn retry_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     let bundle = wait_tree();
     let (mut live, run) = live_run_held_at_design(&bundle, "abandoned-retried");
-    recorded(&run_control(None, "withdraw", &run, &[]), "withdraw", &run);
+    recorded(
+        &run_control(None, "cancel", &run, &WITHDRAW),
+        "cancel",
+        &run,
+    );
     live.process.kill().unwrap();
     live.process.wait().unwrap();
     fs::write(&live.release, "").unwrap();
     let execution_root = bundle.execution_root();
-    let retry = ["--execution-root", execution_root.to_str().unwrap()];
+    let retry = [
+        "--all",
+        "--execution-root",
+        execution_root.to_str().unwrap(),
+    ];
 
     // Until the orphaned step process ends, the attempt's ownership is unproven.
     let output = poll_until(
@@ -1514,32 +1759,38 @@ fn retry_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-213, REQ-LOCALRUN-186, REQ-WFEXEC-73: a `withdraw` that finds an abandoned run
-// held by a `retry`, or a `resume --from`, that has not begun its attempt is answered
+// REQ-LOCALRUN-213, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal that finds an abandoned run
+// held by a `retry --all`, or a `retry --from`, that has not begun its attempt is answered
 // `recorded`, and that command then ends the run `withdrawn` instead of beginning an attempt,
-// so no stage starts after the `withdraw` was answered.
+// so no stage starts after the withdrawal was answered.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_before_a_continuation_begins_ends_the_abandoned_run() {
-    for (leaf, args) in [
-        ("retry", vec!["--execution-root".to_owned()]),
-        ("resume", vec!["--from".to_owned(), "design".to_owned()]),
-    ] {
+    for (name, all) in [("retry-all", true), ("retry-from", false)] {
         let bundle = wait_tree();
-        let (mut live, run) = live_run_held_at_design(&bundle, leaf);
+        let (mut live, run) = live_run_held_at_design(&bundle, name);
         live.process.kill().unwrap();
         live.process.wait().unwrap();
         fs::write(&live.release, "").unwrap();
-        let mut args = args;
-        if leaf == "retry" {
-            args.push(bundle.execution_root().to_str().unwrap().to_owned());
-        }
-        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let execution_root = bundle.execution_root().to_str().unwrap().to_owned();
+        let args = if all {
+            vec!["--all", "--execution-root", &execution_root]
+        } else {
+            vec!["--from", "design"]
+        };
 
-        let gate = bundle.result(&format!("{leaf}-begin-gate"));
-        let mut command = held_at_begin_gate(&run, leaf, &args, &gate);
-        recorded(&run_control(None, "withdraw", &run, &[]), "withdraw", &run);
+        let gate = bundle.result(&format!("{name}-begin-gate"));
+        let mut command = held_at_begin_gate(&run, "retry", &args, &gate);
+        recorded(
+            &run_control(None, "cancel", &run, &WITHDRAW),
+            "cancel",
+            &run,
+        );
         fs::write(&gate, "").unwrap();
-        ended_withdrawn_unattempted(&command.output(), leaf, &run);
+        ended_withdrawn_unattempted(&command.output(), "retry", &run);
     }
 }
 
@@ -1605,19 +1856,22 @@ fn ended_withdrawn_unattempted(output: &Output, leaf: &str, run: &Path) {
 // the abandoned attempt and marks the record `exited` `canceled` without an attempt.
 #[test]
 fn cancel_ends_an_abandoned_run() {
-    ends_an_abandoned_run("cancel", "canceled");
+    ends_an_abandoned_run(&[], "cancel", "canceled");
 }
 
-// REQ-LOCALRUN-186, REQ-CONTINUE-2: `withdraw` of a `running` run whose process is gone
-// settles the abandoned attempt and marks the record `exited` `withdrawn` without an attempt.
+// REQ-LOCALRUN-186, REQ-CONTINUE-2: `cancel --control withdraw` of a `running` run whose
+// process is gone settles the abandoned attempt and marks the record `exited` `withdrawn`
+// without an attempt.
 #[test]
-fn withdraw_ends_an_abandoned_run() {
-    ends_an_abandoned_run("withdraw", "withdrawn");
+fn a_withdrawal_ends_an_abandoned_run() {
+    ends_an_abandoned_run(&WITHDRAW, "withdraw", "withdrawn");
 }
 
 /// Runs the wait tree until its `design` step holds, kills the `useful` process, and ends the
-/// abandoned run with `leaf`, which records `control.<leaf>` and exits the run `outcome`.
-fn ends_an_abandoned_run(leaf: &str, outcome: &str) {
+/// abandoned run with `cancel` and `args`, which records `control.<event>` and exits the run
+/// `outcome`.
+fn ends_an_abandoned_run(args: &[&str], event: &str, outcome: &str) {
+    let leaf = "cancel";
     let bundle = wait_tree();
     let (mut live, run) = live_run_held_at_design(&bundle, "abandoned");
     live.process.kill().unwrap();
@@ -1629,15 +1883,15 @@ fn ends_an_abandoned_run(leaf: &str, outcome: &str) {
     // unproven and the command fails without recording anything.
     let output = poll_until(
         &format!("the abandoned run's {leaf}"),
-        || run_control(None, leaf, &run, &[]),
+        || run_control(None, leaf, &run, args),
         |output| output.status.code() == Some(0),
     );
     let document = recorded_as(&output, leaf, outcome, &run);
-    assert_eq!(document["control"]["event"], format!("control.{leaf}"));
+    assert_eq!(document["control"]["event"], format!("control.{event}"));
     assert_eq!(document["control"]["wait"], serde_json::Value::Null);
     assert_eq!(
         document["control"]["path"],
-        format!("controls/0001-{leaf}.json")
+        format!("controls/0001-{event}.json")
     );
     assert_eq!(document["wait"], serde_json::Value::Null);
     control_file(&run, &document);
@@ -1817,8 +2071,8 @@ fn run_commands_address_a_run_by_its_subject() {
         "run_live",
     );
     recorded_as(
-        &run_control(home, "withdraw", "AUTO-1", &[]),
-        "withdraw",
+        &run_control(home, "cancel", "AUTO-1", &[]),
+        "cancel",
         "withdrawn",
         &run,
     );
@@ -1835,23 +2089,33 @@ fn run_commands_address_a_run_by_its_subject() {
     let canary = published.republish(&["--new"]);
     let canary = canary["definition"]["id"].as_str().unwrap().to_owned();
     let (_, canary_run) = published.waiting_for(&canary, "AUTO-1");
-    for leaf in ["show", "release"] {
-        let refusal = refused(
-            &run_control(home, leaf, "AUTO-1", &[]),
-            leaf,
-            "subject_ambiguous",
-        );
-        assert!(refusal.get("runDirectory").is_none(), "{refusal}");
-        let message = refusal["diagnostics"][0]["message"].as_str().unwrap();
+    let shown = show_error(
+        &run_control(home, "show", "AUTO-1", &[]),
+        "subject_ambiguous",
+    );
+    assert!(
+        super::workflow_status::status_schema().is_valid(&shown),
+        "{shown}"
+    );
+    let refusal = refused(
+        &run_control(home, "release", "AUTO-1", &[]),
+        "release",
+        "subject_ambiguous",
+    );
+    for (document, message) in [
+        (&shown, &shown["error"]["message"]),
+        (&refusal, &refusal["diagnostics"][0]["message"]),
+    ] {
+        assert!(document.get("runDirectory").is_none(), "{document}");
+        let message = message.as_str().unwrap();
         assert!(
             message.contains(&id) && message.contains(&canary_run),
-            "{refusal}"
+            "{document}"
         );
     }
 
-    let unknown = refused(
-        &run_control(home, "show", "AUTO-9", &[]),
-        "show",
+    let unknown = show_error(
+        &super::workflow_status::signed_out(control_command(home, "show", "AUTO-9", &[])),
         "run_not_found",
     );
     assert!(unknown.get("runDirectory").is_none(), "{unknown}");
@@ -1900,12 +2164,22 @@ fn control_commands_address_a_run_by_its_id() {
     let (run, id, terminal) = published.run("blocked");
     assert_eq!(terminal["wait"]["kind"], "answer", "{terminal}");
     let home = Some(&published.home);
-    let output = run_control(home, "answer", &id, &["--question", "1", "--text", "yes"]);
+    let output = run_control(
+        home,
+        "answer",
+        &id,
+        &["--question", "1", "--text", "yes", "--record-only"],
+    );
     let document = recorded(&output, "answer", &run);
     assert_eq!(document["run"], id.as_str());
     assert_eq!(control_file(&run, &document)["payload"]["complete"], true);
 
-    let unknown = run_control(home, "approve", "run_7zzzzzzzzzzzzzzzzzzzzzzzzz", &[]);
+    let unknown = super::workflow_status::signed_out(control_command(
+        home,
+        "approve",
+        "run_7zzzzzzzzzzzzzzzzzzzzzzzzz",
+        &[],
+    ));
     let refusal = refused(&unknown, "approve", "run_not_found");
     assert!(refusal.get("runDirectory").is_none(), "{refusal}");
 
@@ -1928,20 +2202,24 @@ fn control_commands_address_a_run_by_its_id() {
     assert!(!destination.join("controls").exists());
 }
 
-// REQ-LOCALRUN-80: a control command missing a required option, and `retry` on a run that
-// does not wait without `--execution-root`, are usage errors.
+// REQ-LOCALRUN-80: a control command missing a required option, `retry` given `--from` with
+// `--all`, and an option of a Cloud run given a run under the home are usage errors.
 #[test]
 fn control_command_usage_errors_exit_two() {
     let bundle = wait_tree();
     let (run, _) = waiting_run(&bundle, "usage", "blocked");
     let run = run.to_str().unwrap();
     for args in [
-        vec!["answer", run, "--text", "x"],
         vec!["answer", run, "--question", "1"],
         vec!["hand-back", run],
-        vec!["stop", run, "--before", "review"],
-        vec!["stop", run, "--reason", "x"],
+        vec!["pause", run, "--before", "review"],
+        vec!["pause", run, "--reason", "x"],
         vec!["approve", run, "--execution-root", run],
+        vec!["retry", run, "--all", "--from", "design"],
+        vec!["retry", run, "--wait"],
+        vec!["retry", run, "--expected-version", "3"],
+        vec!["cancel", run, "--wait"],
+        vec!["cancel", run, "--idempotency-key", "key-1"],
     ] {
         let args = ["workflow", "run"]
             .into_iter()
@@ -1951,36 +2229,21 @@ fn control_command_usage_errors_exit_two() {
         assert_usage_error(&args);
     }
     assert!(!Path::new(run).join("controls").exists());
-
-    let closure = RunBundle::new(
-        "schemaVersion: 1\nsteps:\n  complete:\n    kind: cmd\n    command:\n      argv: [\"false\"]\n",
-    );
-    let destination = closure.result("failed");
-    let created = isolated_command(&closure.args(&destination))
-        .output()
-        .unwrap();
-    assert_eq!(created.status.code(), Some(1), "{created:?}");
-    assert_usage_error(&[
-        "workflow".to_owned(),
-        "run".to_owned(),
-        "retry".to_owned(),
-        destination.to_str().unwrap().to_owned(),
-    ]);
 }
 
-/// A subject's waiting run restarted onto a changed revision (REQ-LOCALRUN-194): the wait
-/// tree published with `subject: ticket`, a run for `AUTO-1` waiting on `answer` after
-/// `design` on revision 1, revision 2 publishing a changed `review.yaml`, and `useful workflow run
-/// restart <predecessor id> --at review --json` run to its `approval` wait.
+/// A subject's waiting run upgraded from a step onto a changed revision (REQ-LOCALRUN-194):
+/// the wait tree published with `subject: ticket`, a run for `AUTO-1` waiting on `answer` after
+/// `design` on revision 1, revision 2 publishing a changed `review.yaml`, and `useful workflow
+/// run upgrade <predecessor id> --from review --json` run to its `approval` wait.
 pub(super) struct RestartedSubject {
     pub(super) published: PublishedWaitTree,
     pub(super) predecessor: PathBuf,
     pub(super) predecessor_id: String,
     pub(super) successor: PathBuf,
     pub(super) successor_id: String,
-    /// The restart's `--json` document, checked against the run-result schema.
+    /// The upgrade's `--json` document, checked against the run-result schema.
     pub(super) terminal: serde_json::Value,
-    /// The restart's `continuation_partition` event.
+    /// The upgrade's `continuation_partition` event.
     pub(super) partition: serde_json::Value,
 }
 
@@ -1995,9 +2258,9 @@ impl RestartedSubject {
         decide(&published.bundle, "review", "approve");
         let output = run_control(
             Some(&published.home),
-            "restart",
+            "upgrade",
             &predecessor_id,
-            &["--at", "review"],
+            &["--from", "review"],
         );
         let terminal = completed(&output);
         let partition = partition_event(&output);
@@ -2052,10 +2315,10 @@ fn successor_command_refused(output: &Output, leaf: &str, phase: &str) -> serde_
     rejection
 }
 
-/// A `restart` refused before anything was created: the document at `phase` naming the
-/// command, with its first diagnostic's `code`.
-fn restart_refused(output: &Output, phase: &str, code: &str) -> serde_json::Value {
-    let rejection = successor_command_refused(output, "restart", phase);
+/// An `upgrade --from` refused before anything was created: the document at `phase` naming
+/// the command, with its first diagnostic's `code`.
+fn upgrade_from_refused(output: &Output, phase: &str, code: &str) -> serde_json::Value {
+    let rejection = successor_command_refused(output, "upgrade", phase);
     assert_eq!(rejection["diagnostics"][0]["code"], code, "{rejection}");
     rejection
 }
@@ -2087,7 +2350,7 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
 
     let terminal = &restarted.terminal;
     assert_eq!(
-        terminal["command"], "useful workflow run restart",
+        terminal["command"], "useful workflow run upgrade",
         "{terminal}"
     );
     assert_eq!(terminal["outcome"], "waiting", "{terminal}");
@@ -2141,35 +2404,41 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
         assert_eq!((records(predecessor), records(successor)), before);
         assert_eq!(run_directories(predecessor.parent().unwrap()), 2);
     };
-    let refusal = restart_refused(
-        &run_control(home, "restart", predecessor_id, &["--at", "review"]),
+    let refusal = upgrade_from_refused(
+        &run_control(home, "upgrade", predecessor_id, &["--from", "review"]),
         "successor",
         "run_exited",
     );
     assert_eq!(refusal["diagnostics"].as_array().unwrap().len(), 1);
     assert_eq!(refusal["diagnostics"][0]["run"], predecessor_id.as_str());
     unchanged();
-    restart_refused(
-        &run_control(home, "restart", successor_id, &["--at", "nosuch"]),
+    upgrade_from_refused(
+        &run_control(home, "upgrade", successor_id, &["--from", "nosuch"]),
         "continuation",
         "continuation_definition_invalid",
     );
     unchanged();
     assert_eq!(run_record(successor)["state"], "waiting");
-    // REQ-LOCALRUN-80: `--at` is required.
-    assert_usage_error(&[
-        "workflow".to_owned(),
-        "run".to_owned(),
-        "restart".to_owned(),
-        successor.to_str().unwrap().to_owned(),
-    ]);
+    // REQ-LOCALRUN-194, REQ-LOCALRUN-80: `--input-text` and `--execution-root` name what the
+    // successor runs again, so each is a usage error without `--from`.
+    for options in [
+        ["--input-text", "note", "hello"].as_slice(),
+        &["--execution-root", "."],
+    ] {
+        let args = ["workflow", "run", "upgrade", successor.to_str().unwrap()]
+            .into_iter()
+            .chain(options.iter().copied())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_usage_error(&args);
+    }
     unchanged();
 
     // A live process holds the successor while it runs `merge`.
     let bundle = &restarted.published.bundle;
     let execution = bundle.execution_root();
     recorded(
-        &run_control(home, "approve", successor_id, &[]),
+        &run_control(home, "approve", successor_id, &["--record-only"]),
         "approve",
         successor,
     );
@@ -2193,13 +2462,13 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
         "the successor's held merge",
         || {
             execution.join("held-merge").exists()
-                && useful_execution::lock_holder(successor).is_ok_and(|holder| holder.is_some())
+                && crate::lock_holder(successor).is_ok_and(|holder| holder.is_some())
         },
         |held| *held,
     );
     let before = (records(predecessor), records(successor));
-    let refusal = restart_refused(
-        &run_control(home, "restart", successor_id, &["--at", "review"]),
+    let refusal = upgrade_from_refused(
+        &run_control(home, "upgrade", successor_id, &["--from", "review"]),
         "successor",
         "run_locked",
     );
@@ -2279,8 +2548,8 @@ fn an_unfinished_move_is_completed_or_undone_by_the_successors_continuation() {
     assert_eq!(control_count(successor), 0);
     assert_eq!(holder(), format!("{predecessor_id}\n"));
     assert_eq!(records(predecessor), before);
-    restart_refused(
-        &run_control(home, "restart", successor_id, &["--at", "review"]),
+    upgrade_from_refused(
+        &run_control(home, "upgrade", successor_id, &["--from", "review"]),
         "successor",
         "run_exited",
     );
@@ -2321,8 +2590,8 @@ fn a_superseded_predecessor_is_not_continued_or_retried() {
     };
 
     let rejection = refused(
-        &run_control(home, "resume", predecessor_id, &["--from", "review"]),
-        "useful workflow run resume",
+        &run_control(home, "retry", predecessor_id, &["--from", "review"]),
+        "useful workflow run retry",
         "continuation",
     );
     names_the_successor(&rejection);
@@ -2334,7 +2603,11 @@ fn a_superseded_predecessor_is_not_continued_or_retried() {
             home,
             "retry",
             predecessor_id,
-            &["--execution-root", execution_root.path().to_str().unwrap()],
+            &[
+                "--all",
+                "--execution-root",
+                execution_root.path().to_str().unwrap(),
+            ],
         ),
         "useful workflow run retry",
         "retry",
@@ -2350,7 +2623,7 @@ fn a_superseded_predecessor_is_not_continued_or_retried() {
     names_the_successor(&rejection);
     unchanged();
 
-    let output = run_control(home, "status", predecessor_id, &[]);
+    let output = run_control(home, "show", predecessor_id, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let status = json(&output);
     assert!(
@@ -2396,7 +2669,7 @@ fn a_restarted_successors_design_receives_the_predecessors_answers() {
     let changed = format!("{}# revision 2\n", fs::read_to_string(&review).unwrap());
     bundle.write_source("review.yaml", &changed);
     assert_eq!(published.republish(&[])["revision"]["n"], 2);
-    let output = run_control(home, "restart", &predecessor_id, &["--at", "design"]);
+    let output = run_control(home, "upgrade", &predecessor_id, &["--from", "design"]);
     let terminal = completed(&output);
     assert_eq!(terminal["outcome"], "waiting", "{terminal}");
     assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
@@ -2417,17 +2690,19 @@ fn list_and_show_print_a_restarted_runs_lineage() {
     let (predecessor, successor) = (&restarted.predecessor, &restarted.successor);
     let (predecessor_id, successor_id) = (&restarted.predecessor_id, &restarted.successor_id);
     let list = |args: &[&str]| {
-        let output = isolated_command(
-            &["workflow", "run", "list"]
-                .iter()
-                .chain(args)
-                .map(|arg| (*arg).to_owned())
-                .collect::<Vec<_>>(),
-        )
-        .env("USEFUL_HOME", home.path())
-        .env("USER", OPERATOR)
-        .output()
-        .unwrap();
+        let output = super::workflow_status::signed_out({
+            let mut command = isolated_command(
+                &["workflow", "run", "list"]
+                    .iter()
+                    .chain(args)
+                    .map(|arg| (*arg).to_owned())
+                    .collect::<Vec<_>>(),
+            );
+            command
+                .env("USEFUL_HOME", home.path())
+                .env("USER", OPERATOR);
+            command
+        });
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         output
     };
@@ -2454,7 +2729,7 @@ fn list_and_show_print_a_restarted_runs_lineage() {
     let line = |id: &str| {
         plain
             .lines()
-            .find(|line| line.starts_with(id))
+            .find(|line| line.starts_with(&format!("local · {id}")))
             .unwrap_or_else(|| panic!("{id} in {plain}"))
             .to_owned()
     };
@@ -2539,8 +2814,8 @@ fn a_restart_sets_text_inputs_of_the_current_revision() {
     };
 
     // Revision 2's `note` has no value in the predecessor's retained inputs.
-    let refusal = restart_refused(
-        &run_control(home, "restart", &predecessor_id, &["--at", "review"]),
+    let refusal = upgrade_from_refused(
+        &run_control(home, "upgrade", &predecessor_id, &["--from", "review"]),
         "continuation",
         "continuation_inputs_unsatisfied",
     );
@@ -2549,9 +2824,9 @@ fn a_restart_sets_text_inputs_of_the_current_revision() {
     let subject_binding = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "restart".to_owned(),
+        "upgrade".to_owned(),
         predecessor_id.clone(),
-        "--at".to_owned(),
+        "--from".to_owned(),
         "review".to_owned(),
         "--input-text".to_owned(),
         "ticket".to_owned(),
@@ -2572,9 +2847,9 @@ fn a_restart_sets_text_inputs_of_the_current_revision() {
 
     let terminal = completed(&run_control(
         home,
-        "restart",
+        "upgrade",
         &predecessor_id,
-        &["--at", "review", "--input-text", "note", "hello"],
+        &["--from", "review", "--input-text", "note", "hello"],
     ));
     assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
     let successor = PathBuf::from(terminal["runDirectory"].as_str().unwrap());
@@ -2683,7 +2958,7 @@ fn an_upgrade_moves_a_waiting_subject_with_its_wait() {
     assert!(!successor.join("mirror").exists());
 
     recorded(
-        &run_control(home, "approve", &successor_id, &[]),
+        &run_control(home, "approve", &successor_id, &["--record-only"]),
         "approve",
         &successor,
     );
@@ -2777,18 +3052,68 @@ fn an_upgrade_is_refused_with_every_miss_and_changes_nothing() {
     }
     unchanged();
 
-    recorded(&run_control(home, "approve", &id, &[]), "approve", &run);
+    recorded(
+        &run_control(home, "approve", &id, &["--record-only"]),
+        "approve",
+        &run,
+    );
     let refusal = upgrade_refused(&upgrade(), "successor", &["wait_resolved"]);
     assert_eq!(refusal["diagnostics"][0]["run"], id.as_str(), "{refusal}");
     unchanged();
+}
+
+// REQ-LOCALRUN-180, REQ-LOCALRUN-194: `upgrade` looks under the home alone, so an ID the home
+// lacks is `run_not_found` saying that a Cloud run has no upgrade, with or without `--from`,
+// and nothing is sent to the deployment in effect.
+#[test]
+fn an_upgrade_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
+    let home = Home::new();
+    let server = super::ScriptedServer::respond(Vec::new());
+    let credentials = super::private_credential_directory();
+    let credential_path = credentials.path().join("credentials.json");
+    for args in [&[][..], &["--from", "review"]] {
+        let mut command = control_command(
+            Some(&home),
+            "upgrade",
+            "run_7zzzzzzzzzzzzzzzzzzzzzzzzz",
+            args,
+        );
+        command.env("USEFUL_ORG", "acme-research");
+        for (name, value) in
+            super::deployment_environment(&server.api_url, credential_path.to_str().unwrap())
+        {
+            command.env(name, value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("run_not_found"), "{args:?}: {stderr}");
+        assert!(stderr.contains("Cloud run"), "{args:?}: {stderr}");
+    }
+    assert!(server.finish().is_empty());
 }
 
 // REQ-LOCALRUN-197, REQ-LOCALRUN-195: an approval recorded on the predecessor after the
 // upgrade inspected it and before it took the lock refuses the upgrade `wait_resolved` under
 // the lock, instead of being copied to a successor it would not resolve; the predecessor is
 // unchanged, and resuming it takes the approval.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn an_upgrade_refuses_a_wait_resolved_between_its_inspection_and_the_lock() {
+    approval_prevents_upgrade(true);
+}
+
+// REQ-LOCALRUN-197, REQ-LOCALRUN-195. This ordering also runs against release builds.
+#[test]
+fn a_recorded_approval_stays_with_the_wait_when_upgrade_is_refused() {
+    approval_prevents_upgrade(false);
+}
+
+fn approval_prevents_upgrade(pause_after_inspection: bool) {
     let published = PublishedWaitTree::new();
     let home = Some(&published.home);
     let bundle = &published.bundle;
@@ -2803,24 +3128,35 @@ fn an_upgrade_refuses_a_wait_resolved_between_its_inspection_and_the_lock() {
     let before = records(&run);
 
     let gate = bundle.result("upgrade-lock-gate");
-    fs::create_dir_all(gate.parent().unwrap()).unwrap();
-    let upgrade = control_command(home, "upgrade", &id, &[])
-        .env("USEFUL_TEST_RUN_LOCK_GATE", &gate)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    poll_until(
-        "the upgrade's inspection",
-        || gate.with_extension("inspected").exists(),
-        |inspected| *inspected,
+    let upgrade = pause_after_inspection.then(|| {
+        fs::create_dir_all(gate.parent().unwrap()).unwrap();
+        let process = control_command(home, "upgrade", &id, &[])
+            .env("USEFUL_TEST_RUN_LOCK_GATE", &gate)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        poll_until(
+            "the upgrade's inspection",
+            || gate.with_extension("inspected").exists(),
+            |inspected| *inspected,
+        );
+        process
+    });
+    recorded(
+        &run_control(home, "approve", &id, &["--record-only"]),
+        "approve",
+        &run,
     );
-    recorded(&run_control(home, "approve", &id, &[]), "approve", &run);
     let controls = || fs::read_dir(run.join("controls")).unwrap().count();
     assert_eq!(controls(), 1);
-    fs::write(&gate, "").unwrap();
-    let output = upgrade.wait_with_output().unwrap();
+    let output = if let Some(process) = upgrade {
+        fs::write(&gate, "").unwrap();
+        process.wait_with_output().unwrap()
+    } else {
+        run_control(home, "upgrade", &id, &[])
+    };
 
     let refusal = upgrade_refused(&output, "successor", &["wait_resolved"]);
     assert_eq!(refusal["diagnostics"][0]["run"], id.as_str(), "{refusal}");
@@ -2892,7 +3228,7 @@ fn an_upgraded_fan_out_resumes_at_its_element() {
         home,
         "answer",
         &successor_id,
-        &["--question", "1", "--text", "split"],
+        &["--question", "1", "--text", "split", "--record-only"],
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     fs::write(root.join("verdict-build-b"), "built").unwrap();
@@ -2976,7 +3312,7 @@ fn a_restart_at_a_fan_out_waiting_past_its_first_element_advises_upgrade() {
     let restarted_at = |output: &Output, item: u64| {
         let terminal = completed(output);
         assert_eq!(
-            terminal["command"], "useful workflow run restart",
+            terminal["command"], "useful workflow run upgrade",
             "{terminal}"
         );
         assert_eq!(terminal["outcome"], "waiting", "{terminal}");
@@ -2993,9 +3329,9 @@ fn a_restart_at_a_fan_out_waiting_past_its_first_element_advises_upgrade() {
 
     let (successor, stderr) = restarted(&run_control(
         home,
-        "restart",
+        "upgrade",
         &predecessor_id,
-        &["--at", "build"],
+        &["--from", "build"],
     ));
     assert_eq!(
         ordinals_of(&successor.join("children/build")),
@@ -3011,17 +3347,17 @@ fn a_restart_at_a_fan_out_waiting_past_its_first_element_advises_upgrade() {
 
     let successor_id = run_record(&successor)["id"].as_str().unwrap().to_owned();
     let before = records(&successor);
-    let refused = run_control(home, "restart", &successor_id, &["--at", "nosuch"]);
-    restart_refused(&refused, "continuation", "continuation_definition_invalid");
+    let refused = run_control(home, "upgrade", &successor_id, &["--from", "nosuch"]);
+    upgrade_from_refused(&refused, "continuation", "continuation_definition_invalid");
     assert!(!advises(&String::from_utf8_lossy(&refused.stderr)));
     assert_eq!(records(&successor), before);
     waits_at_element(&successor, 2);
 
     let (third, stderr) = restarted(&run_control(
         home,
-        "restart",
+        "upgrade",
         &successor_id,
-        &["--at", "design"],
+        &["--from", "design"],
     ));
     assert!(!advises(&stderr), "{stderr}");
 
@@ -3032,7 +3368,7 @@ fn a_restart_at_a_fan_out_waiting_past_its_first_element_advises_upgrade() {
     fs::write(blocked_first, "blocked").unwrap();
     let restart_at_build = |run: &Path| {
         let id = run_record(run)["id"].as_str().unwrap().to_owned();
-        restarted_at(&run_control(home, "restart", &id, &["--at", "build"]), 1)
+        restarted_at(&run_control(home, "upgrade", &id, &["--from", "build"]), 1)
     };
     let (fourth, stderr) = restart_at_build(&third);
     assert!(advises(&stderr), "{stderr}");
@@ -3253,9 +3589,9 @@ steps:
 
 /// `stage STEP` counts its runs in `count-<STEP>`; `plan` and `route` record the value they
 /// received as `seen-read[-<part>]` and `seen-plan[-<part>]`, and `route` the `notes` it
-/// received, when it has any, as `seen-notes[-<part>]`; `route` requires the omitted
-/// `findings` to read `null` and `plan[-<part>].md` to read `fenced`; `effect` appends one
-/// line to `effects`.
+/// received, when it has any, as `seen-notes[-<part>]`; `route` then exits 71 while
+/// `host-down[-<part>]` exists, and requires the omitted `findings` to read `null` and
+/// `plan[-<part>].md` to read `fenced`; `effect` appends one line to `effects`.
 const STAGE_TREE_PROGRAM: &str = "#!/bin/sh
 set -eu
 count=$(($(cat \"count-$1\" 2>/dev/null || printf 0) + 1))
@@ -3271,6 +3607,7 @@ case \"$1\" in
     cat \"$USEFUL_STEP_INPUTS/values/plan\" > \"seen-plan$suffix\"
     test ! -e \"$USEFUL_STEP_INPUTS/values/notes\" ||
       cat \"$USEFUL_STEP_INPUTS/values/notes\" > \"seen-notes$suffix\"
+    test ! -e \"host-down$suffix\" || exit 71
     test \"$(cat \"$USEFUL_STEP_INPUTS/values/findings\")\" = null
     grep -qx fenced \"plan$suffix.md\"
     printf planned > verdict.txt ;;
@@ -3288,6 +3625,55 @@ fn stage_tree(root: &str) -> TreeBundle {
         r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}"#,
     );
     bundle.write_program("bin/stage", STAGE_TREE_PROGRAM);
+    bundle
+}
+
+/// The stage tree under `root`, one of the stage roots, whose `design` routes `host_failed`
+/// to `{wait: host, then: design, limit: 2, else: {wait: repair, then: design}}` and whose
+/// `requires.check` is `host-check`, healthy once the execution root holds `healthy`
+/// (SC-CONTINUE-15). The child's `route` exits 71, an infrastructure exit code, while
+/// `host-down[-<part>]` exists, after `read` and `plan` succeeded.
+fn host_stage_tree(root: &str) -> TreeBundle {
+    const PROGRAMS: &str = "programs: [bin]\n";
+    const REPAIR: &str = "      failed:\n        wait: repair\n        then: design\n";
+    assert!(root.contains(PROGRAMS) && root.contains(REPAIR), "{root}");
+    let root = root
+        .replacen(
+            PROGRAMS,
+            "programs: [bin]\nrequires:\n  check:\n    argv: [host-check]\n",
+            1,
+        )
+        .replacen(
+            REPAIR,
+            &format!(
+                "{REPAIR}      host_failed:\n        wait: host\n        then: design\n        limit: 2\n        else:\n          wait: repair\n          then: design\n"
+            ),
+            1,
+        );
+    let bundle = stage_tree(&root);
+    bundle.write_source(
+        "design.yaml",
+        &STAGE_TREE_DESIGN
+            .replacen(
+                "outcomes: [planned, failed]\n",
+                "outcomes: [planned, failed, host_failed]\n",
+                1,
+            )
+            .replacen(
+                "  onFailure: failed\n",
+                "  onFailure: failed\n  onInfrastructure: host_failed\n",
+                1,
+            )
+            .replacen(
+                "  route:\n    kind: cmd\n",
+                "  route:\n    kind: cmd\n    infrastructureExitCodes: [71]\n",
+                1,
+            ),
+    );
+    bundle.write_program(
+        "bin/host-check",
+        super::workflow_continue::HOST_CHECK_PROGRAM,
+    );
     bundle
 }
 
@@ -3359,6 +3745,16 @@ fn repair_waiting_stage(
     name: &str,
     args: &[&str],
 ) -> (PathBuf, serde_json::Value) {
+    stage_waiting_on(bundle, name, args, "repair")
+}
+
+/// `repair_waiting_stage` for a run that waits on a wait of `kind`.
+fn stage_waiting_on(
+    bundle: &TreeBundle,
+    name: &str,
+    args: &[&str],
+    kind: &str,
+) -> (PathBuf, serde_json::Value) {
     let destination = bundle.result(name);
     let terminal = completed(
         &isolated_command(&bundle.args(&destination))
@@ -3367,7 +3763,7 @@ fn repair_waiting_stage(
             .unwrap(),
     );
     assert_eq!(terminal["outcome"], "waiting", "{terminal}");
-    assert_eq!(terminal["wait"]["kind"], "repair", "{terminal}");
+    assert_eq!(terminal["wait"]["kind"], kind, "{terminal}");
     (
         fs::canonicalize(&destination).unwrap(),
         terminal["wait"].clone(),
@@ -3406,8 +3802,8 @@ fn states(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every file under `directory`, by relative path, with its bytes.
-fn file_tree(directory: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+/// Every file under `directory` but the run lock, by relative path, with its bytes.
+pub(super) fn file_tree(directory: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     let mut files = std::collections::BTreeMap::new();
     let mut pending = vec![directory.to_owned()];
     while let Some(next) = pending.pop() {
@@ -3535,6 +3931,76 @@ fn a_repair_retry_continues_the_failed_child_without_repeating_its_completed_ste
     assert_eq!(file_tree(&child.join("attempts/000001")), first_attempt);
 }
 
+// SC-CONTINUE-15, REQ-CONTINUE-93, REQ-CONTINUE-81: a stage whose later step fails on its host
+// waits for the host; while the check fails `resume` holds the wait and changes nothing, and
+// once it passes the same child's attempt 2 inherits `read` and `plan` and re-executes
+// `route` and `effect` with reason `host`, and the run lands. A `retry` of the host wait
+// continues the same child with reason `retry`.
+#[test]
+fn a_resolved_host_wait_continues_the_failed_child_without_repeating_its_completed_steps() {
+    for leaf in ["resume", "retry"] {
+        let bundle = host_stage_tree(STAGE_TREE_ROOT);
+        let root = bundle.execution_root();
+        fs::write(root.join("plan.md"), "fenced").unwrap();
+        fs::write(root.join("host-down"), "").unwrap();
+        let (run, wait) = stage_waiting_on(&bundle, leaf, &[], "host");
+        assert_eq!(wait["payload"]["child"], "children/design/000001", "{wait}");
+        assert_eq!(
+            run_record(&run)["edges"],
+            serde_json::json!({"design.host_failed": 1})
+        );
+        let child = run.join("children/design/000001");
+        let child_id = run_record(&child)["id"].clone();
+        assert_eq!(stage_counts(root), [1, 1, 1]);
+        fs::remove_file(root.join("host-down")).unwrap();
+
+        let terminal = if leaf == "resume" {
+            // While the check fails the wait holds and the run directory is unchanged.
+            let before = file_tree(&run);
+            let output = resume(&run);
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            let held = last_document(&output);
+            assert_eq!(held["outcome"], "waiting", "{held}");
+            assert_eq!(file_tree(&run), before);
+            fs::write(root.join("healthy"), "").unwrap();
+            completed(&resume(&run))
+        } else {
+            last_document(&run_control(None, "retry", &run, &[]))
+        };
+        let reason = if leaf == "resume" { "host" } else { "retry" };
+        assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+        assert_eq!(terminal["result"]["continuation"]["reason"], reason);
+        assert_eq!(run_record(&run)["outcome"], "landed");
+        assert_eq!(attempt_count(&run), 2);
+
+        assert_eq!(ordinals_of(&run.join("children/design")), ["000001"]);
+        assert_eq!(run_record(&child)["id"], child_id);
+        assert_eq!(run_record(&child)["outcome"], "planned");
+        assert_eq!(attempt_count(&child), 2);
+        let result = attempt_result(&child, 2);
+        assert_eq!(result["continuation"]["reason"], reason, "{result}");
+        assert_eq!(
+            result["continuation"]["reexecutedSteps"],
+            serde_json::json!(["route", "effect"]),
+            "{result}"
+        );
+        assert_eq!(
+            step_states(&result),
+            states(&[
+                ("read", "inherited"),
+                ("plan", "inherited"),
+                ("route", "succeeded"),
+                ("effect", "succeeded"),
+            ])
+        );
+        assert_eq!(stage_counts(root), [1, 1, 2]);
+        assert_eq!(
+            fs::read_to_string(root.join("seen-plan")).unwrap(),
+            "plan-1"
+        );
+    }
+}
+
 // SC-CONTINUE-10, REQ-CONTINUE-81, REQ-WFEXEC-68: at a fan-out's second element the retry
 // continues that element's child; the first element is not run again and the third runs once,
 // after the repaired second plans.
@@ -3570,6 +4036,57 @@ fn a_repair_retry_continues_the_failed_fan_out_element_before_the_next() {
     assert_eq!(attempt_count(&element("000001").join("000001")), 1);
     assert_eq!(attempt_count(&element("000002").join("000001")), 2);
     assert_eq!(attempt_count(&element("000003").join("000001")), 1);
+    assert_eq!(stage_counts(root), [3, 3, 4]);
+    assert_eq!(
+        fs::read_to_string(root.join("seen-plan-b")).unwrap(),
+        "plan-2"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("effects")).unwrap(),
+        "effect-a\neffect-b\neffect-c\n"
+    );
+}
+
+// REQ-CONTINUE-93, REQ-WFEXEC-68: a host wait at a fan-out's second element, resolved by the
+// condition, continues that element's failed child in place before the third element runs;
+// the first element is not run again.
+#[test]
+fn a_resolved_host_wait_continues_the_failed_fan_out_element_before_the_next() {
+    let bundle = host_stage_tree(STAGE_FAN_OUT_ROOT);
+    let root = bundle.execution_root();
+    for part in ["a", "b", "c"] {
+        fs::write(root.join(format!("plan-{part}.md")), "fenced").unwrap();
+    }
+    fs::write(root.join("host-down-b"), "").unwrap();
+    let (run, wait) = stage_waiting_on(
+        &bundle,
+        "host-fan-out",
+        &[
+            "--input-json",
+            "parts",
+            r#"[{"name":"a"},{"name":"b"},{"name":"c"}]"#,
+        ],
+        "host",
+    );
+    assert_eq!(wait["step"], serde_json::json!(["design", {"item": 2}]));
+    assert_eq!(wait["payload"]["child"], "children/design/000002/000001");
+    assert!(!run.join("children/design/000003").exists());
+    assert_eq!(stage_counts(root), [2, 2, 2]);
+
+    fs::remove_file(root.join("host-down-b")).unwrap();
+    fs::write(root.join("healthy"), "").unwrap();
+    let terminal = completed(&resume(&run));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    let element = |n: &str| run.join("children/design").join(n);
+    for n in ["000001", "000002", "000003"] {
+        assert_eq!(ordinals_of(&element(n)), ["000001"], "element {n}");
+    }
+    assert_eq!(attempt_count(&element("000001").join("000001")), 1);
+    assert_eq!(attempt_count(&element("000002").join("000001")), 2);
+    assert_eq!(attempt_count(&element("000003").join("000001")), 1);
+    let result = attempt_result(&element("000002").join("000001"), 2);
+    assert_eq!(result["continuation"]["reason"], "host", "{result}");
     assert_eq!(stage_counts(root), [3, 3, 4]);
     assert_eq!(
         fs::read_to_string(root.join("seen-plan-b")).unwrap(),
@@ -3801,12 +4318,12 @@ fn a_stage_whose_child_failed_is_shown_failed_in_the_stream_and_summary() {
     );
 }
 
-/// The plain output of `useful workflow run status` of the run at `run`, which exits 0.
+/// The plain output of `useful workflow run show` of the run at `run`, which exits 0.
 pub(super) fn plain_status(run: &Path) -> String {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run.to_string_lossy().into_owned(),
     ])
     .output()
@@ -3965,7 +4482,7 @@ fn terminal_interface_finishes_a_run_whose_stage_left_an_export_uncommitted() {
     let status_args = [
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ];
@@ -4270,8 +4787,18 @@ const HAND_BACK_NOTES: &str = "Tighten the plan.\n\n- keep the fence\n- name the
 /// fails at `route` while the workspace's plan file is unfenced, and the run waits for a
 /// repair naming that child: the run's directory and that wait.
 fn handed_back_repair_waiting(bundle: &TreeBundle, name: &str) -> (PathBuf, serde_json::Value) {
+    fs::write(bundle.execution_root().join("plan.md"), "unfenced").unwrap();
+    handed_back_waiting(bundle, name, "repair")
+}
+
+/// `handed_back_repair_waiting` for a `design` child that fails as the execution root
+/// leaves it, the run waiting on a wait of `kind` naming that child.
+fn handed_back_waiting(
+    bundle: &TreeBundle,
+    name: &str,
+    kind: &str,
+) -> (PathBuf, serde_json::Value) {
     let root = bundle.execution_root();
-    fs::write(root.join("plan.md"), "unfenced").unwrap();
     let destination = bundle.result(name);
     let approval = completed(
         &isolated_command(&bundle.args(&destination))
@@ -4281,13 +4808,18 @@ fn handed_back_repair_waiting(bundle: &TreeBundle, name: &str) -> (PathBuf, serd
     assert_eq!(approval["wait"]["kind"], "approval", "{approval}");
     let run = fs::canonicalize(&destination).unwrap();
     recorded(
-        &run_control(None, "hand-back", &run, &["--notes", HAND_BACK_NOTES]),
+        &run_control(
+            None,
+            "hand-back",
+            &run,
+            &["--notes", HAND_BACK_NOTES, "--record-only"],
+        ),
         "hand-back",
         &run,
     );
     let waiting = completed(&resume(&run));
     assert_eq!(waiting["outcome"], "waiting", "{waiting}");
-    assert_eq!(waiting["wait"]["kind"], "repair", "{waiting}");
+    assert_eq!(waiting["wait"]["kind"], kind, "{waiting}");
     assert_eq!(waiting["wait"]["then"], "design", "{waiting}");
     assert_eq!(
         waiting["wait"]["payload"]["child"], "children/design/000001",
@@ -4302,15 +4834,16 @@ fn handed_back_repair_waiting(bundle: &TreeBundle, name: &str) -> (PathBuf, serd
 }
 
 /// Asserts that the hand-back stage tree's run at `run` landed after continuing its one
-/// `design` child in place: attempt 2 of the child, with `read` and `plan` inherited, re-ran
-/// only `route` and `effect`, and `route` read the hand-back's notes again.
-fn continued_with_the_hand_back_notes(run: &Path, root: &Path) {
+/// `design` child in place: the child's last attempt, `attempts`, with `read` and `plan`
+/// inherited, re-ran only `route` and `effect` with continuation `reason`, and `route` read
+/// the hand-back's notes again.
+fn continued_with_the_hand_back_notes(run: &Path, root: &Path, reason: &str, attempts: u64) {
     assert_eq!(run_record(run)["outcome"], "landed");
     let child = run.join("children/design/000001");
     assert_eq!(ordinals_of(&run.join("children/design")), ["000001"]);
-    assert_eq!(attempt_count(&child), 2);
-    let result = attempt_result(&child, 2);
-    assert_eq!(result["continuation"]["reason"], "retry", "{result}");
+    assert_eq!(attempt_count(&child), usize::try_from(attempts).unwrap());
+    let result = attempt_result(&child, attempts);
+    assert_eq!(result["continuation"]["reason"], reason, "{result}");
     assert_eq!(
         step_states(&result),
         states(&[
@@ -4320,7 +4853,7 @@ fn continued_with_the_hand_back_notes(run: &Path, root: &Path) {
             ("effect", "succeeded"),
         ])
     );
-    assert_eq!(stage_counts(root), [1, 1, 2]);
+    assert_eq!(stage_counts(root), [1, 1, u32::try_from(attempts).unwrap()]);
     assert_eq!(
         fs::read(root.join("seen-notes")).unwrap(),
         HAND_BACK_NOTES.as_bytes()
@@ -4341,7 +4874,7 @@ fn a_repair_retry_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     fs::write(root.join("plan.md"), "fenced").unwrap();
     let terminal = last_document(&run_control(None, "retry", &run, &[]));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
-    continued_with_the_hand_back_notes(&run, root);
+    continued_with_the_hand_back_notes(&run, root, "retry", 2);
 
     // A retry recorded with other notes changes the step's mapped inputs.
     let bundle = stage_tree(STAGE_HAND_BACK_ROOT);
@@ -4381,7 +4914,41 @@ fn a_repair_retry_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     });
     let terminal = completed(&resume(&run));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
-    continued_with_the_hand_back_notes(&run, root);
+    continued_with_the_hand_back_notes(&run, root, "retry", 2);
+}
+
+// REQ-WFEXEC-63, REQ-CONTINUE-93: a host wait at a stage a hand-back started, resolved by the
+// condition, keeps the hand-back's `wait.notes` for that stage, so the step maps the inputs
+// its failed child retained and the same child continues rather than being refused
+// `continuation_inputs_unsatisfied`; so it does after two host waits in a row.
+#[test]
+fn a_resolved_host_wait_of_a_handed_back_stage_keeps_the_hand_back_notes() {
+    for waits in [1, 2] {
+        let bundle = host_stage_tree(STAGE_HAND_BACK_ROOT);
+        let root = bundle.execution_root();
+        fs::write(root.join("plan.md"), "fenced").unwrap();
+        fs::write(root.join("host-down"), "").unwrap();
+        let (run, _) = handed_back_waiting(&bundle, &format!("host-{waits}"), "host");
+        fs::write(root.join("healthy"), "").unwrap();
+        if waits == 2 {
+            // The host is healthy but the step fails on it again: the same child waits again.
+            let waiting = completed(&resume(&run));
+            assert_eq!(waiting["wait"]["kind"], "host", "{waiting}");
+            assert_eq!(
+                waiting["wait"]["payload"]["child"], "children/design/000001",
+                "{waiting}"
+            );
+            assert_eq!(
+                run_record(&run)["edges"],
+                serde_json::json!({"design.host_failed": 2})
+            );
+        }
+        fs::remove_file(root.join("seen-notes")).unwrap();
+        fs::remove_file(root.join("host-down")).unwrap();
+        let terminal = completed(&resume(&run));
+        assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+        continued_with_the_hand_back_notes(&run, root, "host", waits + 1);
+    }
 }
 
 // REQ-CONTINUE-81, REQ-LOCALRUN-184: automatic continuation stays in the retained execution
@@ -4492,10 +5059,8 @@ fn a_repair_retry_refuses_a_child_that_failed_only_in_its_finalizer() {
 
 /// The root workflow fixture of the engineering lifecycle, whose `release` control trigger
 /// cancels on a departure to `$canceled` and withdraws otherwise.
-const ENGINEERING_ROOT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/crates/execution/tests/fixtures/workflow/v1/valid/root-workflow.yaml"
-));
+const ENGINEERING_ROOT: &str =
+    include_str!("../../crates/execution/tests/fixtures/workflow/v1/valid/root-workflow.yaml");
 
 /// The claim's admission observation `updatedAt`, T.
 const ADMITTED_AT: &str = "2026-11-10T10:00:00Z";
@@ -5107,7 +5672,7 @@ fn held_stage(bundle: &TreeBundle, name: &str) -> (PathBuf, LiveRun) {
         "the stage's held step",
         || {
             execution.join("held-work").exists()
-                && useful_execution::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
+                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
         },
         |held| *held,
     );
@@ -5219,16 +5784,20 @@ fn a_signal_interrupts_a_staged_run_and_retry_continues_its_stage() {
     }
 }
 
-// REQ-LOCALRUN-135, REQ-WFEXEC-40: SIGINT or SIGTERM to a `restart` or an `upgrade` before its
-// successor's run directory exists ends the command with 130 or 143 and creates no successor,
-// so none is left `canceled`: the predecessor still waits, unchanged and holding its subject,
-// and the same command later moves it. The command is held between its inspection and the
-// predecessor's lock.
+// REQ-LOCALRUN-135, REQ-WFEXEC-40: SIGINT or SIGTERM to an `upgrade`, with or without
+// `--from`, before its successor's run directory exists ends the command with 130 or 143 and
+// creates no successor, so none is left `canceled`: the predecessor still waits, unchanged and
+// holding its subject, and the same command later moves it. The command is held between its
+// inspection and the predecessor's lock.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_signal_before_a_successor_exists_leaves_the_predecessor_waiting() {
-    let restart: &[&str] = &["--at", "review"];
+    let from: &[&str] = &["--from", "review"];
     for (leaf, args, signal, status) in [
-        ("restart", restart, Signal::INT, 130),
+        ("upgrade", from, Signal::INT, 130),
         ("upgrade", &[], Signal::TERM, 143),
     ] {
         let published = PublishedWaitTree::with_subject();
@@ -5327,7 +5896,7 @@ fn signalled_at_gate(
     at_gate();
     kill_process(command.pid(), signal).unwrap();
     // The process is idle at the gate; give its observer time to take the signal.
-    useful_support::sleep(std::time::Duration::from_millis(500));
+    crate::sleep(std::time::Duration::from_millis(500));
     fs::write(gate, "").unwrap();
     command.output()
 }
@@ -5338,6 +5907,10 @@ fn signalled_at_gate(
 // were, so `resume` continues the same child; a retry from the start of a run that ended
 // `failed` leaves it `exited` `failed` for a later retry. The command is held between its
 // inspection and the run's lock.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_signal_before_a_continuation_begins_starts_no_attempt() {
     let bundle = interrupt_tree();
@@ -5384,7 +5957,11 @@ fn a_signal_before_a_continuation_begins_starts_no_attempt() {
     assert_eq!(created.status.code(), Some(1), "{created:?}");
     let run = fs::canonicalize(&destination).unwrap();
     let before = records(&run);
-    let retry = ["--execution-root", flat.execution_root().to_str().unwrap()];
+    let retry = [
+        "--all",
+        "--execution-root",
+        flat.execution_root().to_str().unwrap(),
+    ];
     let output = signalled_at_lock_gate(
         control_command(None, "retry", &run, &retry),
         &flat.result("retry-lock-gate"),
@@ -5410,6 +5987,10 @@ fn a_signal_before_a_continuation_begins_starts_no_attempt() {
 // child gets no attempt. The recorded `control.retry` still resolves the wait, so a second
 // `retry` is refused and `resume` continues the same child to the run's outcome. The command
 // is held before its child dispatcher prepares the child.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn an_interrupted_retry_keeps_the_wait_it_continued_from() {
     for (signal, status, reason) in [
@@ -5477,6 +6058,10 @@ fn an_interrupted_retry_keeps_the_wait_it_continued_from() {
 // no child and gives it no attempt: `build` fails at `start` with `interrupted`, the run ends
 // `failed` with no wait and the command exits 130. The command is held before its child
 // dispatcher prepares the child.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn an_interrupted_first_attempt_creates_no_child_and_fails_its_stage() {
     let bundle = interrupt_tree();
@@ -5552,7 +6137,7 @@ fn cancel_still_cancels_a_live_staged_run_and_an_interrupted_one() {
     let (run, mut live) = held_stage(&bundle, "interrupted");
     assert_eq!(live.signal(Signal::INT).status.code(), Some(130));
     assert_eq!(run_record(&run)["state"], "waiting");
-    let output = run_control(None, "cancel", &run, &[]);
+    let output = run_control(None, "cancel", &run, &["--control", "cancel"]);
     recorded_as(&output, "cancel", "canceled", &run);
     let record = run_record(&run);
     assert_eq!(record["state"], "exited", "{record}");
@@ -5602,10 +6187,7 @@ fn interrupt_parks_one_live_run_and_retry_continues_its_stage() {
 
     // The other run's process still holds it, running, with nothing recorded on it.
     assert_eq!(run_record(&other)["state"], "running");
-    assert_eq!(
-        useful_execution::lock_holder(&other).unwrap(),
-        Some(other_live.pid())
-    );
+    assert_eq!(crate::lock_holder(&other).unwrap(), Some(other_live.pid()));
     assert_eq!(control_count(&other), 0);
     assert_eq!(control_count(&other.join("children/build/000001")), 0);
     drop(other_live);
@@ -5695,6 +6277,205 @@ fn interrupt_refuses_a_run_it_cannot_interrupt() {
     drop(held);
 }
 
+/// `leaf ARGS` on `run`, a run under the home, refused for the run's state with `code`, exit
+/// 1, its one diagnostic's message naming every verb of `verbs`, and nothing written
+/// (REQ-LOCALRUN-223).
+fn refused_in_state(run: &Path, leaf: &str, args: &[&str], code: &str, verbs: &[&str]) {
+    let before = (records(run), control_count(run));
+    let output = run_control(None, leaf, run, args);
+    assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
+    let document = json(&output);
+    assert_eq!(document["command"], format!("useful workflow run {leaf}"));
+    assert_eq!(document["exitStatus"], 1, "{leaf}: {document}");
+    let diagnostic = &document["diagnostics"][0];
+    assert_eq!(diagnostic["code"], code, "{leaf}: {document}");
+    let message = diagnostic["message"].as_str().unwrap();
+    for verb in verbs {
+        assert!(
+            message.contains(verb),
+            "{leaf}: {verb} missing from {message}"
+        );
+    }
+    assert_eq!((records(run), control_count(run)), before, "{leaf}");
+}
+
+// REQ-LOCALRUN-223, REQ-LOCALRUN-181: a control verb given a run in a state it does not apply
+// in is refused, exit 1, with the code it always had and a message naming the verbs the
+// state takes, and nothing is written.
+#[test]
+fn a_control_verb_refused_for_the_runs_state_names_the_verbs_that_apply() {
+    const ANSWER: &[&str] = &["--text", "keep"];
+    const PAUSE: &[&str] = &["--before", "review", "--reason", "hold"];
+    const INTERRUPT: &[&str] = &["--reason", "hold"];
+    let bundle = wait_tree();
+    decide(&bundle, "review", "approve");
+    let (answer, _) = waiting_run(&bundle, "state-answer", "blocked");
+    let (approval, _) = waiting_run(&bundle, "state-approval", "planned");
+    let (repair, _) = waiting_run(&bundle, "state-repair", "failed");
+    let (resolved, _) = waiting_run(&bundle, "state-resolved", "blocked");
+    answer_the_one_question(&resolved);
+    let (ended, _) = waiting_run(&bundle, "state-ended", "blocked");
+    recorded_as(
+        &run_control(None, "cancel", &ended, &[]),
+        "cancel",
+        "withdrawn",
+        &ended,
+    );
+    decide(&bundle, "design", "planned");
+    let destination = bundle.result("state-paused");
+    let mut args = bundle.args(&destination);
+    args.splice(
+        args.len() - 1..args.len() - 1,
+        ["--pause-before".to_owned(), "review".to_owned()],
+    );
+    let terminal = completed(&isolated_command(&args).output().unwrap());
+    assert_eq!(terminal["wait"]["kind"], "stop", "{terminal}");
+    let paused = fs::canonicalize(&destination).unwrap();
+    let succeeding = interrupt_tree();
+    fs::remove_file(succeeding.execution_root().join("hold-work")).unwrap();
+    let destination = succeeding.result("state-succeeded");
+    completed(
+        &isolated_command(&succeeding.args(&destination))
+            .output()
+            .unwrap(),
+    );
+    let succeeded = fs::canonicalize(&destination).unwrap();
+
+    let waiting_for_answer = ["answer", "upgrade", "pause", "cancel"];
+    let ended_verbs = ["retry", "release"];
+    let abandoned = ["resume", "pause", "cancel"];
+    for (run, leaf, args, code, verbs) in [
+        (
+            &answer,
+            "approve",
+            &[][..],
+            "wait_kind_mismatch",
+            &waiting_for_answer[..],
+        ),
+        (
+            &answer,
+            "retry",
+            &[][..],
+            "wait_kind_mismatch",
+            &waiting_for_answer[..],
+        ),
+        (
+            &answer,
+            "interrupt",
+            INTERRUPT,
+            "run_not_running",
+            &waiting_for_answer[..],
+        ),
+        (
+            &approval,
+            "answer",
+            ANSWER,
+            "wait_kind_mismatch",
+            &["approve", "hand-back", "upgrade", "pause", "cancel"][..],
+        ),
+        (
+            &paused,
+            "answer",
+            ANSWER,
+            "wait_kind_mismatch",
+            &["unpause", "upgrade", "cancel"][..],
+        ),
+        (
+            &repair,
+            "approve",
+            &[][..],
+            "wait_kind_mismatch",
+            &["retry", "upgrade", "pause", "cancel"][..],
+        ),
+        (
+            &ended,
+            "answer",
+            ANSWER,
+            "run_not_waiting",
+            &ended_verbs[..],
+        ),
+        (&ended, "pause", PAUSE, "run_exited", &ended_verbs[..]),
+        (
+            &ended,
+            "interrupt",
+            INTERRUPT,
+            "run_exited",
+            &ended_verbs[..],
+        ),
+        (
+            &ended,
+            "resume",
+            &[][..],
+            "continuation_disposition_ineligible",
+            &ended_verbs[..],
+        ),
+        (&ended, "cancel", &[][..], "run_exited", &ended_verbs[..]),
+        (
+            &succeeded,
+            "retry",
+            &[][..],
+            "continuation_disposition_ineligible",
+            &["release"][..],
+        ),
+        (&resolved, "answer", ANSWER, "wait_resolved", &abandoned[..]),
+        (
+            &resolved,
+            "retry",
+            &[][..],
+            "wait_kind_mismatch",
+            &abandoned[..],
+        ),
+    ] {
+        refused_in_state(run, leaf, args, code, verbs);
+    }
+
+    // A run a live process holds is running.
+    let held = hold_lock(&answer);
+    refused_in_state(
+        &answer,
+        "approve",
+        &[],
+        "run_locked",
+        &["interrupt", "pause", "cancel"],
+    );
+    drop(held);
+}
+
+// REQ-LOCALRUN-202, REQ-LOCALRUN-180: `interrupt` looks under the home alone, so an ID the
+// home lacks is `run_not_found`, saying that Cloud carries no interrupt and naming `cancel`,
+// and nothing is sent to the deployment in effect.
+#[test]
+fn an_interrupt_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
+    let home = Home::new();
+    let server = super::ScriptedServer::respond(Vec::new());
+    let credentials = super::private_credential_directory();
+    let credential_path = credentials.path().join("credentials.json");
+    let mut command = control_command(
+        Some(&home),
+        "interrupt",
+        "run_7zzzzzzzzzzzzzzzzzzzzzzzzz",
+        &["--reason", "x"],
+    );
+    command.env("USEFUL_ORG", "acme-research");
+    for (name, value) in
+        super::deployment_environment(&server.api_url, credential_path.to_str().unwrap())
+    {
+        command.env(name, value);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document = json(&output);
+    assert_eq!(document["command"], "useful workflow run interrupt");
+    assert_eq!(
+        document["diagnostics"][0]["code"], "run_not_found",
+        "{document}"
+    );
+    let message = document["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("Cloud"), "{message}");
+    assert!(message.contains("cancel"), "{message}");
+    assert!(server.finish().is_empty());
+}
+
 /// The test `LockHolder` launches.
 const LOCK_HOLDER_FIXTURE: &str = "workflow_run_control::run_lock_holder_fixture";
 const HELD_LOCKS_VARIABLE: &str = "USEFUL_TEST_HELD_RUN_LOCKS";
@@ -5727,9 +6508,8 @@ impl LockHolder {
         poll_until(
             "the fixture's run locks",
             || {
-                runs.iter().all(|run| {
-                    useful_execution::lock_holder(run).is_ok_and(|held| held == Some(pid))
-                })
+                runs.iter()
+                    .all(|run| crate::lock_holder(run).is_ok_and(|held| held == Some(pid)))
             },
             |held| *held,
         );
@@ -5744,14 +6524,14 @@ impl LockHolder {
 impl Drop for LockHolder {
     fn drop(&mut self) {
         let _ = fs::write(&self.release, "");
-        let deadline = useful_support::monotonic_now() + std::time::Duration::from_secs(10);
+        let deadline = crate::monotonic_now() + std::time::Duration::from_secs(10);
         while self.process.try_wait().ok().flatten().is_none() {
-            if useful_support::monotonic_now() >= deadline {
+            if crate::monotonic_now() >= deadline {
                 let _ = self.process.kill();
                 let _ = self.process.wait();
                 return;
             }
-            useful_support::sleep(std::time::Duration::from_millis(10));
+            crate::sleep(std::time::Duration::from_millis(10));
         }
     }
 }
@@ -5765,7 +6545,7 @@ fn run_lock_holder_fixture() {
         .map(|path| hold_lock(path.parent().unwrap()))
         .collect::<Vec<_>>();
     while !release.exists() {
-        useful_support::sleep(std::time::Duration::from_millis(10));
+        crate::sleep(std::time::Duration::from_millis(10));
     }
     drop(held);
 }
@@ -5802,7 +6582,7 @@ fn an_unanswered_interrupt_is_pending_and_no_later_attempt_acts_on_it() {
     // so a later attempt holds at `work` again.
     let mut later = held_again(root, "resume", &run, &[]);
     kill_process(later.pid(), Signal::URG).unwrap();
-    useful_support::sleep(std::time::Duration::from_millis(500));
+    crate::sleep(std::time::Duration::from_millis(500));
     fs::write(&later.release, "").unwrap();
     let output = later.output();
     let terminal = chained(&output).pop().unwrap();

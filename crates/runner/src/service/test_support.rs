@@ -1860,8 +1860,8 @@ pub(in crate::service) mod tree_fixture {
     /// cancel` ends it `canceled`; for state `refused` it makes no run and answers with the
     /// runtime's rejection whose diagnostic code is `$TREE_TEST_REFUSAL`, by default
     /// `required_tool_unavailable`, that of a root whose `requires.tools` names a missing tool.
-    /// Each `run resume` appends its command line to
-    /// `resume.args`, leaves its environment in `resume.env` and answers with the next word of
+    /// Each `run resume`, and each `run retry --from`, which acts as `run resume`, appends its
+    /// command line to `resume.args`, leaves its environment in `resume.env` and answers with the next word of
     /// `$TREE_TEST_RESUMES`, or with the word in `$TREE_TEST_LOG/answer` while that file
     /// exists: `held` (the default) reports the wait unchanged, `gated` waits until
     /// `$TREE_TEST_LOG/gate` no longer exists and then answers with the word in
@@ -1871,7 +1871,7 @@ pub(in crate::service) mod tree_fixture {
     /// `continuation_nodes_unsatisfied`, `stall` starts nothing and prints nothing until `run
     /// cancel` runs, and `continue` starts the record's next attempt at
     /// that position, then lands the run once `$TREE_TEST_LOG/proceed` exists, its result
-    /// `{"outcome":"succeeded"}`. `run cancel` ends a waiting
+    /// `{"outcome":"succeeded"}`. `run cancel --control=cancel` ends a waiting
     /// record `canceled`. A stage `$TREE_TEST_LOG/stages/<name>/` is copied into the run
     /// directory: `create` before the first record is written, `exited` after `create` writes
     /// an `exited` record, `resume<n>` by the n-th `resume` (after `continue` writes attempt 2)
@@ -1883,15 +1883,16 @@ pub(in crate::service) mod tree_fixture {
     /// `withdraw` with the JSON `$TREE_TEST_ACTION_OUTCOME` as its `actionOutcome`, leaving the
     /// record as it is, `not_later`
     /// refuses `event_not_later` before any read, and `owned` refuses `issue_in_owned_state`
-    /// after one. `run stop` and `run lift` record their command lines; `run answer`, `approve`
+    /// after one. `run pause` and `run unpause` record their command lines in `stop.args` and
+    /// `lift.args`; `run answer`, `approve`
     /// and `hand-back` append theirs to `control.args` and answer `recorded`, or, with
     /// `$TREE_TEST_CONTROL` `refuse`, refuse `question_unknown`, with `hang` hang until killed,
     /// with `silent` exit 0 printing nothing, which the runner reads as no document, and with
     /// `record_hang` (`approve` and `hand-back`) record their control for the run's
     /// wait under `controls/` and then hang until killed; `run retry` appends its command
-    /// line there too and then answers as `resume`. `event`, `stop`, `lift`, `answer`,
-    /// `approve`, `hand-back`, `retry` and `resume` (but not a retry's) each append their name
-    /// to `$TREE_TEST_LOG/order`. `run event` with `$TREE_TEST_EVENT` `hang` starts a `sleep`
+    /// line there too and then answers as `resume`. `event`, `answer`, `approve`, `hand-back`,
+    /// `retry` and `resume` (but not a retry's) each append their name, and `pause` and `unpause`
+    /// `stop` and `lift`, to `$TREE_TEST_LOG/order`. `run event` with `$TREE_TEST_EVENT` `hang` starts a `sleep`
     /// beside it in its process group, writes the sleep's pid to `$TREE_TEST_LOG/hang.pid` and
     /// waits for it. While `$TREE_TEST_LOG/noise` exists every command first writes that many
     /// bytes to stderr. While `$TREE_TEST_LOG/unlaunchable` exists `run create` removes the
@@ -1902,7 +1903,8 @@ pub(in crate::service) mod tree_fixture {
     /// `origin` to `create.credential` and its exit status to `create.credential.status`; and
     /// `run resume`, while `git-root` names a root, does the same to `resume.git-config`,
     /// `resume.credential` and `resume.credential.status` before it answers.
-    /// `run withdraw` appends its command line to `withdraw.args` and its name to `order`, leaves
+    /// `run cancel --control=withdraw` appends its command line to `withdraw.args` and `withdraw`
+    /// to `order`, leaves
     /// its environment in `withdraw.env` and answers with the next word of
     /// `$TREE_TEST_WITHDRAWS`: `withdrawn` (the default) ends a waiting record `withdrawn`, as
     /// the runtime does, with the outcome write `withdrawn_write` under the run's `mirror/`, and
@@ -1936,7 +1938,7 @@ observe_git() {
   echo "$?" > "$log/$2.credential.status"
 }
 recorded() {
-  printf '{"schemaVersion":1,"command":"useful workflow run %s","outcome":"recorded","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc","control":{"ordinal":1,"event":"control.%s","path":"controls/0001-%s.json","wait":null},"wait":null}\n' "$1" "$2" "$1" "$1"
+  printf '{"schemaVersion":1,"command":"useful workflow run %s","outcome":"recorded","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc","control":{"ordinal":1,"event":"control.%s","path":"controls/0001-%s.json","wait":null},"wait":null}\n' "$1" "$2" "${3:-$1}" "${3:-$1}"
 }
 withdrawn() {
   rm -f "$1/wait.json"
@@ -1947,11 +1949,21 @@ withdrawn() {
   mv "$1/run.json.next" "$1/run.json"
 }
 retrying=
+continuing=
 if [ "$1 $2 $3" = "workflow run retry" ]; then
-  printf '%s\n' "$*" >> "$log/control.args"
-  echo retry >> "$log/order"
-  retrying=1
-  set -- workflow run resume "$4" --json
+  case " $* " in
+  *" --from "*)
+    continuing="$*"
+    shift 3
+    set -- workflow run resume "$@"
+    ;;
+  *)
+    printf '%s\n' "$*" >> "$log/control.args"
+    echo retry >> "$log/order"
+    retrying=1
+    set -- workflow run resume "$4" --json
+    ;;
+  esac
 fi
 case "$1 $2 $3" in
 "workflow definition publish")
@@ -2049,15 +2061,15 @@ case "$1 $2 $3" in
     ;;
   esac
   ;;
-"workflow run stop")
+"workflow run pause")
   printf '%s\n' "$@" > "$log/stop.args"
   echo stop >> "$log/order"
-  recorded stop "$4"
+  recorded pause "$4" stop
   ;;
-"workflow run lift")
+"workflow run unpause")
   printf '%s\n' "$@" > "$log/lift.args"
   echo lift >> "$log/order"
-  recorded lift "$4"
+  recorded unpause "$4" lift
   ;;
 "workflow run answer"|"workflow run approve"|"workflow run hand-back")
   printf '%s\n' "$*" >> "$log/control.args"
@@ -2083,7 +2095,7 @@ case "$1 $2 $3" in
   run="$4"
   [ -n "$retrying" ] || echo resume >> "$log/order"
   printf '%s\n' "$run" >> "$log/resume.log"
-  printf '%s\n' "$*" >> "$log/resume.args"
+  printf '%s\n' "${continuing:-$*}" >> "$log/resume.args"
   env > "$log/resume.env"
   if [ -f "$log/git-root" ]; then observe_git "$(cat "$log/git-root")" resume; fi
   n=$(wc -l < "$log/resume.log" | tr -d ' ')
@@ -2126,38 +2138,42 @@ case "$1 $2 $3" in
     ;;
   esac
   ;;
-"workflow run withdraw")
-  printf '%s\n' "$*" >> "$log/withdraw.args"
-  echo withdraw >> "$log/order"
-  env > "$log/withdraw.env"
-  n=$(wc -l < "$log/withdraw.args" | tr -d ' ')
-  answer=$(printf '%s\n' $TREE_TEST_WITHDRAWS | sed -n "${n}p")
-  case "$answer" in
-  recorded)
-    : > "$log/withdraw.recorded"
-    printf '{"schemaVersion":1,"command":"useful workflow run withdraw","outcome":"recorded","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc"}\n' "$4"
+"workflow run cancel")
+  case "$5" in
+  --control=withdraw)
+    printf '%s\n' "$*" >> "$log/withdraw.args"
+    echo withdraw >> "$log/order"
+    env > "$log/withdraw.env"
+    n=$(wc -l < "$log/withdraw.args" | tr -d ' ')
+    answer=$(printf '%s\n' $TREE_TEST_WITHDRAWS | sed -n "${n}p")
+    case "$answer" in
+    recorded)
+      : > "$log/withdraw.recorded"
+      printf '{"schemaVersion":1,"command":"useful workflow run cancel","outcome":"recorded","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc"}\n' "$4"
+      ;;
+    refuse)
+      printf '{"schemaVersion":1,"command":"useful workflow run cancel","outcome":"refused","exitStatus":1,"runDirectory":"%s","diagnostics":[{"code":"mirror_credentials_unavailable","message":"unavailable"}]}\n' "$4"
+      exit 1
+      ;;
+    hang) sleep 60 & wait ;;
+    *)
+      if grep -q '"state":"waiting"' "$4/run.json"; then withdrawn "$4"; fi
+      if [ "$answer" = withdrawn_hang ]; then sleep 60 & wait; fi
+      printf '{"schemaVersion":1,"command":"useful workflow run cancel","outcome":"withdrawn","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc"}\n' "$4"
+      ;;
+    esac
     ;;
-  refuse)
-    printf '{"schemaVersion":1,"command":"useful workflow run withdraw","outcome":"refused","exitStatus":1,"runDirectory":"%s","diagnostics":[{"code":"mirror_credentials_unavailable","message":"unavailable"}]}\n' "$4"
-    exit 1
-    ;;
-  hang) sleep 60 & wait ;;
   *)
-    if grep -q '"state":"waiting"' "$4/run.json"; then withdrawn "$4"; fi
-    if [ "$answer" = withdrawn_hang ]; then sleep 60 & wait; fi
-    printf '{"schemaVersion":1,"command":"useful workflow run withdraw","outcome":"withdrawn","exitStatus":0,"runDirectory":"%s","run":"run_01k0z6r1w8f4jy2m7q9v3x5loc"}\n' "$4"
+    printf '%s\n' "$@" > "$log/cancel.args"
+    : > "$log/cancelled"
+    if grep -q '"state":"waiting"' "$4/run.json"; then
+      rm -f "$4/wait.json"
+      # Replaced whole, as the runtime writes it, so a `cancel` killed midway leaves it readable.
+      printf '{"state":"exited","outcome":"canceled","attempts":1,"position":[]}\n' > "$4/run.json.next"
+      mv "$4/run.json.next" "$4/run.json"
+    fi
     ;;
   esac
-  ;;
-"workflow run cancel")
-  printf '%s\n' "$@" > "$log/cancel.args"
-  : > "$log/cancelled"
-  if grep -q '"state":"waiting"' "$4/run.json"; then
-    rm -f "$4/wait.json"
-    # Replaced whole, as the runtime writes it, so a `cancel` killed midway leaves it readable.
-    printf '{"state":"exited","outcome":"canceled","attempts":1,"position":[]}\n' > "$4/run.json.next"
-    mv "$4/run.json.next" "$4/run.json"
-  fi
   ;;
 esac
 "#;

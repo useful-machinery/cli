@@ -12,6 +12,7 @@ use super::Sleeper;
 use super::artifact_delivery::{
     ArtifactCloudResponse, ArtifactDeliveryBroker, ArtifactDeliveryProtocolFailure,
 };
+use super::command_fence::CommandFence;
 use super::config::Config;
 use super::disk::DiskReadingHandle;
 use super::execution::{
@@ -59,6 +60,7 @@ mod commands;
 mod events;
 mod finalization;
 mod lease_authority;
+mod lease_loss;
 mod observation;
 mod outbox;
 mod overview;
@@ -68,6 +70,7 @@ mod spec_validation;
 pub(super) use causal_lease::*;
 pub(super) use commands::*;
 pub(super) use lease_authority::*;
+pub(super) use lease_loss::*;
 pub(super) use observation::*;
 pub(super) use outbox::*;
 use overview::OfferFacts;
@@ -314,6 +317,7 @@ pub(super) enum PhaseEnd {
     Failed,
     Cancelled,
     TimedOut,
+    LeaseLost(LeaseLossReason),
 }
 
 impl PhaseEnd {
@@ -322,7 +326,7 @@ impl PhaseEnd {
             Self::Succeeded => TelemetryOutcome::Success,
             Self::Failed => TelemetryOutcome::Failure,
             Self::Cancelled => TelemetryOutcome::Cancelled,
-            Self::TimedOut => TelemetryOutcome::Timeout,
+            Self::TimedOut | Self::LeaseLost(_) => TelemetryOutcome::Timeout,
         }
     }
 
@@ -331,6 +335,7 @@ impl PhaseEnd {
             Self::Succeeded | Self::Cancelled => None,
             Self::Failed => Some("runner_phase_failed"),
             Self::TimedOut => Some("runner_phase_timeout"),
+            Self::LeaseLost(reason) => Some(reason.as_str()),
         }
     }
 }
@@ -435,6 +440,13 @@ impl RunEvent {
         if let Some(event) = &self.state().event {
             event.set(attribute);
         }
+    }
+
+    fn lease_loss(&self, reason: LeaseLossReason) {
+        self.set(KeyValue::new(
+            crate::telemetry::attribute::LEASE_LOSS_REASON,
+            reason.as_str(),
+        ));
     }
 
     // Opens `phase` as a child of the run, closing an open phase as
@@ -593,6 +605,7 @@ pub(super) struct RunEnd {
 struct RunningAssignment {
     identity: AssignmentIdentity,
     cancellation: CancellationSource,
+    lease_loss: LeaseLoss,
     cancellation_grace: Duration,
     current_grant: ExecutionLeaseGrant,
     causal_lease: CausalLease,
@@ -1201,13 +1214,6 @@ impl AssignmentDependencies {
 }
 
 pub(super) struct AssignmentManager {
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the test fixture asserts work-root cleanup through this lease"
-        )
-    )]
     work_root: Arc<WorkRootLease>,
     root_preparer: Arc<dyn AssignmentRootPreparer>,
     root_preparation_worker: AssignmentRootPreparationWorker,
@@ -1274,6 +1280,10 @@ pub(super) struct AssignmentManager {
     deferred_offer_failure: Option<AssignmentManagerFailure>,
     fenced_final_graces: BTreeSet<FencedFinalGrace>,
     guard_processes: bool,
+    /// Notified, keeping one notice for the next waiter, whenever an assignment stops being
+    /// held or reporting, which is when a run may have stopped working; the kept-run
+    /// schedule waits on it (REQ-RUNNERENROLL-158).
+    run_ended: Arc<Notify>,
 }
 
 /// The time an admission's grant-token refresh task waits on, and the live
@@ -1301,6 +1311,24 @@ impl GrantTokenRefreshing {
 }
 
 impl AssignmentManager {
+    /// The work-root lease the manager's assignment roots are made in, whose kept
+    /// directories the kept-run pass prunes (REQ-RUNNERENROLL-158).
+    pub(in crate::service) fn work_root(&self) -> Arc<WorkRootLease> {
+        Arc::clone(&self.work_root)
+    }
+
+    /// The command fence every `useful` command of the manager's tree runs, and every
+    /// single-workflow execution it starts, enters (INV-RUNNER-53).
+    pub(in crate::service) fn command_fence(&self) -> Arc<CommandFence> {
+        Arc::clone(self.tree_run.fence())
+    }
+
+    /// What is notified, with `notify_one`, whenever an assignment stops being held or
+    /// reporting (REQ-RUNNERENROLL-158).
+    pub(in crate::service) fn run_ended(&self) -> Arc<Notify> {
+        Arc::clone(&self.run_ended)
+    }
+
     /// Holds `assignment` under its assignment ID.
     fn hold(&mut self, assignment: HeldAssignment) {
         self.held
@@ -1455,6 +1483,7 @@ pub(super) mod test_support {
         authority: tokio::sync::watch::Receiver<LeaseAuthority>,
         causal_lease: CausalLease,
         cancellation: CancellationSource,
+        lease_loss: LeaseLoss,
         identity: AssignmentIdentity,
         initial_cancellation_headroom: Duration,
     }
@@ -1477,6 +1506,7 @@ pub(super) mod test_support {
                 self.authority.clone(),
                 self.causal_lease.clone(),
                 self.cancellation.clone(),
+                self.lease_loss.clone(),
                 self.identity.assignment_id.clone(),
                 self.identity.attempt_id.clone(),
             );
@@ -1680,12 +1710,14 @@ pub(super) mod test_support {
         {
             let mut state = causal_lease.lock();
             state.bases.insert(2, bases.renewal);
-            // Outbox ids start at 1, so the request reads as one Cloud has acknowledged.
+            // Outbox ids start at 1, so the request has left the outbox and may be asked
+            // again; no acknowledgement of it is recorded.
             state.renewal_requests.insert(
                 2,
                 RenewalRequest {
                     observation_id: 0,
                     enqueued_at: bases.renewal,
+                    acknowledged: false,
                 },
             );
         }
@@ -1722,6 +1754,8 @@ pub(super) mod test_support {
             rejected_renewals: BTreeMap::new(),
         });
         let cancellation = CancellationSource::new();
+        let run_event = RunEvent::default();
+        let lease_loss = LeaseLoss::new(cancellation.clone(), run_event.clone());
         let (authority_updates, authority) = tokio::sync::watch::channel(initial_authority);
         let (start_authority, _start_authority) = tokio::sync::watch::channel(true);
         let (infrastructure_interruption, _infrastructure_interruption) =
@@ -1738,6 +1772,7 @@ pub(super) mod test_support {
         manager.hold(HeldAssignment::Running(Box::new(RunningAssignment {
             identity: identity.clone(),
             cancellation: cancellation.clone(),
+            lease_loss: lease_loss.clone(),
             cancellation_grace,
             current_grant: ExecutionLeaseGrant { sequence: 1 },
             causal_lease: causal_lease.clone(),
@@ -1747,7 +1782,7 @@ pub(super) mod test_support {
             workflow_git: Some(workflow_git),
             engine_terminal: Arc::new(AtomicBool::new(false)),
             workspace_release: None,
-            run_event: RunEvent::default(),
+            run_event,
             _grant_tokens: None,
             activity: None,
             view: None,
@@ -1760,6 +1795,7 @@ pub(super) mod test_support {
             authority,
             causal_lease,
             cancellation,
+            lease_loss,
             identity,
             initial_cancellation_headroom,
         }
@@ -2678,16 +2714,14 @@ fn build_execution_context(
     })
 }
 
-fn revoke_authority(running: &mut RunningAssignment) {
+fn revoke_authority(running: &mut RunningAssignment, reason: LeaseLossReason) {
     if let Some(workflow_git) = &running.workflow_git {
         disable_workflow_git_off_thread(workflow_git);
     }
+    running.lease_loss.lose(reason);
     running.authority_updates.send_modify(|authority| {
         authority.revoked = true;
     });
-    running
-        .cancellation
-        .request_cancellation(CancellationReason::ExecutionLeaseExpired);
 }
 
 fn disable_workflow_git_off_thread(workflow_git: &WorkflowGitAuthority) {

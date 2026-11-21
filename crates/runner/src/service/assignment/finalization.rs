@@ -1,6 +1,11 @@
 use super::*;
 use crate::control_protocol::{HeldRun, HeldRunState};
 
+pub(super) enum BeforeExecutionEnd {
+    Shutdown,
+    LeaseLost(LeaseLossReason),
+}
+
 impl AssignmentManager {
     pub(super) fn finish_without_reporting(
         &mut self,
@@ -157,6 +162,8 @@ impl AssignmentManager {
                 }
             }
         }
+        // The assignment is held no longer (REQ-RUNNERENROLL-158).
+        self.run_ended.notify_one();
         self.outbox.wake();
     }
 
@@ -210,7 +217,7 @@ impl AssignmentManager {
             "user_request"
         };
         if self
-            .enqueue_assignment_interruption(&identity, reason)
+            .enqueue_assignment_interruption(&identity, reason, None)
             .is_err()
         {
             self.cleanup_failed = true;
@@ -229,12 +236,14 @@ impl AssignmentManager {
         &self,
         identity: &AssignmentIdentity,
         reason: &str,
+        lease_loss: Option<LeaseLossReason>,
     ) -> Result<u64, OutboxFailure> {
         let id = self.outbox.enqueue(AssignmentObservation::Execution {
             assignment_id: identity.assignment_id.clone(),
             attempt_id: identity.attempt_id.clone(),
             report: ExecutionReport::AssignmentInterrupted {
                 reason: reason.to_owned(),
+                lease_loss,
             },
         })?;
         if let Some(event) = self.run_events.get(&identity.assignment_id) {
@@ -260,19 +269,29 @@ impl AssignmentManager {
         &mut self,
         identity: AssignmentIdentity,
         root: AssignmentRoot,
-        reason: &str,
+        end: BeforeExecutionEnd,
     ) -> Result<(), AssignmentManagerFailure> {
-        let Ok(final_observation_id) = self.enqueue_assignment_interruption(&identity, reason)
+        let (reason, lease_loss, retention) = match end {
+            BeforeExecutionEnd::Shutdown => ("graceful_shutdown", None, RetentionReason::Cancelled),
+            BeforeExecutionEnd::LeaseLost(loss) => {
+                if let Some(event) = self.run_events.get(&identity.assignment_id) {
+                    event.lease_loss(loss);
+                }
+                (
+                    "execution_lease_expired",
+                    Some(loss),
+                    RetentionReason::Interrupted,
+                )
+            }
+        };
+        let Ok(final_observation_id) =
+            self.enqueue_assignment_interruption(&identity, reason, lease_loss)
         else {
             // No report will end the run, and the assignment is given up.
             self.finish_run_event(&identity.assignment_id, Some("aborted"));
             return Err(AssignmentManagerFailure::DecisionCapacity);
         };
-        let workspace_disposition = WorkspaceDisposition::Retain(match reason {
-            "graceful_shutdown" => RetentionReason::Cancelled,
-            "execution_lease_expired" => RetentionReason::Interrupted,
-            _ => RetentionReason::Failed,
-        });
+        let workspace_disposition = WorkspaceDisposition::Retain(retention);
         // Ended before it ran, the assignment never reported a wait.
         self.hold(HeldAssignment::Finishing(Box::new(FinishingAssignment {
             identity: identity.clone(),
@@ -346,7 +365,7 @@ impl AssignmentManager {
             && self.outbox.replay_obligations_dispatched()
     }
 
-    /// The assignment counts and the held runs of `useful runner status`, taken in one read
+    /// The assignment counts and the held runs of `useful runner show`, taken in one read
     /// (REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80). A tree run whose loop last reported a
     /// wait, by the read the offer rule makes, is counted `waiting` and listed `waiting`; an
     /// assignment that has ended is counted `finishing` or `reporting` and not listed. The

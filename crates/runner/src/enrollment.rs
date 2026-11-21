@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use time::format_description::well_known::Rfc3339;
 
 use useful_support::generate_idempotency_key;
 
-use super::service::Backoff;
+use super::service::{Backoff, BuildCache, KeptRunBounds, LOG_DIRECTORY};
 use super::validation::{valid_secret_syntax, valid_typed_id};
 
 mod home;
@@ -82,9 +82,11 @@ impl ActivationArtifact {
         }
     }
 
+    /// Writes the key as one line of JSON, as a pool key is written, so either kind can be
+    /// pasted at one prompt or held in one variable (REQ-RUNNERENROLL-167).
     pub fn write_json(&self, output: &mut impl Write) -> Result<(), EnrollmentError> {
         let transferable = TransferableActivationArtifact::from(self);
-        serde_json::to_writer_pretty(&mut *output, &transferable)
+        serde_json::to_writer(&mut *output, &transferable)
             .map_err(|_| EnrollmentError::ArtifactWrite)?;
         output
             .write_all(b"\n")
@@ -131,10 +133,18 @@ pub struct JoinKeyArtifact {
     expires_at: String,
 }
 
-impl JoinKeyArtifact {
-    /// Reads the artifact as an activation file is read: from a regular file
-    /// private to the current user, which is neither removed nor rewritten, or
-    /// with `-` from piped standard input.
+/// A key a host is given (REQ-RUNNERENROLL-167): a pool's join key, which any
+/// number of hosts may present, or a single-runner key, the activation of one
+/// registered runner. The two closed documents are told apart by the member
+/// each requires, `joinUrl` or `activationUrl`, never by an option.
+pub enum JoinKey {
+    Pool(JoinKeyArtifact),
+    SingleRunner(ActivationArtifact),
+}
+
+impl JoinKey {
+    /// Reads a key from a regular file private to the current user, which is
+    /// neither removed nor rewritten, or with `-` from piped standard input.
     pub fn read_file(path: &Path) -> Result<Self, EnrollmentError> {
         let bytes = read_artifact_bytes(path).map_err(|failure| match failure {
             ArtifactReadFailure::Terminal => EnrollmentError::TerminalStdin,
@@ -144,11 +154,29 @@ impl JoinKeyArtifact {
         Self::parse(&bytes)
     }
 
-    /// Parses the artifact text, as supplied by the environment.
+    /// Parses a key's text, as a file, the environment or the prompt supplies
+    /// it, on one line or indented. A document that holds neither member or
+    /// both is no key, and a single-runner key's address is checked against
+    /// the host's deployment mode only when it is used.
     pub fn parse(bytes: &[u8]) -> Result<Self, EnrollmentError> {
         if bytes.len() as u64 > ARTIFACT_LIMIT {
             return Err(EnrollmentError::InvalidJoinKey);
         }
+        let document: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(bytes).map_err(|_| EnrollmentError::InvalidJoinKey)?;
+        match (
+            document.contains_key("activationUrl"),
+            document.contains_key("joinUrl"),
+        ) {
+            (true, false) => parse_activation_artifact(bytes).map(Self::SingleRunner),
+            (false, true) => JoinKeyArtifact::parse(bytes).map(Self::Pool),
+            _ => Err(EnrollmentError::InvalidJoinKey),
+        }
+    }
+}
+
+impl JoinKeyArtifact {
+    fn parse(bytes: &[u8]) -> Result<Self, EnrollmentError> {
         let key: Self =
             serde_json::from_slice(bytes).map_err(|_| EnrollmentError::InvalidJoinKey)?;
         if key.schema_version != 1
@@ -206,7 +234,8 @@ pub(crate) enum DeploymentMode {
 }
 
 // The runner home writes the document it generates through the same
-// definition, so the field names exist once.
+// definition, so the field names exist once. It writes no `keptRuns` and no
+// `buildCaches`.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct OperatorConfig {
@@ -219,9 +248,174 @@ struct OperatorConfig {
     /// where absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     minimum_free_disk_bytes: Option<u64>,
+    // A present `keptRuns` reaches the object decode, so a null or an array
+    // is refused there while an absent one stays `None`.
+    #[serde(
+        default,
+        deserialize_with = "present_object",
+        skip_serializing_if = "Option::is_none"
+    )]
+    kept_runs: Option<KeptRunsDocument>,
+    // A present `buildCaches` reaches the array decode, so a null or an
+    // object is refused there while an absent one stays `None`.
+    #[serde(
+        default,
+        deserialize_with = "present_objects",
+        skip_serializing_if = "Option::is_none"
+    )]
+    build_caches: Option<Vec<BuildCacheDocument>>,
+}
+
+// Each member tells absent (`None`) from null (`Some(None)`): an absent
+// member takes its default bound and a null one sets none.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct KeptRunsDocument {
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    maximum_age_days: Option<Option<u64>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    maximum_total_bytes: Option<Option<u64>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct BuildCacheDocument {
+    path: PathBuf,
+    maximum_bytes: u64,
+}
+
+const MAXIMUM_KEPT_RUN_AGE_DAYS: u64 = 3650;
+const MAXIMUM_BUILD_CACHES: usize = 16;
+const SECONDS_PER_DAY: u64 = 86_400;
+
+// Decodes a member that is present, null included, as `Some`; serde's
+// `default` leaves an absent member `None`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+// As `present`, for a member that must be a JSON object: a derived struct
+// decode would also take an array as its fields in order.
+fn present_object<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let object = serde_json::Map::deserialize(deserializer)?;
+    from_object(object).map(Some)
+}
+
+// As `present_object`, for a member that must be an array of JSON objects.
+fn present_objects<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Vec::<serde_json::Map<String, serde_json::Value>>::deserialize(deserializer)?
+        .into_iter()
+        .map(from_object)
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
+fn from_object<T, E>(object: serde_json::Map<String, serde_json::Value>) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: serde::de::Error,
+{
+    serde_json::from_value(serde_json::Value::Object(object)).map_err(E::custom)
 }
 
 impl OperatorConfig {
+    fn kept_runs_valid(&self) -> bool {
+        let Some(document) = &self.kept_runs else {
+            return true;
+        };
+        let age_valid = match document.maximum_age_days {
+            Some(Some(days)) => (1..=MAXIMUM_KEPT_RUN_AGE_DAYS).contains(&days),
+            Some(None) | None => true,
+        };
+        age_valid && document.maximum_total_bytes != Some(Some(0))
+    }
+
+    // Judges `buildCaches` (REQ-RUNNERENROLL-160) on the paths as written,
+    // component by component, as `Path::starts_with` compares them.
+    fn build_caches_valid(&self) -> bool {
+        let Some(caches) = &self.build_caches else {
+            return true;
+        };
+        caches.len() <= MAXIMUM_BUILD_CACHES
+            && caches
+                .iter()
+                .all(|cache| cache.maximum_bytes >= 1 && self.build_cache_path_valid(&cache.path))
+            && caches.iter().enumerate().all(|(index, cache)| {
+                caches[index + 1..].iter().all(|other| {
+                    !cache.path.starts_with(&other.path) && !other.path.starts_with(&cache.path)
+                })
+            })
+    }
+
+    fn build_cache_path_valid(&self, path: &Path) -> bool {
+        let holds = |file: &Path| {
+            file == path || file.parent().is_some_and(|parent| parent.starts_with(path))
+        };
+        path.is_absolute()
+            && !path
+                .components()
+                .any(|component| component == Component::ParentDir)
+            && !path.starts_with(&self.work_root)
+            && !self.work_root.starts_with(path)
+            && !holds(&self.runner_state_path)
+            && !holds(&self.control_socket_path)
+            && !self
+                .runner_state_path
+                .parent()
+                .is_some_and(|directory| path.starts_with(directory.join(LOG_DIRECTORY)))
+    }
+
+    // The caches `buildCaches` names, none when it is absent.
+    fn build_caches(&self) -> Vec<BuildCache> {
+        self.build_caches
+            .iter()
+            .flatten()
+            .map(|cache| BuildCache {
+                path: cache.path.clone(),
+                maximum_bytes: cache.maximum_bytes,
+            })
+            .collect()
+    }
+
+    // The bounds `keptRuns` sets (REQ-RUNNERENROLL-157), each absent member
+    // taking its default.
+    fn kept_run_bounds(&self) -> KeptRunBounds {
+        let defaults = KeptRunBounds::default();
+        let Some(document) = &self.kept_runs else {
+            return defaults;
+        };
+        KeptRunBounds {
+            maximum_age: document
+                .maximum_age_days
+                .map_or(defaults.maximum_age, |days| {
+                    days.map(|days| Duration::from_secs(days * SECONDS_PER_DAY))
+                }),
+            maximum_total_bytes: document
+                .maximum_total_bytes
+                .unwrap_or(defaults.maximum_total_bytes),
+        }
+    }
+
     fn minimum_free_disk_bytes(&self) -> u64 {
         self.minimum_free_disk_bytes
             .unwrap_or(useful_execution::DEFAULT_MINIMUM_FREE_DISK_BYTES)
@@ -240,6 +434,8 @@ pub(crate) struct RunnerServiceConfiguration {
     pub(super) state_access: RunnerStateAccess,
     pub(super) control_socket_path: PathBuf,
     pub(super) work_root: PathBuf,
+    pub(super) kept_runs: KeptRunBounds,
+    pub(super) build_caches: Vec<BuildCache>,
     pub(super) minimum_free_disk_bytes: u64,
 }
 
@@ -586,6 +782,8 @@ impl EnrollmentResponse {
 
 #[derive(Debug)]
 pub enum EnrollmentOutcome {
+    /// The host already holds enrolled state, so nothing was sent.
+    AlreadyEnrolled,
     Enrolled {
         response: EnrollmentResponse,
         replacement: bool,
@@ -607,23 +805,6 @@ pub enum ReplacementDisposition {
     Current,
     Pending,
     Missing,
-}
-
-pub fn write_activation_file(
-    destination: &str,
-    artifact: &ActivationArtifact,
-) -> Result<(), EnrollmentError> {
-    let destination = ArtifactDestination::prepare(destination).map_err(|error| match error {
-        PrivateArtifactError::UnsafeDirectory => EnrollmentError::UnsafePath(
-            "activation artifact parent must be a non-symbolic-link directory",
-        ),
-        _ => EnrollmentError::ArtifactWrite,
-    })?;
-    let mut document = zeroize::Zeroizing::new(Vec::new());
-    artifact.write_json(&mut *document)?;
-    destination
-        .write(&document)
-        .map_err(|_| EnrollmentError::ArtifactWrite)
 }
 
 /// Where an issued secret-bearing artifact goes: standard output for `-`,
@@ -778,96 +959,195 @@ impl Error for PrivateArtifactError {
     }
 }
 
-pub fn enroll(
-    activation_file: Option<&Path>,
+/// Enrolls the host with a single-runner key when it holds no enrolled state
+/// (REQ-RUNNERENROLL-13). An enrollment staged for the key's activation is
+/// resent as it was staged, after the key's expiry included
+/// (REQ-RUNNERENROLL-22); a journal staged for another activation or a join
+/// is refused and nothing is sent (REQ-RUNNERENROLL-24); and an activation the
+/// host's receipt already records as gone is answered `Gone` without a
+/// request (REQ-RUNNERENROLL-23). The request is sent once: an ambiguous or
+/// refused answer keeps the journal for a later start to resend.
+pub fn enroll_unless_enrolled(
     config_path: &Path,
-    replace_credential: bool,
-    resume: bool,
+    key: ActivationArtifact,
 ) -> Result<EnrollmentOutcome, EnrollmentError> {
-    if !resume && activation_file.is_none() {
-        return Err(EnrollmentError::InvalidCommand);
+    let host = LockedStateDirectory::lock(config_path)?;
+    validate_artifact(&key, host.mode)?;
+    if let Some(state) = read_runner_state_if_present(&host.state_path, host.mode)? {
+        remove_persisted_journal(&host.journal_path, &state, true)?;
+        return Ok(EnrollmentOutcome::AlreadyEnrolled);
     }
-    if resume && (activation_file.is_some() || replace_credential) {
-        return Err(EnrollmentError::InvalidCommand);
-    }
-    if activation_file == Some(Path::new("-")) && io::stdin().is_terminal() {
-        return Err(EnrollmentError::TerminalStdin);
-    }
-
-    let LockedStateDirectory {
-        mode,
-        state_path,
-        journal_path,
-        _lock: lock,
-    } = LockedStateDirectory::lock(config_path)?;
-
-    let journal = if resume {
-        read_journal(&journal_path)?
-    } else {
-        let artifact = read_activation_artifact_allow_expired(
-            activation_file.ok_or(EnrollmentError::InvalidCommand)?,
-            mode,
-        )?;
-        let existing_state = read_runner_state_if_present(&state_path, mode)?;
-        match (&existing_state, replace_credential) {
-            (Some(_), false) => return Err(EnrollmentError::StateAlreadyEnrolled),
-            (None, true) => return Err(EnrollmentError::ReplacementStateMissing),
-            (Some(state), true) => {
-                if state.runner_id != artifact.runner_id {
-                    return Err(EnrollmentError::RunnerMismatch);
-                }
-                let artifact_activation_id = activation_id(&artifact)?;
-                let local_credential = if let Some(pending) = &state.pending_credential {
-                    if !pending.activated_by(&artifact_activation_id) {
-                        return Err(EnrollmentError::PendingCredentialExists);
-                    }
-                    Some(pending)
-                } else if state.last_promotion.as_ref().is_some_and(|promotion| {
-                    promotion.credential_id == state.current_credential.id
-                        && promotion.activation_id == artifact_activation_id
-                }) {
-                    Some(&state.current_credential)
-                } else {
-                    None
-                };
-                if let Some(credential) = local_credential {
-                    require_resolved_journal(&journal_path)?;
-                    let outcome = EnrollmentOutcome::ReplacementCredential {
-                        runner_id: state.runner_id.clone(),
-                        credential_id: credential.id.clone(),
-                        deployment: enrollment_deployment(&artifact.activation_url)?,
-                    };
-                    drop(lock);
-                    return Ok(outcome);
+    host.refuse_beside_registration()?;
+    let key_activation_id = activation_id(&key)?;
+    let journal = match read_staged_document(&host.journal_path)? {
+        StagedDocument::Journal(journal) => {
+            match &journal.target {
+                EnrollmentTarget::Activation(staged)
+                    if !journal.replace_credential
+                        && activation_id(staged)? == key_activation_id => {}
+                EnrollmentTarget::Activation(_) => return Err(EnrollmentError::UnresolvedJournal),
+                EnrollmentTarget::Join(_) => {
+                    return Err(journal
+                        .activation_artifact(&host.journal_path)
+                        .err()
+                        .unwrap_or(EnrollmentError::UnresolvedJournal));
                 }
             }
-            (None, false) => {}
+            journal
         }
-        require_unexpired(&artifact.expires_at, EnrollmentError::ExpiredArtifact)?;
-        stage_journal(
-            &journal_path,
-            EnrollmentTarget::Activation(artifact),
-            replace_credential,
-        )?
+        StagedDocument::Receipt(receipt) if receipt.activation_id == key_activation_id => {
+            return Ok(EnrollmentOutcome::Gone {
+                deployment: enrollment_deployment(&key.activation_url)?,
+                activation_id: key_activation_id,
+            });
+        }
+        StagedDocument::Receipt(_) | StagedDocument::Nothing => {
+            require_unexpired(&key.expires_at, EnrollmentError::ExpiredArtifact)?;
+            stage_journal(&host.journal_path, EnrollmentTarget::Activation(key), false)?
+        }
     };
+    send_staged_enrollment(host, &journal)
+}
 
-    let artifact = journal.activation_artifact(&journal_path)?;
-    validate_journal(&journal, mode)?;
-    if journal.replace_credential {
-        validate_replacement_journal_local_state(&state_path, mode, &journal, artifact)?;
+/// Resends the first enrollment a host with no enrolled state has staged, as
+/// a start given no key does (REQ-RUNNERENROLL-22), and answers `None` when it
+/// holds no journal or only a terminal receipt: the host is then not
+/// enrolled. A staged join is resolved only with its key, and a staged
+/// replacement only beside the state it replaces.
+pub fn resend_staged_enrollment(
+    config_path: &Path,
+) -> Result<Option<EnrollmentOutcome>, EnrollmentError> {
+    // A host that holds no journal at all is not enrolled, and its start
+    // writes nothing, not even the state lock (REQ-RUNNERENROLL-30).
+    let state_path = load_operator_config(config_path)?.runner_state_path;
+    if fs::symlink_metadata(state_directory(&state_path)?.join(JOURNAL_FILE))
+        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    {
+        return Ok(None);
     }
+    let host = LockedStateDirectory::lock(config_path)?;
+    if let Some(state) = read_runner_state_if_present(&host.state_path, host.mode)? {
+        remove_persisted_journal(&host.journal_path, &state, true)?;
+        return Ok(Some(EnrollmentOutcome::AlreadyEnrolled));
+    }
+    let StagedDocument::Journal(journal) = read_staged_document(&host.journal_path)? else {
+        return Ok(None);
+    };
+    journal.activation_artifact(&host.journal_path)?;
+    if journal.replace_credential {
+        return Err(EnrollmentError::ReplacementStateMissing);
+    }
+    host.refuse_beside_registration()?;
+    send_staged_enrollment(host, &journal).map(Some)
+}
 
+/// Enrolls a second credential for the host's own runner with a
+/// single-runner key, keeping the current one (REQ-RUNNERENROLL-48). A
+/// replacement staged for the key's activation is resent; one already staged
+/// in the state or promoted answers `ReplacementCredential` without a request
+/// (REQ-RUNNERENROLL-51).
+pub fn enroll_replacement(
+    config_path: &Path,
+    key: ActivationArtifact,
+) -> Result<EnrollmentOutcome, EnrollmentError> {
+    let host = LockedStateDirectory::lock(config_path)?;
+    validate_artifact(&key, host.mode)?;
+    let state = read_runner_state_if_present(&host.state_path, host.mode)?
+        .ok_or(EnrollmentError::ReplacementStateMissing)?;
+    if state.runner_id != key.runner_id {
+        return Err(EnrollmentError::RunnerMismatch);
+    }
+    let key_activation_id = activation_id(&key)?;
+    if let StagedDocument::Journal(journal) = read_staged_document(&host.journal_path)? {
+        let staged = journal.activation_artifact(&host.journal_path)?;
+        if journal.replace_credential && activation_id(staged)? == key_activation_id {
+            return send_staged_enrollment(host, &journal);
+        }
+        return Err(EnrollmentError::UnresolvedJournal);
+    }
+    let local_credential = if let Some(pending) = &state.pending_credential {
+        if !pending.activated_by(&key_activation_id) {
+            return Err(EnrollmentError::PendingCredentialExists);
+        }
+        Some(pending)
+    } else if state.last_promotion.as_ref().is_some_and(|promotion| {
+        promotion.credential_id == state.current_credential.id
+            && promotion.activation_id == key_activation_id
+    }) {
+        Some(&state.current_credential)
+    } else {
+        None
+    };
+    if let Some(credential) = local_credential {
+        return Ok(EnrollmentOutcome::ReplacementCredential {
+            runner_id: state.runner_id.clone(),
+            credential_id: credential.id.clone(),
+            deployment: enrollment_deployment(&key.activation_url)?,
+        });
+    }
+    require_unexpired(&key.expires_at, EnrollmentError::ExpiredArtifact)?;
+    let journal = stage_journal(&host.journal_path, EnrollmentTarget::Activation(key), true)?;
+    send_staged_enrollment(host, &journal)
+}
+
+/// Resends the replacement the host has staged, as a replacement start given
+/// no key does (REQ-RUNNERENROLL-22); a host that has staged none answers
+/// `NoStagedReplacement`.
+pub fn resend_staged_replacement(config_path: &Path) -> Result<EnrollmentOutcome, EnrollmentError> {
+    let host = LockedStateDirectory::lock(config_path)?;
+    let StagedDocument::Journal(journal) = read_staged_document(&host.journal_path)? else {
+        return Err(EnrollmentError::NoStagedReplacement);
+    };
+    journal.activation_artifact(&host.journal_path)?;
+    if !journal.replace_credential {
+        return Err(EnrollmentError::UnresolvedJournal);
+    }
+    send_staged_enrollment(host, &journal)
+}
+
+/// What the host's journal file holds.
+enum StagedDocument {
+    Nothing,
+    Receipt(TerminalReceipt),
+    Journal(EnrollmentJournal),
+}
+
+fn read_staged_document(path: &Path) -> Result<StagedDocument, EnrollmentError> {
+    let Some(bytes) = read_private_file_if_present(path, STATE_LIMIT)? else {
+        return Ok(StagedDocument::Nothing);
+    };
+    if let Ok(journal) = serde_json::from_slice::<EnrollmentJournal>(&bytes) {
+        return Ok(StagedDocument::Journal(journal));
+    }
+    match serde_json::from_slice::<TerminalReceipt>(&bytes) {
+        Ok(receipt) if valid_terminal_receipt(&receipt) => Ok(StagedDocument::Receipt(receipt)),
+        _ => Err(EnrollmentError::InvalidJournal),
+    }
+}
+
+// Sends the activation `journal` stages, once, under the host's state lock:
+// on Cloud's acceptance the state is written and the journal removed; a 410
+// replaces the journal with its terminal receipt; any other answer leaves it.
+fn send_staged_enrollment(
+    host: LockedStateDirectory,
+    journal: &EnrollmentJournal,
+) -> Result<EnrollmentOutcome, EnrollmentError> {
+    let artifact = journal.activation_artifact(&host.journal_path)?;
+    validate_journal(journal, host.mode)?;
+    if journal.replace_credential {
+        validate_replacement_journal_local_state(&host.state_path, host.mode, journal, artifact)?;
+    }
     let deployment = enrollment_deployment(&artifact.activation_url)?;
     match send_enrollment(
-        &journal,
+        journal,
         &artifact.activation_url,
         &artifact.activation_token,
     )? {
         EnrollmentHTTPOutcome::Success(response) => {
-            validate_enrollment_response(&response, Some(&artifact.runner_id), mode)?;
-            persist_enrollment_state(&state_path, &journal, &response, mode)?;
-            remove_and_sync(&journal_path)?;
-            drop(lock);
+            validate_enrollment_response(&response, Some(&artifact.runner_id), host.mode)?;
+            persist_enrollment_state(&host.state_path, journal, &response, host.mode)?;
+            remove_and_sync(&host.journal_path)?;
+            drop(host);
             Ok(EnrollmentOutcome::Enrolled {
                 response,
                 replacement: journal.replace_credential,
@@ -875,8 +1155,8 @@ pub fn enroll(
             })
         }
         EnrollmentHTTPOutcome::Gone => {
-            let activation_id = write_terminal_receipt(&journal_path, artifact)?;
-            drop(lock);
+            let activation_id = write_terminal_receipt(&host.journal_path, artifact)?;
+            drop(host);
             Ok(EnrollmentOutcome::Gone {
                 activation_id,
                 deployment,
@@ -977,14 +1257,7 @@ pub fn join_unless_enrolled(
         remove_persisted_journal(journal_path, &state, false)?;
         return Ok(JoinOutcome::AlreadyEnrolled);
     }
-    // A signed-in registration this host began is resumed only by a start
-    // with its options, so a key neither joins beside it nor clears it.
-    let registration_path = host.registration_path();
-    if let Some(record) = registration::read_registration_record(&registration_path)? {
-        return Err(EnrollmentError::RegistrationConflict(Box::new(
-            record.conflict(RegistrationConflictKind::Unresolved, &registration_path),
-        )));
-    }
+    host.refuse_beside_registration()?;
 
     let (journal, mut resent) = staged_or_new_join(journal_path, &key, None, mode)?;
     let EnrollmentTarget::Join(staged) = &journal.target else {
@@ -1158,15 +1431,16 @@ impl HeldJoinKey {
     }
 }
 
-/// Removes the journal of the host's own completed join, the one whose
-/// credential the enrolled state already holds, under the state lock. A start
-/// of an enrolled host calls it before serving, so the journal neither keeps a
-/// second copy of the credential secret nor blocks a later enrollment. Any
-/// other journal, and a host without enrolled state, are left as they are.
-pub fn remove_completed_join_journal(config_path: &Path) -> Result<(), EnrollmentError> {
+/// Removes the journal of the host's own completed join or first enrollment,
+/// the one whose credential the enrolled state already holds, under the state
+/// lock. A start of an enrolled host calls it before serving, so the journal
+/// neither keeps a second copy of the credential secret nor blocks a later
+/// enrollment. Any other journal, a replacement's included, and a host
+/// without enrolled state, are left as they are.
+pub fn remove_completed_enrollment_journal(config_path: &Path) -> Result<(), EnrollmentError> {
     let host = LockedStateDirectory::lock(config_path)?;
     if let Some(state) = read_runner_state_if_present(&host.state_path, host.mode)? {
-        remove_persisted_journal(&host.journal_path, &state, false)?;
+        remove_persisted_journal(&host.journal_path, &state, true)?;
     }
     Ok(())
 }
@@ -1184,6 +1458,19 @@ impl LockedStateDirectory {
     /// The signed-in registration's record, beside the journal.
     fn registration_path(&self) -> PathBuf {
         self.journal_path.with_file_name(REGISTRATION_FILE)
+    }
+
+    /// A signed-in registration this host began is resumed only by a start
+    /// with its options, so a key neither enrolls beside it nor clears it, and
+    /// a start with no key does not resend what it staged.
+    fn refuse_beside_registration(&self) -> Result<(), EnrollmentError> {
+        let registration_path = self.registration_path();
+        match registration::read_registration_record(&registration_path)? {
+            Some(record) => Err(EnrollmentError::RegistrationConflict(Box::new(
+                record.conflict(RegistrationConflictKind::Unresolved, &registration_path),
+            ))),
+            None => Ok(()),
+        }
     }
 
     fn lock(config_path: &Path) -> Result<Self, EnrollmentError> {
@@ -1442,6 +1729,8 @@ pub(crate) fn load_runner_service_configuration(
     path: &Path,
 ) -> Result<RunnerServiceConfiguration, EnrollmentError> {
     let config = load_operator_config(path)?;
+    let kept_runs = config.kept_run_bounds();
+    let build_caches = config.build_caches();
     let lock = StateLock::acquire_beside(&config.runner_state_path)?;
     let state = read_runner_state_if_present(&config.runner_state_path, config.deployment_mode)?
         .ok_or(EnrollmentError::InvalidState)?;
@@ -1469,6 +1758,8 @@ pub(crate) fn load_runner_service_configuration(
         minimum_free_disk_bytes,
         control_socket_path: config.control_socket_path,
         work_root: config.work_root,
+        kept_runs,
+        build_caches,
     })
 }
 
@@ -1602,6 +1893,8 @@ fn load_operator_config(path: &Path) -> Result<OperatorConfig, EnrollmentError> 
         || !config.runner_state_path.is_absolute()
         || !config.control_socket_path.is_absolute()
         || !config.work_root.is_absolute()
+        || !config.kept_runs_valid()
+        || !config.build_caches_valid()
         || config
             .minimum_free_disk_bytes
             .is_some_and(|minimum| minimum > useful_execution::MAXIMUM_MINIMUM_FREE_DISK_BYTES)
@@ -1611,32 +1904,22 @@ fn load_operator_config(path: &Path) -> Result<OperatorConfig, EnrollmentError> 
     Ok(config)
 }
 
-#[cfg(test)]
-fn read_activation_artifact(
-    path: &Path,
-    mode: DeploymentMode,
-) -> Result<ActivationArtifact, EnrollmentError> {
-    let artifact = read_activation_artifact_allow_expired(path, mode)?;
-    require_unexpired(&artifact.expires_at, EnrollmentError::ExpiredArtifact)?;
+// A single-runner key's own facts, which hold whatever the host's deployment
+// mode; `validate_artifact` checks its address against the mode before use.
+fn parse_activation_artifact(bytes: &[u8]) -> Result<ActivationArtifact, EnrollmentError> {
+    let artifact: ActivationArtifact =
+        serde_json::from_slice(bytes).map_err(|_| EnrollmentError::InvalidArtifact)?;
+    if artifact.schema_version != 1
+        || !valid_typed_id(&artifact.runner_id, "rnr_")
+        || parse_rfc3339(&artifact.expires_at).is_none()
+    {
+        return Err(EnrollmentError::InvalidArtifact);
+    }
+    activation_id(&artifact)?;
     Ok(artifact)
 }
 
-fn read_activation_artifact_allow_expired(
-    path: &Path,
-    mode: DeploymentMode,
-) -> Result<ActivationArtifact, EnrollmentError> {
-    let bytes = read_artifact_bytes(path).map_err(|failure| match failure {
-        ArtifactReadFailure::Terminal => EnrollmentError::TerminalStdin,
-        ArtifactReadFailure::Stdin(_) | ArtifactReadFailure::File(_) => {
-            EnrollmentError::InvalidArtifact
-        }
-    })?;
-    let artifact = serde_json::from_slice(&bytes).map_err(|_| EnrollmentError::InvalidArtifact)?;
-    validate_artifact(&artifact, mode)?;
-    Ok(artifact)
-}
-
-/// Reads a presented activation or join key artifact, bounded at
+/// Reads a presented key of either kind, bounded at
 /// `ARTIFACT_LIMIT`: piped standard input for `-`, refusing a terminal, or
 /// otherwise a regular file private to the current user, opened with
 /// `O_NOFOLLOW`. Each caller maps a failure to its own error.
@@ -1891,13 +2174,6 @@ fn require_terminal_receipt(bytes: &[u8]) -> Result<(), EnrollmentError> {
         return Err(EnrollmentError::UnresolvedJournal);
     }
     Ok(())
-}
-
-fn read_journal(path: &Path) -> Result<EnrollmentJournal, EnrollmentError> {
-    let bytes = read_private_file_if_present(path, STATE_LIMIT)
-        .map_err(|_| EnrollmentError::InvalidJournal)?
-        .ok_or(EnrollmentError::MissingJournal)?;
-    serde_json::from_slice(&bytes).map_err(|_| EnrollmentError::InvalidJournal)
 }
 
 fn validate_journal(
@@ -2624,7 +2900,6 @@ fn now_rfc3339() -> Result<String, EnrollmentError> {
 
 #[derive(Debug)]
 pub enum EnrollmentError {
-    InvalidCommand,
     TerminalStdin,
     InvalidConfig,
     InvalidArtifact,
@@ -2634,7 +2909,8 @@ pub enum EnrollmentError {
     UnsafePath(&'static str),
     StateLock,
     UnresolvedJournal,
-    MissingJournal,
+    /// A replacement start given no key found no staged replacement to resend.
+    NoStagedReplacement,
     InvalidJournal,
     EntropyUnavailable,
     StateAlreadyEnrolled,
@@ -2706,21 +2982,16 @@ pub enum EnrollmentError {
 impl fmt::Display for EnrollmentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Self::InvalidCommand => "runner enrollment options are inconsistent",
-            Self::TerminalStdin => {
-                "terminal stdin cannot supply an activation artifact or join key"
-            }
+            Self::TerminalStdin => "terminal stdin cannot supply a join key",
             Self::InvalidConfig => "runner operator configuration is invalid",
-            Self::InvalidArtifact => "activation artifact is invalid",
-            Self::ExpiredArtifact => {
-                "activation artifact has expired; issue a different activation"
-            }
+            Self::InvalidArtifact => "single-runner key is invalid",
+            Self::ExpiredArtifact => "single-runner key has expired; issue another for the runner",
             Self::InvalidURL => "Cloud-issued runner URL is not permitted by deploymentMode",
             Self::ArtifactWrite => "activation artifact could not be written safely",
             Self::UnsafePath(requirement) => requirement,
             Self::StateLock => "runner state lock is unavailable",
             Self::UnresolvedJournal => "an unresolved enrollment journal already exists",
-            Self::MissingJournal => "no unresolved enrollment journal is available to resume",
+            Self::NoStagedReplacement => "no credential replacement is staged to resend",
             Self::InvalidJournal => "enrollment journal is invalid",
             Self::EntropyUnavailable => "secure enrollment randomness is unavailable",
             Self::StateAlreadyEnrolled => "runner state already contains a current credential",
@@ -2728,7 +2999,7 @@ impl fmt::Display for EnrollmentError {
                 "replacement enrollment requires existing runner state"
             }
             Self::PendingCredentialExists => "runner state already contains a pending credential",
-            Self::RunnerMismatch => "activation and local runner registration do not match",
+            Self::RunnerMismatch => "the single-runner key is for another runner than this host's",
             Self::InvalidState => "protected runner state is invalid",
             Self::StateWrite => "protected runner state could not be committed durably",
             Self::NetworkAmbiguous(cause) => {
@@ -2740,10 +3011,10 @@ impl fmt::Display for EnrollmentError {
                 if let AmbiguousCause::CloudUnavailable(status) = cause {
                     write!(formatter, ", HTTP {status}")?;
                 }
-                return formatter.write_str("); resume the journal explicitly");
+                return formatter.write_str(")");
             }
             Self::Unauthorized => {
-                "activation authentication was rejected; the journal remains unresolved"
+                "Cloud rejected the single-runner key's token; the journal remains unresolved"
             }
             Self::Conflict => {
                 "enrollment request conflicts with Cloud state; the journal remains unresolved"

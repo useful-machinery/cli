@@ -5,41 +5,51 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 
 use super::Cli;
 
-const LEAVES: &str = "accept activate answer approve authorize archive begin cancel complete connect continue create deauthorize decline delete disable doctor download drain enable end enroll event hand-back history import interrupt issue leave lift link list login logout move preview propose publish reconnect reference release remove rename replay request restart resume retire retry revoke revoke-previous-secret rotate-secret run schema seal serve set set-principal show signup status stop sync test unarchive update upgrade upload uses validate version view wait watch withdraw";
-const GROUPS: &str = "account action activation agent-login artifact audit auth authorization cloud connection credential definition delegation deletion delivery github gitlab grant identity input input-set installation integration invitation join-key linear member occurrence organization pool project publication repository run runner runner-pool schedule service-principal setup state team trigger evaluation webhook workflow";
-const COMMON: [&str; 3] = ["json", "service-api-key-file", "allow-insecure-http"];
+const LEAVES: &str = "accept add answer approve authorize archive cancel connect create deauthorize decline delete disable disconnect doctor download drain enable end event hand-back interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
+const GROUPS: &str = "account artifact audit credential definition delegation delivery event identity input input-set integration invitation join-key key linear member org pool project publication repository run runner secret service team evaluation webhook workflow";
+const COMMON: [&str; 3] = ["json", "api-key-file", "allow-insecure-http"];
 // These leaves have no limit/cursor contract; see cli/docs/output-style.md.
-const UNPAGINATED_LISTS: [&str; 6] = [
-    "connection github installation list",
-    "connection github repository list",
-    "grant list",
-    "integration list",
+const UNPAGINATED_LISTS: [&str; 4] = [
+    "org integration list",
+    "account integration list",
+    "runner join-key list",
     "workflow definition list",
-    "workflow run list",
 ];
 // These destructive leaves' own confirmation refuses a missing --yes with the statement the
 // leaf makes before it acts, which clap's refusal of a required argument cannot carry;
 // destructive_leaves_require_confirmation_but_runner_modes_do_not pins that refusal.
-const SELF_CONFIRMING: [&str; 3] = [
-    "auth agent-login revoke",
-    "grant revoke",
-    "integration revoke",
-];
+const SELF_CONFIRMING: [&str; 1] = ["account integration disconnect"];
+// These destructive leaves take no --yes at all: `project webhook secret revoke` ends only the
+// overlap of a secret a rotation already replaced, so the subscription keeps a working secret
+// and the tree writes the leaf without a confirmation (REQ-WEBHOOK-75).
+const UNCONFIRMED: [&str; 1] = ["project webhook secret revoke"];
 
 // These identities are backed by shared Args or identifier argument types in cli/src/cli.rs
 // and cli/src/cli/entity.rs. A long spelling alone is never a help identity.
 fn semantic_class(path: &str, long: &str) -> Option<String> {
     let shared = match long {
-        // A restart's Text input overrides one carried over from the run, so it is not
+        // An upgrade's Text input overrides one carried over from the run, so it is not
         // the required value `--input-text` supplies elsewhere.
-        "input-text" if path == "workflow run restart" => "input-text:override",
-        "service-api-key-file"
+        "input-text" if path == "workflow run upgrade" => "input-text:override",
+        // The connection a project's repository is bound through, GitHub's or GitLab's alone,
+        // found when omitted (`org/connection/reach.rs`, REQ-PROJECT-101).
+        "connection" if matches!(path, "project create" | "project update") => {
+            "connection:repository"
+        }
+        // The runner key `runner join-key issue` writes is no API key: its destination is the
+        // same `PATH|-`, and its help names the key it holds.
+        "key-file" if path == "runner join-key issue" => "key-file:runner-key",
+        // A runner a single-runner key is issued for may be a name no runner has yet, which
+        // the issue registers (REQ-RUNNERENROLL-1).
+        "runner" if path == "runner join-key issue" => "runner:registering",
+        "api-key-file"
+        | "key-file"
         | "allow-insecure-http"
+        // The connection a `useful org integration` leaf acts on (`org/connection/target.rs`).
+        | "connection"
         | "cursor"
-        | "organization"
-        | "pool-id"
+        | "org"
         | "project-id"
-        | "installation-id"
         | "repository-id"
         | "timeout"
         | "yes"
@@ -49,71 +59,88 @@ fn semantic_class(path: &str, long: &str) -> Option<String> {
         | "input-file"
         | "input-attachment"
         | "input-attachments-empty"
-        | "agent-profiles" => long,
+        | "agent-profiles"
+        // A runner by ID or exact name (REQ-GRANT-65), at each grant leaf that takes one and at
+        // `workflow doctor` (REQ-CREDREADY-23).
+        | "runner" => long,
         // Only these paths flatten PaginationArgs. Other options named --limit
         // do not acquire pagination semantics just by sharing the spelling.
         "limit" => match path {
-            "organization audit list" | "workflow definition cloud list" => "limit:100",
-            "artifact list"
-            | "auth agent-login list"
-            | "auth grant list"
-            | "auth grant uses"
-            | "auth identity list"
-            | "delegation list"
-            | "invitation list"
-            | "organization list"
-            | "organization invitation list"
-            | "organization member list"
-            | "organization member history"
+            "org audit list" | "org integration team list" | "org integration team show" => {
+                "limit:100"
+            }
+            "org integration repository list"
+            | "account delegation list"
+            | "account identity list"
+            | "account invitation list"
+            | "account service key list"
+            | "org list"
+            | "org invitation list"
+            | "org member list"
+            | "org member event list"
             | "project list"
-            | "publication list"
             | "runner pool list"
-            | "runner activation list"
-            | "runner join-key list"
             | "runner credential list"
             | "runner list"
-            | "service-principal credential list" => "limit:200",
+            | "workflow run artifact list"
+            | "workflow run publication list" => "limit:200",
             _ => return None,
         },
-        // `run restart` replaces one input of the successor's current revision, not a
+        // The project in effect (`context::ProjectArgs`), at `account show`, `workflow doctor`,
+        // `workflow input-set create`, `workflow run create`, `workflow run list`, the
+        // `workflow definition` leaves and every `useful project` leaf that reads it.
+        "project"
+            if matches!(
+                path,
+                "account show"
+                    | "workflow doctor"
+                    | "workflow input-set create"
+                    | "workflow run create"
+                    | "workflow run list"
+            )
+                || path.starts_with("workflow definition ")
+                || path.starts_with("project ") =>
+        {
+            "project:in-effect"
+        }
+        "project" => return None,
+        // `run upgrade` replaces one input of the successor's current revision, not a
         // required input of a new run.
         "input-text" => match path {
-            "workflow run restart" => "input-text:restart",
+            "workflow run upgrade" => "input-text:upgrade",
             _ => "input-text",
         },
         "json" => {
             // JsonArgs<F> is parameterized by output family; deletion cancellation
             // uses StreamingJson rather than DeletionJson.
-            let family = if path.starts_with("connection github ") {
-                "github-connection"
-            } else if path.starts_with("connection gitlab ") {
-                "gitlab-connection"
-            } else if matches!(
+            let family = if matches!(
                 path,
-                "auth login"
-                    | "auth grant create"
-                    | "grant create"
-                    | "integration connect"
-                    | "auth identity link"
-                    | "account deletion cancel"
-                    | "organization deletion cancel"
+                "account login"
+                    | "account integration connect"
+                    | "account integration reconnect"
+                    | "account identity link"
+                    | "account restore"
+                    | "org integration connect"
+                    | "org integration reconnect"
+                    | "org restore"
             ) {
                 "streaming-events"
-            } else if matches!(path, "auth logout" | "auth status") {
+            } else if path.starts_with("org integration ") {
+                "org-connection"
+            } else if matches!(path, "account logout" | "account show") {
                 "sign-in"
-            } else if path.starts_with("auth agent-login ") {
-                "agent-login"
-            } else if path.starts_with("auth credential ") {
-                "credential"
-            } else if path.starts_with("auth grant ") {
-                "grant"
-            } else if path.starts_with("auth identity ") {
+            } else if path.starts_with("account identity ") {
                 "identity"
-            } else if path.starts_with("organization invitation ") {
-                "invitation"
-            } else if path.starts_with("account deletion ")
-                || path.starts_with("organization deletion ")
+            } else if path.starts_with("account integration ") {
+                "grant"
+            } else if path.starts_with("org invitation ") || path.starts_with("account invitation ")
             {
+                "invitation"
+            } else if path.starts_with("account service ") {
+                "service-principal"
+            } else if path.starts_with("account delegation ") {
+                "delegation"
+            } else if matches!(path, "account delete" | "org delete") {
                 "deletion"
             } else {
                 path.split(' ').next().unwrap_or("")
@@ -177,13 +204,14 @@ fn violations(root: &Command) -> BTreeSet<String> {
                 }
                 let destructive = matches!(
                     token,
-                    "delete" | "decline" | "end" | "leave" | "remove" | "revoke" | "retire"
-                ) || matches!(
-                    path,
-                    "account deletion request" | "organization deletion request"
+                    "delete" | "decline" | "disconnect" | "end" | "leave" | "remove" | "revoke"
                 );
                 let has = |long| node.get_arguments().any(|arg| arg.get_long() == Some(long));
-                if destructive
+                if UNCONFIRMED.contains(&path) {
+                    if has("yes") {
+                        failures.insert(format!("confirmation|{path}"));
+                    }
+                } else if destructive
                     && !node.get_arguments().any(|arg| {
                         arg.get_long() == Some("yes")
                             && matches!(arg.get_action(), ArgAction::SetTrue)
@@ -299,62 +327,123 @@ fn cli_grammar_conforms() {
     );
 }
 
+// INV-CLI-21: the lexicons hold the words the tree uses and no other, so a word the tree
+// gave up cannot name a new path without changing them.
+#[test]
+fn lexicons_hold_exactly_the_words_of_the_tree() {
+    fn collect<'a>(
+        node: &'a Command,
+        leaves: &mut BTreeSet<&'a str>,
+        groups: &mut BTreeSet<&'a str>,
+    ) {
+        for child in node.get_subcommands().filter(|c| c.get_name() != "help") {
+            if child.has_subcommands() {
+                groups.insert(child.get_name());
+                collect(child, leaves, groups);
+            } else {
+                leaves.insert(child.get_name());
+            }
+        }
+    }
+    let root = Cli::command();
+    let (mut leaves, mut groups) = (BTreeSet::new(), BTreeSet::new());
+    collect(&root, &mut leaves, &mut groups);
+    assert_eq!(leaves, LEAVES.split_whitespace().collect::<BTreeSet<_>>());
+    assert_eq!(groups, GROUPS.split_whitespace().collect::<BTreeSet<_>>());
+}
+
+// The guide's Verb lexicon runs from its marker to the next bullet. Parenthesised
+// glosses are dropped before tokens are collected, since a gloss may name a word
+// that is no verb.
+fn guide_verb_lexicon(guide: &str) -> BTreeSet<&str> {
+    let lexicon = guide
+        .split_once("**Verb lexicon:**")
+        .map_or("", |(_, rest)| {
+            rest.split_once("\n- **").map_or(rest, |(bullet, _)| bullet)
+        });
+    let mut spans = lexicon.split('(');
+    let unglossed = spans
+        .next()
+        .into_iter()
+        .chain(spans.map(|span| span.split_once(')').map_or("", |(_, after)| after)));
+    unglossed
+        .flat_map(|span| span.split('`').skip(1).step_by(2))
+        .collect()
+}
+
+// INV-CLI-19
+#[test]
+fn guide_verb_lexicon_is_the_admitted_leaf_set() {
+    let guide = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/output-style.md"));
+    let documented = guide_verb_lexicon(guide);
+    let admitted = LEAVES.split_whitespace().collect::<BTreeSet<_>>();
+    let undocumented = admitted
+        .difference(&documented)
+        .copied()
+        .collect::<Vec<_>>();
+    let unadmitted = documented
+        .difference(&admitted)
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        undocumented.is_empty() && unadmitted.is_empty(),
+        "verbs admitted by LEAVES but absent from the guide's Verb lexicon: {}\n\
+         verbs in the guide's Verb lexicon but absent from LEAVES: {}",
+        undocumented.join(" "),
+        unadmitted.join(" ")
+    );
+}
+
 #[test]
 fn entity_identifier_flags_match_the_command_tree_and_parser() {
     let cases: &[(&[&str], &str, &str, &[&str])] = &[
         (
             &["project", "create"],
-            "pool-id",
             "pool",
+            "pool-id",
             &[
-                "example",
-                "--name",
                 "widget",
-                "--installation-id",
-                "ins_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "--repository-id",
-                "repo-123",
-                "--pool-id",
+                "--repository",
+                "123",
+                "--integration",
+                "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "--pool",
                 "builders",
             ],
         ),
         (
-            &["runner", "create"],
-            "pool-id",
+            &["runner", "update"],
             "pool",
-            &["example", "--pool-id", "builders", "--activation-file", "-"],
+            "pool-id",
+            &["builder-one", "--pool", "builders"],
         ),
         (
-            &["runner", "move"],
-            "pool-id",
+            &["runner", "serve"],
             "pool",
-            &["example", "builder-one", "--pool-id", "builders"],
+            "pool-id",
+            &["--pool", "builders"],
         ),
         (
-            &["organization", "invitation", "issue"],
+            &["runner", "serve"],
+            "org",
+            "organization",
+            &["--personal", "--org", "acme"],
+        ),
+        (
+            &["org", "invitation", "issue"],
+            "account",
             "principal-id",
-            "principal",
-            &[
-                "example",
-                "--principal-id",
-                "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
-            ],
+            &["--account", "prn_01k0z6r1w8f4jy2m7q9v3x5abc"],
         ),
         (
-            &["auth", "grant", "create"],
-            "identity-id",
-            "identity",
-            &["github", "--identity-id", "idn_01k0z6r1w8f4jy2m7q9v3x5abc"],
-        ),
-        (
-            &["workflow", "definition", "cloud", "set-principal"],
-            "project-id",
+            &["workflow", "definition", "update"],
             "project",
+            "project-id",
             &[
-                "example",
-                "def_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "--project-id",
+                "engineering",
+                "--run-as",
+                "ci",
+                "--project",
                 "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
             ],
         ),
@@ -404,119 +493,47 @@ fn entity_identifier_flags_match_the_command_tree_and_parser() {
 // REQ-ACCOUNT-61
 // REQ-SERVICEPRINCIPAL-20
 // REQ-GRANT-6
-// REQ-GRANT-30
-// REQ-GRANT-35
 // REQ-GRANT-66
 // REQ-GRANT-67
 // REQ-GRANT-68
-// REQ-INTEGRATION-13
 #[test]
 fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
     let gated: &[&[&str]] = &[
         &[
-            "service-principal",
-            "credential",
+            "account",
+            "service",
+            "key",
             "revoke",
             "crd_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "--service-api-key-file",
+            "--api-key-file",
             "key",
         ],
         &[
             "runner",
             "credential",
             "revoke",
-            "example",
-            "runner",
             "credential",
-        ],
-        &[
-            "runner",
-            "credential",
-            "retire",
-            "example",
-            "runner",
-            "credential",
-        ],
-        &[
-            "runner",
-            "activation",
-            "revoke",
-            "example",
-            "runner",
-            "activation",
-        ],
-        &["auth", "grant", "revoke", "pgr_01k0z6r1w8f4jy2m7q9v3x5abc"],
-        &[
-            "auth",
-            "agent-login",
-            "revoke",
-            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &[
-            "auth",
-            "agent-login",
-            "authorize",
-            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--runner",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "runner",
         ],
+        &["account", "integration", "disconnect", "codex"],
+        &["account", "identity", "remove", "identity"],
         &[
-            "auth",
-            "agent-login",
-            "deauthorize",
-            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "--runner",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &["grant", "revoke", "codex"],
-        &[
-            "grant",
-            "authorize",
-            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &[
-            "grant",
-            "authorize",
-            "--all",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &[
-            "grant",
-            "deauthorize",
-            "pgr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &["integration", "revoke", "codex"],
-        &[
+            "org",
             "integration",
-            "authorize",
-            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "disconnect",
+            "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
         ],
         &[
+            "org",
             "integration",
-            "authorize",
-            "--all",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &[
-            "integration",
-            "deauthorize",
-            "pgr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-        ],
-        &["auth", "identity", "remove", "identity"],
-        &[
-            "connection",
-            "github",
-            "installation",
+            "repository",
             "remove",
-            "example",
-            "installation",
+            "7",
+            "--integration",
+            "glc_01k0z6r1w8f4jy2m7q9v3x5abc",
         ],
-        &["project", "repository", "remove", "example", "project"],
-        &["project", "runner-pool", "remove", "example", "project"],
+        &["project", "pool", "remove", "builders"],
     ];
     for &args in gated {
         let input = std::iter::once("useful").chain(args.iter().copied());
@@ -532,28 +549,33 @@ fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
     }
     for mode in ["disable", "drain"] {
         assert!(
-            super::parse(["useful", "runner", mode, "example", "runner"]).is_ok(),
+            super::parse(["useful", "runner", mode, "runner"]).is_ok(),
             "{mode}"
         );
+    }
+    // `authorize` and `deauthorize` check a missing `--yes` as they run, asking on a terminal
+    // in its place (REQ-GRANT-82).
+    for leaf in ["authorize", "deauthorize"] {
+        let input = [
+            "useful",
+            "account",
+            "integration",
+            leaf,
+            "agl_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "--runner",
+            "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
+        ];
+        assert!(super::parse(input).is_ok(), "{leaf}");
     }
 }
 
 // REQ-GRANT-65
 // REQ-GRANT-66
 // REQ-GRANT-81
-// REQ-INTEGRATION-13
-// `authorize` parses `GRANT RUNNER`, `GRANT`, `--all RUNNER` and `--all`, and a leaf given no
-// `RUNNER` runs without `--yes` to offer the runners, while one given `RUNNER` is refused
-// without it (`destructive_leaves_require_confirmation_but_runner_modes_do_not`), under both
-// spellings of the family.
+// `authorize` takes `INTEGRATION` or `--all`, never both, and either leaf names its runner with
+// `--runner`, by ID or by name, or names none, to be told the runners it can name.
 #[test]
 fn authorize_and_deauthorize_take_runner_as_an_option_and_refuse_a_malformed_target() {
-    for family in ["grant", "integration"] {
-        authorize_and_deauthorize_parse_under(family);
-    }
-}
-
-fn authorize_and_deauthorize_parse_under(family: &str) {
     const GRANT: &str = "agl_01k0z6r1w8f4jy2m7q9v3x5abc";
     const RUNNER: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
     for args in [
@@ -561,142 +583,83 @@ fn authorize_and_deauthorize_parse_under(family: &str) {
         &["authorize", "codex"],
         &["authorize", "--all"],
         &["deauthorize", GRANT],
-        &["authorize", GRANT, RUNNER, "--yes"],
-        &["authorize", "--all", RUNNER, "--yes"],
-        &["authorize", RUNNER, "--all", "--yes"],
+        &["authorize", GRANT, "--runner", RUNNER, "--yes"],
+        &["authorize", "--all", "--runner", RUNNER],
+        &["authorize", "--all", "--runner", "build-1"],
+        &["deauthorize", GRANT, "--runner", "build-1"],
     ] {
-        let input = ["useful", family].into_iter().chain(args.iter().copied());
-        assert!(super::parse(input).is_ok(), "{family} {args:?}");
+        let input = ["useful", "account", "integration"]
+            .into_iter()
+            .chain(args.iter().copied());
+        assert!(super::parse(input).is_ok(), "{args:?}");
     }
     for (args, kind) in [
+        // The runner is no positional.
         (
-            &["authorize", GRANT, "--all", "--yes"][..],
-            clap::error::ErrorKind::ArgumentConflict,
-        ),
-        (
-            &["authorize", RUNNER, "--yes"],
-            clap::error::ErrorKind::ValueValidation,
-        ),
-        (
-            &["authorize", "--all", RUNNER, RUNNER, "--yes"],
+            &["authorize", GRANT, RUNNER, "--yes"][..],
             clap::error::ErrorKind::UnknownArgument,
         ),
         (
-            &["authorize", "--yes"],
-            clap::error::ErrorKind::MissingRequiredArgument,
-        ),
-        // A runner is named by its ID, also where the leaf would offer the runners.
-        (
-            &["authorize", "codex", "builder"],
-            clap::error::ErrorKind::ValueValidation,
-        ),
-        // `builder` has a provider id's shape, so beside `--all` it is a `GRANT` that
-        // `--all` excludes (REQ-GRANT-96).
-        (
-            &["authorize", "--all", "builder"],
+            &["authorize", GRANT, "--all", "--runner", RUNNER],
             clap::error::ErrorKind::ArgumentConflict,
         ),
         (
-            &["deauthorize", GRANT, "builder"],
-            clap::error::ErrorKind::ValueValidation,
+            &["authorize", "--runner", RUNNER, "--yes"],
+            clap::error::ErrorKind::MissingRequiredArgument,
+        ),
+        (
+            &["deauthorize", "--runner", RUNNER, "--yes"],
+            clap::error::ErrorKind::MissingRequiredArgument,
         ),
     ] {
-        let input = ["useful", family].into_iter().chain(args.iter().copied());
-        assert_eq!(
-            super::parse(input).unwrap_err().kind(),
-            kind,
-            "{family} {args:?}"
-        );
+        let input = ["useful", "account", "integration"]
+            .into_iter()
+            .chain(args.iter().copied());
+        assert_eq!(super::parse(input).unwrap_err().kind(), kind, "{args:?}");
     }
-}
-
-// REQ-INTEGRATION-15
-// REQ-INTEGRATION-17
-// `--org` acts on an organization's token, which only `useful integration` reaches: each of its
-// leaves takes it and no leaf of `useful grant` does.
-#[test]
-fn org_is_an_option_of_every_integration_leaf_and_of_no_grant_leaf() {
-    let mut root = Cli::command();
-    root.build();
-    let takes_org = |family: &str| {
-        let family = root
-            .find_subcommand(family)
-            .unwrap_or_else(|| panic!("no {family}"));
-        family
-            .get_subcommands()
-            .filter(|leaf| leaf.get_name() != "help")
-            .map(|leaf| {
-                let org = leaf.get_arguments().any(|arg| arg.get_id() == "org");
-                (leaf.get_name().to_owned(), org)
-            })
-            .collect::<Vec<_>>()
-    };
-    let integration = takes_org("integration");
-    assert_eq!(integration.len(), 5, "{integration:?}");
-    assert!(integration.iter().all(|(_, org)| *org), "{integration:?}");
-    let grant = takes_org("grant");
-    assert_eq!(grant.len(), 5, "{grant:?}");
-    assert!(grant.iter().all(|(_, org)| !*org), "{grant:?}");
-}
-
-// REQ-INTEGRATION-15
-// REQ-INTEGRATION-33
-// `--project-id` and `--connection-id` act on an organization's connection authorization, which
-// only `useful integration authorize` and `deauthorize` reach among these leaves: no leaf of
-// `useful grant` takes either.
-#[test]
-fn project_and_connection_are_options_of_integration_authorize_and_deauthorize_and_of_no_grant_leaf()
- {
-    let mut root = Cli::command();
-    root.build();
-    let taking = |family: &str| {
-        root.find_subcommand(family)
-            .unwrap_or_else(|| panic!("no {family}"))
-            .get_subcommands()
-            .filter(|leaf| {
-                leaf.get_arguments()
-                    .any(|arg| arg.get_id() == "project_id" || arg.get_id() == "connection_id")
-            })
-            .map(|leaf| {
-                let ids = leaf
-                    .get_arguments()
-                    .map(|arg| arg.get_id().as_str())
-                    .filter(|id| ["project_id", "connection_id"].contains(id))
-                    .collect::<Vec<_>>();
-                (leaf.get_name().to_owned(), ids)
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        taking("integration"),
-        [
-            ("authorize".to_owned(), vec!["project_id", "connection_id"]),
-            (
-                "deauthorize".to_owned(),
-                vec!["project_id", "connection_id"]
-            )
-        ]
-    );
-    assert_eq!(taking("grant"), []);
 }
 
 // REQ-CONNECTION-88
 #[test]
-fn github_connections_live_only_under_the_connection_family() {
+fn connections_live_only_under_org_integration() {
     let mut root = Cli::command();
     root.build();
-    assert!(root.find_subcommand("github").is_none());
-    let github = root
-        .find_subcommand("connection")
-        .and_then(|connection| connection.find_subcommand("github"))
-        .unwrap();
-    for leaf in ["installation", "repository", "setup"] {
-        assert!(github.find_subcommand(leaf).is_some(), "{leaf}");
+    for family in ["connection", "github", "gitlab", "linear"] {
+        assert!(root.find_subcommand(family).is_none(), "{family}");
     }
+    let leaves = root
+        .find_subcommand("org")
+        .and_then(|org| org.find_subcommand("integration"))
+        .unwrap()
+        .get_subcommands()
+        .map(|command| command.get_name().to_owned())
+        .filter(|name| name != "help")
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        leaves,
+        BTreeSet::from(
+            [
+                "authorize",
+                "connect",
+                "deauthorize",
+                "disconnect",
+                "list",
+                "reconnect",
+                "repository",
+                "show",
+                "team"
+            ]
+            .map(str::to_owned)
+        )
+    );
     for path in [
+        &["connection"][..],
         &["github"][..],
         &["github", "setup", "begin", "example"][..],
-        &["github", "installation", "list", "example"][..],
+        &["gitlab", "list", "example"][..],
+        &["linear"][..],
+        &["connection", "github", "setup", "begin", "acme"][..],
+        &["connection", "gitlab", "credential", "show", "acme"][..],
     ] {
         let input = std::iter::once("useful").chain(path.iter().copied());
         assert_eq!(
@@ -705,6 +668,36 @@ fn github_connections_live_only_under_the_connection_family() {
             "{path:?}"
         );
     }
+}
+
+// REQ-PROJECT-102
+#[test]
+fn project_update_takes_a_change_and_confirms_only_a_cleared_repository() {
+    for arguments in [
+        &["--clear-repository"][..],
+        &[][..],
+        &["--yes", "--name", "gadget"][..],
+        &["--clear-repository", "--yes", "--repository", "a/b"][..],
+        &["--integration", "github", "--name", "gadget"][..],
+    ] {
+        let input = ["useful", "project", "update", "widget"]
+            .into_iter()
+            .chain(arguments.iter().copied());
+        assert!(super::parse(input).is_err(), "{arguments:?}");
+    }
+    assert!(
+        super::parse([
+            "useful",
+            "project",
+            "update",
+            "widget",
+            "--clear-repository",
+            "--yes",
+            "--name",
+            "gadget",
+        ])
+        .is_ok()
+    );
 }
 
 // REQ-TRIGGER-143
@@ -737,7 +730,8 @@ fn run_linear_offers_only_its_reads() {
     let mut root = Cli::command();
     root.build();
     let linear = root
-        .find_subcommand("run")
+        .find_subcommand("workflow")
+        .and_then(|workflow| workflow.find_subcommand("run"))
         .and_then(|run| run.find_subcommand("linear"))
         .unwrap();
     let leaves: Vec<_> = linear
@@ -745,7 +739,7 @@ fn run_linear_offers_only_its_reads() {
         .map(Command::get_name)
         .filter(|name| *name != "help")
         .collect();
-    assert_eq!(leaves, ["history", "show"]);
+    assert_eq!(leaves, ["list"]);
 }
 
 #[test]
@@ -753,13 +747,9 @@ fn renamed_leaves_have_only_the_approved_verb_paths() {
     let mut root = Cli::command();
     root.build();
     for (family, replacement, old) in [
-        (
-            &["connection", "github", "installation"][..],
-            "remove",
-            "disconnect",
-        ),
-        (&["project", "repository"][..], "remove", "detach"),
-        (&["runner", "activation"][..], "issue", "create"),
+        (&["org", "integration"][..], "disconnect", "remove"),
+        (&["org", "integration"][..], "disconnect", "delete"),
+        (&["runner", "join-key"][..], "issue", "create"),
     ] {
         let command = family.iter().fold(&root, |parent, token| {
             parent.find_subcommand(token).unwrap()
@@ -768,9 +758,9 @@ fn renamed_leaves_have_only_the_approved_verb_paths() {
         assert!(command.find_subcommand(old).is_none(), "{family:?}");
     }
     for family in [
-        &["runner", "activation"][..],
-        &["organization", "invitation"][..],
-        &["service-principal", "credential"][..],
+        &["runner", "join-key"][..],
+        &["org", "invitation"][..],
+        &["account", "service", "key"][..],
     ] {
         let command = family.iter().fold(&root, |parent, token| {
             parent.find_subcommand(token).unwrap()
@@ -779,10 +769,19 @@ fn renamed_leaves_have_only_the_approved_verb_paths() {
         assert!(command.find_subcommand("revoke").is_some(), "{family:?}");
         assert!(command.find_subcommand("create").is_none(), "{family:?}");
     }
+    let project = root.find_subcommand("project").unwrap();
+    for leaf in ["update", "pool"] {
+        assert!(project.find_subcommand(leaf).is_some(), "{leaf}");
+    }
+    for gone in ["rename", "repository", "runner-pool"] {
+        assert!(project.find_subcommand(gone).is_none(), "{gone}");
+    }
     for path in [
-        &["connection", "github", "installation", "disconnect"][..],
-        &["project", "repository", "detach"][..],
-        &["runner", "activation", "create"][..],
+        &["org", "integration", "remove"][..],
+        &["org", "integration", "delete"][..],
+        &["runner", "join-key", "create"][..],
+        &["runner", "activation", "issue"][..],
+        &["runner", "create"][..],
     ] {
         let input = std::iter::once("useful").chain(path.iter().copied());
         assert_eq!(
@@ -795,11 +794,11 @@ fn renamed_leaves_have_only_the_approved_verb_paths() {
         super::parse([
             "useful",
             "runner",
-            "activation",
+            "join-key",
             "issue",
+            "--runner",
             "example",
-            "runner",
-            "--activation-file",
+            "--key-file",
             "-",
         ])
         .is_ok()
@@ -887,6 +886,34 @@ fn structural_rules_reject_discriminating_changes() {
         ))
         .contains("confirmation|entity remove")
     );
+    // The one unconfirmed path takes no `--yes`, and its exemption is that path's alone.
+    let unconfirmed = |path: [&'static str; 4], yes: Option<Arg>| {
+        let leaf = Command::new(path[3]).about("A");
+        Command::new("fixture").subcommand(Command::new(path[0]).subcommand(
+            Command::new(path[1]).subcommand(
+                Command::new(path[2]).subcommand(yes.into_iter().fold(leaf, Command::arg)),
+            ),
+        ))
+    };
+    let exempt = ["project", "webhook", "secret", "revoke"];
+    assert!(
+        !violations(&unconfirmed(exempt, None))
+            .contains("confirmation|project webhook secret revoke")
+    );
+    assert!(
+        violations(&unconfirmed(
+            exempt,
+            Some(Arg::new("yes").long("yes").action(ArgAction::SetTrue))
+        ))
+        .contains("confirmation|project webhook secret revoke")
+    );
+    assert!(
+        violations(&unconfirmed(
+            ["project", "webhook", "delivery", "revoke"],
+            None
+        ))
+        .contains("confirmation|project webhook delivery revoke")
+    );
     // The insertion order is correct; only display metadata reverses help order.
     let ordered = |http_order, json_order| {
         Command::new("fixture").subcommand(
@@ -943,7 +970,7 @@ fn option_identity_and_effective_placeholders_are_distinct() {
         Command::new("fixture").subcommand(
             Command::new("account")
                 .subcommand(
-                    Command::new("show").about("A").arg(
+                    Command::new("signup").about("A").arg(
                         Arg::new("json")
                             .long("json")
                             .action(ArgAction::SetTrue)
@@ -1027,8 +1054,9 @@ fn option_identity_and_effective_placeholders_are_distinct() {
         value_shape(&Arg::new("name").long("name").num_args(1..=2)),
         value_shape(&Arg::new("name").long("name").num_args(1..=3))
     );
-    // Both actual --project-id occurrences refer to ProjectArg; drift within
-    // that class must fail even when another long option happens to match.
+    // A long option `semantic_class` names is one class on every command, as
+    // `--project-id` is in this fixture; drift within that class must fail
+    // even when another long option happens to match.
     let project = |second_help| {
         Command::new("fixture").subcommand(
             Command::new("run")
@@ -1074,28 +1102,28 @@ fn parameterized_option_classes_are_isolated_but_ratchet_within_each_class() {
         )
     };
     let different_families = Command::new("fixture")
-        .subcommand(json("account show", "account"))
-        .subcommand(json("runner status", "runner"));
+        .subcommand(json("account signup", "account"))
+        .subcommand(json("runner sync", "runner"));
     assert!(
         !violations(&different_families)
             .iter()
             .any(|id| id.starts_with("option-help"))
     );
     assert_ne!(
-        semantic_class("auth login", "json"),
-        semantic_class("auth status", "json")
+        semantic_class("account login", "json"),
+        semantic_class("account show", "json")
     );
     assert_eq!(
-        semantic_class("auth login", "json"),
-        semantic_class("auth identity link", "json")
+        semantic_class("account login", "json"),
+        semantic_class("account identity link", "json")
     );
     assert_ne!(
-        semantic_class("organization audit list", "limit"),
-        semantic_class("organization list", "limit")
+        semantic_class("org audit list", "limit"),
+        semantic_class("org list", "limit")
     );
     let limit = |help| Arg::new("limit").long("limit").help(help);
     let bounds = Command::new("fixture").subcommand(
-        Command::new("organization")
+        Command::new("org")
             .subcommand(
                 Command::new("audit")
                     .subcommand(Command::new("list").about("Audit").arg(limit("100"))),
@@ -1122,7 +1150,7 @@ fn parameterized_option_classes_are_isolated_but_ratchet_within_each_class() {
             .any(|id| id.starts_with("option-help|limit:200"))
     );
     let streaming = Command::new("fixture").subcommand(
-        Command::new("auth")
+        Command::new("account")
             .subcommand(
                 Command::new("login").about("Login").arg(
                     Arg::new("json")
@@ -1149,123 +1177,86 @@ fn parameterized_option_classes_are_isolated_but_ratchet_within_each_class() {
     );
 }
 
-// REQ-CONTINUE-85
+// REQ-CONTINUE-1, REQ-CONTINUE-25, REQ-LOCALRUN-80, REQ-LOCALRUN-184: `resume` keeps
+// `--workflow` and `--execution-root` and takes no `--from`; `retry` takes `--from` or `--all`,
+// and `--workflow` with neither `--all`.
 #[test]
-fn resume_takes_cloud_only_without_its_local_options() {
+fn resume_and_retry_take_their_options() {
     let resume = ["useful", "workflow", "run", "resume", "run_1"];
-    for local in [
-        &["--workflow", "repair.yaml"][..],
-        &["--execution-root", "root"][..],
+    let retry = ["useful", "workflow", "run", "retry", "run_1"];
+    for accepted in [
+        &[][..],
+        &["--workflow", "repair.yaml", "--execution-root", "root"][..],
+        &["--org", "acme", "--json", "--allow-insecure-http"][..],
     ] {
-        let input = resume
-            .iter()
-            .chain(&["--cloud", "acme"])
-            .chain(local)
-            .copied();
-        let error = super::parse(input).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::ArgumentConflict,
-            "{local:?}"
-        );
-        assert_eq!(error.exit_code(), 2, "{local:?}");
-    }
-    for cloud_only in ["--allow-insecure-http", "--service-api-key-file=key"] {
-        let input = resume.iter().copied().chain([cloud_only]);
-        assert_eq!(
-            super::parse(input).unwrap_err().kind(),
-            clap::error::ErrorKind::MissingRequiredArgument,
-            "{cloud_only}"
-        );
+        let input = resume.iter().chain(accepted).copied();
+        assert!(super::parse(input).is_ok(), "{accepted:?}");
     }
     for accepted in [
         &[][..],
         &[
             "--from",
             "build",
+            "--from",
+            "review",
             "--workflow",
             "repair.yaml",
             "--execution-root",
             "root",
         ][..],
-        &["--cloud", "acme"][..],
+        &["--all", "--execution-root", "root"][..],
         &[
-            "--cloud", "acme", "--from", "build", "--from", "review", "--json",
+            "--all",
+            "--org",
+            "acme",
+            "--expected-version",
+            "7",
+            "--timeout",
+            "5m",
         ][..],
+        &[
+            "--from",
+            "build",
+            "--org",
+            "acme",
+            "--wait",
+            "--timeout",
+            "5m",
+        ][..],
+        &["--agent-profiles", "profiles.json"][..],
     ] {
-        let input = resume.iter().chain(accepted).copied();
+        let input = retry.iter().chain(accepted).copied();
         assert!(super::parse(input).is_ok(), "{accepted:?}");
     }
-}
-
-// REQ-LOCALRUN-172, REQ-LOCALRUN-189, REQ-LOCALRUN-187, REQ-LOCALRUN-218, REQ-CLOUDDEF-19:
-// `show`, `release`, `withdraw` and `cancel` select a Cloud run only with `--cloud`, whose
-// authentication and transport options need it; `cancel --cloud` takes none of
-// `useful run cancel`'s forcing, waiting or key, and `useful run` gains no `release`.
-#[test]
-fn show_release_withdraw_and_cancel_take_cloud() {
-    for leaf in ["show", "release", "withdraw", "cancel"] {
-        let base = ["useful", "workflow", "run", leaf, "run_1"];
-        for accepted in [
-            &[][..],
-            &["--json"][..],
-            &["--cloud", "acme"][..],
-            &[
-                "--cloud",
-                "acme",
-                "--json",
-                "--service-api-key-file=key",
-                "--allow-insecure-http",
-            ][..],
-        ] {
-            let input = base.iter().chain(accepted).copied();
-            assert!(super::parse(input).is_ok(), "{leaf} {accepted:?}");
-        }
-        for cloud_only in ["--allow-insecure-http", "--service-api-key-file=key"] {
-            let input = base.iter().copied().chain([cloud_only]);
-            assert_eq!(
-                super::parse(input).unwrap_err().kind(),
-                clap::error::ErrorKind::MissingRequiredArgument,
-                "{leaf} {cloud_only}"
-            );
-        }
-    }
-    for refused in ["--force", "--wait", "--idempotency-key=k"] {
-        let input = [
-            "useful", "workflow", "run", "cancel", "run_1", "--cloud", "acme", refused,
-        ];
+    for conflicting in [
+        &["--all", "--from", "build"][..],
+        &["--all", "--workflow", "repair.yaml"][..],
+    ] {
+        let input = retry.iter().chain(conflicting).copied();
+        let error = super::parse(input).unwrap_err();
         assert_eq!(
-            super::parse(input).unwrap_err().kind(),
-            clap::error::ErrorKind::UnknownArgument,
-            "{refused}"
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{conflicting:?}"
         );
+        assert_eq!(error.exit_code(), 2, "{conflicting:?}");
     }
-    assert_eq!(
-        super::parse(["useful", "run", "release", "acme", "run_1"])
-            .unwrap_err()
-            .kind(),
-        clap::error::ErrorKind::InvalidSubcommand
-    );
 }
 
-// REQ-CLOUDDEF-15: the definition's evaluations are listed and shown under the target
-// convention, `--state` and `--run-id` filtering the list.
+// REQ-CLOUDDEF-15: a definition's evaluations are listed and shown by the definition's ID or
+// name in the project in effect, `--state` and `--run` filtering the list.
 #[test]
-fn definition_cloud_evaluations_take_the_target_convention() {
-    let definition = "def_01k0z6r1w8f4jy2m7q9v3x5abc";
-    let project = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
-    let base = ["useful", "workflow", "definition", "cloud", "evaluation"];
+fn definition_evaluations_name_the_definition_in_the_project_in_effect() {
+    let evaluation = "wev_01k0z6r1w8f4jy2m7q9v3x5abc";
+    let base = ["useful", "workflow", "definition", "evaluation"];
     for accepted in [
-        &["list", "acme", definition, "--project-id", project][..],
+        &["list", "engineering"][..],
         &[
             "list",
-            "acme",
-            definition,
-            "--project-id",
-            project,
+            "engineering",
             "--state",
             "failed",
-            "--run-id",
+            "--run",
             "run_1",
             "--limit",
             "5",
@@ -1273,22 +1264,12 @@ fn definition_cloud_evaluations_take_the_target_convention() {
             "c",
             "--json",
         ][..],
-        &[
-            "show",
-            "acme",
-            definition,
-            "wev_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "--project-id",
-            project,
-        ][..],
+        &["show", evaluation, "--definition", "engineering"][..],
     ] {
         let input = base.iter().chain(accepted).copied();
         assert!(super::parse(input).is_ok(), "{accepted:?}");
     }
-    for refused in [
-        &["list", "acme", definition][..],
-        &["show", "acme", definition, "--project-id", project][..],
-    ] {
+    for refused in [&["list"][..], &["show", evaluation][..]] {
         let input = base.iter().chain(refused).copied();
         assert!(super::parse(input).is_err(), "{refused:?}");
     }

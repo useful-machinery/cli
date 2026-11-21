@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io::{self, Read as _, Write as _};
@@ -20,9 +21,12 @@ use rustix::io::{Errno, fcntl_dupfd_cloexec};
 use super::execution::{AssignmentProcessGuards, RetainedQuiescence};
 use super::workflow_git::{WorkflowGitAuthority, WorkflowGitTeardownReport};
 use useful_execution::{
-    CloudContinuationSnapshot, RemovalError, open_directory_at, open_regular_file_at,
-    remove_open_tree_at,
+    CloudContinuationSnapshot, RemovalError, allocated_tree_bytes, open_directory_at,
+    open_regular_file_at, remove_open_tree_at,
 };
+
+use kept_inventory::KeptRuns;
+pub(super) use kept_inventory::{KeptAttempt, KeptGroup};
 
 const LOCK_FILE_NAME: &str = ".useful-runner-serve.lock";
 const OWNERSHIP_MARKER_NAME: &str = ".useful-runner-serve-owner-v1";
@@ -40,8 +44,9 @@ const CLEANUP_IDENTITY_BYTES: usize = 32;
 const METADATA_CLEANUP_IDENTITY_VARIABLE: &str = "USEFUL_TEST_METADATA_CLEANUP_IDENTITY";
 const BOOT_MARKER: &[u8] = b"useful-runner-serve/boot-root/v1\n";
 const ASSIGNMENT_MARKER: &[u8] = b"useful-runner-serve/assignment-root/v1\n";
-// Historical boots are diagnostic-only. Never rewrite their evidence or use
-// this descriptor to authorize a current-boot claim or cleanup.
+// Historical boots are read for the startup report and removed only by the
+// kept-run pass (INV-RUNNER-52). Never rewrite their evidence or use this
+// descriptor to authorize a current-boot claim.
 #[derive(Clone, Copy)]
 struct RetainedFormat {
     marker_name: &'static str,
@@ -1313,37 +1318,53 @@ fn safe_private_file(metadata: &Metadata) -> bool {
         && metadata.nlink() == 1
 }
 
+/// Reports the kept directories of an earlier boot and records each one whose markers
+/// verify in the boot's format in the kept-run inventory. Anything else the boot holds
+/// keeps the boot's directory (INV-RUNNER-52).
 fn discover_retained_workspaces(
     boot: &OwnedTree,
     format: RetainedFormat,
     retained: &mut Vec<RetainedWorkspace>,
+    kept: &mut KeptRuns,
 ) {
     let initial_count = retained.len();
+    let kept_boot = kept.add_earlier_boot(boot, format);
     let Ok(directory) = boot.directory() else {
+        kept.keep_boot(kept_boot);
         retained.push(unknown_retained_root(boot.path()));
         return;
     };
     let Ok(children) = Dir::read_from(directory.as_ref()) else {
+        kept.keep_boot(kept_boot);
         retained.push(unknown_retained_root(boot.path()));
         return;
     };
     let mut assignment_ids = Vec::new();
     for child in children {
         let Ok(child) = child else {
+            kept.keep_boot(kept_boot);
             retained.push(unknown_retained_root(boot.path()));
             return;
         };
-        let Ok(assignment_id) = std::str::from_utf8(child.file_name().to_bytes()) else {
+        let name = child.file_name().to_bytes();
+        if matches!(name, b"." | b"..") || name == format.marker_name.as_bytes() {
+            continue;
+        }
+        let Ok(assignment_id) = std::str::from_utf8(name) else {
+            kept.keep_boot(kept_boot);
             continue;
         };
         if valid_assignment_id(assignment_id) {
             assignment_ids.push(assignment_id.to_owned());
+        } else {
+            kept.keep_boot(kept_boot);
         }
     }
     for assignment_id in assignment_ids {
         let assignment_path = boot.path().join(&assignment_id);
         let Ok(mut assignment_tree) = OwnedTree::capture_child(boot, assignment_path.clone())
         else {
+            kept.keep_boot(kept_boot);
             retained.push(unknown_retained_root(&assignment_path));
             continue;
         };
@@ -1352,10 +1373,12 @@ fn discover_retained_workspaces(
                 .capture_marker(Arc::clone(directory), format.assignment_marker)
                 .ok()
         }) else {
+            kept.keep_boot(kept_boot);
             retained.push(unknown_retained_root(&assignment_path));
             continue;
         };
         assignment_tree.install_marker(marker);
+        kept.add_earlier_entry(kept_boot, &assignment_tree, &assignment_id, format);
         let Ok(record) = assignment_tree
             .directory()
             .and_then(|directory| format.read_attempt(directory.as_ref()))
@@ -1456,6 +1479,10 @@ pub(super) struct WorkRootLease {
     engine: CleanupEngine,
     cancellation: Arc<CleanupCancellation>,
     retained: Arc<AtomicBool>,
+    /// The kept directories the kept-run pass may remove, shared with every
+    /// assignment root so that a kept attempt registers itself and a claim is
+    /// fenced against a withdrawal (INV-RUNNER-52).
+    kept_runs: Arc<Mutex<KeptRuns>>,
     startup_retained: Vec<RetainedWorkspace>,
     workspace_release_spawner: Arc<dyn WorkspaceReleaseSpawner>,
     _authority: WorkRootAuthority,
@@ -1524,6 +1551,8 @@ impl WorkRootLease {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| WorkRootError::UnsafeWorkRoot)?;
         let mut startup_retained = Vec::new();
+        let mut kept = KeptRuns::default();
+        let mut cleanup_records = Vec::new();
         for child in children {
             let name = child.file_name();
             if name == LOCK_FILE_NAME {
@@ -1532,6 +1561,10 @@ impl WorkRootLease {
             let Some(name) = name.to_str() else {
                 continue;
             };
+            if name.starts_with(CLEANUP_AUTHORITY_PREFIX) {
+                cleanup_records.push(name.to_owned());
+                continue;
+            }
             if !useful_runner_protocol::valid_boot_id(name) {
                 continue;
             }
@@ -1550,8 +1583,9 @@ impl WorkRootLease {
                 continue;
             };
             tree.install_marker(marker);
-            discover_retained_workspaces(&tree, format, &mut startup_retained);
+            discover_retained_workspaces(&tree, format, &mut startup_retained, &mut kept);
         }
+        kept.exclude_interrupted(read_cleanup_targets(&authority, &cleanup_records).as_deref());
 
         authority
             .validate()
@@ -1563,11 +1597,13 @@ impl WorkRootLease {
         let marker =
             create_marker(&boot_tree, BOOT_MARKER).map_err(|_| WorkRootError::CreateBootRoot)?;
         boot_tree.install_marker(marker);
+        kept.add_live_boot(&boot_tree);
         Ok(Arc::new(Self {
             boot_tree,
             engine,
             cancellation,
             retained: Arc::new(AtomicBool::new(false)),
+            kept_runs: Arc::new(Mutex::new(kept)),
             startup_retained,
             workspace_release_spawner: filesystem.workspace_release_spawner,
             _authority: authority,
@@ -1632,6 +1668,8 @@ impl WorkRootLease {
             attempt_record,
             recorder,
             retained: Arc::clone(&self.retained),
+            kept_runs: Arc::clone(&self.kept_runs),
+            kept_parent: None,
             engine: self.engine.clone(),
             workspace_release_spawner: Arc::clone(&self.workspace_release_spawner),
             workspace_release: Arc::new(AssignmentReleaseState {
@@ -1654,6 +1692,31 @@ impl WorkRootLease {
         root: &mut AssignmentRoot,
         request: RetainedClaimRequest<'_>,
     ) -> Result<RetainedQuiescence, AssignmentRootCreationError> {
+        let prior_assignment_id = request.prior_assignment_id;
+        let mut visited = std::collections::BTreeSet::new();
+        let claimed = self.claim_retained_chain(root, request, &mut visited);
+        // A walk that met a removal the kept-run pass has begun found a workspace that is
+        // no longer kept, not one whose ownership is unproven.
+        if matches!(claimed, Err(AssignmentRootCreationError::OwnershipUnproven))
+            && self
+                .kept_runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .any_live_withdrawn(
+                    std::iter::once(prior_assignment_id).chain(visited.iter().map(String::as_str)),
+                )
+        {
+            return Err(AssignmentRootCreationError::Unavailable);
+        }
+        claimed
+    }
+
+    fn claim_retained_chain(
+        &self,
+        root: &mut AssignmentRoot,
+        request: RetainedClaimRequest<'_>,
+        visited: &mut std::collections::BTreeSet<String>,
+    ) -> Result<RetainedQuiescence, AssignmentRootCreationError> {
         let RetainedClaimRequest {
             assignment_id,
             run_id,
@@ -1671,16 +1734,27 @@ impl WorkRootLease {
         {
             return Err(AssignmentRootCreationError::OwnershipUnproven);
         }
+        // Only a workspace of this boot can be proven; checking the shape first keeps a
+        // root recorded anywhere else unproven rather than missing.
+        let recorded_assignment = recorded_root
+            .parent()
+            .filter(|_| recorded_root.file_name() == Some(OsStr::new("workspace")));
+        if !recorded_assignment.is_some_and(|assignment| {
+            assignment.parent() == Some(self.boot_tree.path.as_path())
+                && assignment
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(useful_runner_protocol::valid_assignment_id)
+        }) {
+            return Err(AssignmentRootCreationError::OwnershipUnproven);
+        }
         let mut cursor = prior_assignment_id.to_owned();
-        let mut visited = std::collections::BTreeSet::new();
         let mut history = Vec::new();
         let anchor = loop {
             if !visited.insert(cursor.clone()) || visited.len() > 256 {
                 return Err(AssignmentRootCreationError::OwnershipUnproven);
             }
-            let mut tree =
-                OwnedTree::capture_child(&self.boot_tree, self.boot_tree.path.join(&cursor))
-                    .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
+            let mut tree = capture_kept_child(&self.boot_tree, &cursor)?;
             let marker = MarkerProof::capture(
                 Arc::clone(
                     tree.directory()
@@ -1733,8 +1807,7 @@ impl WorkRootLease {
         if workspace_path != recorded_root {
             return Err(AssignmentRootCreationError::OwnershipUnproven);
         }
-        let mut workspace = OwnedTree::capture_child(&anchor, workspace_path.clone())
-            .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
+        let mut workspace = capture_kept_child(&anchor, "workspace")?;
         workspace.install_marker(
             MarkerProof::capture(
                 Arc::clone(
@@ -1762,15 +1835,27 @@ impl WorkRootLease {
         let directory = anchor
             .directory()
             .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
-        let mut claim_file = File::from(
-            openat(
-                directory.as_ref(),
-                CLAIM_RECORD_NAME,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?,
-        );
+        // The kept-run pass withdraws a group under this lock before it removes any of
+        // it and only while none of its directories holds a claim file, so the claim
+        // file exists before a withdrawal or is never created (INV-RUNNER-52).
+        let mut kept = self
+            .kept_runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kept.any_live_withdrawn(visited.iter().map(String::as_str)) {
+            return Err(AssignmentRootCreationError::Unavailable);
+        }
+        let claim_descriptor = openat(
+            directory.as_ref(),
+            CLAIM_RECORD_NAME,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
+        // The workspace changes while the continuation runs in it.
+        kept.clear_live_bytes(visited.iter().map(String::as_str));
+        drop(kept);
+        let mut claim_file = File::from(claim_descriptor);
         // The exclusive file is already visible. On an incomplete write, remove
         // only the file we just created; a competing claimant must never mistake
         // its partial contents for a valid claim. Once the owner bytes exist,
@@ -1874,6 +1959,7 @@ impl WorkRootLease {
         .map_err(|_| AssignmentRootCreationError::RetainedClaimCleanup("parent_record_rename"))?;
         sync_directory(root_directory.as_ref())
             .map_err(|_| AssignmentRootCreationError::RetainedClaimCleanup("parent_record_sync"))?;
+        root.kept_parent = Some(prior_assignment_id.to_owned());
         Ok(proof)
     }
 
@@ -1931,6 +2017,23 @@ impl WorkRootLease {
     pub(super) fn boot_path(&self) -> &Path {
         &self.boot_tree.path
     }
+}
+
+/// Captures the kept directory `name` under `parent` for a retained claim. A directory
+/// that is gone is no longer kept and answers `Unavailable`; every other failure leaves
+/// the claim unproven.
+fn capture_kept_child(
+    parent: &OwnedTree,
+    name: &str,
+) -> Result<OwnedTree, AssignmentRootCreationError> {
+    let directory = parent
+        .directory()
+        .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
+    if let Err(Errno::NOENT) = statat(directory.as_ref(), name, AtFlags::SYMLINK_NOFOLLOW) {
+        return Err(AssignmentRootCreationError::Unavailable);
+    }
+    OwnedTree::capture_child(parent, parent.path.join(name))
+        .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)
 }
 
 fn assignment_creation_failure(result: CleanupResult) -> AssignmentRootCreationError {
@@ -2346,6 +2449,9 @@ pub(super) struct AssignmentRoot {
     attempt_record: AttemptRecord,
     recorder: Option<Arc<crate::telemetry::Recorder>>,
     retained: Arc<AtomicBool>,
+    kept_runs: Arc<Mutex<KeptRuns>>,
+    /// The assignment whose kept workspace this one continues, once its claim succeeded.
+    kept_parent: Option<String>,
     engine: CleanupEngine,
     workspace_release_spawner: Arc<dyn WorkspaceReleaseSpawner>,
     workspace_release: Arc<AssignmentReleaseState>,
@@ -2397,6 +2503,8 @@ impl AssignmentRoot {
         let attempt_record = self.attempt_record.clone();
         let recorder = self.recorder.clone();
         let retained = Arc::clone(&self.retained);
+        let kept_runs = Arc::clone(&self.kept_runs);
+        let kept_parent = self.kept_parent.clone();
         if self
             .workspace_release_spawner
             .spawn(Box::new(move || {
@@ -2431,6 +2539,13 @@ impl AssignmentRoot {
                             &report,
                             recorded,
                         );
+                        register_kept(
+                            &kept_runs,
+                            &assignment_tree,
+                            &attempt_record,
+                            reason,
+                            kept_parent,
+                        );
                         workspace.retain_and_complete()
                     }
                 };
@@ -2462,6 +2577,13 @@ impl AssignmentRoot {
                 quiescence,
                 &report,
                 recorded,
+            );
+            register_kept(
+                &self.kept_runs,
+                &self.assignment_tree,
+                &self.attempt_record,
+                reason,
+                self.kept_parent.clone(),
             );
             self.workspace.retain_pending();
             completion.complete(CleanupResult::Retained);
@@ -2506,6 +2628,21 @@ impl AssignmentRoot {
         }
         pending
     }
+}
+
+/// Registers a kept attempt of the live boot with the kept-run inventory, with the reason
+/// it was kept, whether or not its disposition was recorded, before its release completes.
+fn register_kept(
+    kept_runs: &Mutex<KeptRuns>,
+    assignment_tree: &OwnedTree,
+    attempt: &AttemptRecord,
+    reason: RetentionReason,
+    parent: Option<String>,
+) {
+    kept_runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .register_live(assignment_tree, attempt, reason, parent);
 }
 
 fn effective_disposition(
@@ -2665,6 +2802,735 @@ impl PendingRelease {
     }
 }
 
+/// The paths the work root's cleanup records name, relative to the work root, or `None`
+/// when one of them cannot be read.
+fn read_cleanup_targets(authority: &WorkRootAuthority, names: &[String]) -> Option<Vec<PathBuf>> {
+    if names.is_empty() {
+        return Some(Vec::new());
+    }
+    let work_root = fcntl_dupfd_cloexec(&authority.shared.directory_lock, 0).ok()?;
+    names
+        .iter()
+        .map(|name| {
+            let contents =
+                read_private_record_at(&work_root, name, MAXIMUM_CLEANUP_AUTHORITY_BYTES).ok()?;
+            let contents = std::str::from_utf8(&contents).ok()?;
+            let mut lines = contents.split('\n');
+            if lines.next() != Some(CLEANUP_AUTHORITY_HEADER) {
+                return None;
+            }
+            let path = parse_authority_field(&mut lines, "path=").ok()?;
+            validate_cleanup_target(path).ok()?;
+            Some(PathBuf::from(path))
+        })
+        .collect()
+}
+
+/// The kept-run inventory (INV-RUNNER-52): the kept assignment directories of the work
+/// root that the kept-run pass may remove, recorded by identity and never by an open
+/// descriptor, and the lease's steps of the pass over them.
+mod kept_inventory {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::MutexGuard;
+
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    #[derive(Default)]
+    pub(in crate::service) struct KeptRuns {
+        boots: Vec<KeptBoot>,
+        entries: Vec<KeptEntry>,
+    }
+
+    struct KeptBoot {
+        name: String,
+        device: u64,
+        inode: u64,
+        format: RetainedFormat,
+        live: bool,
+        /// An earlier boot that holds nothing the pass may not remove, whose directory
+        /// goes once only its marker is left.
+        removable: bool,
+        settled: bool,
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum KeptState {
+        Kept,
+        /// Taken by a pass, which is removing it.
+        Withdrawn,
+        Removed,
+        /// A removal failed; it stays withdrawn for the life of the process.
+        Failed,
+    }
+
+    struct KeptEntry {
+        boot: usize,
+        assignment_id: String,
+        device: u64,
+        inode: u64,
+        attempt: Option<KeptAttempt>,
+        /// Why the attempt was kept: its attempt record's disposition, or its `Retain`
+        /// branch's reason for an attempt of the live boot.
+        reason: RetentionReason,
+        parent: Option<String>,
+        bytes: Option<u64>,
+        generation: u64,
+        state: KeptState,
+    }
+
+    /// The IDs a kept directory's attempt record gives.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub(in crate::service) struct KeptAttempt {
+        pub(in crate::service) assignment_id: String,
+        pub(in crate::service) run_id: String,
+        pub(in crate::service) attempt_id: String,
+    }
+
+    impl From<&AttemptRecord> for KeptAttempt {
+        fn from(record: &AttemptRecord) -> Self {
+            Self {
+                assignment_id: record.assignment_id.clone(),
+                run_id: record.run_id.clone(),
+                attempt_id: record.attempt_id.clone(),
+            }
+        }
+    }
+
+    /// A kept workspace: the kept directories of one boot that parent links join to one
+    /// anchor, the deepest link first.
+    pub(in crate::service) struct KeptGroup {
+        live: bool,
+        pub(in crate::service) members: Vec<KeptMember>,
+    }
+
+    #[derive(Clone)]
+    pub(in crate::service) struct KeptMember {
+        index: usize,
+        /// The entry's generation when the group was read, which a claim since has changed.
+        generation: u64,
+        /// The assignment directory.
+        pub(in crate::service) path: PathBuf,
+        pub(in crate::service) attempt: Option<KeptAttempt>,
+        pub(in crate::service) reason: RetentionReason,
+    }
+
+    /// What re-capturing a kept directory compares.
+    struct KeptTarget {
+        boot_name: String,
+        boot_device: u64,
+        boot_inode: u64,
+        format: RetainedFormat,
+        live: bool,
+        assignment_id: String,
+        device: u64,
+        inode: u64,
+    }
+
+    impl KeptRuns {
+        pub(in crate::service) fn add_earlier_boot(
+            &mut self,
+            boot: &OwnedTree,
+            format: RetainedFormat,
+        ) -> Option<usize> {
+            let link = boot.link()?;
+            let name = boot.path().file_name()?.to_str()?.to_owned();
+            self.boots.push(KeptBoot {
+                name,
+                device: link.device,
+                inode: link.inode,
+                format,
+                live: false,
+                removable: true,
+                settled: false,
+            });
+            Some(self.boots.len() - 1)
+        }
+
+        /// The earlier boot holds something the pass never removes, so its directory stays.
+        pub(in crate::service) fn keep_boot(&mut self, boot: Option<usize>) {
+            if let Some(boot) = boot.and_then(|boot| self.boots.get_mut(boot)) {
+                boot.removable = false;
+            }
+        }
+
+        /// Records an assignment directory of an earlier boot whose marker verified, with
+        /// the reason its attempt record gives, `outcome_unknown` when none reads.
+        pub(in crate::service) fn add_earlier_entry(
+            &mut self,
+            boot: Option<usize>,
+            tree: &OwnedTree,
+            assignment_id: &str,
+            format: RetainedFormat,
+        ) {
+            let (Some(boot), Some(link), Ok(directory)) = (boot, tree.link(), tree.directory())
+            else {
+                self.keep_boot(boot);
+                return;
+            };
+            let record = format
+                .read_attempt(directory.as_ref())
+                .ok()
+                .filter(|record| record.assignment_id == assignment_id);
+            let reason = record
+                .as_ref()
+                .map_or(RetentionReason::OutcomeUnknown, |record| record.disposition);
+            let attempt = record.as_ref().map(KeptAttempt::from);
+            let parent = read_private_record_at(directory.as_ref(), RETAINED_PARENT_NAME, 32)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .filter(|name| valid_assignment_id(name));
+            self.entries.push(KeptEntry {
+                boot,
+                assignment_id: assignment_id.to_owned(),
+                device: link.device,
+                inode: link.inode,
+                attempt,
+                reason,
+                parent,
+                bytes: None,
+                generation: 0,
+                state: KeptState::Kept,
+            });
+        }
+
+        /// Leaves out of the inventory each directory a cleanup record names or that holds
+        /// a path one names, and keeps the boot directory of each; a record that cannot be
+        /// read (`None`) leaves every earlier boot as it is.
+        pub(in crate::service) fn exclude_interrupted(&mut self, targets: Option<&[PathBuf]>) {
+            let Some(targets) = targets else {
+                for boot in &mut self.boots {
+                    boot.removable = false;
+                }
+                self.entries.clear();
+                return;
+            };
+            for target in targets {
+                let mut components = target.components();
+                let Some(boot_name) = components.next() else {
+                    continue;
+                };
+                for boot in &mut self.boots {
+                    if Path::new(&boot.name) == Path::new(boot_name.as_os_str()) {
+                        boot.removable = false;
+                    }
+                }
+            }
+            let boots = &self.boots;
+            self.entries.retain(|entry| {
+                boots.get(entry.boot).is_some_and(|boot| {
+                    let relative = Path::new(&boot.name).join(&entry.assignment_id);
+                    !targets
+                        .iter()
+                        .any(|target| target.starts_with(&relative) || relative.starts_with(target))
+                })
+            });
+        }
+
+        pub(in crate::service) fn add_live_boot(&mut self, boot: &OwnedTree) {
+            let (Some(link), Some(name)) =
+                (boot.link(), boot.path().file_name().and_then(OsStr::to_str))
+            else {
+                return;
+            };
+            self.boots.push(KeptBoot {
+                name: name.to_owned(),
+                device: link.device,
+                inode: link.inode,
+                format: CURRENT_RETAINED_FORMAT,
+                live: true,
+                removable: false,
+                settled: true,
+            });
+        }
+
+        /// Records an attempt of the live boot as it is kept, for `reason`.
+        pub(in crate::service) fn register_live(
+            &mut self,
+            tree: &OwnedTree,
+            record: &AttemptRecord,
+            reason: RetentionReason,
+            parent: Option<String>,
+        ) {
+            let (Some(boot), Some(link)) = (self.live_boot(), tree.link()) else {
+                return;
+            };
+            self.entries.push(KeptEntry {
+                boot,
+                assignment_id: record.assignment_id.clone(),
+                device: link.device,
+                inode: link.inode,
+                attempt: Some(KeptAttempt::from(record)),
+                reason,
+                parent,
+                bytes: None,
+                generation: 0,
+                state: KeptState::Kept,
+            });
+        }
+
+        /// Whether a pass has withdrawn any of the named directories of the live boot.
+        pub(in crate::service) fn any_live_withdrawn<'a>(
+            &self,
+            assignment_ids: impl IntoIterator<Item = &'a str>,
+        ) -> bool {
+            let Some(live) = self.live_boot() else {
+                return false;
+            };
+            assignment_ids.into_iter().any(|assignment_id| {
+                self.entries.iter().any(|entry| {
+                    entry.boot == live
+                        && entry.assignment_id == assignment_id
+                        && entry.state != KeptState::Kept
+                })
+            })
+        }
+
+        /// Marks the named directories of the live boot as taken by a claim: their measured
+        /// bytes are forgotten, and a group read before the claim is withdrawn no longer.
+        pub(in crate::service) fn clear_live_bytes<'a>(
+            &mut self,
+            assignment_ids: impl IntoIterator<Item = &'a str>,
+        ) {
+            let Some(live) = self.live_boot() else {
+                return;
+            };
+            for assignment_id in assignment_ids {
+                for entry in &mut self.entries {
+                    if entry.boot == live && entry.assignment_id == assignment_id {
+                        entry.bytes = None;
+                        entry.generation = entry.generation.wrapping_add(1);
+                    }
+                }
+            }
+        }
+
+        fn live_boot(&self) -> Option<usize> {
+            self.boots.iter().position(|boot| boot.live)
+        }
+
+        fn groups(&self, work_root: &Path) -> Vec<KeptGroup> {
+            let named = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.state == KeptState::Kept)
+                .map(|(index, entry)| ((entry.boot, entry.assignment_id.as_str()), index))
+                .collect::<HashMap<_, _>>();
+            let mut groups = BTreeMap::<(usize, usize), Vec<(usize, usize)>>::new();
+            for &index in named.values() {
+                let Some(entry) = self.entries.get(index) else {
+                    continue;
+                };
+                let (anchor, depth) = self.anchor_of(index, &named);
+                groups
+                    .entry((entry.boot, anchor))
+                    .or_default()
+                    .push((depth, index));
+            }
+            groups
+                .into_iter()
+                .filter_map(|((boot, _), mut members)| {
+                    let live = self.boots.get(boot)?.live;
+                    members.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+                    let members = members
+                        .into_iter()
+                        .map(|(_, index)| self.member(work_root, index))
+                        .collect::<Option<Vec<_>>>()?;
+                    Some(KeptGroup { live, members })
+                })
+                .collect()
+        }
+
+        /// The anchor a directory's parent links reach and its distance from it. A link to
+        /// no kept directory of the same boot ends the walk; a walk that meets a cycle makes
+        /// the directory its own anchor.
+        fn anchor_of(&self, index: usize, named: &HashMap<(usize, &str), usize>) -> (usize, usize) {
+            let mut visited = vec![index];
+            let mut cursor = index;
+            while let Some(parent) = self
+                .entries
+                .get(cursor)
+                .and_then(|entry| named.get(&(entry.boot, entry.parent.as_deref()?)).copied())
+            {
+                if visited.contains(&parent) {
+                    return (index, 0);
+                }
+                visited.push(parent);
+                cursor = parent;
+            }
+            (cursor, visited.len() - 1)
+        }
+
+        fn member(&self, work_root: &Path, index: usize) -> Option<KeptMember> {
+            let entry = self.entries.get(index)?;
+            let boot = self.boots.get(entry.boot)?;
+            Some(KeptMember {
+                index,
+                generation: entry.generation,
+                path: work_root.join(&boot.name).join(&entry.assignment_id),
+                attempt: entry.attempt.clone(),
+                reason: entry.reason,
+            })
+        }
+
+        fn target(&self, index: usize) -> Option<KeptTarget> {
+            let entry = self.entries.get(index)?;
+            let boot = self.boots.get(entry.boot)?;
+            Some(KeptTarget {
+                boot_name: boot.name.clone(),
+                boot_device: boot.device,
+                boot_inode: boot.inode,
+                format: boot.format,
+                live: boot.live,
+                assignment_id: entry.assignment_id.clone(),
+                device: entry.device,
+                inode: entry.inode,
+            })
+        }
+
+        /// Whether each member is still kept and no claim has taken it since its group was
+        /// read.
+        fn kept_as_read(&self, members: &[KeptMember]) -> bool {
+            members.iter().all(|member| {
+                self.entries.get(member.index).is_some_and(|entry| {
+                    entry.state == KeptState::Kept && entry.generation == member.generation
+                })
+            })
+        }
+
+        fn settle(&mut self, members: &[KeptMember], from: KeptState, to: KeptState) {
+            for member in members {
+                if let Some(entry) = self.entries.get_mut(member.index)
+                    && entry.state == from
+                {
+                    entry.state = to;
+                }
+            }
+        }
+    }
+
+    /// The lease's steps of the kept-run pass. None of them holds the inventory's lock
+    /// while it walks or removes a directory.
+    impl WorkRootLease {
+        fn kept(&self) -> MutexGuard<'_, KeptRuns> {
+            self.kept_runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        /// The kept workspaces not yet withdrawn.
+        pub(in crate::service) fn kept_groups(&self) -> Vec<KeptGroup> {
+            self.kept().groups(self.engine.authority.work_root())
+        }
+
+        /// Whether a continuation holds the group: a live-boot directory of it holds a
+        /// claim file, or cannot be read to show that none does.
+        pub(in crate::service) fn kept_group_in_use(&self, group: &KeptGroup) -> bool {
+            group.live && !self.live_claims_absent(group)
+        }
+
+        fn live_claims_absent(&self, group: &KeptGroup) -> bool {
+            let Ok(boot) = self.boot_tree.directory() else {
+                return false;
+            };
+            group.members.iter().all(|member| {
+                let Some(name) = member.path.file_name().and_then(OsStr::to_str) else {
+                    return false;
+                };
+                match open_directory_at(boot.as_ref(), name) {
+                    Ok(directory) => claim_absent_at(&directory),
+                    Err(Errno::NOENT) => true,
+                    Err(_) => false,
+                }
+            })
+        }
+
+        /// Each directory whose removal failed, a member of its own (REQ-WORKSPACE-45).
+        pub(in crate::service) fn failed_kept_members(&self) -> Vec<KeptMember> {
+            let kept = self.kept();
+            let work_root = self.engine.authority.work_root();
+            kept.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.state == KeptState::Failed)
+                .filter_map(|(index, _)| kept.member(work_root, index))
+                .collect()
+        }
+
+        /// The newest modification time of the group's directories, or `None` when one of
+        /// them is no longer the directory the inventory recorded.
+        pub(in crate::service) fn kept_group_newest_modification(
+            &self,
+            group: &KeptGroup,
+        ) -> Option<OffsetDateTime> {
+            self.kept_members_newest_modification(&group.members)
+        }
+
+        /// The modification time of one directory, as `kept_group_newest_modification`
+        /// reads a group's.
+        pub(in crate::service) fn kept_member_modification(
+            &self,
+            member: &KeptMember,
+        ) -> Option<OffsetDateTime> {
+            self.kept_members_newest_modification(std::slice::from_ref(member))
+        }
+
+        fn kept_members_newest_modification(
+            &self,
+            members: &[KeptMember],
+        ) -> Option<OffsetDateTime> {
+            let targets = {
+                let kept = self.kept();
+                members
+                    .iter()
+                    .map(|member| kept.target(member.index))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            let mut newest = None;
+            for target in targets {
+                let metadata = statat(
+                    &self.engine.authority.shared.directory_lock,
+                    Path::new(&target.boot_name).join(&target.assignment_id),
+                    AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .ok()?;
+                if normalized_device(metadata.st_dev) != target.device
+                    || metadata.st_ino != target.inode
+                {
+                    return None;
+                }
+                newest = newest.max(Some(modification_time(&metadata)?));
+            }
+            newest
+        }
+
+        /// The bytes the directory holds, measured once and cached until a claim takes its
+        /// group; a directory that cannot be captured counts nothing.
+        pub(in crate::service) fn kept_member_bytes(&self, member: &KeptMember) -> u64 {
+            let (target, generation) = {
+                let kept = self.kept();
+                let Some(entry) = kept.entries.get(member.index) else {
+                    return 0;
+                };
+                if let Some(bytes) = entry.bytes {
+                    return bytes;
+                }
+                let Some(target) = kept.target(member.index) else {
+                    return 0;
+                };
+                (target, entry.generation)
+            };
+            let Some(bytes) = self.capture_kept(&target).and_then(|tree| {
+                tree.directory()
+                    .ok()
+                    .map(|directory| allocated_tree_bytes(directory.as_ref()))
+            }) else {
+                return 0;
+            };
+            if let Some(entry) = self.kept().entries.get_mut(member.index)
+                && entry.generation == generation
+            {
+                entry.bytes = Some(bytes);
+            }
+            bytes
+        }
+
+        /// Withdraws the group so that no continuation can claim it, unless one holds it,
+        /// one has taken it since the group was read, which makes its age and its members
+        /// what a later pass reads, or another pass took any of it.
+        pub(in crate::service) fn withdraw_kept_group(&self, group: &KeptGroup) -> bool {
+            let mut kept = self.kept();
+            if !kept.kept_as_read(&group.members) || (group.live && !self.live_claims_absent(group))
+            {
+                return false;
+            }
+            kept.settle(&group.members, KeptState::Kept, KeptState::Withdrawn);
+            true
+        }
+
+        /// Returns withdrawn directories a stopped pass did not reach to the inventory.
+        pub(in crate::service) fn restore_kept_members(&self, members: &[KeptMember]) {
+            self.kept()
+                .settle(members, KeptState::Withdrawn, KeptState::Kept);
+        }
+
+        /// Leaves the withdrawn directories of a group whose removal failed withdrawn for
+        /// the life of the process.
+        pub(in crate::service) fn fail_kept_members(&self, members: &[KeptMember]) {
+            self.kept()
+                .settle(members, KeptState::Withdrawn, KeptState::Failed);
+        }
+
+        /// Removes one withdrawn directory through the cleanup engine, re-captured from
+        /// the work root and compared with the recorded identity, and answers whether it
+        /// is gone.
+        pub(in crate::service) fn remove_kept_member(&self, member: &KeptMember) -> bool {
+            let target = self.kept().target(member.index);
+            let removed = target.is_some_and(|target| {
+                self.capture_kept(&target).is_some_and(|tree| {
+                    if !target.live {
+                        unlink_stale_claims(&tree);
+                    }
+                    self.engine.remove(&tree) == CleanupResult::Released
+                })
+            });
+            self.kept().settle(
+                std::slice::from_ref(member),
+                KeptState::Withdrawn,
+                if removed {
+                    KeptState::Removed
+                } else {
+                    KeptState::Failed
+                },
+            );
+            removed
+        }
+
+        /// Removes each earlier boot's directory once all its kept directories are gone
+        /// and nothing but its marker is left, through the cleanup engine and with no
+        /// record. Each boot is tried once.
+        pub(in crate::service) fn remove_emptied_kept_boots(
+            &self,
+            may_continue: &dyn Fn() -> bool,
+        ) {
+            let emptied = {
+                let kept = self.kept();
+                kept.boots
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, boot)| {
+                        !boot.live
+                            && boot.removable
+                            && !boot.settled
+                            && kept
+                                .entries
+                                .iter()
+                                .filter(|entry| entry.boot == *index)
+                                .all(|entry| entry.state == KeptState::Removed)
+                    })
+                    .map(|(index, boot)| {
+                        (
+                            index,
+                            boot.name.clone(),
+                            boot.device,
+                            boot.inode,
+                            boot.format,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (index, name, device, inode, format) in emptied {
+                if !may_continue() {
+                    return;
+                }
+                if let Some(boot) = self.capture_kept_boot(&name, device, inode, format)
+                    && holds_only_marker(&boot, format)
+                {
+                    // A failure leaves the boot and its cleanup record for the operator.
+                    let _ = self.engine.remove(&boot);
+                }
+                if let Some(boot) = self.kept().boots.get_mut(index) {
+                    boot.settled = true;
+                }
+            }
+        }
+
+        fn capture_kept_boot(
+            &self,
+            name: &str,
+            device: u64,
+            inode: u64,
+            format: RetainedFormat,
+        ) -> Option<OwnedTree> {
+            let authority = &self.engine.authority;
+            let mut boot = OwnedTree::capture_root(
+                &authority.shared.directory_lock,
+                authority.work_root().join(name),
+            )
+            .ok()?;
+            let link = boot.link()?;
+            if link.device != device || link.inode != inode {
+                return None;
+            }
+            let marker = format
+                .capture_marker(Arc::clone(boot.directory().ok()?), format.boot_marker)
+                .ok()?;
+            boot.install_marker(marker);
+            Some(boot)
+        }
+
+        fn capture_kept(&self, target: &KeptTarget) -> Option<OwnedTree> {
+            let boot = self.capture_kept_boot(
+                &target.boot_name,
+                target.boot_device,
+                target.boot_inode,
+                target.format,
+            )?;
+            let mut tree =
+                OwnedTree::capture_child(&boot, boot.path().join(&target.assignment_id)).ok()?;
+            let link = tree.link()?;
+            if link.device != target.device || link.inode != target.inode {
+                return None;
+            }
+            let marker = target
+                .format
+                .capture_marker(
+                    Arc::clone(tree.directory().ok()?),
+                    target.format.assignment_marker,
+                )
+                .ok()?;
+            tree.install_marker(marker);
+            Some(tree)
+        }
+    }
+
+    /// No process holds an earlier boot's claim across boots, and the cleanup engine
+    /// refuses a directory that holds one. A claim file left in place makes the removal
+    /// fail.
+    fn unlink_stale_claims(tree: &OwnedTree) {
+        let Ok(directory) = tree.directory() else {
+            return;
+        };
+        for name in [CLAIM_RECORD_NAME, LEGACY_CLAIM_RECORD_NAME] {
+            let _ = rustix::fs::unlinkat(directory.as_ref(), name, AtFlags::empty());
+        }
+    }
+
+    fn holds_only_marker(boot: &OwnedTree, format: RetainedFormat) -> bool {
+        let Ok(directory) = boot.directory() else {
+            return false;
+        };
+        let Ok(children) = Dir::read_from(directory.as_ref()) else {
+            return false;
+        };
+        for child in children {
+            let Ok(child) = child else {
+                return false;
+            };
+            let name = child.file_name().to_bytes();
+            if !matches!(name, b"." | b"..") && name != format.marker_name.as_bytes() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn modification_time(metadata: &Stat) -> Option<OffsetDateTime> {
+        let seconds = signed(metadata.st_mtime)?;
+        let nanoseconds = signed(metadata.st_mtime_nsec)?;
+        OffsetDateTime::from_unix_timestamp(seconds)
+            .ok()?
+            .checked_add(time::Duration::nanoseconds(nanoseconds))
+    }
+
+    /// `stat` time fields differ in width and sign across Unix targets.
+    fn signed<T: TryInto<i64>>(value: T) -> Option<i64> {
+        value.try_into().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -2675,7 +3541,10 @@ mod tests {
 
     use useful_test_support::watchdog::{FIXTURE_WAIT_BASE, host_scaled_recv};
 
+    use super::super::KeptRunBounds;
+    use super::super::kept_runs::{PruneBound, PruneOutcome, PruneResult, prune_kept_runs};
     use super::*;
+    use crate::control_protocol::PruneScope;
 
     const BOOT_A: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abc";
     const BOOT_B: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -3110,6 +3979,88 @@ mod tests {
         assert!(previous_path.is_dir());
     }
 
+    // REQ-CONTINUE-48: a kept directory that is gone is no longer kept, not unproven.
+    #[test]
+    fn retained_claim_of_a_missing_kept_directory_is_unavailable() {
+        const RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
+        const SECOND: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abd";
+        const SECOND_ATTEMPT: &str = "atm_01k0z6r1w8f4jy2m7q9v3x5abd";
+        const THIRD: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abe";
+        const THIRD_ATTEMPT: &str = "atm_01k0z6r1w8f4jy2m7q9v3x5abe";
+        fn claim(
+            owner: &WorkRootLease,
+            (assignment_id, attempt_id): (&str, &str),
+            (prior_assignment_id, prior_attempt_id): (&str, &str),
+            recorded_root: &Path,
+        ) -> (
+            AssignmentRoot,
+            Result<RetainedQuiescence, AssignmentRootCreationError>,
+        ) {
+            let mut claimant = owner
+                .create_assignment_for_attempt(assignment_id, RUN, attempt_id, None)
+                .unwrap();
+            let claimed = owner.claim_retained_for_attempt(
+                &mut claimant,
+                RetainedClaimRequest {
+                    assignment_id,
+                    run_id: RUN,
+                    attempt_id,
+                    prior_assignment_id,
+                    prior_attempt_id,
+                    recorded_root,
+                },
+            );
+            (claimant, claimed)
+        }
+        let first = (ASSIGNMENT, "atm_01k0z6r1w8f4jy2m7q9v3x5abc");
+
+        // The prior assignment's whole directory, and then only its workspace.
+        for whole_directory in [true, false] {
+            let directory = private_work_root();
+            let owner = WorkRootLease::acquire_for_test(directory.path(), BOOT_A).unwrap();
+            let (_previous, previous_path) = retained_failed_assignment(&owner);
+            let removed = if whole_directory {
+                previous_path.parent().unwrap()
+            } else {
+                &previous_path
+            };
+            fs::remove_dir_all(removed).unwrap();
+            let (_claimant, claimed) =
+                claim(&owner, (SECOND, SECOND_ATTEMPT), first, &previous_path);
+            assert!(matches!(
+                claimed,
+                Err(AssignmentRootCreationError::Unavailable)
+            ));
+        }
+
+        // The anchor of a two-link chain, named through the chain's second link.
+        let directory = private_work_root();
+        let owner = WorkRootLease::acquire_for_test(directory.path(), BOOT_A).unwrap();
+        let (_previous, previous_path) = retained_failed_assignment(&owner);
+        let (second, claimed) = claim(&owner, (SECOND, SECOND_ATTEMPT), first, &previous_path);
+        claimed.expect("claim the first link");
+        assert_eq!(
+            second
+                .release_pending(
+                    ProcessQuiescence::Proven,
+                    WorkspaceDisposition::Retain(RetentionReason::Failed),
+                )
+                .wait(),
+            CleanupResult::Retained
+        );
+        fs::remove_dir_all(previous_path.parent().unwrap()).unwrap();
+        let (_third, claimed) = claim(
+            &owner,
+            (THIRD, THIRD_ATTEMPT),
+            (SECOND, SECOND_ATTEMPT),
+            &previous_path,
+        );
+        assert!(matches!(
+            claimed,
+            Err(AssignmentRootCreationError::Unavailable)
+        ));
+    }
+
     // REQ-WORKSPACE-43, INV-RUNNER-43
     #[test]
     fn an_earlier_releases_recovery_root_record_changes_no_cleanup_or_claim() {
@@ -3423,7 +4374,7 @@ mod tests {
         }
     }
 
-    // REQ-WORKSPACE-29
+    // REQ-RUNNERENROLL-69
     // REQ-RUNNERENROLL-66
     #[test]
     fn startup_retains_old_boots_and_creates_a_fresh_root() {
@@ -4167,5 +5118,477 @@ mod tests {
         assert_eq!(second.boot_path(), root.path().join(BOOT_B));
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    const KEPT_RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
+    const BOOT_C: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abe";
+    const BOOT_D: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abf";
+    const SECOND: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abd";
+    const THIRD: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abe";
+    const FOURTH: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abf";
+    const FIFTH: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abg";
+
+    fn attempt_of(assignment_id: &str) -> String {
+        assignment_id.replacen("asn_", "atm_", 1)
+    }
+
+    /// Keeps a failed attempt of `KEPT_RUN` under `assignment_id` and answers its
+    /// assignment directory.
+    fn keep_attempt(owner: &WorkRootLease, assignment_id: &str) -> PathBuf {
+        let assignment = owner
+            .create_assignment_for_attempt(
+                assignment_id,
+                KEPT_RUN,
+                &attempt_of(assignment_id),
+                None,
+            )
+            .unwrap();
+        AssignmentProcessGuards::durable(&assignment.private).unwrap();
+        assert_eq!(
+            assignment
+                .release_pending(
+                    ProcessQuiescence::Proven,
+                    WorkspaceDisposition::Retain(RetentionReason::Failed),
+                )
+                .wait(),
+            CleanupResult::Retained
+        );
+        owner.boot_path().join(assignment_id)
+    }
+
+    fn claim_kept(
+        owner: &WorkRootLease,
+        assignment_id: &str,
+        prior_assignment_id: &str,
+        recorded_root: &Path,
+    ) -> (
+        AssignmentRoot,
+        Result<RetainedQuiescence, AssignmentRootCreationError>,
+    ) {
+        let attempt_id = attempt_of(assignment_id);
+        let prior_attempt_id = attempt_of(prior_assignment_id);
+        let mut claimant = owner
+            .create_assignment_for_attempt(assignment_id, KEPT_RUN, &attempt_id, None)
+            .unwrap();
+        let claimed = owner.claim_retained_for_attempt(
+            &mut claimant,
+            RetainedClaimRequest {
+                assignment_id,
+                run_id: KEPT_RUN,
+                attempt_id: &attempt_id,
+                prior_assignment_id,
+                prior_attempt_id: &prior_attempt_id,
+                recorded_root,
+            },
+        );
+        (claimant, claimed)
+    }
+
+    fn modified(path: &Path) -> time::OffsetDateTime {
+        time::OffsetDateTime::from(fs::symlink_metadata(path).unwrap().modified().unwrap())
+    }
+
+    fn fifteen_days_after_newest(paths: &[&Path]) -> time::OffsetDateTime {
+        paths.iter().map(|path| modified(path)).max().unwrap() + 15 * time::Duration::DAY
+    }
+
+    fn set_modified(path: &Path, time: time::OffsetDateTime) {
+        let stamp = rustix::fs::Timespec {
+            tv_sec: time.unix_timestamp(),
+            tv_nsec: 0,
+        };
+        rustix::fs::utimensat(
+            rustix::fs::CWD,
+            path,
+            &rustix::fs::Timestamps {
+                last_access: stamp,
+                last_modification: stamp,
+            },
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .unwrap();
+    }
+
+    fn fixed_now() -> time::OffsetDateTime {
+        time::OffsetDateTime::from_unix_timestamp(2_000_000_000).unwrap()
+    }
+
+    fn age_bound_only() -> KeptRunBounds {
+        KeptRunBounds {
+            maximum_age: Some(Duration::from_secs(14 * 86_400)),
+            maximum_total_bytes: None,
+        }
+    }
+
+    fn prune(
+        owner: &WorkRootLease,
+        bounds: KeptRunBounds,
+        now: time::OffsetDateTime,
+    ) -> Vec<PruneOutcome> {
+        prune_kept_runs(owner, bounds, PruneScope::Bounds, now, &|| true, None)
+    }
+
+    fn pruned(outcomes: &[PruneOutcome]) -> Vec<(PathBuf, PruneBound, PruneResult)> {
+        outcomes
+            .iter()
+            .map(|outcome| (outcome.path.clone(), outcome.bound, outcome.result))
+            .collect()
+    }
+
+    // REQ-WORKSPACE-44, INV-RUNNER-52
+    #[test]
+    fn kept_run_pass_removes_an_earlier_boots_aged_directories_and_its_emptied_boot() {
+        let root = private_work_root();
+        let first = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let kept = [ASSIGNMENT, SECOND].map(|assignment_id| keep_attempt(&first, assignment_id));
+        drop(first);
+        let current = WorkRootLease::acquire_for_test(root.path(), BOOT_B).unwrap();
+
+        let outcomes = prune(
+            &current,
+            KeptRunBounds::default(),
+            fifteen_days_after_newest(&[&kept[0], &kept[1]]),
+        );
+
+        assert!(kept.iter().all(|path| !path.exists()));
+        assert!(!root.path().join(BOOT_A).exists());
+        assert!(current.boot_path().is_dir());
+        assert!(root.path().join(LOCK_FILE_NAME).is_file());
+        let mut removed = outcomes
+            .iter()
+            .map(|outcome| {
+                assert_eq!(
+                    (outcome.bound, outcome.result),
+                    (PruneBound::Age, PruneResult::Removed)
+                );
+                assert!(outcome.bytes > 0);
+                let attempt = outcome.attempt.as_ref().unwrap();
+                assert_eq!(attempt.run_id, KEPT_RUN);
+                (
+                    outcome.path.clone(),
+                    attempt.assignment_id.clone(),
+                    attempt.attempt_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        removed.sort();
+        assert_eq!(
+            removed,
+            [ASSIGNMENT, SECOND]
+                .into_iter()
+                .zip(&kept)
+                .map(|(assignment_id, path)| (
+                    path.clone(),
+                    assignment_id.to_owned(),
+                    attempt_of(assignment_id)
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // REQ-WORKSPACE-45, INV-RUNNER-52
+    #[test]
+    fn kept_run_pass_leaves_a_claimed_workspace_and_a_removed_one_is_unavailable() {
+        let root = private_work_root();
+        let owner = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let removed = keep_attempt(&owner, FOURTH);
+        let (_previous, previous_path) = retained_failed_assignment(&owner);
+        let (_claimant, claimed) = claim_kept(&owner, SECOND, ASSIGNMENT, &previous_path);
+        claimed.expect("claim the kept attempt");
+        let claimed_directory = owner.boot_path().join(ASSIGNMENT);
+
+        let outcomes = prune(
+            &owner,
+            KeptRunBounds::default(),
+            fifteen_days_after_newest(&[&removed, &claimed_directory]),
+        );
+
+        assert_eq!(
+            pruned(&outcomes),
+            [(removed.clone(), PruneBound::Age, PruneResult::Removed)]
+        );
+        assert!(!removed.exists());
+        assert!(previous_path.is_dir());
+        assert!(claimed_directory.join(CLAIM_RECORD_NAME).is_file());
+        let (_late, claimed) = claim_kept(&owner, FIFTH, FOURTH, &removed.join("workspace"));
+        assert!(matches!(
+            claimed,
+            Err(AssignmentRootCreationError::Unavailable)
+        ));
+    }
+
+    // REQ-WORKSPACE-44
+    #[test]
+    fn kept_run_pass_removes_the_oldest_beyond_the_size_bound_and_keeps_the_newest() {
+        const PAYLOAD_BYTES: u64 = 1 << 20;
+        let now = fixed_now();
+        for maximum_total_bytes in [PAYLOAD_BYTES * 3 / 2, 1] {
+            let root = private_work_root();
+            let first = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+            // Newest first: one, two and three days old.
+            let kept = [ASSIGNMENT, SECOND, THIRD].map(|assignment_id| {
+                let path = keep_attempt(&first, assignment_id);
+                fs::write(path.join("workspace/payload"), vec![7_u8; 1 << 20]).unwrap();
+                path
+            });
+            drop(first);
+            for (days, path) in [1, 2, 3].into_iter().zip(&kept) {
+                set_modified(path, now - days * time::Duration::DAY);
+            }
+            let current = WorkRootLease::acquire_for_test(root.path(), BOOT_B).unwrap();
+
+            let outcomes = prune(
+                &current,
+                KeptRunBounds {
+                    maximum_age: None,
+                    maximum_total_bytes: Some(maximum_total_bytes),
+                },
+                now,
+            );
+
+            assert_eq!(
+                pruned(&outcomes),
+                [
+                    (kept[2].clone(), PruneBound::TotalSize, PruneResult::Removed),
+                    (kept[1].clone(), PruneBound::TotalSize, PruneResult::Removed),
+                ],
+                "{maximum_total_bytes}"
+            );
+            assert!(
+                outcomes
+                    .iter()
+                    .all(|outcome| outcome.bytes >= PAYLOAD_BYTES)
+            );
+            assert!(kept[0].join("workspace/payload").is_file());
+        }
+    }
+
+    // REQ-WORKSPACE-44
+    #[test]
+    fn kept_run_pass_ages_and_removes_a_continuation_chain_together() {
+        let now = fixed_now();
+        for earlier_boot in [false, true] {
+            let root = private_work_root();
+            let first = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+            let (previous, previous_path) = retained_failed_assignment(&first);
+            let (continuation, claimed) = claim_kept(&first, SECOND, ASSIGNMENT, &previous_path);
+            claimed.expect("claim the kept attempt");
+            assert_eq!(
+                continuation
+                    .release_pending(
+                        ProcessQuiescence::Proven,
+                        WorkspaceDisposition::Retain(RetentionReason::Failed),
+                    )
+                    .wait(),
+                CleanupResult::Retained
+            );
+            drop((previous, continuation));
+            let anchor = root.path().join(BOOT_A).join(ASSIGNMENT);
+            let continued = root.path().join(BOOT_A).join(SECOND);
+            let owner = if earlier_boot {
+                drop(first);
+                WorkRootLease::acquire_for_test(root.path(), BOOT_B).unwrap()
+            } else {
+                first
+            };
+            set_modified(&anchor, now - 15 * time::Duration::DAY);
+            set_modified(&continued, now - time::Duration::DAY);
+
+            assert!(prune(&owner, age_bound_only(), now).is_empty());
+            assert!(anchor.is_dir() && continued.is_dir());
+
+            set_modified(&continued, now - 15 * time::Duration::DAY);
+            assert_eq!(
+                pruned(&prune(&owner, age_bound_only(), now)),
+                [
+                    (continued.clone(), PruneBound::Age, PruneResult::Removed),
+                    (anchor.clone(), PruneBound::Age, PruneResult::Removed),
+                ],
+                "earlier boot: {earlier_boot}"
+            );
+            assert!(!anchor.exists() && !continued.exists());
+        }
+    }
+
+    // REQ-WORKSPACE-45, INV-RUNNER-52
+    #[test]
+    fn kept_run_pass_never_removes_what_it_cannot_prove_or_an_interrupted_removal() {
+        let root = private_work_root();
+        // An earlier boot holding a regular file beside its run directory.
+        let first = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let beside_file = keep_attempt(&first, ASSIGNMENT);
+        let note = first.boot_path().join("operator-note");
+        fs::write(&note, b"kept").unwrap();
+        drop(first);
+        // An earlier boot holding a symbolic link named like a run directory.
+        let second = WorkRootLease::acquire_for_test(root.path(), BOOT_B).unwrap();
+        let beside_link = keep_attempt(&second, SECOND);
+        let target = root.path().join("outside-target");
+        create_private_directory(&target).unwrap();
+        fs::write(target.join("sentinel"), b"outside").unwrap();
+        let link = second.boot_path().join(THIRD);
+        symlink(&target, &link).unwrap();
+        drop(second);
+        // An earlier boot whose removal of a run directory was begun and not finished.
+        let third = WorkRootLease::acquire_with(
+            root.path(),
+            BOOT_C,
+            filesystem(
+                ScriptedRemover::new([RemovalOutcome::Error; REMOVAL_DELAYS.len() + 1]),
+                Arc::new(RecordingSleeper::default()),
+                Arc::new(NoopWorkRootHook),
+            ),
+        )
+        .unwrap();
+        let interrupted = third
+            .create_assignment_for_attempt(FOURTH, KEPT_RUN, &attempt_of(FOURTH), None)
+            .unwrap();
+        let interrupted_path = third.boot_path().join(FOURTH);
+        assert_eq!(
+            interrupted
+                .release_pending(ProcessQuiescence::Proven, WorkspaceDisposition::Remove)
+                .wait(),
+            CleanupResult::Quarantined(CleanupFailure::OrdinaryRemovalExhausted)
+        );
+        drop((interrupted, third));
+        let current = WorkRootLease::acquire_for_test(root.path(), BOOT_D).unwrap();
+
+        let mut outcomes = pruned(&prune(
+            &current,
+            KeptRunBounds::default(),
+            fifteen_days_after_newest(&[&beside_file, &beside_link, &interrupted_path]),
+        ));
+
+        outcomes.sort();
+        assert_eq!(
+            outcomes,
+            [
+                (beside_file, PruneBound::Age, PruneResult::Removed),
+                (beside_link, PruneBound::Age, PruneResult::Removed),
+            ]
+        );
+        assert_eq!(fs::read(&note).unwrap(), b"kept");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"outside");
+        assert!(interrupted_path.join("workspace").is_dir());
+        assert!(root.path().join(BOOT_C).is_dir());
+    }
+
+    // REQ-WORKSPACE-45
+    #[test]
+    fn a_failed_kept_run_removal_is_reported_once_and_not_tried_again() {
+        let root = private_work_root();
+        let remover = ScriptedRemover::new([RemovalOutcome::Error; REMOVAL_DELAYS.len() + 1]);
+        let owner = owner_with_remover(root.path(), remover.clone());
+        let kept = keep_attempt(&owner, SECOND);
+        let now = fifteen_days_after_newest(&[&kept]);
+
+        assert_eq!(
+            pruned(&prune(&owner, KeptRunBounds::default(), now)),
+            [(kept.clone(), PruneBound::Age, PruneResult::Failed)]
+        );
+        assert!(kept.join("workspace").is_dir());
+        let calls = remover.calls.load(Ordering::Relaxed);
+        assert!(calls > 0);
+        assert!(prune(&owner, KeptRunBounds::default(), now).is_empty());
+        assert_eq!(remover.calls.load(Ordering::Relaxed), calls);
+        owner.create_assignment(ASSIGNMENT).unwrap();
+    }
+
+    // REQ-WORKSPACE-45, INV-RUNNER-52
+    #[test]
+    fn a_continuation_of_a_withdrawn_kept_workspace_is_unavailable() {
+        let root = private_work_root();
+        let owner = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let (_previous, previous_path) = retained_failed_assignment(&owner);
+        let groups = owner.kept_groups();
+        let [group] = groups.as_slice() else {
+            panic!("one kept group");
+        };
+        assert!(owner.withdraw_kept_group(group));
+
+        let (_claimant, claimed) = claim_kept(&owner, SECOND, ASSIGNMENT, &previous_path);
+
+        assert!(matches!(
+            claimed,
+            Err(AssignmentRootCreationError::Unavailable)
+        ));
+        assert!(previous_path.is_dir());
+        assert!(
+            !owner
+                .boot_path()
+                .join(ASSIGNMENT)
+                .join(CLAIM_RECORD_NAME)
+                .exists()
+        );
+    }
+
+    // REQ-WORKSPACE-44: a workspace ages from the end of the last attempt that continued
+    // it, so a pass does not take one on what it read before that attempt.
+    #[test]
+    fn a_kept_workspace_continued_since_a_pass_read_it_is_not_withdrawn() {
+        let root = private_work_root();
+        let owner = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let (_previous, previous_path) = retained_failed_assignment(&owner);
+        let read = owner.kept_groups();
+        let [read] = read.as_slice() else {
+            panic!("one kept group");
+        };
+
+        let (continuation, claimed) = claim_kept(&owner, SECOND, ASSIGNMENT, &previous_path);
+        claimed.expect("claim the kept attempt");
+        assert_eq!(
+            continuation
+                .release_pending(
+                    ProcessQuiescence::Proven,
+                    WorkspaceDisposition::Retain(RetentionReason::Failed),
+                )
+                .wait(),
+            CleanupResult::Retained
+        );
+
+        assert!(!owner.withdraw_kept_group(read));
+        assert!(previous_path.is_dir());
+        // Read again, the workspace and its continuation are one group a pass may take.
+        let groups = owner.kept_groups();
+        let [group] = groups.as_slice() else {
+            panic!("one kept group");
+        };
+        assert_eq!(group.members.len(), 2);
+        assert!(owner.withdraw_kept_group(group));
+    }
+
+    // REQ-WORKSPACE-44
+    #[test]
+    fn a_stopped_kept_run_pass_leaves_the_rest_untouched() {
+        let now = fixed_now();
+        let root = private_work_root();
+        let first = WorkRootLease::acquire_for_test(root.path(), BOOT_A).unwrap();
+        let kept = [ASSIGNMENT, SECOND].map(|assignment_id| keep_attempt(&first, assignment_id));
+        drop(first);
+        set_modified(&kept[0], now - 16 * time::Duration::DAY);
+        set_modified(&kept[1], now - 15 * time::Duration::DAY);
+        let current = WorkRootLease::acquire_for_test(root.path(), BOOT_B).unwrap();
+
+        let outcomes = prune_kept_runs(
+            &current,
+            age_bound_only(),
+            PruneScope::Bounds,
+            now,
+            &|| kept.iter().all(|path| path.exists()),
+            None,
+        );
+
+        assert_eq!(
+            pruned(&outcomes),
+            [(kept[0].clone(), PruneBound::Age, PruneResult::Removed)]
+        );
+        assert!(kept[1].join("workspace").is_dir());
+        assert!(root.path().join(BOOT_A).is_dir());
     }
 }

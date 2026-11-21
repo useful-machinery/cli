@@ -2,7 +2,7 @@
 //! definition publish` into the run-scoped home, `useful workflow run create` and `useful
 //! workflow run resume` under the assignment's lease, `useful workflow run cancel` when
 //! the assignment is cancelled, and `useful workflow run event` for each trigger delivery, with
-//! `useful workflow run stop` and `lift` once the offer's deliveries are applied
+//! `useful workflow run pause` and `unpause` once the offer's deliveries are applied
 //! (REQ-TRIGGER-136), and the `useful workflow run` control command each Cloud control names
 //! (REQ-RUNNERENROLL-90).
 //! Each runs with the daemon's environment whole, with the agent logins the runner holds when
@@ -34,6 +34,7 @@ use tokio::io::AsyncReadExt as _;
 use tokio::process::ChildStderr;
 
 use super::super::Sleeper;
+use super::super::command_fence::{CommandFence, FenceEntry};
 use super::super::run_inputs::PreparationDeadline;
 use super::activity::{CommandInFlight, RunActivity};
 use super::records::{RecordState, read_record};
@@ -82,9 +83,10 @@ const CONTROL_COMMAND_FAILED: &str = "control_command_failed";
 /// recorded, and the code the run's log names beside its class.
 pub(in crate::service) const PENDING_STOP_UNLIFTED: &str = "tree_run_pending_stop_unlifted";
 /// The outcome of a control recorded for the run: what a `retry` that printed no outcome
-/// reports once its control is recorded, and what a `withdraw` a live process holds answers.
+/// reports once its control is recorded, and what a withdrawal of a run a live process holds
+/// answers.
 pub(in crate::service) const RECORDED: &str = "recorded";
-/// The code the run's log names when the runner's second `withdraw` of a run left waiting
+/// The code the run's log names when the runner's second withdrawal of a run left waiting
 /// did not end it (REQ-RUNNERENROLL-123).
 const WITHDRAWAL_UNFINISHED: &str = "tree_run_withdrawal_unfinished";
 /// The most of a control command's stdout read back for its last document.
@@ -105,6 +107,9 @@ pub(in crate::service) struct UsefulCommand {
     /// The run's activity, which counts each command in flight and which a setup's install
     /// or removal holds, so no command starts during one (INV-RUNNER-15).
     pub(in crate::service) activity: Arc<RunActivity>,
+    /// The runner's command fence, which each command enters once its run's activity lets it
+    /// start, so none starts while a holder holds it (INV-RUNNER-53).
+    pub(in crate::service) fence: Arc<CommandFence>,
     pub(in crate::service) home: PathBuf,
     pub(in crate::service) log: RunLog,
     pub(in crate::service) sleeper: Arc<dyn Sleeper>,
@@ -118,8 +123,9 @@ impl UsefulCommand {
     /// Spawns `arguments` in its own process group, stdout to `stdout` and stderr copied to
     /// the log, with the environment built now (REQ-GRANT-49): once no agent-login install or
     /// removal holds the run's activity, which then counts the command in flight until its
-    /// child is dropped (INV-RUNNER-15). The group is killed if the child is dropped before
-    /// it is reaped.
+    /// child is dropped (INV-RUNNER-15), and then once it has entered the runner's command
+    /// fence, in which it stays until its child is dropped (INV-RUNNER-53). The group is
+    /// killed if the child is dropped before it is reaped.
     async fn spawn(
         &self,
         arguments: impl IntoIterator<Item = impl AsRef<OsStr>>,
@@ -128,13 +134,15 @@ impl UsefulCommand {
         let log = self.log.clone();
         let offered = self.environment.clone();
         let activity = Arc::clone(&self.activity);
-        // Waiting for an install, building the environment, which reads the agent-login
-        // files, and opening the log block, so they run on a blocking worker.
-        let (in_flight, environment) = tokio::task::spawn_blocking(move || {
+        let fence = Arc::clone(&self.fence);
+        // Waiting for an install or the fence's holder, building the environment, which reads
+        // the agent-login files, and opening the log block, so they run on a blocking worker.
+        let (in_flight, entry, environment) = tokio::task::spawn_blocking(move || {
             let in_flight = activity.start_command();
+            let entry = fence.enter();
             // The log exists once a command has run, whether or not it wrote anything.
             drop(log.open()?);
-            Ok::<_, io::Error>((in_flight, offered.build()))
+            Ok::<_, io::Error>((in_flight, entry, offered.build()))
         })
         .await
         .map_err(io::Error::other)??;
@@ -167,6 +175,7 @@ impl UsefulCommand {
                 child,
                 group,
                 _in_flight: in_flight,
+                _entry: entry,
             },
             pump,
         ))
@@ -497,6 +506,9 @@ struct SupervisedChild {
     group: Option<Pid>,
     /// Counts the command in flight in its run's activity while the child is held.
     _in_flight: CommandInFlight,
+    /// Keeps the command in the runner's command fence while the child is held
+    /// (INV-RUNNER-53).
+    _entry: FenceEntry,
 }
 
 impl SupervisedChild {
@@ -525,17 +537,19 @@ pub(in crate::service) fn resume_arguments(run_directory: &Path) -> Vec<OsString
     resume_from_arguments(run_directory, &[])
 }
 
-/// `useful workflow run resume RUN --from STEP... --json`, one `--from` per step in order:
+/// `useful workflow run retry RUN --from STEP... --json`, one `--from` per step in order:
 /// starts the next attempt of a finished run from the named steps and inherits the rest
-/// (REQ-CONTINUE-1); with no step, `resume_arguments`.
+/// (REQ-CONTINUE-1, REQ-RUNNERENROLL-89); with no step, `useful workflow run resume RUN
+/// --json`, as `resume_arguments` builds it.
 pub(in crate::service) fn resume_from_arguments(
     run_directory: &Path,
     steps: &[String],
 ) -> Vec<OsString> {
+    let leaf = if steps.is_empty() { "resume" } else { "retry" };
     let mut arguments: Vec<OsString> = vec![
         "workflow".into(),
         "run".into(),
-        "resume".into(),
+        leaf.into(),
         run_directory.into(),
     ];
     for step in steps {
@@ -696,8 +710,9 @@ async fn cancel_when_created(useful: UsefulCommand, runs: PathBuf) {
     }
 }
 
-/// Runs `useful workflow run cancel RUN --json` for the home's run, output to the log. It is the
-/// cancellation's own command, so only its bound abandons it.
+/// Runs `useful workflow run cancel RUN --control=cancel --json` for the home's run, output to
+/// the log: the cancellation whatever the run's state, a waiting run ended `canceled`
+/// (REQ-RUNNERENROLL-123). It is the cancellation's own command, so only its bound abandons it.
 pub(in crate::service) async fn cancel_run(useful: &UsefulCommand, runs: &Path) -> io::Result<()> {
     let directory = {
         let runs = runs.to_owned();
@@ -711,6 +726,7 @@ pub(in crate::service) async fn cancel_run(useful: &UsefulCommand, runs: &Path) 
         "run".into(),
         "cancel".into(),
         directory.into(),
+        "--control=cancel".into(),
         "--json".into(),
     ];
     let end = run_short(
@@ -988,7 +1004,7 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-/// `useful workflow run stop RUN --before STEP --reason TEXT --json`: puts back the start's own
+/// `useful workflow run pause RUN --before STEP --reason TEXT --json`: puts back the start's own
 /// stop once the runner lifts the one it created the run with. True when the stop was
 /// recorded; false when it was not, as `start_control` logs, or the command was abandoned.
 pub(in crate::service) async fn stop_before(
@@ -1001,8 +1017,8 @@ pub(in crate::service) async fn stop_before(
     start_control(useful, arguments, cancellation).await
 }
 
-/// `useful workflow run lift RUN --before STEP --json`: lifts the stop before the first step the
-/// runner created the run with. True when the lift was recorded; false when it was not, as
+/// `useful workflow run unpause RUN --before STEP --json`: lifts the stop before the first step
+/// the runner created the run with. True when the lift was recorded; false when it was not, as
 /// `start_control` logs, or the command was abandoned.
 pub(in crate::service) async fn lift(
     useful: &UsefulCommand,
@@ -1042,8 +1058,11 @@ async fn start_control(
 /// Applies a Cloud control's `action` to the run at `run_directory` with the `useful workflow
 /// run` command it names (REQ-RUNNERENROLL-90): `answer --question ID --text TEXT`, once
 /// per answer in order and ending at the first that is not applied, `approve`, `hand-back
-/// --notes TEXT`, `lift [--before STEP]`, `stop --before STEP --reason TEXT` or `withdraw`
-/// (REQ-RUNNERENROLL-123), each reported as `control_outcome` says. A `retry` continues the
+/// --notes TEXT`, each of these three with `--record-only` so that the command records the
+/// control and the loop resumes the run itself, `unpause [--before STEP]` for a `lift`,
+/// `pause --before STEP --reason TEXT` for a `stop`, or `cancel --control=withdraw` for a
+/// `withdraw` (REQ-RUNNERENROLL-123),
+/// each reported as `control_outcome` says. A `retry` continues the
 /// run, so the resume loop supervises it instead (`retry_arguments`). `None` when the
 /// assignment's `cancellation` abandoned a command, which leaves nothing to report.
 pub(in crate::service) async fn apply_control(
@@ -1070,7 +1089,8 @@ pub(in crate::service) async fn apply_control(
     Some(outcome)
 }
 
-/// `useful workflow run withdraw RUN --json` once more on the run at `run_directory`, for a
+/// `useful workflow run cancel RUN --control=withdraw --json` once more on the run at
+/// `run_directory`, for a
 /// withdrawal applied `recorded` that the process holding the run ended without honoring,
 /// leaving the run waiting (REQ-RUNNERENROLL-123). It reports no application: one that did
 /// not end the run has the run's log name `WITHDRAWAL_UNFINISHED` with the application it
@@ -1290,6 +1310,9 @@ fn control_arguments(run_directory: &Path, action: &RunControlAction) -> Vec<Vec
         arguments.push("--json".into());
         arguments
     };
+    // `answer`, `approve` and `hand-back` would continue the run themselves; the loop resumes
+    // it, so each records its control alone.
+    let record_only = || OsString::from("--record-only");
     match action {
         RunControlAction::Answer { answers, .. } => answers
             .iter()
@@ -1299,13 +1322,17 @@ fn control_arguments(run_directory: &Path, action: &RunControlAction) -> Vec<Vec
                     vec![
                         option("--question", &answer.question),
                         option("--text", &answer.text),
+                        record_only(),
                     ],
                 )
             })
             .collect(),
-        RunControlAction::Approve { .. } => vec![command("approve", Vec::new())],
+        RunControlAction::Approve { .. } => vec![command("approve", vec![record_only()])],
         RunControlAction::HandBack { notes, .. } => {
-            vec![command("hand-back", vec![option("--notes", notes)])]
+            vec![command(
+                "hand-back",
+                vec![option("--notes", notes), record_only()],
+            )]
         }
         RunControlAction::Lift { before, .. } => {
             vec![lift_arguments(run_directory, before.as_deref())]
@@ -1316,7 +1343,7 @@ fn control_arguments(run_directory: &Path, action: &RunControlAction) -> Vec<Vec
             reason.as_deref().unwrap_or(CLOUD_STOP_REASON),
         )],
         RunControlAction::Retry { .. } => Vec::new(),
-        RunControlAction::Withdraw => vec![command("withdraw", Vec::new())],
+        RunControlAction::Withdraw => vec![command("cancel", vec!["--control=withdraw".into()])],
     }
 }
 
@@ -1327,8 +1354,8 @@ fn option(name: &str, value: &str) -> OsString {
     format!("{name}={value}").into()
 }
 
-/// `useful workflow run retry RUN --json`: on the run's `repair` wait, records the retry and
-/// continues the run as `resume` does (REQ-LOCALRUN-184).
+/// `useful workflow run retry RUN --json`: on the run's `repair` or `host` wait, records the
+/// retry and continues the run as `resume` does (REQ-LOCALRUN-184).
 pub(in crate::service) fn retry_arguments(run_directory: &Path) -> Vec<OsString> {
     vec![
         "workflow".into(),
@@ -1343,7 +1370,7 @@ fn stop_arguments(run_directory: &Path, step: &str, reason: &str) -> Vec<OsStrin
     vec![
         "workflow".into(),
         "run".into(),
-        "stop".into(),
+        "pause".into(),
         run_directory.into(),
         option("--before", step),
         option("--reason", reason),
@@ -1355,7 +1382,7 @@ fn lift_arguments(run_directory: &Path, step: Option<&str>) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = vec![
         "workflow".into(),
         "run".into(),
-        "lift".into(),
+        "unpause".into(),
         run_directory.into(),
     ];
     if let Some(step) = step {

@@ -21,10 +21,10 @@ use pi::PiCheck;
 pub use agent_logins::OperatorConfigSource;
 pub use git::{RepositoryRootError, repository_root};
 pub use workflow_credentials::{
-    CredentialKind, CredentialOrigin, CredentialRequirement, CredentialSummary, Declaration,
-    DeclarationKind, DerivedCredentials, Difference, IntegrationDifference, Node, NodeKind,
-    OriginDeclaration, ReadinessCode, RepositorySource, UnknownCredential, UnknownDeclaration,
-    WorkflowCredentials, read_workflow_credentials,
+    CredentialKind, CredentialOrigin, CredentialRequirement, Declaration, DeclarationKind,
+    DerivedCredentials, Difference, IntegrationDifference, Node, NodeKind, OriginDeclaration,
+    ReadinessCode, RepositorySource, UnknownCredential, UnknownDeclaration, WorkflowCredentials,
+    read_workflow_credentials,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,9 +145,13 @@ pub struct Summary {
     pub failed: usize,
 }
 
+/// The results of the checks a run selected and, in registry order, the
+/// checks it did not select, which count as neither passed nor failed
+/// (REQ-RUNNERENROLL-47).
 #[derive(Debug, Eq, PartialEq)]
 pub struct Report {
     pub results: Vec<CheckResult>,
+    pub not_run: Vec<CheckDescriptor>,
 }
 
 impl Report {
@@ -219,19 +223,23 @@ impl Registry {
                 requested_ids.contains(descriptor.id)
             }
         };
-        let results = self
-            .checks
-            .iter()
-            .filter_map(|check| {
-                let descriptor = check.descriptor();
-                selected(descriptor).then(|| CheckResult {
+        let mut report = Report {
+            results: Vec::new(),
+            not_run: Vec::new(),
+        };
+        for check in &self.checks {
+            let descriptor = check.descriptor();
+            if selected(descriptor) {
+                report.results.push(CheckResult {
                     descriptor,
                     outcome: check.run(),
-                })
-            })
-            .collect();
+                });
+            } else {
+                report.not_run.push(descriptor);
+            }
+        }
 
-        Ok(Report { results })
+        Ok(report)
     }
 }
 
@@ -279,7 +287,7 @@ impl fmt::Display for SelectionError {
         match self {
             Self::UnknownId(id) => write!(
                 formatter,
-                "unknown runner doctor check '{id}'; use 'useful runner doctor --list-checks' to list available checks"
+                "unknown runner doctor check '{id}'; the report of 'useful runner doctor' lists every check"
             ),
         }
     }
@@ -335,7 +343,7 @@ mod tests {
 
     use super::{
         CheckDescriptor, DoctorCheck, OperatorConfigSource, Outcome, Registry, RegistryError,
-        SelectionError, Status, built_in_registry,
+        SelectionError, Status, Summary, built_in_registry,
     };
 
     struct FakeCheck {
@@ -443,12 +451,20 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-46
+    // REQ-RUNNERENROLL-46, REQ-RUNNERENROLL-47
     #[test]
     fn empty_selection_runs_only_default_checks() {
         let default_runs = Arc::new(AtomicUsize::new(0));
         let non_default_runs = Arc::new(AtomicUsize::new(0));
         let mut registry = Registry::new();
+        registry
+            .register(Box::new(fake_check(
+                "extension.fixture.earlier",
+                false,
+                Status::Fail,
+                Arc::clone(&non_default_runs),
+            )))
+            .unwrap();
         registry
             .register(Box::new(fake_check(
                 "extension.fixture.default",
@@ -461,7 +477,7 @@ mod tests {
             .register(Box::new(fake_check(
                 "extension.fixture.extra",
                 false,
-                Status::Pass,
+                Status::Fail,
                 Arc::clone(&non_default_runs),
             )))
             .unwrap();
@@ -472,6 +488,24 @@ mod tests {
         assert_eq!(report.results[0].descriptor.id, "extension.fixture.default");
         assert_eq!(default_runs.load(Ordering::SeqCst), 1);
         assert_eq!(non_default_runs.load(Ordering::SeqCst), 0);
+        // The report names the checks it did not run, in registry order, and
+        // counts none of them (REQ-RUNNERENROLL-47).
+        assert_eq!(
+            report
+                .not_run
+                .iter()
+                .map(|descriptor| descriptor.id)
+                .collect::<Vec<_>>(),
+            ["extension.fixture.earlier", "extension.fixture.extra"]
+        );
+        assert_eq!(
+            report.summary(),
+            Summary {
+                passed: 1,
+                failed: 0
+            }
+        );
+        assert!(!report.has_failures());
     }
 
     // REQ-RUNNERENROLL-46

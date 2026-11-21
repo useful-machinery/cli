@@ -35,8 +35,19 @@ fn response(status: &str, body: serde_json::Value, mutation: bool) -> Vec<u8> {
 fn args<'a>(leaf: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec!["project", "webhook"];
     args.extend_from_slice(leaf);
-    args.extend(["--json", "--allow-insecure-http"]);
+    args.extend([
+        "--json",
+        "--allow-insecure-http",
+        "--org",
+        ORGANIZATION,
+        "--project",
+        PROJECT_ID,
+    ]);
     args
+}
+/// The route of `WEBHOOK` the leaves address, followed by `suffix`.
+fn route(suffix: &str) -> String {
+    format!("/api/v1/organizations/{ORGANIZATION}/projects/{PROJECT_ID}/webhooks/{WEBHOOK}{suffix}")
 }
 fn run(leaf: &[&str], server: &ScriptedServer, credentials: &str) -> Output {
     run_project(&args(leaf), server, credentials)
@@ -62,13 +73,7 @@ fn webhook_preserves_gateway_valid_raw_url_bytes() {
         let server = ScriptedServer::respond(vec![response("201 Created", metadata, true)]);
         let (server, _directory, credential) = prepared_server(server);
         let output = run(
-            &[
-                "create",
-                ORGANIZATION,
-                PROJECT_ID,
-                "--config-file",
-                path.to_str().unwrap(),
-            ],
+            &["create", "--config-file", path.to_str().unwrap()],
             &server,
             &credential,
         );
@@ -88,39 +93,26 @@ fn webhook_preserves_gateway_valid_raw_url_bytes() {
 // REQ-WEBHOOK-71, REQ-WEBHOOK-75, REQ-WEBHOOK-77
 #[test]
 fn webhook_owner_leaves_use_exact_paths_statuses_and_nonsecret_inspection() {
-    let paths: &[(&[&str], &str, &str, bool)] = &[
+    let paths: &[(&[&str], &str, &str, bool, &str)] = &[
+        (&["show", WEBHOOK], "GET", "", false, "found"),
+        (&["enable", WEBHOOK], "POST", "/enable", true, "enabled"),
+        (&["disable", WEBHOOK], "POST", "/disable", true, "disabled"),
         (
-            &["show", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            "GET",
-            "/webhooks/",
-            false,
-        ),
-        (
-            &["enable", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            "POST",
-            "/enable",
-            true,
-        ),
-        (
-            &["disable", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            "POST",
-            "/disable",
-            true,
-        ),
-        (
-            &["rotate-secret", ORGANIZATION, PROJECT_ID, WEBHOOK],
+            &["secret", "rotate", WEBHOOK],
             "POST",
             "/rotate-secret",
             true,
+            "rotated",
         ),
         (
-            &["revoke-previous-secret", ORGANIZATION, PROJECT_ID, WEBHOOK],
+            &["secret", "revoke", WEBHOOK],
             "POST",
             "/revoke-previous-secret",
             true,
+            "revoked",
         ),
     ];
-    for (leaf, method, suffix, mutation) in paths {
+    for (leaf, method, suffix, mutation, outcome) in paths {
         let server = ScriptedServer::respond(vec![response(
             "200 OK",
             subscription(*suffix == "/rotate-secret"),
@@ -136,15 +128,21 @@ fn webhook_owner_leaves_use_exact_paths_statuses_and_nonsecret_inspection() {
         );
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(json["schemaVersion"], 1);
+        assert_eq!(json["outcome"], *outcome);
         assert_eq!(json["webhook"]["id"], WEBHOOK);
         assert_eq!(
             json["webhook"]["secret"].is_string(),
             *suffix == "/rotate-secret"
         );
         let request = server.finish().remove(0);
-        assert!(request.starts_with(method));
-        assert!(request.lines().next().unwrap().contains(suffix));
-        assert_eq!(request.contains("idempotency-key:"), *mutation);
+        assert_eq!(
+            request.lines().next().unwrap(),
+            format!("{method} {} HTTP/1.1", route(suffix))
+        );
+        assert_eq!(
+            useful_test_support::request_header(&request, "idempotency-key").is_some(),
+            *mutation
+        );
     }
     let server = ScriptedServer::respond(vec![http_response_with_headers(
         "204 No Content",
@@ -154,26 +152,16 @@ fn webhook_owner_leaves_use_exact_paths_statuses_and_nonsecret_inspection() {
     )]);
     let (server, _credential_directory, credentials) = prepared_server(server);
     assert_json_success(
-        &run(
-            &["delete", ORGANIZATION, PROJECT_ID, WEBHOOK, "--yes"],
-            &server,
-            &credentials,
-        ),
+        &run(&["delete", WEBHOOK, "--yes"], &server, &credentials),
         "deleted",
     );
     assert_eq!(server.finish().len(), 1);
+    let replay = format!("/deliveries/{DELIVERY}/replay");
     for (leaf, suffix) in [
-        (&["test", ORGANIZATION, PROJECT_ID, WEBHOOK][..], "/test"),
+        (&["test", WEBHOOK][..], "/test"),
         (
-            &[
-                "delivery",
-                "replay",
-                ORGANIZATION,
-                PROJECT_ID,
-                WEBHOOK,
-                DELIVERY,
-            ][..],
-            "/replay",
+            &["delivery", "replay", DELIVERY, "--webhook", WEBHOOK][..],
+            replay.as_str(),
         ),
     ] {
         let server = ScriptedServer::respond(vec![response(
@@ -198,18 +186,13 @@ fn webhook_owner_leaves_use_exact_paths_statuses_and_nonsecret_inspection() {
                 .contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         );
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        if suffix == "/replay" {
+        if suffix != "/test" {
             assert_eq!(value["outcome"], "replayed");
             assert_eq!(value["metadataOnly"], true);
         }
-        assert!(
-            server
-                .finish()
-                .remove(0)
-                .lines()
-                .next()
-                .unwrap()
-                .contains(suffix)
+        assert_eq!(
+            server.finish().remove(0).lines().next().unwrap(),
+            format!("POST {} HTTP/1.1", route(suffix))
         );
     }
 }
@@ -219,7 +202,7 @@ fn prepared_server(server: ScriptedServer) -> (ScriptedServer, tempfile::TempDir
     write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
     (server, dir, path.to_str().unwrap().to_owned())
 }
-// REQ-WEBHOOK-72, REQ-WEBHOOK-76, REQ-WEBHOOK-78
+// REQ-WEBHOOK-71, REQ-WEBHOOK-72, REQ-WEBHOOK-76, REQ-WEBHOOK-78
 #[test]
 fn webhook_create_update_and_filtered_pages_preserve_selection() {
     let input = private_credential_directory();
@@ -228,11 +211,7 @@ fn webhook_create_update_and_filtered_pages_preserve_selection() {
     let path = file.to_str().unwrap();
     let server = ScriptedServer::respond(vec![response("201 Created", subscription(true), true)]);
     let (server, _credential_directory, credentials) = prepared_server(server);
-    let output = run(
-        &["create", ORGANIZATION, PROJECT_ID, "--config-file", path],
-        &server,
-        &credentials,
-    );
+    let output = run(&["create", "--config-file", path], &server, &credentials);
     assert!(
         output.status.success(),
         "stdout: {} stderr: {}",
@@ -256,8 +235,6 @@ fn webhook_create_update_and_filtered_pages_preserve_selection() {
         &run(
             &[
                 "update",
-                ORGANIZATION,
-                PROJECT_ID,
                 WEBHOOK,
                 "--config-file",
                 path,
@@ -279,44 +256,18 @@ fn webhook_create_update_and_filtered_pages_preserve_selection() {
 
     for (leaf, body) in [
         (
-            vec![
-                "list",
-                ORGANIZATION,
-                PROJECT_ID,
-                "--limit",
-                "2",
-                "--cursor",
-                "opaque-9",
-            ],
+            vec!["list", "--limit", "2", "--cursor", "opaque-9"],
             serde_json::json!({"items":[subscription(false)], "nextCursor":"opaque-10"}),
         ),
         (
             vec![
-                "delivery",
-                "list",
-                ORGANIZATION,
-                PROJECT_ID,
-                WEBHOOK,
-                "--limit",
-                "2",
-                "--cursor",
-                "opaque-9",
-                "--run-id",
-                RUN_ID,
-                "--state",
-                "failed",
+                "delivery", "list", WEBHOOK, "--limit", "2", "--cursor", "opaque-9", "--run",
+                RUN_ID, "--state", "failed",
             ],
             serde_json::json!({"items":[delivery()], "nextCursor":"opaque-10"}),
         ),
         (
-            vec![
-                "delivery",
-                "show",
-                ORGANIZATION,
-                PROJECT_ID,
-                WEBHOOK,
-                DELIVERY,
-            ],
+            vec!["delivery", "show", DELIVERY, "--webhook", WEBHOOK],
             delivery(),
         ),
     ] {
@@ -338,8 +289,75 @@ fn webhook_create_update_and_filtered_pages_preserve_selection() {
             assert!(request.contains(&format!("runId={RUN_ID}")));
             assert!(request.contains("state=failed"));
         }
+        if leaf[1] == "show" {
+            assert_eq!(
+                request.lines().next().unwrap(),
+                format!("GET {} HTTP/1.1", route(&format!("/deliveries/{DELIVERY}")))
+            );
+        }
     }
 }
+// REQ-WEBHOOK-71, REQ-WEBHOOK-75, REQ-WEBHOOK-76, REQ-WEBHOOK-77
+#[test]
+fn a_created_webhook_can_test_inspect_and_rotate_its_secret() {
+    let queued = test_delivery();
+    let mut detail = queued.clone();
+    detail["cycles"] = serde_json::json!([]);
+    let mut rotated = subscription(true);
+    rotated["secret"] = serde_json::json!("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=");
+    let (server, directory, credentials) = prepared_server(ScriptedServer::respond(vec![
+        response("201 Created", subscription(true), true),
+        response("202 Accepted", queued.clone(), true),
+        response("200 OK", serde_json::json!({"items":[queued]}), false),
+        response("200 OK", detail, false),
+        response("200 OK", rotated, true),
+        response("200 OK", subscription(false), true),
+    ]));
+    let config = directory.path().join("hook.json");
+    fs::write(
+        &config,
+        r#"{"url":"https://receiver.example.com/hook","eventTypes":["run.failed"]}"#,
+    )
+    .unwrap();
+    let invoke = |leaf: &[&str], outcome: &str| {
+        assert_json_success(&run(leaf, &server, &credentials), outcome)
+    };
+    let created = invoke(
+        &["create", "--config-file", config.to_str().unwrap()],
+        "created",
+    );
+    let hook = created["webhook"]["id"].as_str().unwrap();
+    let first_key = created["webhook"]["secret"].as_str().unwrap();
+    let tested = invoke(&["test", hook], "queued");
+    let page = invoke(&["delivery", "list", hook], "listed");
+    let delivery_id = page["items"][0]["id"].as_str().unwrap();
+    assert_eq!(tested["delivery"]["id"], delivery_id);
+    let shown = invoke(
+        &["delivery", "show", delivery_id, "--webhook", hook],
+        "found",
+    );
+    assert_eq!(shown["delivery"]["eventId"], tested["delivery"]["eventId"]);
+    let rotated = invoke(&["secret", "rotate", hook], "rotated");
+    let replacement = rotated["webhook"]["secret"].as_str().unwrap();
+    assert_ne!(first_key, replacement);
+    let revoked = invoke(&["secret", "revoke", hook], "revoked");
+    assert_eq!(revoked["webhook"]["id"], hook);
+    assert!(revoked["webhook"].get("secret").is_none());
+    let requests = server.finish();
+    let collection = format!("/api/v1/organizations/{ORGANIZATION}/projects/{PROJECT_ID}/webhooks");
+    assert_eq!(
+        request_lines(&requests),
+        [
+            format!("POST {collection} HTTP/1.1"),
+            format!("POST {collection}/{hook}/test HTTP/1.1"),
+            format!("GET {collection}/{hook}/deliveries HTTP/1.1"),
+            format!("GET {collection}/{hook}/deliveries/{delivery_id} HTTP/1.1"),
+            format!("POST {collection}/{hook}/rotate-secret HTTP/1.1"),
+            format!("POST {collection}/{hook}/revoke-previous-secret HTTP/1.1"),
+        ]
+    );
+}
+
 // REQ-WEBHOOK-80, REQ-WEBHOOK-81
 #[test]
 fn webhook_rejects_mismatched_and_malformed_delivery_responses() {
@@ -347,24 +365,13 @@ fn webhook_rejects_mismatched_and_malformed_delivery_responses() {
     let mut wrong = delivery();
     wrong["id"] = serde_json::json!("whd_01k0z6r1w8f4jy2m7q9v3x5ab2");
     cases.push((
-        vec![
-            "delivery",
-            "replay",
-            ORGANIZATION,
-            PROJECT_ID,
-            WEBHOOK,
-            DELIVERY,
-        ],
+        vec!["delivery", "replay", DELIVERY, "--webhook", WEBHOOK],
         wrong,
         "202 Accepted",
     ));
     let mut wrong = test_delivery();
     wrong["eventType"] = serde_json::json!("run.failed");
-    cases.push((
-        vec!["test", ORGANIZATION, PROJECT_ID, WEBHOOK],
-        wrong,
-        "202 Accepted",
-    ));
+    cases.push((vec!["test", WEBHOOK], wrong, "202 Accepted"));
     for (field, value) in [
         ("sequence", serde_json::json!(0)),
         ("runId", serde_json::json!("run_wrong")),
@@ -374,14 +381,7 @@ fn webhook_rejects_mismatched_and_malformed_delivery_responses() {
         let mut wrong = delivery();
         wrong[field] = value;
         cases.push((
-            vec![
-                "delivery",
-                "show",
-                ORGANIZATION,
-                PROJECT_ID,
-                WEBHOOK,
-                DELIVERY,
-            ],
+            vec!["delivery", "show", DELIVERY, "--webhook", WEBHOOK],
             wrong,
             "200 OK",
         ));
@@ -409,11 +409,7 @@ fn webhook_rejects_mismatched_and_malformed_delivery_responses() {
         false,
     )]);
     let (server, _directory, credential) = prepared_server(server);
-    let output = run(
-        &["delivery", "list", ORGANIZATION, PROJECT_ID, WEBHOOK],
-        &server,
-        &credential,
-    );
+    let output = run(&["delivery", "list", WEBHOOK], &server, &credential);
     assert!(!output.status.success());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["outcome"],
@@ -436,11 +432,7 @@ fn webhook_refusal_in_an_archived_project_is_named_only_by_its_reason() {
         }
         let server = ScriptedServer::respond(vec![problem_http_response("409 Conflict", body)]);
         let (server, _credential_directory, credentials) = prepared_server(server);
-        let output = run(
-            &["disable", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            &server,
-            &credentials,
-        );
+        let output = run(&["disable", WEBHOOK], &server, &credentials);
         assert_eq!(output.status.code(), Some(1), "{reason:?}");
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["outcome"], outcome, "{reason:?}");
@@ -457,7 +449,7 @@ fn webhook_config_standard_input_and_service_actor_are_independent() {
     let (server, _directory, credential) = prepared_server(server);
     let environment = deployment_environment(&server.api_url, &credential);
     let output = run_with_stdin(
-        &args(&["create", ORGANIZATION, PROJECT_ID, "--config-file", "-"]),
+        &args(&["create", "--config-file", "-"]),
         &environment,
         source,
     );
@@ -469,15 +461,7 @@ fn webhook_config_standard_input_and_service_actor_are_independent() {
     let (_server, _directory, credential) = prepared_server(server);
     let environment = deployment_environment(&_server.api_url, &credential);
     let output = run_with_stdin(
-        &args(&[
-            "create",
-            ORGANIZATION,
-            PROJECT_ID,
-            "--config-file",
-            "-",
-            "--service-api-key-file",
-            "-",
-        ]),
+        &args(&["create", "--config-file", "-", "--api-key-file", "-"]),
         &environment,
         source,
     );
@@ -502,11 +486,7 @@ fn webhook_invalid_config_and_stdin_contention_make_no_requests() {
     assert!(server.finish().is_empty());
     let server = ScriptedServer::respond(vec![]);
     let (server, _directory, credential) = prepared_server(server);
-    let output = run(
-        &["delete", ORGANIZATION, PROJECT_ID, WEBHOOK],
-        &server,
-        &credential,
-    );
+    let output = run(&["delete", WEBHOOK], &server, &credential);
     assert!(!output.status.success());
     assert!(server.finish().is_empty());
     let input = private_credential_directory();
@@ -529,13 +509,7 @@ fn webhook_invalid_config_and_stdin_contention_make_no_requests() {
         let (server, _credential_directory, credentials) = prepared_server(server);
         assert!(
             !run(
-                &[
-                    "create",
-                    ORGANIZATION,
-                    PROJECT_ID,
-                    "--config-file",
-                    file.to_str().unwrap()
-                ],
+                &["create", "--config-file", file.to_str().unwrap()],
                 &server,
                 &credentials
             )
@@ -549,13 +523,7 @@ fn webhook_invalid_config_and_stdin_contention_make_no_requests() {
     let (server, _credential_directory, credentials) = prepared_server(server);
     assert!(
         !run(
-            &[
-                "create",
-                ORGANIZATION,
-                PROJECT_ID,
-                "--config-file",
-                file.to_str().unwrap()
-            ],
+            &["create", "--config-file", file.to_str().unwrap()],
             &server,
             &credentials
         )
@@ -567,17 +535,59 @@ fn webhook_invalid_config_and_stdin_contention_make_no_requests() {
         let server = ScriptedServer::respond(vec![]);
         let (server, _directory, credentials) = prepared_server(server);
         let output = run(
-            &[
-                "create",
-                ORGANIZATION,
-                PROJECT_ID,
-                "--config-file",
-                source.to_str().unwrap(),
-            ],
+            &["create", "--config-file", source.to_str().unwrap()],
             &server,
             &credentials,
         );
         assert!(!output.status.success());
         assert!(server.finish().is_empty());
     }
+}
+
+// REQ-WEBHOOK-71: a leaf acts in the project in effect, so `show` with `--org` and no project
+// named exits 2 naming `--project` and sends nothing.
+#[test]
+fn webhook_without_a_project_in_effect_is_a_usage_error() {
+    let (output, requests) = run_in_effect(
+        &["project", "webhook", "show", WEBHOOK, "--json"],
+        Vec::new(),
+        &["--org", ORGANIZATION],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--project"));
+    assert!(requests.is_empty());
+}
+
+// REQ-WEBHOOK-73: the configuration is checked before the organization and the project in
+// effect are resolved, so an invalid file with neither named is `invalid_input`, unsent.
+#[test]
+fn webhook_invalid_config_precedes_the_project_in_effect() {
+    let input = private_credential_directory();
+    let file = input.path().join("selection.json");
+    fs::write(
+        &file,
+        r#"{"url":"https://receiver.example/h","extra":true}"#,
+    )
+    .unwrap();
+    let (output, requests) = run_in_effect(
+        &[
+            "project",
+            "webhook",
+            "create",
+            "--config-file",
+            file.to_str().unwrap(),
+            "--json",
+        ],
+        Vec::new(),
+        &[],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["outcome"],
+        "invalid_input"
+    );
+    assert!(requests.is_empty());
 }

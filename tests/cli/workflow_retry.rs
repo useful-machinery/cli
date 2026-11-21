@@ -22,6 +22,7 @@ fn retry_args(run_directory: &Path, execution_root: &Path, options: &[&str]) -> 
         "run".to_owned(),
         "retry".to_owned(),
         run_directory.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         execution_root.to_string_lossy().into_owned(),
     ];
@@ -65,6 +66,70 @@ fn initial_failed_run(bundle: &RunBundle, name: &str) -> PathBuf {
     destination
 }
 
+/// `useful workflow run show RUN_DIRECTORY ARGS --json`.
+fn show_args(run_directory: &Path, args: &[&str]) -> Vec<String> {
+    let mut all = vec![
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "show".to_owned(),
+        run_directory.to_string_lossy().into_owned(),
+    ];
+    all.extend(args.iter().map(|arg| (*arg).to_owned()));
+    all.push("--json".to_owned());
+    all
+}
+
+// REQ-LOCALRUN-189: `--attempt N` of a local run keeps attempt N alone in the attempts and
+// changes nothing else, a number the run has no attempt of is `attempt_not_found` in the
+// `error` document, and `--wait`, which follows a Cloud run, is a usage error.
+#[test]
+fn show_selects_one_attempt_of_a_local_run_and_refuses_wait() {
+    let bundle = environment_retry_bundle();
+    let run_directory = initial_failed_run(&bundle, "attempt-selection");
+    let retried = isolated_command(&retry_args(
+        &run_directory,
+        bundle.execution_root(),
+        &["--json"],
+    ))
+    .env("RETRY_PHASE", "retry")
+    .output()
+    .unwrap();
+    assert!(retried.status.success(), "{retried:?}");
+
+    let every: serde_json::Value =
+        serde_json::from_slice(&run(&show_args(&run_directory, &[])).stdout).unwrap();
+    assert_eq!(every["attempts"].as_array().unwrap().len(), 2, "{every}");
+    let second = run(&show_args(&run_directory, &["--attempt", "2"]));
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    let attempts = second["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 1, "{second}");
+    assert_eq!(attempts[0]["number"], 2);
+    for member in [
+        "state", "record", "recovery", "retry", "children", "controls",
+    ] {
+        assert_eq!(second[member], every[member], "{member}");
+    }
+
+    let missing = run(&show_args(&run_directory, &["--attempt", "3"]));
+    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    let missing: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(missing["outcome"], "error", "{missing}");
+    assert_eq!(missing["error"]["code"], "attempt_not_found", "{missing}");
+    assert!(
+        super::workflow_status::status_schema().is_valid(&missing),
+        "{missing}"
+    );
+
+    let wait = run(&show_args(&run_directory, &["--wait"]));
+    assert_eq!(wait.status.code(), Some(2), "{wait:?}");
+    assert!(wait.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&wait.stderr).contains("--wait"),
+        "{wait:?}"
+    );
+}
+
 #[test]
 fn retry_acquires_after_pre_rename_publication_crash() {
     let bundle = environment_retry_bundle();
@@ -78,7 +143,7 @@ fn retry_acquires_after_pre_rename_publication_crash() {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         run_directory.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -696,6 +761,76 @@ fn retry_warns_about_a_reused_execution_root_without_inspecting_it() {
     );
 }
 
+// REQ-LOCALRUN-78, REQ-LOCALRUN-79: `retry --all` with no `--execution-root` starts the
+// next attempt of every step where the previous attempt ran, and warns that an earlier
+// attempt used that root.
+#[test]
+fn retry_all_without_an_execution_root_reruns_every_step_in_the_previous_root() {
+    let bundle = environment_retry_bundle();
+    let run_directory = initial_failed_run(&bundle, "default-root");
+    let previous_root = fs::canonicalize(bundle.execution_root()).unwrap();
+    let retried = isolated_command(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "retry".to_owned(),
+        run_directory.to_string_lossy().into_owned(),
+        "--all".to_owned(),
+        "--json".to_owned(),
+    ])
+    .env("RETRY_PHASE", "retry")
+    .output()
+    .unwrap();
+    assert!(retried.status.success(), "{retried:?}");
+    let terminal: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
+    assert_eq!(terminal["command"], "useful workflow run retry");
+    assert_eq!(terminal["attemptNumber"], 2);
+    let state = read_state(&run_directory);
+    assert_eq!(state["attempts"][1]["state"], "succeeded");
+    assert_eq!(
+        state["attempts"][1]["executionRoot"],
+        state["attempts"][0]["executionRoot"]
+    );
+    assert_eq!(
+        fs::read_to_string(previous_root.join("phases")).unwrap(),
+        "initial\nretry\n"
+    );
+    let stderr = String::from_utf8(retried.stderr).unwrap();
+    let warning: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with('!'))
+        .collect();
+    assert_eq!(warning.len(), 1, "{stderr:?}");
+    assert!(
+        warning[0].contains(previous_root.to_str().unwrap()),
+        "{stderr:?}"
+    );
+}
+
+// REQ-LOCALRUN-78: `retry --all` of a run that waits is refused `run_waiting` and changes
+// nothing.
+#[test]
+fn retry_all_of_a_waiting_run_is_refused_run_waiting() {
+    let bundle = super::workflow_continue::wait_tree();
+    let (run_directory, _) =
+        super::workflow_continue::waiting_run(&bundle, "waiting-all", "blocked");
+    let state = fs::read(run_directory.join("state.json")).unwrap();
+    let record = fs::read(run_directory.join("run.json")).unwrap();
+    let output = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "retry".to_owned(),
+        run_directory.to_string_lossy().into_owned(),
+        "--all".to_owned(),
+        "--json".to_owned(),
+    ]);
+    let refusal = super::workflow_run_control::refused(&output, "retry", "run_waiting");
+    assert_eq!(refusal["runDirectory"], run_directory.to_str().unwrap());
+    assert_eq!(fs::read(run_directory.join("state.json")).unwrap(), state);
+    assert_eq!(fs::read(run_directory.join("run.json")).unwrap(), record);
+    assert!(!run_directory.join("attempts/000002").exists());
+}
+
 // REQ-LOCALRUN-168, REQ-OUTPUTS-24
 #[test]
 fn retry_git_capture_keeps_the_recorded_baseline_after_head_advances() {
@@ -1183,26 +1318,25 @@ fn resuming_a_live_parent_is_refused_run_locked() {
     assert!(!destination.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-131: an id no run under the home has is a run-directory
-// failure, which retry and resume report on stderr only, writing no document.
+// REQ-LOCALRUN-180: an id no run under the home has, with nobody signed in to ask Cloud, is
+// `run_not_found` in the `refused` document of retry and resume, as of every leaf that looks
+// everywhere.
 #[test]
-fn retry_and_resume_refuse_an_unknown_run_id_on_stderr_only() {
+fn retry_and_resume_refuse_an_unknown_run_id() {
     let home = tempfile::tempdir().unwrap();
     let execution_root = tempfile::tempdir().unwrap();
     let unknown = Path::new("run_7zzzzzzzzzzzzzzzzzzzzzzzzz");
-    for args in [
-        retry_args(unknown, execution_root.path(), &["--json"]),
-        resume_args(unknown),
+    for (leaf, args) in [
+        (
+            "retry",
+            retry_args(unknown, execution_root.path(), &["--json"]),
+        ),
+        ("resume", resume_args(unknown)),
     ] {
-        let output = isolated_command(&args)
-            .env("USEFUL_HOME", home.path())
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
-        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("run_not_found"),
-            "{args:?}: {output:?}"
-        );
+        let mut command = isolated_command(&args);
+        command.env("USEFUL_HOME", home.path());
+        let output = super::workflow_status::signed_out(command);
+        let refusal = super::workflow_run_control::refused(&output, leaf, "run_not_found");
+        assert!(refusal.get("runDirectory").is_none(), "{refusal}");
     }
 }

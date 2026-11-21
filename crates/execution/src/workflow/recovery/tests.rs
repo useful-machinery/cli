@@ -129,6 +129,31 @@ fn decision_parser_rejects_each_closed_contract_failure_separately() {
         .unwrap(),
         RecoveryDecision::gave_up("inspected", "unsafe to repair")
     );
+    assert_eq!(
+        parse_recovery_decision(
+            br#"{"schemaVersion":1,"decision":"infrastructure","summary":"disk full","reason":"host"}"#
+        )
+        .unwrap(),
+        RecoveryDecision::infrastructure("disk full", "host")
+    );
+}
+
+// REQ-WFRECOVERY-22
+#[test]
+fn decision_schema_admits_infrastructure_and_refuses_retry() {
+    let schema_document = serde_json::from_str(RECOVERY_DECISION_SCHEMA_JSON).unwrap();
+    let schema = jsonschema::draft202012::new(&schema_document).unwrap();
+    let document = |decision: &str| {
+        json!({
+            "schemaVersion": 1,
+            "decision": decision,
+            "summary": "disk full",
+            "reason": "host"
+        })
+    };
+
+    assert!(schema.is_valid(&document("infrastructure")));
+    assert!(!schema.is_valid(&document("retry")));
 }
 
 // REQ-WFRECOVERY-22

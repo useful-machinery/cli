@@ -1,0 +1,135 @@
+[
+  {
+    "title": "Try a workflow on this machine",
+    "steps": [
+      ["workflow", "validate", ".useful/starter"],
+      ["workflow", "run", "create", "--path", ".useful/starter"],
+      ["workflow", "run", "list"],
+      ["workflow", "run", "show", "run_01jcq3m8x2k9v7t4r6p0w5n8yz"],
+      ["workflow", "run", "view", "run_01jcq3m8x2k9v7t4r6p0w5n8yz"]
+    ]
+  },
+  {
+    "title": "Set up Cloud for a team",
+    "steps": [
+      ["account", "signup"],
+      ["org", "create", "--name", "Dunder Mifflin"],
+      ["org", "integration", "connect", "github"],
+      ["runner", "pool", "create", "builders"],
+      ["project", "create", "paper", "--repository", "dunder-mifflin/paper", "--pool", "builders"],
+      ["runner", "join-key", "issue", "--pool", "builders", "--expires-in", "1d", "--key-file", "builders.key"],
+      ["runner", "serve", "--join-key-file", "builders.key"],
+      ["project", "show", "paper"]
+    ]
+  },
+  {
+    "title": "Publish a workflow and run it in Cloud",
+    "steps": [
+      ["workflow", "definition", "publish", ".useful/engineering", "--on", "project"],
+      ["workflow", "run", "create", "engineering", "--on", "personal", "--input-text", "issue", "AUTO-12", "--wait"],
+      ["workflow", "run", "create", "engineering", "--on", "project", "--input-text", "issue", "AUTO-13"],
+      ["workflow", "run", "list"],
+      ["workflow", "run", "show", "AUTO-12"]
+    ]
+  },
+  {
+    "title": "Answer, approve or hold a waiting run",
+    "steps": [
+      ["workflow", "run", "list", "--waiting"],
+      ["workflow", "run", "show", "AUTO-12"],
+      ["workflow", "run", "answer", "AUTO-12", "--text", "Only the billing service"],
+      ["workflow", "run", "approve", "AUTO-13"],
+      ["workflow", "run", "hand-back", "AUTO-13", "--notes", "Split the migration into two PRs"],
+      ["workflow", "run", "pause", "AUTO-12", "--before", "deploy", "--reason", "Release freeze"],
+      ["workflow", "run", "unpause", "AUTO-12"]
+    ]
+  },
+  {
+    "title": "Recover a failed run",
+    "steps": [
+      ["workflow", "run", "show", "AUTO-12"],
+      ["workflow", "run", "retry", "AUTO-12"],
+      ["workflow", "run", "retry", "AUTO-12", "--from", "implement"],
+      ["workflow", "definition", "publish", ".useful/engineering", "--on", "project"],
+      ["workflow", "run", "upgrade", "AUTO-12", "--from", "review"]
+    ]
+  },
+  {
+    "title": "Get a workflow's credentials ready on a runner",
+    "steps": [
+      ["workflow", "doctor", ".useful/engineering", "--runner", "scranton-1"],
+      ["account", "integration", "connect", "--workflow", ".useful/engineering", "--runner", "scranton-1"],
+      ["account", "integration", "authorize", "--all", "--runner", "scranton-1"],
+      ["runner", "sync"],
+      ["workflow", "doctor", ".useful/engineering", "--runner", "scranton-1"]
+    ]
+  },
+  {
+    "title": "Add a teammate, or remove one",
+    "steps": [
+      ["org", "invitation", "issue", "--email", "pam@dundermifflin.com"],
+      ["account", "invitation", "list"],
+      ["account", "invitation", "accept", "inv_01jcq5h6j7k8m9n0p1q2r3s4t5"],
+      ["org", "member", "list"],
+      ["org", "member", "update", "pam@dundermifflin.com", "--role", "owner"],
+      ["org", "member", "remove", "pam@dundermifflin.com", "--yes"]
+    ]
+  },
+  {
+    "title": "Take a runner down for maintenance, or move it",
+    "steps": [
+      ["runner", "list", "--pool", "builders"],
+      ["runner", "drain", "scranton-1"],
+      ["runner", "show"],
+      ["runner", "update", "scranton-1", "--pool", "gpu"],
+      ["runner", "enable", "scranton-1"]
+    ]
+  },
+  {
+    "title": "Restore lost repository access",
+    "steps": [
+      ["project", "show", "paper"],
+      ["org", "integration", "list"],
+      ["org", "integration", "reconnect", "github"],
+      ["project", "update", "paper", "--repository", "dunder-mifflin/paper-archive"]
+    ]
+  },
+  {
+    "title": "Collect a run's outputs",
+    "steps": [
+      ["workflow", "run", "artifact", "list", "AUTO-12"],
+      ["workflow", "run", "artifact", "download", "AUTO-12", "--output", "out/"],
+      ["workflow", "run", "artifact", "validate", "out/"],
+      ["workflow", "run", "publication", "create", "--run", "AUTO-12", "--export", "review", "--wait"]
+    ]
+  },
+  {
+    "title": "Start runs from CI with a service principal",
+    "steps": [
+      ["account", "service", "create", "--name", "ci", "--key-file", "ci.key"],
+      ["org", "invitation", "issue", "--account", "prn_01jcqa1b2c3d4e5f6g7h8j9k0m"],
+      ["account", "invitation", "accept", "inv_01jcqb1c2d3e4f5g6h7j8k9m0n", "--api-key-file", "ci.key"],
+      ["workflow", "run", "create", "engineering", "--on", "project", "--input-text", "pr", "4545", "--wait", "--json", "--api-key-file", "ci.key"]
+    ]
+  },
+  {
+    "title": "Turn on automatic starts and see why one did not fire",
+    "steps": [
+      ["workflow", "definition", "update", "engineering", "--run-as", "ci"],
+      ["workflow", "definition", "enable", "engineering"],
+      ["workflow", "definition", "evaluation", "list", "engineering", "--state", "not_matched"],
+      ["workflow", "definition", "evaluation", "show", "wev_01k0z6r1w8f4jy2m7q9v3x5abd"]
+    ]
+  },
+  {
+    "title": "Get notified of runs with a webhook",
+    "steps": [
+      ["project", "webhook", "create", "--config-file", "hook.json"],
+      ["project", "webhook", "test", "wh_01jcqd"],
+      ["project", "webhook", "delivery", "list", "wh_01jcqd"],
+      ["project", "webhook", "delivery", "show", "dlv_01jcqe"],
+      ["project", "webhook", "secret", "rotate", "wh_01jcqd"],
+      ["project", "webhook", "secret", "revoke", "wh_01jcqd"]
+    ]
+  }
+]

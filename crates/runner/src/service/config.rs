@@ -2,6 +2,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use url::Url;
 
@@ -12,7 +13,7 @@ use useful_execution::{
 };
 
 /// The directory beside the state file that holds the runner's log.
-const LOG_DIRECTORY: &str = "logs";
+pub(crate) const LOG_DIRECTORY: &str = "logs";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RepositoryUrlPolicy {
@@ -33,20 +34,70 @@ impl RepositoryUrlPolicy {
     }
 }
 
+/// The kept-run bounds the operator configuration's `keptRuns` resolves to
+/// (REQ-RUNNERENROLL-157): `None` sets no bound of that kind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KeptRunBounds {
+    pub(crate) maximum_age: Option<Duration>,
+    pub(crate) maximum_total_bytes: Option<u64>,
+}
+
+impl Default for KeptRunBounds {
+    /// The bound of each kind a configuration takes when it does not name
+    /// one: 14 days and 50 GiB.
+    fn default() -> Self {
+        Self {
+            maximum_age: Some(Duration::from_secs(14 * 86_400)),
+            maximum_total_bytes: Some(53_687_091_200),
+        }
+    }
+}
+
+/// A build cache the operator configuration's `buildCaches` names
+/// (REQ-RUNNERENROLL-160): the directory as written and its bound.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildCache {
+    pub(crate) path: PathBuf,
+    pub(crate) maximum_bytes: u64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct AssignmentConfig {
     work_root: PathBuf,
+    kept_runs: KeptRunBounds,
+    build_caches: Vec<BuildCache>,
 }
 
 impl AssignmentConfig {
     pub(crate) fn new(work_root: &Path) -> Result<Self, ConfigError> {
         Ok(Self {
             work_root: canonical_directory(work_root, ConfigError::WorkRootUnavailable)?,
+            kept_runs: KeptRunBounds::default(),
+            build_caches: Vec::new(),
         })
+    }
+
+    pub(crate) fn with_kept_runs(self, kept_runs: KeptRunBounds) -> Self {
+        Self { kept_runs, ..self }
+    }
+
+    pub(crate) fn with_build_caches(self, build_caches: Vec<BuildCache>) -> Self {
+        Self {
+            build_caches,
+            ..self
+        }
     }
 
     pub(crate) fn work_root(&self) -> &Path {
         &self.work_root
+    }
+
+    pub(crate) fn kept_runs(&self) -> KeptRunBounds {
+        self.kept_runs
+    }
+
+    pub(crate) fn build_caches(&self) -> &[BuildCache] {
+        &self.build_caches
     }
 }
 
@@ -73,6 +124,8 @@ impl fmt::Debug for Config {
             .debug_struct("Config")
             .field("endpoint", &self.endpoint)
             .field("credential", &self.credential)
+            .field("kept_runs", &self.assignment.kept_runs())
+            .field("build_caches", &self.assignment.build_caches())
             .field(
                 "agent_capable",
                 &(self.pi_installation.is_some()
@@ -159,7 +212,9 @@ impl Config {
             let _ = validate_pending_credential(pending)?;
         }
         let startup_pending = enrolled.pending_credential;
-        let assignment = AssignmentConfig::new(&enrolled.work_root)?;
+        let assignment = AssignmentConfig::new(&enrolled.work_root)?
+            .with_kept_runs(enrolled.kept_runs)
+            .with_build_caches(enrolled.build_caches);
         let mut config = Self::new(
             endpoint.as_str(),
             credential,
@@ -265,6 +320,13 @@ impl Config {
         self.minimum_free_disk_bytes
     }
 
+    /// The configuration with `build_caches` in place of its build caches.
+    #[cfg(test)]
+    pub(crate) fn with_build_caches(mut self, build_caches: Vec<BuildCache>) -> Self {
+        self.assignment = self.assignment.with_build_caches(build_caches);
+        self
+    }
+
     pub(super) fn repository_url_policy(&self) -> RepositoryUrlPolicy {
         self.repository_url_policy
     }
@@ -349,9 +411,12 @@ mod tests {
     use std::fs::{self, Permissions};
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tempfile::TempDir;
 
-    use super::{AssignmentConfig, Config, ConfigError, RepositoryUrlPolicy};
+    use super::{
+        AssignmentConfig, BuildCache, Config, ConfigError, KeptRunBounds, RepositoryUrlPolicy,
+    };
     use crate::credential::test_credential;
 
     fn assignment_fixture(temporary: &TempDir) -> AssignmentConfig {
@@ -428,22 +493,32 @@ mod tests {
 
     impl Host {
         fn new() -> Self {
+            Self::with_member(None)
+        }
+
+        /// A host whose operator configuration carries `keptRuns`.
+        fn with_kept_runs(kept_runs: serde_json::Value) -> Self {
+            Self::with_member(Some(("keptRuns", kept_runs)))
+        }
+
+        /// A host whose operator configuration carries the optional member
+        /// given, by name and value.
+        fn with_member(member: Option<(&str, serde_json::Value)>) -> Self {
             let root = tempfile::tempdir().unwrap();
             fs::set_permissions(root.path(), Permissions::from_mode(0o700)).unwrap();
             let config = root.path().join("runner.json");
             let state = root.path().join("state/runner-state.json");
-            fs::write(
-                &config,
-                serde_json::to_vec(&serde_json::json!({
-                    "schemaVersion": 1,
-                    "deploymentMode": "development",
-                    "runnerStatePath": state,
-                    "controlSocketPath": root.path().join("run/runner.sock"),
-                    "workRoot": root.path().join("work")
-                }))
-                .unwrap(),
-            )
-            .unwrap();
+            let mut document = serde_json::json!({
+                "schemaVersion": 1,
+                "deploymentMode": "development",
+                "runnerStatePath": state,
+                "controlSocketPath": root.path().join("run/runner.sock"),
+                "workRoot": root.path().join("work")
+            });
+            if let Some((name, value)) = member {
+                document[name] = value;
+            }
+            fs::write(&config, serde_json::to_vec(&document).unwrap()).unwrap();
             Self {
                 _root: root,
                 config,
@@ -458,6 +533,94 @@ mod tests {
             fs::write(&self.state, serde_json::to_vec(document).unwrap()).unwrap();
             fs::set_permissions(&self.state, Permissions::from_mode(0o600)).unwrap();
         }
+
+        /// Writes valid enrolled state; the work root stays absent.
+        fn write_enrolled_state(&self) {
+            self.write_state(&serde_json::json!({
+                "schemaVersion": 1,
+                "runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "connectionUrl": "ws://127.0.0.1:8765/v1/runner/connect",
+                "currentCredential": {
+                    "id": "rrc_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "activationId": "rna_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "enrolledAt": "2026-08-06T12:00:00Z"
+                },
+                "updatedAt": "2026-08-06T12:00:00Z"
+            }));
+        }
+
+        /// Writes valid enrolled state and creates the work root, so that
+        /// `Config::load` succeeds.
+        fn enroll(&self) {
+            self.write_enrolled_state();
+            fs::create_dir(self.config.parent().unwrap().join("work")).unwrap();
+        }
+    }
+
+    // REQ-RUNNERENROLL-157
+    #[test]
+    fn a_loaded_configuration_carries_its_kept_run_bounds_to_assignments() {
+        let bounded = Host::with_kept_runs(serde_json::json!({
+            "maximumAgeDays": null,
+            "maximumTotalBytes": 1_073_741_824_u64
+        }));
+        bounded.enroll();
+        assert_eq!(
+            Config::load(&bounded.config)
+                .unwrap()
+                .assignment()
+                .kept_runs(),
+            KeptRunBounds {
+                maximum_age: None,
+                maximum_total_bytes: Some(1_073_741_824),
+            },
+        );
+
+        let defaulted = Host::new();
+        defaulted.enroll();
+        assert_eq!(
+            Config::load(&defaulted.config)
+                .unwrap()
+                .assignment()
+                .kept_runs(),
+            KeptRunBounds {
+                maximum_age: Some(Duration::from_secs(14 * 86_400)),
+                maximum_total_bytes: Some(53_687_091_200),
+            },
+        );
+    }
+
+    // REQ-RUNNERENROLL-160
+    #[test]
+    fn a_loaded_configuration_carries_its_build_caches_to_assignments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache");
+        let cached = Host::with_member(Some((
+            "buildCaches",
+            serde_json::json!([{"path": path, "maximumBytes": 1_073_741_824_u64}]),
+        )));
+        cached.enroll();
+        assert_eq!(
+            Config::load(&cached.config)
+                .unwrap()
+                .assignment()
+                .build_caches(),
+            [BuildCache {
+                path,
+                maximum_bytes: 1_073_741_824,
+            }],
+        );
+
+        let uncached = Host::new();
+        uncached.enroll();
+        assert_eq!(
+            Config::load(&uncached.config)
+                .unwrap()
+                .assignment()
+                .build_caches(),
+            [],
+        );
     }
 
     // REQ-RUNNERENROLL-104
@@ -475,18 +638,7 @@ mod tests {
         );
 
         let without_work_root = Host::new();
-        without_work_root.write_state(&serde_json::json!({
-            "schemaVersion": 1,
-            "runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "connectionUrl": "ws://127.0.0.1:8765/v1/runner/connect",
-            "currentCredential": {
-                "id": "rrc_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                "activationId": "rna_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "enrolledAt": "2026-08-06T12:00:00Z"
-            },
-            "updatedAt": "2026-08-06T12:00:00Z"
-        }));
+        without_work_root.write_enrolled_state();
         assert_eq!(
             Config::load(&without_work_root.config).unwrap_err(),
             ConfigError::WorkRootUnavailable,

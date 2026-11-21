@@ -17,6 +17,8 @@ pub fn valid_organization_ref(value: &str) -> bool {
     valid_typed_id(value, "org_") || valid_url_safe_name(value)
 }
 
+/// An organization slug or a project name (REQ-PROJECT-11): 1 to 63 lowercase letters, digits
+/// and hyphens, beginning and ending with a letter or digit.
 pub fn valid_url_safe_name(value: &str) -> bool {
     valid_lowercase_hyphenated(value, 63)
 }

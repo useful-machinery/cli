@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use super::agent_login::setup::SYNC_BOUND;
 use super::control_protocol::{
-    AssignmentAnswer, AssignmentQuery, OVERVIEW_RESPONSE_LIMIT, Operation, OverviewAnswer,
-    ProtocolFailure, RESPONSE_LIMIT, Response, decode_assignment_response,
-    decode_overview_response, decode_response, encode_assignment_request, encode_overview_request,
-    encode_request,
+    AssignmentAnswer, AssignmentQuery, KeptAnswer, OVERVIEW_RESPONSE_LIMIT, Operation,
+    OverviewAnswer, ProtocolFailure, PruneAnswer, PruneScope, RESPONSE_LIMIT, Response,
+    decode_assignment_response, decode_kept_response, decode_overview_response,
+    decode_prune_response, decode_response, encode_assignment_request, encode_kept_request,
+    encode_overview_request, encode_prune_request, encode_request,
 };
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -52,7 +53,7 @@ pub fn request(socket_path: &Path, operation: Operation) -> Result<Response, Req
     let response = exchange(
         socket_path,
         &encode_request(operation),
-        response_timeout,
+        Some(response_timeout),
         RESPONSE_LIMIT,
     )?;
     decode_response(&response).map_err(RequestFailure::Protocol)
@@ -65,7 +66,7 @@ pub fn request_overview(socket_path: &Path) -> Result<OverviewAnswer, RequestFai
     let response = exchange(
         socket_path,
         &encode_overview_request(),
-        IO_TIMEOUT,
+        Some(IO_TIMEOUT),
         OVERVIEW_RESPONSE_LIMIT,
     )?;
     decode_overview_response(&response).map_err(RequestFailure::Protocol)
@@ -80,21 +81,55 @@ pub fn request_assignment(
     query: &AssignmentQuery,
 ) -> Result<AssignmentAnswer, RequestFailure> {
     let request = encode_assignment_request(query).map_err(RequestFailure::Protocol)?;
-    let response = exchange(socket_path, &request, IO_TIMEOUT, OVERVIEW_RESPONSE_LIMIT)?;
+    let response = exchange(
+        socket_path,
+        &request,
+        Some(IO_TIMEOUT),
+        OVERVIEW_RESPONSE_LIMIT,
+    )?;
     decode_assignment_response(&response).map_err(RequestFailure::Protocol)
 }
 
+/// Asks the serving process what it keeps on the host and what a prune of `scope` would
+/// remove now (REQ-RUNNERENROLL-164). The answer waits for any pass in flight, so it is
+/// read with no timeout; a serving process of an earlier release refuses the operation,
+/// which is answered as `KeptAnswer::Refused`.
+pub fn request_kept(socket_path: &Path, scope: PruneScope) -> Result<KeptAnswer, RequestFailure> {
+    let response = exchange(
+        socket_path,
+        &encode_kept_request(scope),
+        None,
+        OVERVIEW_RESPONSE_LIMIT,
+    )?;
+    decode_kept_response(&response).map_err(RequestFailure::Protocol)
+}
+
+/// Asks the serving process to prune what `scope` covers now (REQ-RUNNERENROLL-165). A
+/// pass takes as long as its file system does, so the answer is read with no timeout; a
+/// runner whose held run is working answers `PruneAnswer::Refused` with `runner_busy`, and
+/// one of an earlier release with `invalid_request`.
+pub fn request_prune(socket_path: &Path, scope: PruneScope) -> Result<PruneAnswer, RequestFailure> {
+    let response = exchange(
+        socket_path,
+        &encode_prune_request(scope),
+        None,
+        OVERVIEW_RESPONSE_LIMIT,
+    )?;
+    decode_prune_response(&response).map_err(RequestFailure::Protocol)
+}
+
 /// Writes one request and reads its one LF-terminated answer of at most
-/// `response_limit` bytes.
+/// `response_limit` bytes, waiting for it at most `response_timeout`, or until the
+/// connection closes when that is `None`.
 fn exchange(
     socket_path: &Path,
     request: &[u8],
-    response_timeout: Duration,
+    response_timeout: Option<Duration>,
     response_limit: usize,
 ) -> Result<Vec<u8>, RequestFailure> {
     let mut stream = UnixStream::connect(socket_path).map_err(|_| RequestFailure::NotReachable)?;
     stream
-        .set_read_timeout(Some(response_timeout))
+        .set_read_timeout(response_timeout)
         .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
         .map_err(|_| RequestFailure::NotReachable)?;
     stream
@@ -137,11 +172,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::thread;
 
-    use super::{RequestFailure, request_assignment, request_overview};
+    use super::{
+        RequestFailure, request_assignment, request_kept, request_overview, request_prune,
+    };
     use crate::control_protocol::{
         AssignmentAnswer, AssignmentQuery, ControlError, OverviewAnswer, OverviewRunElement,
-        ProtocolFailure, decode_assignment_response, decode_overview_response,
-        encode_assignment_response, encode_overview_response,
+        ProtocolFailure, PruneAnswer, PruneScope, decode_assignment_response, decode_kept_response,
+        decode_overview_response, decode_prune_response, encode_assignment_response,
+        encode_overview_response,
     };
 
     fn fixture(path: &str) -> Vec<u8> {
@@ -236,6 +274,36 @@ mod tests {
         assert!(answer.len() > 65_536, "{}", answer.len());
         let (answered, _) = exchange(answer);
         assert_eq!(answered, Ok(OverviewAnswer::Overview(overview)));
+    }
+
+    // REQ-RUNNERENROLL-164: the client writes the fixture's `kept` request line for its
+    // scope and reads the report answered.
+    #[test]
+    fn a_kept_request_is_the_fixture_line_and_its_answer_decodes() {
+        let answer = fixture("valid/kept-response.json");
+        let (answered, received) = exchange_with(answer.clone(), |socket| {
+            request_kept(socket, PruneScope::Bounds)
+        });
+        assert_eq!(received, fixture("valid/kept-request.json"));
+        assert_eq!(answered, Ok(decode_kept_response(&answer).unwrap()));
+    }
+
+    // REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-82: the client writes the fixture's `prune`
+    // request line for its scope and reads the result answered, or the refusal of a
+    // runner whose held run is working.
+    #[test]
+    fn a_prune_request_is_the_fixture_line_and_its_answer_decodes() {
+        let answer = fixture("valid/pruned-response.json");
+        let (answered, received) = exchange_with(answer.clone(), |socket| {
+            request_prune(socket, PruneScope::All)
+        });
+        assert_eq!(received, fixture("valid/prune-request.json"));
+        assert_eq!(answered, Ok(decode_prune_response(&answer).unwrap()));
+
+        let (answered, _) = exchange_with(fixture("valid/runner-busy-response.json"), |socket| {
+            request_prune(socket, PruneScope::All)
+        });
+        assert_eq!(answered, Ok(PruneAnswer::Refused(ControlError::RunnerBusy)));
     }
 
     /// The query `valid/assignment-request.json` states.

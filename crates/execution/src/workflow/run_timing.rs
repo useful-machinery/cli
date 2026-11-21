@@ -158,7 +158,7 @@ impl RunTimingObservation {
 fn failure_is_timed(step: Option<&ObservedStepTransition>) -> bool {
     matches!(
         step,
-        Some(ObservedStepTransition::Failed { detail })
+        Some(ObservedStepTransition::Failed { detail, .. })
             if !matches!(detail.phase, FailurePhase::Condition)
     )
 }
@@ -218,7 +218,10 @@ mod tests {
                 from: StepStateKind::Pending,
                 to: StepStateKind::Failed,
             },
-            step: Some(ObservedStepTransition::Failed { detail }),
+            step: Some(ObservedStepTransition::Failed {
+                detail,
+                failure_class: None,
+            }),
             executions: ObservedExecutions::default(),
         }))
     }

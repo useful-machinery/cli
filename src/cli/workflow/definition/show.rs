@@ -1,28 +1,40 @@
-//! `useful workflow definition show` (REQ-WFDEF-26).
+//! `useful workflow definition show DEFINITION` (REQ-WFDEF-26, REQ-CLOUDDEF-15): a definition
+//! under the home, read without a request, or else one of the project in effect
+//! (REQ-CLOUDDEF-42).
 
 use std::io::{self, Write};
 
 use clap::Args;
 use serde::Serialize;
 
+use super::cloud_report;
 use super::report::{display, display_members, write_json};
+use super::target::{self, Found, InEffect, Leaf, Named, Options, Project};
+use crate::cli::CommandResult;
+use useful_api::WorkflowDefinition;
 use useful_execution::{
     BindingValue, BindingsSnapshot, DefinitionError, ListedRun, RevisionRecord, RunState,
-    StoredDefinition, WorkflowHome, list_runs, read_current_bindings, read_definition,
+    StoredDefinition, WorkflowHome, list_runs, read_current_bindings,
 };
+use useful_human_auth::Deployment;
 
-pub(super) const ABOUT: &str = "Show a local workflow definition and its revisions";
+pub(super) const ABOUT: &str = "Show a workflow definition and its revisions";
 const COMMAND_NAME: &str = "useful workflow definition show";
 const REFUSED: &str = "Show refused.";
 const TREE_ROOT_FILE: &str = "workflow.yaml";
+/// The most revisions a Cloud definition's `show` reads, the API's page bound.
+const SHOWN_REVISIONS: i32 = 100;
 
 #[derive(Debug, Args)]
 pub(super) struct Command {
-    #[arg(value_name = "ID", help = super::ID_HELP)]
-    id: String,
+    #[arg(value_name = target::DEFINITION, help = target::DEFINITION_HELP)]
+    definition: Named,
 
     #[command(flatten)]
-    output: super::super::super::JsonArgs<super::super::super::WorkflowJson>,
+    in_effect: InEffect,
+
+    #[command(flatten)]
+    options: Options,
 }
 
 /// The record, whether each revision's tree copy is under the home, newest first, the
@@ -35,26 +47,77 @@ struct Shown {
 }
 
 impl Command {
-    pub(super) fn execute(self) -> super::super::super::CommandResult {
-        let result = WorkflowHome::from_environment().and_then(|home| shown(&home, &self.id));
-        super::finish(
-            COMMAND_NAME,
-            REFUSED,
-            result,
-            self.output.json,
-            |shown, json| {
-                if json {
-                    write_json(&show_report(shown), "workflow definition")
-                } else {
-                    write_human(shown)
-                }
-            },
-        )
+    /// Finds the definition under the home and then in the project, and shows it.
+    pub(super) fn execute(self) -> CommandResult {
+        let json = self.options.json;
+        let leaf = Leaf {
+            name: "show",
+            command: COMMAND_NAME,
+            refused: REFUSED,
+            json,
+        };
+        let found = target::find(&self.definition, self.in_effect, &self.options, leaf);
+        match found {
+            Ok(Found::Home { home, definition }) => super::finish(
+                COMMAND_NAME,
+                REFUSED,
+                shown(&home, definition),
+                json,
+                |shown, json| {
+                    if json {
+                        write_json(&show_report(shown), "workflow definition")
+                    } else {
+                        write_human(shown)
+                    }
+                },
+            ),
+            Ok(Found::Project {
+                deployment,
+                project,
+                definition,
+            }) => show_cloud(&deployment, &self.options, &project, definition),
+            Err(ended) => ended,
+        }
     }
 }
 
-fn shown(home: &WorkflowHome, id: &str) -> Result<Shown, DefinitionError> {
-    let definition = read_definition(home, id)?;
+/// A Cloud definition with its current revision and the newest page of its revisions.
+fn show_cloud(
+    deployment: &Deployment,
+    options: &Options,
+    project: &Project,
+    definition: WorkflowDefinition,
+) -> CommandResult {
+    let (organization, project_id, id) = (
+        project.organization.as_str(),
+        project.project.as_str(),
+        definition.id.as_str(),
+    );
+    let read = super::with_api(deployment, options, |api| {
+        let current = api.revision(organization, project_id, id, definition.current_revision)?;
+        let (revisions, more) =
+            api.revisions(organization, project_id, id, Some(SHOWN_REVISIONS), None)?;
+        Ok((current, revisions, more.is_some()))
+    })?;
+    let scope = cloud_report::Scope {
+        leaf: "show",
+        organization: Some(organization),
+        project: Some(project_id),
+        json: options.json,
+    };
+    let shown = read.map(|(current, revisions, more)| cloud_report::Shown {
+        definition,
+        current,
+        revisions,
+        more,
+    });
+    cloud_report::finish(&scope, shown.as_ref(), |shown| {
+        cloud_report::shown(&scope, shown)
+    })
+}
+
+fn shown(home: &WorkflowHome, definition: StoredDefinition) -> Result<Shown, DefinitionError> {
+    let id = definition.record.id.as_str();
     let bindings = read_current_bindings(&definition)?;
     let retained = definition
         .record
@@ -181,6 +244,7 @@ fn show_report(shown: &Shown) -> JsonShown<'_> {
     JsonShown {
         schema_version: 1,
         command: COMMAND_NAME,
+        on: "local",
         definition: JsonDefinition {
             id: &record.id,
             name: &record.name,
@@ -212,6 +276,7 @@ fn show_report(shown: &Shown) -> JsonShown<'_> {
 struct JsonShown<'a> {
     schema_version: u8,
     command: &'static str,
+    on: &'static str,
     definition: JsonDefinition<'a>,
     revisions: Vec<JsonRevision<'a>>,
     bindings: &'a BindingsSnapshot,

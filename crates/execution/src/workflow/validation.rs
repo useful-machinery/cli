@@ -99,6 +99,8 @@ pub(crate) enum ValidationFailureKind {
     WaitRuleUnsupported,
     WaitRuleInvalid,
     WaitRuleReferenceInvalid,
+    WaitHostTargetInvalid,
+    WaitLimitRequired,
     ControlReferenceRequiresOptional,
     ForEachReferenceInvalid,
     ForEachEmptyUndeclared,
@@ -284,8 +286,8 @@ impl ChildWorkflowSummary {
 }
 
 /// A child with `workflow` steps is a nested workflow; its first step in source order
-/// that declares `forEach`, or whose edges reach a wait that is not an `answer` or `repair`
-/// wait continuing at the step, is the shape its parent refuses (REQ-WFFORMAT-104).
+/// that declares `forEach`, or whose edges reach a wait that is not an `answer`, `repair` or
+/// `host` wait continuing at the step, is the shape its parent refuses (REQ-WFFORMAT-104).
 fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
     let mut workflow_steps = child
         .source_order
@@ -315,12 +317,14 @@ fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
         .map_or(ChildNesting::Nested, ChildNesting::Unsupported)
 }
 
-/// The refused shape of a wait an edge of `step` reaches, directly or as a limited edge's
-/// `else`, which counts as entered by `step`.
+/// The refused shape of a wait an edge of `step` reaches, directly or as a limited edge's or
+/// a host wait's `else`, which counts as entered by `step`. A host wait itself waits at
+/// `step`, which validation requires.
 fn refused_wait(step: &str, target: &ValidatedEdgeTarget) -> Option<NestedShape> {
     match target {
         ValidatedEdgeTarget::Step(_) | ValidatedEdgeTarget::Exit(_) => None,
-        ValidatedEdgeTarget::Limited { else_, .. } => refused_wait(step, else_),
+        ValidatedEdgeTarget::Limited { else_, .. }
+        | ValidatedEdgeTarget::HostWait { else_, .. } => refused_wait(step, else_),
         ValidatedEdgeTarget::Wait { kind, then, .. } => {
             if !matches!(kind, WaitKind::Answer | WaitKind::Repair) {
                 Some(NestedShape::WaitKind)
@@ -480,7 +484,7 @@ pub(crate) fn validate_with_children(
     };
     for step_name in step_names {
         let step = &document.steps[step_name];
-        let body = match &step.body {
+        let mut body = match &step.body {
             NodeBody::Workflow(node) => ValidatedStep::Workflow(validate_workflow_step(
                 step_name,
                 node,
@@ -498,6 +502,13 @@ pub(crate) fn validate_with_children(
                 &mut declared_inputs,
             )?,
         };
+        // The JSON schema admits `infrastructureExitCodes` on an ordinary `cmd` step only
+        // (REQ-WFFORMAT-109).
+        if let ValidatedStep::Command(command) = &mut body {
+            command
+                .infrastructure_exit_codes
+                .extend(step.infrastructure_exit_codes.iter().copied());
+        }
         let recovery = validate_recovery(
             step_name,
             step.recovery.as_ref(),
@@ -879,10 +890,11 @@ fn step_index(document: &WorkflowDocument, step: &str) -> Option<usize> {
 
 /// Every child outcome has exactly one edge, and each target is a step of the workflow
 /// (later, the step itself or earlier), a parent outcome, a limited edge whose `then` is a
-/// step and whose `else` is an unlimited target (REQ-WFFORMAT-96), or a wait whose `then`
+/// step and whose `else` is an unlimited target (REQ-WFFORMAT-96), a wait whose `then`
 /// is a step or an exit, whose `onHandBack`, present exactly for `approval`, is a step,
 /// and whose `rule`, present exactly for `external`, is checked (REQ-WFFORMAT-92,
-/// REQ-WFFORMAT-97).
+/// REQ-WFFORMAT-97), or a host wait whose `then` is `step_name` and which has a `limit` and
+/// an unlimited `else` (REQ-WFFORMAT-111).
 fn validate_edges(
     step_name: &str,
     node: &super::document::WorkflowNode,
@@ -918,7 +930,7 @@ fn validate_edges(
     node.edges
         .iter()
         .map(|(outcome, target)| {
-            validate_edge_target(target, position, document)
+            validate_edge_target(target, step_name, position, document)
                 .map(|target| (outcome.clone(), target))
                 .map_err(|kind| edge_failure(kind, outcome))
         })
@@ -927,9 +939,17 @@ fn validate_edges(
 
 fn validate_edge_target(
     target: &EdgeTarget,
+    step_name: &str,
     position: Option<usize>,
     document: &WorkflowDocument,
 ) -> Result<ValidatedEdgeTarget, ValidationFailureKind> {
+    // The schema admits no limited edge and no host wait as an `else`.
+    let unlimited = |else_: &EdgeTarget| {
+        !matches!(
+            else_,
+            EdgeTarget::Limited { .. } | EdgeTarget::HostWait { .. }
+        )
+    };
     match target {
         EdgeTarget::Step(step) => {
             validate_step_target(step, document).map(ValidatedEdgeTarget::Step)
@@ -945,14 +965,30 @@ fn validate_edge_target(
                 .ok_or(ValidationFailureKind::EdgeExitUndeclared)
         }
         EdgeTarget::Limited { then, limit, else_ } => {
-            // The schema admits only a step id or an exit as `then`, and no limited `else`.
-            if then.starts_with("exit.") || matches!(else_.as_ref(), EdgeTarget::Limited { .. }) {
+            // The schema admits only a step id or an exit as `then`.
+            if then.starts_with("exit.") || !unlimited(else_) {
                 return Err(ValidationFailureKind::EdgeLimitTargetInvalid);
             }
             Ok(ValidatedEdgeTarget::Limited {
                 then: validate_step_target(then, document)?,
                 limit: *limit,
-                else_: Box::new(validate_edge_target(else_, position, document)?),
+                else_: Box::new(validate_edge_target(else_, step_name, position, document)?),
+            })
+        }
+        EdgeTarget::HostWait { then, limit, else_ } => {
+            if then != step_name {
+                return Err(ValidationFailureKind::WaitHostTargetInvalid);
+            }
+            let (Some(limit), Some(else_)) = (limit, else_) else {
+                return Err(ValidationFailureKind::WaitLimitRequired);
+            };
+            if !unlimited(else_) {
+                return Err(ValidationFailureKind::EdgeLimitTargetInvalid);
+            }
+            Ok(ValidatedEdgeTarget::HostWait {
+                then: then.clone(),
+                limit: *limit,
+                else_: Box::new(validate_edge_target(else_, step_name, position, document)?),
             })
         }
         EdgeTarget::Wait {
@@ -979,7 +1015,7 @@ fn validate_edge_target(
             };
             Ok(ValidatedEdgeTarget::Wait {
                 kind: *kind,
-                then: Box::new(validate_edge_target(then, position, document)?),
+                then: Box::new(validate_edge_target(then, step_name, position, document)?),
                 on_hand_back: on_hand_back
                     .as_deref()
                     .map(|step| validate_step_target(step, document))
@@ -1047,9 +1083,9 @@ fn validate_wait_rule(
 }
 
 /// In an edge-scheduled workflow every step but the entry is the step target of some
-/// other step's edge, through a wait's `then` or `onHandBack` or a limited edge's `then` or
-/// `else` as well; an edge naming its own step reaches nothing new (REQ-WFFORMAT-92,
-/// REQ-WFFORMAT-93, REQ-WFFORMAT-96).
+/// other step's edge, through a wait's `then` or `onHandBack`, a limited edge's `then` or
+/// `else` or a host wait's `else` as well; an edge naming its own step reaches nothing new
+/// (REQ-WFFORMAT-92, REQ-WFFORMAT-93, REQ-WFFORMAT-96, REQ-WFFORMAT-111).
 fn validate_reachability(
     document: &WorkflowDocument,
     scheduling: &Scheduling,
@@ -1066,6 +1102,12 @@ fn validate_reachability(
             EdgeTarget::Limited { then, else_, .. } => {
                 targeted.insert(then);
                 step_targets(else_, targeted);
+            }
+            EdgeTarget::HostWait { then, else_, .. } => {
+                targeted.insert(then);
+                if let Some(else_) = else_ {
+                    step_targets(else_, targeted);
+                }
             }
             EdgeTarget::Wait {
                 then, on_hand_back, ..
@@ -2259,6 +2301,7 @@ fn validate_body(
                 declared_inputs,
             )?,
             argv: command.argv.clone(),
+            infrastructure_exit_codes: BTreeSet::new(),
         })),
         NodeBody::Agent(agent) => {
             let common = validate_common(
@@ -2798,7 +2841,8 @@ fn resolve_export_source(
     })
 }
 
-/// Resolve `outcomes` and `outcome` (REQ-WFFORMAT-87, REQ-WFFORMAT-88, REQ-WFFORMAT-108).
+/// Resolve `outcomes` and `outcome` (REQ-WFFORMAT-87, REQ-WFFORMAT-88, REQ-WFFORMAT-108,
+/// REQ-WFFORMAT-110). `onFailure` and a declared `onInfrastructure` are among `outcomes`.
 /// Each source must be a `text` output of a required ordinary step. A single reference's step
 /// declares no `condition`, so that a succeeded run always holds its value; the sources of a
 /// `firstOf` may, and then meet the reachability rule at the outcome (REQ-WFFORMAT-106).
@@ -2811,7 +2855,10 @@ fn resolve_outcome(
         (Some(declaration), false) => declaration,
         _ => return Err(failure(ValidationFailureKind::InvalidOutcomeDeclaration)),
     };
-    if !document.outcomes.contains(&declaration.on_failure) {
+    if std::iter::once(&declaration.on_failure)
+        .chain(&declaration.on_infrastructure)
+        .any(|name| !document.outcomes.contains(name))
+    {
         return Err(failure(ValidationFailureKind::InvalidOutcomeDeclaration));
     }
     let invalid = || failure(ValidationFailureKind::InvalidOutcomeSource);
@@ -2830,6 +2877,7 @@ fn resolve_outcome(
         names: document.outcomes.clone(),
         source,
         on_failure: declaration.on_failure.clone(),
+        on_infrastructure: declaration.on_infrastructure.clone(),
     }))
 }
 

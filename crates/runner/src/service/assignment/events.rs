@@ -485,6 +485,7 @@ impl AssignmentManager {
                         self.cleanup_failure_report = None;
                         self.retire_assignment_observations(&assignment_id);
                         self.reporting.remove(&assignment_id);
+                        self.run_ended.notify_one();
                         continue;
                     }
                     if self.fenced_final_graces.remove(&FencedFinalGrace {
@@ -629,6 +630,7 @@ impl AssignmentManager {
         for predecessor in predecessors {
             self.retire_assignment_observations(&predecessor);
             self.reporting.remove(&predecessor);
+            self.run_ended.notify_one();
         }
         let rejected_assignments: Vec<_> = self
             .decisions
@@ -848,7 +850,7 @@ impl AssignmentManager {
     fn revoke_every_running_authority(&mut self) {
         for held in self.held.values_mut() {
             if let HeldAssignment::Running(running) = held {
-                revoke_authority(running);
+                revoke_authority(running, LeaseLossReason::ClockFailed);
             }
         }
     }

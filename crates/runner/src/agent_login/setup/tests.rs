@@ -2187,7 +2187,7 @@ async fn a_use_is_stated_to_cloud_only_beside_a_ready_install() {
 }
 
 impl Fixture {
-    /// A setup `useful runner integration sync` asked for.
+    /// A setup `useful runner sync` asked for.
     async fn sync(&self) -> SetupAnswer {
         self.setup.set_up(SetupCaller::Sync).await
     }

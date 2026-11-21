@@ -8,8 +8,9 @@ use std::process::{self, Stdio};
 use anyhow::Context;
 use clap::{ArgGroup, Args};
 
+use super::super::context::{self, OrgArgs};
 use super::super::secret_file::prompt_without_echo;
-use super::super::{HttpOptions, OrganizationArg, PoolArg, PrincipalAuthenticationArgs};
+use super::super::{HttpOptions, PoolArg, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
 use useful_api::{HttpTransportPolicy, RunnerApi, RunnerFailure};
 use useful_execution::{
@@ -20,34 +21,42 @@ use useful_execution::{
 };
 use useful_human_auth::Deployment;
 use useful_runner::{
-    ActivationArtifact, AmbiguousCause, Config, EnrollmentError, EnrollmentResponse, HeldJoinKey,
-    JoinKeyArtifact, JoinKeyHold, JoinKeyMode, JoinOutcome, JoinRefusal, JoinRetry,
-    RecordedOptions, RegisteredRunner, RegistrationAuthority, RegistrationConflict,
-    RegistrationConflictKind, RegistrationError, RegistrationOutcome, RegistrationStage,
-    RegistrationTarget, Rejoin, RejoinAnswer, RejoinOutcome, ServiceEnd,
+    ActivationArtifact, AmbiguousCause, Config, EnrollmentError, EnrollmentOutcome,
+    EnrollmentResponse, HeldJoinKey, JoinKey, JoinKeyArtifact, JoinKeyHold, JoinKeyMode,
+    JoinOutcome, JoinRefusal, JoinRetry, RecordedOptions, RegisteredRunner, RegistrationAuthority,
+    RegistrationConflict, RegistrationConflictKind, RegistrationError, RegistrationOutcome,
+    RegistrationStage, RegistrationTarget, Rejoin, RejoinAnswer, RejoinOutcome, ServiceEnd,
 };
 use useful_support::generate_idempotency_key;
+
+mod replacement;
 
 pub(super) const ABOUT: &str = "Serve run assignments";
 
 const JOIN_KEY_VARIABLE: &str = "USEFUL_RUNNER_JOIN_KEY";
 
 // One registration mode at most: a signed-in mode excludes the other and a
-// join key, needs --organization, and is the only use of --organization and
-// --allow-insecure-http. USEFUL_RUNNER_JOIN_KEY is refused by `join_key_source`.
+// key, and is the only use of --org and --allow-insecure-http; without --org it
+// registers in the organization in effect. --replace-credential excludes a
+// signed-in mode and the prompt and is the only use of --json.
+// USEFUL_RUNNER_JOIN_KEY is refused by `join_key_source`.
 #[derive(Debug, Args)]
 #[command(
     group(
         ArgGroup::new("signed_in_mode")
             .args(["personal", "pool"])
-            .requires("organization")
             .conflicts_with_all(["join_key_file", "join_key"])
     ),
     group(
         ArgGroup::new("signed_in_options")
-            .args(["organization", "allow_insecure_http"])
+            .args(["org", "allow_insecure_http"])
             .multiple(true)
             .requires("signed_in_mode")
+    ),
+    group(
+        ArgGroup::new("replacement_report")
+            .args(["json"])
+            .requires("replace_credential")
     )
 )]
 pub(super) struct Command {
@@ -56,27 +65,37 @@ pub(super) struct Command {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Join the key's pool from a protected file or explicit stdin when the
-    /// host holds no enrolled state, or rejoin it when Cloud deleted the runner
-    /// of a host that joined with a key; USEFUL_RUNNER_JOIN_KEY may hold the key instead.
+    /// Read a single-runner key or a pool's join key from a protected file or
+    /// explicit stdin when the host holds no enrolled state, or rejoin the pool
+    /// when Cloud deleted the runner of a host that joined with a key;
+    /// USEFUL_RUNNER_JOIN_KEY may hold the key instead.
     #[arg(long, value_name = "PATH|-")]
     join_key_file: Option<PathBuf>,
 
-    /// Join the key's pool with a join key pasted at a prompt that does not
-    /// echo it when the host holds no enrolled state; needs a terminal.
+    /// Read a single-runner key or a pool's join key pasted at a prompt that
+    /// does not echo it when the host holds no enrolled state; needs a terminal.
     #[arg(long)]
     join_key: bool,
 
+    /// Enroll a second credential for this host's runner with the single-runner
+    /// key --join-key-file gives, or resend the staged replacement, switch the
+    /// live runner to it and exit without serving.
+    #[arg(long, conflicts_with_all = ["personal", "pool", "join_key"])]
+    replace_credential: bool,
+
     /// Register the host as a runner in the signed-in account's personal
-    /// pool of --organization when it holds no enrolled state.
+    /// pool of the organization in effect when it holds no enrolled state.
     #[arg(long)]
     personal: bool,
 
-    #[arg(long = "pool-id", value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
+    #[arg(long, value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
     pool: Option<PoolArg>,
 
-    #[arg(long, value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: Option<OrganizationArg>,
+    #[command(flatten)]
+    org: OrgArgs,
+
+    #[command(flatten)]
+    output: super::super::JsonArgs<super::super::RunnerJson>,
 
     #[command(flatten)]
     http: HttpOptions,
@@ -84,10 +103,13 @@ pub(super) struct Command {
 
 impl Command {
     pub(super) fn execute(self) -> super::super::CommandResult {
+        if self.replace_credential {
+            return self.replace_credential();
+        }
         let registration = signed_in_registration(
             self.personal,
             self.pool,
-            self.organization,
+            self.org,
             self.http.transport_policy(),
         )?;
         let join_key = join_key_source(
@@ -135,15 +157,22 @@ impl Command {
             match (enrolled, join_key, registration) {
                 (Err(error), _, _) => return Err(configuration_failure(error).into()),
                 // A host with no state file, no key and no registration mode
-                // has nothing to enroll with: what can be checked of its
-                // configuration before a join keeps its own cause, and
-                // otherwise it is not enrolled.
+                // resends the first enrollment it has staged: what can be
+                // checked of its configuration before a join keeps its own
+                // cause, and a host with nothing staged is not enrolled.
                 (Ok(false), None, None) => {
                     if let Err(error) = Config::validate_before_join(&config_path) {
                         return Err(configuration_failure(error).into());
                     }
-                    discover();
-                    return Err(not_enrolled(&config_path, self.config.is_some()).into());
+                    let installations = discover();
+                    match useful_runner::resend_staged_enrollment(&config_path) {
+                        Ok(None) => {
+                            return Err(not_enrolled(&config_path, self.config.is_some()).into());
+                        }
+                        Ok(Some(outcome)) => report_enrollment(outcome)?,
+                        Err(error) => return Err(enrollment_failure(error).into()),
+                    }
+                    (load_config(&config_path)?, installations, JoinKeyMode::None)
                 }
                 // An enrolled host serves with its state when the registration
                 // mode it is given, if any, is the one its registration record
@@ -167,8 +196,8 @@ impl Command {
                     if let Some(registration) = registration {
                         registration.confirm(&config_path)?;
                     }
-                    useful_runner::remove_completed_join_journal(&config_path)
-                        .context("remove the journal of the runner's completed join")?;
+                    useful_runner::remove_completed_enrollment_journal(&config_path)
+                        .context("remove the journal of the runner's completed enrollment")?;
                     (config, discover(), join_key)
                 }
                 // A host with no state file checks what it can of its
@@ -181,7 +210,13 @@ impl Command {
                     }
                     let key = join_key.read()?;
                     let installations = discover();
-                    join_unless_enrolled(&config_path, key)?;
+                    match key {
+                        JoinKey::Pool(key) => join_unless_enrolled(&config_path, key)?,
+                        JoinKey::SingleRunner(key) => report_enrollment(
+                            useful_runner::enroll_unless_enrolled(&config_path, key)
+                                .map_err(enrollment_failure)?,
+                        )?,
+                    }
                     (load_config(&config_path)?, installations, JoinKeyMode::None)
                 }
                 // A signed-in registration checks the host the same way before
@@ -192,8 +227,8 @@ impl Command {
                         return Err(configuration_failure(error).into());
                     }
                     let installations = discover();
-                    match super::super::execute_deployment_leaf(
-                        registration,
+                    match super::super::execute_deployment_command(
+                        Some(registration),
                         &[super::NAME, "serve"],
                         "configure Useful Machinery runner registration",
                         |registration, deployment| registration.register(&config_path, deployment),
@@ -273,8 +308,31 @@ fn finished_service(end: ServiceEnd) -> Option<super::super::CommandResult> {
     }
 }
 
-/// A start on a host that holds no enrolled state and was given neither a
-/// join key nor a registration mode (REQ-RUNNERENROLL-30). The commands it names repeat `--config` when the
+impl Command {
+    /// `--replace-credential`: the key is `--join-key-file`'s alone, so the
+    /// variable beside it is a usage error, and the command exits without
+    /// serving (REQ-RUNNERENROLL-48).
+    fn replace_credential(self) -> super::super::CommandResult {
+        if std::env::var_os(JOIN_KEY_VARIABLE).is_some() {
+            return Err(super::super::CommandFailure::with_exit_code(
+                anyhow::anyhow!(
+                    "read join key: --replace-credential and {JOIN_KEY_VARIABLE} are set together\n\nGive the replacement's single-runner key with --join-key-file PATH|-, and unset {JOIN_KEY_VARIABLE}."
+                ),
+                ExitCode::UsageError,
+            ));
+        }
+        let config_path = super::initialized_operator_config_path(self.config.as_deref())?;
+        let key = self
+            .join_key_file
+            .map(|path| JoinKeySource::File(path).read())
+            .transpose()?;
+        replacement::execute(&config_path, key, self.output.json)
+    }
+}
+
+/// A start on a host that holds no enrolled state, has no enrollment staged
+/// and was given neither a key nor a registration mode
+/// (REQ-RUNNERENROLL-30). The commands it names repeat `--config` when the
 /// start was given it.
 fn not_enrolled(config_path: &Path, explicit_config: bool) -> anyhow::Error {
     let config = if explicit_config {
@@ -283,10 +341,82 @@ fn not_enrolled(config_path: &Path, explicit_config: bool) -> anyhow::Error {
         String::new()
     };
     anyhow::anyhow!(
-        "start runner with operator configuration {}: host is not enrolled\n\nEnroll the host with an activation an owner issued for it:\n  useful runner enroll --activation-file <PATH>{config}\nOr start the runner with a join key a pool issued:\n  useful runner serve --join-key-file <PATH>{config}",
+        "start runner with operator configuration {}: host is not enrolled\n\nStart the runner with a single-runner key or a pool's join key issued for it:\n  useful runner serve --join-key-file <PATH>{config}\nOr register it as the signed-in account, in its personal pool or in a pool:\n  useful runner serve --personal{config}\n  useful runner serve --pool POOL{config}",
         config_path.display()
     )
 }
+
+/// What a start that enrolled with a single-runner key, or resent its
+/// staged enrollment, reports before it serves.
+fn report_enrollment(outcome: EnrollmentOutcome) -> Result<(), super::super::CommandFailure> {
+    match outcome {
+        EnrollmentOutcome::AlreadyEnrolled => Ok(()),
+        EnrollmentOutcome::Enrolled { response, .. } => {
+            write_enrolled(&mut io::stderr().lock(), "✓ Runner enrolled.", &response)?;
+            Ok(())
+        }
+        EnrollmentOutcome::Gone { activation_id, .. } => {
+            Err(gone_activation(ENROLL_RUNNER, &activation_id).into())
+        }
+        // A first enrollment never stages a replacement.
+        EnrollmentOutcome::ReplacementCredential { .. } => Err(anyhow::anyhow!(
+            "{ENROLL_RUNNER}: the host holds no enrolled state to replace a credential of"
+        )
+        .into()),
+    }
+}
+
+const ENROLL_RUNNER: &str = "enroll the runner with its single-runner key";
+
+/// Cloud's 410 to an activation, or a start given the key whose activation
+/// the host's receipt records as gone (REQ-RUNNERENROLL-23).
+fn gone_activation(operation: &str, activation_id: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{operation}: Cloud reports activation {activation_id} revoked, expired or already used\n\nThe enrollment did not commit, and its journal was replaced with a terminal receipt. Start the runner with another single-runner key, which useful runner join-key issue --runner RUNNER issues."
+    )
+}
+
+/// Whether `error` leaves an enrollment journal whose request a later start
+/// resends as it was staged (REQ-RUNNERENROLL-21).
+const fn resendable(error: &EnrollmentError) -> bool {
+    matches!(
+        error,
+        EnrollmentError::NetworkAmbiguous(_)
+            | EnrollmentError::Unauthorized
+            | EnrollmentError::Conflict
+            | EnrollmentError::InvalidResponse
+    )
+}
+
+/// `error` as the failure of `operation`, with the `cause:` line of an
+/// ambiguous outcome and `remedy`.
+fn with_cause_and_remedy(operation: &str, error: &EnrollmentError, remedy: &str) -> anyhow::Error {
+    let cause = match error {
+        EnrollmentError::NetworkAmbiguous(cause) => format!("\ncause: {}", cause.code()),
+        _ => String::new(),
+    };
+    anyhow::anyhow!("{operation}: {error}{cause}\n\n{remedy}")
+}
+
+/// A first enrollment with a single-runner key that did not complete: a
+/// kept journal is resent by the next start, with the key or with none, and
+/// a journal another start staged is resolved first (REQ-RUNNERENROLL-24).
+fn enrollment_failure(error: EnrollmentError) -> anyhow::Error {
+    let remedy = match error {
+        ref error if resendable(error) => {
+            "The enrollment journal is kept. Start useful runner serve again, with this key or with none, to resend the same request."
+        }
+        EnrollmentError::UnresolvedJournal => STAGED_ENROLLMENT_REMEDY,
+        EnrollmentError::RegistrationConflict(conflict) => {
+            return registration_conflict(ENROLL_RUNNER, &conflict);
+        }
+        error => return anyhow::Error::new(error).context(ENROLL_RUNNER),
+    };
+    with_cause_and_remedy(ENROLL_RUNNER, &error, remedy)
+}
+
+/// How a start that meets an enrollment journal another start staged goes on.
+const STAGED_ENROLLMENT_REMEDY: &str = "Start useful runner serve without a key, which resends the staged enrollment; another key is refused until Cloud answers it.";
 
 fn load_config(config_path: &Path) -> anyhow::Result<Config> {
     Config::load(config_path).map_err(|error| config_load_error(config_path, error))
@@ -339,7 +469,7 @@ fn join_key_source(
                     "read join key: {given} are set together\n\nGive the join key in only one of --join-key-file PATH|-, --join-key and {JOIN_KEY_VARIABLE}."
                 ),
                 Some(_) => anyhow::anyhow!(
-                    "select runner registration: {given} are set together\n\nStart the runner with a join key or with --personal or --pool-id, not both. Unset {JOIN_KEY_VARIABLE} to register with the signed-in account."
+                    "select runner registration: {given} are set together\n\nStart the runner with a join key or with --personal or --pool, not both. Unset {JOIN_KEY_VARIABLE} to register with the signed-in account."
                 ),
             };
             Err(super::super::CommandFailure::with_exit_code(
@@ -350,19 +480,20 @@ fn join_key_source(
     }
 }
 
-/// A signed-in registration mode with its organization, as given.
+/// A signed-in registration mode with `--org`, which names its organization
+/// when given; otherwise `USEFUL_ORG` or the organization in effect does.
 struct SignedInRegistration {
-    organization: OrganizationArg,
+    org: OrgArgs,
     target: RegistrationTarget,
     transport_policy: HttpTransportPolicy,
 }
 
 /// The signed-in registration mode the arguments name, if any. Clap's
-/// groups make `--organization` present exactly when a mode is.
+/// groups refuse `--org` without a mode.
 fn signed_in_registration(
     personal: bool,
     pool: Option<PoolArg>,
-    organization: Option<OrganizationArg>,
+    org: OrgArgs,
     transport_policy: HttpTransportPolicy,
 ) -> Result<Option<SignedInRegistration>, super::super::CommandFailure> {
     let target = match (personal, pool) {
@@ -370,28 +501,19 @@ fn signed_in_registration(
         (false, Some(pool)) => RegistrationTarget::Pool(pool.into_string()),
         (false, None) => return Ok(None),
         (true, Some(_)) => {
-            return Err(registration_usage_error(
-                "--personal and --pool-id are set together",
+            return Err(super::super::CommandFailure::with_exit_code(
+                anyhow::anyhow!(
+                    "select runner registration: --personal and --pool are set together\n\nGive one of --personal and --pool POOL."
+                ),
+                ExitCode::UsageError,
             ));
         }
     };
-    let organization = organization.ok_or_else(|| {
-        registration_usage_error("--personal and --pool-id need --organization ORGANIZATION")
-    })?;
     Ok(Some(SignedInRegistration {
-        organization,
+        org,
         target,
         transport_policy,
     }))
-}
-
-fn registration_usage_error(diagnostic: &str) -> super::super::CommandFailure {
-    super::super::CommandFailure::with_exit_code(
-        anyhow::anyhow!(
-            "select runner registration: {diagnostic}\n\nGive one of --personal and --pool-id POOL, with --organization ORGANIZATION."
-        ),
-        ExitCode::UsageError,
-    )
 }
 
 impl SignedInRegistration {
@@ -399,35 +521,58 @@ impl SignedInRegistration {
     fn option(&self) -> &'static str {
         match self.target {
             RegistrationTarget::Personal => "--personal",
-            RegistrationTarget::Pool(_) => "--pool-id",
+            RegistrationTarget::Pool(_) => "--pool",
         }
     }
 
     /// Confirms the mode against an enrolled host's registration record,
-    /// completing a record whose runner the state holds; it reads no sign-in
-    /// and sends nothing.
-    fn confirm(&self, config_path: &Path) -> anyhow::Result<()> {
-        match useful_runner::confirm_registration(config_path, &self.organization, &self.target) {
+    /// completing a record whose runner the state holds; it reads no sign-in,
+    /// resolves no organization and sends nothing (REQ-RUNNERENROLL-118). The
+    /// organization is compared only when `--org` or `USEFUL_ORG` names one.
+    fn confirm(&self, config_path: &Path) -> Result<(), super::super::CommandFailure> {
+        let named = self.org.named_in_process()?;
+        let organization = named.as_ref().map(|named| named.organization.as_str());
+        match useful_runner::confirm_registration(config_path, organization, &self.target) {
             Ok(()) => Ok(()),
             Err(RegistrationError::Conflict(conflict)) => {
-                Err(registration_conflict(CONFIRM_REGISTRATION, &conflict))
+                Err(registration_conflict(CONFIRM_REGISTRATION, &conflict).into())
             }
-            Err(error) => Err(anyhow::Error::new(error).context(CONFIRM_REGISTRATION)),
+            Err(error) => Err(anyhow::Error::new(error)
+                .context(CONFIRM_REGISTRATION)
+                .into()),
         }
     }
 
     /// Registers, enrolls and records the host's runner as the signed-in
-    /// person, and reports it; the authority, and with it the human session,
-    /// is dropped before this returns.
-    fn register(self, config_path: &Path, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    /// person in the organization in effect, and reports it; the authority,
+    /// and with it the human session, is dropped before this returns. The
+    /// organization is resolved first (INV-CLI-20), so a start in none
+    /// registers and writes nothing.
+    fn register(self, config_path: &Path, deployment: &Deployment) -> super::super::CommandResult {
+        let authentication = PrincipalAuthenticationArgs::default();
+        let organization = match context::organization_in_effect(
+            &self.org,
+            self.transport_policy,
+            &authentication,
+            deployment,
+        )? {
+            Ok(organization) => organization,
+            Err(failure) => {
+                return Ok(super::cloud::write_registration_failure(
+                    deployment.fingerprint().api_url(),
+                    &super::cloud::context_failure(&failure),
+                    NOTHING_REGISTERED,
+                )?);
+            }
+        };
         let mut authority = SignedInAuthority {
             deployment,
             transport_policy: self.transport_policy,
-            authentication: PrincipalAuthenticationArgs::default(),
+            authentication,
         };
         let outcome = useful_runner::register_unless_enrolled(
             config_path,
-            &self.organization,
+            &organization,
             &self.target,
             &mut authority,
         );
@@ -438,10 +583,13 @@ impl SignedInRegistration {
                 write_enrolled(&mut io::stderr().lock(), "✓ Runner registered.", &response)?;
                 Ok(ExitCode::Success)
             }
-            Err(error) => registration_failure(deployment, error),
+            Err(error) => Ok(registration_failure(deployment, error)?),
         }
     }
 }
+
+/// What a start whose organization in effect could not be read leaves.
+const NOTHING_REGISTERED: &str = "This start registered nothing.";
 
 /// Cloud's side of `serve`'s registration: the human API as the signed-in
 /// person, through the session `cloud::with_api` acquires and refreshes for
@@ -631,18 +779,18 @@ fn registration_conflict(operation: &str, conflict: &RegistrationConflict) -> an
     );
     let remedy = match (conflict.kind, &conflict.recorded) {
         (RegistrationConflictKind::Target, Some(recorded)) => format!(
-            "Start the runner with the options its registration was made with:\n  {}\nA host that holds its runner state also starts without --personal and --pool-id. An owner moves a runner to another pool with useful runner move.",
+            "Start the runner with the options its registration was made with:\n  {}\nA host that holds its runner state also starts without --personal and --pool. An owner moves a runner to another pool with useful runner update RUNNER --pool POOL.",
             recorded_options(recorded)
         ),
         (RegistrationConflictKind::Target, None) => format!(
-            "The host was enrolled with an activation or a join key. Start {runner} without --personal and --pool-id. An owner moves a runner to another pool with useful runner move."
+            "The host was enrolled with an activation or a join key. Start {runner} without --personal and --pool. An owner moves a runner to another pool with useful runner update RUNNER --pool POOL."
         ),
         (RegistrationConflictKind::Unresolved, Some(recorded)) => format!(
             "Finish the registration by starting the runner with its options, signed in to the same deployment and account within six days of when it began:\n  {}\nOtherwise check the pool for a runner registered from this host, then remove {path}.",
             recorded_options(recorded)
         ),
         (RegistrationConflictKind::Unresolved, None) => format!(
-            "Finish the staged enrollment with useful runner enroll --resume, or the staged join by starting the runner with its join key. Otherwise check the pool for a runner registered from this host, then remove {path}."
+            "Finish the staged enrollment by starting the runner without --personal and --pool, with the key it was staged for or with none, or the staged join by starting the runner with its join key. Otherwise check the pool for a runner registered from this host, then remove {path}."
         ),
         (RegistrationConflictKind::StateMissing, _) => format!(
             "Restore the runner state file of {runner}. Otherwise remove {path}, and delete {runner} in Cloud if it is no longer wanted."
@@ -658,17 +806,15 @@ fn registration_conflict(operation: &str, conflict: &RegistrationConflict) -> an
 fn recorded_options(recorded: &RecordedOptions) -> String {
     let organization = &recorded.organization;
     match &recorded.target {
-        RegistrationTarget::Personal => format!("--personal --organization {organization}"),
-        RegistrationTarget::Pool(pool) => {
-            format!("--pool-id {pool} --organization {organization}")
-        }
+        RegistrationTarget::Personal => format!("--personal --org {organization}"),
+        RegistrationTarget::Pool(pool) => format!("--pool {pool} --org {organization}"),
     }
 }
 
 impl JoinKeySource {
-    fn read(self) -> Result<JoinKeyArtifact, super::super::CommandFailure> {
+    fn read(self) -> Result<JoinKey, super::super::CommandFailure> {
         match self {
-            Self::File(path) => Ok(JoinKeyArtifact::read_file(&path)
+            Self::File(path) => Ok(JoinKey::read_file(&path)
                 .with_context(|| format!("read join key {}", path.display()))?),
             Self::Variable(text) => Err(hand_join_key_to_new_image(&text).into()),
             Self::Prompt => prompt_for_join_key(),
@@ -676,13 +822,13 @@ impl JoinKeySource {
     }
 }
 
-/// A join key artifact's bound, in bytes.
+/// A key's bound, in bytes.
 const JOIN_KEY_ARTIFACT_LIMIT: usize = 4096;
 
 // A prompted key is read from the terminal on standard input with echo off and
 // held only in memory; it was never in the environment, so no `exec` follows.
 // A start that has no terminal fails rather than waiting for input.
-fn prompt_for_join_key() -> Result<JoinKeyArtifact, super::super::CommandFailure> {
+fn prompt_for_join_key() -> Result<JoinKey, super::super::CommandFailure> {
     if !io::stdin().is_terminal() {
         return Err(super::super::CommandFailure::with_exit_code(
             anyhow::anyhow!(
@@ -695,7 +841,7 @@ fn prompt_for_join_key() -> Result<JoinKeyArtifact, super::super::CommandFailure
         .context("read join key from the terminal")?;
     let key = line.strip_suffix(b"\n").unwrap_or(&line);
     let key = key.strip_suffix(b"\r").unwrap_or(key);
-    Ok(JoinKeyArtifact::parse(key).context("read join key from the terminal")?)
+    Ok(JoinKey::parse(key).context("read join key from the terminal")?)
 }
 
 // A key in USEFUL_RUNNER_JOIN_KEY never stays in this process's environment block,
@@ -707,7 +853,7 @@ fn prompt_for_join_key() -> Result<JoinKeyArtifact, super::super::CommandFailure
 // Returns only when the handoff fails: a successful `exec` does not return.
 fn hand_join_key_to_new_image(text: &OsStr) -> anyhow::Error {
     let key = text.as_bytes();
-    if let Err(error) = JoinKeyArtifact::parse(key) {
+    if let Err(error) = JoinKey::parse(key) {
         return anyhow::Error::new(error)
             .context(format!("read join key from {JOIN_KEY_VARIABLE}"));
     }
@@ -846,6 +992,10 @@ fn join_failure(join_key_id: &str, error: EnrollmentError) -> anyhow::Error {
             &format!("join runner pool with join key {join_key_id}"),
             &conflict,
         ),
+        // An enrollment with a single-runner key is staged, and no key supersedes it.
+        error @ EnrollmentError::UnresolvedJournal => anyhow::anyhow!(
+            "join runner pool with join key {join_key_id}: {error}\n\n{STAGED_ENROLLMENT_REMEDY}"
+        ),
         error => anyhow::Error::new(error)
             .context(format!("join runner pool with join key {join_key_id}")),
     }
@@ -881,8 +1031,12 @@ fn enrolled_join_key_mode(
     if !joined_with_key()? {
         return Ok(JoinKeyMode::None);
     }
-    let key = match JoinKeyArtifact::read_file(&path) {
-        Ok(key) => key,
+    // A single-runner key rejoins no pool, so it is unusable here as a text that is no key is.
+    let key = match JoinKey::read_file(&path) {
+        Ok(JoinKey::Pool(key)) => key,
+        Ok(JoinKey::SingleRunner(_)) => {
+            return Ok(unusable_join_key(&path, &EnrollmentError::InvalidJoinKey));
+        }
         Err(error) => return Ok(unusable_join_key(&path, &error)),
     };
     let join_key_id = key.join_key_id().to_owned();
@@ -954,78 +1108,102 @@ impl HostRejoin {
     /// the diagnostic, the refusal's `code:` line when Cloud refused it, and
     /// what the operator can do.
     fn failure(&self, error: EnrollmentError) -> String {
-        let Self {
-            join_key_id,
-            runner_id,
-            journal,
-            ..
-        } = self;
-        let kept = format!(
-            "The host keeps the state of runner {runner_id}, whose credential Cloud refused."
-        );
-        let (code, remedy) = match &error {
-            EnrollmentError::JoinRefused {
-                refusal:
-                    refusal @ (JoinRefusal::Unauthorized | JoinRefusal::Gone | JoinRefusal::Conflict),
-                resent,
-            } => (
-                Some(refusal.code()),
-                format!(
-                    "{} {kept} Start the runner with a join key Cloud accepts to rejoin its pool.",
-                    refused_join_registration(*resent)
-                ),
-            ),
-            EnrollmentError::JoinRefused {
-                refusal: refusal @ JoinRefusal::RejoinUnavailable,
-                ..
-            } => (
-                Some(refusal.code()),
-                format!(
-                    "Cloud still holds runner {runner_id}: it is disabled or its credential was revoked, and a join key does not replace a runner Cloud still holds. Enable the runner or enroll it with a new credential to serve as it again, or delete it and start the runner again to rejoin its pool as a new runner."
-                ),
-            ),
-            EnrollmentError::JoinRefused {
-                refusal: refusal @ JoinRefusal::RejoinUnsupported,
-                ..
-            } => (
-                Some(refusal.code()),
-                format!(
-                    "{NO_RUNNER_REGISTERED} {kept} To join the pool as a new runner, stop the runner, remove the host's state file and start it again with the join key."
-                ),
-            ),
-            EnrollmentError::StagedJoinUnauthorized {
-                journal,
-                join_key_id,
-            } => (
-                Some(JoinRefusal::Unauthorized.code()),
-                staged_join_unauthorized_remedy(join_key_id, journal, "rejoin"),
-            ),
-            EnrollmentError::InvalidResponse => (
-                None,
-                match journal {
-                    Some(journal) => format!(
-                        "The rejoin stays staged in {}. Start the runner again with join key {join_key_id}, which sends the same rejoin.",
-                        journal.display()
-                    ),
-                    None => format!(
-                        "The rejoin stays staged. Start the runner again with join key {join_key_id}, which sends the same rejoin."
-                    ),
-                },
-            ),
-            _ => (
-                None,
-                format!(
-                    "{kept} Correct the cause and start the runner again with join key {join_key_id} to rejoin its pool."
-                ),
-            ),
-        };
-        let code = code
-            .map(|code| format!("code: {code}\n"))
-            .unwrap_or_default();
-        format!(
-            "error: rejoin runner pool with join key {join_key_id}: {error}\n{code}\n{remedy}\n"
+        rejoin_failure(
+            &self.join_key_id,
+            &self.runner_id,
+            self.journal.as_deref(),
+            error,
         )
     }
+}
+
+/// The report of a rejoin of the runner `runner_id` with the join key `join_key_id` that Cloud
+/// refused or that could not be sent, `journal` the rejoin staged where one is: the diagnostic,
+/// the refusal's `code:` line when Cloud refused it, and what the operator can do.
+fn rejoin_failure(
+    join_key_id: &str,
+    runner_id: &str,
+    journal: Option<&Path>,
+    error: EnrollmentError,
+) -> String {
+    let kept =
+        format!("The host keeps the state of runner {runner_id}, whose credential Cloud refused.");
+    let (code, remedy) = match &error {
+        EnrollmentError::JoinRefused {
+            refusal:
+                refusal @ (JoinRefusal::Unauthorized | JoinRefusal::Gone | JoinRefusal::Conflict),
+            resent,
+        } => (
+            Some(refusal.code()),
+            format!(
+                "{} {kept} Start the runner with a join key Cloud accepts to rejoin its pool.",
+                refused_join_registration(*resent)
+            ),
+        ),
+        EnrollmentError::JoinRefused {
+            refusal: refusal @ JoinRefusal::RejoinUnavailable,
+            ..
+        } => (
+            Some(refusal.code()),
+            format!(
+                "Cloud still holds runner {runner_id}: it is disabled or its credential was revoked, and a join key does not replace a runner Cloud still holds. Enable the runner or enroll it with a new credential to serve as it again, or delete it and start the runner again to rejoin its pool as a new runner."
+            ),
+        ),
+        EnrollmentError::JoinRefused {
+            refusal: refusal @ JoinRefusal::RejoinUnsupported,
+            ..
+        } => (
+            Some(refusal.code()),
+            format!(
+                "{NO_RUNNER_REGISTERED} {kept} To join the pool as a new runner, stop the runner, remove the host's state file and start it again with the join key."
+            ),
+        ),
+        EnrollmentError::StagedJoinUnauthorized {
+            journal,
+            join_key_id,
+        } => (
+            Some(JoinRefusal::Unauthorized.code()),
+            staged_join_unauthorized_remedy(join_key_id, journal, "rejoin"),
+        ),
+        // Another enrollment is staged for this host, a credential replacement or an
+        // enrollment with a single-runner key, and no join key supersedes it: a rejoin
+        // started again would meet it again.
+        EnrollmentError::UnresolvedJournal => (
+            None,
+            format!(
+                "{kept} Another enrollment is staged for this host and must be resolved first: resend a staged credential replacement with useful runner serve --replace-credential, or a staged enrollment with a single-runner key with useful runner serve, each without a key. Then start the runner again with join key {join_key_id} to rejoin its pool."
+            ),
+        ),
+        // A join key rejoins only a runner a join key enrolled.
+        EnrollmentError::CredentialNotFromJoinKey => (
+            None,
+            format!(
+                "{kept} Its credential did not come from a join key, so join key {join_key_id} cannot rejoin it. To join the pool as a new runner, stop the runner, remove the host's state file and start it again with the join key."
+            ),
+        ),
+        EnrollmentError::InvalidResponse => (
+            None,
+            match journal {
+                Some(journal) => format!(
+                    "The rejoin stays staged in {}. Start the runner again with join key {join_key_id}, which sends the same rejoin.",
+                    journal.display()
+                ),
+                None => format!(
+                    "The rejoin stays staged. Start the runner again with join key {join_key_id}, which sends the same rejoin."
+                ),
+            },
+        ),
+        _ => (
+            None,
+            format!(
+                "{kept} Correct the cause and start the runner again with join key {join_key_id} to rejoin its pool."
+            ),
+        ),
+    };
+    let code = code
+        .map(|code| format!("code: {code}\n"))
+        .unwrap_or_default();
+    format!("error: rejoin runner pool with join key {join_key_id}: {error}\n{code}\n{remedy}\n")
 }
 
 fn write_enrolled(
@@ -1282,6 +1460,36 @@ mod tests {
     }
 
     // REQ-RUNNERENROLL-97
+    // REQ-RUNNERENROLL-127
+    #[test]
+    fn a_rejoin_that_meets_another_staged_enrollment_names_what_resolves_it() {
+        const JOIN_KEY_ID: &str = "rjk_01k0z6r1w8f4jy2m7q9v3x5abc";
+        const RUNNER_ID: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
+        let failure = rejoin_failure(
+            JOIN_KEY_ID,
+            RUNNER_ID,
+            None,
+            EnrollmentError::UnresolvedJournal,
+        );
+        // The staged replacement or single-runner enrollment is resent before the rejoin.
+        for command in [
+            "useful runner serve --replace-credential",
+            &format!("join key {JOIN_KEY_ID}"),
+        ] {
+            assert!(failure.contains(command), "{command}: {failure}");
+        }
+        assert!(!failure.contains("Correct the cause"), "{failure}");
+
+        let failure = rejoin_failure(
+            JOIN_KEY_ID,
+            RUNNER_ID,
+            None,
+            EnrollmentError::CredentialNotFromJoinKey,
+        );
+        assert!(!failure.contains("Correct the cause"), "{failure}");
+        assert!(failure.contains("state file"), "{failure}");
+    }
+
     #[test]
     fn a_refused_join_claims_no_registration_only_when_no_earlier_send_can_have_registered() {
         const JOIN_KEY_ID: &str = "rjk_01k0z6r1w8f4jy2m7q9v3x5abc";

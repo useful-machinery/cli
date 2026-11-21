@@ -36,6 +36,7 @@ use useful_runner_protocol::{
 };
 
 use super::Sleeper;
+use super::command_fence::CommandFence;
 use super::run_inputs::PreparationDeadline;
 use crate::agent_login::CommandEnvironment;
 
@@ -80,6 +81,9 @@ pub(super) struct TreeRunDependencies {
     command_bound: Duration,
     deliveries: Inbox<TriggerDelivery>,
     controls: Inbox<RunControl>,
+    /// The fence each `useful` command of a run enters, which the clones share
+    /// (INV-RUNNER-53).
+    fence: Arc<CommandFence>,
     /// The disk and minimum each `useful` command holds its run's steps by
     /// (REQ-RUNNERENROLL-155); none when the service runs no disk monitor or its minimum is 0.
     disk_gate: Option<RunnerDiskGate>,
@@ -95,8 +99,15 @@ impl TreeRunDependencies {
             command_bound: command::SHORT_COMMAND_BOUND,
             deliveries: Inbox::default(),
             controls: Inbox::default(),
+            fence: CommandFence::new(),
             disk_gate: None,
         }
+    }
+
+    /// The fence each `useful` command of a run, and each single-workflow execution, enters
+    /// (INV-RUNNER-53).
+    pub(super) fn fence(&self) -> &Arc<CommandFence> {
+        &self.fence
     }
 
     /// Gives each `useful` command `gate` in `RUNNER_DISK_GATE_ENVIRONMENT`, so the run holds
@@ -489,6 +500,7 @@ pub(super) fn prepare(
         log: RunLog::new(layout.log.clone()),
         sleeper: Arc::clone(&preparation.sleeper),
         bound: dependencies.command_bound,
+        fence: Arc::clone(&dependencies.fence),
         disk_gate: dependencies
             .disk_gate
             .as_ref()
@@ -641,6 +653,7 @@ pub(super) fn adopt(
         log: RunLog::new(layout.log),
         sleeper: Arc::clone(&adoption.sleeper),
         bound: dependencies.command_bound,
+        fence: Arc::clone(&dependencies.fence),
         disk_gate: dependencies
             .disk_gate
             .as_ref()
@@ -799,7 +812,7 @@ fn create_arguments(
         arguments.extend(["--source-revision".into(), format!("{name}={value}").into()]);
     }
     if let Some(step) = stop_before {
-        arguments.extend(["--stop-before".into(), step.into()]);
+        arguments.extend(["--pause-before".into(), step.into()]);
     }
     arguments.push("--json".into());
     arguments

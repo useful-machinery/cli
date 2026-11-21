@@ -4,6 +4,7 @@ use super::*;
 pub(in crate::service) enum ExecutionReport {
     AssignmentInterrupted {
         reason: String,
+        lease_loss: Option<LeaseLossReason>,
     },
     Started,
     Transition {
@@ -47,6 +48,7 @@ pub(in crate::service) enum ExecutionReport {
     Interrupted {
         final_execution_event_sequence: u64,
         reason: String,
+        lease_loss: Option<LeaseLossReason>,
         terminal_outcome: Value,
         artifact_delivery: Value,
     },
@@ -94,12 +96,15 @@ impl ExecutionReport {
         attempt_id: String,
     ) -> RunnerFrame {
         match self {
-            Self::AssignmentInterrupted { reason } => RunnerFrame::AssignmentInterrupted {
-                envelope,
-                assignment_id,
-                attempt_id,
-                reason: reason.clone(),
-            },
+            Self::AssignmentInterrupted { reason, lease_loss } => {
+                RunnerFrame::AssignmentInterrupted {
+                    envelope,
+                    assignment_id,
+                    attempt_id,
+                    reason: reason.clone(),
+                    lease_loss: lease_loss.map(|reason| reason.as_str().to_owned()),
+                }
+            }
             Self::Started => RunnerFrame::ExecutionStarted {
                 envelope,
                 assignment_id,
@@ -174,6 +179,7 @@ impl ExecutionReport {
             Self::Interrupted {
                 final_execution_event_sequence,
                 reason,
+                lease_loss,
                 terminal_outcome,
                 artifact_delivery,
             } => RunnerFrame::ExecutionInterrupted {
@@ -182,6 +188,7 @@ impl ExecutionReport {
                 attempt_id,
                 final_execution_event_sequence: *final_execution_event_sequence,
                 reason: reason.clone(),
+                lease_loss: lease_loss.map(|reason| reason.as_str().to_owned()),
                 terminal_outcome: terminal_outcome.clone(),
                 artifact_delivery: artifact_delivery.clone(),
             },

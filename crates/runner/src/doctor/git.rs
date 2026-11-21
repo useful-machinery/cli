@@ -153,20 +153,7 @@ pub(super) fn origin_remote_host(runner: &dyn CommandRunner, directory: &Path) -
 /// The host of a Git remote address: `scheme://[userinfo@]host[:port]/path` or the scp form
 /// `[user@]host:path`. A local path has none.
 fn remote_host(address: &str) -> Option<&str> {
-    let host = if let Some((_, rest)) = address.split_once("://") {
-        let authority = rest.split('/').next().unwrap_or_default();
-        let host_and_port = authority
-            .rsplit_once('@')
-            .map_or(authority, |(_, host)| host);
-        host_and_port.split(':').next().unwrap_or_default()
-    } else {
-        let (prefix, _) = address.split_once(':')?;
-        if prefix.contains('/') {
-            return None;
-        }
-        prefix.rsplit_once('@').map_or(prefix, |(_, host)| host)
-    };
-    (!host.is_empty()).then_some(host)
+    useful_support::remote_address(address).map(|address| address.host)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

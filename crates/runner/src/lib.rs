@@ -25,6 +25,7 @@ use std::fmt;
 pub use control_client::request_assignment;
 pub use control_client::request_overview;
 pub use control_client::{RequestFailure, request};
+pub use control_client::{request_kept, request_prune};
 pub use control_protocol::{AgentLoginCheckCause, SyncedAgentLogins, UnansweredCheck};
 pub use control_protocol::{
     AgentLoginProvider, AgentLoginReadiness, AgentLoginSetupCause, AgentLoginSetupResult,
@@ -32,32 +33,34 @@ pub use control_protocol::{
     AssignmentCommand, AssignmentCounts, AssignmentDetail, AssignmentLog, AssignmentLogRecord,
     AssignmentLogSource, AssignmentLogStream, AssignmentOutput, AssignmentPhase, AssignmentQuery,
     AssignmentRun, AssignmentStep, AssignmentWorkflow, ConnectionFailure, ConnectionState,
-    ControlError, CredentialSource, HeldRun, HeldRunState, LeaseHealth, LiveStepState, OpenWord,
-    Operation, Overview, OverviewAgentLogins, OverviewAnswer, OverviewAssignment,
-    OverviewConnection, OverviewCounts, OverviewDisk, OverviewEvent, OverviewLease,
-    OverviewProviderReadiness, OverviewRecentAssignment, OverviewRunElement, OverviewRunner,
-    OverviewRunningStep, OverviewWait, ProcessState, ProtocolFailure, ProviderReadiness, Response,
-    RunResult, RunnerEventKind, StatusDisk, StatusSnapshot, StepPathPart,
+    ControlError, CredentialSource, HeldRun, HeldRunState, KeptAnswer, KeptBound, KeptCache,
+    KeptCacheState, KeptReason, KeptReport, KeptRunsBounds, KeptWorkspace, KeptWorkspaceState,
+    LeaseHealth, LiveStepState, OpenWord, Operation, Overview, OverviewAgentLogins, OverviewAnswer,
+    OverviewAssignment, OverviewConnection, OverviewCounts, OverviewDisk, OverviewEvent,
+    OverviewLease, OverviewProviderReadiness, OverviewRecentAssignment, OverviewRunElement,
+    OverviewRunner, OverviewRunningStep, OverviewWait, ProcessState, ProtocolFailure,
+    ProviderReadiness, PruneAnswer, PruneReport, PruneScope, PrunedCache, PrunedDirectory,
+    PrunedOutcome, Response, RunResult, RunnerEventKind, StatusDisk, StatusSnapshot, StepPathPart,
 };
 pub use doctor::{
     CheckDescriptor, CheckResult, CredentialKind, CredentialOrigin, CredentialRequirement,
-    CredentialSummary, Declaration, DeclarationKind, DerivedCredentials, Difference,
-    IntegrationDifference, Node, NodeKind, OperatorConfigSource, OriginDeclaration, Outcome,
-    ReadinessCode, Registry, RegistryError, Report, RepositoryRootError, RepositorySource,
-    SelectionError, Status, Summary, UnknownCredential, UnknownDeclaration, WorkflowCredentials,
-    built_in_registry, read_workflow_credentials, repository_root,
+    Declaration, DeclarationKind, DerivedCredentials, Difference, IntegrationDifference, Node,
+    NodeKind, OperatorConfigSource, OriginDeclaration, Outcome, ReadinessCode, Registry,
+    RegistryError, Report, RepositoryRootError, RepositorySource, SelectionError, Status, Summary,
+    UnknownCredential, UnknownDeclaration, WorkflowCredentials, built_in_registry,
+    read_workflow_credentials, repository_root,
 };
 pub use enrollment::{
     ActivationArtifact, ActivationArtifactParts, AmbiguousCause, ArtifactDestination,
     ArtifactWriteError, EnrollmentError, EnrollmentOutcome, EnrollmentResponse, HeldJoinKey,
-    JoinKeyArtifact, JoinKeyHold, JoinOutcome, JoinRefusal, JoinRetry, PrivateArtifactError,
-    PrivateArtifactFile, PublicationStage, RecordedOptions, RegisteredRunner,
+    JoinKey, JoinKeyArtifact, JoinKeyHold, JoinOutcome, JoinRefusal, JoinRetry,
+    PrivateArtifactError, PrivateArtifactFile, PublicationStage, RecordedOptions, RegisteredRunner,
     RegistrationAuthority, RegistrationConflict, RegistrationConflictKind, RegistrationError,
     RegistrationOutcome, RegistrationStage, RegistrationTarget, RejoinOutcome,
-    ReplacementDisposition, RunnerHome, RunnerHomeError, confirm_registration, enroll,
-    enrolled_with_join_key, join_unless_enrolled, load_control_socket_path,
-    register_unless_enrolled, remove_completed_join_journal, replacement_disposition,
-    write_activation_file,
+    ReplacementDisposition, RunnerHome, RunnerHomeError, confirm_registration, enroll_replacement,
+    enroll_unless_enrolled, enrolled_with_join_key, join_unless_enrolled, load_control_socket_path,
+    register_unless_enrolled, remove_completed_enrollment_journal, replacement_disposition,
+    resend_staged_enrollment, resend_staged_replacement,
 };
 pub use service::{Config, ConfigError};
 pub use service::{JoinKeyMode, Rejoin, RejoinAnswer, ServiceEnd};

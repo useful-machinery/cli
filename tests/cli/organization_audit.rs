@@ -69,9 +69,10 @@ fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--limit",
             "100",
@@ -147,7 +148,7 @@ fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
         header_value(&requests[0], "authorization"),
         format!("Bearer {TOKEN}")
     );
-    assert!(!requests[0].contains("idempotency-key:"));
+    assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
 }
 
 // REQ-AUDIT-14
@@ -159,9 +160,10 @@ fn redacted_acceptance_audit_warning_does_not_recreate_an_actor() {
         organization::prepared_organization(vec![json_http_response("200 OK", page)], TOKEN);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -185,9 +187,10 @@ fn human_audit_list_identifies_available_details_without_inventing_unavailable_d
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--allow-insecure-http",
         ],
@@ -222,10 +225,10 @@ fn human_audit_list_identifies_available_details_without_inventing_unavailable_d
 #[test]
 fn organization_audit_rejects_invalid_filters_before_loading_deployment() {
     for args in [
-        &["organization", "audit", "list", "acme/research"][..],
-        &["organization", "audit", "list", "acme", "--limit", "0"][..],
-        &["organization", "audit", "list", "acme", "--limit", "101"][..],
-        &["organization", "audit", "list", "acme", "--cursor", ""][..],
+        &["org", "audit", "list", "--org", "acme/research"][..],
+        &["org", "audit", "list", "--org", "acme", "--limit", "0"][..],
+        &["org", "audit", "list", "--org", "acme", "--limit", "101"][..],
+        &["org", "audit", "list", "--org", "acme", "--cursor", ""][..],
     ] {
         let output = run_with_env(
             args,
@@ -272,9 +275,10 @@ fn refused_organization_audit_listing_reports_outcome_and_exit_without_server_wo
 
         let output = run_with_env(
             &[
-                "organization",
+                "org",
                 "audit",
                 "list",
+                "--org",
                 "acme-research",
                 "--json",
                 "--allow-insecure-http",
@@ -377,9 +381,10 @@ fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
     );
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -398,9 +403,10 @@ fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
         organization::prepared_organization(vec![json_http_response("200 OK", page)], TOKEN);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--allow-insecure-http",
         ],
@@ -453,9 +459,10 @@ fn organization_audit_list_reads_a_connection_authorization_record() {
     );
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -471,9 +478,10 @@ fn organization_audit_list_reads_a_connection_authorization_record() {
         organization::prepared_organization(vec![json_http_response("200 OK", page)], TOKEN);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--allow-insecure-http",
         ],
@@ -524,9 +532,10 @@ fn organization_audit_list_reads_a_workflow_definition_deletion_record() {
     );
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -542,9 +551,10 @@ fn organization_audit_list_reads_a_workflow_definition_deletion_record() {
         organization::prepared_organization(vec![json_http_response("200 OK", page)], TOKEN);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "audit",
             "list",
+            "--org",
             "acme-research",
             "--allow-insecure-http",
         ],

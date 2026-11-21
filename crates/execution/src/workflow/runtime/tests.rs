@@ -78,6 +78,7 @@ fn definition(
                             .map(|output| (*output).to_owned())
                             .collect(),
                         recovery: None,
+                        infrastructure_exit_codes: Arc::from([]),
                         when: BTreeSet::new(),
                         edges: None,
                     },
@@ -420,6 +421,7 @@ fn finalizer_definition(
                     first_of: BTreeMap::new(),
                     declared_outputs: outputs.iter().map(|output| (*output).to_owned()).collect(),
                     recovery: None,
+                    infrastructure_exit_codes: Arc::from([]),
                     when: BTreeSet::new(),
                     edges: None,
                 },
@@ -484,6 +486,7 @@ fn finalizer_definition(
                     first_of: BTreeMap::new(),
                     declared_outputs: BTreeSet::new(),
                     recovery: None,
+                    infrastructure_exit_codes: Arc::from([]),
                     when: when.iter().copied().collect(),
                     edges: None,
                 },
@@ -3102,6 +3105,7 @@ fn resumed_repair_wait() -> EnteredWait {
         rule: None,
         interrupted: None,
         kept: None,
+        counted: false,
     }
 }
 
@@ -6081,7 +6085,100 @@ fn recovery_trace_gave_up_preserves_the_target_failure_and_starts_no_recheck() {
             round: recovery_round(1),
         })
     );
+    // REQ-WFEXEC-79
+    assert_eq!(state.steps["verify"].failure_class, None);
     assert!(gave_up.actions.iter().all(|action| !matches!(
+        action.action,
+        Action::StartStep { .. } | Action::StartRecoveryHandler { .. }
+    )));
+    assert_eq!(ordinary_issues(&state).len(), 1);
+}
+
+// REQ-WFRECOVERY-65, REQ-WFEXEC-79
+#[test]
+fn recovery_trace_infrastructure_preserves_the_target_failure_and_starts_no_recheck() {
+    let mut graph = definition(&[("verify", &[], &[])], &[], 1);
+    configure_recovery(
+        &mut graph,
+        "verify",
+        1,
+        Some(RecoveryHandlerKind::Command),
+        13,
+    );
+    let initialized = initialize_test(graph);
+    let mut state = initialized.state;
+    let target = initialized.actions[0].id;
+    reduce_and_advance(
+        &mut state,
+        Occurrence::StepStarted {
+            step: "verify".into(),
+            action: target,
+        },
+    );
+    let provisional = reduce_and_advance(
+        &mut state,
+        Occurrence::StepExecutionFailed {
+            step: "verify".into(),
+            action: target,
+            cause: "verification failed".into(),
+        },
+    );
+    let [handler] = provisional.actions.as_slice() else {
+        panic!("configured recovery did not authorize one handler");
+    };
+    reduce_and_advance(
+        &mut state,
+        Occurrence::RecoveryHandlerStarted {
+            step: "verify".into(),
+            round: recovery_round(1),
+            action: handler.id,
+        },
+    );
+
+    let infrastructure = reduce_and_advance(
+        &mut state,
+        Occurrence::RecoveryHandlerCompleted {
+            step: "verify".into(),
+            round: recovery_round(1),
+            action: handler.id,
+            decision: RecoveryDecision::infrastructure("disk full", "host"),
+        },
+    );
+    assert_eq!(
+        state.steps["verify"].state,
+        failed_state(FailurePhase::Execution, "verification failed")
+    );
+    let WorkflowState::Failed {
+        primary_issue,
+        later_cancellation: None,
+    } = &state.workflow
+    else {
+        panic!("infrastructure did not settle a required failure");
+    };
+    assert_eq!(
+        primary_issue.detail,
+        failure("verify", FailurePhase::Execution, "verification failed").detail,
+    );
+    let recovery = state.steps["verify"].recovery.as_ref().unwrap();
+    assert_eq!(
+        recovery.rounds[0].handler.as_ref().unwrap().outcome,
+        RecoveryHandlerOutcome::Infrastructure {
+            summary: "disk full".into(),
+            reason: "host".into(),
+        }
+    );
+    assert_eq!(
+        recovery.terminal_disposition,
+        Some(RecoveryTerminalDisposition::Infrastructure {
+            round: recovery_round(1),
+        })
+    );
+    // REQ-WFEXEC-79
+    assert_eq!(
+        state.steps["verify"].failure_class,
+        Some(FailureClass::Infrastructure)
+    );
+    assert!(infrastructure.actions.iter().all(|action| !matches!(
         action.action,
         Action::StartStep { .. } | Action::StartRecoveryHandler { .. }
     )));
@@ -6884,11 +6981,20 @@ steps:
 }
 
 /// A fixture `workflow` step: its id, its `(outcome, target)` edges, an `exit.<name>` target
-/// ending the walk, `wait:<kind>:<then>[:<onHandBack>]` entering a wait and
-/// `limit:<then>:<n>:<else>` a limited edge, and its derived outputs.
+/// ending the walk, `wait:<kind>:<then>[:<onHandBack>]` entering a wait,
+/// `limit:<then>:<n>:<else>` a limited edge and `host:<then>:<n>:<else>` a host wait, and its
+/// derived outputs.
 type EdgeStep<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
 
 fn edge_target(target: &str) -> RuntimeEdgeTarget {
+    if let Some(host) = target.strip_prefix("host:") {
+        let mut parts = host.splitn(3, ':');
+        return RuntimeEdgeTarget::HostWait {
+            then: parts.next().unwrap().to_owned(),
+            limit: parts.next().unwrap().parse().unwrap(),
+            else_: Box::new(edge_target(parts.next().unwrap())),
+        };
+    }
     if let Some(limited) = target.strip_prefix("limit:") {
         let mut parts = limited.splitn(3, ':');
         return RuntimeEdgeTarget::Limited {
@@ -7132,6 +7238,7 @@ fn a_wait_edge_ends_the_attempt_waiting_without_finalization() {
         rule: None,
         interrupted: None,
         kept: None,
+        counted: false,
     };
     assert_eq!(
         state.workflow,
@@ -7210,6 +7317,7 @@ fn a_stop_entered_before_an_authorized_step_ends_the_attempt_waiting() {
                 rule: None,
                 interrupted: None,
                 kept: None,
+                counted: false,
             },
         }
     );
@@ -7587,6 +7695,64 @@ fn a_limited_edge_continues_under_its_count_and_takes_else_at_it() {
     ));
 }
 
+// REQ-WFEXEC-80: a host wait under its count ends the attempt waiting on a counted `host`
+// wait at its own step; at its count it takes `else` as an ordinary target, uncounted.
+#[test]
+fn a_host_wait_is_entered_counted_under_its_limit_and_takes_else_at_it() {
+    let host_failing = |count: u64| {
+        let definition = edge_definition(
+            &[
+                (
+                    "design",
+                    &[
+                        ("planned", "build"),
+                        ("host_failed", "host:design:3:wait:repair:design"),
+                    ],
+                    &["outcome", "parts"],
+                ),
+                ("build", &[("built", "exit.landed")], &["outcome"]),
+            ],
+            4,
+        );
+        let mut state = design_capturing_seeded(
+            definition,
+            ExecutionSeed::empty()
+                .with_edge_counts(BTreeMap::from([("design.host_failed".to_owned(), count)])),
+        );
+        let settled = reduce_and_advance(&mut state, routed_capture(&[("outcome", "host_failed")]));
+        assert_eq!(state.steps["build"].state, not_reached());
+        assert_eq!(state.continued, None);
+        let WorkflowState::Waiting { wait } = &state.workflow else {
+            panic!("count {count}: {:?}", state.workflow);
+        };
+        assert_eq!(state.wait.as_ref(), Some(wait));
+        assert!(matches!(
+            settled.actions.as_slice(),
+            [RequestedAction {
+                action: Action::FinishRun {
+                    outcome: RunOutcome::Waiting { wait: finished },
+                    ..
+                },
+                ..
+            }] if finished == wait
+        ));
+        wait.clone()
+    };
+    for count in [0, 2] {
+        let wait = host_failing(count);
+        assert_eq!(wait.kind, WaitKind::Host, "count {count}");
+        assert_eq!(wait.step, "design");
+        assert_eq!(wait.outcome.as_deref(), Some("host_failed"));
+        assert_eq!(wait.then, "design");
+        assert_eq!(wait.rule, None);
+        assert!(wait.counted, "count {count}");
+    }
+    let wait = host_failing(3);
+    assert_eq!(wait.kind, WaitKind::Repair);
+    assert_eq!(wait.then, "design");
+    assert!(!wait.counted);
+}
+
 /// `design` routing `planned` and `failed` to the given targets, then `build`.
 fn interrupted_route_definition(planned: &str, failed: &str) -> RuntimeDefinition {
     edge_definition(
@@ -7774,6 +7940,7 @@ fn carried(kind: WaitKind, interrupted: Option<ChildInterruption>) -> EnteredWai
         rule: None,
         interrupted,
         kept: None,
+        counted: false,
     }
 }
 

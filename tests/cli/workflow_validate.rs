@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use super::{CREDENTIALS_FILE_VARIABLE, run, run_with_env};
+use super::grant::Git;
+use super::{CREDENTIALS_FILE_VARIABLE, run, run_with_env, run_with_env_from};
 
 const WORKFLOW_PATH: &str = "workflows/complete.yaml";
 const WORKFLOW_SENTINEL: &str = "unique-workflow-static-content-sentinel";
@@ -193,7 +194,7 @@ fn validate_with_arguments(
 
 #[test]
 fn checked_in_workflow_examples_remain_valid() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/workflows");
+    let root = crate::fixture_root().join("examples/workflows");
     for relative_path in ["README.md", "attachments/aurora-brief.txt"] {
         assert!(
             root.join(relative_path).is_file(),
@@ -777,6 +778,49 @@ fn an_external_wait_without_a_rule_is_reported_at_its_edge() {
     assert_eq!(location["outcome"], "admitted");
 }
 
+// REQ-WFFORMAT-111
+#[test]
+fn a_host_wait_at_another_step_or_without_a_limit_is_reported_at_its_edge() {
+    let bundle = WorkflowBundle::valid();
+    fs::write(
+        bundle.root.join("build.yaml"),
+        "schemaVersion: 1\noutcomes: [built, host_failed]\noutcome: { from: outputs.decide.verdict, onFailure: host_failed }\nsteps:\n  decide:\n    kind: cmd\n    command: { argv: [\"true\"] }\n    outputs:\n      verdict: { kind: text, from: path, path: verdict.txt }\n",
+    )
+    .expect("child workflow should be written");
+    let root = |host_wait: &str| {
+        format!(
+            "schemaVersion: 1\noutcomes: [landed, failed]\nsteps:\n  build:\n    kind: workflow\n    workflow: build.yaml\n    on:\n      built: review\n      host_failed:\n        wait: host\n{host_wait}  review:\n    kind: workflow\n    workflow: build.yaml\n    on:\n      built: exit.landed\n      host_failed: exit.failed\n"
+        )
+    };
+    for (host_wait, code) in [
+        (
+            "        then: review\n        limit: 2\n        else: exit.failed\n",
+            "wait_host_target_invalid",
+        ),
+        (
+            "        then: build\n        else: exit.failed\n",
+            "wait_limit_required",
+        ),
+    ] {
+        bundle.replace_workflow(&root(host_wait));
+        let output = validate(&bundle, true);
+        assert_eq!(output.status.code(), Some(1), "{host_wait}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(diagnostics[0]["code"], code, "{report}");
+        assert_eq!(
+            diagnostics[0]["location"],
+            serde_json::json!({"kind": "step_edge", "step": "build", "outcome": "host_failed"}),
+            "{report}"
+        );
+    }
+    bundle.replace_workflow(&root(
+        "        then: build\n        limit: 2\n        else: exit.failed\n",
+    ));
+    assert!(validate(&bundle, true).status.success());
+}
+
 // REQ-WFFORMAT-6, REQ-WFFORMAT-17, REQ-WFFORMAT-18, REQ-WFFORMAT-38, REQ-WFFORMAT-55, REQ-WFFORMAT-56, REQ-WFFORMAT-57, REQ-WFFORMAT-67, REQ-WFFORMAT-69, REQ-WFFORMAT-70, REQ-WFFORMAT-72, REQ-WFFORMAT-76, REQ-WFFORMAT-77
 // REQ-WFFORMAT-71
 #[test]
@@ -919,7 +963,7 @@ fn relative_workflow_file_is_cwd_relative_without_root_relative_fallback() {
     let bundle = WorkflowBundle::valid();
     let initial_cwd = bundle.root.parent().unwrap();
     let execute = |workflow_file: &str| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_useful"))
+        std::process::Command::new(crate::executable())
             .current_dir(initial_cwd)
             .args([
                 "workflow",
@@ -957,7 +1001,7 @@ fn absolute_workflow_paths_do_not_require_a_named_current_directory() {
             "cd \"$1\" && rmdir \"$1\" && exec \"$2\" workflow validate --source-root \"$3\" \"$4\" --json",
             "sh",
             removed_cwd.to_str().unwrap(),
-            env!("CARGO_BIN_EXE_useful"),
+            crate::executable().to_str().unwrap(),
             bundle.root_argument(),
             bundle.workflow_path().to_str().unwrap(),
         ])
@@ -974,18 +1018,45 @@ fn absolute_workflow_paths_do_not_require_a_named_current_directory() {
 
 // REQ-WFFORMAT-12
 #[test]
-fn source_root_is_required_even_for_an_absolute_workflow_path() {
+fn a_file_without_source_root_is_bounded_by_its_git_repository() {
     let bundle = WorkflowBundle::valid();
+    fs::create_dir(bundle.root.join(".git")).expect("Git marker should be created");
+    let git = Git::new();
+    let elsewhere = tempfile::tempdir().expect("another working directory should exist");
     let selected_path = bundle.workflow_path();
     let selected = selected_path
         .to_str()
         .expect("temporary workflow path should be UTF-8");
+    let validate = || {
+        run_with_env_from(
+            &["workflow", "validate", selected, "--json"],
+            &[(
+                "PATH",
+                git.0
+                    .path()
+                    .to_str()
+                    .expect("fake Git path should be UTF-8"),
+            )],
+            Some(elsewhere.path()),
+        )
+    };
 
-    let output = run(&["workflow", "validate", selected]);
+    let found = validate();
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--source-root <ROOT>"));
+    assert_eq!(found.status.code(), Some(0), "{found:?}");
+    let report: serde_json::Value = serde_json::from_slice(&found.stdout).unwrap();
+    assert_eq!(report["outcome"], "valid");
+    assert_eq!(report["workflow"]["path"], WORKFLOW_PATH);
+
+    fs::remove_dir(bundle.root.join(".git")).expect("Git marker should be removed");
+    let refused = validate();
+
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--source-root"),
+        "{refused:?}"
+    );
     assert!(!bundle.marker.exists());
 }
 

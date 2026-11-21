@@ -965,7 +965,7 @@ fn every_schema_integration_provider_decodes_to_its_closed_id() {
     }
 }
 
-// REQ-WFFORMAT-87, REQ-WFFORMAT-88
+// REQ-WFFORMAT-87, REQ-WFFORMAT-88, REQ-WFFORMAT-110
 #[test]
 fn typed_outcomes_decode_the_names_and_the_outcome_source() {
     let workflow =
@@ -980,7 +980,19 @@ fn typed_outcomes_decode_the_names_and_the_outcome_source() {
                 output: "verdict".to_owned(),
             }),
             on_failure: "failed".to_owned(),
+            on_infrastructure: None,
         })
+    );
+
+    let infrastructure =
+        decode(&fs::read(fixture_root().join("valid/infrastructure-outcome.yaml")).unwrap())
+            .unwrap();
+    assert_eq!(
+        infrastructure
+            .outcome
+            .and_then(|outcome| outcome.on_infrastructure)
+            .as_deref(),
+        Some("host_failed")
     );
 
     let plain = decode(&canonical_valid_fixture()).unwrap();
@@ -1167,7 +1179,7 @@ fn workflow_steps_decode_backward_limited_and_external_edges() {
     );
 }
 
-// REQ-WFFORMAT-2, REQ-WFFORMAT-8, REQ-WFFORMAT-11, REQ-WFFORMAT-34, REQ-WFFORMAT-36, REQ-WFFORMAT-37, REQ-WFFORMAT-41, REQ-WFFORMAT-42, REQ-WFFORMAT-45, REQ-WFFORMAT-46, REQ-WFFORMAT-53, REQ-WFFORMAT-54, REQ-WFFORMAT-61, REQ-WFRECOVERY-56, REQ-WFRECOVERY-57, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-89, REQ-WFFORMAT-92, REQ-WFFORMAT-95, REQ-WFFORMAT-96, REQ-WFFORMAT-102, REQ-WFFORMAT-105
+// REQ-WFFORMAT-2, REQ-WFFORMAT-8, REQ-WFFORMAT-11, REQ-WFFORMAT-34, REQ-WFFORMAT-36, REQ-WFFORMAT-37, REQ-WFFORMAT-41, REQ-WFFORMAT-42, REQ-WFFORMAT-45, REQ-WFFORMAT-46, REQ-WFFORMAT-53, REQ-WFFORMAT-54, REQ-WFFORMAT-61, REQ-WFRECOVERY-56, REQ-WFRECOVERY-57, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-89, REQ-WFFORMAT-92, REQ-WFFORMAT-95, REQ-WFFORMAT-96, REQ-WFFORMAT-102, REQ-WFFORMAT-105, REQ-WFFORMAT-109
 #[test]
 fn every_canonical_invalid_fixture_is_a_structural_failure() {
     let invalid_root = fixture_root().join("invalid");

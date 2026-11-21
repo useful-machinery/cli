@@ -1,0 +1,37 @@
+```console
+$ useful workflow run retry --help
+Rerun steps of a run, on this machine or in Cloud
+
+Usage: useful workflow run retry [OPTIONS] <RUN>
+
+Arguments:
+  <RUN>  Run directory, run ID or subject
+
+Options:
+      --from <STEP>                 Ordinary step to rerun from (repeatable)
+      --all                         Rerun every step as a new attempt
+      --workflow <FILE>             Replacement workflow file within the run's original source root, for a run under the useful home
+      --execution-root <PATH>       Existing execution root, for a run under the useful home; defaults to the previous attempt's root
+      --agent-profiles <PATH>       Replace declared agent profiles with the closed replacement document at PATH
+      --expected-version <VERSION>  Require this positive run version at admission, for a Cloud run
+      --wait                        Observe a Cloud run's continuation until it settles
+      --timeout <DURATION>          Stop waiting after a positive duration (units: ms, s, m, or h; a bare number means seconds)
+      --org <ORG>                   Organization ID or exact slug to act in (default: USEFUL_ORG, then the project of this checkout, then your only organization)
+      --plain                       Force plain human presentation
+      --json                        Print the workflow result as JSON
+      --color <WHEN>                Select renderer color behavior [default: auto] [possible values: auto, always, never]
+      --api-key-file <PATH|->       Authenticate with a service API key from a private file, or - for standard input
+      --allow-insecure-http         Allow this command's Useful Machinery requests over insecure HTTP connections
+  -h, --help                        Print help
+
+RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
+
+With --from STEP, repeatable, the run continues from the named ordinary steps: their downstream ordinary dependents run again, other eligible ordinary steps are inherited, and every finalizer runs again. --workflow names a replacement workflow file within the run's original source root.
+
+With --all, every step runs again as a new attempt, from the run's retained workflow and inputs. The attempt runs in --execution-root, or in the previous attempt's execution root when it is omitted, and a root an earlier attempt used is reported with a warning.
+
+With neither, a run waiting for repair or for its host is retried from the stage that failed: the retry is recorded, with the replacement profiles of --agent-profiles when given, and the run continues in the same command; a host wait's retry runs no requires.check. On either wait, a stage whose child run failed continues that child in place, inheriting its completed steps and rerunning the rest. An ended run that did not succeed continues from the stage it stood at: for a workflow of edges the step its latest attempt started last, for a Cloud run the step of the position it reported, and otherwise every step its latest attempt left unfinished; a run that names none is refused, naming --from and --all. In any other state, a run that is running or waits on another kind of wait, the command changes nothing and names the commands that apply.
+
+A run under the home runs in the previous attempt's execution root unless --execution-root names another. For a Cloud run the command asks Cloud for the continuation, the retry, or the repair the runner applies, under one request key sent again if the response is lost; --expected-version requires the run's version, and --wait follows a continuation until it settles, within --timeout. A retry with --all is always followed. Cloud's acceptance is not the runner's application.
+
+```

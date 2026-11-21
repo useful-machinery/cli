@@ -767,6 +767,18 @@
       },
       "required": ["retries"]
     },
+    "InfrastructureExitCodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 255
+      },
+      "description": "Exit codes that classify the step's failure as the host's and start no recovery round."
+    },
     "CommandStep": {
       "type": "object",
       "additionalProperties": false,
@@ -776,6 +788,7 @@
         "dependsOn": { "$ref": "#/$defs/Dependencies" },
         "cwd": { "$ref": "#/$defs/RuntimeRelativePath" },
         "recovery": { "$ref": "#/$defs/Recovery" },
+        "infrastructureExitCodes": { "$ref": "#/$defs/InfrastructureExitCodes" },
         "condition": { "$ref": "#/$defs/OrdinaryCondition" },
         "environmentPassthrough": { "$ref": "#/$defs/EnvironmentPassthrough" },
         "inputs": { "$ref": "#/$defs/InputBindings" },
@@ -850,6 +863,23 @@
       },
       "required": ["wait", "then"]
     },
+    "HostWaitTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wait": { "const": "host" },
+        "then": { "$ref": "#/$defs/EdgeTargetString" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "else": {
+          "oneOf": [
+            { "$ref": "#/$defs/EdgeTargetString" },
+            { "$ref": "#/$defs/WaitTarget" }
+          ]
+        }
+      },
+      "required": ["wait", "then"],
+      "description": "A wait for the host, entered while the edge's per-run count is below limit and taken as else once it reaches it; then must name the step whose edge it is, and limit and else are required."
+    },
     "LimitedTarget": {
       "type": "object",
       "additionalProperties": false,
@@ -870,7 +900,8 @@
       "oneOf": [
         { "$ref": "#/$defs/EdgeTargetString" },
         { "$ref": "#/$defs/LimitedTarget" },
-        { "$ref": "#/$defs/WaitTarget" }
+        { "$ref": "#/$defs/WaitTarget" },
+        { "$ref": "#/$defs/HostWaitTarget" }
       ]
     },
     "Edges": {
@@ -987,7 +1018,8 @@
           ],
           "description": "The text output that names a succeeded run's outcome, or with firstOf the output of the first listed step that succeeded."
         },
-        "onFailure": { "$ref": "#/$defs/OutcomeName" }
+        "onFailure": { "$ref": "#/$defs/OutcomeName" },
+        "onInfrastructure": { "$ref": "#/$defs/OutcomeName" }
       }
     },
     "TreePath": {
@@ -1038,7 +1070,7 @@
     },
     "Requires": {
       "type": "object",
-      "description": "What the workflow needs: host tools probed at admission and the integrations it declares, at least one of them.",
+      "description": "What the workflow needs: host tools probed at admission, the check a host wait's condition runs and the integrations it declares, at least one of them.",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
@@ -1049,6 +1081,7 @@
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$" }
         },
+        "check": { "$ref": "#/$defs/HostCheck" },
         "as": { "$ref": "#/$defs/IntegrationAs" },
         "integrations": {
           "type": "object",
@@ -1062,6 +1095,22 @@
           "additionalProperties": { "$ref": "#/$defs/Integration" }
         }
       }
+    },
+    "HostCheck": {
+      "type": "object",
+      "description": "One command that exits zero on a host able to run the workflow, run only by a host wait's condition; argv[0] names a program on the tree's programs or PATH, never a path.",
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "prefixItems": [
+            { "type": "string", "minLength": 1, "pattern": "^[^/]+$", "not": { "pattern": "\u0000" } }
+          ],
+          "items": { "type": "string", "not": { "pattern": "\u0000" } }
+        }
+      },
+      "required": ["argv"]
     },
     "IntegrationProvider": {
       "description": "A provider id: the reviewed provider table's OAuth rows, then the coding agents a member signs in, then the reviewed token services.",

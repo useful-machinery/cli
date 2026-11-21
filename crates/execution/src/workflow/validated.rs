@@ -115,12 +115,13 @@ impl ValidatedWorkflow {
 /// A workflow's declared outcomes: `source` holds the `text` outputs of required ordinary
 /// steps that `outcome.from` names, in written order, a list of one for a single reference,
 /// whose step then declares no `condition` (REQ-WFFORMAT-88, REQ-WFFORMAT-108); `on_failure`
-/// is one of `names`.
+/// is one of `names`, and so is `on_infrastructure` when declared (REQ-WFFORMAT-110).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedOutcome {
     pub names: Vec<String>,
     pub source: OutputSources,
     pub on_failure: String,
+    pub on_infrastructure: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -223,7 +224,7 @@ pub(crate) struct ValidatedChildInput {
 }
 
 /// A validated `on` target (REQ-WFFORMAT-92): a step of the workflow, which may be the
-/// producer itself or an earlier step, an exit, a limited edge or a wait.
+/// producer itself or an earlier step, an exit, a limited edge, a wait or a host wait.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ValidatedEdgeTarget {
     Step(String),
@@ -243,6 +244,14 @@ pub(crate) enum ValidatedEdgeTarget {
         /// parsed and its `inputs.` and `outputs.` operands checked.
         rule: Option<WaitRule>,
     },
+    /// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111): a `host` wait entered at `then`,
+    /// the step whose edge it is, while the edge's count is below `limit`, and `else_`, never
+    /// limited nor a host wait, taken once it reaches it.
+    HostWait {
+        then: String,
+        limit: u32,
+        else_: Box<ValidatedEdgeTarget>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,6 +259,9 @@ pub struct ValidatedCommandStep {
     pub common: ValidatedCommonStep,
     pub(crate) inputs: BTreeMap<String, ResolvedValueReference>,
     pub(crate) argv: Vec<String>,
+    /// The exit codes that classify an ordinary step's failure `infrastructure`
+    /// (REQ-WFFORMAT-109, REQ-WFRECOVERY-66); empty for a finalizer's body.
+    pub(crate) infrastructure_exit_codes: BTreeSet<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

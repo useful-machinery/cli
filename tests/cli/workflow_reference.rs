@@ -13,7 +13,7 @@ fn embedded_reference_is_emitted_unchanged_without_external_state() {
     let api_url = format!("http://{}/api", listener.local_addr().unwrap());
     let entries_before = directory_entries(working_directory.path());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let output = Command::new(crate::executable())
         .env_clear()
         .current_dir(working_directory.path())
         .args(["workflow", "reference"])
@@ -36,10 +36,7 @@ fn embedded_reference_is_emitted_unchanged_without_external_state() {
         .expect("useful should run");
 
     assert!(output.status.success());
-    assert_eq!(
-        output.stdout,
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/workflow-v1.md"))
-    );
+    assert_eq!(output.stdout, include_bytes!("../../docs/workflow-v1.md"));
     assert!(output.stderr.is_empty());
     assert!(
         output
@@ -58,7 +55,7 @@ fn embedded_reference_is_emitted_unchanged_without_external_state() {
 
     let markdown = std::str::from_utf8(&output.stdout).expect("reference should be UTF-8 Markdown");
     assert!(
-        markdown.len() <= 31 * 1024,
+        markdown.len() <= 33 * 1024,
         "reference should remain concise"
     );
     assert_sections_are_ordered(

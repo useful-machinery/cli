@@ -4,12 +4,18 @@ use std::str::FromStr;
 
 macro_rules! identifier_arg {
     ($name:ident, $value_name:literal, $help:literal) => {
+        identifier_arg!($name, $value_name);
+
+        impl $name {
+            pub(super) const HELP: &'static str = $help;
+        }
+    };
+    ($name:ident, $value_name:literal) => {
         #[derive(Clone, Debug)]
         pub(super) struct $name(String);
 
         impl $name {
             pub(super) const VALUE_NAME: &'static str = $value_name;
-            pub(super) const HELP: &'static str = $help;
         }
 
         impl FromStr for $name {
@@ -34,7 +40,6 @@ macro_rules! identifier_arg {
 pub(super) struct OrganizationArg(String);
 
 impl OrganizationArg {
-    pub(super) const VALUE_NAME: &'static str = "ORGANIZATION";
     pub(super) const HELP: &'static str = "Organization ID or exact slug";
 
     pub(super) fn into_string(self) -> String {
@@ -78,15 +83,53 @@ impl PoolArg {
     }
 }
 
-identifier_arg!(ProjectArg, "PROJECT", "Project ID");
-identifier_arg!(
-    InstallationArg,
-    "INSTALLATION",
-    "GitHub installation binding ID"
-);
-identifier_arg!(
-    GitLabConnectionArg,
-    "GITLAB_CONNECTION",
-    "GitLab connection ID"
-);
 identifier_arg!(RepositoryArg, "REPOSITORY", "Provider repository ID");
+
+/// Whether `value` is a provider repository ID as GitHub and GitLab number one: decimal digits
+/// with no leading zero, a positive 64-bit integer.
+pub(super) fn provider_repository_id(value: &str) -> bool {
+    !value.starts_with('0')
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && matches!(value.parse::<i64>(), Ok(1..=i64::MAX))
+}
+
+/// A repository as `useful project create` and `update` name it, parsed with no request
+/// (REQ-PROJECT-101).
+#[derive(Clone, Debug)]
+pub(super) enum RepositoryRef {
+    /// The provider's repository ID.
+    Id(String),
+    /// The repository's path: `owner/name`, or a GitLab project's full path.
+    Path(String),
+}
+
+impl RepositoryRef {
+    pub(super) const VALUE_NAME: &'static str = "REPOSITORY";
+    pub(super) const HELP: &'static str =
+        "Repository path (owner/name, or a GitLab project's full path) or provider repository ID";
+}
+
+impl FromStr for RepositoryRef {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if provider_repository_id(value) {
+            Ok(Self::Id(value.to_owned()))
+        } else if value.contains('/') {
+            Ok(Self::Path(value.to_owned()))
+        } else {
+            Err(
+                "must be a repository path such as owner/name, or a provider repository ID"
+                    .to_owned(),
+            )
+        }
+    }
+}
+
+impl std::fmt::Display for RepositoryRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Id(value) | Self::Path(value) => formatter.write_str(value),
+        }
+    }
+}

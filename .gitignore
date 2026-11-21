@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+/tests/target/
 
 # Node development dependencies
 node_modules/

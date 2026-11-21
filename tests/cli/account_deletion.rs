@@ -107,13 +107,7 @@ fn account_deletion_request_schedules_thirty_days_and_removes_the_local_session(
     );
 
     let output = run_with_env(
-        &[
-            "account",
-            "deletion",
-            "request",
-            "--yes",
-            "--allow-insecure-http",
-        ],
+        &["account", "delete", "--yes", "--allow-insecure-http"],
         &environment,
     );
 
@@ -131,7 +125,7 @@ fn account_deletion_request_schedules_thirty_days_and_removes_the_local_session(
                 "local credential: removed\n",
                 "deployment: {}\n\n",
                 "Cancel before the deadline with fresh browser proof:\n",
-                "  useful account deletion cancel\n"
+                "  useful account restore\n"
             ),
             PRINCIPAL_ID, server.api_url
         )
@@ -181,10 +175,9 @@ fn service_account_deletion_reports_immediate_completion_without_human_cleanup()
     let output = run_with_env(
         &[
             "account",
-            "deletion",
-            "request",
+            "delete",
             "--yes",
-            "--service-api-key-file",
+            "--api-key-file",
             service_key_path.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -238,8 +231,7 @@ fn account_deletion_accepts_a_schedule_updated_at_the_deadline() {
     let output = run_with_env(
         &[
             "account",
-            "deletion",
-            "request",
+            "delete",
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -278,12 +270,11 @@ fn account_deletion_preserves_a_concurrently_replaced_credential_pair() {
         credential_path.to_str().unwrap(),
     );
     let empty_path = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
             "account",
-            "deletion",
-            "request",
+            "delete",
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -358,8 +349,7 @@ fn account_deletion_request_emits_json_for_an_invalid_api_response() {
     let output = run_with_env(
         &[
             "account",
-            "deletion",
-            "request",
+            "delete",
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -406,8 +396,7 @@ fn account_deletion_request_reports_owner_and_existing_schedule_conflicts() {
         let output = run_with_env(
             &[
                 "account",
-                "deletion",
-                "request",
+                "delete",
                 "--yes",
                 "--json",
                 "--allow-insecure-http",
@@ -443,13 +432,7 @@ fn account_deletion_cancellation_uses_fresh_unstored_browser_proof() {
     );
 
     let output = run_with_env(
-        &[
-            "account",
-            "deletion",
-            "cancel",
-            "--json",
-            "--allow-insecure-http",
-        ],
+        &["account", "restore", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -518,13 +501,7 @@ fn account_deletion_cancellation_emits_a_terminal_result_for_an_invalid_api_resp
     );
 
     let output = run_with_env(
-        &[
-            "account",
-            "deletion",
-            "cancel",
-            "--json",
-            "--allow-insecure-http",
-        ],
+        &["account", "restore", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -584,13 +561,7 @@ fn account_deletion_cancellation_reports_reauthentication_and_already_cancelled_
         );
 
         let output = run_with_env(
-            &[
-                "account",
-                "deletion",
-                "cancel",
-                "--json",
-                "--allow-insecure-http",
-            ],
+            &["account", "restore", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -614,7 +585,7 @@ fn account_deletion_cancellation_reports_reauthentication_and_already_cancelled_
 // REQ-ACCOUNT-32
 #[test]
 fn account_deletion_request_requires_explicit_confirmation() {
-    let output = run(&["account", "deletion", "request"]);
+    let output = run(&["account", "delete"]);
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
@@ -632,7 +603,7 @@ fn account_deletion_reports_acceptance_unknown_when_the_repeat_of_a_lost_reply_i
             credential_path.to_str().unwrap(),
         );
         let before = fs::read(&credential_path).unwrap();
-        let mut args = vec!["account", "deletion", "request", "--yes"];
+        let mut args = vec!["account", "delete", "--yes"];
         if json {
             args.push("--json");
         }
@@ -668,8 +639,8 @@ fn account_deletion_reports_acceptance_unknown_when_the_repeat_of_a_lost_reply_i
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("useful auth status"));
-    assert!(stderr.contains("useful account deletion cancel"));
+    assert!(stderr.contains("useful account show"));
+    assert!(stderr.contains("useful account restore"));
     assert_eq!(requests.len(), 2);
 
     let (output, api_url, requests) = request(

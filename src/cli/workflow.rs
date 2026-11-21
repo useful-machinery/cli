@@ -1,4 +1,6 @@
 mod definition;
+pub(in crate::cli) mod doctor;
+pub(in crate::cli) mod input_set;
 mod reference;
 mod run;
 mod schema;
@@ -6,7 +8,7 @@ pub(in crate::cli) mod validate;
 
 use std::future::Future;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -43,33 +45,21 @@ pub(super) struct PresentationOptions {
     pub(super) color: ColorArgument,
 }
 
-#[derive(Debug, Args)]
-pub(super) struct ExistingLocalRun {
-    #[arg(
-        value_name = "RUN",
-        help = "Run directory, or the id or subject of a run under the useful home"
-    )]
-    pub(super) run_dir: PathBuf,
-}
-
-impl ExistingLocalRun {
-    /// The run directory `RUN` names (REQ-LOCALRUN-180): a single component of a run id's
-    /// form is the run with that id under the `useful` home; a single component of a subject's
-    /// form that names no existing path is the run the home's subject index holds for it;
-    /// anything else is the directory itself.
-    pub(super) fn resolve(&self) -> Result<PathBuf, RunAddressError> {
-        let Some(value) = self.run_dir.to_str() else {
-            return Ok(self.run_dir.clone());
-        };
-        if useful_execution::is_run_id(value) {
-            return locate_by_id(&home()?, value);
-        }
-        if useful_execution::is_subject(value) && std::fs::symlink_metadata(&self.run_dir).is_err()
-        {
-            return locate_by_subject(&home()?, value);
-        }
-        Ok(self.run_dir.clone())
+/// The run directory `run` names under the `useful` home (REQ-LOCALRUN-180): a single
+/// component of a run id's form is the run with that id under the `useful` home; a single
+/// component of a subject's form that names no existing path is the run the home's subject
+/// index holds for it; anything else is the directory itself.
+pub(super) fn resolve_under_home(run: &Path) -> Result<PathBuf, RunAddressError> {
+    let Some(value) = run.to_str() else {
+        return Ok(run.to_path_buf());
+    };
+    if useful_execution::is_run_id(value) {
+        return locate_by_id(&home()?, value);
     }
+    if useful_execution::is_subject(value) && std::fs::symlink_metadata(run).is_err() {
+        return locate_by_subject(&home()?, value);
+    }
+    Ok(run.to_path_buf())
 }
 
 fn home() -> Result<useful_execution::WorkflowHome, RunAddressError> {
@@ -131,9 +121,9 @@ fn locate_by_subject(
     }
 }
 
-const RUN_NOT_FOUND: &str = "run_not_found";
+pub(super) const RUN_NOT_FOUND: &str = "run_not_found";
 const RUN_DIRECTORY_UNAVAILABLE: &str = "run_directory_unavailable";
-const SUBJECT_AMBIGUOUS: &str = "subject_ambiguous";
+pub(super) const SUBJECT_AMBIGUOUS: &str = "subject_ambiguous";
 
 /// A run id or subject `RUN` the `useful` home does not answer (REQ-LOCALRUN-180): `code` is
 /// `run_not_found`, `subject_ambiguous` (the message names the runs), `home_unavailable`, or
@@ -147,7 +137,7 @@ pub(super) struct RunAddressError {
 }
 
 impl RunAddressError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(super) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -213,25 +203,9 @@ pub(super) struct LocalExecutionRoot {
     #[arg(
         long,
         value_name = "PATH",
-        help = "Directory for workflow execution (must already exist)"
+        help = "Directory for workflow execution (must already exist; the working directory when omitted)"
     )]
     pub(super) execution_root: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub(super) struct LocalWorkflowSource {
-    #[arg(
-        long,
-        value_name = "ROOT",
-        help = "Directory boundary for workflow source files"
-    )]
-    pub(super) source_root: PathBuf,
-
-    #[arg(
-        value_name = "WORKFLOW_FILE",
-        help = "Workflow definition path, resolved from the initial working directory"
-    )]
-    pub(super) workflow_file: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -244,6 +218,10 @@ pub(super) struct Command {
 enum WorkflowCommand {
     #[command(about = definition::ABOUT)]
     Definition(definition::Command),
+    #[command(about = doctor::ABOUT)]
+    Doctor(doctor::Command),
+    #[command(about = input_set::ABOUT)]
+    InputSet(input_set::Command),
     #[command(about = reference::ABOUT)]
     Reference(reference::Command),
     #[command(about = run::ABOUT)]
@@ -363,6 +341,8 @@ impl Command {
         match self.command {
             None => super::print_help(&[NAME]),
             Some(WorkflowCommand::Definition(command)) => command.execute(),
+            Some(WorkflowCommand::Doctor(command)) => command.execute(),
+            Some(WorkflowCommand::InputSet(command)) => command.execute(),
             Some(WorkflowCommand::Reference(command)) => command.execute(),
             Some(WorkflowCommand::Run(command)) => command.execute(),
             Some(WorkflowCommand::Schema(command)) => command.execute(),

@@ -1,57 +1,50 @@
-//! `useful workflow run show RUN --cloud ORGANIZATION`, `useful workflow run release RUN --cloud
-//! ORGANIZATION` (REQ-LOCALRUN-189, REQ-LOCALRUN-187), `withdraw` and `cancel` with `--cloud`
-//! (REQ-LOCALRUN-218) and the control leaves `answer`, `approve`, `hand-back`, `lift`, `stop` and
-//! `retry` with `--cloud` (REQ-LOCALRUN-210): the Cloud run `RUN` names, as typed, read with its
-//! identity, observations, trigger deliveries and controls (REQ-RUN-96, REQ-RUN-87, REQ-RUN-88 and
-//! REQ-RUN-110), its subject claim released by an owner (REQ-CLOUDDEF-19), a control carried to
-//! its runner (REQ-RUN-91), or a graceful cancellation requested (REQ-CANCEL-1), through the
-//! public API under the CLI's session handling. Nothing under the `useful` home is read or
-//! written.
-
+//! `answer`, `approve`, `hand-back`, `pause`, `unpause`, `resume`, `retry`, `cancel` and
+//! `release` of a Cloud run the lookup found (REQ-LOCALRUN-180, REQ-LOCALRUN-187,
+//! REQ-LOCALRUN-210, REQ-LOCALRUN-218): a control carried to its runner (REQ-RUN-91,
+//! REQ-RUN-110), a continuation or a retry requested (REQ-CONTINUE-55, REQ-CONTINUE-85,
+//! REQ-RETRY-30), a cancellation requested (REQ-CANCEL-38), or the run's subject claim released
+//! by an owner (REQ-CLOUDDEF-19), through the public API under the CLI's session handling. A
+//! verb refused for the run's state names it and the verbs that apply (REQ-LOCALRUN-223).
+//! Nothing under the `useful` home is read or written. `useful workflow run show` reads a Cloud
+//! run in `show`.
 use std::io::{self, Write};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use serde::Serialize;
-use serde_json::Value;
 use useful_api::{
-    HttpClient, Run, RunApi, RunCancellationMode, RunCancellationReceipt, RunClaimRelease,
-    RunControl, RunControlAnswer, RunControlKind, RunControlRequest, RunControlSubmission,
-    RunControlWait, RunFailure, RunRead, RunSubjectClaim, RunTriggerDelivery,
+    HttpClient, Run, RunApi, RunClaimRelease, RunControl, RunControlAnswer, RunControlKind,
+    RunControlRequest, RunControlSubmission, RunControlWait, RunFailure, RunRead, RunState,
+    RunSubjectClaim,
 };
+use useful_execution::{ContinuingControl, WaitKind};
 use useful_human_auth::Deployment;
 
-use super::super::super::run::{
-    reported_field as field, reported_text as text, step_path as path, wait_phrase,
-};
 use super::super::super::{
-    self as cli, CommandFailure, HttpOptions, OrganizationArg, PrincipalAuthenticationArgs,
+    self as cli, CommandFailure, CommonArgs, HttpOptions, PrincipalAuthenticationArgs,
+    TerminalObservation,
 };
+use super::super::RunAddressError;
+use super::cloud_api::observation::{self, ObservationContext};
+use super::cloud_api::{
+    Cancellation, CloudSnapshot, ContinuationSubmission, Missed, RetryRequest, RunOptions,
+    RunWaitArgs, reported_text as text,
+};
+use super::control::{Placed, Refusal, Standing};
+use super::target::{InCloud, Unread};
 use crate::exit_code::ExitCode;
 
-const SHOW_COMMAND: &str = "useful workflow run show";
 const RELEASE_COMMAND: &str = "useful workflow run release";
 const CANCEL_COMMAND: &str = "useful workflow run cancel";
-const WITHDRAW_COMMAND: &str = "useful workflow run withdraw";
-/// The most deliveries `show` reads, the API's page bound.
-const SHOWN_DELIVERIES: u32 = 100;
-/// The most controls `show` reads, the API's page bound.
-const SHOWN_CONTROLS: u32 = 100;
-/// The run fields a definition-backed run's read carries and a run by `workflowPath` may
-/// leave out; `show` reports an absent one as null.
-const OBSERVED_FIELDS: [&str; 6] = [
-    "definition",
-    "subjectClaim",
-    "workflowState",
-    "workflowOutcome",
-    "workflowProgress",
-    "exits",
-];
-
-/// The `after_help` paragraph of a control leaf that takes `--cloud` (REQ-LOCALRUN-210).
-pub(super) const CONTROL_AFTER_HELP: &str = "With --cloud ORGANIZATION, RUN is a Cloud run ID: the command reads that run and asks Cloud, under one request key sent again if the response is lost, to carry the control for the run's current wait to the runner executing it, which applies it as this command applies it to a local run. Cloud's acceptance is not the runner's application. It reads and writes no local run.";
+const RETRY_COMMAND: &str = "useful workflow run retry";
+/// What a followed withdrawal reports when it ends before the run is final (REQ-RUN-62).
+const TIMED_OUT: &str = "The run was not final before the timeout; it continues in Cloud.";
+const STOPPED: &str = "Observation stopped; the run continues in Cloud.";
+const UNREACHABLE: &str = "Cloud could not be reached twice in a row; observation stopped and the run continues in Cloud.";
 
 /// The control a leaf asks Cloud to carry to the run's runner (REQ-LOCALRUN-210), with the
-/// arguments its local form takes.
+/// arguments its local form takes: `pause` sends the control kind `stop`, `unpause` the kind
+/// `lift`, and `cancel` of a waiting run the kind `withdraw` (REQ-LOCALRUN-218).
 pub(super) enum Control {
     Answer { question: String, text: String },
     Approve,
@@ -62,10 +55,74 @@ pub(super) enum Control {
     Withdraw,
 }
 
-/// Why a control leaf sent nothing: the run does not wait on the wait its control resolves.
+/// The lookup's miss the failure of a request to the run `found` names stands for, written as
+/// `command`'s refusal (REQ-LOCALRUN-180): Cloud has no such run, or nobody is signed in.
+fn missed(found: InCloud, command: &'static str, json: bool) -> Missed {
+    Box::new(move |failure, options| {
+        Ok(found
+            .missed_by(failure, &options.authentication, &options.http)?
+            .map(|miss| -> Box<dyn FnOnce() -> cli::CommandResult> {
+                Box::new(move || {
+                    super::control::write_refusal(command, None, &Refusal::from(miss), json)
+                })
+            }))
+    })
+}
+
+/// The hook of a request that is not the lookup's first: its failure is its own.
+fn unmissed() -> Missed {
+    Box::new(|_, _| Ok(None))
+}
+
+/// The step `run`'s latest progress report stood at: the first step identifier of its
+/// position, if any.
+fn positioned_step(run: &Run) -> Option<String> {
+    let progress = run.workflow_progress.as_ref()?.as_deref()?;
+    progress
+        .position
+        .iter()
+        .find_map(|element| match serde_json::to_value(element) {
+            Ok(serde_json::Value::String(step)) => Some(step),
+            _ => None,
+        })
+}
+
+/// The state of the Cloud run `read` reads (REQ-LOCALRUN-223): a final `state` is ended, a
+/// wait its latest progress report carries is waiting on that kind, and anything else, a run
+/// Cloud has not materialized among it, is running.
+fn standing(read: &RunRead) -> Standing {
+    let RunRead::Materialized(run) = read else {
+        return Standing::Running;
+    };
+    match run.state {
+        RunState::Succeeded => Standing::Ended { succeeded: true },
+        RunState::Failed | RunState::Cancelled | RunState::Interrupted | RunState::Rejected => {
+            Standing::Ended { succeeded: false }
+        }
+        _ => progress_wait(run).map_or(Standing::Running, |current| {
+            Standing::Waiting(wait_kind(&current.wait))
+        }),
+    }
+}
+
+/// The kind of a wait a progress report names.
+fn wait_kind(wait: &RunControlWait) -> WaitKind {
+    match wire(wait.kind).as_str() {
+        "approval" => WaitKind::Approval,
+        "repair" => WaitKind::Repair,
+        "host" => WaitKind::Host,
+        "stop" => WaitKind::Stop,
+        "external" => WaitKind::External,
+        "children" => WaitKind::Children,
+        _ => WaitKind::Answer,
+    }
+}
+
+/// Why a control leaf sent nothing: the run does not wait on the wait its control resolves,
+/// in the state it is in (REQ-LOCALRUN-223).
 enum Unsent {
-    NotWaiting,
-    KindMismatch,
+    NotWaiting(Standing),
+    KindMismatch(Standing),
 }
 
 impl Control {
@@ -74,43 +131,49 @@ impl Control {
             Self::Answer { .. } => "answer",
             Self::Approve => "approve",
             Self::HandBack { .. } => "hand-back",
-            Self::Lift { .. } => "lift",
-            Self::Stop { .. } => "stop",
+            Self::Lift { .. } => "unpause",
+            Self::Stop { .. } => "pause",
             Self::Retry => "retry",
-            Self::Withdraw => "withdraw",
+            Self::Withdraw => "cancel",
         }
     }
 
     fn command(&self) -> &'static str {
         match self {
-            Self::Answer { .. } => "useful workflow run answer",
-            Self::Approve => "useful workflow run approve",
-            Self::HandBack { .. } => "useful workflow run hand-back",
-            Self::Lift { .. } => "useful workflow run lift",
-            Self::Stop { .. } => "useful workflow run stop",
-            Self::Retry => "useful workflow run retry",
-            Self::Withdraw => WITHDRAW_COMMAND,
+            Self::Answer { .. } => ContinuingControl::Answer.command(),
+            Self::Approve => ContinuingControl::Approve.command(),
+            Self::HandBack { .. } => ContinuingControl::HandBack.command(),
+            Self::Lift { .. } => "useful workflow run unpause",
+            Self::Stop { .. } => "useful workflow run pause",
+            Self::Retry => RETRY_COMMAND,
+            Self::Withdraw => CANCEL_COMMAND,
         }
     }
 
-    /// The kind of wait the control resolves, which the run must currently wait on; a `lift`
-    /// names the run's `stop` wait when it waits on one, and a `stop` and a `withdraw` name
-    /// none.
-    fn resolves(&self) -> Option<&'static str> {
+    /// The kinds of wait the control resolves, one of which the run must currently wait on
+    /// (a `retry` resolves a `repair` or a `host` wait, REQ-LOCALRUN-210); a `lift` names the
+    /// run's `stop` wait when it waits on one, and a `stop` and a `withdraw` name none.
+    fn resolves(&self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Answer { .. } => Some("answer"),
-            Self::Approve | Self::HandBack { .. } => Some("approval"),
-            Self::Retry => Some("repair"),
+            Self::Answer { .. } => Some(&["answer"]),
+            Self::Approve | Self::HandBack { .. } => Some(&["approval"]),
+            Self::Retry => Some(&["repair", "host"]),
             Self::Lift { .. } | Self::Stop { .. } | Self::Withdraw => None,
         }
     }
 
-    /// The request naming `wait`, or the reason none is sent.
-    fn request(&self, wait: Option<RunControlWait>) -> Result<RunControlRequest, Unsent> {
+    /// The request naming `wait`, or the reason none is sent to the run in `standing`.
+    fn request(
+        &self,
+        wait: Option<RunControlWait>,
+        standing: Standing,
+    ) -> Result<RunControlRequest, Unsent> {
         let wait = match self.resolves() {
-            Some(kind) => match wait {
-                None => return Err(Unsent::NotWaiting),
-                Some(wait) if wire(wait.kind) != kind => return Err(Unsent::KindMismatch),
+            Some(kinds) => match wait {
+                None => return Err(Unsent::NotWaiting(standing)),
+                Some(wait) if !kinds.contains(&wire(wait.kind).as_str()) => {
+                    return Err(Unsent::KindMismatch(standing));
+                }
                 wait => wait,
             },
             None if matches!(self, Self::Lift { .. }) => {
@@ -145,250 +208,593 @@ impl Control {
     }
 }
 
-/// The run's current wait as its latest progress report names it, if it waits.
-fn current_wait(read: RunRead) -> Option<RunControlWait> {
-    let RunRead::Materialized(run) = read else {
-        return None;
+/// A run's current wait as its latest progress report names it: the wait a control names, and
+/// the ids of the questions it lists, `None` when it lists none.
+pub(super) struct CurrentWait {
+    wait: RunControlWait,
+    questions: Option<Vec<String>>,
+}
+
+/// The run's current wait as its latest progress report names it, if it waits, and its state.
+/// An ended run waits on nothing: the wait its last report may still carry, when no runner
+/// reported the end of it, is not current.
+fn current_wait(read: &RunRead) -> (Option<CurrentWait>, Standing) {
+    let standing = standing(read);
+    let wait = match read {
+        RunRead::Materialized(run) if !matches!(standing, Standing::Ended { .. }) => {
+            progress_wait(run)
+        }
+        RunRead::Materialized(_) | RunRead::Pending(_) => None,
     };
-    let progress = run.workflow_progress.flatten()?;
-    progress.wait.as_deref().map(RunControlWait::from)
+    (wait, standing)
+}
+
+/// The wait `run`'s latest progress report names, if any.
+fn progress_wait(run: &Run) -> Option<CurrentWait> {
+    let progress = run.workflow_progress.as_ref()?.as_deref()?;
+    progress.wait.as_deref().map(|wait| CurrentWait {
+        wait: RunControlWait::from(wait),
+        questions: wait
+            .questions
+            .clone()
+            .flatten()
+            .map(|questions| questions.into_iter().map(|question| question.id).collect()),
+    })
+}
+
+/// The question `answer` with no `--question` answers on a Cloud run (REQ-LOCALRUN-210): the
+/// one question `wait` lists, or `1` when it lists none; several are `question_ambiguous`.
+/// A run that does not wait on an answer is left to the request to refuse.
+fn open_question(wait: Option<&CurrentWait>) -> Result<String, Refusal> {
+    let listed = wait
+        .filter(|current| wire(current.wait.kind) == "answer")
+        .and_then(|current| current.questions.as_deref())
+        .unwrap_or_default();
+    match listed {
+        [] => Ok("1".to_owned()),
+        [question] => Ok(question.clone()),
+        questions => Err(super::control::question_ambiguous(
+            questions.iter().map(String::as_str),
+        )),
+    }
 }
 
 /// The Cloud run one leaf acts on and how it reports.
 pub(super) struct CloudRun {
-    organization: OrganizationArg,
+    organization: String,
     run_id: String,
+    /// The lookup that found the run, whose first read of the run ends it
+    /// (REQ-LOCALRUN-180); `None` once the leaf took it.
+    found: Option<InCloud>,
+    /// `--record-only`, which a Cloud run does not read: a usage error once the run is read.
+    record_only: bool,
     authentication: PrincipalAuthenticationArgs,
     http: HttpOptions,
     json: bool,
 }
 
 impl CloudRun {
-    /// `RUN` as the Cloud run id in `organization`, through `selector`'s authentication and
-    /// transport; a `RUN` that is not UTF-8 is a usage error.
-    pub(super) fn new(
-        run: super::ExistingLocalRun,
-        organization: OrganizationArg,
-        selector: super::CloudSelector,
+    /// The Cloud run the lookup found (REQ-LOCALRUN-180), through the leaf's authentication
+    /// and transport; `record_only` is the leaf's `--record-only`, a usage error, exit 2, once
+    /// the run is read.
+    pub(super) fn found(
+        found: InCloud,
+        authentication: PrincipalAuthenticationArgs,
+        http: HttpOptions,
         json: bool,
-    ) -> Result<Self, CommandFailure> {
-        let run_id = run.run_dir.into_os_string().into_string().map_err(|_| {
-            CommandFailure::with_exit_code(
-                anyhow!("the Cloud run id RUN must be valid UTF-8"),
-                ExitCode::UsageError,
-            )
-        })?;
-        Ok(Self {
-            organization,
-            run_id,
-            authentication: selector.authentication,
-            http: selector.http,
+        record_only: bool,
+    ) -> Self {
+        Self {
+            organization: found.organization.clone(),
+            run_id: found.run_id.clone(),
+            found: Some(found),
+            record_only,
+            authentication,
+            http,
             json,
-        })
+        }
     }
 
-    /// Reads the run, for a definition-backed run holding a claim the newest page of its
-    /// trigger deliveries, and for any definition-backed run the newest page of its controls.
-    pub(super) fn show(self) -> cli::CommandResult {
-        cli::execute_deployment_command(
-            Some(self),
-            &["workflow", "run", "show"],
-            "configure Useful Machinery runs",
-            |cloud, deployment| {
-                let read = cloud.with_api(deployment, |api| {
-                    let run = match api.get(&cloud.organization, &cloud.run_id)? {
-                        RunRead::Materialized(run) => run,
-                        RunRead::Pending(_) => return Ok(None),
-                    };
-                    let defined = matches!(run.definition, Some(Some(_)));
-                    let claimed = defined && matches!(run.subject_claim, Some(Some(_)));
-                    let deliveries = if claimed {
-                        Some(api.list_trigger_deliveries(
-                            &cloud.organization,
-                            &cloud.run_id,
-                            Some(SHOWN_DELIVERIES),
-                            None,
-                        )?)
-                    } else {
-                        None
-                    };
-                    // A run by `workflowPath` has no controls: Cloud answers it 404.
-                    let controls = if defined {
-                        Some(api.list_run_controls(
-                            &cloud.organization,
-                            &cloud.run_id,
-                            Some(SHOWN_CONTROLS),
-                            None,
-                        )?)
-                    } else {
-                        None
-                    };
-                    let value = serde_json::to_value(&*run).map_err(|_| RunFailure::Protocol {
-                        credential_rejected: false,
-                    })?;
-                    Ok(Some((
-                        run,
-                        value,
-                        Listings {
-                            deliveries,
-                            controls,
-                        },
-                    )))
-                })?;
-                match read {
-                    Ok(Some((run, value, listings))) => cloud.write_shown(&run, value, listings),
-                    Ok(None) => cloud.write_pending(),
-                    Err(failure) => cloud.write_failure(SHOW_COMMAND, &failure),
-                }
-            },
-        )
-    }
-
-    /// Asks Cloud to release the run's current claim under one fresh key.
-    pub(super) fn release(self) -> cli::CommandResult {
+    /// Asks Cloud to release the current claim of the run the lookup found under one fresh
+    /// key (REQ-LOCALRUN-187). The request is the run's first, unread; its `404` keeps
+    /// release's own `not_found`, since Cloud answers a run that holds no claim the same way.
+    pub(super) fn release(mut self) -> cli::CommandResult {
         let key = useful_support::generate_idempotency_key()
             .context("generate Cloud claim release request identity")?;
-        cli::execute_deployment_command(
-            Some(self),
-            &["workflow", "run", "release"],
-            "configure Useful Machinery runs",
-            |cloud, deployment| {
-                let released = cloud.with_api(deployment, |api| {
-                    api.release_claim(&cloud.organization, &cloud.run_id, &key)
-                })?;
-                match released {
-                    Ok(RunClaimRelease::Released(claim)) => cloud.write_released(&claim),
-                    Ok(RunClaimRelease::Live) => cloud.write_refusal(
-                        RELEASE_COMMAND,
-                        "claim_live",
-                        "The run is live and still holds its claim; nothing was released.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(RunClaimRelease::Changed) => cloud.write_refusal(
-                        RELEASE_COMMAND,
-                        "claim_changed",
-                        "The run's current claim changed; nothing was released.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(RunClaimRelease::IdempotencyConflict) => cloud.write_refusal(
-                        RELEASE_COMMAND,
-                        "idempotency_conflict",
-                        "Cloud answered this request's key for another request; nothing was released.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Err(failure) => cloud.write_failure(RELEASE_COMMAND, &failure),
-                }
-            },
-        )
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to release was not looked up").into());
+        };
+        let released = self.with_api(&found.deployment, |api| {
+            api.release_claim(&self.organization, &self.run_id, &key)
+        })?;
+        match released {
+            Ok(RunClaimRelease::Released(claim)) => self.write_released(&claim),
+            Ok(RunClaimRelease::Live) => self.write_refusal(
+                RELEASE_COMMAND,
+                "claim_live",
+                "The run is live and still holds its claim; nothing was released.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunClaimRelease::Changed) => self.write_refusal(
+                RELEASE_COMMAND,
+                "claim_changed",
+                "The run's current claim changed; nothing was released.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunClaimRelease::IdempotencyConflict) => self.write_refusal(
+                RELEASE_COMMAND,
+                "idempotency_conflict",
+                "Cloud answered this request's key for another request; nothing was released.",
+                ExitCode::GeneralFailure,
+            ),
+            Err(failure) => self.write_failure(RELEASE_COMMAND, &failure),
+        }
     }
 
-    /// Asks Cloud for a graceful cancellation of the run under one fresh key, sent again when
-    /// the response is lost, and reports the cancellation request Cloud answers
-    /// (REQ-LOCALRUN-218, REQ-CANCEL-1).
-    pub(super) fn cancel(self) -> cli::CommandResult {
-        let key = useful_support::generate_idempotency_key()
-            .context("generate Cloud run cancellation request identity")?;
-        cli::execute_deployment_command(
-            Some(self),
-            &["workflow", "run", "cancel"],
-            "configure Useful Machinery runs",
-            |cloud, deployment| {
-                let cancelled = cloud.with_api(deployment, |api| {
-                    api.cancel(
-                        &cloud.organization,
-                        &cloud.run_id,
-                        &key,
-                        RunCancellationMode::Graceful,
-                        || true,
-                    )
-                })?;
-                match cancelled {
-                    Ok(envelope) => cloud.write_cancellation(&envelope.request),
-                    Err(failure) => cloud.write_failure(CANCEL_COMMAND, &failure),
-                }
-            },
-        )
-    }
-
-    /// Reads the run for its current wait, unless the control is a `stop` or a `withdraw`,
-    /// which name none, and asks Cloud to carry the control naming that wait to the run's
-    /// runner under one fresh key.
+    /// Reads the run for its current wait, unless the control is a `stop`, which names none,
+    /// and asks Cloud to carry the control naming that wait to the run's runner under one
+    /// fresh key.
     pub(super) fn control(self, control: Control) -> cli::CommandResult {
+        let (leaf, command) = (control.leaf(), control.command());
+        let reads = !matches!(control, Control::Stop { .. });
+        self.send(leaf, command, reads, |_| Ok(control))
+    }
+
+    /// Ends the Cloud run the lookup found (REQ-LOCALRUN-218, REQ-CANCEL-38): with `force`
+    /// the force cancellation request, sent unread, whose 404 is the lookup's miss; otherwise
+    /// the run is read, and one whose progress carries a wait is sent a withdrawal, carried to
+    /// its runner, and any other the graceful cancellation request, which also follows a
+    /// withdrawal Cloud refuses `run_not_live` or `control_unsupported`. Whichever is sent goes
+    /// under `--idempotency-key` or one fresh key.
+    pub(super) fn cancel(mut self, cancel: Cancel) -> cli::CommandResult {
+        let key = match cancel.idempotency_key.clone() {
+            Some(key) => key,
+            None => useful_support::generate_idempotency_key()
+                .context("generate Cloud run cancellation request identity")?,
+        };
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to cancel was not looked up").into());
+        };
+        if cancel.force {
+            return self.cancellation(found, cancel, key);
+        }
+        let read = |api: &RunApi<'_>| api.get(&self.organization, &self.run_id);
+        let wait = match found.first_read(&self.authentication, &self.http, read)? {
+            Ok(run) => current_wait(&run).0,
+            Err(Unread::Missed(miss)) => return self.write_missed(CANCEL_COMMAND, miss),
+            Err(Unread::Failed(failure)) => return self.write_failure(CANCEL_COMMAND, &failure),
+        };
+        if wait.is_none() {
+            return self.cancellation(found, cancel, key);
+        }
+        let Ok(request) = Control::Withdraw.request(None, Standing::Running) else {
+            return Err(anyhow!("a withdrawal names no wait").into());
+        };
+        let sent = self.with_api(&found.deployment, |api| {
+            api.request_control(&self.organization, &self.run_id, &key, &request)
+        })?;
+        match sent {
+            Ok(RunControlSubmission::Accepted(accepted)) if cancel.wait.wait => {
+                self.follow(found, *accepted, cancel.wait.timeout)
+            }
+            Ok(RunControlSubmission::RunNotLive | RunControlSubmission::ControlUnsupported) => {
+                self.cancellation(found, cancel, key)
+            }
+            sent => self.write_submission(CANCEL_COMMAND, sent),
+        }
+    }
+
+    /// Sends the cancellation request of `cancel` under `key` and reports it in the document
+    /// of the `cancel` operation; a forced one is the run's first request, so its 404, or
+    /// nobody signed in to send it, is the lookup's miss.
+    fn cancellation(self, found: InCloud, cancel: Cancel, key: String) -> cli::CommandResult {
+        let (force, json) = (cancel.force, self.json);
+        let deployment = found.deployment.clone();
+        Cancellation {
+            organization: self.organization,
+            run_id: self.run_id,
+            force,
+            key,
+            wait: cancel.wait,
+            options: CommonArgs::new(json, self.authentication, self.http),
+        }
+        .execute(
+            deployment,
+            if force {
+                missed(found, CANCEL_COMMAND, json)
+            } else {
+                unmissed()
+            },
+        )
+    }
+
+    /// The continuation of the Cloud run the lookup found from `steps`, none for `resume`
+    /// (REQ-CONTINUE-55, REQ-CONTINUE-85): the request `useful workflow run retry --from`
+    /// sends, unread, so its 404, or nobody signed in to send it, is the lookup's miss,
+    /// reported as `command`.
+    pub(super) fn continue_from(
+        mut self,
+        command: &'static str,
+        steps: Vec<String>,
+        expected_version: Option<i64>,
+        wait: RunWaitArgs,
+    ) -> cli::CommandResult {
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to continue was not looked up").into());
+        };
+        let deployment = found.deployment.clone();
+        let missed = missed(found, command, self.json);
+        self.continuation(steps, expected_version, wait)
+            .submit(deployment, missed)
+    }
+
+    /// The retry of every step of the Cloud run the lookup found (REQ-RETRY-30,
+    /// REQ-RETRY-44), sent unread and followed within `timeout`: its 404, or nobody signed in
+    /// to send it, is the lookup's miss.
+    pub(super) fn rerun(
+        mut self,
+        expected_version: Option<i64>,
+        timeout: Option<Duration>,
+    ) -> cli::CommandResult {
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to retry was not looked up").into());
+        };
+        let deployment = found.deployment.clone();
+        let missed = missed(found, RETRY_COMMAND, self.json);
+        RetryRequest::new(
+            (self.organization, self.run_id),
+            expected_version,
+            timeout,
+            CommonArgs::new(self.json, self.authentication, self.http),
+        )
+        .execute(deployment, missed)
+    }
+
+    /// `useful workflow run retry` with neither `--from` nor `--all` of the Cloud run the
+    /// lookup found (REQ-LOCALRUN-210, REQ-CONTINUE-55): reads the run; one that waits is
+    /// sent the carried `retry` for its wait, refused `wait_kind_mismatch` unless the wait is
+    /// for repair; one that ended other than `succeeded` is continued from the first step its
+    /// progress's position names, as `retry --from` continues it, and refused
+    /// `continuation_step_required` when it names none; a succeeded run is refused
+    /// `latest_attempt_succeeded` and any other `run_not_waiting`, nothing sent, each naming
+    /// the run's state and the verbs that apply (REQ-LOCALRUN-223).
+    pub(super) fn retry(
+        mut self,
+        expected_version: Option<i64>,
+        wait: RunWaitArgs,
+    ) -> cli::CommandResult {
         let key = useful_support::generate_idempotency_key()
             .context("generate Cloud run control request identity")?;
-        let command = control.command();
-        cli::execute_deployment_command(
-            Some(self),
-            &["workflow", "run", control.leaf()],
-            "configure Useful Machinery runs",
-            |cloud, deployment| {
-                let sent = cloud.with_api(deployment, |api| {
-                    let wait = if matches!(control, Control::Stop { .. } | Control::Withdraw) {
-                        None
-                    } else {
-                        current_wait(api.get(&cloud.organization, &cloud.run_id)?)
-                    };
-                    match control.request(wait) {
-                        Ok(request) => api
-                            .request_control(&cloud.organization, &cloud.run_id, &key, &request)
-                            .map(Ok),
-                        Err(unsent) => Ok(Err(unsent)),
-                    }
-                })?;
-                match sent {
-                    Ok(Ok(RunControlSubmission::Accepted(accepted))) => {
-                        cloud.write_accepted(command, &accepted)
-                    }
-                    Ok(Ok(RunControlSubmission::WaitNotCurrent)) => cloud.write_refusal(
-                        command,
-                        "wait_not_current",
-                        "The run's wait changed before Cloud accepted the control; nothing was sent to the runner.",
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to retry was not looked up").into());
+        };
+        let read = |api: &RunApi<'_>| api.get(&self.organization, &self.run_id);
+        let read = match found.first_read(&self.authentication, &self.http, read)? {
+            Ok(read) => read,
+            Err(Unread::Missed(miss)) => return self.write_missed(RETRY_COMMAND, miss),
+            Err(Unread::Failed(failure)) => return self.write_failure(RETRY_COMMAND, &failure),
+        };
+        let (current, standing) = current_wait(&read);
+        let RunRead::Materialized(run) = read else {
+            return self.refuse_retry("run_not_waiting", standing);
+        };
+        if let Some(current) = current {
+            return self.post(
+                &found.deployment,
+                None,
+                RETRY_COMMAND,
+                &Control::Retry,
+                (Some(current.wait), standing),
+                &key,
+            );
+        }
+        match run.state {
+            RunState::Failed | RunState::Cancelled | RunState::Interrupted | RunState::Rejected => {
+                match positioned_step(&run) {
+                    Some(step) => self
+                        .continuation(vec![step], expected_version, wait)
+                        .submit(found.deployment, unmissed()),
+                    None => self.write_refusal(
+                        RETRY_COMMAND,
+                        "continuation_step_required",
+                        "The run reports no step it stood at; name the steps to rerun with --from STEP, or rerun every step with --all.",
                         ExitCode::GeneralFailure,
                     ),
-                    Ok(Ok(RunControlSubmission::RunNotLive)) => cloud.write_refusal(
-                        command,
-                        "run_not_live",
-                        if matches!(control, Control::Withdraw) {
-                            "No runner is executing the run's current attempt; nothing was sent. End the run with useful workflow run cancel RUN --cloud ORGANIZATION."
-                        } else {
-                            "No runner is executing the run's current attempt; nothing was sent."
-                        },
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(Ok(RunControlSubmission::ControlUnsupported)) => cloud.write_refusal(
-                        command,
-                        "control_unsupported",
-                        "The runner executing the run runs a useful that does not apply a withdrawal; nothing was sent. End the run with useful workflow run cancel RUN --cloud ORGANIZATION.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(Ok(RunControlSubmission::TooLarge)) => cloud.write_refusal(
-                        command,
-                        "control_too_large",
-                        "The control is larger than a runner accepts; nothing was sent.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(Ok(RunControlSubmission::IdempotencyConflict)) => cloud.write_refusal(
-                        command,
-                        "idempotency_conflict",
-                        "Cloud answered this request's key for another request; nothing was sent.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(Err(Unsent::NotWaiting)) => cloud.write_refusal(
-                        command,
-                        "run_not_waiting",
-                        "The run does not wait, so there is nothing to resolve; nothing was sent.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Ok(Err(Unsent::KindMismatch)) => cloud.write_refusal(
-                        command,
-                        "wait_kind_mismatch",
-                        "The run waits on a kind of wait this command does not resolve; nothing was sent.",
-                        ExitCode::GeneralFailure,
-                    ),
-                    Err(failure) => cloud.write_failure(command, &failure),
                 }
+            }
+            RunState::Succeeded => self.refuse_retry("latest_attempt_succeeded", standing),
+            _ => self.refuse_retry("run_not_waiting", standing),
+        }
+    }
+
+    /// The continuation request of this run from `steps`.
+    fn continuation(
+        self,
+        steps: Vec<String>,
+        expected_version: Option<i64>,
+        wait: RunWaitArgs,
+    ) -> ContinuationSubmission {
+        ContinuationSubmission::new(
+            (self.organization, self.run_id),
+            steps,
+            expected_version,
+            wait,
+            CommonArgs::new(self.json, self.authentication, self.http),
+        )
+    }
+
+    /// `retry` refused `code` for the run's state, naming it and the verbs that apply
+    /// (REQ-LOCALRUN-223); nothing was sent.
+    fn refuse_retry(&self, code: &'static str, standing: Standing) -> cli::CommandResult {
+        self.write_refusal(
+            RETRY_COMMAND,
+            code,
+            &standing.message(Placed::Cloud),
+            ExitCode::GeneralFailure,
+        )
+    }
+
+    /// Reads the run until it is final once Cloud accepted the withdrawal `accepted`, as
+    /// `useful workflow run show --wait` reads it (REQ-RUN-61), and prints the `accepted`
+    /// document with the run last read; a timeout, a signal and Cloud unreachable twice in a
+    /// row end the observation with REQ-RUN-62's codes and exit statuses.
+    fn follow(
+        self,
+        found: InCloud,
+        accepted: RunControl,
+        timeout: Option<Duration>,
+    ) -> cli::CommandResult {
+        let report = Followed {
+            organization: self.organization,
+            run_id: self.run_id,
+            json: self.json,
+            control: accepted,
+        };
+        let options: RunOptions = CommonArgs::new(self.json, self.authentication, self.http);
+        let (signal_report, timeout_report) = (report.clone(), report.clone());
+        cli::execute_mutation_with_signals_and_deferred_timeout(
+            "Cloud run cancel",
+            CloudSnapshot::for_run(found.run_id.clone()),
+            timeout,
+            move |control, timeout_start| {
+                timeout_start.start();
+                let started = useful_support::monotonic_now();
+                let snapshot = control.recovery();
+                let result = observation::wait_run(
+                    ObservationContext {
+                        deployment: &found.deployment,
+                        options: &options,
+                        organization: &found.organization,
+                        snapshot: &snapshot,
+                        timeout,
+                        started,
+                    },
+                    control,
+                    &cli::SystemObservationClock,
+                    |latest| {
+                        control.update_recovery(latest);
+                    },
+                );
+                let last = control.recovery().run;
+                let (ending, exit) = match result {
+                    Ok(TerminalObservation::Terminal { resource, .. }) => {
+                        let run = resource.run;
+                        return super::cloud_api::finish_operation(control, || {
+                            report.write(run.as_deref(), None, ExitCode::Success)
+                        });
+                    }
+                    Ok(TerminalObservation::TimedOut) => (
+                        Ending::of("timed_out", "wait_timed_out", TIMED_OUT),
+                        ExitCode::GeneralFailure,
+                    ),
+                    Ok(TerminalObservation::Stopped) => return Ok(ExitCode::GeneralFailure),
+                    Err(RunFailure::Unreachable(_)) => (
+                        Ending::of("refused", "observation_failed", UNREACHABLE),
+                        ExitCode::Unavailable,
+                    ),
+                    Err(failure) => {
+                        let (code, message, exit) = failure_diagnostic(CANCEL_COMMAND, &failure);
+                        (Ending::of("refused", code, message), exit)
+                    }
+                };
+                super::cloud_api::finish_operation(control, || {
+                    report.write(last.as_deref(), Some(&ending), exit)
+                })
+            },
+            move |signal, snapshot| {
+                signal_report
+                    .write(
+                        snapshot.recovery.run.as_deref(),
+                        Some(&Ending::of(
+                            "observation_stopped",
+                            "observation_stopped",
+                            STOPPED,
+                        )),
+                        signal,
+                    )
+                    .map_err(Into::into)
+            },
+            move |snapshot| {
+                timeout_report
+                    .write(
+                        snapshot.recovery.run.as_deref(),
+                        Some(&Ending::of("timed_out", "wait_timed_out", TIMED_OUT)),
+                        ExitCode::GeneralFailure,
+                    )
+                    .map_err(Into::into)
             },
         )
+    }
+
+    /// Reads the run and answers its wait with `text`: the question `--question` names, or
+    /// with none the one its wait lists (`open_question`), refused `question_ambiguous` with
+    /// nothing sent when it lists several (REQ-LOCALRUN-210).
+    pub(super) fn answer(self, question: Option<String>, text: String) -> cli::CommandResult {
+        self.send(
+            "answer",
+            ContinuingControl::Answer.command(),
+            true,
+            |wait| {
+                let question = match question {
+                    Some(question) => question,
+                    None => open_question(wait)?,
+                };
+                Ok(Control::Answer { question, text })
+            },
+        )
+    }
+
+    /// Reads the run when `reads`, chooses the control from its current wait, and asks Cloud
+    /// to carry it to the run's runner under one fresh key, reported as leaf `leaf`'s
+    /// `command`. A found run's first request, its read or the control a leaf that reads
+    /// nothing sends, ends the lookup: a 404 is the lookup's miss.
+    fn send(
+        mut self,
+        leaf: &'static str,
+        command: &'static str,
+        reads: bool,
+        choose: impl FnOnce(Option<&CurrentWait>) -> Result<Control, Refusal>,
+    ) -> cli::CommandResult {
+        let key = useful_support::generate_idempotency_key()
+            .context("generate Cloud run control request identity")?;
+        let Some(found) = self.found.take() else {
+            return Err(anyhow!("the Cloud run to {leaf} was not looked up").into());
+        };
+        let read = |api: &RunApi<'_>| api.get(&self.organization, &self.run_id);
+        let (wait, standing) = if reads {
+            match found.first_read(&self.authentication, &self.http, read)? {
+                Ok(run) => current_wait(&run),
+                Err(Unread::Missed(miss)) => return self.write_missed(command, miss),
+                Err(Unread::Failed(failure)) => return self.write_failure(command, &failure),
+            }
+        } else {
+            (None, Standing::Running)
+        };
+        if self.record_only {
+            return Err(CommandFailure::with_exit_code(
+                anyhow!(
+                    "--record-only records a control on a run under the useful home, and RUN names a Cloud run\n\n\
+                     Leave out --record-only: the runner executing the Cloud run applies the control."
+                ),
+                ExitCode::UsageError,
+            ));
+        }
+        let control = match choose(wait.as_ref()) {
+            Ok(control) => control,
+            Err(refusal) => {
+                return self.write_refusal(
+                    command,
+                    refusal.code,
+                    &refusal.message,
+                    ExitCode::GeneralFailure,
+                );
+            }
+        };
+        let wait = wait.map(|current| current.wait);
+        self.post(
+            &found.deployment,
+            (!reads).then_some(&found),
+            command,
+            &control,
+            (wait, standing),
+            &key,
+        )
+    }
+
+    /// Asks Cloud to carry `control` naming the run's current wait to its runner under `key`,
+    /// reported as `command`; `first` is the lookup whose first request this is, whose 404, or
+    /// nobody signed in to send it, is the lookup's miss (REQ-LOCALRUN-180). `current` is the
+    /// run's wait and its state as the run read found them: a control the state does not
+    /// admit is refused naming it and the verbs that apply (REQ-LOCALRUN-223).
+    fn post(
+        &self,
+        deployment: &Deployment,
+        first: Option<&InCloud>,
+        command: &'static str,
+        control: &Control,
+        current: (Option<RunControlWait>, Standing),
+        key: &str,
+    ) -> cli::CommandResult {
+        let (wait, standing) = current;
+        let request = match control.request(wait, standing) {
+            Ok(request) => request,
+            Err(Unsent::NotWaiting(standing)) => {
+                return self.write_refusal(
+                    command,
+                    "run_not_waiting",
+                    &standing.message(Placed::Cloud),
+                    ExitCode::GeneralFailure,
+                );
+            }
+            Err(Unsent::KindMismatch(standing)) => {
+                return self.write_refusal(
+                    command,
+                    "wait_kind_mismatch",
+                    &standing.message(Placed::Cloud),
+                    ExitCode::GeneralFailure,
+                );
+            }
+        };
+        let post =
+            |api: &RunApi<'_>| api.request_control(&self.organization, &self.run_id, key, &request);
+        let sent = match first {
+            // The control is a found run's first request, which ends the lookup
+            // (REQ-LOCALRUN-180): a 404, or nobody signed in to send it, is the lookup's miss.
+            Some(found) => match found.first_read(&self.authentication, &self.http, post)? {
+                Ok(submission) => Ok(submission),
+                Err(Unread::Missed(miss)) => return self.write_missed(command, miss),
+                Err(Unread::Failed(failure)) => Err(failure),
+            },
+            None => self.with_api(deployment, post)?,
+        };
+        self.write_submission(command, sent)
+    }
+
+    /// Reports what Cloud answered a control `command` asked it to carry.
+    fn write_submission(
+        &self,
+        command: &'static str,
+        sent: Result<RunControlSubmission, RunFailure>,
+    ) -> cli::CommandResult {
+        match sent {
+            Ok(RunControlSubmission::Accepted(accepted)) => self.write_accepted(command, &accepted),
+            Ok(RunControlSubmission::WaitNotCurrent) => self.write_refusal(
+                command,
+                "wait_not_current",
+                "The run's wait changed before Cloud accepted the control; nothing was sent to the runner.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunControlSubmission::RunNotLive) => self.write_refusal(
+                command,
+                "run_not_live",
+                "No runner is executing the run's current attempt; nothing was sent.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunControlSubmission::ControlUnsupported) => self.write_refusal(
+                command,
+                "control_unsupported",
+                "The runner executing the run runs a useful that does not apply this control; nothing was sent.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunControlSubmission::TooLarge) => self.write_refusal(
+                command,
+                "control_too_large",
+                "The control is larger than a runner accepts; nothing was sent.",
+                ExitCode::GeneralFailure,
+            ),
+            Ok(RunControlSubmission::IdempotencyConflict) => self.write_refusal(
+                command,
+                "idempotency_conflict",
+                "Cloud answered this request's key for another request; nothing was sent.",
+                ExitCode::GeneralFailure,
+            ),
+            Err(failure) => self.write_failure(command, &failure),
+        }
+    }
+
+    /// The lookup's miss, as control `command` writes it (REQ-LOCALRUN-180).
+    fn write_missed(&self, command: &'static str, miss: RunAddressError) -> cli::CommandResult {
+        super::control::write_refusal(command, None, &Refusal::from(miss), self.json)
     }
 
     /// Runs `operation` against the deployment under the leaf's session, again with a
@@ -419,69 +825,6 @@ impl CloudRun {
             || RunFailure::Unauthenticated,
             RunFailure::Unreachable,
         )
-    }
-
-    fn write_shown(&self, typed: &Run, mut run: Value, listings: Listings) -> cli::CommandResult {
-        if let Some(fields) = run.as_object_mut() {
-            for field in OBSERVED_FIELDS {
-                fields.entry(field).or_insert(Value::Null);
-            }
-        }
-        let (deliveries, more_deliveries) = paged(listings.deliveries);
-        let (controls, more_controls) = paged(listings.controls);
-        let written = if self.json {
-            cli::write_pretty_json(&ShowDocument {
-                schema_version: 1,
-                command: SHOW_COMMAND,
-                outcome: "shown",
-                exit_status: ExitCode::Success.as_u8(),
-                organization_ref: &self.organization,
-                run_id: &self.run_id,
-                run: Some(&run),
-                deliveries: deliveries.as_deref(),
-                more_deliveries,
-                controls: controls.as_deref(),
-                more_controls,
-            })
-        } else {
-            write_plain(
-                &self.organization,
-                &self.run_id,
-                typed,
-                &run,
-                (deliveries.as_deref(), more_deliveries),
-                (controls.as_deref(), more_controls),
-            )
-        };
-        written.with_context(|| format!("write {SHOW_COMMAND} output"))?;
-        Ok(ExitCode::Success)
-    }
-
-    /// A run whose creation Cloud has accepted but not yet materialized.
-    fn write_pending(&self) -> cli::CommandResult {
-        let written = if self.json {
-            cli::write_pretty_json(&ShowDocument {
-                schema_version: 1,
-                command: SHOW_COMMAND,
-                outcome: "pending",
-                exit_status: ExitCode::Success.as_u8(),
-                organization_ref: &self.organization,
-                run_id: &self.run_id,
-                run: None,
-                deliveries: None,
-                more_deliveries: false,
-                controls: None,
-                more_controls: false,
-            })
-        } else {
-            let mut stdout = io::stdout().lock();
-            writeln!(stdout, "run: {}", text(&self.run_id))
-                .and_then(|()| writeln!(stdout, "organization: {}", text(&self.organization)))
-                .and_then(|()| writeln!(stdout, "state: creation pending"))
-                .and_then(|()| stdout.flush())
-        };
-        written.with_context(|| format!("write {SHOW_COMMAND} output"))?;
-        Ok(ExitCode::Success)
     }
 
     fn write_released(&self, claim: &RunSubjectClaim) -> cli::CommandResult {
@@ -515,57 +858,16 @@ impl CloudRun {
     }
 
     fn write_accepted(&self, command: &'static str, control: &RunControl) -> cli::CommandResult {
-        let written = if self.json {
-            cli::write_pretty_json(&AcceptedDocument {
-                schema_version: 1,
+        Ok(write_accepted(
+            Accepted {
                 command,
-                outcome: "accepted",
-                exit_status: ExitCode::Success.as_u8(),
-                organization_ref: &self.organization,
+                organization: &self.organization,
                 run_id: &self.run_id,
+                json: self.json,
                 control,
-            })
-        } else {
-            let mut stdout = io::stdout().lock();
-            writeln!(
-                stdout,
-                "✓ Cloud accepted {} control {} for run {} attempt {} (state {}); the runner executing the attempt applies it.",
-                wire(control.kind),
-                text(&control.id),
-                text(&self.run_id),
-                control.attempt_number,
-                wire(control.state),
-            )
-            .and_then(|()| stdout.flush())
-        };
-        written.with_context(|| format!("write {command} output"))?;
-        Ok(ExitCode::Success)
-    }
-
-    fn write_cancellation(&self, request: &RunCancellationReceipt) -> cli::CommandResult {
-        let written = if self.json {
-            cli::write_pretty_json(&CancellationDocument {
-                schema_version: 1,
-                command: CANCEL_COMMAND,
-                outcome: "accepted",
-                exit_status: ExitCode::Success.as_u8(),
-                organization_ref: &self.organization,
-                run_id: &self.run_id,
-                cancellation_request: request,
-            })
-        } else {
-            let mut stdout = io::stdout().lock();
-            writeln!(
-                stdout,
-                "✓ Cloud accepted cancellation request {} for run {} (state {}).",
-                text(&request.id),
-                text(&self.run_id),
-                wire(request.state),
-            )
-            .and_then(|()| stdout.flush())
-        };
-        written.with_context(|| format!("write {CANCEL_COMMAND} output"))?;
-        Ok(ExitCode::Success)
+            },
+            None,
+        )?)
     }
 
     /// Reports `failure` as a refusal under [`failure_diagnostic`].
@@ -578,7 +880,7 @@ impl CloudRun {
         &self,
         command: &'static str,
         code: &'static str,
-        message: &'static str,
+        message: &str,
         exit: ExitCode,
     ) -> cli::CommandResult {
         let written = if self.json {
@@ -601,11 +903,13 @@ impl CloudRun {
 }
 
 /// The diagnostic code, message and exit status leaf `command` reports `failure` under: the
-/// code and exit status the `useful run` commands report it under (`failure_code`), but for an
-/// unnamed conflict, which is `conflict`, and a rejected session, which exits 3 (INV-CLI-17,
-/// REQ-LOCALRUN-215). The message is the leaf's own, chosen by the code. Only `show` and
-/// `release` read the run's subject claim, so only their not-found names it.
-fn failure_diagnostic(
+/// code and exit status the Cloud forms of the `useful workflow run` commands in `cloud_api`
+/// report it under (`failure_code`), but for an unnamed conflict, which is `conflict`, and a
+/// rejected session, which exits 3 (INV-CLI-17, REQ-LOCALRUN-215). The message is the leaf's
+/// own, chosen by the code. Only `release` reads the run's subject claim, so only its not-found
+/// names it, and its `404` is its own; `show` and the control leaves write a 404 of their first
+/// request as the lookup's miss (REQ-LOCALRUN-180).
+pub(super) fn failure_diagnostic(
     command: &str,
     failure: &RunFailure,
 ) -> (&'static str, &'static str, ExitCode) {
@@ -614,14 +918,14 @@ fn failure_diagnostic(
     } else if failure.credential_rejected() {
         ("authentication_required", ExitCode::AuthenticationRequired)
     } else {
-        cli::run::failure_code(failure, cli::PrincipalAuthenticationKind::HumanSession)
+        super::cloud_api::failure_code(failure, cli::PrincipalAuthenticationKind::HumanSession)
     };
     let message = match code {
         "authentication_required" => {
-            "Cloud rejected the session; sign in with useful auth login and try again."
+            "Cloud rejected the session; sign in with useful account login and try again."
         }
         "forbidden" => "The principal may not do this to the run.",
-        "not_found" if matches!(command, SHOW_COMMAND | RELEASE_COMMAND) => {
+        "not_found" if command == RELEASE_COMMAND => {
             "Cloud has no such run in this organization, or the run has no subject claim."
         }
         "not_found" => "Cloud has no such run in this organization.",
@@ -633,39 +937,6 @@ fn failure_diagnostic(
         _ => "The request to Cloud did not complete.",
     };
     (code, message, exit)
-}
-
-/// One page of a listing `show` read and the next page's cursor.
-type Page<T> = (Vec<T>, Option<String>);
-
-/// The listings `show` read beside the run; `None` for one it did not read.
-struct Listings {
-    deliveries: Option<Page<RunTriggerDelivery>>,
-    controls: Option<Page<Value>>,
-}
-
-/// A listing's items, if it was read, and whether more remain.
-fn paged<T>(page: Option<Page<T>>) -> (Option<Vec<T>>, bool) {
-    match page {
-        Some((items, cursor)) => (Some(items), cursor.is_some()),
-        None => (None, false),
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShowDocument<'a> {
-    schema_version: u8,
-    command: &'static str,
-    outcome: &'static str,
-    exit_status: u8,
-    organization_ref: &'a str,
-    run_id: &'a str,
-    run: Option<&'a Value>,
-    deliveries: Option<&'a [RunTriggerDelivery]>,
-    more_deliveries: bool,
-    controls: Option<&'a [Value]>,
-    more_controls: bool,
 }
 
 #[derive(Serialize)]
@@ -680,6 +951,137 @@ struct ReleasedDocument<'a> {
     claim: &'a RunSubjectClaim,
 }
 
+/// What `cancel` sends a Cloud run (REQ-LOCALRUN-218): `--force`, `--idempotency-key`, and
+/// `--wait` with its `--timeout`.
+pub(super) struct Cancel {
+    pub(super) force: bool,
+    pub(super) idempotency_key: Option<String>,
+    pub(super) wait: RunWaitArgs,
+}
+
+/// A withdrawal Cloud accepted that `cancel --wait` follows, and how it reports.
+#[derive(Clone)]
+struct Followed {
+    organization: String,
+    run_id: String,
+    json: bool,
+    control: RunControl,
+}
+
+impl Followed {
+    /// The `accepted` document with `run`, the run last read, and `ending`, how the
+    /// observation ended before the run was final, exiting `exit`.
+    fn write(
+        &self,
+        run: Option<&Run>,
+        ending: Option<&Ending>,
+        exit: ExitCode,
+    ) -> anyhow::Result<ExitCode> {
+        write_accepted(
+            Accepted {
+                command: CANCEL_COMMAND,
+                organization: &self.organization,
+                run_id: &self.run_id,
+                json: self.json,
+                control: &self.control,
+            },
+            Some((run, ending, exit)),
+        )
+    }
+}
+
+/// How a followed withdrawal's observation ended before the run was final: the document's
+/// outcome and its one diagnostic (REQ-RUN-62).
+struct Ending {
+    outcome: &'static str,
+    code: &'static str,
+    message: &'static str,
+}
+
+impl Ending {
+    const fn of(outcome: &'static str, code: &'static str, message: &'static str) -> Self {
+        Self {
+            outcome,
+            code,
+            message,
+        }
+    }
+}
+
+/// The control Cloud accepted and whom the `accepted` document names.
+struct Accepted<'a> {
+    command: &'static str,
+    organization: &'a str,
+    run_id: &'a str,
+    json: bool,
+    control: &'a RunControl,
+}
+
+/// Prints the `accepted` document of a carried control (REQ-LOCALRUN-210), or its line; for a
+/// withdrawal `cancel --wait` followed (REQ-LOCALRUN-218), `followed` is the run last read
+/// under `run`, how the observation ended, if it ended before the run was final, and the
+/// exit status.
+fn write_accepted(
+    accepted: Accepted<'_>,
+    followed: Option<(Option<&Run>, Option<&Ending>, ExitCode)>,
+) -> anyhow::Result<ExitCode> {
+    let Accepted {
+        command,
+        organization,
+        run_id,
+        json,
+        control,
+    } = accepted;
+    let (run, ending, exit) = match followed {
+        Some((run, ending, exit)) => (Some(run), ending, exit),
+        None => (None, None, ExitCode::Success),
+    };
+    let written = if json {
+        cli::write_pretty_json(&AcceptedDocument {
+            schema_version: 1,
+            command,
+            outcome: ending.map_or("accepted", |ending| ending.outcome),
+            exit_status: exit.as_u8(),
+            organization_ref: organization,
+            run_id,
+            control,
+            run,
+            diagnostics: ending.map(|ending| {
+                [Diagnostic {
+                    code: ending.code,
+                    message: ending.message,
+                }]
+            }),
+        })
+    } else {
+        let mut stdout = io::stdout().lock();
+        writeln!(
+            stdout,
+            "✓ Cloud accepted {} control {} for run {} attempt {} (state {}); the runner executing the attempt applies it.",
+            wire(control.kind),
+            text(&control.id),
+            text(run_id),
+            control.attempt_number,
+            wire(control.state),
+        )
+        .and_then(|()| match run.flatten() {
+            Some(run) => writeln!(stdout, "run state: {}", wire(run.state)),
+            None => Ok(()),
+        })
+        .and_then(|()| stdout.flush())
+        .and_then(|()| match ending {
+            Some(ending) => {
+                let mut stderr = io::stderr().lock();
+                writeln!(stderr, "{command} {}: {}: {}", ending.outcome, ending.code, ending.message)
+                    .and_then(|()| stderr.flush())
+            }
+            None => Ok(()),
+        })
+    };
+    written.with_context(|| format!("write {command} output"))?;
+    Ok(exit)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AcceptedDocument<'a> {
@@ -690,18 +1092,11 @@ struct AcceptedDocument<'a> {
     organization_ref: &'a str,
     run_id: &'a str,
     control: &'a RunControl,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CancellationDocument<'a> {
-    schema_version: u8,
-    command: &'static str,
-    outcome: &'static str,
-    exit_status: u8,
-    organization_ref: &'a str,
-    run_id: &'a str,
-    cancellation_request: &'a RunCancellationReceipt,
+    /// The run last read, for a withdrawal `cancel --wait` followed; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<Option<&'a Run>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostics: Option<[Diagnostic<'a>; 1]>,
 }
 
 #[derive(Serialize)]
@@ -713,313 +1108,17 @@ struct RefusedDocument<'a> {
     exit_status: u8,
     organization_ref: &'a str,
     run_id: &'a str,
-    diagnostics: [Diagnostic; 1],
+    diagnostics: [Diagnostic<'a>; 1],
 }
 
 #[derive(Serialize)]
-struct Diagnostic {
+struct Diagnostic<'a> {
     code: &'static str,
-    message: &'static str,
+    message: &'a str,
 }
 
-fn wire(value: impl Serialize) -> String {
+pub(super) fn wire(value: impl Serialize) -> String {
     useful_support::wire_name(value).unwrap_or_else(|| "-".to_owned())
-}
-
-/// The run as `show` prints it without `--json`: its identity, owner, route and what it
-/// waits for, workspace, claim, workflow state and outcome, its cancellation's mode, its
-/// rejection as `useful run show` prints it (REQ-RUN-105), latest progress, exits with their
-/// mirror results, its controls (REQ-RUN-110) and its deliveries, acceptance apart from the
-/// runner's application. `deliveries` and `controls` are each a listing, if read, and
-/// whether more remain.
-/// A held claim of an exited run adds what it holds and the release command for `run_id`
-/// in `organization` (REQ-RUN-96).
-fn write_plain(
-    organization: &str,
-    run_id: &str,
-    typed: &Run,
-    run: &Value,
-    deliveries: (Option<&[RunTriggerDelivery]>, bool),
-    controls: (Option<&[Value]>, bool),
-) -> io::Result<()> {
-    let mut out = io::stdout().lock();
-    writeln!(out, "run: {}", field(run, "id"))?;
-    writeln!(out, "organization: {}", text(organization))?;
-    writeln!(out, "state: {}", field(run, "state"))?;
-    cli::run::write_route(&mut out, typed)?;
-    if let Some(observation) = typed.observation.as_deref() {
-        cli::run::write_waiting(&mut out, observation)?;
-        cli::run::write_held_with(&mut out, observation)?;
-    }
-    let definition = &run["definition"];
-    if definition.is_object() {
-        writeln!(
-            out,
-            "definition: {} revision {}",
-            field(definition, "definitionId"),
-            definition["revision"]
-        )?;
-        writeln!(out, "tree: {}", field(definition, "treeDigest"))?;
-        writeln!(out, "workflow: {}", field(definition, "workflowPath"))?;
-    } else {
-        writeln!(out, "definition: none")?;
-        writeln!(
-            out,
-            "workflow: {}",
-            field(&run["workflowDefinitionSource"], "workflowPath")
-        )?;
-    }
-    let workspace = &run["primaryWorkspaceSource"];
-    writeln!(
-        out,
-        "workspace: {} {} commit {}",
-        field(workspace, "kind"),
-        field(workspace, "providerKind"),
-        field(workspace, "commitOid")
-    )?;
-    let claim = &run["subjectClaim"];
-    if claim.is_object() {
-        write!(
-            out,
-            "subject claim: {} · {} · {}",
-            field(claim, "claimId"),
-            field(claim, "subject"),
-            field(claim, "state")
-        )?;
-        if let Some(cause) = claim["releaseCause"].as_str() {
-            write!(out, " ({})", text(cause))?;
-        }
-        writeln!(out)?;
-        if claim["state"] == "held" && run["workflowState"] == "exited" {
-            let subject = field(claim, "subject");
-            writeln!(
-                out,
-                "  this exited run still holds the slot of {subject}; a start Cloud refuses for {subject} reads subject-settled and names this run"
-            )?;
-            writeln!(
-                out,
-                "  an organization owner releases the claim with: useful workflow run release {} --cloud {}",
-                text(run_id),
-                text(organization)
-            )?;
-        }
-    } else {
-        writeln!(out, "subject claim: none")?;
-    }
-    writeln!(out, "workflow state: {}", field(run, "workflowState"))?;
-    writeln!(out, "workflow outcome: {}", field(run, "workflowOutcome"))?;
-    let cancellation = &run["cancellation"];
-    if cancellation.is_object() {
-        writeln!(out, "cancellation: {}", field(cancellation, "mode"))?;
-    }
-    cli::run::write_rejection(&mut out, typed)?;
-    write_progress(&mut out, &run["workflowProgress"])?;
-    write_exits(&mut out, &run["exits"])?;
-    write_controls(&mut out, controls.0, controls.1)?;
-    write_deliveries(&mut out, deliveries.0, deliveries.1)?;
-    out.flush()
-}
-
-fn write_progress(out: &mut impl Write, progress: &Value) -> io::Result<()> {
-    if !progress.is_object() {
-        return writeln!(out, "progress: none");
-    }
-    write!(
-        out,
-        "progress: attempt {} at {}",
-        progress["attempt"],
-        path(&progress["position"])
-    )?;
-    let wait = &progress["wait"];
-    if wait.is_object() {
-        write!(out, " · waiting {}", wait_phrase(wait))?;
-    } else {
-        write!(out, " · running")?;
-    }
-    writeln!(out, " · reported {}", field(progress, "reportedAt"))?;
-    write_failed_stage(out, wait)?;
-    if wait["kind"] == "answer" {
-        write_questions(out, &wait["questions"])?;
-    }
-    Ok(())
-}
-
-/// The failed stage the runner reported for a wait of any kind (REQ-RUN-112), in the order
-/// `useful workflow run status` prints its own: the stage's path, the outcome, the failing
-/// node by its path under the stage with its state, then the phase and the code when each is
-/// a string. A null or absent `failedChild` prints nothing, since it never says the stage
-/// succeeded.
-fn write_failed_stage(out: &mut impl Write, wait: &Value) -> io::Result<()> {
-    let failed_child = &wait["failedChild"];
-    if !failed_child.is_object() {
-        return Ok(());
-    }
-    let stage = path(&wait["step"]);
-    write!(
-        out,
-        "failed stage: {stage} · child outcome {} · {stage}.{} {}",
-        field(failed_child, "outcome"),
-        field(&failed_child["node"], "id"),
-        field(failed_child, "state")
-    )?;
-    for key in ["phase", "code"] {
-        if let Some(value) = failed_child[key].as_str() {
-            write!(out, " · {}", text(value))?;
-        }
-    }
-    writeln!(out)
-}
-
-/// An answer wait's questions, one indented line each as `<id>: <text>` or the id alone,
-/// `unknown` when Cloud sent null or omitted them and `none` when the wait asks none.
-fn write_questions(out: &mut impl Write, questions: &Value) -> io::Result<()> {
-    let Some(questions) = questions.as_array() else {
-        return writeln!(out, "questions: unknown");
-    };
-    if questions.is_empty() {
-        return writeln!(out, "questions: none");
-    }
-    writeln!(out, "questions:")?;
-    for question in questions {
-        write!(out, "  {}", field(question, "id"))?;
-        if let Some(question_text) = question["text"].as_str() {
-            write!(out, ": {}", text(question_text))?;
-        }
-        writeln!(out)?;
-    }
-    Ok(())
-}
-
-fn write_exits(out: &mut impl Write, exits: &Value) -> io::Result<()> {
-    let Some(exits) = exits.as_array() else {
-        return writeln!(out, "exits: none");
-    };
-    if exits.is_empty() {
-        return writeln!(out, "exits: none");
-    }
-    writeln!(out, "exits:")?;
-    for exit in exits {
-        writeln!(
-            out,
-            "  attempt {} · outcome {} · claim release {}",
-            exit["attemptNumber"],
-            field(exit, "workflowOutcome"),
-            if exit["claimRelease"] == true {
-                "yes"
-            } else {
-                "no"
-            }
-        )?;
-        match exit["mirror"].as_array() {
-            None => writeln!(out, "    mirror: not attempted")?,
-            Some(results) => {
-                for result in results {
-                    writeln!(out, "    mirror {}", mirror_text(result))?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// A mirror result as `<hook> <issue> · comment <body>|state <state> · <outcome>`, with a
-/// skip's reason, a failure's code and its diagnostic when present.
-fn mirror_text(result: &Value) -> String {
-    let action = &result["action"];
-    let action = match action["kind"].as_str() {
-        Some("comment") => format!("comment {}", field(action, "body")),
-        Some("state") => format!("state {}", field(action, "state")),
-        _ => "-".to_owned(),
-    };
-    let mut line = format!(
-        "{} {} · {action} · {}",
-        field(result, "hook"),
-        field(result, "issue"),
-        field(result, "outcome")
-    );
-    for key in ["reason", "code", "diagnostic"] {
-        if let Some(value) = result[key].as_str() {
-            line.push(' ');
-            line.push_str(&text(value));
-        }
-    }
-    line
-}
-
-/// The run's controls as Cloud listed them, newest first, one indented line each as
-/// `<id> · <kind> · <state> [<actionOutcome>|<code>] · attempt <n> · accepted <time>`.
-fn write_controls(out: &mut impl Write, controls: Option<&[Value]>, more: bool) -> io::Result<()> {
-    let Some(controls) = controls.filter(|controls| !controls.is_empty()) else {
-        return writeln!(out, "controls: none");
-    };
-    writeln!(out, "controls:")?;
-    for control in controls {
-        write!(
-            out,
-            "  {} · {} · {}",
-            field(control, "id"),
-            field(control, "kind"),
-            field(control, "state")
-        )?;
-        if let Some(settled) = control["actionOutcome"]
-            .as_str()
-            .or_else(|| control["code"].as_str())
-        {
-            write!(out, " {}", text(settled))?;
-        }
-        writeln!(
-            out,
-            " · attempt {} · accepted {}",
-            control["attemptNumber"],
-            field(control, "acceptedAt")
-        )?;
-    }
-    if more {
-        writeln!(out, "older controls: not shown")?;
-    }
-    Ok(())
-}
-
-fn write_deliveries(
-    out: &mut impl Write,
-    deliveries: Option<&[RunTriggerDelivery]>,
-    more: bool,
-) -> io::Result<()> {
-    let Some(deliveries) = deliveries.filter(|deliveries| !deliveries.is_empty()) else {
-        return writeln!(out, "deliveries: none");
-    };
-    writeln!(out, "deliveries:")?;
-    for delivery in deliveries {
-        let event = serde_json::to_value(&delivery.event).unwrap_or(Value::Null);
-        write!(
-            out,
-            "  {} · {} revision {} · {} {} · claim {} · accepted {} · ",
-            text(&delivery.id),
-            text(&delivery.trigger_name),
-            delivery.revision,
-            wire(delivery.event_name),
-            field(&event["issue"], "identifier"),
-            text(&delivery.claim.claim_id),
-            text(&delivery.accepted_at)
-        )?;
-        let state = wire(delivery.state);
-        match (&delivery.action, &delivery.reason) {
-            (Some(action), _) => write!(out, "{state} {}", wire(action))?,
-            (None, Some(reason)) => write!(out, "{state} {}", text(reason))?,
-            (None, None) => write!(out, "{state}")?,
-        }
-        if let Some(delivered) = &delivery.delivered_at {
-            write!(out, " · delivered {}", text(delivered))?;
-        }
-        if let Some(settled) = &delivery.settled_at {
-            write!(out, " · settled {}", text(settled))?;
-        }
-        writeln!(out)?;
-    }
-    if more {
-        writeln!(out, "older deliveries: not shown")?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1030,15 +1129,16 @@ mod tests {
         ContinuationAdmissionViolation, RetryConflict, RunFailure, UnreachableCategory,
     };
 
-    use super::{SHOW_COMMAND, failure_diagnostic};
-    use crate::cli::{PrincipalAuthenticationKind, run::failure_code};
+    use super::{RELEASE_COMMAND, failure_diagnostic};
+    use crate::cli::PrincipalAuthenticationKind;
+    use crate::cli::workflow::run::cloud_api::failure_code;
     use crate::exit_code::ExitCode;
 
     // REQ-COMPAT-20, REQ-LOCALRUN-187, REQ-LOCALRUN-210: a refusal Cloud answers `409`
     // under a type this release does not name is reported as a conflict, exit 1.
     #[test]
     fn an_unnamed_conflict_is_reported_as_a_conflict() {
-        let (code, _, exit) = failure_diagnostic(SHOW_COMMAND, &RunFailure::Conflict);
+        let (code, _, exit) = failure_diagnostic(RELEASE_COMMAND, &RunFailure::Conflict);
         assert_eq!((code, exit), ("conflict", ExitCode::GeneralFailure));
     }
 
@@ -1111,7 +1211,7 @@ mod tests {
             } else {
                 shared
             };
-            let (code, _, exit) = failure_diagnostic(SHOW_COMMAND, &failure);
+            let (code, _, exit) = failure_diagnostic(RELEASE_COMMAND, &failure);
             assert_eq!((code, exit), expected, "{failure:?}");
         }
     }

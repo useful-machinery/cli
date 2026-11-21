@@ -57,6 +57,26 @@ async fn exercise_retained_cloud_git_continuation(v3: bool) {
     assert!(run_fixture_git(&workspace, &["status", "--porcelain"]).is_empty());
 }
 
+// REQ-CONTINUE-48
+#[tokio::test]
+async fn continuation_of_a_removed_kept_workspace_is_declined_retained_workspace_unavailable() {
+    let (_temporary, mut manager, initial, workspace, _baseline) =
+        retained_initial_attempt(false).await;
+    fs::remove_dir_all(workspace.parent().unwrap()).unwrap();
+    let successor = continuation_successor(&manager, &initial, &workspace);
+
+    let (decline, _) =
+        test_support::prepare_continued(&mut manager, &successor, "eff_01k0z6r1w8f4jy2m7q9v3x5abj")
+            .await;
+
+    assert_eq!(
+        decline,
+        Some(AssignmentDecline::RunnerUnable(
+            RunnerUnableReason::RetainedWorkspaceUnavailable
+        ))
+    );
+}
+
 // REQ-TELEMETRY-39
 #[tokio::test]
 async fn execution_lost_before_the_engine_starts_ends_the_execution_phase_failed() {

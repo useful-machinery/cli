@@ -282,13 +282,15 @@ pub fn register_unless_enrolled<A: RegistrationAuthority>(
 
 /// Confirms a signed-in mode against an enrolled host's registration record
 /// under the state lock, sending nothing (REQ-RUNNERENROLL-118): the options
-/// must name the record's organization and target, and the record the
-/// state's runner. A record whose runner the state holds and that is not yet
-/// complete is completed, after the activation journal the state consumed is
-/// removed. The state itself is never written.
+/// must name the record's target, and its organization when `organization`,
+/// the one `--org` or `USEFUL_ORG` names, is given; the record must name the
+/// state's runner. A start that names no organization resolves none, so the
+/// mode and the pool alone are compared. A record whose runner the state
+/// holds and that is not yet complete is completed, after the activation
+/// journal the state consumed is removed. The state itself is never written.
 pub fn confirm_registration(
     config_path: &Path,
-    organization: &str,
+    organization: Option<&str>,
     target: &RegistrationTarget,
 ) -> Result<(), RegistrationError<Infallible>> {
     let host = LockedStateDirectory::lock(config_path)
@@ -343,7 +345,7 @@ fn resumable<A: RegistrationAuthority>(
     if record.enrolled_at.is_some() {
         return Err(conflict(RegistrationConflictKind::StateMissing, &record));
     }
-    if !record.matches(organization, target) {
+    if !record.matches(Some(organization), target) {
         return Err(conflict(RegistrationConflictKind::Target, &record));
     }
     if record.runner.is_none() {
@@ -753,14 +755,17 @@ impl RegistrationRecord {
     }
 
     /// Whether a start's options name this record's registration: the same
-    /// mode, the organization as recorded or the registered runner's
-    /// organization ID, and the pool as recorded or its ID.
-    fn matches(&self, organization: &str, target: &RegistrationTarget) -> bool {
-        let organization_matches = self.organization == organization
-            || self
-                .runner
-                .as_ref()
-                .is_some_and(|runner| runner.organization_id == organization);
+    /// mode, the pool as recorded or its ID, and, when the start names one,
+    /// the organization as recorded or the registered runner's organization
+    /// ID.
+    fn matches(&self, organization: Option<&str>, target: &RegistrationTarget) -> bool {
+        let organization_matches = organization.is_none_or(|organization| {
+            self.organization == organization
+                || self
+                    .runner
+                    .as_ref()
+                    .is_some_and(|runner| runner.organization_id == organization)
+        });
         organization_matches
             && match (&self.target, target) {
                 (RecordedTarget::Personal {}, RegistrationTarget::Personal) => true,

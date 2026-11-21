@@ -685,13 +685,8 @@ where
                 ResultValidationOutcome::Decided(ResultValidationDecision::Rejected {
                     feedback,
                 }) => {
-                    let progress = self.parser.reject_result(Arc::clone(&feedback));
-                    let mut observations = vec![AgentObservation::ValueRejected {
-                        kind: crate::workflow::agent::AgentValueKind::Result,
-                        feedback,
-                    }];
-                    observations.extend(self.parser.take_observations());
-                    Some((progress, observations, false))
+                    let progress = self.parser.reject_result(feedback);
+                    Some((progress, self.parser.take_observations(), false))
                 }
                 ResultValidationOutcome::Decided(ResultValidationDecision::Valid(result)) => {
                     let progress = self.parser.accept_result(result);

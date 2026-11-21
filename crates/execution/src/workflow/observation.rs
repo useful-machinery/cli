@@ -4,8 +4,8 @@ use std::sync::Arc;
 use super::admission::CancellationReason;
 use super::agent::AgentObservationEnvelope;
 use super::evidence::{
-    BlockedDetail, CancellationDetail, ConditionFalseDetail, FailedChild, FailureDetail,
-    NonExecutionDetail,
+    BlockedDetail, CancellationDetail, ConditionFalseDetail, FailedChild, FailureClass,
+    FailureDetail, NonExecutionDetail,
 };
 use super::runtime::{
     ActionId, ActiveStepInvocation, RecoveryDecisionKind, RecoveryHandlerActivity,
@@ -82,6 +82,9 @@ pub enum ObservedStepTransition {
     },
     Failed {
         detail: FailureDetail,
+        /// The class of the failure (REQ-WFEXEC-79), when a recovery handler's decision or the
+        /// step's listed exit status gave it one.
+        failure_class: Option<FailureClass>,
     },
     Blocked {
         detail: BlockedDetail,

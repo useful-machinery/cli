@@ -1389,7 +1389,7 @@
         }
       ]
     },
-    "treeWaitKind": {"enum": ["answer", "approval", "repair", "stop", "external", "children"]},
+    "treeWaitKind": {"enum": ["answer", "approval", "repair", "stop", "external", "children", "host"]},
     "TreeProgressWait": {
       "description": "The wait a waiting tree run is pending on: its kind, since when, and the step that waits. The optional questions (REQ-COMPAT-18) are admitted only on an answer wait; an answer wait without them reports its questions unknown, never that it asks none. The questions array is at most 98,304 bytes as compact JSON and holds no text PostgreSQL's jsonb cannot store (the escape \\u0000, an unpaired surrogate escape) and no bytes that are not UTF-8; the Gateway checks both. The optional failedChild (REQ-COMPAT-18) is admitted on a wait of any kind and names the failed stage the wait is on, with the failing node of that stage's run; a wait without it reports no failed stage, which never says the stage succeeded. The Gateway judges a wait that carries it storable as it does one with questions.",
       "type": "object", "additionalProperties": false,
@@ -1714,6 +1714,16 @@
       ],
       "unevaluatedProperties": false
     },
+    "LeaseLossReason": {
+      "enum": [
+        "lease_start_late",
+        "lease_renewal_unreachable",
+        "lease_renewal_late",
+        "lease_revoked_by_cloud",
+        "lease_clock_failed",
+        "lease_authority_missing"
+      ]
+    },
     "RunnerAssignmentInterrupted": {
       "allOf": [
         {
@@ -1725,29 +1735,55 @@
               "const": "assignment_interrupted"
             },
             "payload": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "assignmentId": {
-                  "$ref": "#/$defs/assignmentId"
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "assignmentId": {
+                      "$ref": "#/$defs/assignmentId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/attemptId"
+                    },
+                    "reason": {
+                      "enum": [
+                        "graceful_shutdown",
+                        "user_request",
+                        "force_abort"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "assignmentId",
+                    "attemptId",
+                    "reason"
+                  ]
                 },
-                "attemptId": {
-                  "type": "string",
-                  "pattern": "^atm_[0-7][0-9a-hjkmnp-tv-z]{25}$"
-                },
-                "reason": {
-                  "enum": [
-                    "graceful_shutdown",
-                    "execution_lease_expired",
-                    "user_request",
-                    "force_abort"
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "assignmentId": {
+                      "$ref": "#/$defs/assignmentId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/attemptId"
+                    },
+                    "reason": {
+                      "const": "execution_lease_expired"
+                    },
+                    "leaseLoss": {
+                      "$ref": "#/$defs/LeaseLossReason"
+                    }
+                  },
+                  "required": [
+                    "assignmentId",
+                    "attemptId",
+                    "reason",
+                    "leaseLoss"
                   ]
                 }
-              },
-              "required": [
-                "assignmentId",
-                "attemptId",
-                "reason"
               ]
             }
           }
@@ -4035,6 +4071,7 @@
           "enum": [
             "recheck",
             "gave_up",
+            "infrastructure",
             "failed",
             "cancelled"
           ]
@@ -4108,7 +4145,8 @@
             "kind": {
               "enum": [
                 "recovered",
-                "exhausted"
+                "exhausted",
+                "infrastructure"
               ]
             },
             "executionNumber": {
@@ -4127,7 +4165,10 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
-              "const": "gave_up"
+              "enum": [
+                "gave_up",
+                "infrastructure"
+              ]
             },
             "round": {
               "type": "integer",
@@ -4429,7 +4470,8 @@
         "decision": {
           "enum": [
             "recheck",
-            "gave_up"
+            "gave_up",
+            "infrastructure"
           ]
         }
       },
@@ -5519,6 +5561,9 @@
                     "reason": {
                       "const": "execution_lease_expired"
                     },
+                    "leaseLoss": {
+                      "$ref": "#/$defs/LeaseLossReason"
+                    },
                     "terminalOutcome": {
                       "$ref": "#/$defs/ExecutionLeaseExpiredCancelledOutcome"
                     },
@@ -5531,6 +5576,7 @@
                     "attemptId",
                     "finalExecutionEventSequence",
                     "reason",
+                    "leaseLoss",
                     "terminalOutcome",
                     "artifactDelivery"
                   ]

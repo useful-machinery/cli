@@ -276,6 +276,15 @@ else
         --archive "$archive" \
         --target "$host_target" \
         --version 0.0.0-dev
+      # Also compile the independent driver and exercise its selection of the
+      # packaged executable. The workspace run above already ran the shared cases.
+      # The archive holds the all-features build, so the driver is compiled with its
+      # checkpoint cases and one of them holds a command at a gate: nothing else
+      # builds or runs that configuration of the standalone driver.
+      tar -xzf "$archive" -C "$release_dist"
+      "$public_root/scripts/test-e2e" "$release_dist/useful-0.0.0-dev-$host_target/useful" \
+        --features candidate-checkpoints \
+        -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run) | test(a_withdraw_refused_at_the_run_lock_appends_nothing)'
       ;;
     *)
       printf 'Skipped release-package execution on unsupported host target: %s\n' \

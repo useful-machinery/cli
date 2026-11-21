@@ -176,7 +176,7 @@ fn list_returns_one_exact_page_with_current_and_provenance_fields() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "list",
             "--limit",
@@ -241,7 +241,7 @@ fn list_passes_through_an_identity_grant_and_prints_its_state_and_id() {
             &server.issuer,
             path.to_str().unwrap(),
         );
-        let mut args = vec!["auth", "identity", "list", "--allow-insecure-http"];
+        let mut args = vec!["account", "identity", "list", "--allow-insecure-http"];
         if json {
             args.push("--json");
         }
@@ -282,7 +282,7 @@ fn list_passes_through_an_identity_grant_of_any_provider() {
         deployment_environment_with_issuer(&server.api_url, &server.issuer, path.to_str().unwrap());
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "list",
             "--json",
@@ -401,7 +401,7 @@ fn list_presents_only_exact_auth0_human_namespaces_without_changing_api_fields()
             &server.issuer,
             path.to_str().unwrap(),
         );
-        let mut args = vec!["auth", "identity", "list", "--allow-insecure-http"];
+        let mut args = vec!["account", "identity", "list", "--allow-insecure-http"];
         if json {
             args.push("--json");
         }
@@ -454,10 +454,10 @@ fn service_list_does_not_label_a_workload_subject() {
         let missing_store = directory.path().join("no-human-session.json");
         let environment = deployment_environment(&server.api_url, missing_store.to_str().unwrap());
         let mut args = vec![
-            "auth",
+            "account",
             "identity",
             "list",
-            "--service-api-key-file",
+            "--api-key-file",
             key.to_str().unwrap(),
             "--allow-insecure-http",
         ];
@@ -518,7 +518,7 @@ fn unknown_identity_remains_removable_by_opaque_id() {
         deployment_environment_with_issuer(&server.api_url, &server.issuer, path.to_str().unwrap());
     let listed = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "list",
             "--json",
@@ -531,7 +531,7 @@ fn unknown_identity_remains_removable_by_opaque_id() {
     assert_eq!(value["items"][1], with_provider(unknown, "unknown"));
     let removed = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "remove",
             LINKED_IDENTITY_ID,
@@ -578,7 +578,7 @@ fn successful_link_presents_human_provider_but_not_workload_provider() {
             &server.issuer,
             path.to_str().unwrap(),
         );
-        let mut args = vec!["auth", "identity", "link", "--allow-insecure-http"];
+        let mut args = vec!["account", "identity", "link", "--allow-insecure-http"];
         if json {
             args.push("--json");
         }
@@ -637,13 +637,13 @@ fn service_link_reports_the_committed_result_when_interrupted_after_dispatch() {
     let missing_human_store = directory.path().join("missing-human.json");
     let environment =
         deployment_environment(&server.api_url, missing_human_store.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "auth",
+            "account",
             "identity",
             "link",
-            "--service-api-key-file",
+            "--api-key-file",
             service_key_path.to_str().unwrap(),
             "--workload-token-file",
             workload_token_path.to_str().unwrap(),
@@ -716,7 +716,7 @@ fn link_uses_fresh_separate_browser_proof_and_keeps_the_local_session() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
             "--json",
@@ -813,10 +813,10 @@ fn link_keeps_the_preflight_acting_session_across_browser_proof() {
         credential_path.to_str().unwrap(),
     );
     let empty_path = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "auth",
+            "account",
             "identity",
             "link",
             "--json",
@@ -912,7 +912,7 @@ fn assert_link_refusal_leaves_credentials_unchanged(problem_type: &str, expected
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
             "--json",
@@ -971,10 +971,10 @@ fn service_link_reports_workload_policy_and_quantity_failures() {
 
         let output = run_with_env(
             &[
-                "auth",
+                "account",
                 "identity",
                 "link",
-                "--service-api-key-file",
+                "--api-key-file",
                 service_key_path.to_str().unwrap(),
                 "--workload-token-file",
                 workload_token_path.to_str().unwrap(),
@@ -1030,7 +1030,7 @@ fn link_does_not_report_an_unchanged_session_after_rejected_credential_cleanup()
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
             "--json",
@@ -1097,7 +1097,7 @@ fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link(
         deployment_environment_with_issuer(&server.api_url, &server.issuer, path.to_str().unwrap());
 
     let ordinary = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
     assert!(ordinary.status.success());
@@ -1108,7 +1108,7 @@ fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link(
 
     let forced = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1123,9 +1123,12 @@ fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link(
         serde_json::from_str(events.lines().last().unwrap()).unwrap();
     assert_eq!(completion["status"]["state"], "authenticated");
 
+    // Naming the organization keeps `account show` from reading the memberships.
+    let mut named = environment.to_vec();
+    named.push(("USEFUL_ORG", "acme"));
     let confirmation = run_with_env(
-        &["auth", "status", "--json", "--allow-insecure-http"],
-        &environment,
+        &["account", "show", "--json", "--allow-insecure-http"],
+        &named,
     );
     assert!(confirmation.status.success());
     let confirmed: serde_json::Value = serde_json::from_slice(&confirmation.stdout).unwrap();
@@ -1138,7 +1141,7 @@ fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link(
 
     let link = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
             "--json",
@@ -1219,7 +1222,7 @@ fn removing_the_former_session_identity_keeps_the_forced_login_session() {
 
     let login = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1237,7 +1240,7 @@ fn removing_the_former_session_identity_keeps_the_forced_login_session() {
 
     let removal = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "remove",
             CURRENT_IDENTITY_ID,
@@ -1305,7 +1308,7 @@ fn remove_reports_freshness_and_retention_outcomes() {
 
         let output = run_with_env(
             &[
-                "auth",
+                "account",
                 "identity",
                 "remove",
                 LINKED_IDENTITY_ID,
@@ -1342,12 +1345,12 @@ fn service_remove_reports_disabled_workload_identity_linking() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "remove",
             LINKED_IDENTITY_ID,
             "--yes",
-            "--service-api-key-file",
+            "--api-key-file",
             service_key_path.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -1389,19 +1392,19 @@ fn service_link_refuses_ambiguous_secret_sources_before_any_request() {
     // produces rather than relying on the exit alone.
     for (args, refused) in [
         (
-            &["--service-api-key-file", "-", "--workload-token-file", "-"][..],
+            &["--api-key-file", "-", "--workload-token-file", "-"][..],
             "cannot supply both",
         ),
         (
             &["--workload-token-file", workload_token][..],
-            "--service-api-key-file",
+            "--api-key-file",
         ),
     ] {
         let server = ScriptedServer::respond(Vec::new());
         let missing_human_store = directory.path().join("missing-human.json");
         let environment =
             deployment_environment(&server.api_url, missing_human_store.to_str().unwrap());
-        let mut arguments = vec!["auth", "identity", "link"];
+        let mut arguments = vec!["account", "identity", "link"];
         arguments.extend_from_slice(args);
         arguments.extend(["--json", "--allow-insecure-http"]);
 
@@ -1436,10 +1439,10 @@ fn service_link_human_does_not_label_a_workload_subject() {
     let environment = deployment_environment(&server.api_url, missing_store.to_str().unwrap());
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
-            "--service-api-key-file",
+            "--api-key-file",
             key.to_str().unwrap(),
             "--workload-token-file",
             proof.to_str().unwrap(),
@@ -1483,10 +1486,10 @@ fn service_identity_link_uses_explicit_private_key_and_workload_token_files() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "identity",
             "link",
-            "--service-api-key-file",
+            "--api-key-file",
             service_key_path.to_str().unwrap(),
             "--workload-token-file",
             workload_token_path.to_str().unwrap(),

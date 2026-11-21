@@ -28,25 +28,19 @@ macro_rules! impl_organization_human_credential_outcome {
 }
 pub(super) use impl_organization_human_credential_outcome;
 
-mod account;
-mod artifact;
+pub(crate) mod account;
 mod atomic_directory;
-mod auth;
-mod connection;
-mod delegation;
+mod context;
 mod deletion;
 mod entity;
-pub(crate) mod grant;
-mod integration;
+mod integration_token;
 mod invitation;
-mod organization;
+mod org;
+mod paging;
 mod principal;
 mod project;
-mod publication;
-mod run;
 mod runner;
 mod secret_file;
-mod service_principal;
 mod version;
 mod workflow;
 
@@ -66,9 +60,7 @@ use anyhow::{Context, anyhow};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde::Serialize;
 
-use self::entity::{
-    GitLabConnectionArg, InstallationArg, OrganizationArg, PoolArg, ProjectArg, RepositoryArg,
-};
+use self::entity::{OrganizationArg, PoolArg, RepositoryArg, RepositoryRef};
 use crate::exit_code::{ExitCode, OutcomeClass};
 use crate::service_auth::{ServiceApiKey, read_api_key};
 use useful_api::{
@@ -251,10 +243,6 @@ const AFTER_HELP: &str = "Documentation:\n  Public API contract: https://docs.us
 pub(crate) struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-
-    /// The earlier leaf the invocation named, if it named one (REQ-GRANT-77).
-    #[arg(skip)]
-    earlier: Option<grant::alias::Earlier>,
 }
 
 impl CommandFactory for Cli {
@@ -320,17 +308,14 @@ macro_rules! json_family {
 }
 
 json_family!(AccountJson, "account");
-json_family!(ArtifactJson, "artifact");
+json_family!(ConnectionJson, "connection");
 json_family!(DelegationJson, "delegation");
 json_family!(DeletionJson, "deletion");
-json_family!(GithubJson, "GitHub");
-json_family!(GitlabJson, "GitLab connection");
 json_family!(GrantJson, "grant");
 json_family!(IdentityJson, "identity");
 json_family!(InvitationJson, "invitation");
 json_family!(OrganizationJson, "organization");
 json_family!(ProjectJson, "project");
-json_family!(PublicationJson, "publication");
 json_family!(RunJson, "run");
 json_family!(RunnerJson, "runner");
 json_family!(ServicePrincipalJson, "service-principal");
@@ -462,7 +447,7 @@ struct PrincipalAuthenticationArgs {
         value_name = "PATH|-",
         help = "Authenticate with a service API key from a private file, or - for standard input"
     )]
-    service_api_key_file: Option<PathBuf>,
+    api_key_file: Option<PathBuf>,
 
     #[arg(skip)]
     resolved_service_api_key: Mutex<Option<Arc<ServiceApiKey>>>,
@@ -475,18 +460,18 @@ struct RequiredServiceAuthenticationArgs {
         value_name = "PATH|-",
         help = "Authenticate with a service API key from a private file, or - for standard input"
     )]
-    service_api_key_file: PathBuf,
+    api_key_file: PathBuf,
 }
 
 impl RequiredServiceAuthenticationArgs {
     fn api_key(&self) -> anyhow::Result<ServiceApiKey> {
-        read_api_key(&self.service_api_key_file).context("read service API key")
+        read_api_key(&self.api_key_file).context("read service API key")
     }
 }
 
 impl PrincipalAuthenticationArgs {
     const fn kind(&self) -> PrincipalAuthenticationKind {
-        if self.service_api_key_file.is_some() {
+        if self.api_key_file.is_some() {
             PrincipalAuthenticationKind::ServiceApiKey
         } else {
             PrincipalAuthenticationKind::HumanSession
@@ -494,7 +479,7 @@ impl PrincipalAuthenticationArgs {
     }
 
     fn service_api_key(&self) -> anyhow::Result<Option<Arc<ServiceApiKey>>> {
-        let Some(path) = self.service_api_key_file.as_deref() else {
+        let Some(path) = self.api_key_file.as_deref() else {
             return Ok(None);
         };
         let mut resolved = self
@@ -510,13 +495,12 @@ impl PrincipalAuthenticationArgs {
     }
 
     fn required_service_api_key(&self) -> anyhow::Result<Arc<ServiceApiKey>> {
-        self.service_api_key()?.ok_or_else(|| {
-            anyhow!("--service-api-key-file is required for service credential management")
-        })
+        self.service_api_key()?
+            .ok_or_else(|| anyhow!("--api-key-file is required for service credential management"))
     }
 
     fn uses_stdin(&self) -> bool {
-        self.service_api_key_file.as_deref() == Some(Path::new("-"))
+        self.api_key_file.as_deref() == Some(Path::new("-"))
     }
 }
 
@@ -552,34 +536,12 @@ struct PaginationArgs<const MAX: u16 = 200> {
 enum Command {
     #[command(about = account::ABOUT)]
     Account(account::Command),
-    #[command(about = artifact::ABOUT)]
-    Artifact(artifact::Command),
-    #[command(about = auth::ABOUT)]
-    Auth(auth::Command),
-    #[command(about = connection::ABOUT)]
-    Connection(connection::Command),
-    #[command(about = delegation::ABOUT)]
-    Delegation(delegation::Command),
-    // The earlier spelling of `integration`, kept out of help until the stage that removes it
-    // (REQ-INTEGRATION-15).
-    #[command(about = grant::ABOUT, hide = true)]
-    Grant(grant::Command),
-    #[command(about = integration::ABOUT)]
-    Integration(integration::Command),
-    #[command(about = invitation::ABOUT)]
-    Invitation(invitation::Command),
-    #[command(about = organization::ABOUT)]
-    Organization(organization::Command),
+    #[command(about = org::ABOUT)]
+    Org(org::Command),
     #[command(about = project::ABOUT)]
     Project(project::Command),
-    #[command(about = publication::ABOUT)]
-    Publication(publication::Command),
-    #[command(about = run::ABOUT)]
-    Run(Box<run::Command>),
     #[command(about = runner::ABOUT)]
     Runner(runner::Command),
-    #[command(about = service_principal::ABOUT)]
-    ServicePrincipal(service_principal::Command),
     #[command(about = version::ABOUT)]
     Version(version::Command),
     #[command(about = workflow::ABOUT)]
@@ -593,45 +555,19 @@ where
 {
     let mut command = Cli::command();
     let matches = command.try_get_matches_from_mut(args)?;
-    let mut cli = Cli::from_arg_matches(&matches).map_err(|error| error.format(&mut command))?;
-    cli.earlier = grant::alias::Earlier::at(&invoked_path(&matches));
-    Ok(cli)
-}
-
-/// The subcommand names an invocation gave, joined by spaces: `grant list`.
-fn invoked_path(matches: &clap::ArgMatches) -> String {
-    let mut names = Vec::new();
-    let mut matches = matches;
-    while let Some((name, subcommand)) = matches.subcommand() {
-        names.push(name);
-        matches = subcommand;
-    }
-    names.join(" ")
+    Cli::from_arg_matches(&matches).map_err(|error| error.format(&mut command))
 }
 
 impl Cli {
     pub(crate) fn execute(self) -> CommandResult {
         useful_api::identify_client(crate::build_info::VERSION);
-        if let Some(earlier) = self.earlier {
-            earlier.write_notice();
-        }
         match self.command {
             None => print_help(&[]),
             Some(Command::Account(command)) => command.execute(),
-            Some(Command::Artifact(command)) => command.execute(),
-            Some(Command::Auth(command)) => command.execute(),
-            Some(Command::Delegation(command)) => command.execute(),
-            Some(Command::Connection(command)) => command.execute(),
-            Some(Command::Grant(command)) => command.execute(),
-            Some(Command::Integration(command)) => command.execute(),
-            Some(Command::Invitation(command)) => command.execute(),
-            Some(Command::Organization(command)) => command.execute(),
+            Some(Command::Org(command)) => command.execute(),
             Some(Command::Project(command)) => command.execute(),
-            Some(Command::Publication(command)) => command.execute(),
-            Some(Command::Run(command)) => (*command).execute(),
             Some(Command::Version(command)) => command.execute(),
             Some(Command::Runner(command)) => command.execute(),
-            Some(Command::ServicePrincipal(command)) => command.execute(),
             Some(Command::Workflow(command)) => command.execute(),
         }
     }
@@ -671,6 +607,25 @@ struct CloudListResult<'a, T> {
     items: &'a [T],
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<&'a str>,
+}
+
+impl<'a, T> CloudListResult<'a, T> {
+    /// One listed page of `items`, which a list whose document has its own members flattens
+    /// into that document.
+    const fn listed(
+        schema_version: u8,
+        deployment: &'a str,
+        items: &'a [T],
+        next_cursor: Option<&'a str>,
+    ) -> Self {
+        Self {
+            schema_version,
+            deployment,
+            outcome: "listed",
+            items,
+            next_cursor,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -748,13 +703,13 @@ impl ApiFailureReport {
         }
     }
 
-    // The failures every member API reports alike, worded for its `subject`: "agent login" or
+    // The failures every member API reports alike, worded for its `subject`: "grant" or
     // "provider grant".
     fn unauthenticated(subject: &str) -> Self {
         Self::new(
             "unauthenticated",
             format!("! You must sign in before managing {subject}s."),
-            "Run:\n  useful auth login",
+            "Run:\n  useful account login",
             OutcomeClass::Unauthenticated,
         )
     }
@@ -763,7 +718,7 @@ impl ApiFailureReport {
         Self::new(
             "forbidden",
             format!("! Your account is not permitted to manage {subject}s."),
-            "Sign in as an active member:\n  useful auth login",
+            "Sign in as an active member:\n  useful account login",
             OutcomeClass::Forbidden,
         )
     }
@@ -916,13 +871,12 @@ fn write_cloud_list_json_version(
     items: &[impl Serialize],
     next_cursor: Option<&str>,
 ) -> io::Result<()> {
-    write_pretty_json(&CloudListResult {
-        schema_version: version,
+    write_pretty_json(&CloudListResult::listed(
+        version,
         deployment,
-        outcome: "listed",
         items,
         next_cursor,
-    })
+    ))
 }
 
 fn write_cloud_failure_json(
@@ -1762,6 +1716,63 @@ where
     })
 }
 
+/// The signal that stopped an operation run by `execute_mutation_with_signal_cleanup`, which
+/// the operation reads once it sees itself cancelled.
+struct StopSignal(std::sync::OnceLock<ExitCode>);
+
+impl StopSignal {
+    /// The exit code of the signal that stopped the operation.
+    fn exit_code(&self) -> ExitCode {
+        self.0
+            .get()
+            .copied()
+            .unwrap_or_else(|| OutcomeClass::Interrupted.exit_code())
+    }
+}
+
+/// Runs a mutation that cleans up after a signal. The first signal stops the operation unless it
+/// has not dispatched, which ends the command at once: the operation sees `is_cancelled` (its
+/// dispatch, recovery and completion are refused), sends what undoes its work from its own
+/// thread, writes its ending and ends the command with its own result. A second signal ends the
+/// command at once with `abandoned`, given the operation's recovery state.
+fn execute_mutation_with_signal_cleanup<R>(
+    context: &'static str,
+    recovery: R,
+    operation: impl FnOnce(&OperationControl<R>, &StopSignal) -> CommandResult + Send + 'static,
+    abandoned: impl FnOnce(ExitCode, R) -> CommandResult + 'static,
+) -> CommandResult
+where
+    R: Clone + Send + 'static,
+{
+    run_blocking_signal_runtime(context, async move {
+        let mut signals = ProcessSignals::install(context)?;
+        let control = Arc::new(OperationControl::new(recovery));
+        let stop = Arc::new(StopSignal(std::sync::OnceLock::new()));
+        let operation_stop = Arc::clone(&stop);
+        let mut running = spawn_controlled_blocking(Arc::clone(&control), move |control| {
+            operation(control, &operation_stop)
+        });
+        tokio::select! {
+            biased;
+            signal = signals.recv() => {
+                let _ = stop.0.set(signal);
+                if control
+                    .claim_signal()
+                    .is_some_and(|snapshot| !snapshot.dispatched)
+                {
+                    return Ok(signal);
+                }
+                tokio::select! {
+                    biased;
+                    again = signals.recv() => abandoned(again, control.recovery()),
+                    result = &mut running => finish_read_only_operation(context, result),
+                }
+            }
+            result = &mut running => finish_read_only_operation(context, result),
+        }
+    })
+}
+
 fn finish_read_only_operation(
     context: &str,
     result: Result<CommandResult, tokio::task::JoinError>,
@@ -2101,6 +2112,12 @@ fn print_help(command_path: &[&str]) -> CommandResult {
 #[cfg(test)]
 #[path = "cli/grammar_tests.rs"]
 mod grammar_tests;
+
+#[cfg(test)]
+mod migration_tests;
+
+#[cfg(test)]
+mod scenario_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2529,216 +2546,13 @@ mod tests {
         assert_command_order(&Cli::command(), "useful");
     }
 
-    fn customer_command_paths() -> Vec<String> {
+    /// Every path of the tree, hidden ones and aliases included, sorted and without `useful`.
+    pub(super) fn customer_command_paths() -> Vec<String> {
         let mut paths = Vec::new();
         collect_command_paths(&Cli::command(), "", &mut paths);
         paths.sort();
         paths.dedup();
         paths
-    }
-
-    /// The families `useful integration` and `useful runner integration` replace
-    /// (REQ-GRANT-77, REQ-INTEGRATION-15).
-    const EARLIER_FAMILIES: [&[&str]; 6] = [
-        &["auth", "agent-login"],
-        &["auth", "credential"],
-        &["auth", "grant"],
-        &["grant"],
-        &["runner", "agent-login"],
-        &["runner", "grant"],
-    ];
-
-    /// Each `useful integration` and `useful runner integration` leaf with the `useful grant`
-    /// or `useful runner grant` leaf of the same purpose (REQ-INTEGRATION-13,
-    /// REQ-INTEGRATION-14).
-    const INTEGRATION_LEAVES: [(&[&str], &[&str]); 6] = [
-        (&["integration", "authorize"], &["grant", "authorize"]),
-        (&["integration", "connect"], &["grant", "create"]),
-        (&["integration", "deauthorize"], &["grant", "deauthorize"]),
-        (&["integration", "list"], &["grant", "list"]),
-        (&["integration", "revoke"], &["grant", "revoke"]),
-        (
-            &["runner", "integration", "sync"],
-            &["runner", "grant", "sync"],
-        ),
-    ];
-
-    fn subcommand<'a>(root: &'a clap::Command, path: &[&str]) -> &'a clap::Command {
-        path.iter().fold(root, |command, name| {
-            command
-                .find_subcommand(name)
-                .unwrap_or_else(|| panic!("no subcommand {name} in {path:?}"))
-        })
-    }
-
-    // REQ-GRANT-77
-    // REQ-INTEGRATION-15
-    #[test]
-    fn the_earlier_families_are_hidden_but_still_in_the_command_surface() {
-        let root = Cli::command();
-        for family in EARLIER_FAMILIES {
-            assert!(subcommand(&root, family).is_hide_set(), "{family:?}");
-        }
-        let visible = subcommand(&root, &["auth"])
-            .get_subcommands()
-            .filter(|command| !command.is_hide_set())
-            .map(clap::Command::get_name)
-            .collect::<Vec<_>>();
-        assert_eq!(visible, ["identity", "login", "logout", "status"]);
-
-        let paths = customer_command_paths();
-        for family in EARLIER_FAMILIES {
-            let family = family.join(" ");
-            let leaves = paths
-                .iter()
-                .filter(|path| path.starts_with(&format!("{family} ")))
-                .count();
-            assert!(paths.contains(&family) && leaves > 0, "{family}");
-        }
-    }
-
-    // REQ-GRANT-77
-    // REQ-INTEGRATION-15
-    #[test]
-    fn the_notice_table_names_exactly_the_earlier_leaves() {
-        let root = Cli::command();
-        let mut leaves = Vec::new();
-        for family in EARLIER_FAMILIES {
-            for leaf in subcommand(&root, family).get_subcommands() {
-                leaves.push(format!("{} {}", family.join(" "), leaf.get_name()));
-            }
-        }
-        leaves.sort();
-        let noticed = super::grant::alias::EARLIER
-            .iter()
-            .map(|(path, _)| (*path).to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(noticed, leaves);
-    }
-
-    // REQ-GRANT-77
-    // REQ-INTEGRATION-15
-    // Every earlier leaf names a visible `useful integration` or `useful runner integration`
-    // leaf, and each `grant` leaf names the one of its own purpose.
-    #[test]
-    fn the_notice_table_names_the_integration_leaves() {
-        let root = Cli::command();
-        for (earlier, replacement) in super::grant::alias::EARLIER {
-            let command = replacement
-                .strip_prefix("useful ")
-                .unwrap_or_else(|| panic!("{earlier}: {replacement}"));
-            assert!(
-                command.starts_with("integration ") || command.starts_with("runner integration "),
-                "{earlier}: {replacement}"
-            );
-            let path = command
-                .split(' ')
-                .take_while(|word| word.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'))
-                .collect::<Vec<_>>();
-            assert!(
-                !subcommand(&root, &path).is_hide_set(),
-                "{earlier}: {replacement}"
-            );
-        }
-        for (integration, grant) in INTEGRATION_LEAVES {
-            let path = grant.join(" ");
-            let replacement = super::grant::alias::EARLIER
-                .iter()
-                .find(|(earlier, _)| *earlier == path)
-                .map(|(_, replacement)| *replacement);
-            assert_eq!(
-                replacement,
-                Some(format!("useful {}", integration.join(" ")).as_str()),
-                "{path}"
-            );
-        }
-    }
-
-    // REQ-INTEGRATION-13
-    // REQ-INTEGRATION-14
-    #[test]
-    fn the_integration_families_are_listed_with_their_leaves() {
-        let root = Cli::command();
-        for (family, leaves) in [
-            (
-                &["integration"][..],
-                &["authorize", "connect", "deauthorize", "list", "revoke"][..],
-            ),
-            (&["runner", "integration"], &["sync"]),
-        ] {
-            let command = subcommand(&root, family);
-            assert!(!command.is_hide_set(), "{family:?}");
-            let names = command
-                .get_subcommands()
-                .map(clap::Command::get_name)
-                .filter(|name| *name != "help")
-                .collect::<Vec<_>>();
-            assert_eq!(names, leaves, "{family:?}");
-            for leaf in command.get_subcommands() {
-                assert!(!leaf.is_hide_set(), "{family:?} {}", leaf.get_name());
-            }
-        }
-    }
-
-    // REQ-INTEGRATION-13
-    // REQ-INTEGRATION-14
-    // Each integration leaf takes every argument of the grant leaf of its purpose, spelled and
-    // checked as that leaf spells and checks it.
-    #[test]
-    fn the_integration_leaves_take_the_arguments_of_the_grant_leaves() {
-        let mut root = Cli::command();
-        root.build();
-        for (integration, grant) in INTEGRATION_LEAVES {
-            let integration = subcommand(&root, integration);
-            let grant = subcommand(&root, grant);
-            assert!(grant.get_arguments().next().is_some(), "{grant:?}");
-            for expected in grant.get_arguments() {
-                let id = expected.get_id();
-                let actual = integration
-                    .get_arguments()
-                    .find(|arg| arg.get_id() == id)
-                    .unwrap_or_else(|| panic!("{} lacks {id}", integration.get_name()));
-                assert_eq!(actual.get_long(), expected.get_long(), "{id}");
-                assert_eq!(actual.get_value_names(), expected.get_value_names(), "{id}");
-                assert_eq!(
-                    format!("{:?}", actual.get_action()),
-                    format!("{:?}", expected.get_action()),
-                    "{id}"
-                );
-                assert_eq!(actual.is_required_set(), expected.is_required_set(), "{id}");
-                assert_eq!(actual.is_positional(), expected.is_positional(), "{id}");
-            }
-        }
-    }
-
-    // REQ-INTEGRATION-16
-    // `integration connect` takes the arguments of `grant create` and `--org` alone, so no
-    // argument of the leaf can carry a token.
-    #[test]
-    fn integration_connect_takes_the_arguments_of_grant_create_and_org_alone() {
-        let mut root = Cli::command();
-        root.build();
-        let ids = |path: &[&str]| {
-            subcommand(&root, path)
-                .get_arguments()
-                .map(|arg| arg.get_id().to_string())
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        let mut expected = ids(&["grant", "create"]);
-        expected.insert("org".to_owned());
-        assert_eq!(ids(&["integration", "connect"]), expected);
-        assert!(parse(["useful", "integration", "connect", "mergify", "a-token"]).is_err());
-        assert!(
-            parse([
-                "useful",
-                "integration",
-                "connect",
-                "mergify",
-                "--org",
-                "acme"
-            ])
-            .is_ok()
-        );
     }
 
     #[test]
@@ -2767,10 +2581,11 @@ mod tests {
         assert!(
             parse([
                 "useful",
-                "service-principal",
-                "credential",
+                "account",
+                "service",
+                "key",
                 "list",
-                "--service-api-key-file",
+                "--api-key-file",
                 "service.key",
             ])
             .is_ok()
@@ -2778,10 +2593,10 @@ mod tests {
         assert!(
             parse([
                 "useful",
-                "organization",
+                "org",
                 "show",
                 "example",
-                "--service-api-key-file",
+                "--api-key-file",
                 "service.key",
             ])
             .is_ok()
@@ -2789,13 +2604,14 @@ mod tests {
         assert!(
             parse([
                 "useful",
-                "service-principal",
+                "account",
+                "service",
                 "create",
-                "--display-name",
+                "--name",
                 "Build agent",
-                "--api-key-file",
+                "--key-file",
                 "new.key",
-                "--service-api-key-file",
+                "--api-key-file",
                 "service.key",
             ])
             .is_err()
@@ -2803,281 +2619,1435 @@ mod tests {
         assert!(
             parse([
                 "useful",
-                "organization",
-                "deletion",
-                "request",
+                "org",
+                "delete",
                 "example",
                 "--yes",
-                "--service-api-key-file",
+                "--api-key-file",
                 "service.key",
             ])
             .is_err()
         );
     }
 
-    // REQ-INTEGRATION-13
-    // REQ-INTEGRATION-14
+    // INV-CLI-21
     #[test]
     fn customer_command_surface_is_exact_and_has_no_operator_entrypoint() {
         let actual = customer_command_paths();
-        let expected = [
-            "account",
-            "account deletion",
-            "account deletion cancel",
-            "account deletion request",
-            "account signup",
-            "account update",
-            "artifact",
-            "artifact download",
-            "artifact list",
-            "artifact validate",
-            "auth",
-            "auth agent-login",
-            "auth agent-login authorize",
-            "auth agent-login deauthorize",
-            "auth agent-login import",
-            "auth agent-login list",
-            "auth agent-login reconnect",
-            "auth agent-login revoke",
-            "auth agent-login show",
-            "auth credential",
-            "auth credential status",
-            "auth grant",
-            "auth grant create",
-            "auth grant list",
-            "auth grant revoke",
-            "auth grant uses",
-            "auth identity",
-            "auth identity link",
-            "auth identity list",
-            "auth identity remove",
-            "auth login",
-            "auth logout",
-            "auth status",
-            "connection",
-            "connection github",
-            "connection github installation",
-            "connection github installation list",
-            "connection github installation remove",
-            "connection github repository",
-            "connection github repository list",
-            "connection github setup",
-            "connection github setup begin",
-            "connection github setup complete",
-            "connection gitlab",
-            "connection gitlab create",
-            "connection gitlab credential",
-            "connection gitlab credential activate",
-            "connection gitlab credential cancel",
-            "connection gitlab credential create",
-            "connection gitlab credential show",
-            "connection gitlab list",
-            "connection gitlab remove",
-            "connection gitlab repository",
-            "connection gitlab repository link",
-            "connection gitlab repository list",
-            "connection gitlab repository remove",
-            "connection gitlab show",
-            "connection linear",
-            "connection linear authorization",
-            "connection linear authorization create",
-            "connection linear authorization show",
-            "connection linear authorization wait",
-            "connection linear delete",
-            "connection linear list",
-            "connection linear remove",
-            "connection linear show",
-            "connection linear state",
-            "connection linear state list",
-            "connection linear team",
-            "connection linear team list",
-            "delegation",
-            "delegation accept",
-            "delegation end",
-            "delegation list",
-            "delegation propose",
-            "delegation show",
-            "grant",
-            "grant authorize",
-            "grant create",
-            "grant deauthorize",
-            "grant list",
-            "grant revoke",
-            "integration",
-            "integration authorize",
-            "integration connect",
-            "integration deauthorize",
-            "integration list",
-            "integration revoke",
-            "invitation",
-            "invitation accept",
-            "invitation decline",
-            "invitation list",
-            "invitation preview",
-            "organization",
-            "organization audit",
-            "organization audit list",
-            "organization create",
-            "organization deletion",
-            "organization deletion cancel",
-            "organization deletion request",
-            "organization invitation",
-            "organization invitation issue",
-            "organization invitation list",
-            "organization invitation revoke",
-            "organization leave",
-            "organization list",
-            "organization member",
-            "organization member history",
-            "organization member list",
-            "organization member remove",
-            "organization member update",
-            "organization show",
-            "organization update",
-            "project",
-            "project archive",
-            "project create",
-            "project list",
-            "project rename",
-            "project repository",
-            "project repository remove",
-            "project repository set",
-            "project repository show",
-            "project repository update",
-            "project runner-pool",
-            "project runner-pool remove",
-            "project runner-pool set",
-            "project show",
-            "project unarchive",
-            "project webhook",
-            "project webhook create",
-            "project webhook delete",
-            "project webhook delivery",
-            "project webhook delivery list",
-            "project webhook delivery replay",
-            "project webhook delivery show",
-            "project webhook disable",
-            "project webhook enable",
-            "project webhook list",
-            "project webhook revoke-previous-secret",
-            "project webhook rotate-secret",
-            "project webhook show",
-            "project webhook test",
-            "project webhook update",
-            "publication",
-            "publication create",
-            "publication list",
-            "publication show",
-            "run",
-            "run cancel",
-            "run continue",
-            "run input",
-            "run input delete",
-            "run input download",
-            "run input show",
-            "run input-set",
-            "run input-set create",
-            "run input-set delete",
-            "run input-set seal",
-            "run input-set show",
-            "run input-set upload",
-            "run linear",
-            "run linear history",
-            "run linear show",
-            "run list",
-            "run retry",
-            "run show",
-            "runner",
-            "runner activation",
-            "runner activation issue",
-            "runner activation list",
-            "runner activation revoke",
-            "runner agent-login",
-            "runner agent-login sync",
-            "runner create",
-            "runner credential",
-            "runner credential list",
-            "runner credential retire",
-            "runner credential revoke",
-            "runner delete",
-            "runner disable",
-            "runner doctor",
-            "runner drain",
-            "runner enable",
-            "runner enroll",
-            "runner grant",
-            "runner grant sync",
-            "runner integration",
-            "runner integration sync",
-            "runner join-key",
-            "runner join-key issue",
-            "runner join-key list",
-            "runner join-key revoke",
-            "runner list",
-            "runner move",
-            "runner pool",
-            "runner pool create",
-            "runner pool delete",
-            "runner pool list",
-            "runner pool rename",
-            "runner pool show",
-            "runner rename",
-            "runner serve",
-            "runner show",
-            "runner status",
-            "runner watch",
-            "service-principal",
-            "service-principal create",
-            "service-principal credential",
-            "service-principal credential issue",
-            "service-principal credential list",
-            "service-principal credential revoke",
-            "version",
-            "workflow",
-            "workflow definition",
-            "workflow definition cloud",
-            "workflow definition cloud archive",
-            "workflow definition cloud delete",
-            "workflow definition cloud disable",
-            "workflow definition cloud enable",
-            "workflow definition cloud evaluation",
-            "workflow definition cloud evaluation list",
-            "workflow definition cloud evaluation show",
-            "workflow definition cloud list",
-            "workflow definition cloud set-principal",
-            "workflow definition cloud show",
-            "workflow definition cloud unarchive",
-            "workflow definition disable",
-            "workflow definition enable",
-            "workflow definition list",
-            "workflow definition publish",
-            "workflow definition show",
-            "workflow definition validate",
-            "workflow reference",
-            "workflow run",
-            "workflow run answer",
-            "workflow run approve",
-            "workflow run cancel",
-            "workflow run create",
-            "workflow run event",
-            "workflow run hand-back",
-            "workflow run interrupt",
-            "workflow run lift",
-            "workflow run list",
-            "workflow run release",
-            "workflow run restart",
-            "workflow run resume",
-            "workflow run retry",
-            "workflow run show",
-            "workflow run status",
-            "workflow run stop",
-            "workflow run upgrade",
-            "workflow run view",
-            "workflow run withdraw",
-            "workflow schema",
-            "workflow validate",
-        ];
+        let expected: Vec<_> = include_str!("../tests/fixtures/command-tree.txt")
+            .lines()
+            .collect();
 
         assert_eq!(actual, expected);
+        // A command is a path with no subcommand; every other path is a group.
+        let commands: Vec<_> = expected
+            .iter()
+            .filter(|path| {
+                !expected.iter().any(|other| {
+                    other
+                        .strip_prefix(**path)
+                        .is_some_and(|rest| rest.starts_with(' '))
+                })
+            })
+            .collect();
+        assert_eq!((commands.len(), expected.len() - commands.len()), (147, 33));
+        let root = Cli::command();
+        let visible = commands
+            .iter()
+            .filter(|path| {
+                let mut node = &root;
+                path.split(' ').all(|token| {
+                    node = node
+                        .find_subcommand(token)
+                        .expect("every listed path is in the tree");
+                    !node.is_hide_set()
+                })
+            })
+            .count();
+        assert_eq!(visible, 146);
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_account_paths_and_options_are_unknown() {
+        for (arguments, kind) in [
+            (
+                &["useful", "auth", "grant", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "grant", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "grant", "create", "github"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "grant", "revoke", "codex", "--yes"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "integration",
+                    "list",
+                    "pgr_01k0z6r1w8f4jy2m7q9v3x5abc",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "account", "integration", "list", "--uses", "20"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "integration",
+                    "connect",
+                    "github",
+                    "--replace",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "integration",
+                    "connect",
+                    "codex",
+                    "--organization",
+                    "acme",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "doctor",
+                    "--workflow",
+                    "workflow.yaml",
+                    "--connect",
+                    "--replace",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "auth", "agent-login", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "auth", "credential", "status"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "auth", "login"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "auth", "status"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "auth", "logout"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "auth", "identity", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "account", "status"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "account", "deletion", "request", "--yes"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "account", "update", "--display-name", "X"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "account", "update", "--clear-display-name"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "org",
+                    "show",
+                    "example",
+                    "--service-api-key-file",
+                    "service.key",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "service",
+                    "create",
+                    "--name",
+                    "X",
+                    "--api-key-file",
+                    "new.key",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "invitation", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "invitation",
+                    "preview",
+                    "inv_01k0z6r1w8f4jy2m7q9v3x5abc",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "service-principal",
+                    "create",
+                    "--display-name",
+                    "ci",
+                    "--key-file",
+                    "ci.key",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "service",
+                    "credential",
+                    "list",
+                    "--api-key-file",
+                    "ci.key",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "delegation", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "account",
+                    "service",
+                    "create",
+                    "--display-name",
+                    "ci",
+                    "--key-file",
+                    "ci.key",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+        ] {
+            let error = parse(arguments).expect_err("an earlier spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_connection_paths_are_unknown() {
+        for arguments in [
+            &[
+                "useful",
+                "connection",
+                "github",
+                "installation",
+                "list",
+                "acme",
+            ][..],
+            &["useful", "connection", "gitlab", "list", "acme"][..],
+            &["useful", "connection", "linear", "list", "acme"][..],
+            &[
+                "useful",
+                "connection",
+                "gitlab",
+                "show",
+                "acme",
+                "glc_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "show",
+                "acme",
+                "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "authorization",
+                "show",
+                "acme",
+                "las_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "github",
+                "repository",
+                "list",
+                "acme",
+                "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "team",
+                "list",
+                "acme",
+                "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "state",
+                "list",
+                "acme",
+                "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "team",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "github",
+                "installation",
+                "remove",
+                "acme",
+                "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "--yes",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "delete",
+                "acme",
+                "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "--yes",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "gitlab",
+                "repository",
+                "link",
+                "acme",
+                "glc_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "--repository-id",
+                "7",
+                "--expected-version",
+                "1",
+            ][..],
+            &[
+                "useful",
+                "connection",
+                "linear",
+                "authorization",
+                "create",
+                "acme",
+            ][..],
+            &["useful", "connection", "github", "setup", "begin", "acme"][..],
+            &["useful", "connection"][..],
+            &[
+                "useful",
+                "connection",
+                "gitlab",
+                "create",
+                "acme",
+                "https://gitlab.com",
+            ][..],
+            &["useful", "gitlab"][..],
+        ] {
+            let error = parse(arguments).expect_err("an earlier connection path must not parse");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::InvalidSubcommand,
+                "{arguments:?}"
+            );
+        }
+        let error = parse([
+            "useful",
+            "org",
+            "integration",
+            "connect",
+            "linear",
+            "--enable-state-updates",
+        ])
+        .expect_err("the earlier state-updates spelling must not parse");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        let error = parse([
+            "useful",
+            "org",
+            "integration",
+            "connect",
+            "github",
+            "--provider-installation-id",
+            "7",
+        ])
+        .expect_err("the earlier installation spelling must not parse");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_project_paths_and_options_are_unknown() {
+        const PROJECT: &str = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
+        const WEBHOOK: &str = "whs_01k0z6r1w8f4jy2m7q9v3x5abc";
+        for (arguments, kind) in [
+            (
+                &["useful", "project", "list", "acme"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "project", "show", "acme", PROJECT][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "create",
+                    "acme",
+                    "--name",
+                    "widget",
+                    "--installation-id",
+                    "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "--repository-id",
+                    "123",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "project", "archive", "acme", PROJECT][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "archive",
+                    PROJECT,
+                    "--project",
+                    PROJECT,
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "project", "action", "list", "acme", PROJECT][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "project", "repository", "show", "acme", PROJECT][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "project", "show", "widget", "--project", "widget"][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &[
+                    "useful", "project", "rename", "acme", PROJECT, "--name", "gadget",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "repository",
+                    "set",
+                    "acme",
+                    PROJECT,
+                    "--installation-id",
+                    "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "--repository-id",
+                    "123",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "runner-pool",
+                    "set",
+                    "acme",
+                    PROJECT,
+                    "builders",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "runner-pool",
+                    "remove",
+                    "acme",
+                    PROJECT,
+                    "--yes",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "project", "webhook", "rotate-secret", WEBHOOK][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "webhook",
+                    "revoke-previous-secret",
+                    WEBHOOK,
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful", "project", "webhook", "show", "acme", PROJECT, WEBHOOK,
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "webhook",
+                    "delivery",
+                    "list",
+                    WEBHOOK,
+                    "--run-id",
+                    "run_01k0z6r1w8f4jy2m7q9v3x5abc",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "project",
+                    "webhook",
+                    "delivery",
+                    "show",
+                    "dlv_01jcqe",
+                ][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+        ] {
+            let error = parse(arguments).expect_err("an earlier project spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_runner_paths_and_options_are_unknown() {
+        for (arguments, kind) in [
+            (
+                &["useful", "runner", "list", "acme"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "show", "acme", "builder-one"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "drain", "acme", "builder-one"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "pool", "list", "acme"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "pool", "create", "--name", "builders"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "update",
+                    "builder-one",
+                    "--pool-id",
+                    "builders",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "move",
+                    "builder-one",
+                    "--pool",
+                    "builders",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "runner", "rename", "builder-one", "--name", "b"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful", "runner", "pool", "rename", "builders", "--name", "b",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful", "runner", "list", "--pool", "builders", "--limit", "5",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "credential",
+                    "retire",
+                    "rrc_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--runner",
+                    "builder-one",
+                    "--yes",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "credential",
+                    "list",
+                    "acme",
+                    "builder-one",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "credential",
+                    "revoke",
+                    "acme",
+                    "builder-one",
+                    "rrc_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--yes",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "create", "--key-file", "-"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "activation",
+                    "issue",
+                    "builder-one",
+                    "--key-file",
+                    "-",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "issue",
+                    "acme",
+                    "--pool",
+                    "builders",
+                    "--expires-in",
+                    "1d",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "issue",
+                    "--pool-id",
+                    "builders",
+                    "--expires-in",
+                    "1d",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "issue",
+                    "--pool",
+                    "builders",
+                    "--expires-in",
+                    "1d",
+                    "--join-key-file",
+                    "k",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "join-key", "list", "--limit", "5"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "issue",
+                    "--runner",
+                    "builder-one",
+                    "--expires-in",
+                    "1d",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "list",
+                    "--runner",
+                    "builder-one",
+                    "--pool",
+                    "builders",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &[
+                    "useful", "runner", "join-key", "issue", "--pool", "builders",
+                ][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "issue",
+                    "--member",
+                    "pam@dundermifflin.com",
+                    "--expires-in",
+                    "1d",
+                ][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "join-key",
+                    "revoke",
+                    "rrc_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--yes",
+                ][..],
+                clap::error::ErrorKind::ValueValidation,
+            ),
+            (
+                &["useful", "runner", "status"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "runner", "grant", "sync"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "runner", "agent-login", "sync"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "show",
+                    "builder-one",
+                    "--config",
+                    "runner.json",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &["useful", "runner", "show", "--json"][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                &["useful", "runner", "show", "--org", "acme"][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "serve",
+                    "--personal",
+                    "--organization",
+                    "acme",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "serve",
+                    "--pool-id",
+                    "builders",
+                    "--org",
+                    "acme",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "enroll",
+                    "--activation-file",
+                    "key.json",
+                ][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "runner", "serve", "--activation-file", "key.json"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &["useful", "runner", "serve", "--resume"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "serve",
+                    "--replace-credential",
+                    "--personal",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &[
+                    "useful",
+                    "runner",
+                    "serve",
+                    "--replace-credential",
+                    "--join-key",
+                ][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &["useful", "runner", "serve", "--json"][..],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+        ] {
+            let error = parse(arguments).expect_err("an earlier runner spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_workflow_paths_and_options_are_unknown() {
+        use clap::error::ErrorKind::{
+            ArgumentConflict, InvalidSubcommand, InvalidValue, MissingRequiredArgument,
+            UnknownArgument,
+        };
+        const RUNNER_DOCTOR: &[&str] = &["useful", "runner", "doctor"];
+        const WORKFLOW_DOCTOR: &[&str] = &["useful", "workflow", "doctor", "workflow.yaml"];
+        const PUBLISH: &[&str] = &[
+            "useful",
+            "workflow",
+            "definition",
+            "publish",
+            ".useful/engineering",
+        ];
+        // `runner doctor` checks the host alone, and `workflow doctor` reads and never signs in
+        // (REQ-CREDREADY-1, REQ-CREDREADY-13).
+        let runner_doctor: &[&[&str]] = &[
+            // The report lists every check (REQ-RUNNERENROLL-46).
+            &["--list-checks"],
+            &["--workflow", "workflow.yaml"],
+            &["--readiness"],
+            &["--grants"],
+            &["--connect"],
+            &["--require-grants"],
+            &["--runner-id", "rnr_01k0z6r1w8f4jy2m7q9v3x5abd"],
+            &["--organization-id", "acme"],
+            &["--project-id", "prj_01k0z6r1w8f4jy2m7q9v3x5abd"],
+            &["--source-root", "."],
+            &["--api-key-file", "key"],
+            &["--allow-insecure-http"],
+        ];
+        let workflow_doctor: &[&[&str]] = &[
+            &["--readiness"],
+            &["--grants"],
+            &["--connect"],
+            &["--require-grants"],
+            &["--runner-id", "rnr_01k0z6r1w8f4jy2m7q9v3x5abd"],
+            &["--organization-id", "acme"],
+        ];
+        // `publish --on project` finds its Cloud definition by the tree's name and records no
+        // link to it (REQ-CLOUDDEF-14, REQ-CLOUDDEF-20).
+        let publish: &[&[&str]] = &[
+            &["--cloud", "acme"],
+            &["--cloud-to", "def_01k0z6r1w8f4jy2m7q9v3x5abd"],
+            &["--cloud-new"],
+        ];
+        let options = runner_doctor
+            .iter()
+            .map(|options| ([RUNNER_DOCTOR, options].concat(), UnknownArgument))
+            .chain(
+                workflow_doctor
+                    .iter()
+                    .map(|options| ([WORKFLOW_DOCTOR, options].concat(), UnknownArgument)),
+            )
+            .chain(
+                publish
+                    .iter()
+                    .map(|options| ([PUBLISH, options].concat(), UnknownArgument)),
+            );
+        let cases: Vec<(Vec<&str>, clap::error::ErrorKind)> = [
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "validate",
+                    ".useful/engineering",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "doctor"],
+                MissingRequiredArgument,
+            ),
+            // A definition is named by ID or name wherever it lives, and `list` reads the home
+            // and the project in effect to the last page (REQ-CLOUDDEF-42, REQ-WFDEF-25).
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "cloud",
+                    "list",
+                    "acme",
+                    "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "cloud",
+                    "show",
+                    "acme",
+                    "def_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--project-id",
+                    "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "definition", "list", "--limit", "5"],
+                UnknownArgument,
+            ),
+            // The verbs that change a definition act on it where it lives, in the project in
+            // effect, and `update --run-as` names the service principal (REQ-CLOUDDEF-15).
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "cloud",
+                    "enable",
+                    "acme",
+                    "def_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--project-id",
+                    "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "set-principal",
+                    "engineering",
+                    "prn_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "evaluation",
+                    "list",
+                    "engineering",
+                    "--run-id",
+                    "run_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "evaluation",
+                    "show",
+                    "wev_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                MissingRequiredArgument,
+            ),
+            (
+                vec!["useful", "workflow", "definition", "update", "engineering"],
+                MissingRequiredArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "definition",
+                    "list",
+                    "--on",
+                    "personal",
+                ],
+                InvalidValue,
+            ),
+            // `publish` reaches Cloud with `--on project`, to the project's definition of the
+            // tree's name, and never records the link (REQ-CLOUDDEF-14).
+            ([PUBLISH, &["--on", "personal"]].concat(), InvalidValue),
+            (
+                [PUBLISH, &["--to", "engineering", "--new"]].concat(),
+                ArgumentConflict,
+            ),
+            // Input sets are workflow inputs, staged in the organization and the project in
+            // effect (REQ-RUNINPUT-61).
+            (
+                vec![
+                    "useful",
+                    "run",
+                    "input-set",
+                    "show",
+                    "acme",
+                    "ris_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "input-set",
+                    "show",
+                    "acme",
+                    "ris_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "input-set",
+                    "create",
+                    "--project-id",
+                    "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                    "--input-text",
+                    "request",
+                    "hello",
+                ],
+                UnknownArgument,
+            ),
+        ]
+        .into_iter()
+        .chain(options)
+        .collect();
+        for (arguments, kind) in cases {
+            let error = parse(&arguments).expect_err("an earlier workflow spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_run_paths_and_options_are_unknown() {
+        use clap::error::ErrorKind::{
+            InvalidSubcommand, InvalidValue, MissingRequiredArgument, UnknownArgument,
+        };
+        const RUN: &str = "run_01jcq3m8x2k9v7t4r6p0w5n8yz";
+        const DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abd";
+        // `show` is the one read of a run, local or Cloud (REQ-LOCALRUN-189), and finds the
+        // run itself (REQ-LOCALRUN-180).
+        let cases: Vec<(Vec<&str>, clap::error::ErrorKind)> = vec![
+            (
+                vec!["useful", "workflow", "run", "status", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "run", "show", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "run", "linear", "show", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "run", "show", RUN, "--cloud", "acme"],
+                UnknownArgument,
+            ),
+            // `list` is one listing of the runs under the home and in Cloud (REQ-RUN-127).
+            (vec!["useful", "run", "list", "acme"], InvalidSubcommand),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "list",
+                    "--project-id",
+                    "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec!["useful", "workflow", "run", "list", "--on", "cloud"],
+                InvalidValue,
+            ),
+            // `create --on personal|project` starts a Cloud run in the organization and
+            // project in effect (REQ-RUN-94).
+            (
+                vec![
+                    "useful", "workflow", "run", "create", DEFINITION, "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "create",
+                    DEFINITION,
+                    "--no-owner",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "create",
+                    DEFINITION,
+                    "--input-set-id",
+                    "ris_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "create",
+                    "engineering",
+                    "--on",
+                    "cloud",
+                ],
+                InvalidValue,
+            ),
+            // A run's retained inputs and Linear updates are read under `workflow run`, in
+            // the organization in effect (REQ-RUNINPUT-65, REQ-TRIGGER-145).
+            (
+                vec!["useful", "run", "input", "show", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "run", "linear", "history", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "run", "linear", "history", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "run", "input", "delete", RUN],
+                MissingRequiredArgument,
+            ),
+            // A run's artifacts are listed, downloaded and checked under `workflow run`
+            // (REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-29).
+            (
+                vec!["useful", "artifact", "validate", "out"],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "artifact", "list", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            // A run's publications are created and read under `workflow run`, the run named
+            // by `RUN` or `--run` (REQ-PUBLISH-13, REQ-PUBLISH-56).
+            (
+                vec!["useful", "publication", "list", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "publication",
+                    "show",
+                    "pub_01k0z6r1w8f4jy2m7q9v3x5abd",
+                ],
+                MissingRequiredArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "publication",
+                    "create",
+                    "--export",
+                    "review",
+                ],
+                MissingRequiredArgument,
+            ),
+            // `answer`, `approve` and `hand-back` find their run under the home and then in
+            // Cloud, and take no `--cloud` (REQ-LOCALRUN-180, REQ-LOCALRUN-210).
+            (
+                vec![
+                    "useful", "workflow", "run", "answer", RUN, "--text", "x", "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful", "workflow", "run", "approve", RUN, "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "hand-back",
+                    RUN,
+                    "--notes",
+                    "x",
+                    "--cloud",
+                    "acme",
+                ],
+                UnknownArgument,
+            ),
+            // `pause` and `unpause` hold a run before a step and release the hold, and
+            // `create --pause-before` holds it from the start (REQ-LOCALRUN-185).
+            (
+                vec![
+                    "useful", "workflow", "run", "stop", RUN, "--before", "deploy", "--reason", "x",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "run", "lift", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful",
+                    "workflow",
+                    "run",
+                    "create",
+                    "engineering",
+                    "--stop-before",
+                    "deploy",
+                ],
+                UnknownArgument,
+            ),
+            // `cancel` ends a run wherever it executes, and finds it itself
+            // (REQ-LOCALRUN-186, REQ-LOCALRUN-218).
+            (
+                vec!["useful", "run", "cancel", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "workflow", "run", "withdraw", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful", "workflow", "run", "cancel", RUN, "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            // `retry` is the one verb that reruns steps, and `resume` reruns none, for a run
+            // under the home and a Cloud run alike (REQ-LOCALRUN-184, REQ-CONTINUE-1).
+            (
+                vec!["useful", "run", "continue", "acme", RUN, "--from", "build"],
+                InvalidSubcommand,
+            ),
+            (
+                vec!["useful", "run", "retry", "acme", RUN],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful", "workflow", "run", "resume", RUN, "--from", "build",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec![
+                    "useful", "workflow", "run", "resume", RUN, "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec!["useful", "workflow", "run", "retry", RUN, "--cloud", "acme"],
+                UnknownArgument,
+            ),
+            // `upgrade --from` moves a waiting run to its definition's current revision and
+            // runs the named step again (REQ-LOCALRUN-194).
+            (
+                vec![
+                    "useful", "workflow", "run", "restart", RUN, "--at", "review",
+                ],
+                InvalidSubcommand,
+            ),
+            (
+                vec![
+                    "useful", "workflow", "run", "upgrade", RUN, "--at", "review",
+                ],
+                UnknownArgument,
+            ),
+            // `release` finds its run under the home and then in Cloud, so it takes no
+            // `--cloud` (REQ-LOCALRUN-187, REQ-LOCALRUN-180).
+            (
+                vec![
+                    "useful", "workflow", "run", "release", RUN, "--cloud", "acme",
+                ],
+                UnknownArgument,
+            ),
+            (
+                vec!["useful", "run", "release", "acme", RUN],
+                InvalidSubcommand,
+            ),
+        ];
+        for (arguments, kind) in cases {
+            let error = parse(&arguments).expect_err("an earlier run spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
+    }
+
+    // INV-CLI-21: `workflow run event`, which the runner passes a delivered event, is the
+    // tree's one hidden path.
+    #[test]
+    fn workflow_run_event_is_the_one_hidden_path() {
+        fn hidden(command: &clap::Command, prefix: &str, paths: &mut Vec<String>) {
+            for child in command.get_subcommands() {
+                let path = format!("{prefix} {}", child.get_name());
+                if child.is_hide_set() {
+                    paths.push(path.trim_start().to_owned());
+                }
+                hidden(child, &path, paths);
+            }
+        }
+        let mut paths = Vec::new();
+        hidden(&Cli::command(), "", &mut paths);
+        assert_eq!(paths, ["workflow run event"]);
+    }
+
+    // INV-CLI-21: `--control` of `workflow run cancel`, which the runner passes, is the tree's
+    // one hidden argument.
+    #[test]
+    fn workflow_run_cancel_control_is_the_one_hidden_argument() {
+        fn hidden(command: &clap::Command, prefix: &str, arguments: &mut Vec<String>) {
+            for argument in command.get_arguments().filter(|arg| arg.is_hide_set()) {
+                let name = argument
+                    .get_long()
+                    .map_or_else(|| argument.get_id().to_string(), |long| format!("--{long}"));
+                arguments.push(format!("{prefix} {name}").trim_start().to_owned());
+            }
+            for child in command.get_subcommands() {
+                hidden(child, &format!("{prefix} {}", child.get_name()), arguments);
+            }
+        }
+        let mut arguments = Vec::new();
+        hidden(&Cli::command(), "", &mut arguments);
+        assert_eq!(arguments, ["workflow run cancel --control"]);
+    }
+
+    // INV-CLI-21
+    #[test]
+    fn the_earlier_organization_paths_and_options_are_unknown() {
+        for (arguments, kind) in [
+            (
+                &["useful", "organization", "list"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "org", "deletion", "request", "acme", "--yes"][..],
+                clap::error::ErrorKind::InvalidSubcommand,
+            ),
+            (
+                &["useful", "org", "create", "--display-name", "X"][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+            (
+                &[
+                    "useful",
+                    "org",
+                    "invitation",
+                    "issue",
+                    "--principal-id",
+                    "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
+                ][..],
+                clap::error::ErrorKind::UnknownArgument,
+            ),
+        ] {
+            let error = parse(arguments).expect_err("an earlier spelling must not parse");
+            assert_eq!(error.kind(), kind, "{arguments:?}");
+        }
     }
 }

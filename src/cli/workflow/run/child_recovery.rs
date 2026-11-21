@@ -1,5 +1,6 @@
 //! The repair continuation of a parent's failed child (REQ-CONTINUE-81, REQ-CONTINUE-82,
-//! INV-ENGINE-27): a `control.retry` that resolves a repair wait back to the waiting step
+//! INV-ENGINE-27): a `control.retry` that resolves a repair wait back to the waiting step, or
+//! the host condition or a `control.retry` that resolves a `host` wait there (REQ-CONTINUE-93),
 //! continues the child the wait names in its own run directory rather than starting the stage
 //! afresh. `prepare` verifies and admits that continuation under the parent's and the child's
 //! locks before the parent's wait is consumed; `begin` starts the child's next attempt once
@@ -58,9 +59,10 @@ pub(super) struct ChildContinuation {
     admitted: AdmittedWorkflow,
     from: Vec<String>,
     mode: ContinuationDefinitionMode,
-    /// `retry` for a failed stage (REQ-CONTINUE-81); for a nested run, `retry` or `resume` as
-    /// the root's continuation (REQ-CONTINUE-92), or for an abandoned one `resume`, or `edge`
-    /// from the edge its latest attempt took (REQ-CONTINUE-91).
+    /// `retry` for a failed stage (REQ-CONTINUE-81), or `host` for one a host wait the
+    /// condition resolved continues (REQ-CONTINUE-93); for a nested run, `retry`, `host` or
+    /// `resume` as the root's continuation (REQ-CONTINUE-92), or for an abandoned one `resume`,
+    /// or `edge` from the edge its latest attempt took (REQ-CONTINUE-91).
     reason: ContinuationReasonV1,
     /// The edge an abandoned nested run's latest attempt ended `continued` on, uncounted
     /// (REQ-CONTINUE-78); none otherwise.
@@ -73,8 +75,8 @@ impl ChildContinuation {
     }
 }
 
-/// A parent's continuation of a repair wait by `control.retry` at `target`, admitted in
-/// `admitted`'s execution root, which `explicit_root` says the command named.
+/// A parent's continuation of a repair or host wait at `target`, admitted in `admitted`'s
+/// execution root, which `explicit_root` says the command named.
 pub(super) struct Repair<'a> {
     pub(super) parent: &'a PendingLocalContinuation,
     pub(super) admitted: &'a AdmittedWorkflow,
@@ -104,6 +106,9 @@ struct Expected {
     /// For a nested parent, the root whose controls it reads.
     root: Option<NestedRoot>,
     next_attempt: u64,
+    /// The continuation reason of the parent's next attempt, or for a nested parent its
+    /// root's, which no `state.json` records yet (REQ-CONTINUE-93).
+    reason: ContinuationReasonV1,
     parent_run: String,
     step: String,
     item: Option<u64>,
@@ -148,24 +153,41 @@ enum Refusal {
     Directory(LocalRunDirectoryError),
 }
 
-/// The repair continuation of the child the parent's wait names (REQ-CONTINUE-81), or `None`
-/// for a fresh stage: a successor's imported wait, another wait kind or step, a wait without a
-/// child, an explicitly different execution root, or a child whose latest attempt did not
-/// fail during execution, such as one that exited with a declared outcome. Every mismatch of
-/// the wait's locator, the child's record, tree, history, retained evidence or execution root
-/// is refused (REQ-CONTINUE-82), never answered with a fresh child.
+/// The repair continuation of the child the parent's wait names (REQ-CONTINUE-81), started
+/// with `reason`, or `None` for a fresh stage: a successor's imported wait, another wait kind
+/// or step, a wait without a child, an explicitly different execution root, or a child whose
+/// latest attempt did not fail during execution, such as one that exited with a declared
+/// outcome. Every mismatch of the wait's locator, the child's record, tree, history, retained
+/// evidence or execution root is refused (REQ-CONTINUE-82), never answered with a fresh
+/// child.
 async fn prepare(
     repair: Repair<'_>,
+    reason: ContinuationReasonV1,
     cancellation: &CancellationSource,
     output: (&useful_execution::PresentationConfig, ExecutionLeaf),
 ) -> Result<Option<ChildRecovery>, Unprepared> {
-    prepare_stage(repair, None, cancellation, output).await
+    prepare_stage(repair, reason, None, cancellation, output).await
+}
+
+/// Whether a wait of `kind` resolved with `reason` continues its failed child in place: a
+/// `repair` wait by `control.retry`, and a `host` wait by `control.retry` or by the host
+/// condition (REQ-CONTINUE-81, REQ-CONTINUE-93).
+fn continues_in_place(kind: WaitKind, reason: ContinuationReasonV1) -> bool {
+    matches!(
+        (kind, reason),
+        (WaitKind::Repair, ContinuationReasonV1::Retry)
+            | (
+                WaitKind::Host,
+                ContinuationReasonV1::Retry | ContinuationReasonV1::Host
+            )
+    )
 }
 
 /// `prepare` for a parent that is the run itself or, with `root`, a nested run whose controls
 /// are its root's.
 async fn prepare_stage(
     repair: Repair<'_>,
+    reason: ContinuationReasonV1,
     root: Option<NestedRoot>,
     cancellation: &CancellationSource,
     output: (&useful_execution::PresentationConfig, ExecutionLeaf),
@@ -196,7 +218,7 @@ async fn prepare_stage(
         Ok(None) => return Ok(None),
         Err(error) => return Err(Unprepared::Diagnosed(error)),
     };
-    if wait.kind != WaitKind::Repair
+    if !continues_in_place(wait.kind, reason)
         || wait.step.first().and_then(serde_json::Value::as_str) != Some(target)
     {
         return Ok(None);
@@ -230,6 +252,7 @@ async fn prepare_stage(
         parent_directory: parent.run_directory().to_owned(),
         root,
         next_attempt: parent.prior_attempt_number().saturating_add(1),
+        reason,
         parent_run: record.id,
         step: target.to_owned(),
         item,
@@ -299,7 +322,7 @@ async fn prepare_stage(
             admitted: child_admitted,
             from,
             mode,
-            reason: ContinuationReasonV1::Retry,
+            reason,
             edge: None,
         }),
     }))
@@ -308,7 +331,8 @@ async fn prepare_stage(
 /// The child recovery of a continuation that a resolved wait starts at `target` with `reason`
 /// (REQ-CONTINUE-75): for a wait the root carries from a nested run (REQ-WFEXEC-75), the
 /// continuation of that nested run in place (REQ-CONTINUE-92); for a `control.retry` of the
-/// run's own repair wait, the failed child's (`prepare`); otherwise none.
+/// run's own repair or host wait, or the host condition resolving its host wait
+/// (REQ-CONTINUE-93), the failed child's (`prepare`); otherwise none.
 pub(super) async fn prepare_wait(
     repair: Repair<'_>,
     reason: ContinuationReasonV1,
@@ -323,7 +347,9 @@ pub(super) async fn prepare_wait(
         Some(wait) if wait.is_carried() => {
             prepare_nested(repair, wait, reason, cancellation, output).await
         }
-        _ if reason == ContinuationReasonV1::Retry => prepare(repair, cancellation, output).await,
+        Some(wait) if continues_in_place(wait.kind, reason) => {
+            prepare(repair, reason, cancellation, output).await
+        }
         _ => Ok(None),
     }
 }
@@ -344,8 +370,9 @@ struct VerifiedNested {
 /// root, the step and the element, keep its tree copy and wait on the root wait's kind and
 /// `since` at the nested step; anything else is refused as REQ-CONTINUE-82 refuses a failed
 /// child. The nested run's next attempt is admitted from the nested step that waited with
-/// `reason`; for a repair, that step's stage is adopted, continued or started afresh as the
-/// run's own would be, with the nested run as its parent and the root's resolving control.
+/// `reason`; for a repair, or a host wait the condition or a `control.retry` resolved, that
+/// step's stage is adopted, continued or started afresh as the run's own would be, with the
+/// nested run as its parent and the root's resolving control, if any.
 async fn prepare_nested(
     repair: Repair<'_>,
     wait: WaitRecord,
@@ -429,6 +456,7 @@ async fn prepare_nested(
         parent_directory: parent.run_directory().to_owned(),
         root: None,
         next_attempt: parent.prior_attempt_number().saturating_add(1),
+        reason,
         parent_run: record.id,
         step: target.to_owned(),
         item,
@@ -492,9 +520,10 @@ async fn prepare_nested(
     if let Err(error) = pending.validate_execution_root(&nested_admitted) {
         return Err(Unprepared::Diagnosed(error));
     }
-    // REQ-CONTINUE-92: a repair retry treats the nested step's stage as the run's own repair
-    // would, with the nested run as the parent and the control recorded on the root.
-    let stage = if nested_wait.kind == WaitKind::Repair && reason == ContinuationReasonV1::Retry {
+    // REQ-CONTINUE-92, REQ-CONTINUE-93: a repair retry, or a host wait's resolution, treats
+    // the nested step's stage as the run's own would, with the nested run as the parent and
+    // the control, if any, recorded on the root.
+    let stage = if continues_in_place(nested_wait.kind, reason) {
         let adopted =
             match super::resume::adopted_repair(&pending, &nested_wait.then, &nested_wait, control)
             {
@@ -514,7 +543,7 @@ async fn prepare_nested(
                     directory: expected.parent_directory.clone(),
                     prefix,
                 };
-                prepare_stage(stage, Some(root), cancellation, output).await?
+                prepare_stage(stage, reason, Some(root), cancellation, output).await?
             }
         }
     } else {
@@ -1010,16 +1039,18 @@ fn owned_child(
     }
 }
 
-/// The controls the parent's next attempt starts with: its own or, for a nested parent, its
-/// root's (REQ-WFEXEC-75).
+/// The controls the parent's next attempt starts with, with the continuation's reason: its
+/// own or, for a nested parent, its root's (REQ-WFEXEC-75).
 fn parent_controls(expected: &Expected) -> Result<AttemptControls, LocalRunDirectoryError> {
+    let reason = Some(expected.reason);
     match &expected.root {
-        None => attempt_controls(&expected.parent_directory, expected.next_attempt),
+        None => attempt_controls(&expected.parent_directory, expected.next_attempt, reason),
         Some(root) => AttemptControls::nested(
             &root.directory,
             &expected.parent_directory,
             expected.next_attempt,
             &root.prefix,
+            reason,
         ),
     }
 }
@@ -1090,8 +1121,9 @@ fn retained_request(
 }
 
 /// Begins the next attempt of the child `continuation` holds for the step's dispatched
-/// `request`, with its reason, `retry` for a failed stage and `retry` or `resume` for a nested
-/// run (REQ-CONTINUE-92), and its continuation context bound (INV-ENGINE-27). The
+/// `request`, with its reason, `retry` or `host` for a failed stage (REQ-CONTINUE-93) and
+/// `retry`, `host` or `resume` for a nested run (REQ-CONTINUE-92), and its continuation
+/// context bound (INV-ENGINE-27). The
 /// request must be for the child's own workflow with the mapped inputs its run retained
 /// (REQ-CONTINUE-82); otherwise nothing is written and the refusal is the child's rejection
 /// code. The attempt observes the step's `cancellation`.

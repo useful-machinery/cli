@@ -28,10 +28,10 @@ unbounded token values rather than silently repairing or replacing them. Human
 credentials are never runner credentials.
 
 Treat the credential file as a secret. Do not copy it into bug reports, command output,
-logs, repositories, or runner configuration. Use `useful auth logout` to remove
+logs, repositories, or runner configuration. Use `useful account logout` to remove
 the active deployment's local credential.
 
-`auth login` requests `openid profile email offline_access`, requires both access and
+`account login` requests `openid profile email offline_access`, requires both access and
 refresh tokens, opens no browser, and listens on no inbound port. The private OAuth
 device code and issued tokens must never be copied from memory into output or
 diagnostics; only the activation URL and user code are displayed. Interrupting a pending
@@ -47,7 +47,7 @@ than 1 MiB. Refresh retries one ambiguous response at most once within Auth0's b
 overlap; an authenticated API request is retried at most once after renewal.
 
 An explicit invalid, expired, or revoked refresh token removes only the matching local
-session. Transport, rate-limit, and server failures preserve it. `auth logout` first
+session. Transport, rate-limit, and server failures preserve it. `account logout` first
 removes the selected local session and then submits its refresh token to Auth0's
 revocation endpoint while retaining refresh authority. It distinguishes confirmed,
 unconfirmed, and inapplicable revocation without exposing credential material.
@@ -168,8 +168,8 @@ Claude Code; or expose any of those values in doctor output.
 The operator-selected CodexAppServerV1 check applies the same first-executable,
 canonical-path, no-fallback rule to executable name `codex`. Its isolated version and
 generated-schema probes use fresh private native and XDG directories, accept only stable
-`>=0.147.0 <0.164.0` or, as untested, a stable release newer than `0.163.0`, and require the maintained App Server schema capability, including
-the ephemeral-thread contract. The exact repository qualification anchor is `0.163.0`;
+`>=0.147.0 <0.172.0` or, as untested, a stable release newer than `0.171.0`, and require the maintained App Server schema capability, including
+the ephemeral-thread contract. The exact repository qualification anchor is `0.171.0`;
 it does not substitute for the retained selected executable or prove an unexecuted host. The validator does not read ambient `CODEX_HOME`, provider
 credentials, or
 native configuration; start an App Server thread; query a provider; or expose any such
@@ -256,10 +256,12 @@ command-only, Pi-only, and Claude-only workflows do not require it.
 Each invocation creates one fresh ephemeral thread with no native project assignment and
 one owner-private transient SQLite directory beneath private invocation staging. Absent
 or null startup `projectId` is admitted; non-null assignment and thread project updates
-fail closed. Bounded global project changes and matching strict-review notices remain
-observable metadata only. Agent messages marked for async delivery likewise have no
+fail closed. Global project changes, strict-review notices and progress reports are shown as
+activity and decide nothing. Agent messages marked for async delivery likewise have no
 response, structured-result, approval, persistence, or settlement authority even when
-Codex labels their phase `final_answer`.
+Codex labels their phase `final_answer`. Only the root thread Useful Machinery opened
+and the turns it started on that thread carry response, structured-result, and terminal
+authority. A subagent thread carries none.
 
 The transient SQLite directory remains outside the workflow
 execution root and ambient `CODEX_HOME`, stays live through settlement and process-group

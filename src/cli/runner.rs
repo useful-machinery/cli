@@ -1,27 +1,15 @@
-mod activation;
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunnerCreationOutput<'a> {
-    schema_version: u8,
-    deployment: &'a str,
-    outcome: &'static str,
-    runner: &'a useful_api::RunnerRegistration,
-    activation: &'a useful_api::RunnerActivation,
-    activation_file: &'a str,
-}
-mod agent_login;
 mod cloud;
 mod credential;
-pub(super) mod doctor;
-mod enroll;
+mod doctor;
 mod join_key;
 mod pool;
+mod prune;
 mod serve;
-mod status;
+mod show;
+mod sync;
+mod update;
 mod watch;
 
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
@@ -30,7 +18,8 @@ use crate::exit_code::ExitCode;
 use useful_human_auth::Deployment;
 use useful_support::generate_idempotency_key;
 
-use super::{OrganizationArg, PaginationArgs, PoolArg};
+use super::context::OrgArgs;
+use super::{PaginationArgs, PoolArg};
 
 pub(super) const ABOUT: &str = "Manage the Useful Machinery runner";
 const NAME: &str = "runner";
@@ -43,14 +32,6 @@ pub(super) struct Command {
 
 #[derive(Debug, Subcommand)]
 enum RunnerCommand {
-    #[command(about = activation::ABOUT)]
-    Activation(activation::Command),
-    // The earlier spelling of `runner integration`, kept for one release out of help
-    // (REQ-GRANT-77).
-    #[command(about = agent_login::ABOUT, hide = true)]
-    AgentLogin(agent_login::Command),
-    #[command(about = "Create a runner registration and enrollment activation")]
-    Create(CreateCommand),
     #[command(about = credential::ABOUT)]
     Credential(credential::Command),
     #[command(
@@ -66,40 +47,25 @@ enum RunnerCommand {
     Drain(ModeCommand),
     #[command(about = "Enable a runner registration")]
     Enable(ModeCommand),
-    #[command(about = enroll::ABOUT)]
-    Enroll(enroll::Command),
-    // The earlier spelling of `runner integration`, kept out of help until the stage that
-    // removes it (REQ-INTEGRATION-15).
-    #[command(
-        about = agent_login::GRANT_ABOUT,
-        hide = true,
-        mut_subcommand("sync", |sync| sync.about(agent_login::GRANT_SYNC_ABOUT))
-    )]
-    Grant(agent_login::Command),
-    #[command(
-        about = agent_login::INTEGRATION_ABOUT,
-        mut_subcommand("sync", |sync| sync.about(agent_login::INTEGRATION_SYNC_ABOUT))
-    )]
-    Integration(agent_login::Command),
     #[command(about = join_key::ABOUT)]
     JoinKey(join_key::Command),
-    #[command(about = "List runner registrations")]
-    List(ListCommand),
     #[command(
-        about = "Move a runner registration",
-        after_help = "Eligibility:\n  The runner registration must be quiescent before moving it."
+        about = "List runner registrations",
+        after_help = "Pool:\n  With --pool, the command reads every page and prints the pool's runners with no cursor."
     )]
-    Move(MoveCommand),
+    List(ListCommand),
     #[command(about = pool::ABOUT)]
     Pool(pool::Command),
-    #[command(about = "Rename a runner registration")]
-    Rename(RenameCommand),
+    #[command(about = prune::ABOUT)]
+    Prune(prune::Command),
     #[command(about = serve::ABOUT)]
     Serve(serve::Command),
-    #[command(about = "Show a runner registration")]
-    Show(ShowCommand),
-    #[command(about = status::ABOUT)]
-    Status(status::Command),
+    #[command(about = show::ABOUT, after_help = show::AFTER_HELP)]
+    Show(show::Command),
+    #[command(about = sync::ABOUT)]
+    Sync(sync::Command),
+    #[command(about = update::ABOUT, after_help = update::AFTER_HELP)]
+    Update(update::Command),
     #[command(about = watch::ABOUT)]
     Watch(watch::Command),
 }
@@ -121,102 +87,42 @@ impl CloudOptions {
     }
 }
 
-// Registration creation and standalone activation issuance intentionally keep
-// distinct Clap types because their positional resources and required options
-// are different operator contracts.
-#[derive(Debug, Args)]
-// With neither target, Cloud places the runner in the caller's own personal pool.
-#[command(group(clap::ArgGroup::new("target").args(["pool", "member"])))]
-struct CreateCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(long = "pool-id", value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
-    pool: Option<PoolArg>,
-
-    #[arg(
-        long,
-        value_name = "MEMBER",
-        value_parser = parse_member_id,
-        help = "Register the runner in this member's personal pool, by exact principal ID"
-    )]
-    member: Option<String>,
-
-    #[arg(long, help = "Set the exact runner name")]
-    name: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "PATH|-",
-        help = "Create the protected artifact file, or write only the artifact to stdout"
-    )]
-    activation_file: String,
-
-    #[command(flatten)]
-    options: CloudOptions,
-}
-
 #[derive(Debug, Args)]
 struct ListCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
+    // The API's registration list takes no pool, so `--pool` reads every page and keeps the
+    // pool's runners (REQ-RUNNERPOOL-91); a page and a cursor mean nothing then.
+    #[arg(
+        long,
+        value_name = PoolArg::VALUE_NAME,
+        help = "List only this pool's runners, by runner pool ID or exact name",
+        conflicts_with_all = ["limit", "cursor"]
+    )]
+    pool: Option<PoolArg>,
 
     #[command(flatten)]
     pagination: PaginationArgs,
 
     #[command(flatten)]
+    org: OrgArgs,
+
+    #[command(flatten)]
     options: CloudOptions,
 }
 
+// The runner a Cloud leaf acts on, in the organization in effect.
 #[derive(Debug, Args)]
-struct RegistrationTarget {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
+struct RunnerTarget {
     #[arg(value_name = "RUNNER", help = "Runner ID or exact name")]
     runner: String,
-}
-
-#[derive(Debug, Args)]
-struct ShowCommand {
-    #[command(flatten)]
-    target: RegistrationTarget,
 
     #[command(flatten)]
-    options: CloudOptions,
+    org: OrgArgs,
 }
 
 #[derive(Debug, Args)]
 struct ModeCommand {
     #[command(flatten)]
-    target: RegistrationTarget,
-
-    #[command(flatten)]
-    options: CloudOptions,
-}
-
-#[derive(Debug, Args)]
-struct MoveCommand {
-    #[command(flatten)]
-    target: RegistrationTarget,
-
-    #[arg(long = "pool-id", value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
-    pool: PoolArg,
-
-    #[command(flatten)]
-    options: CloudOptions,
-}
-
-#[derive(Debug, Args)]
-struct RenameCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(value_name = "RUNNER", help = "Runner ID or exact name")]
-    runner: String,
-
-    #[arg(long, help = "Set the exact runner name")]
-    name: String,
+    target: RunnerTarget,
 
     #[command(flatten)]
     options: CloudOptions,
@@ -225,7 +131,7 @@ struct RenameCommand {
 #[derive(Debug, Args)]
 struct DeleteCommand {
     #[command(flatten)]
-    target: RegistrationTarget,
+    target: RunnerTarget,
 
     #[command(flatten)]
     confirmation: super::ConfirmationArgs,
@@ -239,18 +145,13 @@ impl Command {
         match self.command {
             None => super::print_help(&[NAME]),
             Some(RunnerCommand::Pool(command)) => command.execute(),
-            Some(RunnerCommand::Create(command)) => execute_cloud(command, CreateCommand::execute),
-            Some(RunnerCommand::Activation(command)) => command.execute(),
-            Some(RunnerCommand::AgentLogin(command)) => command.execute(&[NAME, "agent-login"]),
-            Some(RunnerCommand::Grant(command)) => command.execute(&[NAME, "grant"]),
-            Some(RunnerCommand::Integration(command)) => command.execute(&[NAME, "integration"]),
+            Some(RunnerCommand::Prune(command)) => command.execute(),
             Some(RunnerCommand::Credential(command)) => command.execute(),
-            Some(RunnerCommand::Enroll(command)) => command.execute(),
             Some(RunnerCommand::JoinKey(command)) => command.execute(),
-            Some(RunnerCommand::List(command)) => execute_cloud(command, ListCommand::execute),
-            Some(RunnerCommand::Show(command)) => execute_cloud(command, ShowCommand::execute),
+            Some(RunnerCommand::List(command)) => execute_in_cloud(command, ListCommand::execute),
+            Some(RunnerCommand::Show(command)) => command.execute(),
             Some(RunnerCommand::Enable(command)) => {
-                execute_cloud(command, |command, deployment| {
+                execute_in_cloud(command, |command, deployment| {
                     command.execute(
                         deployment,
                         useful_api::RunnerRegistrationMode::Enabled,
@@ -259,16 +160,18 @@ impl Command {
                     )
                 })
             }
-            Some(RunnerCommand::Drain(command)) => execute_cloud(command, |command, deployment| {
-                command.execute(
-                    deployment,
-                    useful_api::RunnerRegistrationMode::Draining,
-                    "draining",
-                    "✓ Runner draining.",
-                )
-            }),
+            Some(RunnerCommand::Drain(command)) => {
+                execute_in_cloud(command, |command, deployment| {
+                    command.execute(
+                        deployment,
+                        useful_api::RunnerRegistrationMode::Draining,
+                        "draining",
+                        "✓ Runner draining.",
+                    )
+                })
+            }
             Some(RunnerCommand::Disable(command)) => {
-                execute_cloud(command, |command, deployment| {
+                execute_in_cloud(command, |command, deployment| {
                     command.execute(
                         deployment,
                         useful_api::RunnerRegistrationMode::Disabled,
@@ -277,12 +180,13 @@ impl Command {
                     )
                 })
             }
-            Some(RunnerCommand::Move(command)) => execute_cloud(command, MoveCommand::execute),
-            Some(RunnerCommand::Rename(command)) => execute_cloud(command, RenameCommand::execute),
+            Some(RunnerCommand::Update(command)) => {
+                execute_in_cloud(command, update::Command::execute)
+            }
             Some(RunnerCommand::Delete(command)) => command.execute(),
             Some(RunnerCommand::Doctor(command)) => command.execute(),
             Some(RunnerCommand::Serve(command)) => command.execute(),
-            Some(RunnerCommand::Status(command)) => command.execute(),
+            Some(RunnerCommand::Sync(command)) => command.execute(),
             Some(RunnerCommand::Watch(command)) => command.execute(),
         }
     }
@@ -293,8 +197,8 @@ fn operator_config_path(path: &Path) -> anyhow::Result<PathBuf> {
         .with_context(|| format!("resolve runner operator configuration {}", path.display()))
 }
 
-/// The operator configuration of a command that prepares the host, `serve` and
-/// `enroll`: the file `--config` names, which touches no runner home, or else
+/// The operator configuration of the command that prepares the host, `serve`:
+/// the file `--config` names, which touches no runner home, or else
 /// the runner home's, created where it is missing (REQ-RUNNERENROLL-109,
 /// REQ-RUNNERENROLL-110).
 fn initialized_operator_config_path(config: Option<&Path>) -> anyhow::Result<PathBuf> {
@@ -304,8 +208,8 @@ fn initialized_operator_config_path(config: Option<&Path>) -> anyhow::Result<Pat
     }
 }
 
-/// The control socket of a command that only asks the live runner, `status`,
-/// `watch` and `grant sync`: the one the file `--config` names, which touches no runner
+/// The control socket of a command that only asks the live runner, `show` with
+/// no `RUNNER`, `watch`, `prune` and `sync`: the one the file `--config` names, which touches no runner
 /// home, or else the one the runner home's configuration names, the home's
 /// `runner/control.sock` when it holds none. Creates nothing
 /// (REQ-RUNNERENROLL-112).
@@ -387,147 +291,6 @@ fn runner_home_failure(error: useful_runner::RunnerHomeError) -> anyhow::Error {
     anyhow::anyhow!("{error}\n\n{remedy}")
 }
 
-enum CreateOutcome {
-    Complete {
-        registration: useful_api::RunnerRegistration,
-        issuance: useful_api::RunnerActivationIssuance,
-    },
-    ActivationFailed {
-        registration: useful_api::RunnerRegistration,
-        failure: useful_api::RunnerFailure,
-    },
-}
-
-impl CreateOutcome {
-    fn credential_rejected(&self) -> bool {
-        matches!(
-            self,
-            Self::ActivationFailed { failure, .. } if failure.credential_rejected()
-        )
-    }
-}
-
-fn parse_member_id(value: &str) -> Result<String, String> {
-    if useful_support::valid_typed_id(value, "prn_") {
-        Ok(value.to_owned())
-    } else {
-        Err("must be an exact member principal ID".to_owned())
-    }
-}
-
-impl CreateCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        validate_activation_destination(&self.activation_file, self.options.json)?;
-        let registration_key =
-            generate_idempotency_key().context("generate runner registration request identity")?;
-        let activation_key =
-            generate_idempotency_key().context("generate activation request identity")?;
-        let mut committed_registration = None;
-        let result = cloud::with_api_retrying_rejected_result(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                let pool_id = self
-                    .pool
-                    .as_ref()
-                    .map(|pool| pool.resolve_id(api, &self.organization))
-                    .transpose()?;
-                let registration = api.create_registration(
-                    &self.organization,
-                    &registration_key,
-                    pool_id.as_deref(),
-                    self.member.as_deref(),
-                    self.name.as_deref(),
-                )?;
-                committed_registration = Some(registration.clone());
-                Ok(
-                    match api.create_activation(
-                        &self.organization,
-                        &registration.id,
-                        &activation_key,
-                    ) {
-                        Ok(issuance) => CreateOutcome::Complete {
-                            registration,
-                            issuance,
-                        },
-                        Err(failure) => CreateOutcome::ActivationFailed {
-                            registration,
-                            failure,
-                        },
-                    },
-                )
-            },
-            CreateOutcome::credential_rejected,
-        )?;
-        let result = match (result, committed_registration) {
-            (Err(failure), Some(registration)) => Ok(CreateOutcome::ActivationFailed {
-                registration,
-                failure,
-            }),
-            (result, _) => result,
-        };
-        let outcome = match completed_cloud_result(
-            deployment,
-            result,
-            self.options.authentication.kind(),
-            self.options.json,
-        )? {
-            Ok(outcome) => outcome,
-            Err(exit_code) => return Ok(exit_code),
-        };
-        let (registration, issuance) = match outcome {
-            CreateOutcome::Complete {
-                registration,
-                issuance,
-            } => (registration, issuance),
-            CreateOutcome::ActivationFailed {
-                registration,
-                failure,
-            } => {
-                return cloud::write_activation_failure(
-                    deployment.fingerprint().api_url(),
-                    &failure,
-                    &self.organization,
-                    &registration.id,
-                    self.options.authentication.kind(),
-                    self.options.json,
-                );
-            }
-        };
-        write_activation_issuance(&self.activation_file, &issuance)?;
-        if self.activation_file == "-" {
-            writeln!(
-                io::stderr().lock(),
-                "✓ Runner {} created with an activation.",
-                registration.id
-            )?;
-        } else if self.options.json {
-            serde_json::to_writer_pretty(
-                &mut io::stdout().lock(),
-                &RunnerCreationOutput {
-                    schema_version: 1,
-                    deployment: deployment.fingerprint().api_url(),
-                    outcome: "created",
-                    runner: &registration,
-                    activation: &issuance.activation,
-                    activation_file: &self.activation_file,
-                },
-            )?;
-            writeln!(io::stdout().lock())?;
-        } else {
-            write_activation_summary(
-                &mut io::stdout().lock(),
-                "✓ Runner created.",
-                &registration.id,
-                Some(&registration.name),
-                &self.activation_file,
-            )?;
-        }
-        Ok(ExitCode::Success)
-    }
-}
-
 fn completed_cloud_result<T>(
     deployment: &Deployment,
     result: Result<T, useful_api::RunnerFailure>,
@@ -543,29 +306,6 @@ fn completed_cloud_result<T>(
             json,
         )?)),
     }
-}
-
-fn validate_activation_destination(destination: &str, json: bool) -> anyhow::Result<()> {
-    if destination == "-" && json {
-        return Err(anyhow::anyhow!(
-            "--json cannot be combined with --activation-file -"
-        ));
-    }
-    Ok(())
-}
-
-fn write_activation_issuance(
-    destination: &str,
-    issuance: &useful_api::RunnerActivationIssuance,
-) -> anyhow::Result<useful_runner::ActivationArtifact> {
-    let artifact = host_activation_artifact(issuance).ok_or_else(|| {
-        anyhow::anyhow!(
-            "activation issuance replay omitted its secret; issue a replacement activation with a new command"
-        )
-    })?;
-    useful_runner::write_activation_file(destination, &artifact)
-        .map_err(|error| anyhow::anyhow!(error))?;
-    Ok(artifact)
 }
 
 /// The activation artifact a host enrolls with, from an issuance that carries
@@ -585,66 +325,70 @@ fn host_activation_artifact(
     ))
 }
 
-fn write_activation_summary(
-    output: &mut impl Write,
-    heading: &str,
-    runner_id: &str,
-    runner_name: Option<&str>,
-    destination: &str,
-) -> io::Result<()> {
-    writeln!(output, "{heading}\n")?;
-    writeln!(output, "  Runner:          {runner_id}")?;
-    if let Some(name) = runner_name {
-        writeln!(output, "  Name:            {name}")?;
-    }
-    writeln!(output, "  Activation file: {destination}")
-}
-
 impl ListCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    fn execute(self, deployment: &Deployment) -> super::CommandResult {
         let Self {
-            organization,
+            pool,
             pagination,
+            org,
             options,
         } = self;
-        let result = cloud::with_api(
-            deployment,
-            options.http.transport_policy(),
-            &options.authentication,
-            |api| {
-                api.list_registrations(
-                    &organization,
-                    pagination.limit,
-                    pagination.cursor.as_deref(),
-                )
-            },
-        )?;
-        cloud::write_runner_list(
-            deployment.fingerprint().api_url(),
-            &result,
-            options.authentication.kind(),
-            options.json,
-        )
+        execute_in(org, options, deployment, |options, organization| {
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| match &pool {
+                    Some(pool) => pool_registrations(api, organization, pool),
+                    None => api.list_registrations(
+                        organization,
+                        pagination.limit,
+                        pagination.cursor.as_deref(),
+                    ),
+                },
+            )?;
+            cloud::write_runner_list(
+                deployment.fingerprint().api_url(),
+                &result,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
-impl ShowCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let Self { target, options } = self;
-        let result = cloud::with_api(
-            deployment,
-            options.http.transport_policy(),
-            &options.authentication,
-            |api| api.get_registration(&target.organization, &target.runner),
-        )?;
-        cloud::write_runner_show(
-            deployment.fingerprint().api_url(),
-            &result,
-            options.authentication.kind(),
-            options.json,
-        )
-    }
+/// Every runner of `pool` in `organization`, as one page with no cursor (REQ-RUNNERPOOL-91).
+fn pool_registrations(
+    api: &useful_api::RunnerApi,
+    organization: &str,
+    pool: &PoolArg,
+) -> Result<useful_api::RunnerRegistrationList, useful_api::RunnerFailure> {
+    let pool_id = pool.resolve_id(api, organization)?;
+    Ok(useful_api::RunnerRegistrationList {
+        items: every_registration(api, organization, Some(&pool_id))?,
+        next_cursor: None,
+    })
 }
+
+/// The runners of `organization`, the registration list read to its last page, keeping those
+/// in the pool `pool_id` names when one is given: the list takes no pool of its own.
+fn every_registration(
+    api: &useful_api::RunnerApi,
+    organization: &str,
+    pool_id: Option<&str>,
+) -> Result<Vec<useful_api::RunnerRegistration>, useful_api::RunnerFailure> {
+    let mut items = super::paging::every_page(useful_api::RunnerFailure::Protocol, |cursor| {
+        api.list_registrations(organization, Some(LIST_PAGE), cursor)
+            .map(|page| (page.items, page.next_cursor))
+    })?;
+    if let Some(pool_id) = pool_id {
+        items.retain(|runner| runner.runner_pool.id == pool_id);
+    }
+    Ok(items)
+}
+
+// The largest page the runner lists serve.
+const LIST_PAGE: u16 = 200;
 
 impl ModeCommand {
     fn execute(
@@ -653,83 +397,38 @@ impl ModeCommand {
         mode: useful_api::RunnerRegistrationMode,
         outcome: &'static str,
         heading: &'static str,
-    ) -> anyhow::Result<ExitCode> {
+    ) -> super::CommandResult {
         let Self { target, options } = self;
-        let key = generate_idempotency_key().context("generate runner mode request identity")?;
-        let result = cloud::with_api(
-            deployment,
-            options.http.transport_policy(),
-            &options.authentication,
-            |api| api.update_registration_mode(&target.organization, &target.runner, &key, mode),
-        )?;
-        cloud::write_runner_transition(
-            deployment.fingerprint().api_url(),
-            &result,
-            outcome,
-            heading,
-            options.authentication.kind(),
-            options.json,
-        )
-    }
-}
-
-impl MoveCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let Self {
-            target,
-            pool,
-            options,
-        } = self;
-        let key = generate_idempotency_key().context("generate runner move request identity")?;
-        let result = cloud::with_api(
-            deployment,
-            options.http.transport_policy(),
-            &options.authentication,
-            |api| api.move_registration(&target.organization, &target.runner, &pool, &key),
-        )?;
-        cloud::write_runner_transition(
-            deployment.fingerprint().api_url(),
-            &result,
-            "moved",
-            "✓ Runner moved.",
-            options.authentication.kind(),
-            options.json,
-        )
-    }
-}
-
-impl RenameCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let Self {
-            organization,
-            runner,
-            name,
-            options,
-        } = self;
-        let key = generate_idempotency_key().context("generate runner rename request identity")?;
-        let result = cloud::with_api(
-            deployment,
-            options.http.transport_policy(),
-            &options.authentication,
-            |api| api.rename_registration(&organization, &runner, &key, &name),
-        )?;
-        cloud::write_runner_rename(
-            deployment.fingerprint().api_url(),
-            &result,
-            options.authentication.kind(),
-            options.json,
-        )
+        let RunnerTarget { runner, org } = target;
+        execute_in(org, options, deployment, |options, organization| {
+            let key =
+                generate_idempotency_key().context("generate runner mode request identity")?;
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| api.update_registration_mode(organization, &runner, &key, mode),
+            )?;
+            cloud::write_runner_transition(
+                deployment.fingerprint().api_url(),
+                &result,
+                outcome,
+                heading,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
     }
 }
 
 impl DeleteCommand {
     fn execute(self) -> super::CommandResult {
-        execute_deletion_command(DeletionInvocation {
-            organization: self.target.organization,
-            resource_ref: self.target.runner,
-            options: self.options,
-            kind: DeletionKind::Runner,
-        })
+        execute_deletion_command(
+            self.target.org,
+            self.target.runner,
+            self.options,
+            DeletionKind::Runner,
+        )
     }
 }
 
@@ -739,32 +438,48 @@ enum DeletionKind {
     Pool,
 }
 
+/// A deletion once the organization it acts in is known: the reference sent, the value `--org`
+/// or `USEFUL_ORG` gave or else the organization's ID.
 struct DeletionInvocation {
-    organization: OrganizationArg,
+    organization: String,
     resource_ref: String,
     options: CloudOptions,
     kind: DeletionKind,
 }
 
 fn execute_pool_deletion(
-    organization: OrganizationArg,
+    org: OrgArgs,
     pool: PoolArg,
     options: CloudOptions,
 ) -> super::CommandResult {
-    execute_deletion_command(DeletionInvocation {
-        organization,
-        resource_ref: pool.into_string(),
-        options,
-        kind: DeletionKind::Pool,
-    })
+    execute_deletion_command(org, pool.into_string(), options, DeletionKind::Pool)
 }
 
-fn execute_deletion_command(invocation: DeletionInvocation) -> super::CommandResult {
+// The organization in effect is resolved before the deletion's first request and outside its
+// signal handling, so an interrupted read of the memberships commits nothing to report.
+fn execute_deletion_command(
+    org: OrgArgs,
+    resource_ref: String,
+    options: CloudOptions,
+    kind: DeletionKind,
+) -> super::CommandResult {
     super::execute_deployment_command(
-        Some(invocation),
+        Some((org, resource_ref, options)),
         &[NAME],
         "configure Useful Machinery runner deletion",
-        |invocation, deployment| execute_deletion_with_signals(invocation, deployment.clone()),
+        |(org, resource_ref, options), deployment| {
+            execute_in(org, options, deployment, |options, organization| {
+                execute_deletion_with_signals(
+                    DeletionInvocation {
+                        organization: organization.to_owned(),
+                        resource_ref,
+                        options,
+                        kind,
+                    },
+                    deployment.clone(),
+                )
+            })
+        },
     )
 }
 
@@ -914,15 +629,32 @@ pub(super) fn write_failure(
     )
 }
 
-fn execute_cloud<T>(
+/// Runs a Cloud leaf that acts in the organization in effect, once the deployment is loaded.
+fn execute_in_cloud<T>(
     command: T,
-    execute: impl FnOnce(T, &Deployment) -> anyhow::Result<ExitCode>,
+    execute: impl FnOnce(T, &Deployment) -> super::CommandResult,
 ) -> super::CommandResult {
-    super::execute_deployment_leaf(
-        command,
-        &[NAME],
-        "configure Useful Machinery runner administration",
-        execute,
+    super::execute_deployment_command(Some(command), &[NAME], CLOUD_CONTEXT, execute)
+}
+
+const CLOUD_CONTEXT: &str = "configure Useful Machinery runner administration";
+
+/// Runs `run` with `options` and the organization reference to send, the value `--org` or
+/// `USEFUL_ORG` gave or else the organization's ID, in the organization in effect
+/// (REQ-RUNNERPOOL-47, REQ-ORG-87). A refused read of the memberships is written as the
+/// family writes its own failures, and a failure `run` ends with keeps its exit code.
+fn execute_in<E: Into<super::CommandFailure>>(
+    org: OrgArgs,
+    options: CloudOptions,
+    deployment: &Deployment,
+    run: impl FnOnce(CloudOptions, &str) -> Result<ExitCode, E>,
+) -> super::CommandResult {
+    super::context::execute_in_keeping_exit(
+        org,
+        options,
+        deployment,
+        cloud::write_context_failure,
+        run,
     )
 }
 

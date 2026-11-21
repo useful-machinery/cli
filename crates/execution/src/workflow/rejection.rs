@@ -900,6 +900,14 @@ fn validation_classification(kind: ValidationFailureKind) -> (&'static str, &'st
             "wait_rule_required",
             "Give the external wait a rule: {source, event, where}.",
         ),
+        ValidationFailureKind::WaitHostTargetInvalid => (
+            "wait_host_target_invalid",
+            "Wait for the host at the step whose edge it is: name that step in then.",
+        ),
+        ValidationFailureKind::WaitLimitRequired => (
+            "wait_limit_required",
+            "Give the host wait a limit from 1 to 64 and an else target.",
+        ),
         ValidationFailureKind::WaitRuleUnsupported => (
             "wait_rule_unsupported",
             "Remove rule; only an external wait carries one.",

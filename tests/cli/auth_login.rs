@@ -17,6 +17,49 @@ fn json_lines(output: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+pub(super) fn device_authorization_response(device_code: &str, user_code: &str) -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "device_code": device_code,
+            "user_code": user_code,
+            "verification_uri": "https://auth.fixture.example/activate",
+            "expires_in": 600,
+            "interval": 1
+        }),
+    )
+}
+
+pub(super) fn issued_token_response(access_token: &str, refresh_token: &str) -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "expires_in": 300
+        }),
+    )
+}
+
+pub(super) fn principal_not_provisioned_response() -> Vec<u8> {
+    problem_http_response(
+        "403 Forbidden",
+        serde_json::json!({
+            "type": "https://api.usefulmachinery.com/problems/principal-not-provisioned",
+            "title": "Principal not provisioned",
+            "status": 403
+        }),
+    )
+}
+
+pub(super) fn denied_token_response() -> Vec<u8> {
+    json_http_response(
+        "400 Bad Request",
+        serde_json::json!({ "error": "access_denied" }),
+    )
+}
+
 // REQ-AUTH-20, REQ-AUTH-21, REQ-AUTH-24, REQ-AUTH-34, REQ-AUTH-54, REQ-AUTH-55
 #[test]
 fn forced_login_emits_ndjson_persists_token_and_confirms_principal() {
@@ -77,7 +120,7 @@ fn forced_login_emits_ndjson_persists_token_and_confirms_principal() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -146,7 +189,10 @@ fn forced_login_emits_ndjson_persists_token_and_confirms_principal() {
     assert!(requests[1].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
     assert!(requests[2].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
     assert!(requests[3].starts_with("GET /api/v1/me HTTP/1.1\r\n"));
-    assert!(requests[3].contains("authorization: Bearer unique-new-access-token\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[3], "authorization"),
+        "Bearer unique-new-access-token"
+    );
 
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&credential_path).unwrap()).unwrap();
@@ -192,7 +238,7 @@ fn existing_authenticated_credential_short_circuits_device_authorization() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -224,7 +270,7 @@ fn existing_credential_of_a_refused_account_reports_forbidden_without_signing_in
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -243,20 +289,8 @@ fn existing_credential_of_a_refused_account_reports_forbidden_without_signing_in
 #[test]
 fn human_login_writes_activation_and_terminal_result_to_stdout() {
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "unique-human-private-device-code",
-                "user_code": "HUMAN-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "400 Bad Request",
-            serde_json::json!({ "error": "access_denied" }),
-        ),
+        device_authorization_response("unique-human-private-device-code", "HUMAN-CODE"),
+        denied_token_response(),
     ]);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
@@ -264,7 +298,7 @@ fn human_login_writes_activation_and_terminal_result_to_stdout() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--force", "--allow-insecure-http"],
+        &["account", "login", "--force", "--allow-insecure-http"],
         &environment,
     );
 
@@ -307,23 +341,11 @@ fn human_login_prefers_the_direct_link_and_explains_required_signup() {
                 "interval": 1
             }),
         ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-human-signup-access-token",
-                "refresh_token": "unique-human-signup-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
+        issued_token_response(
+            "unique-human-signup-access-token",
+            "unique-human-signup-refresh-token",
         ),
-        problem_http_response(
-            "403 Forbidden",
-            serde_json::json!({
-                "type": "https://api.usefulmachinery.com/problems/principal-not-provisioned",
-                "title": "Principal not provisioned",
-                "status": 403
-            }),
-        ),
+        principal_not_provisioned_response(),
     ]);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
@@ -331,7 +353,7 @@ fn human_login_prefers_the_direct_link_and_explains_required_signup() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--force", "--allow-insecure-http"],
+        &["account", "login", "--force", "--allow-insecure-http"],
         &environment,
     );
 
@@ -380,7 +402,7 @@ fn human_login_names_an_existing_authenticated_principal() {
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = login_environment(&server, credential_path_string);
 
-    let output = run_with_env(&["auth", "login", "--allow-insecure-http"], &environment);
+    let output = run_with_env(&["account", "login", "--allow-insecure-http"], &environment);
 
     assert!(output.status.success());
     assert_eq!(
@@ -403,16 +425,7 @@ fn unauthenticated_existing_check_starts_device_authorization() {
                 "status": 401
             }),
         ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-expiring-device-code",
-                "user_code": "EXPIRE-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
+        device_authorization_response("private-expiring-device-code", "EXPIRE-CODE"),
         json_http_response(
             "400 Bad Request",
             serde_json::json!({ "error": "expired_token" }),
@@ -424,7 +437,7 @@ fn unauthenticated_existing_check_starts_device_authorization() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -438,7 +451,7 @@ fn unauthenticated_existing_check_starts_device_authorization() {
     assert!(output.stderr.is_empty());
     let requests = server.finish();
     assert!(requests[0].starts_with("GET /api/v1/me HTTP/1.1\r\n"));
-    assert!(!requests[0].contains("authorization:"));
+    assert!(useful_test_support::request_header(&requests[0], "authorization").is_none());
     assert!(requests[1].starts_with("POST /auth/oauth/device/code HTTP/1.1\r\n"));
     assert!(requests[2].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
 }
@@ -453,7 +466,7 @@ fn existing_status_unreachable_emits_failure_without_device_authorization() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -485,7 +498,7 @@ fn existing_status_protocol_error_emits_failure_without_device_authorization() {
     let environment = login_environment(&server, credential_path_string);
 
     let output = run_with_env(
-        &["auth", "login", "--json", "--allow-insecure-http"],
+        &["account", "login", "--json", "--allow-insecure-http"],
         &environment,
     );
 
@@ -515,7 +528,7 @@ fn human_existing_status_protocol_failure_uses_shared_renderer_with_reason() {
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = login_environment(&server, credential_path_string);
 
-    let output = run_with_env(&["auth", "login", "--allow-insecure-http"], &environment);
+    let output = run_with_env(&["account", "login", "--allow-insecure-http"], &environment);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -527,20 +540,8 @@ fn human_existing_status_protocol_failure_uses_shared_renderer_with_reason() {
 #[test]
 fn denied_forced_login_preserves_the_previous_credential() {
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "unique-denied-device-code",
-                "user_code": "DENY-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "400 Bad Request",
-            serde_json::json!({ "error": "access_denied" }),
-        ),
+        device_authorization_response("unique-denied-device-code", "DENY-CODE"),
+        denied_token_response(),
     ]);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
@@ -557,7 +558,7 @@ fn denied_forced_login_preserves_the_previous_credential() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -604,7 +605,7 @@ fn human_login_connection_failure_names_the_oauth_issuer_and_cause_on_stderr() {
     ];
 
     let output = run_with_env(
-        &["auth", "login", "--force", "--allow-insecure-http"],
+        &["account", "login", "--force", "--allow-insecure-http"],
         &environment,
     );
 
@@ -624,16 +625,7 @@ fn login_unreachable_failures_report_the_active_phase() {
         ),
         (
             vec![
-                json_http_response(
-                    "200 OK",
-                    serde_json::json!({
-                        "device_code": "private-device-code",
-                        "user_code": "RETRY-CODE",
-                        "verification_uri": "https://auth.fixture.example/activate",
-                        "expires_in": 600,
-                        "interval": 1
-                    }),
-                ),
+                device_authorization_response("private-device-code", "RETRY-CODE"),
                 http_response("503 Service Unavailable", None, &[]),
             ],
             "token_polling",
@@ -650,7 +642,7 @@ fn login_unreachable_failures_report_the_active_phase() {
 
         let output = run_with_env(
             &[
-                "auth",
+                "account",
                 "login",
                 "--force",
                 "--json",
@@ -683,16 +675,7 @@ fn login_protocol_failures_report_the_active_phase() {
         ),
         (
             vec![
-                json_http_response(
-                    "200 OK",
-                    serde_json::json!({
-                        "device_code": "private-device-code",
-                        "user_code": "PROTO-CODE",
-                        "verification_uri": "https://auth.fixture.example/activate",
-                        "expires_in": 600,
-                        "interval": 1
-                    }),
-                ),
+                device_authorization_response("private-device-code", "PROTO-CODE"),
                 json_http_response("200 OK", serde_json::json!({})),
             ],
             "token_polling",
@@ -700,25 +683,8 @@ fn login_protocol_failures_report_the_active_phase() {
         ),
         (
             vec![
-                json_http_response(
-                    "200 OK",
-                    serde_json::json!({
-                        "device_code": "private-device-code",
-                        "user_code": "PROTO-CODE",
-                        "verification_uri": "https://auth.fixture.example/activate",
-                        "expires_in": 600,
-                        "interval": 1
-                    }),
-                ),
-                json_http_response(
-                    "200 OK",
-                    serde_json::json!({
-                        "access_token": "unique-protocol-token",
-                        "refresh_token": "unique-protocol-refresh-token",
-                        "token_type": "Bearer",
-                        "expires_in": 300
-                    }),
-                ),
+                device_authorization_response("private-device-code", "PROTO-CODE"),
+                issued_token_response("unique-protocol-token", "unique-protocol-refresh-token"),
                 json_http_response("200 OK", serde_json::json!({})),
             ],
             "principal_confirmation",
@@ -735,7 +701,7 @@ fn login_protocol_failures_report_the_active_phase() {
 
         let output = run_with_env(
             &[
-                "auth",
+                "account",
                 "login",
                 "--force",
                 "--json",
@@ -786,7 +752,7 @@ fn local_login_failure_emits_no_auth_event_or_network_request() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -829,10 +795,10 @@ fn interrupting_login_emits_cancellation_and_exits_130() {
     let before = fs::read(&credential_path).unwrap();
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = login_environment(&server, credential_path_string);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -897,24 +863,10 @@ fn interrupting_login_emits_cancellation_and_exits_130() {
 #[test]
 fn interrupt_after_persistence_does_not_report_cancellation() {
     let mut server = ScriptedServer::respond_with_paused_last_response(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-committed-device-code",
-                "user_code": "COMMIT-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-committed-access-token",
-                "refresh_token": "unique-committed-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
+        device_authorization_response("private-committed-device-code", "COMMIT-CODE"),
+        issued_token_response(
+            "unique-committed-access-token",
+            "unique-committed-refresh-token",
         ),
         json_http_response(
             "200 OK",
@@ -932,10 +884,10 @@ fn interrupt_after_persistence_does_not_report_cancellation() {
     let credential_path = credential_directory.path().join("credentials.json");
     let credential_path_string = credential_path.to_str().unwrap();
     let environment = login_environment(&server, credential_path_string);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1003,24 +955,10 @@ fn interrupt_after_persistence_does_not_report_cancellation() {
 #[test]
 fn issued_token_is_retained_when_principal_confirmation_is_unreachable() {
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-device-code",
-                "user_code": "WAIT-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-retained-access-token",
-                "refresh_token": "unique-retained-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
+        device_authorization_response("private-device-code", "WAIT-CODE"),
+        issued_token_response(
+            "unique-retained-access-token",
+            "unique-retained-refresh-token",
         ),
         http_response("503 Service Unavailable", None, &[]),
     ]);
@@ -1031,7 +969,7 @@ fn issued_token_is_retained_when_principal_confirmation_is_unreachable() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1068,24 +1006,10 @@ fn issued_token_is_retained_when_principal_confirmation_is_unreachable() {
 #[test]
 fn issued_token_is_retained_when_principal_confirmation_is_forbidden() {
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-device-code",
-                "user_code": "REFUSE-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-refused-new-access-token",
-                "refresh_token": "unique-refused-new-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
+        device_authorization_response("private-device-code", "REFUSE-CODE"),
+        issued_token_response(
+            "unique-refused-new-access-token",
+            "unique-refused-new-refresh-token",
         ),
         forbidden_problem_response(),
     ]);
@@ -1096,7 +1020,7 @@ fn issued_token_is_retained_when_principal_confirmation_is_forbidden() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1124,24 +1048,10 @@ fn issued_token_is_retained_when_principal_confirmation_is_forbidden() {
 #[test]
 fn unauthenticated_principal_confirmation_emits_status_and_removes_token() {
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-device-code",
-                "user_code": "REJECT-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-rejected-new-token",
-                "refresh_token": "unique-rejected-new-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
+        device_authorization_response("private-device-code", "REJECT-CODE"),
+        issued_token_response(
+            "unique-rejected-new-token",
+            "unique-rejected-new-refresh-token",
         ),
         problem_http_response(
             "401 Unauthorized",
@@ -1171,7 +1081,7 @@ fn unauthenticated_principal_confirmation_emits_status_and_removes_token() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",
@@ -1202,25 +1112,8 @@ fn signup_required_principal_confirmation_preserves_opaque_actions() {
         "unknown": true
     }]);
     let server = ScriptedServer::respond(vec![
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "device_code": "private-device-code",
-                "user_code": "SIGNUP-CODE",
-                "verification_uri": "https://auth.fixture.example/activate",
-                "expires_in": 600,
-                "interval": 1
-            }),
-        ),
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-signup-token",
-                "refresh_token": "unique-signup-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 300
-            }),
-        ),
+        device_authorization_response("private-device-code", "SIGNUP-CODE"),
+        issued_token_response("unique-signup-token", "unique-signup-refresh-token"),
         problem_http_response(
             "403 Forbidden",
             serde_json::json!({
@@ -1238,7 +1131,7 @@ fn signup_required_principal_confirmation_preserves_opaque_actions() {
 
     let output = run_with_env(
         &[
-            "auth",
+            "account",
             "login",
             "--force",
             "--json",

@@ -2,7 +2,8 @@ use super::*;
 
 #[derive(Clone, Copy)]
 pub(super) struct LeaseFailureContext<'a> {
-    cancellation: &'a CancellationSource,
+    lease_loss: &'a LeaseLoss,
+    causal_lease: &'a CausalLease,
     post_stop_fence: &'a PostStopFence,
     process_guards: &'a AssignmentProcessGuards,
 }
@@ -25,7 +26,7 @@ pub(super) enum LeaseExecution<Output> {
 )]
 pub(super) async fn run_under_lease<F, Output>(
     execution: F,
-    cancellation: &CancellationSource,
+    lease_loss: &LeaseLoss,
     lease_clock: &LeaseClock,
     mut authority_updates: tokio::sync::watch::Receiver<LeaseAuthority>,
     mut infrastructure_updates: tokio::sync::watch::Receiver<Option<InfrastructureInterruption>>,
@@ -42,39 +43,46 @@ where
 {
     tokio::pin!(execution);
     let mut infrastructure_interruption = *infrastructure_updates.borrow_and_update();
+    let mut first_check = true;
+    let failure = LeaseFailureContext {
+        lease_loss,
+        causal_lease,
+        post_stop_fence,
+        process_guards,
+    };
     'supervision: loop {
         let authority = authority_updates.borrow_and_update().clone();
         if let Some(interruption) = *infrastructure_updates.borrow_and_update() {
             infrastructure_interruption = Some(interruption);
         }
-        let failure = LeaseFailureContext {
-            cancellation,
-            post_stop_fence,
-            process_guards,
-        };
         let now = match lease_clock.now() {
             Ok(now) => now,
             Err(error) => {
-                return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+                return fail_lease_clock(error, failure);
             }
         };
         let cancellation_due = match now.checked_cmp(authority.cancellation_start) {
             Ok(ordering) => ordering != std::cmp::Ordering::Less,
             Err(error) => {
-                return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+                return fail_lease_clock(error, failure);
             }
         };
         if authority.revoked || cancellation_due {
+            let reason = if first_check {
+                LeaseLossReason::StartLate
+            } else {
+                causal_lease.deadline_reason(authority.sequence)
+            };
             return finish_after_lease_loss(
                 &mut execution,
-                cancellation,
+                failure,
                 lease_clock,
                 &authority,
-                post_stop_fence,
-                process_guards,
+                reason,
             )
             .await;
         }
+        first_check = false;
         let armed_wait = match initial_wait.take() {
             Some((sequence, wait)) if sequence == authority.sequence => Some(wait),
             Some(_) | None => None,
@@ -91,7 +99,7 @@ where
                 }
                 let now = match lease_clock.now() {
                     Ok(now) => now,
-                    Err(error) => return fail_lease_clock(error, cancellation, post_stop_fence, process_guards),
+                    Err(error) => return fail_lease_clock(error, failure),
                 };
                 if !matches!(
                     now.checked_cmp(authority.cancellation_start),
@@ -99,11 +107,10 @@ where
                 ) {
                     return finish_after_lease_loss(
                         &mut execution,
-                        cancellation,
+                        failure,
                         lease_clock,
                         &authority,
-                        post_stop_fence,
-                        process_guards,
+                        causal_lease.deadline_reason(authority.sequence),
                     ).await;
                 }
                 match causal_lease.request_renewal(
@@ -116,16 +123,15 @@ where
                 ) {
                     Ok(()) => {}
                     Err(RenewalRequestFailure::LeaseClock) => {
-                        return fail_lease_clock(LeaseClockError::ClockUnavailable, cancellation, post_stop_fence, process_guards);
+                        return fail_lease_clock(LeaseClockError::ClockUnavailable, failure);
                     }
                     Err(RenewalRequestFailure::Outbox | RenewalRequestFailure::Sequence) => {
                         return finish_after_lease_loss(
                             &mut execution,
-                            cancellation,
+                            failure,
                             lease_clock,
                             &authority,
-                            post_stop_fence,
-                            process_guards,
+                            LeaseLossReason::RenewalUnreachable,
                         ).await;
                     }
                 }
@@ -147,11 +153,10 @@ where
                             }
                             return finish_after_lease_loss(
                                 &mut execution,
-                                cancellation,
+                                failure,
                                 lease_clock,
                                 &authority,
-                                post_stop_fence,
-                                process_guards,
+                                causal_lease.deadline_reason(authority.sequence),
                             ).await;
                         }
                         wait = wait_to_ask_again(
@@ -172,18 +177,17 @@ where
                                 lease_clock,
                                 outbox,
                             ) == Err(RenewalRequestFailure::LeaseClock) {
-                                return fail_lease_clock(LeaseClockError::ClockUnavailable, cancellation, post_stop_fence, process_guards);
+                                return fail_lease_clock(LeaseClockError::ClockUnavailable, failure);
                             }
                         }
                         changed = authority_updates.changed() => {
                             if changed.is_err() {
                                 return finish_after_lease_loss(
                                     &mut execution,
-                                    cancellation,
+                                    failure,
                                     lease_clock,
                                     &authority,
-                                    post_stop_fence,
-                                    process_guards,
+                                    LeaseLossReason::AuthorityMissing,
                                 ).await;
                             }
                             continue 'supervision;
@@ -202,7 +206,7 @@ where
                                 lease_clock,
                                 &authority,
                                 infrastructure_interruption,
-                                false,
+                                None,
                             );
                         }
                     }
@@ -212,11 +216,10 @@ where
                 if changed.is_err() {
                     return finish_after_lease_loss(
                         &mut execution,
-                        cancellation,
+                        failure,
                         lease_clock,
                         &authority,
-                        post_stop_fence,
-                        process_guards,
+                        LeaseLossReason::AuthorityMissing,
                     ).await;
                 }
             }
@@ -234,7 +237,7 @@ where
                     lease_clock,
                     &authority,
                     infrastructure_interruption,
-                    false,
+                    None,
                 );
             }
         }
@@ -247,20 +250,23 @@ pub(super) fn complete_ready_execution<Output>(
     lease_clock: &LeaseClock,
     authority: &LeaseAuthority,
     infrastructure_interruption: Option<InfrastructureInterruption>,
-    lease_already_lost: bool,
+    prior_loss: Option<LeaseLossReason>,
 ) -> LeaseExecution<Output> {
     let LeaseFailureContext {
-        cancellation,
+        lease_loss,
         post_stop_fence,
         process_guards,
+        ..
     } = failure;
     let now = match lease_clock.now() {
         Ok(now) => now,
         Err(error) => {
-            return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+            return fail_lease_clock(error, failure);
         }
     };
-    if !lease_already_lost {
+    let reason = if let Some(reason) = prior_loss {
+        reason
+    } else {
         match now.checked_cmp(authority.cancellation_start) {
             Ok(std::cmp::Ordering::Less) if !authority.revoked => {
                 return LeaseExecution::Completed {
@@ -268,13 +274,13 @@ pub(super) fn complete_ready_execution<Output>(
                     infrastructure_interruption,
                 };
             }
-            Ok(_) => {}
+            Ok(_) => failure.causal_lease.deadline_reason(authority.sequence),
             Err(error) => {
-                return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+                return fail_lease_clock(error, failure);
             }
         }
-    }
-    cancellation.request_cancellation(CancellationReason::ExecutionLeaseExpired);
+    };
+    lease_loss.lose(reason);
     match now.checked_cmp(authority.force_stop_start) {
         Ok(std::cmp::Ordering::Less) => {
             return LeaseExecution::Completed {
@@ -285,10 +291,10 @@ pub(super) fn complete_ready_execution<Output>(
             };
         }
         Ok(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater) => {
-            begin_forced_containment(cancellation, post_stop_fence, process_guards);
+            begin_forced_containment(lease_loss, reason, post_stop_fence, process_guards);
         }
         Err(error) => {
-            return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+            return fail_lease_clock(error, failure);
         }
     }
     match lease_clock
@@ -318,32 +324,32 @@ pub(super) fn complete_ready_execution<Output>(
 
 pub(super) async fn finish_after_lease_loss<F, Output>(
     execution: &mut std::pin::Pin<&mut F>,
-    cancellation: &CancellationSource,
+    failure: LeaseFailureContext<'_>,
     lease_clock: &LeaseClock,
     authority: &LeaseAuthority,
-    post_stop_fence: &PostStopFence,
-    process_guards: &AssignmentProcessGuards,
+    reason: LeaseLossReason,
 ) -> LeaseExecution<Output>
 where
     F: Future<Output = Output>,
 {
-    cancellation.request_cancellation(CancellationReason::ExecutionLeaseExpired);
-    let failure = LeaseFailureContext {
-        cancellation,
+    let LeaseFailureContext {
+        lease_loss,
         post_stop_fence,
         process_guards,
-    };
+        ..
+    } = failure;
+    lease_loss.lose(reason);
     let now = match lease_clock.now() {
         Ok(now) => now,
         Err(error) => {
-            return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+            return fail_lease_clock(error, failure);
         }
     };
     let before_force_stop = match now.checked_cmp(authority.force_stop_start) {
         Ok(std::cmp::Ordering::Less) => true,
         Ok(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater) => false,
         Err(error) => {
-            return fail_lease_clock(error, cancellation, post_stop_fence, process_guards);
+            return fail_lease_clock(error, failure);
         }
     };
     if before_force_stop {
@@ -361,13 +367,13 @@ where
                     lease_clock,
                     authority,
                     Some(InfrastructureInterruption::ExecutionLeaseExpired),
-                    true,
+                    Some(reason),
                 );
             }
         }
     }
 
-    begin_forced_containment(cancellation, post_stop_fence, process_guards);
+    begin_forced_containment(lease_loss, reason, post_stop_fence, process_guards);
     let now = match lease_clock.now() {
         Ok(now) => now,
         Err(error) => {
@@ -395,7 +401,7 @@ where
             lease_clock,
             authority,
             Some(InfrastructureInterruption::ExecutionLeaseExpired),
-            true,
+            Some(reason),
         ),
         wait = wait_for_lease_deadline(lease_clock, authority.force_stop_end) => {
             match wait {
@@ -415,11 +421,17 @@ where
     F: Future<Output = Output>,
 {
     let LeaseFailureContext {
-        cancellation,
+        lease_loss,
         post_stop_fence,
         process_guards,
+        ..
     } = failure;
-    begin_forced_containment(cancellation, post_stop_fence, process_guards);
+    begin_forced_containment(
+        lease_loss,
+        LeaseLossReason::ClockFailed,
+        post_stop_fence,
+        process_guards,
+    );
     if !process_guards.is_quiescent() {
         let _ = execution.as_mut().await;
     }
@@ -431,11 +443,20 @@ where
 
 pub(super) fn fail_lease_clock<Output>(
     error: LeaseClockError,
-    cancellation: &CancellationSource,
-    post_stop_fence: &PostStopFence,
-    process_guards: &AssignmentProcessGuards,
+    failure: LeaseFailureContext<'_>,
 ) -> LeaseExecution<Output> {
-    begin_forced_containment(cancellation, post_stop_fence, process_guards);
+    let LeaseFailureContext {
+        lease_loss,
+        post_stop_fence,
+        process_guards,
+        ..
+    } = failure;
+    begin_forced_containment(
+        lease_loss,
+        LeaseLossReason::ClockFailed,
+        post_stop_fence,
+        process_guards,
+    );
     LeaseExecution::LeaseClockFailed {
         quiescent: process_guards.is_quiescent(),
         error,
@@ -443,12 +464,13 @@ pub(super) fn fail_lease_clock<Output>(
 }
 
 pub(super) fn begin_forced_containment(
-    cancellation: &CancellationSource,
+    lease_loss: &LeaseLoss,
+    reason: LeaseLossReason,
     post_stop_fence: &PostStopFence,
     process_guards: &AssignmentProcessGuards,
 ) {
     post_stop_fence.fence();
-    cancellation.request_cancellation(CancellationReason::ExecutionLeaseExpired);
+    lease_loss.lose(reason);
     process_guards.begin_forced_containment();
 }
 

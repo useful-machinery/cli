@@ -3227,6 +3227,7 @@ mod tests {
                     recovery: None,
                     invocations: Vec::new(),
                     failed_child: None,
+                    failure_class: None,
                     input_sources: Vec::new(),
                 }],
                 finalization: None,

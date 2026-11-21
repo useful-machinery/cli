@@ -70,6 +70,7 @@ pub(crate) mod attribute {
     pub(crate) const LEASE_DECISION_DELAY_MS: &str = "um.lease.decision_delay_ms";
     pub(crate) const LEASE_CANCELLATION_HEADROOM_MS: &str = "um.lease.cancellation_headroom_ms";
     pub(crate) const LEASE_REQUEST_AGE_MS: &str = "um.lease.request_age_ms";
+    pub(crate) const LEASE_LOSS_REASON: &str = "um.lease.loss_reason";
     pub(crate) const EFFECTS_RECEIVED: &str = "um.runner.effects_received";
     pub(crate) const ERROR_TYPE: &str = "error.type";
     pub(crate) const FAILURE_KIND: &str = "um.connection.failure_kind";
@@ -118,6 +119,15 @@ pub(crate) mod attribute {
     pub(crate) const RUNNER_CREDENTIALS_REMOVED: &str = "um.teardown.runner_credentials_removed";
     pub(crate) const RUNNER_CREDENTIALS_REVOKED: &str = "um.teardown.runner_credentials_revoked";
     pub(crate) const WORKSPACE_PATH: &str = "um.workspace.path";
+    pub(crate) const WORKSPACE_BYTES: &str = "um.workspace.bytes";
+    pub(crate) const WORKSPACE_PRUNE_BOUND: &str = "um.workspace.prune_bound";
+    pub(crate) const WORKSPACE_PRUNE_OUTCOME: &str = "um.workspace.prune_outcome";
+    pub(crate) const BUILD_CACHE_PATH: &str = "um.build_cache.path";
+    pub(crate) const BUILD_CACHE_MAXIMUM_BYTES: &str = "um.build_cache.maximum_bytes";
+    pub(crate) const BUILD_CACHE_REMOVED_FILES: &str = "um.build_cache.removed_files";
+    pub(crate) const BUILD_CACHE_REMOVED_BYTES: &str = "um.build_cache.removed_bytes";
+    pub(crate) const BUILD_CACHE_REMAINING_BYTES: &str = "um.build_cache.remaining_bytes";
+    pub(crate) const BUILD_CACHE_FAILED_FILES: &str = "um.build_cache.failed_files";
     /// A `runner.disk_space` record gives the state the work root's disk turned to, `low`
     /// or `ok`, with the reading that turned it (REQ-TELEMETRY-55).
     pub(crate) const DISK_STATE: &str = "um.disk.state";

@@ -7,7 +7,7 @@ use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use useful_support::{is_diagnostic_slug, valid_typed_id};
+use useful_support::{is_diagnostic_slug, valid_typed_id, valid_url_safe_name};
 
 use super::MAXIMUM_PARALLEL_STEPS;
 use super::document::FailurePolicy;
@@ -282,7 +282,7 @@ pub(crate) fn validate_with_invariant(result: &WorkflowResultV1) -> Result<(), R
                 && is_lowercase_hex(commit_oid, 40)
                 && source_display_snapshot.as_ref().is_none_or(|snapshot| {
                     valid_organization_display_name(&snapshot.organization_display_name)
-                        && valid_project_name(&snapshot.project_name)
+                        && valid_url_safe_name(&snapshot.project_name)
                         && match snapshot.repository.provider_kind.as_str() {
                             "github" => {
                                 snapshot.repository.instance_url.is_none()
@@ -820,18 +820,6 @@ fn valid_organization_display_name(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn valid_project_name(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let is_lowercase_or_digit = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-    !bytes.is_empty()
-        && bytes.len() <= 63
-        && bytes.first().is_some_and(is_lowercase_or_digit)
-        && bytes.last().is_some_and(is_lowercase_or_digit)
-        && bytes
-            .iter()
-            .all(|byte| is_lowercase_or_digit(byte) || *byte == b'-')
-}
-
 fn valid_github_repository_name(value: &str) -> bool {
     let valid_part = |part: &str| {
         !part.is_empty()
@@ -1214,6 +1202,27 @@ fn validate_step_recovery(
     step: &WorkflowStepV1,
     maximum_stream_bytes: u64,
 ) -> Result<(), ResultMetadataError> {
+    // REQ-WFEXEC-79, REQ-WFRECOVERY-42: a step with recovery is classified exactly when its
+    // recovery ended `infrastructure`; a `cmd` step with none only by its exit status
+    // (REQ-WFRECOVERY-66). Only a failed ordinary step is classified.
+    let classification_admitted = match step.recovery.as_ref() {
+        Some(recovery) => {
+            step.failure_class.is_some()
+                == matches!(
+                    recovery.termination,
+                    RecoveryTerminationV1::Infrastructure { .. }
+                )
+        }
+        None => {
+            step.failure_class.is_none() || (step.kind == "cmd" && exit_status_classifies(step))
+        }
+    };
+    if !classification_admitted
+        || (step.failure_class.is_some()
+            && (step.state != WorkflowStepStateV1::Failed || step.role != WorkflowNodeRoleV1::Step))
+    {
+        return Err(ResultMetadataError);
+    }
     if let Some(recovery) = &step.recovery
         && (step.role != WorkflowNodeRoleV1::Step
             || recovery.schema_version != 1
@@ -1305,6 +1314,10 @@ fn validate_step_recovery(
             RecoveryTerminationV1::GaveUp { round } if *round == expected_round => {
                 Some(RecoveryHandlerOutcomeV1::GaveUp)
             }
+            RecoveryTerminationV1::Infrastructure {
+                round: Some(round),
+                execution_number: None,
+            } if *round == expected_round => Some(RecoveryHandlerOutcomeV1::Infrastructure),
             RecoveryTerminationV1::HandlerFailed { round, .. } if *round == expected_round => {
                 Some(RecoveryHandlerOutcomeV1::Failed)
             }
@@ -1374,6 +1387,24 @@ fn validate_step_recovery(
     if target_executions.iter().copied().ne(1..=maximum_target) || !handler_rounds_valid {
         return Err(ResultMetadataError);
     }
+    // A handler's gave_up or infrastructure decision ends recovery at the last
+    // round with the failure of the execution that opened it.
+    let handler_decided_end = |round: u8, outcome: RecoveryHandlerOutcomeV1| {
+        step.state == WorkflowStepStateV1::Failed
+            && round == last_round
+            && maximum_target == round
+            && recovery.rounds.last().is_some_and(|record| {
+                record
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| handler.outcome == outcome)
+            })
+            && terminal_failure_detail(step)
+                == recovery
+                    .rounds
+                    .last()
+                    .and_then(|round| failure_detail_from_recovery(&round.failed_execution.failure))
+    };
     match &recovery.termination {
         RecoveryTerminationV1::Recovered { execution_number }
             if step.state == WorkflowStepStateV1::Succeeded
@@ -1385,19 +1416,22 @@ fn validate_step_recovery(
                 && *execution_number == last_round.saturating_add(1)
                 && maximum_target == *execution_number => {}
         RecoveryTerminationV1::GaveUp { round }
-            if step.state == WorkflowStepStateV1::Failed
-                && *round == last_round
-                && maximum_target == *round
-                && recovery.rounds.last().is_some_and(|record| {
-                    record
-                        .handler
-                        .as_ref()
-                        .is_some_and(|handler| handler.outcome == RecoveryHandlerOutcomeV1::GaveUp)
-                })
-                && terminal_failure_detail(step)
-                    == recovery.rounds.last().and_then(|round| {
-                        failure_detail_from_recovery(&round.failed_execution.failure)
-                    }) => {}
+            if handler_decided_end(*round, RecoveryHandlerOutcomeV1::GaveUp) => {}
+        // A handler's decision names its round and no execution.
+        RecoveryTerminationV1::Infrastructure {
+            round: Some(round),
+            execution_number: None,
+        } if handler_decided_end(*round, RecoveryHandlerOutcomeV1::Infrastructure) => {}
+        // The step's exit status names the execution after the last round, every round
+        // having rechecked, and no round (REQ-WFRECOVERY-66).
+        RecoveryTerminationV1::Infrastructure {
+            round: None,
+            execution_number: Some(execution_number),
+        } if step.state == WorkflowStepStateV1::Failed
+            && step.kind == "cmd"
+            && *execution_number == last_round.saturating_add(1)
+            && maximum_target == *execution_number
+            && exit_status_classifies(step) => {}
         RecoveryTerminationV1::HandlerFailed {
             round,
             handler_failure,
@@ -1442,6 +1476,20 @@ fn interrupted(detail: &NodeDetail) -> bool {
     matches!(detail, NodeDetail::Failed(detail) if detail.is_interrupted())
 }
 
+/// Whether the step's failure is one its exit status can classify: a `command_exit` at phase
+/// `execution` with an exit code from 1 to 255 (REQ-WFRECOVERY-66).
+fn exit_status_classifies(step: &WorkflowStepV1) -> bool {
+    terminal_failure_detail(step).is_some_and(|detail| exit_status_classifiable(&detail))
+}
+
+pub(super) fn exit_status_classifiable(detail: &FailureDetail) -> bool {
+    detail.phase == super::evidence::FailurePhase::Execution
+        && detail.code == super::evidence::FailureCode::CommandExit
+        && detail
+            .exit_code
+            .is_some_and(|code| (1..=255).contains(&code))
+}
+
 fn terminal_failure_detail(step: &WorkflowStepV1) -> Option<FailureDetail> {
     match step.detail.as_ref() {
         Some(NodeDetail::Failed(detail)) => Some(detail.clone()),
@@ -1465,7 +1513,9 @@ fn validate_handler_summary(
     handler: &super::publication::RecoveryHandlerSummaryV1,
 ) -> Result<(), ResultMetadataError> {
     match handler.outcome {
-        RecoveryHandlerOutcomeV1::Recheck | RecoveryHandlerOutcomeV1::GaveUp => {
+        RecoveryHandlerOutcomeV1::Recheck
+        | RecoveryHandlerOutcomeV1::GaveUp
+        | RecoveryHandlerOutcomeV1::Infrastructure => {
             if handler.summary.as_deref().is_none_or(|value| {
                 value.is_empty() || super::recovery::recovery_decision_text_is_too_long(value)
             }) || handler.reason.as_deref().is_none_or(|value| {

@@ -114,6 +114,220 @@ fn assert_authenticated(request: &str) {
     );
 }
 
+fn accepted_membership(role: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": MEMBERSHIP_ID, "organizationId": ORG_ID, "principalId": PRINCIPAL_ID,
+        "role": role, "state":"active",
+        "createdAt":"2026-01-02T03:04:05Z", "updatedAt":"2026-01-02T03:04:05Z"
+    })
+}
+
+fn mutation(status: &str, value: &serde_json::Value) -> Vec<u8> {
+    json_response_with_headers(status, value, &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)])
+}
+
+fn issued_response(invitation: &serde_json::Value) -> Vec<u8> {
+    json_response_with_headers(
+        "201 Created",
+        invitation,
+        &[
+            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
+            ("Location", &format!("/v1/invitations/{INVITATION_ID}")),
+        ],
+    )
+}
+
+// REQ-INVITE-57, REQ-INVITE-62, REQ-MEMBER-48, REQ-MEMBER-50
+#[test]
+fn an_invited_teammate_joins_and_the_owner_can_promote_and_remove_them() {
+    let email = "pam@example.test";
+    let mut issued = invitation("outstanding", None);
+    issued.as_object_mut().unwrap().remove("targetPrincipalId");
+    issued["targetKind"] = "email".into();
+    issued["targetEmail"] = email.into();
+    let issuer = "prn_01k0z6r1w8f4jy2m7q9v3x5abd";
+    issued["issuerPrincipalId"] = issuer.into();
+    let inbox = serde_json::json!({"items":[{
+        "id":INVITATION_ID,"organizationId":ORG_ID, "organizationDisplayName":"Example Organization",
+        "organizationSlug":"example", "issuerPrincipalId":issuer, "expiresAt":"2026-01-09T03:04:05Z"
+    }]});
+    let mut row = super::organization::human_row(
+        MEMBERSHIP_ID,
+        Some(serde_json::json!([{"email":email, "verified":true}])),
+    );
+    let directory =
+        |row: &serde_json::Value| json_http_response("200 OK", serde_json::json!({"items":[row]}));
+    let directory_before = directory(&row);
+    let mut promoted_member = accepted_membership("owner");
+    promoted_member["principalType"] = "human".into();
+    promoted_member["nameState"] = "live".into();
+    promoted_member["displayName"] = "Pam Beesly".into();
+    row["role"] = "owner".into();
+    let (server, credentials, _, owner) = prepared(vec![
+        issued_response(&issued),
+        json_http_response("200 OK", inbox),
+        mutation("200 OK", &accepted_membership("member")),
+        directory_before.clone(),
+        directory_before,
+        mutation("200 OK", &promoted_member),
+        directory(&row),
+        super::organization::membership_termination_success(),
+    ]);
+    let teammate = credentials.path().join("teammate.json");
+    write_credential_fixture(
+        &teammate,
+        &server.api_url,
+        "teammate-access",
+        "2999-01-01T00:00:00Z",
+    );
+    let invoke = |actor: &str, args: &[&str]| {
+        let mut args = args.to_vec();
+        args.extend(["--allow-insecure-http", "--json"]);
+        let output = run_with_env(&args, &deployment_environment(&server.api_url, actor));
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let teammate = teammate.to_str().unwrap();
+    let issued = invoke(
+        &owner,
+        &[
+            "org",
+            "invitation",
+            "issue",
+            "--org",
+            ORG_ID,
+            "--email",
+            email,
+        ],
+    );
+    let inbox = invoke(teammate, &["account", "invitation", "list"]);
+    let invitation = inbox["items"][0]["id"].as_str().unwrap();
+    assert_eq!(issued["invitation"]["id"], invitation);
+    let joined = invoke(teammate, &["account", "invitation", "accept", invitation]);
+    let listed = invoke(&owner, &["org", "member", "list", "--org", ORG_ID]);
+    let member = &listed["items"][0];
+    assert_eq!(member["id"], joined["membership"]["id"]);
+    let address = member["linkedEmails"][0]["email"].as_str().unwrap();
+    let promoted = invoke(
+        &owner,
+        &[
+            "org", "member", "update", address, "--org", ORG_ID, "--role", "owner",
+        ],
+    );
+    assert_eq!(promoted["membership"]["role"], "owner");
+    let removed = invoke(
+        &owner,
+        &["org", "member", "remove", address, "--org", ORG_ID, "--yes"],
+    );
+    assert_eq!(removed["membershipId"], promoted["membership"]["id"]);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 8);
+    for (i, request) in requests.iter().enumerate() {
+        let token = if matches!(i, 1 | 2) {
+            "teammate-access"
+        } else {
+            TOKEN
+        };
+        assert_eq!(
+            header_value(request, "authorization"),
+            format!("Bearer {token}")
+        );
+    }
+    assert!(requests[7].starts_with(&format!(
+        "DELETE /api/v1/organizations/{ORG_ID}/memberships/{MEMBERSHIP_ID} "
+    )));
+}
+
+// REQ-INVITE-57, REQ-SERVICEPRINCIPAL-1, REQ-SERVICEPRINCIPAL-8, REQ-RUN-94
+#[test]
+fn a_new_service_joins_the_organization_and_uses_its_key_to_run_a_workflow() {
+    use super::run_command::{
+        ORGANIZATION, PROJECT_ID, RUN_ID, acceptance_response, run_body_with_state, run_response,
+    };
+    let mut issued = invitation("outstanding", None);
+    issued["issuerPrincipalId"] = "prn_01k0z6r1w8f4jy2m7q9v3x5abd".into();
+    let (server, directory, _, credential) = prepared(vec![
+        super::service_principal::created_service_response(),
+        issued_response(&issued),
+        mutation("200 OK", &accepted_membership("member")),
+        acceptance_response(false),
+        run_response(run_body_with_state("succeeded")),
+    ]);
+    let key_file = directory.path().join("ci.key");
+    let environment = deployment_environment(&server.api_url, &credential);
+    let invoke = |args: &[&str]| {
+        let mut args = args.to_vec();
+        args.extend(["--allow-insecure-http", "--json"]);
+        let output = run_with_env(&args, &environment);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let key = fs::read_to_string(&key_file).unwrap();
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(key.trim()));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(key.trim()));
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let created = invoke(&[
+        "account",
+        "service",
+        "create",
+        "--name",
+        "Build agent",
+        "--key-file",
+        key_file.to_str().unwrap(),
+    ]);
+    let service = created["principal"]["id"].as_str().unwrap();
+    let key = created["apiKeyFile"].as_str().unwrap();
+    let issued = invoke(&[
+        "org",
+        "invitation",
+        "issue",
+        "--org",
+        ORG_ID,
+        "--account",
+        service,
+    ]);
+    let invite = issued["invitation"]["id"].as_str().unwrap();
+    let accepted = invoke(&[
+        "account",
+        "invitation",
+        "accept",
+        invite,
+        "--api-key-file",
+        key,
+    ]);
+    assert_eq!(accepted["membership"]["principalId"], service);
+    let settled = invoke(&[
+        "workflow",
+        "run",
+        "create",
+        "def_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "--on",
+        "project",
+        "--org",
+        ORGANIZATION,
+        "--project",
+        PROJECT_ID,
+        "--wait",
+        "--api-key-file",
+        key,
+    ]);
+    assert_eq!(settled["run"]["id"], RUN_ID);
+    assert_eq!(settled["run"]["state"], "succeeded");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 5);
+    for request in &requests[..2] {
+        assert_authenticated(request);
+    }
+    let expected = format!("Bearer {}", fs::read_to_string(&key_file).unwrap().trim());
+    for request in &requests[2..] {
+        assert_eq!(header_value(request, "authorization"), expected);
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[1])).unwrap()["principalId"],
+        service
+    );
+    assert!(requests[2].starts_with(&format!("POST /api/v1/invitations/{invite}/accept ")));
+}
+
 // REQ-INVITE-57
 #[test]
 fn organization_invitation_issue_sends_target_and_idempotency_key() {
@@ -130,11 +344,12 @@ fn organization_invitation_issue_sends_target_and_idempotency_key() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "invitation",
             "issue",
+            "--org",
             ORG_ID,
-            "--principal-id",
+            "--account",
             PRINCIPAL_ID,
             "--json",
             "--allow-insecure-http",
@@ -192,9 +407,10 @@ fn organization_invitation_list_preserves_terminal_history_and_cursor() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "invitation",
             "list",
+            "--org",
             ORG_ID,
             "--limit",
             "4",
@@ -271,9 +487,10 @@ fn organization_invitation_history_human_labels_recorded_and_unavailable_links()
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "invitation",
             "list",
+            "--org",
             ORG_ID,
             "--allow-insecure-http",
         ],
@@ -309,9 +526,10 @@ fn organization_invitation_history_human_reads_each_party_by_its_name_state() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "invitation",
             "list",
+            "--org",
             ORG_ID,
             "--allow-insecure-http",
         ],
@@ -384,7 +602,7 @@ fn invitation_inbox_and_preview_are_available_to_the_current_principal() {
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let inbox = run_with_env(
-        &["invitation", "list", "--allow-insecure-http"],
+        &["account", "invitation", "list", "--allow-insecure-http"],
         &environment,
     );
     assert!(inbox.status.success(), "{inbox:?}");
@@ -395,8 +613,9 @@ fn invitation_inbox_and_preview_are_available_to_the_current_principal() {
 
     let preview = run_with_env(
         &[
+            "account",
             "invitation",
-            "preview",
+            "show",
             INVITATION_ID,
             "--json",
             "--allow-insecure-http",
@@ -443,6 +662,7 @@ fn invitation_accept_reads_a_protected_capability_file_without_printing_it() {
 
     let output = run_with_env(
         &[
+            "account",
             "invitation",
             "accept",
             INVITATION_ID,
@@ -482,6 +702,7 @@ fn invitation_accept_name_gate_reports_a_recoverable_schema_one_failure() {
             )]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = vec![
+            "account",
             "invitation",
             "accept",
             INVITATION_ID,
@@ -500,7 +721,7 @@ fn invitation_accept_name_gate_reports_a_recoverable_schema_one_failure() {
             assert!(output.stderr.is_empty());
         } else {
             let message = String::from_utf8(output.stderr).unwrap();
-            assert!(message.contains("useful account update --display-name"));
+            assert!(message.contains("useful account update --name"));
         }
         let request = server.finish().pop().unwrap();
         assert_authenticated(&request);
@@ -531,6 +752,7 @@ fn invitation_decline_and_owner_revoke_have_deterministic_success_output() {
 
     let decline = run_with_env(
         &[
+            "account",
             "invitation",
             "decline",
             INVITATION_ID,
@@ -549,9 +771,10 @@ fn invitation_decline_and_owner_revoke_have_deterministic_success_output() {
 
     let revoke = run_with_env(
         &[
-            "organization",
+            "org",
             "invitation",
             "revoke",
+            "--org",
             ORG_ID,
             INVITATION_ID,
             "--yes",
@@ -599,8 +822,9 @@ fn capability_file_rejects_group_access_without_printing_the_secret() {
 
     let output = run_with_env(
         &[
+            "account",
             "invitation",
-            "preview",
+            "show",
             INVITATION_ID,
             "--capability-file",
             capability_path.to_str().unwrap(),
@@ -640,6 +864,7 @@ fn invitation_capability_must_match_the_path_invitation() {
 
     let output = run_with_env(
         &[
+            "account",
             "invitation",
             "accept",
             INVITATION_ID,
@@ -674,8 +899,9 @@ fn unavailable_invitation_returns_stable_json_and_exit_code() {
 
     let output = run_with_env(
         &[
+            "account",
             "invitation",
-            "preview",
+            "show",
             INVITATION_ID,
             "--json",
             "--allow-insecure-http",
@@ -733,9 +959,10 @@ fn invitation_api_failures_use_stable_outcomes_and_exit_codes() {
     let cases = [
         (
             vec![
-                "organization",
+                "org",
                 "invitation",
                 "issue",
+                "--org",
                 ORG_ID,
                 "--email",
                 "teammate@example.com",
@@ -748,6 +975,7 @@ fn invitation_api_failures_use_stable_outcomes_and_exit_codes() {
         ),
         (
             vec![
+                "account",
                 "invitation",
                 "accept",
                 INVITATION_ID,
@@ -760,6 +988,7 @@ fn invitation_api_failures_use_stable_outcomes_and_exit_codes() {
         ),
         (
             vec![
+                "account",
                 "invitation",
                 "decline",
                 INVITATION_ID,
@@ -773,11 +1002,12 @@ fn invitation_api_failures_use_stable_outcomes_and_exit_codes() {
         ),
         (
             vec![
-                "organization",
+                "org",
                 "invitation",
                 "issue",
+                "--org",
                 ORG_ID,
-                "--principal-id",
+                "--account",
                 PRINCIPAL_ID,
                 "--json",
                 "--allow-insecure-http",
@@ -788,6 +1018,7 @@ fn invitation_api_failures_use_stable_outcomes_and_exit_codes() {
         ),
         (
             vec![
+                "account",
                 "invitation",
                 "accept",
                 INVITATION_ID,

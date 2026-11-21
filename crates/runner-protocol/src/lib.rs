@@ -120,6 +120,7 @@ pub enum RunnerFrame {
         assignment_id: String,
         attempt_id: String,
         reason: String,
+        lease_loss: Option<String>,
     },
     ExecutionLeaseRenewalRequested {
         envelope: RunnerEnvelope,
@@ -183,6 +184,7 @@ pub enum RunnerFrame {
         attempt_id: String,
         final_execution_event_sequence: u64,
         reason: String,
+        lease_loss: Option<String>,
         terminal_outcome: Value,
         artifact_delivery: Value,
     },
@@ -677,9 +679,11 @@ pub struct RunControl {
     pub action: RunControlAction,
 }
 
-/// What a control asks of the run, each kind with only its own members: the `useful workflow
-/// run` command it names (`answer`, `approve`, `hand-back`, `lift`, `stop`, `retry` or
-/// `withdraw`) and the wait it resolves, when it names one. A `withdraw` holds no member.
+/// What a control asks of the run, each kind with only its own members: the control kind on
+/// the wire (`answer`, `approve`, `hand-back`, `lift`, `stop`, `retry` or `withdraw`, which
+/// `useful workflow run` applies as `answer`, `approve`, `hand-back`, `unpause`, `pause`,
+/// `retry` and `cancel`) and the wait it resolves, when it names one. A `withdraw` holds no
+/// member.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunControlAction {
     Answer {
@@ -1698,14 +1702,18 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             assignment_id,
             attempt_id,
             reason,
+            lease_loss,
         } => runner_frame_value(
             envelope,
             "assignment_interrupted",
-            json!({
-                "assignmentId": assignment_id,
-                "attemptId": attempt_id,
-                "reason": reason,
-            }),
+            with_lease_loss(
+                json!({
+                    "assignmentId": assignment_id,
+                    "attemptId": attempt_id,
+                    "reason": reason,
+                }),
+                lease_loss.as_deref(),
+            ),
         ),
         RunnerFrame::ExecutionLeaseRenewalRequested {
             envelope,
@@ -1893,19 +1901,23 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             attempt_id,
             final_execution_event_sequence,
             reason,
+            lease_loss,
             terminal_outcome,
             artifact_delivery,
         } => runner_frame_value(
             envelope,
             "execution_interrupted",
-            json!({
-                "assignmentId": assignment_id,
-                "attemptId": attempt_id,
-                "finalExecutionEventSequence": final_execution_event_sequence,
-                "reason": reason,
-                "terminalOutcome": terminal_outcome,
-                "artifactDelivery": artifact_delivery,
-            }),
+            with_lease_loss(
+                json!({
+                    "assignmentId": assignment_id,
+                    "attemptId": attempt_id,
+                    "finalExecutionEventSequence": final_execution_event_sequence,
+                    "reason": reason,
+                    "terminalOutcome": terminal_outcome,
+                    "artifactDelivery": artifact_delivery,
+                }),
+                lease_loss.as_deref(),
+            ),
         ),
         RunnerFrame::ExecutionAborted {
             envelope,
@@ -2002,6 +2014,13 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             Err(EncodeError::Serialization)
         }
     }
+}
+
+fn with_lease_loss(mut payload: Value, lease_loss: Option<&str>) -> Value {
+    if let Some(reason) = lease_loss {
+        payload["leaseLoss"] = json!(reason);
+    }
+    payload
 }
 
 fn with_runner_diagnostic(mut payload: Value, diagnostic: &Option<Value>) -> Value {
@@ -3338,7 +3357,8 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeIntegrationBindings",
             "holdsWaitingRuns",
         ],
-        "execution_transition" | "execution_interrupted" => &["diagnostic"],
+        "execution_transition" => &["diagnostic"],
+        "execution_interrupted" | "assignment_interrupted" => &["leaseLoss"],
         "execution_finished" => &[
             "diagnostic",
             "chosenOutcome",
@@ -3732,6 +3752,14 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/run-control-skipped.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/runner-execution-interrupted-lease-loss.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-interrupted-lease-loss.json"
+        )),
     ];
 
     const INVALID_FIXTURES: &[&[u8]] = &[
@@ -3956,6 +3984,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-assignment-offer-continuation-recovery.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/execution-interrupted-shutdown-lease-loss.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/execution-interrupted-lease-loss-missing.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/assignment-interrupted-lease-loss-missing.json"
+        )),
     ];
 
     // INV-CONTRACT-7
@@ -4012,6 +4052,38 @@ mod tests {
                 .ok()
                 .and_then(|frame| decode_frame(fixture).ok().map(|_| frame));
             assert!(result.is_none(), "invalid fixture {index} was accepted");
+        }
+    }
+
+    // REQ-COMPAT-25
+    #[test]
+    fn earlier_lease_loss_reports_cannot_be_encoded() {
+        let assignment_id = "asn_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned();
+        let attempt_id = "atm_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned();
+        let reason = "execution_lease_expired".to_owned();
+        for frame in [
+            RunnerFrame::ExecutionInterrupted {
+                lease_loss: None,
+                envelope: maximal_envelope(),
+                assignment_id: assignment_id.clone(),
+                attempt_id: attempt_id.clone(),
+                final_execution_event_sequence: 2,
+                reason: reason.clone(),
+                terminal_outcome: json!({"outcome":"cancelled","reason":reason,"forceAbort":null}),
+                artifact_delivery: json!({"outcome":"prepared","artifactSetId":"ats_01k0z6r1w8f4jy2m7q9v3x5abc"}),
+            },
+            RunnerFrame::AssignmentInterrupted {
+                lease_loss: None,
+                envelope: maximal_envelope(),
+                assignment_id,
+                attempt_id,
+                reason,
+            },
+        ] {
+            assert!(matches!(
+                encode_runner_frame(&frame),
+                Err(EncodeError::InvalidFrame(_))
+            ));
         }
     }
 

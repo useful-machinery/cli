@@ -143,6 +143,20 @@ impl WorkflowHome {
         }
     }
 
+    /// The home's own `runs/`, beside `workflows/` and `trees/`, which holds the runs of a
+    /// `--path` run created with no `--run-dir` (REQ-WFDEF-17, REQ-LOCALRUN-174).
+    pub fn home_runs_directory(&self) -> PathBuf {
+        self.root.join(RUNS_DIRECTORY)
+    }
+
+    /// Creates the home's own `runs/`, and the home itself, readable by their owner alone
+    /// unless they exist.
+    pub fn create_home_runs_directory(&self) -> Result<PathBuf, DefinitionError> {
+        let runs = self.home_runs_directory();
+        create_private_directory(&runs)?;
+        Ok(runs)
+    }
+
     fn trees_directory(&self) -> PathBuf {
         self.root.join(TREES_DIRECTORY).join(SHA256_DIRECTORY)
     }
@@ -231,7 +245,8 @@ pub struct DefinitionRecord {
     pub current: u64,
     /// Newest first.
     pub revisions: Vec<RevisionRecord>,
-    /// Required on read; written as `null` when absent.
+    /// Required on read and kept as read; a new record writes `null`, and no command sets a
+    /// value (REQ-WFDEF-7), so one an earlier release recorded stays as it was.
     #[serde(deserialize_with = "Option::deserialize")]
     pub cloud_id: Option<String>,
 }
@@ -454,15 +469,6 @@ impl BindingsFile {
 
     pub fn parse(bytes: &[u8]) -> Result<Self, DefinitionError> {
         Self::from_bytes(bytes, None)
-    }
-
-    /// The file of `members`, as one already decoded, such as Cloud's answered snapshot;
-    /// like a parsed one it has no path, so a `bindings_file_invalid` about it names none.
-    pub fn from_object(members: serde_json::Map<String, Value>) -> Self {
-        Self {
-            path: None,
-            members: members.into_iter().collect(),
-        }
     }
 
     fn from_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Self, DefinitionError> {
@@ -964,17 +970,9 @@ pub struct EnabledChange {
 
 /// Where a publish of a root records its revision (REQ-WFDEF-19): the root's `name` and the
 /// record the target resolved to, none when the publish creates one.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublishPlace {
+struct PublishPlace {
     name: String,
     resolved: Option<StoredDefinition>,
-}
-
-impl PublishPlace {
-    /// The record as resolution read it, unlocked; none for a new record.
-    pub fn record(&self) -> Option<&DefinitionRecord> {
-        self.resolved.as_ref().map(|resolved| &resolved.record)
-    }
 }
 
 /// The first half of a publish of `tree`: refuses a root without `name`
@@ -982,7 +980,7 @@ impl PublishPlace {
 /// lock. `To` reads that record (`definition_id_invalid`, `definition_not_found`), `Resolve`
 /// the one record of the root's name (`definition_name_ambiguous` for more than one) and
 /// `New` none.
-pub fn resolve_publish(
+fn resolve_publish(
     home: &WorkflowHome,
     tree: &ValidatedTree,
     target: PublishTarget,
@@ -1014,7 +1012,7 @@ pub fn publish(
     by: &str,
 ) -> Result<Published, DefinitionError> {
     let place = resolve_publish(home, tree, target)?;
-    write_publication(home, tree, place, None, by, |existing| match existing {
+    write_publication(home, tree, place, by, |existing| match existing {
         Some(existing) => resolve_bindings(
             &tree.bindings,
             &tree.required_integrations,
@@ -1038,49 +1036,13 @@ pub fn publish(
     })
 }
 
-/// Records `tree` at `place` as a Cloud publication (REQ-WFDEF-19, REQ-WFDEF-22,
-/// REQ-CLOUDDEF-14): the revision's snapshot is `recorded`, the snapshot Cloud answered, and
-/// the record's `cloudId` is `cloud_id`, set in the same record write, on a record this
-/// creates too. The current snapshot is never read. `recorded` is judged as a bindings file
-/// is (`binding_undeclared`, `binding_kind_mismatch`, `binding_value_invalid`) and must give
-/// every declared binding a value, a `definition` binding included (`binding_missing`); a
-/// `cloud_id` that is not a `def_` id is `definition_id_invalid`. The lock, the record read
-/// again under it and the writes are `publish`'s, so a record extended since `place` was
-/// resolved is extended and a held lock is `publish_conflict`.
-pub fn record_publication(
-    home: &WorkflowHome,
-    tree: &ValidatedTree,
-    place: PublishPlace,
-    recorded: &BindingsFile,
-    cloud_id: &str,
-    by: &str,
-) -> Result<Published, DefinitionError> {
-    check_definition_id(cloud_id)?;
-    write_publication(home, tree, place, Some(cloud_id), by, |_| {
-        let named = NamedBindings::judge(tree, Some(recorded), &[])?;
-        let declarations = Declarations {
-            flat: &tree.bindings,
-            integrations: &tree.required_integrations,
-        };
-        if let Some((at, _)) = declarations
-            .all()
-            .find(|(at, _)| !matches!(named.get(*at), Some(Named::Value(_))))
-        {
-            return Err(at.missing());
-        }
-        resolve_bindings(&tree.bindings, &tree.required_integrations, &named, None)
-    })
-}
-
 /// The rest of a publish to `place`: takes the target's lock and reads its record again under
 /// it, makes the revision's snapshot with `snapshot` from that record (none for a new one),
-/// then writes the snapshot, the tree copy and the record, with `cloudId` set to `cloud_id`
-/// when given.
+/// then writes the snapshot, the tree copy and the record.
 fn write_publication(
     home: &WorkflowHome,
     tree: &ValidatedTree,
     place: PublishPlace,
-    cloud_id: Option<&str>,
     by: &str,
     snapshot: impl FnOnce(Option<&StoredDefinition>) -> Result<BindingsSnapshot, DefinitionError>,
 ) -> Result<Published, DefinitionError> {
@@ -1122,9 +1084,6 @@ fn write_publication(
         by: if by.is_empty() { UNKNOWN_PUBLISHER } else { by }.to_owned(),
     };
     record.name = name;
-    if let Some(cloud_id) = cloud_id {
-        record.cloud_id = Some(cloud_id.to_owned());
-    }
     record.revisions.insert(0, revision.clone());
     record.current = n;
 
@@ -1575,7 +1534,8 @@ fn is_definition_id(value: &str) -> bool {
 
 /// Refuses `id` with `definition_id_invalid` unless it is `def_` and 26 characters
 /// (REQ-WFDEF-27). Local and Cloud definition ids share the shape, so the check cannot tell
-/// one from the other: `publish --cloud-to` checks a Cloud id with it (REQ-CLOUDDEF-20).
+/// one from the other: a definition named by an id is found by looking under the home and
+/// then in the project in effect (REQ-CLOUDDEF-42).
 pub fn check_definition_id(id: &str) -> Result<(), DefinitionError> {
     if is_definition_id(id) {
         Ok(())

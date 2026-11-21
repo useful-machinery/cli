@@ -2,9 +2,10 @@
 //! (REQ-LOCALRUN-194 to REQ-LOCALRUN-197, INV-ENGINE-26): inspecting the predecessor without
 //! its lock, reading the definition's current revision, the pre-check of the continuation
 //! against it under the predecessor's lock, the take-create-name-supersede sequence and then
-//! the hand-off to `continue_run` for `restart` or the `upgraded` report for `upgrade`. Nothing
-//! is written before the pre-check passes, so every refusal leaves both runs as they were, and
-//! `reconcile` completes or undoes a move a command died in (REQ-LOCALRUN-196).
+//! the hand-off to `continue_run` for `upgrade --from` or the `upgraded` report for `upgrade`
+//! without it. Nothing is written before the pre-check passes, so every refusal leaves both
+//! runs as they were, and `reconcile` completes or undoes a move a command died in
+//! (REQ-LOCALRUN-196).
 
 use std::ffi::OsString;
 use std::fmt;
@@ -40,15 +41,15 @@ type CommandResult = super::super::super::CommandResult;
 
 /// What the command asks of the successor.
 pub(super) enum SuccessorRequest {
-    /// `restart`: the step the successor continues from, the `--input-text` values set on top
-    /// of the projected inputs and its execution root (REQ-LOCALRUN-194).
+    /// `upgrade --from`: the step the successor continues from, the `--input-text` values set
+    /// on top of the projected inputs and its execution root (REQ-LOCALRUN-194).
     Restart {
         from: String,
         input_text: Vec<(String, String)>,
         execution_root: Option<PathBuf>,
     },
-    /// `upgrade`: the successor carries the predecessor's wait and starts no attempt
-    /// (REQ-LOCALRUN-197).
+    /// `upgrade` without `--from`: the successor carries the predecessor's wait and starts no
+    /// attempt (REQ-LOCALRUN-197).
     Upgrade,
 }
 
@@ -225,13 +226,6 @@ fn write_upgraded(config: &PresentationConfig, upgraded: &Upgraded) -> CommandRe
     Ok(ExitCode::Success)
 }
 
-/// The `wait_resolved` refusal (REQ-LOCALRUN-197), decided from the inspection before the lock
-/// and again from the controls under it.
-const WAIT_RESOLVED: (&str, &str) = (
-    "wait_resolved",
-    "A recorded control already resolves the run's wait; resume the run instead.",
-);
-
 /// The waiting run a successor supersedes, as inspected without its lock.
 struct Predecessor {
     run_directory: PathBuf,
@@ -250,7 +244,7 @@ enum Unsuitable {
         run_directory: PathBuf,
         run: Option<String>,
         code: &'static str,
-        message: &'static str,
+        message: String,
     },
     Failed(anyhow::Error),
 }
@@ -265,7 +259,7 @@ fn inspect(requested: &Path) -> Result<Predecessor, Unsuitable> {
             error.code.as_str()
         ))
     })?;
-    let refused = |run: Option<&str>, code, message| Unsuitable::Refused {
+    let refused = |run: Option<&str>, code, message: String| Unsuitable::Refused {
         run_directory: snapshot.run_directory.clone(),
         run: run.map(str::to_owned),
         code,
@@ -275,7 +269,8 @@ fn inspect(requested: &Path) -> Result<Predecessor, Unsuitable> {
         return Err(refused(
             None,
             "run_record_missing",
-            "The run has no run record; only a waiting run of a definition has a successor.",
+            "The run has no run record; only a waiting run of a definition has a successor."
+                .to_owned(),
         ));
     };
     let record: WorkflowRunRecord = serde_json::from_value(record)
@@ -286,34 +281,32 @@ fn inspect(requested: &Path) -> Result<Predecessor, Unsuitable> {
         return Err(refused(
             run,
             "definition_missing",
-            "The run was started by path; only a run of a definition has a successor.",
+            "The run was started by path; only a run of a definition has a successor.".to_owned(),
         ));
     };
     let probe = inspect_wait(&snapshot.run_directory, &NoConditions)
         .context("inspect the run's wait")
         .map_err(Unsuitable::Failed)?;
-    let (wait, resolved) = match probe.inspection {
-        WaitInspection::Satisfied { wait, .. } => (wait, true),
+    // REQ-LOCALRUN-223: a run in a state `upgrade` does not apply in is refused naming the
+    // state and the verbs that apply.
+    let standing = || {
+        super::control::Standing::of(&probe.inspection, || {
+            super::control::latest_attempt_succeeded(&snapshot.state)
+        })
+        .message(super::control::Placed::Home)
+    };
+    let (wait, resolved) = match &probe.inspection {
+        WaitInspection::Satisfied { wait, .. } => (wait.clone(), true),
         WaitInspection::Held { wait }
         | WaitInspection::RuleInvalid { wait, .. }
-        | WaitInspection::ConditionUnavailable { wait, .. } => (wait, false),
-        WaitInspection::Locked(_) => {
-            return Err(refused(
-                run,
-                "run_locked",
-                "A live process holds the run; wait for it to finish or cancel it.",
-            ));
-        }
+        | WaitInspection::ConditionUnavailable { wait, .. } => (wait.clone(), false),
+        WaitInspection::Locked(_) => return Err(refused(run, "run_locked", standing())),
         WaitInspection::NoWait {
             state: Some(RunState::Exited),
             ..
-        } => return Err(refused(run, "run_exited", "The run has exited.")),
+        } => return Err(refused(run, "run_exited", standing())),
         WaitInspection::NoWait { .. } | WaitInspection::Continued { .. } => {
-            return Err(refused(
-                run,
-                "run_not_waiting",
-                "The run does not wait; cancel or resume it instead.",
-            ));
+            return Err(refused(run, "run_not_waiting", standing()));
         }
     };
     Ok(Predecessor {
@@ -345,7 +338,7 @@ async fn create(
             run,
             code,
             message,
-        })) => return Err(refuse(&run_directory, run.as_deref(), code, message)),
+        })) => return Err(refuse(&run_directory, run.as_deref(), code, &message)),
         Err(BlockingOperationError::Operation(Unsuitable::Failed(error))) => {
             return Err(Err(error.into()));
         }
@@ -402,7 +395,10 @@ async fn create(
             ));
         }
         if predecessor.resolved {
-            return Err(refuse_predecessor(WAIT_RESOLVED.0, WAIT_RESOLVED.1));
+            // REQ-LOCALRUN-197, REQ-LOCALRUN-223: decided from the inspection before the lock
+            // and again from the controls under it.
+            let refusal = super::control::wait_resolved();
+            return Err(refuse_predecessor(refusal.code, &refusal.message));
         }
     }
     if !definition
@@ -497,7 +493,7 @@ struct Admission {
 
 /// What follows the successor's creation.
 enum Next {
-    /// `restart`: its first own attempt continues from `from` in `execution_root`.
+    /// `upgrade --from`: its first own attempt continues from `from` in `execution_root`.
     Continue {
         from: String,
         execution_root: PathBuf,
@@ -508,12 +504,12 @@ enum Next {
 }
 
 /// Admits the successor against the current revision's workflow under the predecessor's
-/// lock. For `restart` (REQ-LOCALRUN-194, REQ-CONTINUE-79) the continuation from `STEP`:
-/// `STEP` and its dependents re-executed, the rest inherited from the predecessor's attempts,
-/// the predecessor's inputs projected with each `--input-text` on top. For `upgrade`
-/// (REQ-LOCALRUN-197) the carried state resolved against the workflow, every miss listed, then
-/// the continuations from the wait's `then` and `onHandBack`. A refusal is the command's
-/// result, for the caller to return once the predecessor is settled.
+/// lock. For `upgrade --from` (REQ-LOCALRUN-194, REQ-CONTINUE-79) the continuation from
+/// `STEP`: `STEP` and its dependents re-executed, the rest inherited from the predecessor's
+/// attempts, the predecessor's inputs projected with each `--input-text` on top. For `upgrade`
+/// without it (REQ-LOCALRUN-197) the carried state resolved against the workflow, every miss
+/// listed, then the continuations from the wait's `then` and `onHandBack`. A refusal is the
+/// command's result, for the caller to return once the predecessor is settled.
 async fn precheck(
     pending: &PendingLocalContinuation,
     predecessor: &Predecessor,
@@ -604,8 +600,8 @@ async fn precheck(
                 return Err(rejection_exit(
                     continuation_output(config.clone(), leaf, pending.run_directory())
                         .render_successor_refusal(
-                            WAIT_RESOLVED.0,
-                            WAIT_RESOLVED.1,
+                            super::control::wait_resolved().code,
+                            &super::control::wait_resolved().message,
                             Some(&predecessor.record.id),
                         ),
                 ));

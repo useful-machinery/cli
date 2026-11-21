@@ -111,7 +111,7 @@ const CHILDREN_DIRECTORY: &str = "children";
 /// The wait record of a waiting run (REQ-LOCALRUN-178), at the root and under the attempt.
 const WAIT_RECORD_FILE: &str = "wait.json";
 const WAIT_RECORD_TEMPORARY_FILE: &str = "wait.json.tmp";
-/// The run record's outcome for a run withdrawn from its wait (REQ-CONTINUE-75).
+/// The run record's outcome for a run that a withdrawal ended at its wait (REQ-CONTINUE-75).
 pub const WITHDRAWN_OUTCOME: &str = "withdrawn";
 /// The run record's outcome for a run canceled while it waits (REQ-CONTINUE-75).
 pub const CANCELED_OUTCOME: &str = "canceled";
@@ -927,6 +927,13 @@ pub(super) struct AttemptStepV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub(super) failed_child: Option<super::evidence::FailedChild>,
+    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79).
+    #[serde(
+        default,
+        deserialize_with = "super::evidence::deserialize_non_null_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(super) failure_class: Option<super::evidence::FailureClass>,
     /// The source each `firstOf` of a step that started took, kept through recovery
     /// executions and whatever state the step then reaches (REQ-EVIDENCE-28); absent from a
     /// state an earlier `useful` wrote.
@@ -1706,6 +1713,14 @@ impl PendingLocalRetry {
         Ok(current_attempt(&*lock_state(&self.state.current)?)?.attempt_number)
     }
 
+    /// The execution root of the run's latest attempt, where a retry given none runs
+    /// (REQ-LOCALRUN-78).
+    pub fn prior_execution_root(&self) -> Result<PathBuf, LocalRunDirectoryError> {
+        Ok(PathBuf::from(
+            &current_attempt(&*lock_state(&self.state.current)?)?.execution_root,
+        ))
+    }
+
     /// Whether a withdrawal is unhonored over the run this retry holds before its attempt
     /// begins (`withdrawal_unhonored_in`, REQ-LOCALRUN-213), read under the run lock.
     pub fn withdrawal_unhonored(&self) -> Result<bool, LocalRunDirectoryError> {
@@ -1716,7 +1731,7 @@ impl PendingLocalRetry {
         )
     }
 
-    /// Takes the run's controls lock (`ControlsLock`), waiting while a `withdraw` holds it, so
+    /// Takes the run's controls lock (`ControlsLock`), waiting while a withdrawal holds it, so
     /// the retry asks `withdrawal_unhonored` again and begins its attempt without a withdrawal
     /// being appended in between (REQ-LOCALRUN-213); it is held until the returned value is
     /// dropped. `end_running` takes it itself, so it must be dropped before that.
@@ -1775,7 +1790,7 @@ pub enum ContinuationDefinitionMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SuccessorCarry {
     /// Nothing more: the successor's record reads `running` and its first own attempt
-    /// begins at once (`useful workflow run restart`).
+    /// begins at once (`useful workflow run upgrade --from`).
     Continue,
     /// The predecessor's root wait record, copied as the successor's own: the successor's
     /// record reads `waiting` and its first own attempt is the continuation a control
@@ -1855,8 +1870,9 @@ impl PendingLocalContinuation {
     /// The first control, in ordinal order, that resolves `wait` for this run, read under
     /// the run lock (REQ-LOCALRUN-197): a command that inspected the run before locking it
     /// asks again here, since a control recorded in between resolves nothing once copied to a
-    /// successor (REQ-LOCALRUN-195). `None` when no control does, for a rule on a source other
-    /// than `useful` (controls never resolve an external wait, REQ-WFEXEC-65), as for a rule
+    /// successor (REQ-LOCALRUN-195). The controls are read by `controls_rule`, so a
+    /// `control.retry` naming a `host` wait resolves it (INV-ENGINE-48). `None` when no control
+    /// does, for a wait no control resolves (an external wait, REQ-WFEXEC-65), as for a rule
     /// outside the matcher's grammar, and for a run without a record.
     pub fn resolving_control(
         &self,
@@ -1876,7 +1892,7 @@ impl PendingLocalContinuation {
         withdrawal_unhonored_in(&self.normalized, &self.root, &self.state)
     }
 
-    /// Takes the run's controls lock (`ControlsLock`), waiting while a `withdraw` holds it, so
+    /// Takes the run's controls lock (`ControlsLock`), waiting while a withdrawal holds it, so
     /// the continuation asks `withdrawal_unhonored` again and begins its attempt without a
     /// withdrawal being appended in between (REQ-LOCALRUN-213); it is held until the returned
     /// value is dropped. `end_running`, `end_waiting` and `settle_abandoned` take it
@@ -2507,8 +2523,61 @@ impl PendingLocalContinuation {
         else {
             return FailedAttemptRestart::NotFailed;
         };
-        let steps = self
-            .prior_workflow
+        let steps = self.unfinished_ordinary_steps(prior);
+        if steps.is_empty() {
+            FailedAttemptRestart::FinalizerOnly
+        } else {
+            FailedAttemptRestart::Steps(steps)
+        }
+    }
+
+    /// The steps `useful workflow run retry` with neither `--from` nor `--all` continues this
+    /// ended run from (REQ-LOCALRUN-184): for an edge-scheduled workflow the ordinary step the
+    /// latest attempt started last, the stage the run's `position` named until the run exited
+    /// (REQ-WFDEF-4); otherwise the steps `failed_attempt_restart` names for a failed attempt,
+    /// read as well for a latest attempt that was cancelled or interrupted. None when the run
+    /// names none: an edge-scheduled run none of whose ordinary steps started, and otherwise an
+    /// attempt that ended any other way or one whose failure was a finalizer's alone.
+    pub fn ended_attempt_restart(&self) -> Vec<String> {
+        let Some(prior) = self.state.attempts.last() else {
+            return Vec::new();
+        };
+        let definition = &self.prior_workflow.definition;
+        if matches!(
+            definition.scheduling,
+            super::validated::Scheduling::Edges { .. }
+        ) {
+            return prior
+                .progress
+                .steps
+                .iter()
+                .filter(|step| definition.presentation_order.contains(&step.id))
+                .filter_map(|step| {
+                    let started = step.started_at.as_deref()?;
+                    let started = OffsetDateTime::parse(started, &Rfc3339).ok()?;
+                    Some((started, &step.id))
+                })
+                .max_by_key(|(started, _)| *started)
+                .map(|(_, step)| step.clone())
+                .into_iter()
+                .collect();
+        }
+        if matches!(
+            prior.state,
+            AttemptStateV1::WorkflowFailed
+                | AttemptStateV1::Cancelled
+                | AttemptStateV1::Interrupted
+        ) {
+            self.unfinished_ordinary_steps(prior)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Every ordinary step of the definition that governed `prior`, in presentation order,
+    /// that `prior` left other than `succeeded`, `skipped` or `inherited`.
+    fn unfinished_ordinary_steps(&self, prior: &LocalAttemptV1) -> Vec<String> {
+        self.prior_workflow
             .definition
             .presentation_order
             .iter()
@@ -2524,12 +2593,7 @@ impl PendingLocalContinuation {
                 })
             })
             .cloned()
-            .collect::<Vec<_>>();
-        if steps.is_empty() {
-            FailedAttemptRestart::FinalizerOnly
-        } else {
-            FailedAttemptRestart::Steps(steps)
-        }
+            .collect()
     }
 
     /// The steps the prior attempt left neither succeeded nor inherited, which an
@@ -2853,8 +2917,8 @@ impl PendingLocalContinuation {
             }
         };
         // A run-definition continuation that resolves no root wait is a restart's first own
-        // attempt whichever command begins it: `restart`, or `resume --from` after a restart
-        // interrupted before that attempt (REQ-CONTINUE-79). The continuation of an upgrade's
+        // attempt whichever command begins it: `upgrade --from`, or `retry --from` after an
+        // `upgrade --from` interrupted before that attempt (REQ-CONTINUE-79). The continuation of an upgrade's
         // carried wait keeps the reason its control gave it (REQ-CONTINUE-80).
         let reason = if mode == ContinuationDefinitionMode::Run
             && read_optional_wait_record(&self.root)?.is_none()
@@ -3217,6 +3281,26 @@ impl LocalAttemptOwner {
         outcome: Option<&str>,
     ) -> Result<(), LocalRunDirectoryError> {
         update_run_record(&self.state.root, state, attempts, outcome)
+    }
+
+    /// Rewrites the run record for an attempt that ended on a recorded wait: `waiting`,
+    /// `attempts` and no `outcome`, as `update_run_record`, and, for a counted wait (a host
+    /// wait under its limit, `EnteredWait::counted_edge`), its edge's count in `edges`
+    /// incremented, in the same write (REQ-WFEXEC-80, REQ-WFDEF-4).
+    pub fn record_waiting(
+        &self,
+        attempts: u64,
+        counted_edge: Option<&str>,
+    ) -> Result<(), LocalRunDirectoryError> {
+        rewrite_run_record(&self.state.root, |record| {
+            record.state = RunState::Waiting;
+            record.attempts = attempts;
+            record.outcome = None;
+            if let Some(key) = counted_edge {
+                increment_edge(record, key)?;
+            }
+            Ok(())
+        })
     }
 
     /// Creates `requested` as a successor of the waiting run `predecessor` holds
@@ -4495,7 +4579,7 @@ impl LocalAttemptOwner {
     }
 
     /// Takes the run's controls lock (`ControlsLock`) for the attempt's last read of the
-    /// withdrawals (REQ-WFEXEC-73), waiting while a `withdraw` holds it; it is held until the
+    /// withdrawals (REQ-WFEXEC-73), waiting while a withdrawal holds it; it is held until the
     /// returned value is dropped, after the run lock is released.
     pub fn lock_controls(&self) -> Result<ControlsLock, LocalRunDirectoryError> {
         ControlsLock::take(&self.state.root)
@@ -4505,7 +4589,7 @@ impl LocalAttemptOwner {
     /// not (REQ-WFEXEC-73, REQ-LOCALRUN-211): when one naming no wait is later than its
     /// `settledAt` (`withdrawn_after_settlement`), that is taken again now, so every withdrawal
     /// recorded before it reads spent to the next attempt (`withdrawal_pending_in`). Called
-    /// under the controls lock after the attempt's last read, so a `withdraw` appended after it
+    /// under the controls lock after the attempt's last read, so a withdrawal appended after it
     /// finds the run released. An unsettled attempt, one no withdrawal is later than and
     /// unreadable controls leave the state as it is.
     pub fn spend_withdrawals(&self) -> Result<(), LocalRunDirectoryError> {
@@ -6067,6 +6151,11 @@ fn update_progress_nodes<Cause, Output>(
             StepState::Succeeded { .. } => runtime.failed_child.clone(),
             _ => None,
         };
+        // REQ-WFEXEC-79: only a `failed` entry carries its failure's class.
+        node.failure_class = match &runtime.state {
+            StepState::Failed { .. } => runtime.failure_class,
+            _ => None,
+        };
         node.input_sources.clone_from(&runtime.input_sources);
     }
     Ok(())
@@ -6151,6 +6240,9 @@ fn update_recovery_progress(
                             }
                             super::runtime::RecoveryHandlerOutcome::GaveUp { .. } => {
                                 Some(super::publication::RecoveryHandlerOutcomeV1::GaveUp)
+                            }
+                            super::runtime::RecoveryHandlerOutcome::Infrastructure { .. } => {
+                                Some(super::publication::RecoveryHandlerOutcomeV1::Infrastructure)
                             }
                             super::runtime::RecoveryHandlerOutcome::Failed { .. } => {
                                 Some(super::publication::RecoveryHandlerOutcomeV1::Failed)
@@ -6758,12 +6850,17 @@ fn count_run_record_edge(
         record.state = RunState::Running;
         record.attempts = attempts;
         record.outcome = None;
-        let count = record.edges.entry(key.to_owned()).or_insert(0);
-        *count = count
-            .checked_add(1)
-            .ok_or(LocalRunDirectoryError::StateInvalid)?;
-        Ok(())
+        increment_edge(record, key)
     })
+}
+
+/// Increments the count `record` holds for the edge `key` (REQ-WFDEF-4).
+fn increment_edge(record: &mut WorkflowRunRecord, key: &str) -> Result<(), LocalRunDirectoryError> {
+    let count = record.edges.entry(key.to_owned()).or_insert(0);
+    *count = count
+        .checked_add(1)
+        .ok_or(LocalRunDirectoryError::StateInvalid)?;
+    Ok(())
 }
 
 /// Writes `bytes` whole as `.private/<temporary>` with `mode` and renames it to `name` in
@@ -6912,26 +7009,56 @@ impl WaitProbe {
     }
 }
 
-/// The first control under `run_directory`'s `controls/`, in ordinal order, that `wait`'s
-/// rule matches for the run `run_id` (REQ-CONTINUE-74), `Ok(None)` when none does and
-/// `Ok(None)` without reading the controls for a rule on a source other than `useful`
-/// (REQ-WFEXEC-65); a rule outside the grammar is `Err(RuleError)`.
+/// What the host condition reads of the run at `requested` (REQ-WFEXEC-81): the run's id,
+/// its latest attempt's execution root and its tree copy, `<run>/workflow/tree`.
+pub(crate) struct HostConditionRun {
+    pub(crate) run_id: String,
+    pub(crate) execution_root: PathBuf,
+    pub(crate) tree_copy: PathBuf,
+}
+
+/// Reads `HostConditionRun` for the run at `requested` without taking its lock; a run
+/// without a run record or an attempt is `StateInvalid`.
+pub(crate) fn host_condition_run(
+    requested: &Path,
+) -> Result<HostConditionRun, LocalRunDirectoryError> {
+    let (normalized, root) = open_run_root(requested)?;
+    let record = read_optional_run_record(&root)?.ok_or(LocalRunDirectoryError::StateInvalid)?;
+    let state = read_state(&root)?;
+    let latest = state
+        .attempts
+        .last()
+        .ok_or(LocalRunDirectoryError::StateInvalid)?;
+    Ok(HostConditionRun {
+        run_id: record.id,
+        execution_root: PathBuf::from(&latest.execution_root),
+        tree_copy: run_tree_copy_directory(&normalized),
+    })
+}
+
+/// The first control under `run_directory`'s `controls/`, in ordinal order, that the rule
+/// `wait`'s controls are read by (`controls_rule`) matches for the run `run_id`
+/// (REQ-CONTINUE-74), `Ok(None)` when none does and `Ok(None)` without reading the controls
+/// for a wait no control resolves (REQ-WFEXEC-65); a rule outside the grammar is
+/// `Err(RuleError)`.
 fn control_resolution(
     run_directory: &Path,
     run_id: &str,
     wait: &WaitRecord,
 ) -> Result<Result<Option<ControlEvent>, RuleError>, LocalRunDirectoryError> {
-    if wait.rule.source != super::wait::SOURCE {
+    let Some(rule) = super::wait::controls_rule(wait) else {
         return Ok(Ok(None));
-    }
+    };
     let controls = super::wait::read_controls(run_directory)?;
-    Ok(super::wait::evaluate(&wait.rule, run_id, wait, &controls).map(|control| control.cloned()))
+    Ok(super::wait::evaluate(&rule, run_id, wait, &controls).map(|control| control.cloned()))
 }
 
 /// Probes the run at `requested` without taking its lock (REQ-CONTINUE-74): a lock a live
 /// process holds is `Locked`; otherwise the run record, the root wait record and the events
-/// decide: the controls for a rule on source `um`, and for a rule on any other source the
-/// events `conditions` observes now, never the controls (REQ-WFEXEC-65). Nothing is written.
+/// decide: the controls for a rule on source `um`; for a `host` wait the controls a `repair`
+/// wait is read by and, only when none resolves it, the host condition `conditions`
+/// evaluates (REQ-WFEXEC-81, INV-ENGINE-48); and for a rule on any other source the events
+/// `conditions` observes now, never the controls (REQ-WFEXEC-65). Nothing is written.
 pub fn inspect_wait(
     requested: &Path,
     conditions: &dyn super::wait::ConditionSource,
@@ -6991,7 +7118,19 @@ pub fn inspect_wait(
             successor: record.successor.clone(),
         }));
     };
-    let resolved = if wait.rule.source == super::wait::SOURCE {
+    let resolved = if wait.kind == super::wait::WaitKind::Host {
+        // INV-ENGINE-48: a `control.retry` or `control.withdraw` naming the wait resolves it
+        // before the host condition is asked; the condition holds the wait or observes
+        // `host.healthy`, and it is never unavailable (REQ-WFEXEC-81).
+        match control_resolution(&normalized, &record.id, &wait)? {
+            Ok(None) => {
+                let events = conditions.observe_host(&normalized, &wait)?;
+                super::wait::evaluate(&wait.rule, &record.id, &wait, &events)
+                    .map(|event| event.cloned().map(ResolvedBy::External))
+            }
+            resolved => resolved.map(|control| control.map(ResolvedBy::Control)),
+        }
+    } else if wait.rule.source == super::wait::SOURCE {
         control_resolution(&normalized, &record.id, &wait)?
             .map(|control| control.map(ResolvedBy::Control))
     } else {
@@ -7047,7 +7186,7 @@ fn withdrawal_pending_in(attempts: &[LocalAttemptV1], controls: &[ControlEvent])
 
 /// Whether `controls` hold a `control.withdraw` naming no wait that the attempt a reader that
 /// does not own the latest of `attempts` finds next would honor (REQ-LOCALRUN-212): a
-/// `withdraw` (`WaitProbe::withdrawal_pending`), which may find the run held by a `retry` or
+/// withdrawal (`WaitProbe::withdrawal_pending`), which may find the run held by a `retry` or
 /// `resume` that has not begun its attempt. While the latest attempt's span is open, because it
 /// is unsettled or ended `continued` while the run record does not read `exited` (`exited`
 /// false), the reader answers as its owner does (`withdrawal_pending_in`); otherwise only one
@@ -7129,7 +7268,7 @@ fn spend_withdrawals_in(
 }
 
 /// Runs `end` under the run's controls lock (`ControlsLock`) and releases the run lock `lock`,
-/// which the caller verified, before the controls lock, also when `end` fails: a `withdraw`
+/// which the caller verified, before the controls lock, also when `end` fails: a withdrawal
 /// waiting for the controls lock then finds the run released (REQ-LOCALRUN-211). No caller may
 /// hold the controls lock already.
 fn end_under_controls(
@@ -7201,7 +7340,7 @@ fn withdrawn_since(controls: &[ControlEvent], since: Option<OffsetDateTime>) -> 
 }
 
 /// A run's controls lock (REQ-LOCALRUN-186, REQ-WFEXEC-73, INV-ENGINE-39): an exclusive
-/// `flock` on the run directory itself, which nothing else locks. `withdraw` holds it from its
+/// `flock` on the run directory itself, which nothing else locks. A withdrawal holds it from its
 /// check that a live process holds the run through its append, and that process holds it from
 /// its last read of the withdrawals through the release of the run lock, so a withdrawal is
 /// appended only while the process will still read it, or finds the run released. A process
@@ -7250,7 +7389,10 @@ fn read_withdrawal_pending(
 /// REQ-CONTINUE-75), read from the wait copies of the attempts before `attempt_number` and
 /// the run's controls. An imported attempt's copy (REQ-LOCALRUN-195) is resolved by a control
 /// naming any run of the lineage: the run it was recorded under, copied with it, a successor
-/// that carried the wait (REQ-LOCALRUN-197) and recorded the control, or this run.
+/// that carried the wait (REQ-LOCALRUN-197) and recorded the control, or this run. A `host`
+/// wait copy no control resolves was resolved by the host condition when the attempt after it
+/// records continuation reason `host` (REQ-CONTINUE-93); `reason` is the continuation reason of
+/// attempt `attempt_number` while `state.json` does not record it yet.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AttemptControls {
     /// `wait` and `resume_item` from the attempt immediately before, when it entered a wait
@@ -7267,12 +7409,13 @@ pub struct AttemptControls {
 pub fn attempt_controls(
     requested: &Path,
     attempt_number: u64,
+    reason: Option<super::publication::ContinuationReasonV1>,
 ) -> Result<AttemptControls, LocalRunDirectoryError> {
     let (normalized, root) = open_run_root(requested)?;
     let mut resolved = AttemptControls::default();
-    let waits = resolved_attempt_waits(&normalized, &root, attempt_number)?;
-    for (_, wait, control) in &waits {
-        resolved.record_answers(&wait.then, wait, control.as_ref());
+    let waits = resolved_attempt_waits(&normalized, &root, attempt_number, reason)?;
+    for (_, wait, resolution) in &waits {
+        resolved.record_answers(&wait.then, wait, resolution.as_ref());
     }
     resolved.continue_latest(&waits, attempt_number);
     Ok(resolved)
@@ -7284,28 +7427,33 @@ impl AttemptControls {
     /// nested run being at the root's path `prefix` (`[<step>]` or `[<step>, {"item": n}]`):
     /// the wait copies of the nested run's earlier attempts are matched, by `kind@since` and
     /// the full path, with the root's wait copies that carried them and read against the
-    /// control that resolved the root's (REQ-CONTINUE-92). `answers` come from every root wait
-    /// copy at `prefix` followed by one nested step, keyed by that step, so a fresh nested run
-    /// at the element, as a successor's carry starts, receives them too.
+    /// control or the host condition that resolved the root's (REQ-CONTINUE-92,
+    /// REQ-CONTINUE-93). `answers` come from every root wait copy at `prefix` followed by one
+    /// nested step, keyed by that step, so a fresh nested run at the element, as a successor's
+    /// carry starts, receives them too. `reason` is the continuation reason of the root's
+    /// attempt after its last recorded one, read for a carried copy that attempt continues
+    /// while the root's `state.json` does not record it yet, as `attempt_controls` reads it.
     pub fn nested(
         root: &Path,
         nested: &Path,
         attempt_number: u64,
         prefix: &[Value],
+        reason: Option<super::publication::ContinuationReasonV1>,
     ) -> Result<Self, LocalRunDirectoryError> {
         let (root_normalized, root_handle) = open_run_root(root)?;
         let root_attempts = read_optional_run_record(&root_handle)?
             .map_or(0, |record| record.attempts)
             .saturating_add(1);
-        let carried = resolved_attempt_waits(&root_normalized, &root_handle, root_attempts)?;
+        let carried =
+            resolved_attempt_waits(&root_normalized, &root_handle, root_attempts, reason)?;
         let nested_step = |wait: &WaitRecord| match wait.step.strip_prefix(prefix) {
             Some([Value::String(step)]) => Some(step.clone()),
             _ => None,
         };
         let mut resolved = Self::default();
-        for (_, wait, control) in &carried {
+        for (_, wait, resolution) in &carried {
             if let Some(step) = nested_step(wait) {
-                resolved.record_answers(&step, wait, control.as_ref());
+                resolved.record_answers(&step, wait, resolution.as_ref());
             }
         }
         let (_, nested_handle) = open_run_root(nested)?;
@@ -7314,23 +7462,28 @@ impl AttemptControls {
             let Some(wait) = read_attempt_wait_record(&nested_handle, number)? else {
                 continue;
             };
-            let control = carried
+            let resolution = carried
                 .iter()
                 .find(|(_, carrier, _)| {
                     carrier.id() == wait.id()
                         && carrier.step.strip_prefix(prefix) == Some(wait.step.as_slice())
                 })
-                .and_then(|(_, _, control)| control.clone());
-            waits.push((number, wait, control));
+                .and_then(|(_, _, resolution)| resolution.clone());
+            waits.push((number, wait, resolution));
         }
         resolved.continue_latest(&waits, attempt_number);
         Ok(resolved)
     }
 
-    /// Keeps the answers of `wait` for `step` when `control` is the `control.answer` that
+    /// Keeps the answers of `wait` for `step` when `resolution` is the `control.answer` that
     /// resolved it, the latest per step (REQ-WFEXEC-63).
-    fn record_answers(&mut self, step: &str, wait: &WaitRecord, control: Option<&ControlEvent>) {
-        if let Some(control) = control
+    fn record_answers(
+        &mut self,
+        step: &str,
+        wait: &WaitRecord,
+        resolution: Option<&WaitResolution>,
+    ) {
+        if let Some(WaitResolution::Control(control)) = resolution
             && wait.kind == super::wait::WaitKind::Answer
             && control.event == super::wait::CONTROL_ANSWER
             && let Some(answers) = control
@@ -7344,16 +7497,17 @@ impl AttemptControls {
         }
     }
 
-    /// Reads the latest of the earlier attempts' `waits`, in attempt order, and the control
-    /// that resolved it, if any: the agent-profile replacement of a `control.retry` and, for
-    /// the attempt `attempt_number` immediately after it, the `wait.<field>` values
-    /// `continued_wait_fields` derives and the element it resumes at.
+    /// Reads the latest of the earlier attempts' `waits`, in attempt order, and what resolved
+    /// it, if anything: the agent-profile replacement of a `control.retry`, of which the host
+    /// condition carries none, and, for the attempt `attempt_number` immediately after it, the
+    /// `wait.<field>` values `continued_wait_fields` derives and the element it resumes at.
     fn continue_latest(&mut self, waits: &[ResolvedAttemptWait], attempt_number: u64) {
-        let Some((number, wait, Some(control))) = waits.last() else {
+        let Some((number, wait, Some(resolution))) = waits.last() else {
             return;
         };
-        let target = continued_step(wait, control).to_owned();
-        if control.event == super::wait::CONTROL_RETRY
+        let target = continued_step(wait, resolution).to_owned();
+        if let WaitResolution::Control(control) = resolution
+            && control.event == super::wait::CONTROL_RETRY
             && let Some(profiles) = control
                 .payload
                 .as_ref()
@@ -7377,41 +7531,87 @@ impl AttemptControls {
     }
 }
 
-/// An earlier attempt's number, its wait copy and the control that resolved the wait, if any.
-type ResolvedAttemptWait = (u64, WaitRecord, Option<ControlEvent>);
+/// What resolved an earlier attempt's wait copy.
+#[derive(Clone, Debug)]
+enum WaitResolution {
+    /// The control that resolved it.
+    Control(ControlEvent),
+    /// The host condition (REQ-WFEXEC-81): a `host` wait copy that no control resolved,
+    /// followed by an attempt whose continuation reason is `host` (REQ-CONTINUE-93). It
+    /// carries no payload.
+    Condition,
+}
 
-/// The step a wait resolved by `control` continues at: its `onHandBack` for a
+impl WaitResolution {
+    /// The string fields the resolution gives the step it continues at: a control's
+    /// payload's, and none for the condition.
+    fn fields(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        let payload = match self {
+            Self::Control(control) => control.payload.as_ref(),
+            Self::Condition => None,
+        };
+        payload
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+    }
+}
+
+/// An earlier attempt's number, its wait copy and what resolved the wait, if anything.
+type ResolvedAttemptWait = (u64, WaitRecord, Option<WaitResolution>);
+
+/// The step a wait `resolution` resolved continues at: its `onHandBack` for a
 /// `control.hand_back`, else its `then`.
-fn continued_step<'a>(wait: &'a WaitRecord, control: &ControlEvent) -> &'a str {
-    match (control.event.as_str(), &wait.on_hand_back) {
-        (super::wait::CONTROL_HAND_BACK, Some(step)) => step,
+fn continued_step<'a>(wait: &'a WaitRecord, resolution: &WaitResolution) -> &'a str {
+    match (resolution, &wait.on_hand_back) {
+        (WaitResolution::Control(control), Some(step))
+            if control.event == super::wait::CONTROL_HAND_BACK =>
+        {
+            step
+        }
         _ => &wait.then,
     }
 }
 
+/// Whether `resolution` retries `wait` in place at `step`, the step it continues at: a
+/// `control.retry` of a `repair` or `host` wait entered at that step, or the host condition
+/// (REQ-WFEXEC-63, REQ-CONTINUE-93).
+fn retried_in_place(wait: &WaitRecord, resolution: &WaitResolution, step: &str) -> bool {
+    let retried = match resolution {
+        WaitResolution::Control(control) => {
+            control.event == super::wait::CONTROL_RETRY
+                && matches!(
+                    wait.kind,
+                    super::wait::WaitKind::Repair | super::wait::WaitKind::Host
+                )
+        }
+        WaitResolution::Condition => true,
+    };
+    retried && wait.step.first().and_then(Value::as_str) == Some(step)
+}
+
 /// The `wait.<field>` values the attempt continuing the last of `waits`, the earlier
 /// attempts' resolved wait copies in attempt order, starts with at the step that wait
-/// continues at (REQ-WFEXEC-63): the string fields of the control that resolved it. When that
-/// control is a `control.retry` of a `repair` wait entered at the step it continues at, the
+/// continues at (REQ-WFEXEC-63): the string fields of the control that resolved it. When it
+/// was retried in place (`retried_in_place`: a `control.retry` of a `repair` or `host` wait
+/// entered at the step it continues at, or the host condition, whose layer is empty), the
 /// fields are laid over the ones the attempt that entered the wait had there, found the same
 /// way from the copy of the attempt immediately before it, resolved and continuing at the same
 /// step, and so on back; a retried step thus keeps the fields of the control that first
-/// started it, under each retry's own. Any other wait or control keeps nothing earlier.
+/// started it, under each retry's own, through any number of host waits in a row. Any other
+/// wait or control keeps nothing earlier.
 fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, String> {
     let mut layers = Vec::new();
     let mut entries = waits.iter().rev().peekable();
     let mut target = None;
-    while let Some((number, wait, Some(control))) = entries.next() {
-        let step = continued_step(wait, control);
+    while let Some((number, wait, Some(resolution))) = entries.next() {
+        let step = continued_step(wait, resolution);
         if target.is_some_and(|target| target != step) {
             break;
         }
         target = Some(step);
-        layers.push(control);
-        let retried_in_place = control.event == super::wait::CONTROL_RETRY
-            && wait.kind == super::wait::WaitKind::Repair
-            && wait.step.first().and_then(Value::as_str) == Some(step);
-        if !retried_in_place
+        layers.push(resolution);
+        if !retried_in_place(wait, resolution, step)
             || entries
                 .peek()
                 .is_none_or(|(previous, _, _)| previous.checked_add(1) != Some(*number))
@@ -7420,20 +7620,18 @@ fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, Stri
         }
     }
     let mut fields = BTreeMap::new();
-    for control in layers.into_iter().rev() {
-        fields.extend(
-            control
-                .payload
-                .iter()
-                .flatten()
-                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned()))),
-        );
+    for resolution in layers.into_iter().rev() {
+        fields.extend(resolution.fields());
     }
     fields
 }
 
 /// Each wait copy of the attempts before `attempt_number` of the run at `root`, in attempt
-/// order, with the control that resolved it. An imported attempt's copy (REQ-LOCALRUN-195) is
+/// order, with what resolved it: the control, read by `controls_rule` (a `host` wait's by the
+/// repair rule, INV-ENGINE-48; a wait no control resolves has none), and otherwise, for a
+/// `host` wait copy, the host condition when the attempt right after it records continuation
+/// reason `host` in `state.json` or, not recorded yet, is attempt `attempt_number` with
+/// `reason` `host` (REQ-CONTINUE-93). An imported attempt's copy (REQ-LOCALRUN-195) is
 /// resolved by a control naming any run of the lineage: the run it was recorded under,
 /// copied with it, a successor that carried the wait (REQ-LOCALRUN-197) and recorded the
 /// control, or this run. A run without a record has none.
@@ -7441,19 +7639,31 @@ fn resolved_attempt_waits(
     normalized: &Path,
     root: &OwnedFd,
     attempt_number: u64,
+    reason: Option<super::publication::ContinuationReasonV1>,
 ) -> Result<Vec<ResolvedAttemptWait>, LocalRunDirectoryError> {
     let Some(record) = read_optional_run_record(root)? else {
         return Ok(Vec::new());
     };
     let controls = super::wait::read_controls(normalized)?;
     let state = read_optional_state(root)?;
-    let imported = |number: u64| {
-        state.as_ref().is_some_and(|state| {
+    let recorded = |number: u64| {
+        state.as_ref().and_then(|state| {
             state
                 .attempts
                 .iter()
-                .any(|attempt| attempt.attempt_number == number && attempt.imported.is_some())
+                .find(|attempt| attempt.attempt_number == number)
         })
+    };
+    let imported = |number: u64| recorded(number).is_some_and(|attempt| attempt.imported.is_some());
+    // The continuation reason of attempt `number`: recorded, or the caller's for the attempt
+    // not yet begun.
+    let reason_of = |number: u64| match recorded(number) {
+        Some(attempt) => attempt
+            .continuation
+            .as_ref()
+            .and_then(super::publication::ContinuationRecordV1::reason),
+        None if number == attempt_number => reason,
+        None => None,
     };
     let mut waits = Vec::new();
     for number in 1..attempt_number {
@@ -7465,25 +7675,37 @@ fn resolved_attempt_waits(
         // wait (REQ-LOCALRUN-197). Every control here was recorded on this run or copied
         // along the lineage (REQ-LOCALRUN-195), so each is read as its own run's; a wait
         // this run itself entered is resolved by a control naming this run alone.
-        let control = if imported(number) {
-            controls.iter().find(|control| {
-                super::wait::evaluate(
-                    &wait.rule,
-                    &control.run,
-                    &wait,
-                    std::slice::from_ref(*control),
-                )
-                .ok()
-                .flatten()
-                .is_some()
-            })
-        } else {
-            super::wait::evaluate(&wait.rule, &record.id, &wait, &controls)
-                .ok()
-                .flatten()
-        }
-        .cloned();
-        waits.push((number, wait, control));
+        let control = super::wait::controls_rule(&wait).and_then(|rule| {
+            if imported(number) {
+                controls.iter().find(|control| {
+                    super::wait::evaluate(
+                        &rule,
+                        &control.run,
+                        &wait,
+                        std::slice::from_ref(*control),
+                    )
+                    .ok()
+                    .flatten()
+                    .is_some()
+                })
+            } else {
+                super::wait::evaluate(&rule, &record.id, &wait, &controls)
+                    .ok()
+                    .flatten()
+            }
+            .cloned()
+        });
+        let resolution = match control {
+            Some(control) => Some(WaitResolution::Control(control)),
+            None if wait.kind == super::wait::WaitKind::Host
+                && reason_of(number.saturating_add(1))
+                    == Some(super::publication::ContinuationReasonV1::Host) =>
+            {
+                Some(WaitResolution::Condition)
+            }
+            None => None,
+        };
+        waits.push((number, wait, resolution));
     }
     Ok(waits)
 }
@@ -7699,23 +7921,34 @@ pub fn is_run_id(value: &str) -> bool {
     super::schema_common::is_prefixed_ulid(value, RUN_ID_PREFIX)
 }
 
-/// The canonical directory of the run `id` under `home` (REQ-LOCALRUN-180): the one
-/// `workflows/<definition id>/runs/<id>/` whose `run.json` carries `id`. A value that is not
-/// a run id is `InvalidPath`, and an id no run under the home has is `RunNotFound`.
+/// The canonical directory of the run `id` under `home` (REQ-LOCALRUN-180) whose `run.json`
+/// carries `id`: the one `workflows/<definition id>/runs/<id>/`, then the home's own
+/// `runs/<id>/`, then any entry of the home's `runs/`, which a caller may have named with
+/// `--run-dir`. A value that is not a run id is `InvalidPath`, and an id no run under the
+/// home has is `RunNotFound`.
 pub fn locate_run(home: &WorkflowHome, id: &str) -> Result<PathBuf, LocalRunDirectoryError> {
     if !is_run_id(id) {
         return Err(LocalRunDirectoryError::InvalidPath);
     }
-    for definition in home_definitions(home)? {
-        let candidate = home.runs_directory(&definition).join(id);
-        let Ok((normalized, root)) = open_run_root(&candidate) else {
-            continue;
-        };
-        if read_run_record(&root).is_ok_and(|record| record.id == id) {
-            return Ok(normalized);
-        }
+    let carrying = |candidate: &Path| {
+        let (normalized, root) = open_run_root(candidate).ok()?;
+        read_run_record(&root)
+            .is_ok_and(|record| record.id == id)
+            .then_some(normalized)
+    };
+    let home_runs = home.home_runs_directory();
+    if let Some(found) = home_definitions(home)?
+        .into_iter()
+        .map(|definition| home.runs_directory(&definition).join(id))
+        .chain([home_runs.join(id)])
+        .find_map(|candidate| carrying(&candidate))
+    {
+        return Ok(found);
     }
-    Err(LocalRunDirectoryError::RunNotFound)
+    sorted_entries(&home_runs)?
+        .into_iter()
+        .find_map(|entry| carrying(&home_runs.join(entry)))
+        .ok_or(LocalRunDirectoryError::RunNotFound)
 }
 
 /// One root run under the `useful` home, as `list_runs` reads it.
@@ -7747,22 +7980,36 @@ pub struct RunListing {
     pub unreadable: Vec<(PathBuf, LocalRunDirectoryError)>,
 }
 
-/// Lists every `workflows/<definition id>/runs/<run id>/` under `home` that holds a
-/// `run.json` (REQ-LOCALRUN-173), with its root wait record, taking no lock and writing
-/// nothing. A missing `workflows/` or `runs/` directory lists nothing.
+/// Lists every `workflows/<definition id>/runs/<run id>/` under `home` (REQ-LOCALRUN-173)
+/// and every entry of the home's own `runs/` that holds a `run.json` (REQ-LOCALRUN-174),
+/// with its root wait record, taking no lock and writing nothing. A missing `workflows/` or
+/// `runs/` directory lists nothing. An entry of the home's `runs/` with no `run.json` is a
+/// run with no record, which a caller named with `--run-dir`, and is passed by.
 pub fn list_runs(home: &WorkflowHome) -> Result<RunListing, LocalRunDirectoryError> {
     let mut listing = RunListing {
         runs: Vec::new(),
         unreadable: Vec::new(),
     };
+    let mut read = |path: PathBuf| match read_listed_run(&path) {
+        Ok(run) => listing.runs.push(run),
+        Err(error) => listing.unreadable.push((path, error)),
+    };
     for definition in home_definitions(home)? {
         let runs = home.runs_directory(&definition);
         for entry in sorted_entries(&runs)? {
-            let path = runs.join(entry);
-            match read_listed_run(&path) {
-                Ok(run) => listing.runs.push(run),
-                Err(error) => listing.unreadable.push((path, error)),
-            }
+            read(runs.join(entry));
+        }
+    }
+    let home_runs = home.home_runs_directory();
+    for entry in sorted_entries(&home_runs)? {
+        let path = home_runs.join(entry);
+        match std::fs::symlink_metadata(path.join(RUN_RECORD_FILE)) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) => {}
+            _ => read(path),
         }
     }
     listing
@@ -8222,7 +8469,7 @@ pub fn await_settled_gate() -> Result<(), LocalRunDirectoryError> {
     Ok(())
 }
 
-/// A seam for the end-to-end tests of a `withdraw` that meets an attempt ending its run
+/// A seam for the end-to-end tests of a withdrawal that meets an attempt ending its run
 /// (feature `test-fixtures`, REQ-LOCALRUN-211): when `USEFUL_TEST_RELEASE_GATE` names a path, an
 /// attempt that ends the run calls this while it holds the run's controls lock, after its last
 /// read and its spend and before its final record, which writes `<path>.releasing` and returns
@@ -8310,7 +8557,7 @@ pub fn acquire_local_continuation(
 
 /// `acquire_local_continuation` for a process that chains attempts (REQ-WFEXEC-64,
 /// REQ-LOCALRUN-214, INV-ENGINE-39): `bridge` is the run's controls lock the attempt that ended
-/// `continued` took before it released the run lock, so a `withdraw` that arrives in between
+/// `continued` took before it released the run lock, so a withdrawal that arrives in between
 /// waits for this acquisition. It is dropped as soon as the one non-blocking try of the run
 /// lock answered, taken or contended, before anything else here runs: the error path settles
 /// the abandoned attempt (`settle_abandoned_snapshot`), which takes the controls lock itself.
@@ -8921,6 +9168,7 @@ fn resumed_entered_wait(record: &WaitRecord) -> Result<EnteredWait, LocalRunDire
         rule: None,
         interrupted: None,
         kept: None,
+        counted: false,
     })
 }
 
@@ -10478,6 +10726,7 @@ fn fresh_progress_node(
         detail: None,
         diagnostic: None,
         failed_child: None,
+        failure_class: None,
         input_sources: Vec::new(),
         started_at: None,
         recovery: None,
@@ -11866,6 +12115,31 @@ fn validate_attempt_recovery(
         return Err(LocalRunDirectoryError::AttemptRecoveryAccountingInvalid);
     }
     for step in &attempt.progress.steps {
+        // REQ-WFEXEC-79, REQ-WFRECOVERY-42: a failed ordinary step with recovery is
+        // classified exactly when its recovery ended `infrastructure`; one with none only by
+        // its exit status (REQ-WFRECOVERY-66). No other step is classified.
+        let exit_status_classifies = matches!(
+            &step.detail,
+            Some(NodeDetail::Failed(detail))
+                if super::result_metadata::exit_status_classifiable(detail)
+        );
+        let classification_admitted = match &step.recovery {
+            Some(recovery) => {
+                step.failure_class.is_some()
+                    == matches!(
+                        recovery.termination,
+                        Some(super::publication::RecoveryTerminationV1::Infrastructure { .. })
+                    )
+            }
+            None => step.failure_class.is_none() || exit_status_classifies,
+        };
+        if !classification_admitted
+            || (step.failure_class.is_some()
+                && (step.state != AttemptStepStateV1::Failed
+                    || step.role != AttemptNodeRoleV1::Step))
+        {
+            return Err(LocalRunDirectoryError::AttemptRecoveryRoundInvalid);
+        }
         let Some(recovery) = &step.recovery else {
             continue;
         };
@@ -11885,6 +12159,23 @@ fn validate_attempt_recovery(
                         | AttemptStepStateV1::Failed
                         | AttemptStepStateV1::Cancelled
                 )
+            // A handler's decision names its round and no execution; the step's exit
+            // status names the execution after the last round and no round.
+            || match recovery.termination {
+                Some(super::publication::RecoveryTerminationV1::Infrastructure {
+                    round: Some(_),
+                    execution_number: None,
+                }) => false,
+                Some(super::publication::RecoveryTerminationV1::Infrastructure {
+                    round: None,
+                    execution_number: Some(execution_number),
+                }) => {
+                    !exit_status_classifies
+                        || usize::from(execution_number) != recovery.rounds.len() + 1
+                }
+                Some(super::publication::RecoveryTerminationV1::Infrastructure { .. }) => true,
+                _ => false,
+            }
         {
             return Err(LocalRunDirectoryError::AttemptRecoveryRoundInvalid);
         }
@@ -11941,6 +12232,8 @@ fn validate_attempt_finalization<'a>(
                         )
                         // A finalizer's body takes no `firstOf` (REQ-EVIDENCE-28).
                         || !finalizer.input_sources.is_empty()
+                        // No finalizer's failure is classified (REQ-WFEXEC-79).
+                        || finalizer.failure_class.is_some()
                         || !retained_output_set_valid(
                             finalizer.role,
                             &finalizer.id,

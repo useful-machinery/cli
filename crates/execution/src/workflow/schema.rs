@@ -90,6 +90,7 @@ where
 struct RequiresDto {
     #[serde(default)]
     tools: Vec<String>,
+    check: Option<CommandDto>,
     #[serde(rename = "as")]
     acting_as: Option<IntegrationAs>,
     #[serde(default)]
@@ -431,6 +432,8 @@ enum StepDto {
         #[serde(rename = "dependsOn", default)]
         control_dependencies: Vec<String>,
         recovery: Option<RecoveryDto>,
+        #[serde(rename = "infrastructureExitCodes", default)]
+        infrastructure_exit_codes: Vec<u8>,
     },
     #[serde(rename = "agent")]
     Agent {
@@ -482,13 +485,35 @@ impl ForEachDto {
 }
 
 /// Untagged variants are tried in order; the objects deny unknown fields, so a `limit` on
-/// a wait or a limited `else` decodes as neither.
+/// a wait or a limited `else` decodes as neither. A host wait is tried before a wait, whose
+/// kind would admit `host`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum EdgeTargetDto {
     Limited(LimitedTargetDto),
+    HostWait(HostWaitTargetDto),
     Wait(WaitTargetDto),
     Target(String),
+}
+
+/// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111); validation requires `limit` and
+/// `else`, which the schema leaves optional.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostWaitTargetDto {
+    #[serde(rename = "wait")]
+    _wait: HostWaitKindDto,
+    then: String,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default, rename = "else")]
+    else_: Option<ElseTargetDto>,
+}
+
+#[derive(Deserialize)]
+enum HostWaitKindDto {
+    #[serde(rename = "host")]
+    Host,
 }
 
 #[derive(Deserialize)]
@@ -526,11 +551,22 @@ impl EdgeTargetDto {
             Self::Limited(limited) => EdgeTarget::Limited {
                 then: limited.then,
                 limit: limited.limit,
-                else_: Box::new(match limited.else_ {
-                    ElseTargetDto::Target(target) => parse_edge_target(target),
-                    ElseTargetDto::Wait(wait) => wait.into_target(),
-                }),
+                else_: Box::new(limited.else_.into_target()),
             },
+            Self::HostWait(host) => EdgeTarget::HostWait {
+                then: host.then,
+                limit: host.limit,
+                else_: host.else_.map(|else_| Box::new(else_.into_target())),
+            },
+        }
+    }
+}
+
+impl ElseTargetDto {
+    fn into_target(self) -> EdgeTarget {
+        match self {
+            Self::Target(target) => parse_edge_target(target),
+            Self::Wait(wait) => wait.into_target(),
         }
     }
 }
@@ -922,6 +958,8 @@ struct OutcomeDto {
     from: OutcomeSourceDto,
     #[serde(rename = "onFailure")]
     on_failure: String,
+    #[serde(rename = "onInfrastructure", default)]
+    on_infrastructure: Option<String>,
 }
 
 /// `outcome.from`: an output reference string, or a `{firstOf}` (REQ-WFFORMAT-108).
@@ -985,6 +1023,7 @@ impl WorkflowDto {
             exclude: self.exclude.unwrap_or_default(),
             requires: self.requires.map(|requires| RootRequires {
                 tools: requires.tools,
+                check: requires.check.map(|check| check.argv),
                 acting_as: requires.acting_as,
                 integrations: requires
                     .integrations
@@ -1099,6 +1138,7 @@ impl WorkflowDto {
                     }
                 },
                 on_failure: outcome.on_failure,
+                on_infrastructure: outcome.on_infrastructure,
             }),
             None => None,
         };
@@ -1127,17 +1167,28 @@ impl WorkflowDto {
 
 impl StepDto {
     fn into_step(self) -> Option<StepDefinition> {
-        let (body, control_dependencies, recovery) = match self {
+        let (body, control_dependencies, recovery, infrastructure_exit_codes) = match self {
             Self::Command {
                 body,
                 control_dependencies,
                 recovery,
-            } => (body.into_body()?, control_dependencies, recovery),
+                infrastructure_exit_codes,
+            } => (
+                body.into_body()?,
+                control_dependencies,
+                recovery,
+                infrastructure_exit_codes,
+            ),
             Self::Agent {
                 body,
                 control_dependencies,
                 recovery,
-            } => (body.into_body()?, control_dependencies, recovery),
+            } => (
+                body.into_body()?,
+                control_dependencies,
+                recovery,
+                Vec::new(),
+            ),
             Self::Workflow {
                 workflow,
                 inputs,
@@ -1158,12 +1209,14 @@ impl StepDto {
                 }),
                 Vec::new(),
                 None,
+                Vec::new(),
             ),
         };
         Some(StepDefinition {
             body,
             control_dependencies,
             recovery: recovery.map(RecoveryDto::into_recovery),
+            infrastructure_exit_codes,
         })
     }
 }

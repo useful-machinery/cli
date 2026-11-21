@@ -29,7 +29,7 @@
 //! `ClassifiedEnd::Refused` naming the root workflow's first step, never as a missing
 //! record. An adopted run (REQ-RUNNERENROLL-89) creates nothing: with no named step the loop
 //! starts at the record the earlier attempt left, and with named steps its first command
-//! is `useful workflow run resume RUN --from STEP...`, whose refusal ends the loop as a
+//! is `useful workflow run retry RUN --from STEP...`, whose refusal ends the loop as a
 //! `ClassifiedEnd::Refused` rather than as a failure. A cancellation that reaches that first
 //! command before it starts an engine attempt, the record still reading `exited` as the
 //! earlier attempt left it, ends the loop as a `ClassifiedEnd::Unstarted`: the attempt is
@@ -60,7 +60,7 @@
 //! is. An applied `withdraw` is followed by no `resume` (REQ-RUNNERENROLL-123): the loop reads
 //! the record, which ends it on an `exited` record the command left; a withdrawal recorded for
 //! a process that then left the run waiting, as an evaluation of a held wait does, is finished
-//! with one more `withdraw`, reported no further.
+//! with one more `useful workflow run cancel --control=withdraw`, reported no further.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};

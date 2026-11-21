@@ -3,13 +3,14 @@ use std::io::{self, Write};
 use anyhow::Context;
 use clap::{Args, Subcommand};
 
-use super::{CloudOptions, OrganizationArg, PaginationArgs, cloud};
+use super::{CloudOptions, OrgArgs, PaginationArgs, cloud};
 use crate::exit_code::ExitCode;
 use useful_human_auth::Deployment;
 use useful_support::generate_idempotency_key;
 
 pub(super) const ABOUT: &str = "Manage runner credential lifecycle";
 const COMMAND_PATH: &[&str] = &["runner", "credential"];
+const RUNNER_HELP: &str = "Runner ID or exact name";
 
 #[derive(Debug, Args)]
 pub(super) struct Command {
@@ -25,44 +26,67 @@ enum CredentialCommand {
     )]
     List(ListCommand),
     #[command(
-        about = "Schedule runner credential retirement",
-        after_help = "Retirement:\n  The credential retires after a fixed grace period."
-    )]
-    Retire(MutationCommand),
-    #[command(
         about = "Revoke a runner credential",
-        after_help = "Revocation:\n  The credential is revoked immediately."
+        after_help = "Revocation:\n  The credential is revoked at once, or with --after 1h retires after Cloud's one-hour grace."
     )]
-    Revoke(MutationCommand),
+    Revoke(RevokeCommand),
 }
 
-// Credential commands keep their own Clap metadata so help and positional
-// resource contracts remain explicit instead of coupling lifecycle commands to
-// activation or registration administration.
+// Credential commands keep their own Clap metadata so help and resource contracts remain
+// explicit instead of coupling lifecycle commands to activation or registration
+// administration.
 #[derive(Debug, Args)]
 struct ListCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-    #[arg(value_name = "RUNNER", help = "Runner ID or exact name")]
+    #[arg(value_name = "RUNNER", help = RUNNER_HELP)]
     runner: String,
     #[command(flatten)]
     pagination: PaginationArgs,
     #[command(flatten)]
+    org: OrgArgs,
+    #[command(flatten)]
     options: CloudOptions,
 }
 
 #[derive(Debug, Args)]
-struct MutationCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-    #[arg(value_name = "RUNNER", help = "Runner ID or exact name")]
-    runner: String,
+struct RevokeCommand {
     #[arg(value_name = "CREDENTIAL", help = "Runner credential ID")]
     credential: String,
+    // The same help as the `account integration` leaves' `--runner`, one help class.
+    #[arg(long, value_name = "RUNNER", help = RUNNER_HELP)]
+    runner: String,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        value_parser = parse_grace,
+        help = "Retire the credential after Cloud's one-hour grace instead of at once; only 1h or 60m"
+    )]
+    after: Option<RetirementGrace>,
     #[command(flatten)]
     confirmation: super::super::ConfirmationArgs,
     #[command(flatten)]
+    org: OrgArgs,
+    #[command(flatten)]
     options: CloudOptions,
+}
+
+/// The grace of a scheduled retirement, which Cloud fixes at one hour (REQ-RUNNERENROLL-53).
+#[derive(Clone, Copy, Debug)]
+struct RetirementGrace;
+
+/// Reads `--after` as a whole number of minutes, hours or days that comes to exactly one
+/// hour; any other duration is refused before anything is read or sent.
+fn parse_grace(value: &str) -> Result<RetirementGrace, String> {
+    let seconds =
+        super::super::split_unit_suffix(value, &[("d", 86_400_u32), ("h", 3_600), ("m", 60)])
+            .filter(|(quantity, _)| {
+                !quantity.is_empty() && quantity.bytes().all(|byte| byte.is_ascii_digit())
+            })
+            .and_then(|(quantity, unit)| quantity.parse::<u32>().ok()?.checked_mul(unit));
+    if seconds == Some(3_600) {
+        Ok(RetirementGrace)
+    } else {
+        Err("Cloud retires a credential one hour after the request; use --after 1h, or omit --after to revoke it at once".to_owned())
+    }
 }
 
 // This namespace deliberately mirrors sibling runner namespaces while retaining
@@ -72,41 +96,47 @@ impl Command {
         let Some(command) = self.command else {
             return super::super::print_help(COMMAND_PATH);
         };
-        super::execute_cloud(command, |command, deployment| command.execute(deployment))
-    }
-}
-
-impl CredentialCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        match self {
-            Self::List(command) => command.execute(deployment),
-            Self::Retire(command) => command.execute(deployment, CredentialMutation::Retire),
-            Self::Revoke(command) => command.execute(deployment, CredentialMutation::Revoke),
-        }
+        super::execute_in_cloud(command, |command, deployment| match command {
+            CredentialCommand::List(command) => command.execute(deployment),
+            CredentialCommand::Revoke(command) => command.execute(deployment),
+        })
     }
 }
 
 impl ListCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        // Credential and pool listings resolve different resource hierarchies and retain
-        // separate output schemas despite sharing pagination fields.
-        let result = cloud::with_api(
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self {
+            runner,
+            pagination,
+            org,
+            options,
+        } = self;
+        super::execute_in(
+            org,
+            options,
             deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                let runner = api.get_registration(&self.organization, &self.runner)?;
-                api.list_credentials(
-                    &self.organization,
-                    &runner.id,
-                    self.pagination.limit,
-                    self.pagination.cursor.as_deref(),
-                )
-            },
-        )?;
-        match result {
-            Ok(page) => {
-                if self.options.json {
+            |options, organization| -> anyhow::Result<ExitCode> {
+                // Credential and pool listings resolve different resource hierarchies and retain
+                // separate output schemas despite sharing pagination fields.
+                let result = cloud::with_api(
+                    deployment,
+                    options.http.transport_policy(),
+                    &options.authentication,
+                    |api| {
+                        let runner = api.get_registration(organization, &runner)?;
+                        api.list_credentials(
+                            organization,
+                            &runner.id,
+                            pagination.limit,
+                            pagination.cursor.as_deref(),
+                        )
+                    },
+                )?;
+                let page = match result {
+                    Ok(page) => page,
+                    Err(failure) => return options.write_failure(deployment, &failure),
+                };
+                if options.json {
                     serde_json::to_writer_pretty(
                         &mut io::stdout().lock(),
                         &CredentialListOutput {
@@ -118,116 +148,115 @@ impl ListCommand {
                         },
                     )?;
                     writeln!(io::stdout().lock())?;
-                } else {
-                    let mut output = io::stdout().lock();
-                    writeln!(output, "✓ Runner credentials listed.\n")?;
-                    for credential in page.items {
-                        writeln!(
-                            output,
-                            "  Credential: {}  Stored: {}  Effective: {}  Created: {}",
-                            credential.id,
-                            stored_state_label(credential.stored_state),
-                            effective_state_label(credential.effective_state),
-                            credential.created_at,
-                        )?;
-                        if let Some(last_authenticated_at) = credential.last_authenticated_at {
-                            writeln!(output, "    Last authenticated: {last_authenticated_at}")?;
-                        }
-                        if let Some(retire_at) = credential.retire_at {
-                            writeln!(output, "    Retires:            {retire_at}")?;
-                        }
-                        if let Some(revoked_at) = credential.revoked_at {
-                            writeln!(output, "    Revoked:            {revoked_at}")?;
-                        }
-                    }
-                    if let Some(cursor) = page.next_cursor {
-                        writeln!(output, "\n  Next cursor: {cursor}")?;
-                    }
+                    return Ok(ExitCode::Success);
                 }
-                Ok(ExitCode::Success)
-            }
-            Err(failure) => self.options.write_failure(deployment, &failure),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum CredentialMutation {
-    Retire,
-    Revoke,
-}
-
-impl MutationCommand {
-    fn execute(
-        self,
-        deployment: &Deployment,
-        mutation: CredentialMutation,
-    ) -> anyhow::Result<ExitCode> {
-        let key = generate_idempotency_key().context(match mutation {
-            CredentialMutation::Retire => "generate credential retirement identity",
-            CredentialMutation::Revoke => "generate credential revocation identity",
-        })?;
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                let runner = api.get_registration(&self.organization, &self.runner)?;
-                match mutation {
-                    CredentialMutation::Retire => api.retire_credential(
-                        &self.organization,
-                        &runner.id,
-                        &self.credential,
-                        &key,
-                    ),
-                    CredentialMutation::Revoke => api.revoke_credential(
-                        &self.organization,
-                        &runner.id,
-                        &self.credential,
-                        &key,
-                    ),
-                }
-            },
-        )?;
-        match result {
-            Ok(credential) => {
-                let outcome = match mutation {
-                    CredentialMutation::Retire => "retiring",
-                    CredentialMutation::Revoke => "revoked",
-                };
-                if self.options.json {
-                    serde_json::to_writer_pretty(
-                        &mut io::stdout().lock(),
-                        &CredentialMutationOutput {
-                            schema_version: 1,
-                            deployment: deployment.fingerprint().api_url(),
-                            outcome,
-                            credential: &credential,
-                        },
-                    )?;
-                    writeln!(io::stdout().lock())?;
-                } else {
-                    let heading = match mutation {
-                        CredentialMutation::Retire => "✓ Runner credential retirement scheduled.",
-                        CredentialMutation::Revoke => "✓ Runner credential revoked.",
-                    };
-                    let mut output = io::stdout().lock();
-                    writeln!(output, "{heading}\n")?;
-                    writeln!(output, "  Credential: {}", credential.id)?;
+                let mut output = io::stdout().lock();
+                writeln!(output, "✓ Runner credentials listed.\n")?;
+                for credential in page.items {
                     writeln!(
                         output,
-                        "  Effective state: {}",
+                        "  Credential: {}  Stored: {}  Effective: {}  Created: {}",
+                        credential.id,
+                        stored_state_label(credential.stored_state),
                         effective_state_label(credential.effective_state),
+                        credential.created_at,
                     )?;
+                    if let Some(last_authenticated_at) = credential.last_authenticated_at {
+                        writeln!(output, "    Last authenticated: {last_authenticated_at}")?;
+                    }
                     if let Some(retire_at) = credential.retire_at {
-                        writeln!(output, "  Retires: {retire_at}")?;
+                        writeln!(output, "    Retires:            {retire_at}")?;
+                    }
+                    if let Some(revoked_at) = credential.revoked_at {
+                        writeln!(output, "    Revoked:            {revoked_at}")?;
                     }
                 }
+                if let Some(cursor) = page.next_cursor {
+                    writeln!(output, "\n  Next cursor: {cursor}")?;
+                }
                 Ok(ExitCode::Success)
-            }
-            Err(failure) => self.options.write_failure(deployment, &failure),
-        }
+            },
+        )
     }
+}
+
+impl RevokeCommand {
+    fn execute(self, deployment: &Deployment) -> super::super::CommandResult {
+        let Self {
+            credential,
+            runner,
+            after,
+            confirmation: _,
+            org,
+            options,
+        } = self;
+        // With `--after`, the revocation is the retirement Cloud schedules one hour out
+        // (REQ-RUNNERENROLL-53); without it, the revocation is immediate (REQ-RUNNERENROLL-54).
+        let retire = after.is_some();
+        super::execute_in(org, options, deployment, |options, organization| {
+            let key = generate_idempotency_key().context(if retire {
+                "generate credential retirement identity"
+            } else {
+                "generate credential revocation identity"
+            })?;
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| {
+                    let runner = api.get_registration(organization, &runner)?;
+                    if retire {
+                        api.retire_credential(organization, &runner.id, &credential, &key)
+                    } else {
+                        api.revoke_credential(organization, &runner.id, &credential, &key)
+                    }
+                },
+            )?;
+            write_credential_transition(deployment, &options, retire, result)
+        })
+    }
+}
+
+fn write_credential_transition(
+    deployment: &Deployment,
+    options: &CloudOptions,
+    retire: bool,
+    result: Result<useful_api::RunnerCredential, useful_api::RunnerFailure>,
+) -> anyhow::Result<ExitCode> {
+    let credential = match result {
+        Ok(credential) => credential,
+        Err(failure) => return options.write_failure(deployment, &failure),
+    };
+    if options.json {
+        serde_json::to_writer_pretty(
+            &mut io::stdout().lock(),
+            &CredentialMutationOutput {
+                schema_version: 1,
+                deployment: deployment.fingerprint().api_url(),
+                outcome: if retire { "retiring" } else { "revoked" },
+                credential: &credential,
+            },
+        )?;
+        writeln!(io::stdout().lock())?;
+        return Ok(ExitCode::Success);
+    }
+    let heading = if retire {
+        "✓ Runner credential retirement scheduled."
+    } else {
+        "✓ Runner credential revoked."
+    };
+    let mut output = io::stdout().lock();
+    writeln!(output, "{heading}\n")?;
+    writeln!(output, "  Credential: {}", credential.id)?;
+    writeln!(
+        output,
+        "  Effective state: {}",
+        effective_state_label(credential.effective_state),
+    )?;
+    if let Some(retire_at) = credential.retire_at {
+        writeln!(output, "  Retires: {retire_at}")?;
+    }
+    Ok(ExitCode::Success)
 }
 
 #[derive(serde::Serialize)]

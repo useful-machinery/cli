@@ -1,5 +1,5 @@
 //! The credentials a workflow tree declares it needs, read offline from its definitions and
-//! the source root's `origin` remote or, when the command names a project, the provider of the
+//! the source root's `origin` remote or, when a project is in effect, the provider of the
 //! project's repository (REQ-CREDREADY-1 to REQ-CREDREADY-12, REQ-CREDREADY-21), and the report
 //! that follows a named file's declared integrations in their place (REQ-CREDREADY-27), with
 //! where those integrations and the inference disagree (REQ-CREDREADY-28). Nothing here
@@ -326,65 +326,56 @@ impl CredentialRequirement {
     /// service it names the variable a step reads the token from and the commands that
     /// connect the service and authorize a runner for it (REQ-CREDREADY-29).
     pub fn next_action(&self, organization: Option<&str>, project: Option<&str>) -> String {
-        let organization = organization.unwrap_or("ORGANIZATION");
+        // The organization option of a `useful org integration` command, which acts in the
+        // organization in effect when none was named.
+        let org_option = organization.map_or_else(String::new, |named| format!(" --org {named}"));
         let title = self.kind.title();
         let show_repository = || {
             format!(
-                "useful project repository show {organization} {}",
+                "useful project show {}{org_option}",
                 project.unwrap_or("PROJECT")
             )
         };
         let missing = self.code == ReadinessCode::NotConnected;
         // The command that lists the kind's connections, and the remedy for one Cloud shows
         // missing, inactive or lacking a scope.
-        let (list, remedy) = match self.kind {
-            CredentialKind::Github => (
-                "useful connection github installation list",
-                format!(
-                    "Install the GitHub App for the organization with useful connection github setup begin {organization}."
-                ),
+        let list = format!(
+            "useful org integration list --provider {}{org_option}",
+            self.kind.as_str()
+        );
+        let remedy = match self.kind {
+            CredentialKind::Github => format!(
+                "Install the GitHub App for the organization with useful org integration connect github{org_option}."
             ),
-            CredentialKind::Gitlab if missing => (
-                "useful connection gitlab list",
-                format!(
-                    "Connect GitLab.com with useful connection gitlab create {organization} https://gitlab.com, then give it a credential with useful connection gitlab credential create."
-                ),
+            CredentialKind::Gitlab if missing => format!(
+                "Connect GitLab.com with useful org integration connect gitlab --token-file PATH --kind KIND{org_option}."
             ),
-            CredentialKind::Gitlab => (
-                "useful connection gitlab list",
-                format!(
-                    "Replace the GitLab connection's credential with useful connection gitlab credential create {organization} CONNECTION; useful connection gitlab list {organization} shows its ID."
-                ),
+            CredentialKind::Gitlab => format!(
+                "Replace the GitLab connection's token with useful org integration reconnect INTEGRATION --token-file PATH --kind KIND{org_option}; {list} shows its ID."
             ),
-            CredentialKind::Linear if missing => (
-                "useful connection linear list",
-                format!(
-                    "Connect a Linear workspace with useful connection linear authorization create {organization}."
-                ),
+            CredentialKind::Linear if missing => format!(
+                "Connect a Linear workspace with useful org integration connect linear{org_option}."
             ),
-            CredentialKind::Linear => (
-                "useful connection linear list",
-                format!(
-                    "Reauthorize the Linear connection with useful connection linear authorization create {organization} --connection-id CONNECTION; useful connection linear list {organization} shows its ID."
-                ),
+            CredentialKind::Linear => format!(
+                "Reauthorize the Linear connection with useful org integration reconnect INTEGRATION{org_option}; {list} shows its ID."
             ),
             CredentialKind::Mergify | CredentialKind::Buildkite => {
                 let id = self.kind.as_str();
                 return format!(
-                    "Nothing verifies the {title} token; a step reads it from {} when the runner offers one. Connect it with useful integration connect {id}, or useful integration connect {id} --org {organization} for the organization's token, and authorize a runner for it with useful integration authorize {id} RUNNER --yes.",
+                    "Nothing verifies the {title} token; a step reads it from {} when the runner offers one. Connect your own with useful account integration connect {id} and authorize a runner for it with useful account integration authorize {id} --runner RUNNER --yes, or the organization's with useful org integration connect {id}{org_option} and useful org integration authorize {id} --runner RUNNER{org_option} --yes.",
                     self.kind.integration().environment_names()[0]
                 );
             }
             CredentialKind::ClaudeCode | CredentialKind::Codex => {
                 return format!(
-                    "Sign {title} in on the runner host as the user that runs useful runner serve, or give the runner your own login with useful integration connect {} and useful integration authorize INTEGRATION RUNNER --yes.",
+                    "Sign {title} in on the runner host as the user that runs useful runner serve, or give the runner your own login with useful account integration connect {} and useful account integration authorize INTEGRATION --runner RUNNER --yes; name the runner with --runner RUNNER to check it.",
                     self.kind.as_str()
                 );
             }
         };
         match self.code {
             ReadinessCode::NotChecked => format!(
-                "Run this check with --readiness --organization-id {organization} to read the organization's {title} connections from Cloud, or list them with {list} {organization}."
+                "Sign in with useful account login to have this check read the organization's {title} connections from Cloud, or list them with {list}."
             ),
             ReadinessCode::RunnerUnverified => format!(
                 "Cloud holds a ready {title} connection and issues its credential to a runner only for a run."
@@ -408,16 +399,6 @@ impl CredentialRequirement {
     }
 }
 
-/// The requirements counted by state, and the unknown entries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CredentialSummary {
-    pub missing: usize,
-    pub reconnect_required: usize,
-    pub insufficient_permission: usize,
-    pub unverified: usize,
-    pub unknown: usize,
-}
-
 /// The credentials a workflow tree needs: the covered files by source-root-relative path,
 /// one requirement per kind in kind order, and what the declarations cannot show.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -425,29 +406,6 @@ pub struct WorkflowCredentials {
     pub workflows: Vec<String>,
     pub requirements: Vec<CredentialRequirement>,
     pub unknown: Vec<UnknownCredential>,
-}
-
-impl WorkflowCredentials {
-    pub fn summary(&self) -> CredentialSummary {
-        let in_state = |state: &str| {
-            self.requirements
-                .iter()
-                .filter(|requirement| requirement.state() == state)
-                .count()
-        };
-        CredentialSummary {
-            missing: in_state(MISSING),
-            reconnect_required: in_state(RECONNECT_REQUIRED),
-            insufficient_permission: in_state(INSUFFICIENT_PERMISSION),
-            unverified: in_state(UNVERIFIED),
-            unknown: self.unknown.len(),
-        }
-    }
-
-    /// Whether any requirement fails a readiness check (REQ-CREDREADY-17).
-    pub fn fails(&self) -> bool {
-        self.requirements.iter().any(CredentialRequirement::fails)
-    }
 }
 
 /// The recognition rules, kept in one table (REQ-CREDREADY-5, REQ-CREDREADY-11,
@@ -1826,13 +1784,16 @@ steps:
                 origins: Vec::new(),
             };
             let id = kind.as_str();
-            for (organization, named) in [(Some("acme"), "acme"), (None, "ORGANIZATION")] {
+            for (organization, org_option) in [(Some("acme"), " --org acme"), (None, "")] {
                 let next_action = requirement.next_action(organization, None);
                 assert!(next_action.contains(variable), "{next_action}");
                 for command in [
-                    format!("useful integration connect {id}"),
-                    format!("--org {named}"),
-                    format!("useful integration authorize {id} RUNNER --yes"),
+                    format!("useful account integration connect {id} "),
+                    format!("useful account integration authorize {id} --runner RUNNER --yes"),
+                    format!("useful org integration connect {id}{org_option} "),
+                    format!(
+                        "useful org integration authorize {id} --runner RUNNER{org_option} --yes"
+                    ),
                 ] {
                     assert!(next_action.contains(&command), "{command}: {next_action}");
                 }
@@ -1842,7 +1803,7 @@ steps:
 
     // REQ-CREDREADY-7
     #[test]
-    fn a_coding_agents_next_action_names_the_integration_commands() {
+    fn a_coding_agents_next_action_names_the_grant_commands() {
         for kind in [CredentialKind::ClaudeCode, CredentialKind::Codex] {
             let next_action = CredentialRequirement {
                 kind,
@@ -1851,11 +1812,14 @@ steps:
             }
             .next_action(Some("acme"), None);
             assert!(
-                next_action.contains(&format!("useful integration connect {}", kind.as_str())),
+                next_action.contains(&format!(
+                    "useful account integration connect {}",
+                    kind.as_str()
+                )),
                 "{next_action}"
             );
             assert!(
-                next_action.contains("useful integration authorize"),
+                next_action.contains("useful account integration authorize"),
                 "{next_action}"
             );
             assert!(!next_action.contains("useful grant"), "{next_action}");

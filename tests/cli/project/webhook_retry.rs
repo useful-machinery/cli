@@ -13,13 +13,7 @@ fn lost_mutation_response_reuses_identity_and_bytes_without_reporting_success() 
     let server = ScriptedServer::respond(vec![Vec::new(), Vec::new()]);
     let (server, _credentials_directory, credentials) = prepared_server(server);
     let output = run(
-        &[
-            "create",
-            ORGANIZATION,
-            PROJECT_ID,
-            "--config-file",
-            file.to_str().unwrap(),
-        ],
+        &["create", "--config-file", file.to_str().unwrap()],
         &server,
         &credentials,
     );
@@ -62,11 +56,13 @@ fn human_uncertainty_and_metadata_only_use_safe_known_identity() {
         "project",
         "webhook",
         "create",
-        ORGANIZATION,
-        PROJECT_ID,
         "--config-file",
         file.to_str().unwrap(),
         "--allow-insecure-http",
+        "--org",
+        ORGANIZATION,
+        "--project",
+        PROJECT_ID,
     ];
     let server = ScriptedServer::respond(vec![response("201 Created", subscription(false), true)]);
     let (server, _directory, credential) = prepared_server(server);
@@ -135,11 +131,7 @@ fn webhook_generic_conflict_and_rate_limit_preserve_structured_outcomes() {
         );
         let server = ScriptedServer::respond(vec![response]);
         let (server, _credential_directory, credentials) = prepared_server(server);
-        let output = run(
-            &["test", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            &server,
-            &credentials,
-        );
+        let output = run(&["test", WEBHOOK], &server, &credentials);
         assert!(!output.status.success());
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["outcome"], outcome, "{problem_type}");
@@ -189,13 +181,7 @@ fn credential_refresh_keeps_one_mutation_key_and_body() {
         credentials.to_str().unwrap(),
     );
     let output = run_with_env(
-        &args(&[
-            "create",
-            ORGANIZATION,
-            PROJECT_ID,
-            "--config-file",
-            file.to_str().unwrap(),
-        ]),
+        &args(&["create", "--config-file", file.to_str().unwrap()]),
         &environment,
     );
     assert_json_success(&output, "created");
@@ -237,13 +223,7 @@ fn lost_success_body_returns_metadata_without_revealing_original_secret() {
     ]);
     let (server, _directory, credential) = prepared_server(server);
     let output = run(
-        &[
-            "create",
-            ORGANIZATION,
-            PROJECT_ID,
-            "--config-file",
-            file.to_str().unwrap(),
-        ],
+        &["create", "--config-file", file.to_str().unwrap()],
         &server,
         &credential,
     );
@@ -272,19 +252,13 @@ fn metadata_only_mutation_and_authorization_failures_do_not_reveal_secrets() {
     .unwrap();
     let commands = [
         (
-            vec![
-                "create",
-                ORGANIZATION,
-                PROJECT_ID,
-                "--config-file",
-                file.to_str().unwrap(),
-            ],
+            vec!["create", "--config-file", file.to_str().unwrap()],
             "201 Created",
             subscription(false),
             "created",
         ),
         (
-            vec!["rotate-secret", ORGANIZATION, PROJECT_ID, WEBHOOK],
+            vec!["secret", "rotate", WEBHOOK],
             "200 OK",
             subscription(false),
             "rotated",
@@ -309,11 +283,7 @@ fn metadata_only_mutation_and_authorization_failures_do_not_reveal_secrets() {
         );
         let server = ScriptedServer::respond(vec![response]);
         let (server, _credential_directory, credentials) = prepared_server(server);
-        let output = run(
-            &["show", ORGANIZATION, PROJECT_ID, WEBHOOK],
-            &server,
-            &credentials,
-        );
+        let output = run(&["show", WEBHOOK], &server, &credentials);
         assert!(!output.status.success());
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["outcome"], outcome);

@@ -28,7 +28,7 @@ Attempt selection:
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
+    run: super::target::RunArg,
 
     #[arg(
         long,
@@ -52,7 +52,15 @@ impl Command {
 
         let config = viewer_config(&self.presentation, TerminalCapabilities::detect());
         let mode = config.mode();
-        let requested = match self.run.resolve() {
+        let requested = match self.run.home_only().map_err(|mut error| {
+            // REQ-LOCALRUN-180: a Cloud run has nothing to view; `show` reads it.
+            if error.code == super::super::RUN_NOT_FOUND {
+                error.message.push_str(
+                    " A Cloud run has no viewer; read it with useful workflow run show RUN.",
+                );
+            }
+            error
+        }) {
             Ok(requested) => requested,
             // REQ-LOCALRUN-180: a run id the home does not answer is a view `error` document.
             Err(error) if mode == PresentationMode::Json => {
@@ -137,7 +145,7 @@ impl Command {
     }
 }
 
-fn parse_attempt(value: &str) -> Result<NonZeroU64, String> {
+pub(super) fn parse_attempt(value: &str) -> Result<NonZeroU64, String> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("attempt must be a positive decimal integer".to_owned());
     }

@@ -24,10 +24,10 @@ use useful_execution::admit_workflow;
 use useful_execution::{
     ActionId, AdmittedWorkflow, AgentExecution, AgentHarnessInstallationFailure, AgentInputStaging,
     ArtifactStaging, CancellationPolicy, CancellationReason, CancellationSource, ColorChoice,
-    CommitFailure, CoordinationError, CoordinatorClock, DisplayDeadline, DurableDeadline,
-    DurableInvocationStateV1, DurableInvocationV1, EnvironmentSnapshot, ExecutionContext,
-    ExecutionObservation, ExecutionObserver, FailurePolicy, InitialLocalRun, InputStaging,
-    InvocationAccountingLog, LocalAttemptOwner, LocalAttemptOwnershipReleased,
+    CommitFailure, ContinuingControl, CoordinationError, CoordinatorClock, DisplayDeadline,
+    DurableDeadline, DurableInvocationStateV1, DurableInvocationV1, EnvironmentSnapshot,
+    ExecutionContext, ExecutionObservation, ExecutionObserver, FailurePolicy, InitialLocalRun,
+    InputStaging, InvocationAccountingLog, LocalAttemptOwner, LocalAttemptOwnershipReleased,
     LocalPublicationError, LocalPublicationPhase, MAXIMUM_PARALLEL_STEPS, ObservationClock,
     PresentationConfig, PresentationFailure, PresentationFailureOperation, PresentationMode,
     PublicationFailurePhaseV1, PublicationPresentation, RecoveryDiagnosticKindV1,
@@ -73,8 +73,13 @@ use useful_execution::{
 use useful_execution::{RUNNER_DISK_GATE_ENVIRONMENT, RunnerDiskGate};
 
 mod cloud;
+pub(in crate::cli::workflow) use cloud::write_input_acquisition_failure;
 
-pub(super) const ABOUT: &str = "Start a local workflow run, or with --cloud a Cloud run";
+use super::target::Place;
+use crate::cli::workflow::definition::target::{self, Leaf, Named, PLACE};
+
+pub(super) const ABOUT: &str =
+    "Start a run on this machine, on your runners, or on the project's pools";
 pub(super) const AFTER_HELP: &str = "Interactive mode:
   Automatic mode uses the terminal interface only when stdin and stdout are terminals,
   TERM is usable, and stdin is not reserved by a Text or JSON input. Resize keeps the
@@ -89,43 +94,65 @@ const MAXIMUM_ATTACHMENTS: usize = 256;
 const MAXIMUM_ATTACHMENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAXIMUM_TOTAL_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const CANCELLATION_GRACE: Duration = Duration::from_secs(10);
+const STOPPED_OUTPUT_WAIT: Duration = Duration::from_secs(2);
 const ROOT_WORKFLOW_FILE: &str = "workflow.yaml";
+const COMMAND: &str = "useful workflow run create";
+const ON_HELP: &str =
+    "Where the run executes: this machine, your runners, or the project's pools (default: local)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ExecutionLeaf {
     Run,
     Retry,
     Resume,
-    /// A successor's first own attempt (REQ-LOCALRUN-194).
+    /// `upgrade --from`: a successor's first own attempt, a continuation whose reason is
+    /// `restart` (REQ-LOCALRUN-194, REQ-CONTINUE-79).
     Restart,
     /// A successor carrying its predecessor's wait, which starts no attempt
     /// (REQ-LOCALRUN-197): it names the command on the refusals before the successor exists.
     Upgrade,
+    /// `answer`, `approve` or `hand-back` continuing the run whose wait it resolved
+    /// (REQ-LOCALRUN-182, REQ-LOCALRUN-183).
+    Control(ContinuingControl),
 }
 
-// `--execution-root` is required only of a local run, and `--cloud` needs `--project`
-// (REQ-LOCALRUN-76, REQ-RUN-94).
+impl ExecutionLeaf {
+    /// `output` naming the leaf's command on the documents of the run at `run_directory`.
+    fn name_output(
+        self,
+        output: WorkflowRunOutput<io::Stdout, io::Stderr>,
+        run_directory: &Path,
+    ) -> WorkflowRunOutput<io::Stdout, io::Stderr> {
+        match self {
+            Self::Run => output,
+            Self::Retry => output.for_retry(run_directory),
+            Self::Resume => output.for_resume(run_directory),
+            Self::Restart | Self::Upgrade => output.for_upgrade(run_directory),
+            Self::Control(control) => output.for_control(control, run_directory),
+        }
+    }
+}
+
+// `--execution-root` is a local run's, the working directory when omitted (REQ-LOCALRUN-76).
+// An option of one place beside `--on` naming the other is refused by the leaf, before anything
+// is read (REQ-LOCALRUN-80).
 #[derive(Debug, Args)]
-#[command(
-    mut_arg("execution_root", |arg| arg
-        .required(false)
-        .required_unless_present("cloud")
-        .conflicts_with("cloud")),
-    mut_arg("cloud", |arg| arg.requires("project"))
-)]
+#[command(mut_arg("execution_root", |arg| arg.required(false)))]
 pub(super) struct Command {
     #[arg(
-        value_name = "ID",
+        value_name = target::DEFINITION,
         required_unless_present = "path",
-        help = "Workflow definition id, as `useful workflow definition list` prints it; with --cloud, a Cloud definition id"
+        help = target::DEFINITION_HELP
     )]
-    id: Option<String>,
+    definition: Option<Named>,
+
+    #[arg(long, value_enum, value_name = PLACE, help = ON_HELP)]
+    on: Option<Place>,
 
     #[arg(
         long,
         value_name = "DIR",
-        conflicts_with_all = ["id", "cloud"],
-        requires = "run_dir",
+        conflicts_with = "definition",
         help = "Run the tree or workflow source directory at DIR instead of a definition"
     )]
     path: Option<PathBuf>,
@@ -143,7 +170,7 @@ pub(super) struct Command {
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with_all = ["id", "cloud"],
+        conflicts_with = "definition",
         help = "Directory to create for this run (must not already exist)"
     )]
     run_dir: Option<PathBuf>,
@@ -154,7 +181,6 @@ pub(super) struct Command {
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with = "cloud",
         help = "Replace declared agent profiles with the closed replacement document at PATH"
     )]
     agent_profiles: Option<PathBuf>,
@@ -163,23 +189,21 @@ pub(super) struct Command {
         long,
         value_name = "COUNT",
         value_parser = parse_parallelism,
-        help = "Maximum simultaneous workflow steps (1 to 256, or 1 to 64 with --cloud; 1 when omitted)"
+        help = "Maximum simultaneous workflow steps (1 to 256, or 1 to 64 in Cloud; 1 when omitted)"
     )]
     max_parallel: Option<usize>,
 
     #[arg(
         long,
         value_name = "STEP",
-        conflicts_with = "cloud",
-        help = "Park the run before the workflow step STEP until the stop is lifted"
+        help = "Pause the run before the workflow step STEP until the pause is released"
     )]
-    stop_before: Option<String>,
+    pause_before: Option<String>,
 
     #[arg(
         long,
         value_name = "OWNER",
         value_parser = parse_owner,
-        conflicts_with = "cloud",
         help = "Record OWNER as the run's owner in place of the login name"
     )]
     owner: Option<String>,
@@ -188,7 +212,6 @@ pub(super) struct Command {
         long,
         value_name = "NAME=VALUE",
         value_parser = parse_external,
-        conflicts_with = "cloud",
         help = "Record VALUE as the run's external reference NAME (repeatable)"
     )]
     external: Vec<(String, String)>,
@@ -197,7 +220,6 @@ pub(super) struct Command {
         long,
         value_name = "NAME=VALUE",
         value_parser = parse_source_revision,
-        conflicts_with = "cloud",
         help = "Set the run's source revision NAME (commit, branch, workflowBranch or workflowCommit) for its steps (repeatable)"
     )]
     source_revision: Vec<(String, String)>,
@@ -206,44 +228,83 @@ pub(super) struct Command {
     presentation: super::PresentationOptions,
 
     #[command(flatten)]
-    cloud: super::CloudSelector,
-
-    #[command(flatten)]
     cloud_creation: cloud::Options,
 }
 
 impl Command {
     pub(super) fn execute(mut self) -> super::super::super::CommandResult {
-        if let Some(organization) = self.cloud.organization.take() {
-            return self.create_in_cloud(organization);
+        let usage = |message: String| {
+            Err(super::super::super::CommandFailure::with_exit_code(
+                anyhow!(message),
+                ExitCode::UsageError,
+            ))
+        };
+        let place = self.on.unwrap_or(Place::Local);
+        if place != Place::Local {
+            if let Some(flag) = self.local_option() {
+                return usage(format!(
+                    "{flag} cannot be used with --on {}\n\n\
+                     {flag} is an option of a run on this machine; drop it or use --on local.",
+                    place.as_str()
+                ));
+            }
+            return self.create_in_cloud(place);
         }
         if let Some(flag) = self.cloud_creation.given() {
-            return Err(super::super::super::CommandFailure::with_exit_code(
-                anyhow!("{flag} needs --cloud ORGANIZATION"),
-                ExitCode::UsageError,
+            return usage(format!(
+                "{flag} needs --on personal or --on project\n\n\
+                 {flag} is an option of a Cloud run; drop it or name where the run executes."
             ));
+        }
+        // `--on local` reads the definition under the home alone, by ID or by name
+        // (REQ-LOCALRUN-76, REQ-CLOUDDEF-42); an ID the home lacks is refused at phase
+        // `definition` as before (REQ-LOCALRUN-173).
+        if let Some(named @ Named::Name(_)) = &self.definition {
+            match target::home_only(named, definition_leaf(self.presentation.output.json)) {
+                Ok(definition) => self.definition = Some(Named::Id(definition.record.id)),
+                Err(result) => return result,
+            }
         }
         execute_with_runtime("start local workflow runtime", self.execute_async())
     }
 
+    /// The first option of a local run given, by its flag, which a Cloud place refuses
+    /// (REQ-LOCALRUN-80).
+    fn local_option(&self) -> Option<&'static str> {
+        [
+            (self.path.is_some(), "--path"),
+            (self.execution.is_some(), "--execution-root"),
+            (self.run_dir.is_some(), "--run-dir"),
+            (self.agent_profiles.is_some(), "--agent-profiles"),
+            (self.pause_before.is_some(), "--pause-before"),
+            (self.owner.is_some(), "--owner"),
+            (!self.external.is_empty(), "--external"),
+            (!self.source_revision.is_empty(), "--source-revision"),
+        ]
+        .into_iter()
+        .find_map(|(given, flag)| given.then_some(flag))
+    }
+
     async fn execute_async(mut self) -> super::super::super::CommandResult {
-        // The argument rules require it of a local run (REQ-LOCALRUN-76).
-        let Some(super::LocalExecutionRoot { execution_root }) = self.execution.take() else {
-            return Err(super::super::super::CommandFailure::with_exit_code(
-                anyhow!("a local run needs --execution-root PATH"),
-                ExitCode::UsageError,
-            ));
+        // The working directory when omitted (REQ-LOCALRUN-76).
+        let execution_root = match self.execution.take() {
+            Some(super::LocalExecutionRoot { execution_root }) => execution_root,
+            None => std::env::current_dir().context("read the working directory")?,
         };
-        let source = match (self.id.clone(), self.path.clone(), self.run_dir.clone()) {
-            (Some(id), None, None) => RunSubject::Definition(id),
-            (None, Some(root), Some(run_directory)) => RunSubject::Path {
+        let source = match (
+            self.definition.clone(),
+            self.path.clone(),
+            self.run_dir.clone(),
+        ) {
+            (Some(named), None, None) => RunSubject::Definition(named.as_str().to_owned()),
+            (None, Some(root), run_directory) => RunSubject::Path {
                 root,
                 run_directory,
             },
             // The argument rules admit exactly the two forms (REQ-LOCALRUN-80).
             _ => {
                 return Err(super::super::super::CommandFailure::with_exit_code(
-                    anyhow!("name a definition id, or --path DIR with --run-dir PATH"),
+                    anyhow!("name a definition, or --path DIR"),
                     ExitCode::UsageError,
                 ));
             }
@@ -281,7 +342,33 @@ impl Command {
             } => {
                 let tree_root = root.clone();
                 match blocking_operation(move || local_workflow_tree(&tree_root)).await {
-                    Ok(tree) => (root, tree, RunDestination::Path(run_directory)),
+                    Ok(tree) => match (run_directory, &tree) {
+                        (Some(run_directory), _) => {
+                            (root, tree, RunDestination::Path(run_directory))
+                        }
+                        // REQ-LOCALRUN-174: a tree's run is recorded under the home; a
+                        // directory that is not a tree has no run record to name it there.
+                        (None, Some(_)) => match WorkflowHome::from_environment() {
+                            Ok(home) => (root, tree, RunDestination::Home(home)),
+                            Err(error) => {
+                                return rejection_exit(DefinitionTreeFailure::from(error).render(
+                                    WorkflowRunOutput::new(
+                                        presentation_config,
+                                        io::stdout(),
+                                        io::stderr(),
+                                    ),
+                                ));
+                            }
+                        },
+                        (None, None) => {
+                            return Err(super::super::super::CommandFailure::with_exit_code(
+                                anyhow!(
+                                    "--path DIR holds no workflow.yaml, so its run has no run record and needs --run-dir PATH"
+                                ),
+                                ExitCode::UsageError,
+                            ));
+                        }
+                    },
                     Err(BlockingOperationError::Operation(diagnostics)) => {
                         return rejection_output(presentation_config, |output| {
                             output.render_tree_rejection(None, &diagnostics)
@@ -356,18 +443,18 @@ impl Command {
         // REQ-LOCALRUN-80, REQ-LOCALRUN-185: the stop names a step of the selected workflow,
         // or a `workflow` step of a nested workflow it names (REQ-WFEXEC-76), of a run that
         // records itself, before the run directory exists.
-        if let Some(step) = &self.stop_before {
+        if let Some(step) = &self.pause_before {
             let holdable = super::control::holdable_step_ids(&workflow);
             if !workflow.definition.steps.contains_key(step) && !holdable.contains(step) {
                 return Err(super::super::super::CommandFailure::with_exit_code(
-                    anyhow!("--stop-before names no step of the selected workflow"),
+                    anyhow!("--pause-before names no step of the selected workflow"),
                     ExitCode::UsageError,
                 ));
             }
             if tree.is_none() {
                 return Err(super::super::super::CommandFailure::with_exit_code(
                     anyhow!(
-                        "--stop-before needs a run of a tree or a definition, which has a run record"
+                        "--pause-before needs a run of a tree or a definition, which has a run record"
                     ),
                     ExitCode::UsageError,
                 ));
@@ -490,7 +577,7 @@ impl Command {
             record,
             run_directory: run_directory.clone(),
             admitted: admitted.clone(),
-            stop_before: self.stop_before.clone(),
+            stop_before: self.pause_before.clone(),
         };
         let creation_cancellation = cancellation.clone();
         let journals = signal_task
@@ -581,19 +668,23 @@ impl Command {
 }
 
 /// What `run create` runs: a definition's current revision under the home
-/// (REQ-LOCALRUN-173) or a directory with no definition (REQ-LOCALRUN-174).
+/// (REQ-LOCALRUN-173) or a directory with no definition, in `--run-dir` when given
+/// (REQ-LOCALRUN-174).
 enum RunSubject {
     Definition(String),
     Path {
         root: PathBuf,
-        run_directory: PathBuf,
+        run_directory: Option<PathBuf>,
     },
 }
 
-/// Where the run directory goes: `--run-dir`, or `workflows/<id>/runs/<run id>/` under the
-/// home for a definition run.
+/// Where the run directory goes: `--run-dir`, the home's `runs/<run id>/` for a tree run
+/// given none, or `workflows/<id>/runs/<run id>/` under the home for a definition run.
 enum RunDestination {
     Path(PathBuf),
+    /// A `--path` tree's run with no `--run-dir`, which takes no subject claim
+    /// (REQ-LOCALRUN-174).
+    Home(WorkflowHome),
     Definition {
         home: WorkflowHome,
         id: String,
@@ -605,7 +696,7 @@ impl RunDestination {
     /// The definition and revision the run record names, none for a `--path` run.
     fn definition(&self) -> Option<(String, u64)> {
         match self {
-            Self::Path(_) => None,
+            Self::Path(_) | Self::Home(_) => None,
             Self::Definition { id, revision, .. } => Some((id.clone(), *revision)),
         }
     }
@@ -613,11 +704,12 @@ impl RunDestination {
     fn run_directory(&self, record: Option<&WorkflowRunRecord>) -> anyhow::Result<PathBuf> {
         match (self, record) {
             (Self::Path(run_directory), _) => Ok(run_directory.clone()),
+            (Self::Home(home), Some(record)) => Ok(home.home_runs_directory().join(&record.id)),
             (Self::Definition { home, id, .. }, Some(record)) => {
                 Ok(home.runs_directory(id).join(&record.id))
             }
-            (Self::Definition { .. }, None) => Err(anyhow!(
-                "create workflow run: a definition run has no run record"
+            (Self::Home(_) | Self::Definition { .. }, None) => Err(anyhow!(
+                "create workflow run: a run under the home has no run record"
             )),
         }
     }
@@ -626,8 +718,8 @@ impl RunDestination {
     /// the definition's slot for it is held (REQ-WFDEF-28), read without the index's lock.
     fn refuse_subject(&self, subject: &str) -> Result<(), SubjectError> {
         match self {
-            Self::Path(_) if is_subject(subject) => Ok(()),
-            Self::Path(_) => Err(SubjectError::Invalid),
+            Self::Path(_) | Self::Home(_) if is_subject(subject) => Ok(()),
+            Self::Path(_) | Self::Home(_) => Err(SubjectError::Invalid),
             Self::Definition { home, id, .. } => check_subject(home, id, subject, None),
         }
     }
@@ -637,17 +729,22 @@ impl RunDestination {
     /// no claim (REQ-LOCALRUN-173).
     fn take_subject_slot(&self, subject: &str) -> Result<Option<SubjectClaim>, SubjectError> {
         match self {
-            Self::Path(_) => Ok(None),
+            Self::Path(_) | Self::Home(_) => Ok(None),
             Self::Definition { home, id, .. } => {
                 SubjectClaim::take(home, id, subject, None).map(Some)
             }
         }
     }
 
-    /// Creates the definition's `runs/` before its run directory is created there.
+    /// Creates the home's or the definition's `runs/` before the run directory is created
+    /// there.
     fn prepare(&self) -> anyhow::Result<()> {
         match self {
             Self::Path(_) => Ok(()),
+            Self::Home(home) => home
+                .create_home_runs_directory()
+                .map(drop)
+                .map_err(anyhow::Error::new),
             Self::Definition { home, id, .. } => home
                 .create_runs_directory(id)
                 .map(drop)
@@ -657,7 +754,7 @@ impl RunDestination {
 }
 
 /// The creation of an admitted run: its directory at `run_directory` under `destination`,
-/// its record and subject slot, and the stop `--stop-before` names.
+/// its record and subject slot, and the stop `--pause-before` names.
 struct RunCreation {
     destination: RunDestination,
     subject: Option<String>,
@@ -759,8 +856,8 @@ pub(super) fn signalled_before_creation(
     )
 }
 
-/// The failure of a `resume`, `retry` or `restart` a signal reached before its attempt began:
-/// no attempt began and the run is as it was (REQ-LOCALRUN-135).
+/// The failure of a `resume`, `retry` or `upgrade --from` a signal reached before its attempt
+/// began: no attempt began and the run is as it was (REQ-LOCALRUN-135).
 pub(super) fn signalled_before_attempt(
     reason: Option<CancellationReason>,
 ) -> super::super::super::CommandFailure {
@@ -828,6 +925,18 @@ fn subject_rejection(
             error.run(),
         )
     })
+}
+
+/// The definition lookup's leaf (REQ-CLOUDDEF-42): its refusals are `useful workflow run
+/// create`'s, and a failed read of a project's definitions is written as the definition family
+/// writes a failed `list`.
+const fn definition_leaf(json: bool) -> Leaf {
+    Leaf {
+        name: "list",
+        command: COMMAND,
+        refused: "Run not created.",
+        json,
+    }
 }
 
 /// The current revision's tree of a definition, read from the home and checked against the
@@ -1724,6 +1833,14 @@ async fn execute_attempt_phases(
         // nested run has no controls of its own and reads the root's (REQ-WFEXEC-75,
         // INV-ENGINE-40).
         let run_directory = attempt.run()?.run_directory().to_owned();
+        // The attempt's own continuation reason; `state.json` already records it, and a
+        // nested run's equals its root's for a carried host wait (REQ-CONTINUE-92).
+        let reason = attempt
+            .run()?
+            .continuation_record()
+            .map_err(anyhow::Error::new)
+            .context("read the attempt's continuation")?
+            .and_then(|continuation| continuation.reason());
         let (root, nested) = match root {
             Some(root) => (root.clone(), Some(root)),
             None => (RunRoot::of(attempt.run()?, attempt.mirror.clone())?, None),
@@ -1734,8 +1851,8 @@ async fn execute_attempt_phases(
                     run_directory: root,
                     path,
                     ..
-                }) => AttemptControls::nested(&root, &run_directory, attempt_number, &path),
-                None => attempt_controls(&run_directory, attempt_number),
+                }) => AttemptControls::nested(&root, &run_directory, attempt_number, &path, reason),
+                None => attempt_controls(&run_directory, attempt_number, reason),
             }
             .map_err(anyhow::Error::new)
         })
@@ -1911,6 +2028,12 @@ async fn execute_attempt_phases(
         }
         _ => None,
     };
+    // REQ-WFEXEC-80, REQ-WFDEF-4: a host wait entered under its limit and recorded is counted
+    // in the write that makes the run record read `waiting`; a kept wait counts nothing.
+    let counted_edge = match (&execution.outcome, &wait_record) {
+        (RunOutcome::Waiting { wait }, Some(_)) => wait.counted_edge(),
+        _ => None,
+    };
     // REQ-WFEXEC-64: an attempt that took a backward or limited edge chooses no outcome
     // either, and the run record stays `running` for the attempt the loop chains into.
     if let RunOutcome::Continued { edge } = &execution.outcome {
@@ -1967,8 +2090,8 @@ async fn execute_attempt_phases(
                 match leaf {
                     ExecutionLeaf::Retry => terminal.mark_retry(),
                     ExecutionLeaf::Resume => terminal.mark_resume(),
-                    ExecutionLeaf::Restart => terminal.mark_restart(),
-                    ExecutionLeaf::Upgrade => terminal.mark_upgrade(),
+                    ExecutionLeaf::Restart | ExecutionLeaf::Upgrade => terminal.mark_upgrade(),
+                    ExecutionLeaf::Control(control) => terminal.mark_control(control),
                     ExecutionLeaf::Run => {}
                 }
                 if let Some(wait) = published_wait {
@@ -2025,7 +2148,7 @@ async fn execute_attempt_phases(
             // the run `withdrawn` in place of the outcome or wait the attempt chose: the wait
             // record it wrote is removed, and an `onWait` already written stays. Every attempt
             // that ends the run, a `canceled` one included, holds the run's controls lock from
-            // before that read until the run lock is released, so a `withdraw` either appends
+            // before that read until the run lock is released, so a withdrawal either appends
             // before it or finds the run released (REQ-LOCALRUN-186); a lock that cannot be
             // taken leaves the read unserialized, as unreadable controls withdraw nothing.
             // REQ-LOCALRUN-211: under that lock it spends every withdrawal recorded before it,
@@ -2033,7 +2156,7 @@ async fn execute_attempt_phases(
             // the run is not withdrawn by it. A `canceled` attempt keeps its outcome.
             // REQ-LOCALRUN-214, INV-ENGINE-39: an attempt that ended `continued` and chains, one
             // no interruption holds back, takes the same lock before it releases the run and
-            // hands it to the next attempt's acquisition, so a `withdraw` arriving between the
+            // hands it to the next attempt's acquisition, so a withdrawal arriving between the
             // attempts waits for that acquisition and finds the run held.
             let ends_run = !quiet && !continued;
             let last_read = settles_withdrawable && !withdrawn;
@@ -2061,7 +2184,7 @@ async fn execute_attempt_phases(
                 None if continued => {
                     owned_run.update_run_record(RunState::Running, attempt_number, None)
                 }
-                None => owned_run.update_run_record(RunState::Waiting, attempt_number, None),
+                None => owned_run.record_waiting(attempt_number, counted_edge.as_deref()),
             };
             let exited = record_state.is_ok();
             let record_state = match record_state {
@@ -2165,14 +2288,10 @@ fn execution_output(
     owned_run: &LocalAttemptOwner,
     leaf: ExecutionLeaf,
 ) -> WorkflowRunOutput<io::Stdout, io::Stderr> {
-    let output = WorkflowRunOutput::new(config, io::stdout(), io::stderr());
-    match leaf {
-        ExecutionLeaf::Run => output,
-        ExecutionLeaf::Retry => output.for_retry(owned_run.run_directory()),
-        ExecutionLeaf::Resume => output.for_resume(owned_run.run_directory()),
-        ExecutionLeaf::Restart => output.for_restart(owned_run.run_directory()),
-        ExecutionLeaf::Upgrade => output.for_upgrade(owned_run.run_directory()),
-    }
+    leaf.name_output(
+        WorkflowRunOutput::new(config, io::stdout(), io::stderr()),
+        owned_run.run_directory(),
+    )
 }
 
 fn rejection_output(
@@ -4529,15 +4648,10 @@ impl ActiveRunHost {
                     return Err(error.into());
                 }
 
-                let output =
-                    WorkflowRunOutput::new(config.as_ref().clone(), io::stdout(), io::stderr());
-                let output = match *leaf {
-                    ExecutionLeaf::Run => output,
-                    ExecutionLeaf::Retry => output.for_retry(&run.run_directory),
-                    ExecutionLeaf::Resume => output.for_resume(&run.run_directory),
-                    ExecutionLeaf::Restart => output.for_restart(&run.run_directory),
-                    ExecutionLeaf::Upgrade => output.for_upgrade(&run.run_directory),
-                };
+                let output = leaf.name_output(
+                    WorkflowRunOutput::new(config.as_ref().clone(), io::stdout(), io::stderr()),
+                    &run.run_directory,
+                );
                 let presented = match publication {
                     Ok(terminal) => output.render_standard_summary(
                         workflow,
@@ -4602,8 +4716,10 @@ async fn present_standard(
     // The workflow clock adapter bounds the final output wait for cancellation
     // in either phase, including force-aborted finalizers;
     // the presentation thread may be stuck in an unread pipe indefinitely.
+    // The wait tells a destination that takes the output late, such as a reader
+    // slowed by a busy host, from one that does not take it at all.
     let mut clock = SystemExecutionClock;
-    let deadline = clock.now() + Duration::from_millis(100);
+    let deadline = clock.now() + STOPPED_OUTPUT_WAIT;
     tokio::select! {
         presented = output => StandardPresentation::Completed(presented),
         () = clock.wait_until(deadline) => StandardPresentation::DrainTimedOut,
@@ -4804,6 +4920,7 @@ fn build_run_result(
     let mut states = execution.steps;
     let mut recoveries = execution.recoveries;
     let mut failed_children = execution.failed_children;
+    let mut failure_classes = execution.failure_classes;
     let mut input_sources = execution.input_sources;
     let mut steps = Vec::with_capacity(states.len());
     for id in &workflow.definition.presentation_order {
@@ -4864,6 +4981,7 @@ fn build_run_result(
             recovery,
             invocations,
             failed_child: failed_children.remove(id),
+            failure_class: failure_classes.remove(id),
             input_sources: input_sources.remove(id).unwrap_or_default(),
         });
     }
@@ -4933,6 +5051,7 @@ fn build_run_result(
                     },
                     // A finalizer runs no child and its body takes no `firstOf`.
                     failed_child: None,
+                    failure_class: None,
                     input_sources: Vec::new(),
                 });
             }

@@ -8,7 +8,6 @@ use base64::Engine as _;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::grant::{after_notice, without_notice};
 use super::runner_status::{
     ServeStatusFixture, accept_runner_connection_answering, accept_runner_socket,
     cloud_observation_ack, cloud_welcome, write_status_config,
@@ -39,32 +38,16 @@ pub(super) fn synced_response(codex: &str) -> Vec<u8> {
 
 pub(super) const READY_CODEX: &str = r#"{"provider":"codex","state":"ready","agentLoginId":"agl_01k0z6r1w8f4jy2m7q9v3x5abc","generation":3,"checkedAt":"2026-11-12T01:00:00Z","installedAt":"2026-11-12T00:55:00Z"}"#;
 
-/// The sync command (REQ-GRANT-41, REQ-INTEGRATION-14).
-pub(super) const INTEGRATION_SYNC: [&str; 3] = ["runner", "integration", "sync"];
-/// The command it replaces, which the cases below keep driving: it sends the
-/// same request and prints the same output with the same exit status, after a
-/// line on standard error naming `useful runner integration sync`
-/// (REQ-INTEGRATION-15).
-pub(super) const SYNC: [&str; 3] = ["runner", "grant", "sync"];
-/// Its earlier spelling, which does the same (REQ-GRANT-77).
-pub(super) const EARLIER_SYNC: [&str; 3] = ["runner", "agent-login", "sync"];
-/// The command the notice of either earlier spelling names.
-const SYNC_REPLACEMENT: &str = "useful runner integration sync";
+/// The sync command (REQ-GRANT-41).
+pub(super) const SYNC: [&str; 2] = ["runner", "sync"];
 
 const BUSY_RESPONSE: &[u8] =
     b"{\"schemaVersion\":1,\"outcome\":\"error\",\"error\":\"runner_busy\"}\n";
 
-/// [`sync_printing`] without the notice an earlier spelling prints first, so a
-/// case reads what the command prints under any spelling.
-fn sync_against(command: [&str; 3], response: Vec<u8>, extra: &[&str]) -> (Output, Vec<u8>) {
-    let (output, request) = sync_printing(command, response, extra);
-    (without_notice(output, SYNC_REPLACEMENT), request)
-}
-
 /// Runs `command --config PATH` and `extra` against a fake control socket
-/// that answers `response` to one request, and returns the command's output,
-/// any notice included, with the request the socket received.
-fn sync_printing(command: [&str; 3], response: Vec<u8>, extra: &[&str]) -> (Output, Vec<u8>) {
+/// that answers `response` to one request, and returns the command's output
+/// with the request the socket received.
+fn sync_against(command: [&str; 2], response: Vec<u8>, extra: &[&str]) -> (Output, Vec<u8>) {
     let directory = private_credential_directory();
     let runtime = tempfile::tempdir_in("/tmp").unwrap();
     let socket_path = runtime.path().join("runner.sock");
@@ -121,7 +104,7 @@ impl ScriptedControlSocket {
 
 /// Runs `command --config PATH` with no runner listening on the socket the
 /// configuration names.
-fn sync_with_no_live_runner(command: [&str; 3], config: &str) -> Output {
+fn sync_with_no_live_runner(command: [&str; 2], config: &str) -> Output {
     let mut args = command.to_vec();
     args.extend_from_slice(&["--config", config]);
     run(&args)
@@ -147,59 +130,31 @@ fn sync_asks_the_live_runner_and_prints_each_provider_readiness() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-GRANT-41
-// REQ-GRANT-77
-// REQ-INTEGRATION-14
-// REQ-INTEGRATION-15
-// `runner integration sync` sends the request and prints what the earlier
-// spellings print, with no notice; each earlier one prints first a line naming
-// it and then exactly what it prints.
+// INV-CLI-21: the earlier spellings of the sync are unknown commands, refused before any
+// request, with no notice naming the command that replaced them.
 #[test]
-fn the_earlier_sync_spellings_print_what_runner_integration_sync_prints() {
-    let refused = READY_CODEX.replace(
-        r#""installedAt""#,
-        r#""selected":true,"lastUse":"refused","installedAt""#,
-    );
-    for (response, code) in [
-        (synced_response(READY_CODEX), 0),
-        (synced_response(&refused), 1),
-        (BUSY_RESPONSE.to_vec(), 4),
-    ] {
-        for extra in [&[][..], &["--json"][..]] {
-            let (output, request) = sync_printing(INTEGRATION_SYNC, response.clone(), extra);
-            assert_eq!(request, SYNC_REQUEST);
-            assert_eq!(output.status.code(), Some(code), "{extra:?}");
-            if code == 0 {
-                assert!(output.stderr.is_empty(), "{extra:?}");
-            }
-            for spelling in [SYNC, EARLIER_SYNC] {
-                let (earlier, earlier_request) = sync_printing(spelling, response.clone(), extra);
-                assert_eq!(earlier_request, SYNC_REQUEST);
-                assert_eq!(earlier.status.code(), Some(code), "{spelling:?} {extra:?}");
-                assert_eq!(earlier.stdout, output.stdout, "{spelling:?} {extra:?}");
-                assert_eq!(
-                    after_notice(&earlier, SYNC_REPLACEMENT).as_bytes(),
-                    output.stderr,
-                    "{spelling:?} {extra:?}"
-                );
-            }
-        }
-    }
-
+fn the_earlier_sync_spellings_are_unknown_and_print_no_notice() {
     let directory = private_credential_directory();
     let runtime = tempfile::tempdir_in("/tmp").unwrap();
-    let config = write_status_config(&directory, &runtime.path().join("runner.sock"));
-    let output = sync_with_no_live_runner(INTEGRATION_SYNC, &config);
-    assert_eq!(output.status.code(), Some(4));
-    for spelling in [SYNC, EARLIER_SYNC] {
-        let earlier = sync_with_no_live_runner(spelling, &config);
-        assert_eq!(earlier.status.code(), Some(4), "{spelling:?}");
-        assert_eq!(earlier.stdout, output.stdout, "{spelling:?}");
-        assert_eq!(
-            after_notice(&earlier, SYNC_REPLACEMENT).as_bytes(),
-            output.stderr,
-            "{spelling:?}"
+    let socket_path = runtime.path().join("runner.sock");
+    let config = write_status_config(&directory, &socket_path);
+    for earlier in [
+        &["runner", "agent-login", "sync"][..],
+        &["runner", "grant", "sync"][..],
+    ] {
+        let socket = ScriptedControlSocket::answering(&socket_path, synced_response(READY_CODEX));
+        let mut args = earlier.to_vec();
+        args.extend_from_slice(&["--config", &config]);
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{earlier:?}");
+        assert!(output.stdout.is_empty(), "{earlier:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            !stderr.contains("useful runner sync"),
+            "{earlier:?}: {stderr}"
         );
+        assert!(socket.request().is_empty(), "{earlier:?}");
+        fs::remove_file(&socket_path).unwrap();
     }
 }
 
@@ -653,7 +608,7 @@ impl ServedRunner {
         // of a login gives no answer and never reaches a provider.
         let empty_path = tempfile::tempdir().unwrap();
         serve_gateway_with_agent_logins(listener, agent_logins);
-        let mut serve = Command::new(env!("CARGO_BIN_EXE_useful"))
+        let mut serve = Command::new(crate::executable())
             .args(["runner", "serve", "--config", &fixture.config])
             .env("OTEL_SDK_DISABLED", "true")
             .env("PATH", empty_path.path())
@@ -673,20 +628,11 @@ impl ServedRunner {
         });
 
         let sync = poll_until(
-            "agent-login sync against the live runner",
-            || {
-                run(&[
-                    "runner",
-                    "agent-login",
-                    "sync",
-                    "--json",
-                    "--config",
-                    &fixture.config,
-                ])
-            },
+            "sync against the live runner",
+            || run(&["runner", "sync", "--json", "--config", &fixture.config]),
             |output| output.status.code() != Some(4),
         );
-        let status = run(&["runner", "status", "--config", &fixture.config]);
+        let status = run(&["runner", "show", "--config", &fixture.config]);
         let doctor = run(&[
             "runner",
             "doctor",
@@ -819,10 +765,10 @@ fn installed_agent_logins_reach_their_files_and_no_output() {
     for (name, output) in [
         ("runner standard error", serve_stderr),
         ("readiness document", readiness),
-        ("runner status", text(&status.stdout)),
-        ("runner status error", text(&status.stderr)),
-        ("agent-login sync", text(&sync.stdout)),
-        ("agent-login sync error", text(&sync.stderr)),
+        ("runner show", text(&status.stdout)),
+        ("runner show error", text(&status.stderr)),
+        ("runner sync", text(&sync.stdout)),
+        ("runner sync error", text(&sync.stderr)),
         ("runner doctor", text(&doctor.stdout)),
         ("runner doctor error", text(&doctor.stderr)),
     ] {
@@ -852,7 +798,7 @@ fn offer_and_prepare() -> (Message, Message) {
     let fixture = |name: &str| {
         let path = format!(
             "{}/tests/fixtures/runner-protocol/v1/valid/{name}",
-            env!("CARGO_MANIFEST_DIR")
+            crate::fixture_root().display()
         );
         serde_json::from_str::<serde_json::Value>(&fs::read_to_string(path).unwrap()).unwrap()
     };
@@ -1055,7 +1001,7 @@ impl EndedGrantAssignment {
                     }
                 });
         });
-        let mut serve = Command::new(env!("CARGO_BIN_EXE_useful"))
+        let mut serve = Command::new(crate::executable())
             .args(["runner", "serve", "--config", &fixture.config])
             .env("OTEL_SDK_DISABLED", "true")
             .env("HOME", home.path())
@@ -1114,7 +1060,7 @@ fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowher
         || token_file.exists(),
         |exists| !exists,
     );
-    let status = run(&["runner", "status", "--config", &served.fixture.config]);
+    let status = run(&["runner", "show", "--config", &served.fixture.config]);
     let readiness = fs::read(
         served
             .fixture
@@ -1157,8 +1103,8 @@ fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowher
     for (name, output) in [
         ("runner standard error", serve_stderr),
         ("readiness document", readiness.to_string()),
-        ("runner status", text(&status.stdout)),
-        ("runner status error", text(&status.stderr)),
+        ("runner show", text(&status.stdout)),
+        ("runner show error", text(&status.stderr)),
     ] {
         assert!(
             !output.contains(GRANT_TOKEN),
@@ -1184,7 +1130,7 @@ fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
         || token_file.exists(),
         |exists| !exists,
     );
-    let status = run(&["runner", "status", "--config", &served.fixture.config]);
+    let status = run(&["runner", "show", "--config", &served.fixture.config]);
     let readiness = fs::read(
         served
             .fixture
@@ -1215,8 +1161,8 @@ fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
     for (name, output) in [
         ("runner standard error", serve_stderr),
         ("readiness document", readiness.to_string()),
-        ("runner status", text(&status.stdout)),
-        ("runner status error", text(&status.stderr)),
+        ("runner show", text(&status.stdout)),
+        ("runner show error", text(&status.stderr)),
     ] {
         for secret in [EXAMPLE_GRANT_TOKEN, GRANT_TOKEN] {
             assert!(!output.contains(secret), "{name} carries a grant token");
@@ -1238,11 +1184,11 @@ fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current(
     let config = served.fixture.config.clone();
     // The runner answers a sync only once it is idle (REQ-GRANT-41).
     let sync = poll_until(
-        "grant sync once the runner is idle",
-        || run(&["runner", "grant", "sync", "--config", &config]),
+        "sync once the runner is idle",
+        || run(&["runner", "sync", "--config", &config]),
         |output| output.status.code() != Some(4),
     );
-    let json = run(&["runner", "grant", "sync", "--json", "--config", &config]);
+    let json = run(&["runner", "sync", "--json", "--config", &config]);
     let serve_stderr = served.stop();
 
     // An OAuth entry never fails the sync, ended or not (REQ-GRANT-88).

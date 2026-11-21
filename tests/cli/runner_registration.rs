@@ -1,4 +1,4 @@
-//! `useful runner serve --personal` and `--pool-id` on a host with no enrolled
+//! `useful runner serve --personal` and `--pool` on a host with no enrolled
 //! state: the real `useful` against a scripted API, a scripted enrollment
 //! endpoint and a connection witness for the runner endpoint.
 
@@ -6,6 +6,7 @@ use super::*;
 
 use std::path::PathBuf;
 
+use super::organization::{LIST_CURRENT_MEMBERSHIPS, OTHER_IN_EFFECT_ID, active_memberships};
 use super::runner_administration::{
     ACTIVATION_ID, ACTIVATION_SECRET, MEMBER_ID, ORGANIZATION, ORGANIZATION_ID, POOL_ID, RUNNER_ID,
     activation_issuance_body, activation_issued_response_with, current_principal_response,
@@ -139,9 +140,17 @@ fn files_under(directory: &Path) -> Vec<PathBuf> {
 }
 
 fn assert_signed_in_registration_request(request: &str) -> serde_json::Value {
+    assert_signed_in_registration_request_in(request, ORGANIZATION)
+}
+
+/// The registration `request` sent under `organization`, the reference the start sends.
+fn assert_signed_in_registration_request_in(
+    request: &str,
+    organization: &str,
+) -> serde_json::Value {
     assert!(
         request.starts_with(&format!(
-            "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations HTTP/1.1\r\n"
+            "POST /api/v1/organizations/{organization}/runner-registrations HTTP/1.1\r\n"
         )),
         "{request}"
     );
@@ -153,9 +162,13 @@ fn assert_signed_in_registration_request(request: &str) -> serde_json::Value {
 }
 
 fn assert_activation_and_enrollment(activation: &str, enrollment: &str) {
+    assert_activation_and_enrollment_in(activation, enrollment, ORGANIZATION);
+}
+
+fn assert_activation_and_enrollment_in(activation: &str, enrollment: &str, organization: &str) {
     assert!(
         activation.starts_with(&format!(
-            "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/activations HTTP/1.1\r\n"
+            "POST /api/v1/organizations/{organization}/runner-registrations/{RUNNER_ID}/activations HTTP/1.1\r\n"
         )),
         "{activation}"
     );
@@ -202,7 +215,8 @@ fn assert_enrolled_and_connected(host: &JoinHost, connection: &str, stderr: &str
     assert!(record.get("enrolledAt").is_some(), "{record}");
 }
 
-// REQ-RUNNERENROLL-116, REQ-RUNNERENROLL-115
+// REQ-RUNNERENROLL-116, REQ-RUNNERENROLL-115: `--org` names the organization the
+// registration is sent under, with no request before the registration's own.
 #[test]
 fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
     let cloud = SignedInCloud::new(vec![
@@ -213,15 +227,11 @@ fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
 
     let (connection, stderr) = cloud.serve_until_connected(
         &host,
-        &[
-            "--personal",
-            "--organization",
-            ORGANIZATION,
-            "--allow-insecure-http",
-        ],
+        &["--personal", "--org", ORGANIZATION, "--allow-insecure-http"],
     );
 
     assert_enrolled_and_connected(&host, &connection, &stderr);
+    assert_eq!(record_document(&host)["organization"], ORGANIZATION);
     let (requests, enrollment) = cloud.finish();
     assert_eq!(requests.len(), 3, "{requests:?}");
     assert!(
@@ -234,28 +244,29 @@ fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
     assert_activation_and_enrollment(&requests[2], &enrollment);
 }
 
-// REQ-RUNNERENROLL-115
+// REQ-RUNNERENROLL-115: `USEFUL_ORG` names the organization when `--org` does not.
 #[test]
-fn pool_id_resolves_the_named_pool_once_and_registers_in_it() {
+fn pool_resolves_the_named_pool_once_and_registers_in_it() {
     let cloud = SignedInCloud::new(vec![
         current_principal_response(),
         json_http_response("200 OK", pool_list_body()),
         registration_created_response(),
     ]);
     let host = registration_host();
+    let mut environment = cloud.environment().to_vec();
+    environment.push(("USEFUL_ORG", ORGANIZATION));
 
-    let (connection, stderr) = cloud.serve_until_connected(
-        &host,
-        &[
-            "--pool-id",
-            "builders",
-            "--organization",
-            ORGANIZATION,
-            "--allow-insecure-http",
-        ],
+    let mut serve = host.serve(
+        &["--pool", "builders", "--allow-insecure-http"],
+        &environment,
     );
+    let connection = cloud.witness.next_connection(&mut serve);
+    let stderr = serve.stop();
+    let connection =
+        connection.unwrap_or_else(|| panic!("Runner Serve stopped before connecting: {stderr}"));
 
     assert_enrolled_and_connected(&host, &connection, &stderr);
+    assert_eq!(record_document(&host)["organization"], ORGANIZATION);
     let (requests, enrollment) = cloud.finish();
     assert_eq!(requests.len(), 4, "{requests:?}");
     assert!(requests[0].starts_with("GET /api/v1/me HTTP/1.1\r\n"));
@@ -265,6 +276,65 @@ fn pool_id_resolves_the_named_pool_once_and_registers_in_it() {
     let body = assert_signed_in_registration_request(&requests[2]);
     assert_eq!(body["runnerPoolId"], POOL_ID);
     assert_activation_and_enrollment(&requests[3], &enrollment);
+}
+
+// REQ-RUNNERENROLL-115: with no `--org` and no `USEFUL_ORG` the registration is sent in
+// the person's only active organization, by its ID, which the record names.
+#[test]
+fn a_registration_with_no_organization_named_acts_in_the_only_membership() {
+    let cloud = SignedInCloud::new(vec![
+        active_memberships(&[(ORGANIZATION_ID, ORGANIZATION)]),
+        current_principal_response(),
+        registration_created_response(),
+    ]);
+    let host = registration_host();
+
+    let (connection, stderr) =
+        cloud.serve_until_connected(&host, &["--personal", "--allow-insecure-http"]);
+
+    assert_enrolled_and_connected(&host, &connection, &stderr);
+    assert_eq!(record_document(&host)["organization"], ORGANIZATION_ID);
+    let (requests, enrollment) = cloud.finish();
+    assert_eq!(requests.len(), 4, "{requests:?}");
+    assert!(
+        requests[0].starts_with(LIST_CURRENT_MEMBERSHIPS),
+        "{}",
+        requests[0]
+    );
+    assert!(requests[1].starts_with("GET /api/v1/me HTTP/1.1\r\n"));
+    assert_signed_in_registration_request_in(&requests[2], ORGANIZATION_ID);
+    assert_activation_and_enrollment_in(&requests[3], &enrollment, ORGANIZATION_ID);
+}
+
+// REQ-RUNNERENROLL-115: several memberships and no organization named are a usage
+// error after the membership read, naming `--org` and the person's organizations.
+#[test]
+fn a_registration_with_several_memberships_and_no_organization_exits_2_writing_nothing() {
+    let (server, _credentials, credential_path) = prepared_runner(vec![active_memberships(&[
+        (ORGANIZATION_ID, ORGANIZATION),
+        (OTHER_IN_EFFECT_ID, "acme-labs"),
+    ])]);
+    let host = registration_host();
+
+    let (exit, stderr) = host
+        .serve(
+            &["--personal", "--allow-insecure-http"],
+            &deployment_environment(&server.api_url, &credential_path),
+        )
+        .wait_for_exit();
+
+    assert_eq!(exit.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--org"), "{stderr}");
+    assert!(stderr.contains(ORGANIZATION), "{stderr}");
+    assert!(stderr.contains("acme-labs"), "{stderr}");
+    assert!(!record_path(&host).exists());
+    assert!(!host.state.exists());
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        requests[0].starts_with(LIST_CURRENT_MEMBERSHIPS),
+        "{requests:?}"
+    );
 }
 
 // REQ-RUNNERENROLL-116
@@ -279,27 +349,26 @@ fn a_start_with_no_sign_in_exits_3_having_registered_and_written_nothing() {
         .into_owned();
     let host = registration_host();
 
-    let (exit, stderr) = host
-        .serve(
-            &[
-                "--personal",
-                "--organization",
-                ORGANIZATION,
-                "--allow-insecure-http",
-            ],
-            &deployment_environment(&cloud.api_url, &credential_path),
-        )
-        .wait_for_exit();
+    // With no organization named the membership read is the request the sign-in is
+    // missing for.
+    for arguments in [&PERSONAL[..], &["--personal", "--allow-insecure-http"][..]] {
+        let (exit, stderr) = host
+            .serve(
+                arguments,
+                &deployment_environment(&cloud.api_url, &credential_path),
+            )
+            .wait_for_exit();
 
-    assert_eq!(exit.code(), Some(3), "{stderr}");
-    assert!(
-        stderr
-            .lines()
-            .any(|line| line.trim() == "useful auth login"),
-        "{stderr}"
-    );
-    assert!(!record_path(&host).exists());
-    assert!(!host.state.exists());
+        assert_eq!(exit.code(), Some(3), "{arguments:?}: {stderr}");
+        assert!(
+            stderr
+                .lines()
+                .any(|line| line.trim() == "useful account login"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(!record_path(&host).exists());
+        assert!(!host.state.exists());
+    }
     cloud.assert_untouched();
 }
 
@@ -311,10 +380,7 @@ fn a_plain_http_api_address_is_refused_without_allow_insecure_http() {
     let host = registration_host();
 
     let (exit, stderr) = host
-        .serve(
-            &["--personal", "--organization", ORGANIZATION],
-            &cloud.environment(),
-        )
+        .serve(&["--personal", "--org", ORGANIZATION], &cloud.environment())
         .wait_for_exit();
 
     assert!(!exit.success(), "{stderr}");
@@ -343,24 +409,16 @@ fn conflicting_or_incomplete_registration_modes_are_usage_errors_that_send_nothi
     let mut with_variable = deployment.to_vec();
     with_variable.push((JOIN_KEY_VARIABLE, &artifact));
 
-    let personal = ["--personal", "--organization", ORGANIZATION];
-    let pool = ["--pool-id", "builders", "--organization", ORGANIZATION];
+    let personal = ["--personal", "--org", ORGANIZATION];
+    let pool = ["--pool", "builders", "--org", ORGANIZATION];
     // Each case: the arguments after --config and the environment.
     type Case<'a> = (Vec<&'a str>, &'a [(&'a str, &'a str)]);
     let mut cases: Vec<Case<'_>> = vec![
         (
-            vec![
-                "--personal",
-                "--pool-id",
-                "builders",
-                "--organization",
-                ORGANIZATION,
-            ],
+            vec!["--personal", "--pool", "builders", "--org", ORGANIZATION],
             &deployment,
         ),
-        (vec!["--personal"], &deployment),
-        (vec!["--pool-id", "builders"], &deployment),
-        (vec!["--organization", ORGANIZATION], &deployment),
+        (vec!["--org", ORGANIZATION], &deployment),
         (vec!["--allow-insecure-http"], &deployment),
     ];
     for mode in [&personal[..], &pool[..]] {
@@ -399,12 +457,7 @@ fn a_host_without_a_work_root_fails_with_its_configuration_before_registering() 
 
     let (exit, stderr) = host
         .serve(
-            &[
-                "--personal",
-                "--organization",
-                ORGANIZATION,
-                "--allow-insecure-http",
-            ],
+            &["--personal", "--org", ORGANIZATION, "--allow-insecure-http"],
             &deployment_environment(&cloud.api_url, &credential_path),
         )
         .wait_for_exit();
@@ -426,12 +479,7 @@ fn an_ambiguous_registration_is_resent_with_the_same_key_and_completes() {
         registration_created_response(),
     ]);
     let host = registration_host();
-    let arguments = [
-        "--personal",
-        "--organization",
-        ORGANIZATION,
-        "--allow-insecure-http",
-    ];
+    let arguments = ["--personal", "--org", ORGANIZATION, "--allow-insecure-http"];
 
     let (exit, stderr) = host.serve(&arguments, &cloud.environment()).wait_for_exit();
 
@@ -478,12 +526,7 @@ fn a_refused_registration_exits_with_forbidden_and_leaves_nothing() {
 
     let (exit, stderr) = host
         .serve(
-            &[
-                "--personal",
-                "--organization",
-                ORGANIZATION,
-                "--allow-insecure-http",
-            ],
+            &["--personal", "--org", ORGANIZATION, "--allow-insecure-http"],
             &deployment_environment(&server.api_url, &credential_path),
         )
         .wait_for_exit();
@@ -531,7 +574,7 @@ fn write_record(host: &JoinHost, record: &serde_json::Value) {
 }
 
 /// A host enrolled as `RUNNER_ID`, connecting to `connection_url`, whose
-/// registration record says `--personal --organization ORGANIZATION` made it.
+/// registration record says `--personal --org ORGANIZATION` made it.
 fn registered_host(connection_url: &str) -> JoinHost {
     let host = registration_host();
     host.write_enrolled_state(connection_url);
@@ -590,12 +633,7 @@ fn assert_code(stderr: &str, code: &str) {
     );
 }
 
-const PERSONAL: [&str; 4] = [
-    "--personal",
-    "--organization",
-    ORGANIZATION,
-    "--allow-insecure-http",
-];
+const PERSONAL: [&str; 4] = ["--personal", "--org", ORGANIZATION, "--allow-insecure-http"];
 
 // REQ-RUNNERENROLL-118, INV-RUNNER-27
 #[test]
@@ -633,26 +671,53 @@ fn a_registered_host_started_with_another_target_fails_and_sends_nothing() {
     let files = host_files(&host);
     let cloud = SignedInSilentCloud::new();
 
-    for arguments in [
-        &[
-            "--pool-id",
-            "other",
-            "--organization",
-            ORGANIZATION,
-            "--allow-insecure-http",
-        ][..],
-        &[
-            "--personal",
-            "--organization",
-            "other-organization",
-            "--allow-insecure-http",
-        ][..],
+    let signed_in = cloud.environment();
+    let mut other_variable = signed_in.to_vec();
+    other_variable.push(("USEFUL_ORG", "other-organization"));
+
+    // The mode and the pool are compared always, the organization when one is named.
+    for (arguments, environment) in [
+        (
+            &["--pool", "other", "--org", ORGANIZATION][..],
+            &signed_in[..],
+        ),
+        (&["--pool", "other"][..], &signed_in[..]),
+        (
+            &["--personal", "--org", "other-organization"][..],
+            &signed_in[..],
+        ),
+        (&["--personal"][..], other_variable.as_slice()),
     ] {
-        let (exit, stderr) = host.serve(arguments, &cloud.environment()).wait_for_exit();
+        let (exit, stderr) = host.serve(arguments, environment).wait_for_exit();
 
         assert_eq!(exit.code(), Some(1), "{arguments:?}: {stderr}");
         assert_code(&stderr, "registration_target_conflict");
         assert_eq!(host_files(&host), files, "{arguments:?}");
+    }
+    cloud.cloud.assert_untouched();
+}
+
+// REQ-RUNNERENROLL-118: a start that names no organization compares the mode and
+// the pool alone, so it resolves none, reads no sign-in and sends the API nothing.
+#[test]
+fn a_registered_host_started_with_its_mode_and_no_organization_serves_as_the_same_runner() {
+    let witness = ConnectionWitness::new();
+    let host = registered_host(&witness.url);
+    let files = host_files(&host);
+    let cloud = SignedInSilentCloud::new();
+
+    for environment in [&[][..], &cloud.environment()[..]] {
+        let mut serve = host.serve(&["--personal"], environment);
+        let connection = witness.next_connection(&mut serve);
+        let stderr = serve.stop();
+        let connection = connection
+            .unwrap_or_else(|| panic!("Runner Serve stopped before connecting: {stderr}"));
+
+        assert_eq!(
+            header_value(&connection, "authorization"),
+            format!("Bearer {CURRENT_CREDENTIAL_ID}.{CURRENT_SECRET}")
+        );
+        assert_eq!(host_files(&host), files);
     }
     cloud.cloud.assert_untouched();
 }

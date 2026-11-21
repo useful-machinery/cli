@@ -535,7 +535,7 @@ pub(super) fn live_inspector_fact(fact: Option<&ObservedStepTransition>) -> Opti
             ),
             Tone::Active,
         )),
-        ObservedStepTransition::Failed { detail } => Some(InspectorField::new(
+        ObservedStepTransition::Failed { detail, .. } => Some(InspectorField::new(
             "failure",
             canonical_failure_detail(detail),
             Tone::Failure,

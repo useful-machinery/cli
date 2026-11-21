@@ -2,18 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.usefulmachinery.com/schemas/runner-control-v1.schema.json",
   "title": "Useful Machinery Runner Local Control Protocol V1",
-  "description": "One request or response JSON object. The wire protocol appends exactly one LF and limits requests to 4096 bytes, the overview and assignment answers to 1048576 bytes and every other response to 65536 bytes, including that LF. Every request is closed, and only the assignment request carries more than schemaVersion and operation: its assignmentId and, optionally, run and step. Every answer but the overview and the assignment is closed; those two are open at every level.",
+  "description": "One request or response JSON object. The wire protocol appends exactly one LF and limits requests to 4096 bytes, the overview, assignment, kept and pruned answers to 1048576 bytes and every other response to 65536 bytes, including that LF. Every request is closed, and only three carry more than schemaVersion and operation: the assignment request its assignmentId and, optionally, run and step, and the kept and prune requests exactly all, a boolean. Every answer but the overview and the assignment is closed; those two are open at every level.",
   "oneOf": [
     { "$ref": "#/$defs/statusRequest" },
     { "$ref": "#/$defs/reloadRequest" },
     { "$ref": "#/$defs/syncAgentLoginsRequest" },
     { "$ref": "#/$defs/overviewRequest" },
     { "$ref": "#/$defs/assignmentRequest" },
+    { "$ref": "#/$defs/keptRequest" },
+    { "$ref": "#/$defs/pruneRequest" },
     { "$ref": "#/$defs/statusResponse" },
     { "$ref": "#/$defs/reloadedResponse" },
     { "$ref": "#/$defs/agentLoginsSyncedResponse" },
     { "$ref": "#/$defs/overviewResponse" },
     { "$ref": "#/$defs/assignmentResponse" },
+    { "$ref": "#/$defs/keptResponse" },
+    { "$ref": "#/$defs/prunedResponse" },
     { "$ref": "#/$defs/errorResponse" }
   ],
   "$defs": {
@@ -78,6 +82,28 @@
           }
         },
         "step": { "$ref": "#/$defs/stepIdentifier" }
+      }
+    },
+    "keptRequest": {
+      "description": "Asks what the runner keeps on its host and what a prune would remove now; all asks it for every kept workspace and every cache file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "operation", "all"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "operation": { "const": "kept" },
+        "all": { "type": "boolean" }
+      }
+    },
+    "pruneRequest": {
+      "description": "Asks the runner to apply its kept-run bounds and evict its build caches now; all removes every kept workspace not in use and every cache file but CACHEDIR.TAG.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "operation", "all"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "operation": { "const": "prune" },
+        "all": { "type": "boolean" }
       }
     },
     "stepIdentifier": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]{0,63}$" },
@@ -803,6 +829,204 @@
         "discardedBytes": { "type": "integer", "minimum": 0 },
         "omittedBytes": { "description": "The retained bytes before the text.", "type": "integer", "minimum": 0 },
         "text": { "type": "string" }
+      }
+    },
+    "keptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "outcome", "kept"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "outcome": { "const": "kept" },
+        "kept": { "$ref": "#/$defs/kept" }
+      }
+    },
+    "kept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all", "keptRuns", "workspaces", "workspacesOmitted", "buildCaches", "dueBytes"],
+      "properties": {
+        "all": { "type": "boolean" },
+        "keptRuns": {
+          "description": "The kept-run bounds in force; null where a bound is off.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maximumAgeDays", "maximumTotalBytes"],
+          "properties": {
+            "maximumAgeDays": { "type": ["integer", "null"], "minimum": 1, "maximum": 3650 },
+            "maximumTotalBytes": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        },
+        "workspaces": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/keptWorkspace" }
+        },
+        "workspacesOmitted": { "type": "integer", "minimum": 0 },
+        "buildCaches": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/keptCache" }
+        },
+        "dueBytes": {
+          "description": "The bytes a prune would free in all, the omitted workspaces included.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "hostPath": { "type": "string", "pattern": "^/" },
+    "keptBound": { "enum": ["age", "total_size", "operator"] },
+    "keptWorkspace": {
+      "description": "A kept workspace: its run directories, the newest attempt's first, and that attempt's IDs, all three or none; bytes exactly when state is kept or due, and bound exactly when it is due.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directories", "reason", "ageSeconds", "state"],
+      "properties": {
+        "directories": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hostPath" }
+        },
+        "assignmentId": { "type": "string", "pattern": "^asn_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "runId": { "type": "string", "pattern": "^run_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "attemptId": { "type": "string", "pattern": "^atm_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "reason": {
+          "enum": [
+            "failed",
+            "cancelled",
+            "interrupted",
+            "artifact_delivery_failed",
+            "outcome_unknown",
+            "process_stop_failed",
+            "credential_teardown_failed",
+            "release_worker_unavailable"
+          ]
+        },
+        "ageSeconds": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["kept", "due", "in_use", "failed"] },
+        "bound": { "$ref": "#/$defs/keptBound" }
+      },
+      "dependentRequired": {
+        "assignmentId": ["runId", "attemptId"],
+        "runId": ["assignmentId", "attemptId"],
+        "attemptId": ["assignmentId", "runId"]
+      },
+      "oneOf": [
+        {
+          "properties": { "state": { "const": "kept" } },
+          "required": ["bytes"],
+          "not": { "required": ["bound"] }
+        },
+        {
+          "properties": { "state": { "const": "due" } },
+          "required": ["bytes", "bound"]
+        },
+        {
+          "properties": { "state": { "enum": ["in_use", "failed"] } },
+          "not": { "anyOf": [{ "required": ["bytes"] }, { "required": ["bound"] }] }
+        }
+      ]
+    },
+    "keptCache": {
+      "description": "A build cache the configuration names: bytes and dueBytes, dueBytes at most bytes, exactly when its path is measured, or why nothing at its path can be evicted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "maximumBytes", "state"],
+      "properties": {
+        "path": { "$ref": "#/$defs/hostPath" },
+        "maximumBytes": { "type": "integer", "minimum": 1 },
+        "state": { "enum": ["measured", "missing", "not_a_directory", "unreadable", "protected"] },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "dueBytes": { "type": "integer", "minimum": 0 }
+      },
+      "oneOf": [
+        {
+          "properties": { "state": { "const": "measured" } },
+          "required": ["bytes", "dueBytes"]
+        },
+        {
+          "properties": { "state": { "enum": ["missing", "not_a_directory", "unreadable", "protected"] } },
+          "not": { "anyOf": [{ "required": ["bytes"] }, { "required": ["dueBytes"] }] }
+        }
+      ]
+    },
+    "prunedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "outcome", "pruned"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "outcome": { "const": "pruned" },
+        "pruned": { "$ref": "#/$defs/pruned" }
+      }
+    },
+    "pruned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["all", "complete", "directories", "directoriesOmitted", "failedDirectories", "buildCaches", "removedBytes"],
+      "properties": {
+        "all": { "type": "boolean" },
+        "complete": {
+          "description": "Whether the pass finished.",
+          "type": "boolean"
+        },
+        "directories": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/prunedDirectory" }
+        },
+        "directoriesOmitted": { "type": "integer", "minimum": 0 },
+        "failedDirectories": {
+          "description": "Every directory whose removal failed, the omitted ones included.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "buildCaches": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/prunedCache" }
+        },
+        "removedBytes": {
+          "description": "The bytes the pass removed in all.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "prunedDirectory": {
+      "description": "A run directory the pass removed or failed to remove, with its attempt's IDs, all three or none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "bound", "result"],
+      "properties": {
+        "path": { "$ref": "#/$defs/hostPath" },
+        "assignmentId": { "type": "string", "pattern": "^asn_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "runId": { "type": "string", "pattern": "^run_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "attemptId": { "type": "string", "pattern": "^atm_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "bound": { "$ref": "#/$defs/keptBound" },
+        "result": { "enum": ["removed", "failed"] }
+      },
+      "dependentRequired": {
+        "assignmentId": ["runId", "attemptId"],
+        "runId": ["assignmentId", "attemptId"],
+        "attemptId": ["assignmentId", "runId"]
+      }
+    },
+    "prunedCache": {
+      "description": "A build cache the pass evicted from: the files and bytes it removed, the files it could not remove, and the bytes the cache still occupies.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "maximumBytes", "removedFiles", "removedBytes", "failedFiles", "bytes"],
+      "properties": {
+        "path": { "$ref": "#/$defs/hostPath" },
+        "maximumBytes": { "type": "integer", "minimum": 1 },
+        "removedFiles": { "type": "integer", "minimum": 0 },
+        "removedBytes": { "type": "integer", "minimum": 0 },
+        "failedFiles": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 }
       }
     },
     "errorResponse": {

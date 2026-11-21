@@ -5,13 +5,12 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 
 use super::runner_agent_login::{
-    EARLIER_SYNC, INTEGRATION_SYNC, READY_CODEX, SYNC, SYNC_REQUEST, ScriptedControlSocket,
-    synced_response,
+    READY_CODEX, SYNC, SYNC_REQUEST, ScriptedControlSocket, synced_response,
 };
 use super::runner_enrollment::{
     ACTIVATION_ID, ConnectionWitness, JOIN_KEY_ID, ServeProcess, StandardInput,
-    activation_artifact, connection_bearer, enrollment_body, future_expiry, join_base,
-    join_key_artifact, join_response, join_response_body, serve_command, verifier_of,
+    activation_artifact, connection_bearer, enrollment_body, first_connection, future_expiry,
+    join_base, join_key_artifact, join_response, join_response_body, serve_command, verifier_of,
 };
 use super::runner_status::{
     CONNECTED_STATUS, STATUS_REQUEST, ServeStatusFixture, enrolled_state_document,
@@ -239,9 +238,14 @@ fn serve_on_an_empty_home_initializes_it_and_says_the_host_is_not_enrolled() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{stderr}");
         assert!(output.stdout.is_empty());
-        for named in ["useful runner enroll", "--join-key-file"] {
+        for named in [
+            "useful runner serve --join-key-file",
+            "--personal",
+            "--pool",
+        ] {
             assert!(stderr.contains(named), "{named}: {stderr}");
         }
+        assert!(!stderr.contains("useful runner enroll"), "{stderr}");
         assert_initialized(selected);
         assert!(names(elsewhere.path()).is_empty());
     }
@@ -419,7 +423,7 @@ fn status_shows_the_log_the_serving_runner_writes() {
     if witness.next_connection(&mut serve).is_none() {
         panic!("Runner Serve stopped before connecting");
     }
-    let output = home.run(&["runner", "status"]);
+    let output = home.run(&["runner", "show"]);
     serve.stop();
 
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -432,7 +436,7 @@ fn status_shows_the_log_the_serving_runner_writes() {
     assert!(home.log().is_file());
 }
 
-/// Asks `useful runner status` of `home` until it prints a `disk:` line, answering its
+/// Asks `useful runner show` of `home` until it prints a `disk:` line, answering its
 /// standard output's lines; panics once `serve` has exited.
 fn wait_for_status_disk(home: &ServeHome, serve: &mut ServeProcess) -> Vec<String> {
     poll_until(
@@ -441,7 +445,7 @@ fn wait_for_status_disk(home: &ServeHome, serve: &mut ServeProcess) -> Vec<Strin
             if let Some(status) = serve.exited() {
                 panic!("Runner Serve exited {status} before its status gave a disk reading");
             }
-            let output = home.run(&["runner", "status"]);
+            let output = home.run(&["runner", "show"]);
             let stdout = String::from_utf8(output.stdout).unwrap();
             let reading =
                 output.status.success() && stdout.lines().any(|line| line.starts_with("disk:"));
@@ -618,13 +622,6 @@ impl ServeHome {
         path.to_string_lossy().into_owned()
     }
 
-    /// `useful runner enroll ARGUMENTS` with this home as `USEFUL_HOME`.
-    fn enroll(&self, arguments: &[&str]) -> Output {
-        let mut command = vec!["runner", "enroll"];
-        command.extend_from_slice(arguments);
-        self.run(&command)
-    }
-
     /// `useful ARGUMENTS` with this home as `USEFUL_HOME`.
     fn run(&self, arguments: &[&str]) -> Output {
         let useful_home = self.useful_home();
@@ -646,9 +643,17 @@ fn assert_no_connection(cloud: &TcpListener) {
     );
 }
 
+/// Cloud's 201 to the activation of the home's runner, naming `connection_url`.
+fn enrolled_answer(connection_url: &str) -> Vec<u8> {
+    let mut body = enrollment_body();
+    body["connectionUrl"] = connection_url.into();
+    json_http_response("201 Created", body)
+}
+
 // REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-110
 #[test]
-fn enroll_on_an_empty_home_initializes_it_and_its_production_configuration_refuses_loopback() {
+fn serve_with_a_key_on_an_empty_home_initializes_it_and_its_production_configuration_refuses_loopback()
+ {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
     let home = ServeHome::new();
     let activation = home.write_activation(
@@ -656,9 +661,11 @@ fn enroll_on_an_empty_home_initializes_it_and_its_production_configuration_refus
         ACTIVATION_ID,
     );
 
-    let output = home.enroll(&["--activation-file", &activation, "--json"]);
+    let (exit, stderr) = home
+        .serve(&["--join-key-file", &activation])
+        .wait_for_exit();
 
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(exit.code(), Some(1), "{stderr}");
     assert_layout(&home.useful_home());
     assert!(!home.journal().exists());
     let config: serde_json::Value =
@@ -667,20 +674,17 @@ fn enroll_on_an_empty_home_initializes_it_and_its_production_configuration_refus
     assert_no_connection(&cloud);
 }
 
-// REQ-RUNNERENROLL-13
+// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-20
 #[test]
-fn enroll_without_a_configuration_writes_the_homes_state_once() {
-    let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
-        "201 Created",
-        enrollment_body(),
-    ));
+fn serve_with_a_key_and_no_configuration_writes_the_homes_state_once() {
+    let witness = ConnectionWitness::new();
+    let server = api_test_support::ScriptedHttpServer::respond(enrolled_answer(&witness.url));
     let home = ServeHome::new();
     home.write_development_config(&home.state());
     let activation = home.write_activation(&join_base(&server), ACTIVATION_ID);
 
-    let output = home.enroll(&["--activation-file", &activation, "--json"]);
+    first_connection(home.serve(&["--join-key-file", &activation]), &witness);
 
-    assert!(output.status.success(), "{output:?}");
     server.finish_one();
     assert_eq!(mode(&home.state()), 0o600);
     let state = fs::read(home.state()).unwrap();
@@ -690,25 +694,23 @@ fn enroll_without_a_configuration_writes_the_homes_state_once() {
         enrollment_body()["credentialId"]
     );
 
+    // An enrolled host serves with its state and reads no other key.
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
     let second = home.write_activation(
         &format!("http://{}", cloud.local_addr().unwrap()),
         SECOND_ACTIVATION_ID,
     );
-    let output = home.enroll(&["--activation-file", &second, "--json"]);
+    first_connection(home.serve(&["--join-key-file", &second]), &witness);
 
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(fs::read(home.state()).unwrap(), state);
     assert_no_connection(&cloud);
 }
 
 // REQ-RUNNERENROLL-22
 #[test]
-fn enroll_resume_without_a_configuration_completes_the_homes_staged_journal() {
-    let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
-        "201 Created",
-        enrollment_body(),
-    ));
+fn serve_without_a_key_or_a_configuration_resends_the_homes_staged_journal() {
+    let witness = ConnectionWitness::new();
+    let server = api_test_support::ScriptedHttpServer::respond(enrolled_answer(&witness.url));
     let home = ServeHome::new();
     home.write_development_config(&home.state());
     let idempotency_key = "1".repeat(64);
@@ -728,9 +730,8 @@ fn enroll_resume_without_a_configuration_completes_the_homes_staged_journal() {
     .unwrap();
     fs::set_permissions(home.journal(), Permissions::from_mode(0o600)).unwrap();
 
-    let output = home.enroll(&["--resume", "--json"]);
+    first_connection(home.serve(&[]), &witness);
 
-    assert!(output.status.success(), "{output:?}");
     let request = server.finish_one();
     assert_eq!(header_value(&request, "idempotency-key"), idempotency_key);
     assert!(!home.journal().exists());
@@ -741,31 +742,31 @@ fn enroll_resume_without_a_configuration_completes_the_homes_staged_journal() {
 
 // REQ-RUNNERENROLL-109
 #[test]
-fn enroll_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
-    let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
-        "201 Created",
-        enrollment_body(),
-    ));
+fn serve_with_a_key_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
+    let witness = ConnectionWitness::new();
+    let server = api_test_support::ScriptedHttpServer::respond(enrolled_answer(&witness.url));
     let fixture = ServeHome::new();
     fixture.write_development_config(&fixture.state());
     let config = fixture.runner().join("config.json");
     let activation = fixture.write_activation(&join_base(&server), ACTIVATION_ID);
     let useful_home = tempfile::tempdir().unwrap();
 
-    let output = run_with_env(
-        &[
-            "runner",
-            "enroll",
-            "--activation-file",
-            &activation,
-            "--config",
-            config.to_str().unwrap(),
-            "--json",
-        ],
-        &[(USEFUL_HOME_VARIABLE, useful_home.path().to_str().unwrap())],
+    let serve = ServeProcess::start(
+        serve_with_homes(
+            &[
+                "--join-key-file",
+                &activation,
+                "--config",
+                config.to_str().unwrap(),
+            ],
+            Some(useful_home.path()),
+            Some(fixture.root.path()),
+            &fixture.empty_path,
+        ),
+        StandardInput::Null,
     );
+    first_connection(serve, &witness);
 
-    assert!(output.status.success(), "{output:?}");
     server.finish_one();
     assert_eq!(mode(&fixture.state()), 0o600);
     assert!(names(useful_home.path()).is_empty());
@@ -773,7 +774,7 @@ fn enroll_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
 
 // REQ-RUNNERENROLL-48, REQ-RUNNERENROLL-109
 #[test]
-fn enroll_replace_credential_without_a_configuration_asks_the_homes_control_socket() {
+fn serve_replace_credential_without_a_configuration_asks_the_homes_control_socket() {
     let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
         "201 Created",
         enrollment_body(),
@@ -796,9 +797,11 @@ fn enroll_replace_credential_without_a_configuration_asks_the_homes_control_sock
         .into_bytes(),
     );
 
-    let output = home.enroll(&[
+    let output = home.run(&[
+        "runner",
+        "serve",
         "--replace-credential",
-        "--activation-file",
+        "--join-key-file",
         &activation,
         "--json",
     ]);
@@ -816,22 +819,16 @@ fn enroll_replace_credential_without_a_configuration_asks_the_homes_control_sock
     assert_eq!(state["pendingCredential"]["id"], replacement);
 }
 
-/// `useful runner status` and the three spellings of `useful runner integration sync`, each
-/// with the request it sends and a live runner's answer to it.
-fn reading_commands() -> [(&'static [&'static str], &'static [u8], Vec<u8>); 4] {
+/// `useful runner show` with no `RUNNER` and `useful runner sync`, each with the request it
+/// sends and a live runner's answer to it.
+fn reading_commands() -> [(&'static [&'static str], &'static [u8], Vec<u8>); 2] {
     [
         (
-            &["runner", "status"],
+            &["runner", "show"],
             STATUS_REQUEST,
             CONNECTED_STATUS.to_vec(),
         ),
-        (
-            &INTEGRATION_SYNC,
-            SYNC_REQUEST,
-            synced_response(READY_CODEX),
-        ),
         (&SYNC, SYNC_REQUEST, synced_response(READY_CODEX)),
-        (&EARLIER_SYNC, SYNC_REQUEST, synced_response(READY_CODEX)),
     ]
 }
 
@@ -889,7 +886,7 @@ fn status_asks_the_socket_the_homes_configuration_names() {
     write_status_config_at(&config, &elsewhere);
     let before = fs::read(&config).unwrap();
 
-    let output = home.run(&["runner", "status"]);
+    let output = home.run(&["runner", "show"]);
 
     assert_eq!(socket.request(), STATUS_REQUEST);
     assert!(output.status.success(), "{output:?}");
@@ -909,7 +906,7 @@ fn status_fails_on_a_homes_configuration_that_does_not_parse_and_keeps_its_bytes
     let config = home.runner().join("config.json");
     fs::write(&config, b"{\"schemaVersion\":").unwrap();
 
-    let output = home.run(&["runner", "status"]);
+    let output = home.run(&["runner", "show"]);
 
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty());
@@ -931,7 +928,7 @@ fn status_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
     let useful_home = tempfile::tempdir().unwrap();
 
     let output = run_with_env(
-        &["runner", "status", "--config", config.to_str().unwrap()],
+        &["runner", "show", "--config", config.to_str().unwrap()],
         &[(USEFUL_HOME_VARIABLE, useful_home.path().to_str().unwrap())],
     );
 
@@ -958,7 +955,7 @@ fn doctor_with_homes(
     home: Option<&Path>,
 ) -> Output {
     let git = fake_git("printf '%s\\n' 'git version 2.42.0'");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args(["runner", "doctor"])
         .args(arguments)
@@ -1035,9 +1032,9 @@ fn doctor_agent_logins_without_a_useful_home_or_configuration_is_config_required
     assert!(names(useful_home.path()).is_empty());
 }
 
-// REQ-RUNNERENROLL-45
+// REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-47
 #[test]
-fn doctor_default_checks_and_check_list_need_no_useful_home_and_create_none() {
+fn doctor_default_checks_and_their_report_need_no_useful_home_and_create_none() {
     let root = tempfile::tempdir().unwrap();
     let absent = root.path().join("useful");
     for useful_home in [None, Some(absent.as_path())] {
@@ -1047,15 +1044,27 @@ fn doctor_default_checks_and_check_list_need_no_useful_home_and_create_none() {
         let check = only_check(&output);
         assert_eq!(check["id"], "environment.command.git", "{useful_home:?}");
         assert_eq!(check["status"], "pass", "{useful_home:?}");
+        // The check that needs the configuration is reported as not run.
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            report["notRun"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["id"] == "credentials.agent-logins"),
+            "{useful_home:?}: {report}"
+        );
 
-        let output = doctor_with_homes(&["--list-checks"], useful_home, None);
+        let output = doctor_with_homes(&[], useful_home, None);
 
         assert!(output.status.success(), "{useful_home:?}: {output:?}");
         assert!(
             String::from_utf8(output.stdout)
                 .unwrap()
                 .lines()
-                .any(|line| line == "credentials.agent-logins"),
+                .any(|line| line
+                    .split_whitespace()
+                    .any(|word| word == "credentials.agent-logins")),
             "{useful_home:?}"
         );
         assert!(!absent.exists(), "{useful_home:?}");

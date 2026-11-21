@@ -17,10 +17,10 @@ use super::harness_installation::{
 use crate::process::CommandRunner;
 use crate::process::{CommandOutput, SystemCommandRunner};
 
-pub const CODEX_APP_SERVER_V1_SUPPORTED_RANGE: &str = ">=0.147.0 <0.164.0";
-pub const CODEX_APP_SERVER_V1_QUALIFICATION_VERSION: &str = "0.163.0";
+pub const CODEX_APP_SERVER_V1_SUPPORTED_RANGE: &str = ">=0.147.0 <0.172.0";
+pub const CODEX_APP_SERVER_V1_QUALIFICATION_VERSION: &str = "0.171.0";
 const CODEX_APP_SERVER_V1_MINIMUM_VERSION: (u64, u64, u64) = (0, 147, 0);
-const CODEX_APP_SERVER_V1_MAXIMUM_VERSION: (u64, u64, u64) = (0, 164, 0);
+const CODEX_APP_SERVER_V1_MAXIMUM_VERSION: (u64, u64, u64) = (0, 172, 0);
 const CAPABILITY_PROBE_ARGUMENTS: [&str; 4] =
     ["app-server", "generate-json-schema", "--out", "../schemas"];
 const MAXIMUM_SCHEMA_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -335,7 +335,7 @@ impl HarnessInstallationProfile for CodexInstallationProfile {
     type Failure = CodexInstallationFailure;
 
     const EXECUTABLE_NAME: &'static str = "codex";
-    const QUALIFICATION_VERSION: (u64, u64, u64) = (0, 163, 0);
+    const QUALIFICATION_VERSION: (u64, u64, u64) = (0, 171, 0);
     const CAPABILITY_PROBE_ARGUMENTS: &'static [&'static str] = &CAPABILITY_PROBE_ARGUMENTS;
 
     // Codex owns its isolated native-state directories independently of Pi's trust policy.
@@ -789,6 +789,22 @@ mod tests {
             "0.162.999",
             "0.163.0",
             "0.163.999",
+            "0.164.0",
+            "0.164.999",
+            "0.165.0",
+            "0.165.999",
+            "0.166.0",
+            "0.166.999",
+            "0.167.0",
+            "0.167.999",
+            "0.168.0",
+            "0.168.999",
+            "0.169.0",
+            "0.169.999",
+            "0.170.0",
+            "0.170.999",
+            "0.171.0",
+            "0.171.999",
         ] {
             let runner = compatible_runner(version);
             let installation = validate_codex_installation_with(
@@ -830,7 +846,7 @@ mod tests {
             installation.version().as_str(),
             CODEX_APP_SERVER_V1_QUALIFICATION_VERSION
         );
-        assert_eq!(installation.version().numeric(), (0, 163, 0));
+        assert_eq!(installation.version().numeric(), (0, 171, 0));
     }
 
     // REQ-AGENT-3, REQ-AGENT-5
@@ -891,10 +907,10 @@ mod tests {
             CAPABILITY_PROBE_ARGUMENTS.map(str::to_owned).to_vec(),
         ];
         for (version, expected) in [
-            ("0.163.1", HarnessQualification::Untested),
-            ("0.164.0", HarnessQualification::Untested),
+            ("0.171.1", HarnessQualification::Untested),
+            ("0.172.0", HarnessQualification::Untested),
             ("1.0.0", HarnessQualification::Untested),
-            ("0.163.0", HarnessQualification::SupportedRange),
+            ("0.171.0", HarnessQualification::SupportedRange),
         ] {
             let runner = compatible_runner(version);
             let installation = validate_codex_installation_with(
@@ -916,7 +932,7 @@ mod tests {
                 let advisory = advisory.unwrap();
                 assert_eq!(advisory.harness(), "Codex");
                 assert_eq!(advisory.version(), version);
-                assert_eq!(advisory.qualification_version(), "0.163.0");
+                assert_eq!(advisory.qualification_version(), "0.171.0");
             } else {
                 assert_eq!(advisory, None);
             }
@@ -924,7 +940,7 @@ mod tests {
 
         let incompatible = FakeRunner {
             schema_compatible: false,
-            ..compatible_runner("0.164.0")
+            ..compatible_runner("0.172.0")
         };
         assert!(matches!(
             validate_codex_installation_with(

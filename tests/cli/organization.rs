@@ -230,7 +230,7 @@ fn membership_update_success() -> Vec<u8> {
     )
 }
 
-fn membership_termination_success() -> Vec<u8> {
+pub(super) fn membership_termination_success() -> Vec<u8> {
     http_response_with_headers(
         "204 No Content",
         None,
@@ -300,8 +300,8 @@ fn request_body(request: &str) -> &str {
 #[test]
 fn organization_has_no_alias_and_create_requires_a_display_name() {
     for args in [
-        &["org", "show", "acme"][..],
-        &["organization", "create", "--json"][..],
+        &["organization", "show", "acme"][..],
+        &["org", "create", "--json"][..],
     ] {
         let output = run(args);
         assert_eq!(output.status.code(), Some(2));
@@ -318,9 +318,9 @@ fn human_create_has_exact_output_and_request_contract() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "\u{2003}Acme Research\u{2003}",
             "--allow-insecure-http",
         ],
@@ -383,13 +383,13 @@ fn service_create_sends_explicit_delegator_without_using_human_credentials() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme Research",
             "--delegator-principal-id",
             DELEGATOR,
-            "--service-api-key-file",
+            "--api-key-file",
             key_path.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -434,13 +434,13 @@ fn service_create_name_gate_points_to_the_nominated_human_without_private_fields
     let environment = deployment_environment(&server.api_url, human_credentials.to_str().unwrap());
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme",
             "--delegator-principal-id",
             DELEGATOR,
-            "--service-api-key-file",
+            "--api-key-file",
             key_path.to_str().unwrap(),
             "--allow-insecure-http",
         ],
@@ -469,11 +469,11 @@ fn service_create_requires_explicit_human_delegator() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme Research",
-            "--service-api-key-file",
+            "--api-key-file",
             key_path.to_str().unwrap(),
             "--allow-insecure-http",
         ],
@@ -483,7 +483,7 @@ fn service_create_requires_explicit_human_delegator() {
     assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("--delegator-principal-id is required when --service-api-key-file is used")
+            .contains("--delegator-principal-id is required when --api-key-file is used")
     );
     assert!(server.finish().is_empty());
 }
@@ -497,9 +497,9 @@ fn json_create_reports_schema_one_and_supplied_slug() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme Research",
             "--slug",
             "acme-research",
@@ -547,9 +547,9 @@ fn create_retries_one_ambiguous_failure_with_the_same_complete_request() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme Research",
             "--slug",
             "acme-research",
@@ -695,9 +695,9 @@ fn create_expected_outcomes_have_exact_json_and_exit_statuses() {
             deployment_environment_with_issuer(&server.api_url, &server.issuer, &credential_path);
         let output = run_with_env(
             &[
-                "organization",
+                "org",
                 "create",
-                "--display-name",
+                "--name",
                 "Acme Research",
                 "--json",
                 "--allow-insecure-http",
@@ -749,9 +749,9 @@ fn two_ambiguous_create_failures_report_an_unconfirmed_result() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "create",
-            "--display-name",
+            "--name",
             "Acme Research",
             "--json",
             "--allow-insecure-http",
@@ -794,9 +794,9 @@ fn malformed_rate_limit_metadata_is_a_protocol_failure() {
 
         let output = run_with_env(
             &[
-                "organization",
+                "org",
                 "create",
-                "--display-name",
+                "--name",
                 "Acme",
                 "--json",
                 "--allow-insecure-http",
@@ -854,13 +854,7 @@ fn unauthorized_removes_only_the_rejected_credential_and_forbidden_retains_it() 
         );
 
         let output = run_with_env(
-            &[
-                "organization",
-                "show",
-                "acme",
-                "--json",
-                "--allow-insecure-http",
-            ],
+            &["org", "show", "acme", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -890,7 +884,7 @@ fn show_success_preserves_schema_and_the_valid_reference_target() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "show",
             "acme-research",
             "--json",
@@ -924,7 +918,7 @@ fn show_success_preserves_schema_and_the_valid_reference_target() {
         header_value(&request, "authorization"),
         format!("Bearer {TOKEN}")
     );
-    assert!(!request.contains("idempotency-key:"));
+    assert!(useful_test_support::request_header(&request, "idempotency-key").is_none());
 }
 
 // REQ-AUTH-45
@@ -954,13 +948,7 @@ fn a_rejected_request_does_not_remove_a_concurrently_replaced_credential() {
     let output = thread::scope(|scope| {
         let command = scope.spawn(|| {
             run_with_env(
-                &[
-                    "organization",
-                    "show",
-                    "acme",
-                    "--json",
-                    "--allow-insecure-http",
-                ],
+                &["org", "show", "acme", "--json", "--allow-insecure-http"],
                 &environment,
             )
         });
@@ -1009,7 +997,7 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
     let cases = [
         (
             &[
-                "organization",
+                "org",
                 "show",
                 "acme-research",
                 "--json",
@@ -1022,7 +1010,7 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
         ),
         (
             &[
-                "organization",
+                "org",
                 "update",
                 "acme",
                 "--slug",
@@ -1037,7 +1025,7 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
         ),
         (
             &[
-                "organization",
+                "org",
                 "update",
                 "acme",
                 "--slug",
@@ -1055,9 +1043,10 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
         ),
         (
             &[
-                "organization",
+                "org",
                 "member",
                 "list",
+                "--org",
                 "acme",
                 "--json",
                 "--allow-insecure-http",
@@ -1069,9 +1058,10 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
         ),
         (
             &[
-                "organization",
+                "org",
                 "member",
                 "list",
+                "--org",
                 "acme",
                 "--json",
                 "--allow-insecure-http",
@@ -1117,48 +1107,46 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
 #[test]
 fn organization_commands_reject_invalid_cli_input_before_deployment_loading() {
     for args in [
-        &["organization", "show", "."][..],
-        &["organization", "show", ".."][..],
-        &["organization", "show", "acme/research"][..],
-        &["organization", "show", "acme\\research"][..],
-        &["organization", "leave", "acme/research", "--yes"][..],
-        &["organization", "member", "history", "acme/research"][..],
+        &["org", "show", "."][..],
+        &["org", "show", ".."][..],
+        &["org", "show", "acme/research"][..],
+        &["org", "show", "acme\\research"][..],
+        &["org", "leave", "acme/research", "--yes"][..],
+        &["org", "member", "event", "list", "--org", "acme/research"][..],
         &[
-            "organization",
+            "org",
             "member",
             "update",
+            "--org",
             "acme/research",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--role",
             "member",
         ][..],
         &[
-            "organization",
+            "org",
             "member",
             "remove",
+            "--org",
             "acme/research",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--yes",
         ][..],
-        &["organization", "update", "acme"][..],
-        &["organization", "list", "--limit", "0"][..],
-        &["organization", "list", "--limit", "201"][..],
-        &["organization", "list", "--cursor", ""][..],
-        &["organization", "member", "list", "acme", "--limit", "0"][..],
-        &["organization", "member", "list", "acme", "--limit", "201"][..],
-        &["organization", "member", "list", "acme", "--cursor", ""][..],
+        &["org", "update", "acme"][..],
+        &["org", "list", "--limit", "0"][..],
+        &["org", "list", "--limit", "201"][..],
+        &["org", "list", "--cursor", ""][..],
+        &["org", "member", "list", "--org", "acme", "--limit", "0"][..],
+        &["org", "member", "list", "--org", "acme", "--limit", "201"][..],
+        &["org", "member", "list", "--org", "acme", "--cursor", ""][..],
         &[
-            "organization",
-            "member",
-            "history",
-            "acme",
-            "--limit",
-            "201",
+            "org", "member", "event", "list", "--org", "acme", "--limit", "201",
         ][..],
         &[
-            "organization",
+            "org",
             "member",
             "update",
+            "--org",
             "acme",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--role",
@@ -1179,7 +1167,7 @@ fn organization_commands_reject_invalid_cli_input_before_deployment_loading() {
 fn update_accepts_each_patch_shape_and_preserves_the_request_contract() {
     let cases = [
         (
-            &["--display-name", "\u{2003}Acme Labs\u{2003}"][..],
+            &["--name", "\u{2003}Acme Labs\u{2003}"][..],
             serde_json::json!({"displayName": "\u{2003}Acme Labs\u{2003}"}),
         ),
         (
@@ -1187,7 +1175,7 @@ fn update_accepts_each_patch_shape_and_preserves_the_request_contract() {
             serde_json::json!({"slug": "Server_Invalid"}),
         ),
         (
-            &["--display-name", "Acme Labs", "--slug", "acme-labs"][..],
+            &["--name", "Acme Labs", "--slug", "acme-labs"][..],
             serde_json::json!({"displayName": "Acme Labs", "slug": "acme-labs"}),
         ),
     ];
@@ -1197,7 +1185,7 @@ fn update_accepts_each_patch_shape_and_preserves_the_request_contract() {
             prepared_organization(vec![update_success()], TOKEN);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
-            "organization",
+            "org",
             "update",
             "acme-research",
             "--json",
@@ -1256,10 +1244,10 @@ fn human_update_has_exact_success_output() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "update",
             "acme-research",
-            "--display-name",
+            "--name",
             "Acme Research",
             "--allow-insecure-http",
         ],
@@ -1316,7 +1304,7 @@ fn update_expected_outcomes_have_exact_json_and_exit_statuses() {
             deployment_environment_with_issuer(&server.api_url, &server.issuer, &credential_path);
         let output = run_with_env(
             &[
-                "organization",
+                "org",
                 "update",
                 "acme-research",
                 "--slug",
@@ -1340,20 +1328,23 @@ fn update_expected_outcomes_have_exact_json_and_exit_statuses() {
     }
 }
 
-// REQ-ORG-49, REQ-ORG-50, REQ-ORG-51
+// REQ-ORG-49, REQ-ORG-50, REQ-ORG-51, REQ-ORG-88
 #[test]
 fn organization_list_emits_one_visibility_preserving_page() {
     let cursor = "next page /+=";
     let response_items = current_membership_items();
     let (server, _directory, _path, credential_path) = prepared_organization(
-        vec![membership_success(response_items.clone(), Some(cursor))],
+        vec![
+            membership_success(response_items.clone(), Some(cursor)),
+            membership_success(response_items.clone(), None),
+        ],
         TOKEN,
     );
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "list",
             "--limit",
             "2",
@@ -1375,7 +1366,11 @@ fn organization_list_emits_one_visibility_preserving_page() {
             "deployment": server.api_url,
             "outcome": "listed",
             "items": expected_items,
-            "nextCursor": cursor
+            "nextCursor": cursor,
+            "organizationInEffect": {
+                "organization": IN_EFFECT_ID,
+                "source": "only_membership"
+            }
         })
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1385,16 +1380,22 @@ fn organization_list_emits_one_visibility_preserving_page() {
     assert!(output.stdout.ends_with(b"\n"));
     assert!(output.stderr.is_empty());
 
+    // The page shown is the one asked for; a page that may not hold every membership leaves
+    // the organization in effect to its own read.
     let requests = server.finish();
-    assert_eq!(requests.len(), 1, "nextCursor must not trigger pagination");
-    assert!(requests[0].starts_with(
-        "GET /api/v1/me/memberships?limit=2&cursor=opaque+%2F%2B%3D%3F%26 HTTP/1.1\r\n"
-    ));
+    assert_eq!(
+        request_lines(&requests),
+        [
+            "GET /api/v1/me/memberships?limit=2&cursor=opaque+%2F%2B%3D%3F%26 HTTP/1.1",
+            LIST_CURRENT_MEMBERSHIPS.trim_end(),
+        ],
+        "nextCursor must not trigger pagination"
+    );
     assert_eq!(
         header_value(&requests[0], "authorization"),
         format!("Bearer {TOKEN}")
     );
-    assert!(!requests[0].contains("idempotency-key:"));
+    assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
 }
 
 // REQ-ORG-49
@@ -1406,10 +1407,7 @@ fn human_organization_list_exposes_identity_and_history_without_synthesizing_pro
     );
     let environment = deployment_environment(&server.api_url, &credential_path);
 
-    let output = run_with_env(
-        &["organization", "list", "--allow-insecure-http"],
-        &environment,
-    );
+    let output = run_with_env(&["org", "list", "--allow-insecure-http"], &environment);
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -1438,10 +1436,7 @@ fn human_organization_list_api_failure_uses_the_diagnostic_stream() {
     let (server, _directory, _path, credential_path) = prepared_organization(vec![response], TOKEN);
     let environment = deployment_environment(&server.api_url, &credential_path);
 
-    let output = run_with_env(
-        &["organization", "list", "--allow-insecure-http"],
-        &environment,
-    );
+    let output = run_with_env(&["org", "list", "--allow-insecure-http"], &environment);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -1503,7 +1498,7 @@ fn organization_list_rejects_responses_that_violate_profile_visibility() {
         let environment = deployment_environment(&server.api_url, &credential_path);
 
         let output = run_with_env(
-            &["organization", "list", "--json", "--allow-insecure-http"],
+            &["org", "list", "--json", "--allow-insecure-http"],
             &environment,
         );
 
@@ -1545,9 +1540,10 @@ fn members_list_preserves_omitted_and_opaque_query_values() {
             prepared_organization(vec![membership_success(serde_json::json!([]), None)], TOKEN);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme-research",
             "--json",
             "--allow-insecure-http",
@@ -1564,7 +1560,7 @@ fn members_list_preserves_omitted_and_opaque_query_values() {
             header_value(&request, "authorization"),
             format!("Bearer {TOKEN}")
         );
-        assert!(!request.contains("idempotency-key:"));
+        assert!(useful_test_support::request_header(&request, "idempotency-key").is_none());
     }
 }
 
@@ -1599,9 +1595,10 @@ fn json_members_list_emits_one_continued_page_exactly() {
 
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme",
             "--json",
             "--allow-insecure-http",
@@ -1676,9 +1673,10 @@ fn human_and_empty_members_pages_have_exact_output() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let human = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme",
             "--allow-insecure-http",
         ],
@@ -1707,9 +1705,10 @@ fn human_and_empty_members_pages_have_exact_output() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let empty_human = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme",
             "--allow-insecure-http",
         ],
@@ -1731,9 +1730,10 @@ fn human_and_empty_members_pages_have_exact_output() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let empty = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme",
             "--json",
             "--allow-insecure-http",
@@ -1779,9 +1779,10 @@ fn members_list_rejects_explicit_null_optional_fields() {
 
         let output = run_with_env(
             &[
-                "organization",
+                "org",
                 "member",
                 "list",
+                "--org",
                 "acme",
                 "--json",
                 "--allow-insecure-http",
@@ -1815,9 +1816,11 @@ fn membership_management_workflow_has_stable_json_and_request_contracts() {
 
     let history = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
-            "history",
+            "event",
+            "list",
+            "--org",
             "acme-research",
             "--limit",
             "6",
@@ -1848,9 +1851,10 @@ fn membership_management_workflow_has_stable_json_and_request_contracts() {
 
     let update = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "update",
+            "--org",
             "acme-research",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--role",
@@ -1871,9 +1875,10 @@ fn membership_management_workflow_has_stable_json_and_request_contracts() {
 
     let remove = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "remove",
+            "--org",
             "acme-research",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abd",
             "--yes",
@@ -1897,7 +1902,7 @@ fn membership_management_workflow_has_stable_json_and_request_contracts() {
 
     let leave = run_with_env(
         &[
-            "organization",
+            "org",
             "leave",
             "acme-research",
             "--yes",
@@ -1951,9 +1956,11 @@ fn membership_management_preserves_closed_authorization_and_conflict_outcomes() 
     let cases = [
         (
             vec![
-                "organization",
+                "org",
                 "member",
-                "history",
+                "event",
+                "list",
+                "--org",
                 "acme",
                 "--json",
                 "--allow-insecure-http",
@@ -1967,9 +1974,10 @@ fn membership_management_preserves_closed_authorization_and_conflict_outcomes() 
         ),
         (
             vec![
-                "organization",
+                "org",
                 "member",
                 "update",
+                "--org",
                 "acme",
                 "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
                 "--role",
@@ -1986,9 +1994,10 @@ fn membership_management_preserves_closed_authorization_and_conflict_outcomes() 
         ),
         (
             vec![
-                "organization",
+                "org",
                 "member",
                 "remove",
+                "--org",
                 "acme",
                 "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
                 "--yes",
@@ -2004,7 +2013,7 @@ fn membership_management_preserves_closed_authorization_and_conflict_outcomes() 
         ),
         (
             vec![
-                "organization",
+                "org",
                 "leave",
                 "private-target",
                 "--yes",
@@ -2046,9 +2055,11 @@ fn membership_management_human_reports_use_the_expected_streams() {
 
     let history = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
-            "history",
+            "event",
+            "list",
+            "--org",
             "acme",
             "--allow-insecure-http",
         ],
@@ -2085,9 +2096,10 @@ fn membership_management_human_reports_use_the_expected_streams() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let rejected = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "update",
+            "--org",
             "acme",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
             "--role",
@@ -2111,9 +2123,10 @@ fn membership_management_human_reports_use_the_expected_streams() {
 fn organization_member_remove_rejects_self_route_alias() {
     let output = run_with_env(
         &[
-            "organization",
+            "org",
             "member",
             "remove",
+            "--org",
             "acme",
             "me",
             "--yes",
@@ -2133,13 +2146,14 @@ fn organization_member_remove_rejects_self_route_alias() {
 fn terminal_membership_commands_require_explicit_confirmation() {
     for args in [
         &[
-            "organization",
+            "org",
             "member",
             "remove",
+            "--org",
             "acme",
             "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
         ][..],
-        &["organization", "leave", "acme"][..],
+        &["org", "leave", "acme"][..],
     ] {
         let output = run_with_env(
             args,
@@ -2156,7 +2170,7 @@ fn terminal_membership_commands_require_explicit_confirmation() {
 fn organization_commands_report_missing_credentials_without_network_requests() {
     for args in [
         &[
-            "organization",
+            "org",
             "update",
             "acme",
             "--slug",
@@ -2164,11 +2178,12 @@ fn organization_commands_report_missing_credentials_without_network_requests() {
             "--json",
             "--allow-insecure-http",
         ][..],
-        &["organization", "list", "--json", "--allow-insecure-http"][..],
+        &["org", "list", "--json", "--allow-insecure-http"][..],
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "acme",
             "--json",
             "--allow-insecure-http",
@@ -2205,7 +2220,7 @@ fn organization_commands_report_missing_credentials_without_network_requests() {
 fn organization_commands_keep_private_not_found_outputs_identical() {
     for base_args in [
         &[
-            "organization",
+            "org",
             "update",
             "private-target",
             "--slug",
@@ -2213,18 +2228,14 @@ fn organization_commands_keep_private_not_found_outputs_identical() {
             "--allow-insecure-http",
         ][..],
         &[
-            "organization",
+            "org",
             "member",
             "list",
+            "--org",
             "private-target",
             "--allow-insecure-http",
         ][..],
-        &[
-            "organization",
-            "show",
-            "private-target",
-            "--allow-insecure-http",
-        ][..],
+        &["org", "show", "private-target", "--allow-insecure-http"][..],
     ] {
         for json in [false, true] {
             let responses = [
@@ -2257,5 +2268,652 @@ fn organization_commands_keep_private_not_found_outputs_identical() {
             assert_eq!(outputs[1], outputs[2]);
             assert_eq!(server.finish().len(), 3);
         }
+    }
+}
+
+pub(super) const IN_EFFECT_ID: &str = "org_01k0z6r1w8f4jy2m7q9v3x5abc";
+pub(super) const OTHER_IN_EFFECT_ID: &str = "org_01k0z6r1w8f4jy2m7q9v3x5abd";
+pub(super) const LIST_CURRENT_MEMBERSHIPS: &str =
+    "GET /api/v1/me/memberships?limit=200 HTTP/1.1\r\n";
+
+pub(super) fn active_memberships(organizations: &[(&str, &str)]) -> Vec<u8> {
+    let items = organizations
+        .iter()
+        .enumerate()
+        .map(|(index, (organization_id, slug))| {
+            serde_json::json!({
+                "id": format!("mem_01k0z6r1w8f4jy2m7q9v3x5ab{}", ["c", "d", "e"][index]),
+                "organizationId": organization_id,
+                "organizationState": "active",
+                "organizationDisplayName": slug,
+                "organizationSlug": slug,
+                "role": "owner",
+                "state": "active",
+                "createdAt": "2026-07-22T20:32:00Z",
+                "updatedAt": "2026-07-23T10:00:00Z"
+            })
+        })
+        .collect();
+    membership_success(serde_json::Value::Array(items), None)
+}
+
+pub(super) fn projects_of(organization_id: &str, project_id: &str, full_name: &str) -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "items": [{
+                "id": project_id,
+                "organizationId": organization_id,
+                "name": "widgets",
+                "runnerPool": {"id": "rpl_01k0z6r1w8f4jy2m7q9v3x5abc", "name": "builders"},
+                "repository": {
+                    "connectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "providerKind": "github",
+                    "installationBindingId": "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "providerRepositoryId": "123456789",
+                    "fullName": full_name,
+                    "defaultBranch": "main",
+                    "availability": "active"
+                },
+                "executionReadiness": {"ready": true, "blockers": []},
+                "createdAt": "2026-09-05T12:00:00Z",
+                "updatedAt": "2026-09-05T12:01:00Z"
+            }]
+        }),
+    )
+}
+
+/// A `git` whose working directory is a checkout of `Acme/Widgets` on GitHub, passed as `PATH`.
+pub(super) fn acme_widgets_checkout() -> tempfile::TempDir {
+    fake_git(
+        "if [ \"$1 $2\" = 'remote -v' ]; then\n\
+         printf 'origin\\tgit@github.com:Acme/Widgets.git (fetch)\\norigin\\tgit@github.com:Acme/Widgets.git (push)\\n'\n\
+         else exit 1; fi",
+    )
+}
+
+pub(super) fn request_lines(requests: &[String]) -> Vec<&str> {
+    requests
+        .iter()
+        .map(|request| request.split_once("\r\n").unwrap().0)
+        .collect()
+}
+
+fn in_effect_members_list(
+    responses: Vec<Vec<u8>>,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+) -> (Output, Vec<String>) {
+    run_in_effect(
+        &["org", "member", "list", "--json"],
+        responses,
+        arguments,
+        environment,
+    )
+}
+
+pub(super) fn run_in_effect(
+    command: &[&str],
+    responses: Vec<Vec<u8>>,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+) -> (Output, Vec<String>) {
+    let (server, _directory, _path, credential_path) = prepared_organization(responses, TOKEN);
+    let mut variables = deployment_environment(&server.api_url, &credential_path).to_vec();
+    variables.extend_from_slice(environment);
+    let mut args = command.to_vec();
+    args.push("--allow-insecure-http");
+    args.extend_from_slice(arguments);
+    let output = run_with_env(&args, &variables);
+    (output, server.finish())
+}
+
+// REQ-ORG-87
+#[test]
+fn the_variable_names_the_organization_in_effect_without_another_request() {
+    let (output, requests) = in_effect_members_list(
+        vec![membership_success(serde_json::json!([]), None)],
+        &[],
+        &[("USEFUL_ORG", "acme")],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        ["GET /api/v1/organizations/acme/memberships HTTP/1.1"]
+    );
+}
+
+// REQ-ORG-87
+#[test]
+fn the_option_wins_over_the_variable() {
+    let (output, requests) = in_effect_members_list(
+        vec![membership_success(serde_json::json!([]), None)],
+        &["--org", "other"],
+        &[("USEFUL_ORG", "acme")],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        ["GET /api/v1/organizations/other/memberships HTTP/1.1"]
+    );
+}
+
+// REQ-ORG-87
+#[test]
+fn the_only_active_membership_names_the_organization_in_effect_by_its_id() {
+    let (output, requests) = in_effect_members_list(
+        vec![
+            active_memberships(&[(IN_EFFECT_ID, "acme")]),
+            membership_success(serde_json::json!([]), None),
+        ],
+        &[],
+        &[],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_CURRENT_MEMBERSHIPS.trim_end(),
+            &format!("GET /api/v1/organizations/{IN_EFFECT_ID}/memberships HTTP/1.1"),
+        ]
+    );
+}
+
+// REQ-ORG-87
+#[test]
+fn several_memberships_and_no_checkout_name_no_organization_and_change_nothing() {
+    let (output, requests) = in_effect_members_list(
+        vec![active_memberships(&[
+            (IN_EFFECT_ID, "acme"),
+            (OTHER_IN_EFFECT_ID, "dunder"),
+        ])],
+        &[],
+        &[],
+    );
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for named in ["--org", "acme", "dunder"] {
+        assert!(stderr.contains(named), "{stderr}");
+    }
+    assert_eq!(
+        request_lines(&requests),
+        [LIST_CURRENT_MEMBERSHIPS.trim_end()]
+    );
+}
+
+// REQ-ORG-87
+#[test]
+fn the_checkout_names_the_organization_of_the_one_project_its_remote_names() {
+    let git = acme_widgets_checkout();
+    let path = git.path().to_str().unwrap();
+    let (output, requests) = in_effect_members_list(
+        vec![
+            active_memberships(&[(OTHER_IN_EFFECT_ID, "dunder"), (IN_EFFECT_ID, "acme")]),
+            projects_of(
+                OTHER_IN_EFFECT_ID,
+                "prj_01k0z6r1w8f4jy2m7q9v3x5abd",
+                "dunder/paper",
+            ),
+            projects_of(
+                IN_EFFECT_ID,
+                "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "acme/widgets",
+            ),
+            membership_success(serde_json::json!([]), None),
+        ],
+        &[],
+        &[("PATH", path)],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_CURRENT_MEMBERSHIPS.trim_end(),
+            &format!("GET /api/v1/organizations/{OTHER_IN_EFFECT_ID}/projects HTTP/1.1"),
+            &format!("GET /api/v1/organizations/{IN_EFFECT_ID}/projects HTTP/1.1"),
+            &format!("GET /api/v1/organizations/{IN_EFFECT_ID}/memberships HTTP/1.1"),
+        ]
+    );
+}
+
+// REQ-ORG-87
+#[test]
+fn commands_that_change_an_organization_take_it_only_as_their_argument() {
+    for args in [
+        &["org", "leave", "--yes", "--allow-insecure-http"][..],
+        &["org", "update", "--name", "X", "--allow-insecure-http"][..],
+    ] {
+        let server = ScriptedServer::respond(Vec::new());
+        let directory = private_credential_directory();
+        let credential_path = directory.path().join("credentials.json");
+        let mut environment =
+            deployment_environment(&server.api_url, credential_path.to_str().unwrap()).to_vec();
+        environment.push(("USEFUL_ORG", "acme"));
+
+        let output = run_with_env(args, &environment);
+
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty());
+        assert!(server.finish().is_empty(), "{args:?}");
+    }
+}
+
+// REQ-ORG-53, REQ-ORG-87, REQ-ORG-88
+#[test]
+fn show_without_an_argument_shows_the_organization_in_effect() {
+    let (server, _directory, _path, credential_path) =
+        prepared_organization(vec![organization_success("200 OK")], TOKEN);
+    let mut environment = deployment_environment(&server.api_url, &credential_path).to_vec();
+    environment.push(("USEFUL_ORG", "acme-research"));
+
+    let output = run_with_env(
+        &["org", "show", "--json", "--allow-insecure-http"],
+        &environment,
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["outcome"], "found");
+    assert_eq!(
+        request_lines(&server.finish()),
+        ["GET /api/v1/organizations/acme-research HTTP/1.1"]
+    );
+
+    let server = ScriptedServer::respond(Vec::new());
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let output = run_with_env(
+        &[
+            "org",
+            "show",
+            "acme-research",
+            "--org",
+            "other",
+            "--allow-insecure-http",
+        ],
+        &environment,
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(server.finish().is_empty());
+}
+
+const LIST_MEMBERSHIP_PAGE: &str = "GET /api/v1/me/memberships HTTP/1.1";
+// The prefix of the field that marks the membership of the organization in effect, and of the
+// line after a page that does not hold it.
+const ROW_MARKER: &str = "in effect:";
+const PAGE_MARKER: &str = "organization in effect:";
+
+fn org_list(
+    responses: Vec<Vec<u8>>,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+) -> (Output, Vec<String>) {
+    run_in_effect(&["org", "list"], responses, arguments, environment)
+}
+
+fn listed_document(output: &Output) -> serde_json::Value {
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["outcome"], "listed");
+    value
+}
+
+/// The lines of the human page's row for `membership`.
+fn listed_row<'a>(stdout: &'a str, membership: &str) -> Vec<&'a str> {
+    stdout
+        .split("\n\n")
+        .find(|row| {
+            row.lines()
+                .any(|line| line.starts_with(&format!("membership: {membership} ")))
+        })
+        .unwrap_or_else(|| panic!("no row for {membership} in {stdout}"))
+        .lines()
+        .collect()
+}
+
+// REQ-ORG-88
+#[test]
+fn org_list_names_the_organization_the_variable_gave_without_another_request() {
+    let (output, requests) = org_list(
+        vec![active_memberships(&[
+            (IN_EFFECT_ID, "acme-research"),
+            (OTHER_IN_EFFECT_ID, "dunder"),
+        ])],
+        &["--json"],
+        &[("USEFUL_ORG", "acme-research")],
+    );
+
+    let value = listed_document(&output);
+    assert_eq!(
+        value["organizationInEffect"],
+        serde_json::json!({"organization": "acme-research", "source": "environment"})
+    );
+    assert_eq!(value["items"].as_array().unwrap().len(), 2);
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+}
+
+// REQ-ORG-88
+#[test]
+fn org_list_marks_the_membership_of_the_organization_the_option_names() {
+    let page = || {
+        active_memberships(&[
+            (IN_EFFECT_ID, "acme-research"),
+            (OTHER_IN_EFFECT_ID, "dunder"),
+        ])
+    };
+    let (output, requests) = org_list(
+        vec![page()],
+        &["--org", IN_EFFECT_ID, "--json"],
+        &[("USEFUL_ORG", "dunder")],
+    );
+
+    assert_eq!(
+        listed_document(&output)["organizationInEffect"],
+        serde_json::json!({"organization": IN_EFFECT_ID, "source": "flag"})
+    );
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+
+    let (output, requests) = org_list(vec![page()], &["--org", IN_EFFECT_ID], &[]);
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let marked = listed_row(&stdout, "mem_01k0z6r1w8f4jy2m7q9v3x5abc");
+    assert!(
+        marked
+            .iter()
+            .any(|line| line.starts_with(ROW_MARKER) && line.contains("flag")),
+        "{stdout}"
+    );
+    let other = listed_row(&stdout, "mem_01k0z6r1w8f4jy2m7q9v3x5abd");
+    assert!(!other.iter().any(|line| line.starts_with(ROW_MARKER)));
+    assert!(!stdout.lines().any(|line| line.starts_with(PAGE_MARKER)));
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+}
+
+// REQ-ORG-88
+#[test]
+fn org_list_names_the_only_active_membership_from_the_page_it_shows() {
+    let (output, requests) = org_list(
+        vec![active_memberships(&[(IN_EFFECT_ID, "acme-research")])],
+        &["--json"],
+        &[],
+    );
+
+    assert_eq!(
+        listed_document(&output)["organizationInEffect"],
+        serde_json::json!({"organization": IN_EFFECT_ID, "source": "only_membership"})
+    );
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+}
+
+// REQ-ORG-88
+#[test]
+fn org_list_with_no_organization_in_effect_prints_its_page_and_does_not_fail() {
+    let page = || {
+        active_memberships(&[
+            (IN_EFFECT_ID, "acme-research"),
+            (OTHER_IN_EFFECT_ID, "dunder"),
+        ])
+    };
+    let (output, requests) = org_list(vec![page()], &["--json"], &[]);
+
+    let value = listed_document(&output);
+    assert!(value.get("organizationInEffect").is_none(), "{value}");
+    assert_eq!(value["items"].as_array().unwrap().len(), 2);
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+
+    let (output, _) = org_list(vec![page()], &[], &[]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for membership in [
+        "mem_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "mem_01k0z6r1w8f4jy2m7q9v3x5abd",
+    ] {
+        let row = listed_row(&stdout, membership);
+        assert!(!row.iter().any(|line| line.starts_with(ROW_MARKER)));
+    }
+    assert!(
+        stdout.lines().any(|line| line.starts_with(PAGE_MARKER)),
+        "{stdout}"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+const PAM_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abc";
+const COLLEAGUE_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abd";
+const SERVICE_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abe";
+const ACME_DIRECTORY: &str = "GET /api/v1/organizations/acme/memberships?limit=200 HTTP/1.1";
+
+/// A human's row of the organization's directory; `linked_emails` is absent, as for a reader
+/// who is not an owner, when `None`.
+pub(super) fn human_row(
+    membership: &str,
+    linked_emails: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut row = serde_json::json!({
+        "id": membership,
+        "principalId": membership.replacen("mem_", "prn_", 1),
+        "principalType": "human",
+        "principalState": "active",
+        "displayName": "Pam Beesly",
+        "role": "member",
+        "state": "active"
+    });
+    if let Some(linked_emails) = linked_emails {
+        row["linkedEmails"] = linked_emails;
+    }
+    row
+}
+
+fn service_row() -> serde_json::Value {
+    serde_json::json!({
+        "id": SERVICE_MEMBERSHIP,
+        "principalId": "prn_01k0z6r1w8f4jy2m7q9v3x5abe",
+        "principalType": "service",
+        "principalState": "active",
+        "role": "member",
+        "state": "active"
+    })
+}
+
+/// The directory as an owner reads it: Pam holds `pam@example.test` verified, and a colleague
+/// holds it unverified beside a verified address of her own.
+fn owner_directory() -> Vec<u8> {
+    membership_success(
+        serde_json::json!([
+            human_row(
+                COLLEAGUE_MEMBERSHIP,
+                Some(serde_json::json!([
+                    {"email": "pam@example.test", "verified": false},
+                    {"email": "angela@example.test", "verified": true}
+                ]))
+            ),
+            service_row(),
+            human_row(
+                PAM_MEMBERSHIP,
+                Some(serde_json::json!([{"email": "pam@example.test", "verified": true}]))
+            ),
+        ]),
+        None,
+    )
+}
+
+fn json_outcome(output: &Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| panic!("{error}: {output:?}"))
+}
+
+// REQ-MEMBER-48
+#[test]
+fn member_update_sends_the_role_change_to_the_one_member_holding_the_address_verified() {
+    let first_page = membership_success(
+        serde_json::json!([
+            human_row(
+                COLLEAGUE_MEMBERSHIP,
+                Some(serde_json::json!([{"email": "pam@example.test", "verified": false}]))
+            ),
+            service_row(),
+        ]),
+        Some("second page"),
+    );
+    let second_page = membership_success(
+        serde_json::json!([human_row(
+            PAM_MEMBERSHIP,
+            Some(serde_json::json!([{"email": "pam@example.test", "verified": true}]))
+        )]),
+        None,
+    );
+    let (output, requests) = run_in_effect(
+        &["org", "member", "update", "Pam@Example.test"],
+        vec![first_page, second_page, membership_update_success()],
+        &["--org", "acme", "--role", "owner", "--json"],
+        &[],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let value = json_outcome(&output);
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["outcome"], "updated");
+    assert_eq!(value["membership"]["id"], PAM_MEMBERSHIP);
+    assert_eq!(
+        request_lines(&requests),
+        [
+            ACME_DIRECTORY,
+            "GET /api/v1/organizations/acme/memberships?limit=200&cursor=second+page HTTP/1.1",
+            &format!("PATCH /api/v1/organizations/acme/memberships/{PAM_MEMBERSHIP} HTTP/1.1"),
+        ]
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[2])).unwrap(),
+        serde_json::json!({"role": "owner"})
+    );
+    assert_eq!(header_value(&requests[2], "idempotency-key").len(), 64);
+}
+
+// REQ-MEMBER-50
+#[test]
+fn member_remove_ends_the_membership_of_the_member_holding_the_address_verified() {
+    let (output, requests) = run_in_effect(
+        &["org", "member", "remove", "pam@example.test"],
+        vec![owner_directory(), membership_termination_success()],
+        &["--org", "acme", "--yes", "--json"],
+        &[],
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let value = json_outcome(&output);
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "schemaVersion": 1,
+            "deployment": value["deployment"],
+            "outcome": "removed",
+            "organization": "acme",
+            "membershipId": PAM_MEMBERSHIP
+        })
+    );
+    assert_eq!(
+        request_lines(&requests),
+        [
+            ACME_DIRECTORY,
+            &format!("DELETE /api/v1/organizations/acme/memberships/{PAM_MEMBERSHIP} HTTP/1.1"),
+        ]
+    );
+}
+
+/// Runs `org member update ADDRESS` and `org member remove ADDRESS` against `directory` and
+/// returns each output with the requests its server received.
+fn change_by_address(address: &str, directory: impl Fn() -> Vec<u8>) -> Vec<(Output, Vec<String>)> {
+    [
+        (
+            &["org", "member", "update", address][..],
+            &["--org", "acme", "--role", "owner", "--json"][..],
+        ),
+        (
+            &["org", "member", "remove", address][..],
+            &["--org", "acme", "--yes", "--json"][..],
+        ),
+    ]
+    .into_iter()
+    .map(|(command, arguments)| run_in_effect(command, vec![directory()], arguments, &[]))
+    .collect()
+}
+
+// REQ-MEMBER-48, REQ-MEMBER-50
+#[test]
+fn an_address_no_member_holds_verified_is_not_found_and_changes_nothing() {
+    for address in ["pam@example.test", "nobody@example.test"] {
+        let directory = || {
+            membership_success(
+                serde_json::json!([
+                    human_row(
+                        COLLEAGUE_MEMBERSHIP,
+                        Some(serde_json::json!([{"email": "pam@example.test", "verified": false}]))
+                    ),
+                    human_row(
+                        PAM_MEMBERSHIP,
+                        Some(serde_json::json!([{"email": "pam@example.test"}]))
+                    ),
+                ]),
+                None,
+            )
+        };
+        for (output, requests) in change_by_address(address, directory) {
+            assert_eq!(output.status.code(), Some(1), "{address}: {output:?}");
+            assert_eq!(json_outcome(&output)["outcome"], "not_found");
+            assert_eq!(request_lines(&requests), [ACME_DIRECTORY]);
+        }
+    }
+}
+
+// REQ-MEMBER-48, REQ-MEMBER-50
+#[test]
+fn a_directory_that_shows_no_addresses_is_forbidden_and_changes_nothing() {
+    let directory = || {
+        membership_success(
+            serde_json::json!([human_row(PAM_MEMBERSHIP, None), service_row()]),
+            None,
+        )
+    };
+    for (output, requests) in change_by_address("pam@example.test", directory) {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(json_outcome(&output)["outcome"], "forbidden");
+        assert_eq!(request_lines(&requests), [ACME_DIRECTORY]);
+    }
+}
+
+// REQ-MEMBER-48, REQ-MEMBER-50
+#[test]
+fn an_address_two_members_hold_verified_is_refused_naming_both() {
+    let directory = || {
+        membership_success(
+            serde_json::json!([
+                human_row(
+                    COLLEAGUE_MEMBERSHIP,
+                    Some(serde_json::json!([{"email": "PAM@example.test", "verified": true}]))
+                ),
+                human_row(
+                    PAM_MEMBERSHIP,
+                    Some(serde_json::json!([{"email": "pam@example.test", "verified": true}]))
+                ),
+            ]),
+            None,
+        )
+    };
+    for (output, requests) in change_by_address("pam@example.test", directory) {
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        for membership in [COLLEAGUE_MEMBERSHIP, PAM_MEMBERSHIP] {
+            assert!(stderr.contains(membership), "{stderr}");
+        }
+        assert_eq!(request_lines(&requests), [ACME_DIRECTORY]);
     }
 }

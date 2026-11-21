@@ -31,8 +31,8 @@ use crate::service::assignment::test_support::{
 };
 use crate::service::assignment::{
     AssignmentCancel, AssignmentManager, AssignmentObservation, AssignmentOffer, AssignmentRelease,
-    AssignmentRunControl, AssignmentTriggerDelivery, ExecutionReport, MAXIMUM_SERVICE_OBSERVATIONS,
-    OBSERVATION_RESERVE_BASE,
+    AssignmentRunControl, AssignmentTriggerDelivery, ExecutionReport, LeaseLossReason,
+    MAXIMUM_SERVICE_OBSERVATIONS, OBSERVATION_RESERVE_BASE,
 };
 use crate::service::source::test_support::{fixture_credential, fixture_source_broker};
 use crate::service::source::{
@@ -247,7 +247,7 @@ async fn published_tree_runs_once_and_reports_the_chosen_outcome() {
     );
     assert!(create.contains(&"--owner=Ada Lovelace".to_owned()));
     assert_eq!(argument("--external"), Some(format!("url={RUN_URL}")));
-    assert_eq!(argument("--stop-before").as_deref(), Some("review"));
+    assert_eq!(argument("--pause-before").as_deref(), Some("review"));
     assert_eq!(create.last().map(String::as_str), Some("--json"));
     // The daemon's environment reaches the runtime whole; its own admission filters
     // each step (REQ-WFEXEC-22).
@@ -1114,6 +1114,65 @@ async fn a_command_asked_for_during_an_install_starts_after_it() {
     assert_eq!(*order.lock().unwrap(), ["install", "command"]);
 }
 
+// INV-RUNNER-53: a command a tree run starts while the runner's command fence is held marks
+// the hold wanted and waits, so no command of the run starts until the hold is dropped.
+#[tokio::test]
+async fn a_command_asked_for_while_the_fence_is_held_starts_after_it() {
+    let mut fixture = fixture(TREE_DIGEST, "exited", "\"planned\"");
+    let hold = fixture.manager.command_fence().try_hold().unwrap();
+    let work = fixture._temporary.path().join("work");
+    let held = async {
+        // The log is opened only once a command has passed the fence.
+        crate::service::test_support::with_watchdog(async {
+            while !hold.wanted() && files_named(&work, "tree-run.log").is_empty() {
+                crate::service::Sleeper::sleep(
+                    &crate::service::TokioSleeper,
+                    Duration::from_millis(10),
+                )
+                .await;
+            }
+        })
+        .await
+        .expect("no command asked for the fence");
+        // A command that did not wait would start in this time.
+        crate::service::Sleeper::sleep(&crate::service::TokioSleeper, Duration::from_millis(100))
+            .await;
+        let logs = files_named(&work, "tree-run.log");
+        let wanted = hold.wanted();
+        drop(hold);
+        (logs, wanted)
+    };
+    let (declined, (logs, wanted)) =
+        tokio::join!(prepare_offered(&mut fixture.manager, &fixture.offer), held);
+    assert_eq!(logs, Vec::<PathBuf>::new());
+    assert!(wanted);
+    assert_eq!(declined, None);
+
+    start_offered(&mut fixture.manager, &fixture.offer).spawn();
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(terminal_count(&reports), 1);
+}
+
+/// Every file named `name` under `root`, following no link.
+fn files_named(root: &Path, name: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut directories = vec![root.to_owned()];
+    while let Some(directory) = directories.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => directories.push(path),
+                _ if entry.file_name() == name => found.push(path),
+                _ => {}
+            }
+        }
+    }
+    found
+}
+
 // INV-RUNNER-15, REQ-GRANT-40: the evaluation of a held wait is a command of the run in
 // flight, so while it runs the manager still reads the run as waiting and a login check may
 // start, but an install or removal does not run.
@@ -1398,8 +1457,7 @@ async fn published_digest_other_than_the_spec_declines_the_assignment() {
     assert!(!fixture.log.join("create.args").exists());
 }
 
-/// The digest, `sha256:<hex>`, that `useful`'s `workflow definition validate` reports for
-/// `files`.
+/// The digest, `sha256:<hex>`, that `useful`'s `workflow validate` reports for `files`.
 fn validated_digest(useful: &Path, files: &[TreeFile]) -> String {
     let tree = tempfile::tempdir().unwrap();
     for file in files {
@@ -1411,7 +1469,7 @@ fn validated_digest(useful: &Path, files: &[TreeFile]) -> String {
         }
     }
     let output = std::process::Command::new(useful)
-        .args(["workflow", "definition", "validate"])
+        .args(["workflow", "validate"])
         .arg(tree.path())
         .arg("--json")
         .output()
@@ -2252,6 +2310,54 @@ async fn external_wait_is_evaluated_at_once_and_each_interval_until_it_continues
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
+// REQ-RUNNERENROLL-91: a `host` wait is evaluated as an `external` one is, at once and at the
+// held interval, never awaiting a control.
+#[tokio::test]
+async fn host_wait_is_evaluated_at_once_and_each_interval_until_it_continues() {
+    let mut fixture = fixture_with(
+        TREE_DIGEST,
+        "waiting",
+        "null",
+        &[
+            ("TREE_TEST_WAIT_KIND", "host"),
+            ("TREE_TEST_WAIT_SOURCE", "host"),
+            ("TREE_TEST_RESUMES", "held held continue"),
+        ],
+    );
+    start(&mut fixture).await;
+    wait_for_reports(&mut fixture.manager, |reports| {
+        progress(reports)
+            .iter()
+            .any(|(_, attempt, state, _)| *attempt == 2 && *state == "running")
+    })
+    .await;
+    fs::write(fixture.log.join("proceed"), b"").unwrap();
+    let reports = finished_reports(&mut fixture.manager).await;
+
+    assert_eq!(resumes(&fixture.log), 3);
+    assert_eq!(order(&fixture.log), ["resume", "resume", "resume"]);
+    assert_eq!(
+        progress(&reports),
+        [
+            (1, 1, "waiting", json!(["merge"])),
+            (2, 2, "running", json!(["merge"])),
+        ]
+    );
+    let Some(ExecutionReport::TreeProgress { progress, .. }) = reports
+        .iter()
+        .find(|report| matches!(report, ExecutionReport::TreeProgress { .. }))
+    else {
+        panic!("expected a progress report: {reports:#?}");
+    };
+    let wait = progress.wait.as_ref().unwrap();
+    assert_eq!(
+        (wait.kind.as_str(), wait.since.as_str(), &wait.step),
+        ("host", "2026-07-23T00:00:05Z", &vec![json!("merge")])
+    );
+    assert_eq!(terminal_count(&reports), 1);
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
 /// The `since` of the wait the injected `useful` leaves a waiting run on.
 const WAIT_SINCE: &str = "2026-07-23T00:00:05Z";
 const CONTROL_ID: &str = "rct_01k0z6r1w8f4jy2m7q9v3x5acr";
@@ -2938,8 +3044,8 @@ async fn control_for_the_current_wait_is_applied_once_and_the_run_resumes() {
     // Each value travels inside its option's own argument, so text that begins with a
     // hyphen is the option's value and never read as another option.
     for (command, answered) in commands.iter().zip([
-        " --question=scope --text=Only the API. --json",
-        " --question=2 --text=- Yes. --json",
+        " --question=scope --text=Only the API. --record-only --json",
+        " --question=2 --text=- Yes. --record-only --json",
     ]) {
         assert!(command.starts_with("workflow run answer "), "{command}");
         assert!(
@@ -3009,7 +3115,7 @@ async fn hand_back_control_carries_notes_that_begin_with_a_hyphen() {
     assert!(commands[0].starts_with("workflow run hand-back "));
     assert!(
         commands[0]
-            .ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc --notes=- split the migration --json"),
+            .ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc --notes=- split the migration --record-only --json"),
         "{}",
         commands[0]
     );
@@ -3102,6 +3208,7 @@ async fn control_that_recorded_and_then_outlived_its_bound_is_applied_and_the_ru
         control_applications(&reports),
         [applied(CONTROL_ID, "recorded")]
     );
+    assert_recorded_only_approval(&fixture.log);
     assert_eq!(order(&fixture.log), ["approve", "resume"]);
     assert_eq!(terminal_count(&reports), 1);
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
@@ -3131,6 +3238,7 @@ async fn control_that_outlived_its_bound_unrecorded_is_refused_and_its_class_log
     assert!(!failed[0].contains("kind="), "{}", failed[0]);
     // The run's controls were read and hold no such control: no read failed.
     assert!(!failed[0].contains("controls_read="), "{}", failed[0]);
+    assert_recorded_only_approval(&fixture.log);
     assert_eq!(resumes(&fixture.log), 0);
     cancel_assignment(&mut fixture);
     let reports = finished_reports(&mut fixture.manager).await;
@@ -3213,6 +3321,7 @@ async fn control_whose_controls_cannot_be_read_is_refused_and_the_read_class_log
         for field in fields {
             assert!(failed[0].contains(field), "{field}: {}", failed[0]);
         }
+        assert_recorded_only_approval(&fixture.log);
         assert_eq!(resumes(&fixture.log), 0);
         cancel_assignment(&mut fixture);
         let reports = finished_reports(&mut fixture.manager).await;
@@ -3253,6 +3362,47 @@ async fn retry_control_continues_the_run_itself() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
+// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-90: a Cloud `retry` naming a held `host` wait is
+// applied with `workflow run retry`, which continues the run itself; no `resume` follows it.
+#[tokio::test]
+async fn retry_control_continues_a_run_waiting_for_its_host() {
+    let mut fixture = fixture_with(
+        TREE_DIGEST,
+        "waiting",
+        "null",
+        &[
+            ("TREE_TEST_WAIT_KIND", "host"),
+            ("TREE_TEST_WAIT_SOURCE", "host"),
+            ("TREE_TEST_RESUMES", "gated continue"),
+        ],
+    );
+    fs::write(fixture.log.join("gate"), b"").unwrap();
+    fs::write(fixture.log.join("proceed"), b"").unwrap();
+    start(&mut fixture).await;
+    wait_for_waiting(&mut fixture).await;
+    crate::service::test_support::with_watchdog(poll_resumes_while(&fixture.log, |resumed| {
+        resumed == 0
+    }))
+    .await
+    .expect("the host wait was not evaluated");
+    // The control waits for the pause after the evaluation, which holds the wait.
+    send_control(&mut fixture, CONTROL_ID, resolving("retry", "host"));
+    fs::remove_file(fixture.log.join("gate")).unwrap();
+    let reports = finished_reports(&mut fixture.manager).await;
+
+    let commands = logged_lines(&fixture.log, "control.args");
+    assert_eq!(commands.len(), 1);
+    assert!(commands[0].starts_with("workflow run retry "));
+    assert!(commands[0].ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc --json"));
+    assert_eq!(order(&fixture.log), ["resume", "retry"]);
+    assert_eq!(
+        control_applications(&reports),
+        [applied(CONTROL_ID, "succeeded")]
+    );
+    assert_eq!(terminal_count(&reports), 1);
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
 // REQ-RUNNERENROLL-90
 #[tokio::test]
 async fn stop_control_while_a_process_runs_is_applied_beside_it() {
@@ -3276,7 +3426,7 @@ async fn stop_control_while_a_process_runs_is_applied_beside_it() {
     // `create` still runs: nothing has cancelled it.
     assert!(!fixture.log.join("cancelled").exists());
     let stop = logged_lines(&fixture.log, "stop.args");
-    assert_eq!(stop[..3], ["workflow", "run", "stop"]);
+    assert_eq!(stop[..3], ["workflow", "run", "pause"]);
     assert_eq!(
         stop[4..],
         [
@@ -3295,7 +3445,17 @@ async fn stop_control_while_a_process_runs_is_applied_beside_it() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-/// The outcome write the injected `useful`'s `run withdraw` leaves in the run's `mirror/`.
+/// The arguments the runner gave the injected `useful` to cancel the home's run, checked to be
+/// `workflow run cancel RUN --control=cancel --json` (REQ-RUNNERENROLL-123).
+fn cancel_arguments(log: &Path) -> Vec<String> {
+    let cancel = logged_lines(log, "cancel.args");
+    assert_eq!(cancel[..3], ["workflow", "run", "cancel"], "{cancel:#?}");
+    assert_eq!(cancel[4..], ["--control=cancel", "--json"], "{cancel:#?}");
+    cancel
+}
+
+/// The outcome write the injected `useful`'s `run cancel --control=withdraw` leaves in the
+/// run's `mirror/`.
 fn withdrawn_write() -> Value {
     mirror_write(
         "outcome",
@@ -3315,7 +3475,8 @@ fn refused(id: &str, code: &str) -> RunControlApplication {
 }
 
 // REQ-RUNNERENROLL-123, REQ-RUNNERENROLL-99: a withdrawal on a run waiting on a wait only a
-// control resolves runs `useful workflow run withdraw` under the run's environment, which
+// control resolves runs `useful workflow run cancel --control=withdraw` under the run's
+// environment, which
 // ends the run; no resume follows, and the exit reports the withdrawal with the command's
 // outcome write and the release it confirms. Cloud does not yet accept this `cancelled`
 // finish, which it did not request (AUTO-665): the run's `state` reads `interrupted` once its
@@ -3331,12 +3492,12 @@ async fn withdraw_control_on_a_waiting_run_ends_it_withdrawn_without_a_resume() 
     let commands = logged_lines(&fixture.log, "withdraw.args");
     assert_eq!(commands.len(), 1, "{commands:#?}");
     assert!(
-        commands[0].starts_with("workflow run withdraw "),
+        commands[0].starts_with("workflow run cancel "),
         "{}",
         commands[0]
     );
     assert!(
-        commands[0].ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc --json"),
+        commands[0].ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc --control=withdraw --json"),
         "{}",
         commands[0]
     );
@@ -3404,7 +3565,7 @@ async fn withdraw_control_while_a_process_runs_is_recorded_and_ends_with_its_exi
 }
 
 // REQ-RUNNERENROLL-123, REQ-LOCALRUN-212: a withdrawal recorded beside a `resume` that only
-// evaluated a held `external` wait is left pending by it; the runner runs `withdraw` once
+// evaluated a held `external` wait is left pending by it; the runner runs the withdrawal once
 // more on the waiting run, which ends it, reports nothing further and resumes nothing.
 #[tokio::test]
 async fn withdrawal_a_held_wait_evaluation_left_pending_is_finished_without_a_resume() {
@@ -3600,8 +3761,7 @@ async fn cancellation_during_a_wait_cancels_the_run() {
         .unwrap();
     let reports = finished_reports(&mut fixture.manager).await;
 
-    let cancel = logged_lines(&fixture.log, "cancel.args");
-    assert_eq!(cancel[..3], ["workflow", "run", "cancel"]);
+    cancel_arguments(&fixture.log);
     assert_eq!(terminal_count(&reports), 1);
     let Some(ExecutionReport::TreeFinished { outcome, .. }) = reports.last() else {
         panic!("expected a tree finish: {reports:#?}");
@@ -3659,6 +3819,41 @@ async fn lease_loss_kills_the_process_and_reports_no_outcome() {
         ),
         "{reports:#?}"
     );
+}
+
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-39, REQ-TELEMETRY-56
+#[tokio::test]
+async fn lease_revocation_names_the_loss_on_the_run_and_execution_phase() {
+    let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
+    let mut fixture = fixture_recording(TREE_DIGEST, "cancellable", "null", &[], Some(recorder));
+    let reports = lose_lease(&mut fixture).await;
+
+    let run = capture.event("runner.run");
+    assert_eq!(run["um.interruption.cause"], "execution_lease_expired");
+    assert_eq!(
+        run.get("um.lease.loss_reason"),
+        Some(&json!("lease_revoked_by_cloud"))
+    );
+    let report = reports.last().unwrap();
+    assert!(matches!(
+        report,
+        ExecutionReport::Interrupted {
+            lease_loss: Some(LeaseLossReason::RevokedByCloud),
+            ..
+        }
+    ));
+    assert_eq!(
+        encoded_frame(report, &fixture.offer)["payload"]["leaseLoss"],
+        run["um.lease.loss_reason"]
+    );
+    let phases: Vec<_> = capture
+        .events()
+        .into_iter()
+        .filter(|event| event["event.name"] == "runner.run.execution")
+        .collect();
+    assert_eq!(phases.len(), 1);
+    assert_eq!(phases[0]["um.outcome"], "timeout");
+    assert_eq!(phases[0]["error.type"], "lease_revoked_by_cloud");
 }
 
 /// An event's kind, its count, and the run and assignment it names.
@@ -3901,8 +4096,7 @@ async fn assignment_cancellation_cancels_the_local_run() {
         .unwrap();
     let reports = finished_reports(&mut fixture.manager).await;
 
-    let cancel = logged_lines(&fixture.log, "cancel.args");
-    assert_eq!(cancel[..3], ["workflow", "run", "cancel"]);
+    let cancel = cancel_arguments(&fixture.log);
     assert!(cancel[3].ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc"));
     let Some(ExecutionReport::TreeFinished { outcome, exit, .. }) = reports.last() else {
         panic!("expected a tree finish: {reports:#?}");
@@ -3960,6 +4154,23 @@ fn applications(reports: &[ExecutionReport]) -> Vec<TriggerDeliveryApplication> 
 
 fn logged_json(log: &Path, name: &str) -> Value {
     serde_json::from_slice(&fs::read(log.join(name)).unwrap()).unwrap()
+}
+
+/// The one `approve` the runner ran records the control alone, leaving the resume to the
+/// runner (REQ-RUNNERENROLL-90).
+fn assert_recorded_only_approval(log: &Path) {
+    let commands = logged_lines(log, "control.args");
+    assert_eq!(commands.len(), 1, "{commands:#?}");
+    assert!(
+        commands[0].starts_with("workflow run approve "),
+        "{}",
+        commands[0]
+    );
+    assert!(
+        commands[0].ends_with(" --record-only --json"),
+        "{}",
+        commands[0]
+    );
 }
 
 fn order(log: &Path) -> Vec<String> {
@@ -4125,10 +4336,7 @@ async fn refused_application_reports_its_code_and_the_run_keeps_waiting() {
             observation: None,
         }]
     );
-    assert_eq!(
-        logged_lines(&fixture.log, "cancel.args")[..3],
-        ["workflow", "run", "cancel"]
-    );
+    cancel_arguments(&fixture.log);
     assert_eq!(terminal_count(&reports), 1);
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
@@ -4239,11 +4447,11 @@ fn pending_fixture(event: &str, pending: Vec<TriggerDelivery>) -> Fixture {
     with_pending(fixture, pending)
 }
 
-/// The values `--stop-before` takes in the logged `create` arguments, in order.
+/// The values `--pause-before` takes in the logged `create` arguments, in order.
 fn create_stops(log: &Path) -> Vec<String> {
     logged_lines(log, "create.args")
         .windows(2)
-        .filter(|pair| pair[0] == "--stop-before")
+        .filter(|pair| pair[0] == "--pause-before")
         .map(|pair| pair[1].clone())
         .collect()
 }
@@ -4284,11 +4492,11 @@ async fn pending_deliveries_apply_before_the_first_step_and_a_surviving_run_is_l
     );
     // The start's own stop is placed before the runner's is lifted.
     let stop = logged_lines(&fixture.log, "stop.args");
-    assert_eq!(stop[..3], ["workflow", "run", "stop"]);
+    assert_eq!(stop[..3], ["workflow", "run", "pause"]);
     assert!(stop[3].ends_with("/runs/run_01k0z6r1w8f4jy2m7q9v3x5loc"));
     assert_eq!(stop[4], "--before=review");
     let lift = logged_lines(&fixture.log, "lift.args");
-    assert_eq!(lift[..3], ["workflow", "run", "lift"]);
+    assert_eq!(lift[..3], ["workflow", "run", "unpause"]);
     assert_eq!(lift[4..], ["--before=build", "--json"]);
     assert_eq!(
         applications(&reports),
@@ -6401,7 +6609,7 @@ async fn adopted_run_resumes_from_the_named_steps_in_the_adopting_environment() 
     assert_eq!(
         logged_lines(&adopted.log, "resume.args"),
         [format!(
-            "workflow run resume {} --from build --from review --json",
+            "workflow run retry {} --from build --from review --json",
             adopted.run.display()
         )]
     );
@@ -6838,7 +7046,7 @@ async fn pause() {
     crate::service::Sleeper::sleep(&crate::service::TokioSleeper, Duration::from_millis(5)).await;
 }
 
-/// Drives the adopted run from `build`, its first `resume --from` starting no engine attempt
+/// Drives the adopted run from `build`, its first `retry --from` starting no engine attempt
 /// before `reason`'s cancellation reaches it, and returns the loop's end.
 async fn cancel_unstarted_resume(adopted: &Adopted, reason: CancellationReason) -> super::TreeEnd {
     let run = adopt_run(adopted, &["build"], "stall").unwrap();
@@ -6855,7 +7063,7 @@ async fn cancel_unstarted_resume(adopted: &Adopted, reason: CancellationReason) 
 }
 
 // REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-89: a cancellation that reaches an adopted run's
-// first `resume --from` before it starts an engine attempt ends the adopting attempt
+// first `retry --from` before it starts an engine attempt ends the adopting attempt
 // cancelled or interrupted by its own reason. The record still reads as the earlier attempt
 // left it, so its outcome, mirror writes and release request are not this attempt's, and
 // the retained run is left as it was.
@@ -6910,7 +7118,7 @@ fn unreported_exit() -> TreeExit {
 }
 
 // REQ-RUNNERENROLL-89: a cancellation the runner holds when it begins to drive an adopted run
-// applies none of the offer's deliveries and launches no first `resume --from`. Over an
+// applies none of the offer's deliveries and launches no first `retry --from`. Over an
 // `exited` record the attempt ends cancelled or interrupted with no command run, the record
 // and its attempt count as the earlier attempt left them; a run that still stands is
 // cancelled, or left as it stands for the runner's shutdown, as a run no process holds.
@@ -6988,10 +7196,7 @@ async fn adopted_run_cancelled_before_its_drive_applies_no_delivery_and_resumes_
     let end = run.drive(&|_| true).await.unwrap();
 
     assert_eq!(resumes(&waiting.log), 0);
-    assert_eq!(
-        logged_lines(&waiting.log, "cancel.args")[..3],
-        ["workflow", "run", "cancel"]
-    );
+    cancel_arguments(&waiting.log);
     let TreeConclusion::Terminal { result, exit, .. } = end.conclusion() else {
         panic!("a cancelled standing adopted run has a result: {end:#?}");
     };
@@ -7026,7 +7231,7 @@ async fn adopted_run_cancelled_before_its_drive_applies_no_delivery_and_resumes_
 }
 
 // REQ-RUNNERENROLL-89: a cancellation that arrives while the offer's pending delivery is being
-// applied abandons it, reported as nothing, and launches no first `resume --from`; the
+// applied abandons it, reported as nothing, and launches no first `retry --from`; the
 // adopted `exited` record is left as the earlier attempt left it.
 #[tokio::test]
 async fn adopted_run_cancelled_while_a_pending_delivery_is_applied_resumes_nothing() {
@@ -7585,7 +7790,7 @@ async fn continuation_offer_adopts_the_retained_run_and_resumes_it_from_the_name
     assert_eq!(
         logged_lines(&fixture.log, "resume.args"),
         [format!(
-            "workflow run resume {} --from build --json",
+            "workflow run retry {} --from build --json",
             run.display()
         )]
     );
@@ -7646,7 +7851,7 @@ async fn continuation_of_a_github_tree_run_resumes_it_over_the_relay_for_the_fir
     assert_eq!(
         logged_lines(&fixture.log, "resume.args"),
         [format!(
-            "workflow run resume {} --from build --json",
+            "workflow run retry {} --from build --json",
             created_run(&workspace, &first).display()
         )]
     );
@@ -7693,7 +7898,7 @@ async fn continuation_of_a_tree_run_without_an_origin_record_resumes_it_without_
     assert_eq!(
         logged_lines(&fixture.log, "resume.args"),
         [format!(
-            "workflow run resume {} --from build --json",
+            "workflow run retry {} --from build --json",
             created_run(&workspace, &first).display()
         )]
     );
@@ -7759,6 +7964,35 @@ async fn retained_chain_without_a_tree_home_is_declined_retained_workspace_unava
             AssignmentDecline::RunnerUnable(RunnerUnableReason::RetainedWorkspaceUnavailable)
                 .diagnosed("workflow_tree_adoption", "tree_run_home_unavailable")
         )
+    );
+    assert!(!fixture.log.join("resume.args").exists());
+}
+
+// REQ-RUNNERENROLL-89, REQ-CONTINUE-48
+#[tokio::test]
+async fn continuation_of_a_removed_assignment_directory_is_declined_retained_workspace_unavailable()
+{
+    let mut fixture = failed_fixture(&[]);
+    let workspace = retained_first_attempt(&mut fixture).await;
+    fs::remove_dir_all(assignment_directory(
+        &workspace,
+        &fixture.offer.assignment_id,
+    ))
+    .unwrap();
+    let next = continuation_of(&fixture.offer, BOOT, &workspace, &["build"], "cn1");
+
+    let (decline, _) = prepare_continued(
+        &mut fixture.manager,
+        &next,
+        "eff_01k0z6r1w8f4jy2m7q9v3x5pn1",
+    )
+    .await;
+
+    assert_eq!(
+        decline,
+        Some(AssignmentDecline::RunnerUnable(
+            RunnerUnableReason::RetainedWorkspaceUnavailable
+        ))
     );
     assert!(!fixture.log.join("resume.args").exists());
 }
@@ -7843,8 +8077,8 @@ async fn refused_first_resume_fails_the_attempt_and_leaves_the_run_continuable()
     assert_eq!(
         logged_lines(&fixture.log, "resume.args"),
         [
-            format!("workflow run resume {} --from build --json", run.display()),
-            format!("workflow run resume {} --from build --json", run.display()),
+            format!("workflow run retry {} --from build --json", run.display()),
+            format!("workflow run retry {} --from build --json", run.display()),
         ]
     );
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
@@ -8000,10 +8234,7 @@ async fn hanging_event_is_abandoned_with_its_group_when_the_assignment_is_cancel
         "the event's process group was not killed"
     );
     assert_eq!(applications(&reports), []);
-    assert_eq!(
-        logged_lines(&fixture.log, "cancel.args")[..3],
-        ["workflow", "run", "cancel"]
-    );
+    cancel_arguments(&fixture.log);
     let Some(ExecutionReport::TreeFinished { outcome, .. }) = reports.last() else {
         panic!("expected a tree finish: {reports:#?}");
     };
@@ -8118,7 +8349,7 @@ async fn hanging_event_is_abandoned_with_its_group_once_its_bound_passes() {
 #[tokio::test]
 async fn commands_that_cannot_be_launched_log_their_class_and_error_kind() {
     // With the start's own stop the runner puts it back first; without one it only lifts.
-    for (start_stop, command) in [(Some("review"), "stop"), (None, "lift")] {
+    for (start_stop, command) in [(Some("review"), "pause"), (None, "unpause")] {
         let mut fixture =
             pending_fixture("owned", vec![delivery("wtd_01k0z6r1w8f4jy2m7q9v3x5abt")]);
         let tree = fixture.offer.execution_spec.workflow_tree.as_mut().unwrap();

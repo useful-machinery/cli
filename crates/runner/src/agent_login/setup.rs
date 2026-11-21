@@ -228,7 +228,7 @@ impl AssignmentGate for NothingBeside {
 /// (REQ-GRANT-90).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SetupCaller {
-    /// `useful runner integration sync`, through the control socket: every login the
+    /// `useful runner sync`, through the control socket: every login the
     /// pass leaves `ready` is checked.
     Sync,
     /// The schedule, at start and every interval: a login the pass

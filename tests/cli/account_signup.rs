@@ -87,7 +87,10 @@ fn human_signup_creates_and_reports_the_account() {
     assert!(output.stderr.is_empty());
     let request = server.finish().pop().unwrap();
     assert!(request.starts_with("POST /api/v1/signup HTTP/1.1\r\n"));
-    assert!(request.contains("authorization: Bearer unique-human-signup-synthetic-token\r\n"));
+    assert_eq!(
+        crate::header_value(&request, "authorization"),
+        "Bearer unique-human-signup-synthetic-token"
+    );
     let idempotency_key = header_value(&request, "idempotency-key");
     assert_eq!(idempotency_key.len(), 64);
     assert!(idempotency_key.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -206,7 +209,7 @@ fn signup_reports_a_refused_account_as_forbidden_and_names_deletion_cancel() {
     );
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("useful account deletion cancel"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("useful account restore"));
     server.finish();
 }
 
@@ -233,10 +236,127 @@ fn already_provisioned_signup_directs_the_human_to_status() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         output.stdout,
-        b"! This identity already has a Useful Machinery account.\n\nRun:\n  useful auth status\n"
+        b"! This identity already has a Useful Machinery account.\n\nRun:\n  useful account show\n"
     );
     assert!(output.stderr.is_empty());
     server.finish();
+}
+
+fn signed_out_signup(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile::TempDir, String) {
+    let server = ScriptedServer::respond(responses);
+    let credential_directory = private_credential_directory();
+    let credential_path = credential_directory
+        .path()
+        .join("credentials.json")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    (server, credential_directory, credential_path)
+}
+
+// REQ-ACCOUNT-16
+#[test]
+fn signed_out_signup_signs_in_first_and_then_creates_the_account() {
+    let (server, _directory, credential_path) = signed_out_signup(vec![
+        auth_login::device_authorization_response("private-signup-device-code", "SIGNUP-CODE"),
+        auth_login::issued_token_response(
+            "unique-signed-in-signup-token",
+            "unique-signed-in-signup-refresh-token",
+        ),
+        auth_login::principal_not_provisioned_response(),
+        created_response(),
+    ]);
+    let environment = signup_environment(&server, &credential_path);
+
+    let output = run_with_env(
+        &["account", "signup", "--allow-insecure-http"],
+        &environment,
+    );
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let activation = stdout
+        .find("https://auth.fixture.example/activate")
+        .unwrap();
+    let code = stdout.find("SIGNUP-CODE").unwrap();
+    let created = stdout.find("prn_fixture").unwrap();
+    assert!(activation < created && code < created);
+    for secret in [
+        "private-signup-device-code",
+        "unique-signed-in-signup-token",
+        "unique-signed-in-signup-refresh-token",
+    ] {
+        assert!(!stdout.contains(secret));
+    }
+    assert!(output.stderr.is_empty());
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].starts_with("POST /auth/oauth/device/code HTTP/1.1\r\n"));
+    assert!(requests[1].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
+    assert!(requests[2].starts_with("GET /api/v1/me HTTP/1.1\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[2], "authorization"),
+        "Bearer unique-signed-in-signup-token"
+    );
+    assert!(requests[3].starts_with("POST /api/v1/signup HTTP/1.1\r\n"));
+    assert_eq!(
+        crate::header_value(&requests[3], "authorization"),
+        "Bearer unique-signed-in-signup-token"
+    );
+
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&credential_path).unwrap()).unwrap();
+    assert_eq!(
+        stored["credentials"][0]["accessToken"],
+        "unique-signed-in-signup-token"
+    );
+}
+
+// REQ-ACCOUNT-16
+#[test]
+fn structured_signed_out_signup_reports_unauthenticated_without_signing_in() {
+    let (server, _directory, credential_path) = signed_out_signup(Vec::new());
+    let environment = signup_environment(&server, &credential_path);
+
+    let output = run_with_env(
+        &["account", "signup", "--json", "--allow-insecure-http"],
+        &environment,
+    );
+
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "deployment": server.api_url,
+            "outcome": "unauthenticated"
+        })
+    );
+    assert!(output.stderr.is_empty());
+    assert!(server.finish().is_empty());
+}
+
+// REQ-ACCOUNT-16
+#[test]
+fn denied_sign_in_ends_signup_without_asking() {
+    let (server, _directory, credential_path) = signed_out_signup(vec![
+        auth_login::device_authorization_response("private-denied-device-code", "DENY-CODE"),
+        auth_login::denied_token_response(),
+    ]);
+    let environment = signup_environment(&server, &credential_path);
+
+    let output = run_with_env(
+        &["account", "signup", "--allow-insecure-http"],
+        &environment,
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /auth/oauth/device/code HTTP/1.1\r\n"));
+    assert!(requests[1].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
 }
 
 fn rate_limit_response(problem_type: &str, retry_after: Option<&str>) -> Vec<u8> {

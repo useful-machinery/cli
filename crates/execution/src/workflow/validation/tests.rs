@@ -1795,11 +1795,39 @@ fn outcomes_and_outcome_are_declared_together_with_a_member_failure_name() {
                 value_type: WorkflowValueType::Text,
             }),
             on_failure: "failed".to_owned(),
+            on_infrastructure: None,
         })
     );
 
     let undeclared = validate_yaml(&outcome_workflow("")).unwrap();
     assert_eq!(undeclared.outcome, None);
+}
+
+// REQ-WFFORMAT-110
+#[test]
+fn on_infrastructure_names_one_of_the_outcomes() {
+    let with_infrastructure = |name: &str| {
+        outcome_workflow(&format!(
+            "outcomes: [planned, failed]\noutcome: {{from: outputs.decide.verdict, onFailure: failed, onInfrastructure: {name}}}\n"
+        ))
+    };
+    assert_failure(
+        &with_infrastructure("shipped"),
+        ValidationFailureKind::InvalidOutcomeDeclaration,
+        ValidationLocation::Outcome,
+    );
+
+    let declared = validate_yaml(&with_infrastructure("failed")).unwrap();
+    assert_eq!(
+        declared
+            .outcome
+            .and_then(|outcome| outcome.on_infrastructure)
+            .as_deref(),
+        Some("failed")
+    );
+
+    let undeclared = validate_yaml(&declared_outcome("outputs.decide.verdict", "failed")).unwrap();
+    assert_eq!(undeclared.outcome.unwrap().on_infrastructure, None);
 }
 
 // REQ-WFFORMAT-88
@@ -2489,6 +2517,141 @@ fn a_limited_edge_continues_at_a_step_until_its_limit_and_then_takes_else() {
                 rule: None,
             }),
         }
+    );
+}
+
+/// The canonical host-wait root: `build` routes `host_failed` to a host wait at itself with
+/// a `repair` wait as its `else`.
+fn host_wait_workflow() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/workflow/v1/valid/workflow-step-host-wait.yaml"),
+    )
+    .unwrap()
+}
+
+/// The host-wait root with its `host_failed` edge's target replaced by `target`.
+fn host_wait_edge(target: &str) -> String {
+    let source = host_wait_workflow();
+    let edge = "      host_failed:\n        wait: host\n        then: build\n        limit: 3\n        else:\n          wait: repair\n          then: build\n";
+    assert!(source.contains(edge));
+    source.replacen(edge, &format!("      host_failed:\n{target}"), 1)
+}
+
+fn host_wait_summaries() -> BTreeMap<String, ChildWorkflowSummary> {
+    let stage = |outcomes: &[&str]| ChildWorkflowSummary {
+        outcomes: outcomes
+            .iter()
+            .map(|outcome| (*outcome).to_owned())
+            .collect(),
+        exports: BTreeMap::new(),
+        inputs: BTreeMap::new(),
+        nesting: ChildNesting::Stage,
+        has_root_blocks: false,
+        paths: BTreeSet::new(),
+    };
+    [
+        (
+            "build.yaml".to_owned(),
+            stage(&["built", "failed", "host_failed"]),
+        ),
+        ("review.yaml".to_owned(), stage(&["approved", "failed"])),
+    ]
+    .into()
+}
+
+// REQ-WFFORMAT-111, REQ-WFFORMAT-92
+#[test]
+fn a_host_wait_waits_at_its_own_step_under_a_limit_with_an_else() {
+    let workflow = validate_with_children(&host_wait_workflow(), &host_wait_summaries()).unwrap();
+    assert_eq!(
+        workflow_step(&workflow, "build").edges["host_failed"],
+        ValidatedEdgeTarget::HostWait {
+            then: "build".to_owned(),
+            limit: 3,
+            else_: Box::new(ValidatedEdgeTarget::Wait {
+                kind: WaitKind::Repair,
+                then: Box::new(ValidatedEdgeTarget::Step("build".to_owned())),
+                on_hand_back: None,
+                rule: None,
+            }),
+        }
+    );
+
+    let host_wait = |then: &str, limit: &str, else_: &str| {
+        format!("        wait: host\n        then: {then}\n{limit}{else_}")
+    };
+    let limit = "        limit: 3\n";
+    let else_ = "        else: exit.failed\n";
+    for (target, kind) in [
+        (
+            host_wait("review", limit, else_),
+            ValidationFailureKind::WaitHostTargetInvalid,
+        ),
+        (
+            host_wait("exit.landed", limit, else_),
+            ValidationFailureKind::WaitHostTargetInvalid,
+        ),
+        (
+            host_wait("build", "", else_),
+            ValidationFailureKind::WaitLimitRequired,
+        ),
+        (
+            host_wait("build", limit, ""),
+            ValidationFailureKind::WaitLimitRequired,
+        ),
+    ] {
+        assert_edge_failure(
+            &host_wait_edge(&target),
+            &host_wait_summaries(),
+            kind,
+            step_edge("build", "host_failed"),
+        );
+    }
+
+    // `review` is reached only through the host wait's `else`.
+    let through_else = host_wait_edge(&host_wait("build", limit, "        else: review\n"))
+        .replacen("      built: review\n", "      built: exit.landed\n", 1);
+    let workflow = validate_with_children(&through_else, &host_wait_summaries()).unwrap();
+    assert_eq!(
+        workflow_step(&workflow, "build").edges["host_failed"],
+        ValidatedEdgeTarget::HostWait {
+            then: "build".to_owned(),
+            limit: 3,
+            else_: Box::new(ValidatedEdgeTarget::Step("review".to_owned())),
+        }
+    );
+}
+
+// REQ-WFFORMAT-104, REQ-WFFORMAT-111
+#[test]
+fn a_nested_host_wait_admits_an_else_wait_only_at_its_own_step() {
+    let nesting = |source: &str| {
+        let workflow = validate_with_children(source, &host_wait_summaries())
+            .unwrap_or_else(|failure| panic!("{failure:?} for:\n{source}"));
+        ChildWorkflowSummary::of(&workflow, &[], BTreeSet::new()).nesting
+    };
+    let same_step = nesting(&host_wait_workflow());
+    assert_eq!(same_step, ChildNesting::Nested);
+    validate_with_children(EDGE_WORKFLOW, &with_design_nesting(same_step)).unwrap();
+
+    let other_step = nesting(&host_wait_edge(
+        "        wait: host\n        then: build\n        limit: 3\n        else:\n          wait: repair\n          then: review\n",
+    ));
+    assert_eq!(
+        other_step,
+        ChildNesting::Unsupported(UnsupportedNestedShape {
+            step: "build".to_owned(),
+            shape: NestedShape::WaitThen,
+        })
+    );
+    assert_edge_failure(
+        EDGE_WORKFLOW,
+        &with_design_nesting(other_step),
+        ValidationFailureKind::NestedWorkflowUnsupported,
+        ValidationLocation::StepWorkflow {
+            step: "design".to_owned(),
+        },
     );
 }
 

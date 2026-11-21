@@ -1,0 +1,51 @@
+[package]
+name = "useful-e2e"
+version = "0.0.0-dev"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+autotests = false
+
+[features]
+candidate-checkpoints = []
+
+[workspace]
+
+# The loopback HTTP and Git fixtures are shared with the native suite.
+[lib]
+name = "useful_test_support"
+path = "../crates/test-support/src/lib.rs"
+test = false
+doctest = false
+
+[[test]]
+name = "cli"
+path = "cli.rs"
+
+[[test]]
+name = "help_snapshots"
+path = "help_snapshots.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("rust-cli-tests"))'] }
+
+[dependencies]
+rustix = { version = "1.1.4", features = ["event", "pty", "fs", "net", "process", "termios"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision", "unbounded_depth"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+base64 = "0.22.1"
+flate2 = { version = "1.1.5", default-features = false, features = ["rust_backend"] }
+fs4 = "1.1.0"
+futures-util = { version = "0.3.33", default-features = false, features = ["sink", "std"] }
+jsonschema = { version = "0.49.2", default-features = false }
+libc = "0.2.189"
+nix = { version = "0.31.3", default-features = false, features = ["fs", "process", "signal"] }
+ring = "0.17.14"
+serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
+time = { version = "0.3.45", features = ["formatting", "parsing"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+trycmd = "1.2.1"
+url = "2.5.8"

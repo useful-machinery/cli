@@ -147,6 +147,206 @@ fn operator_config_written_bytes_match_schema_in_both_deployment_modes() {
     }
 }
 
+// REQ-RUNNERENROLL-14, REQ-RUNNERENROLL-157
+#[test]
+fn operator_config_kept_runs_is_judged_alike_by_schema_and_loader() {
+    let schema: serde_json::Value =
+        serde_json::from_str(OPERATOR_CONFIG_SCHEMA).expect("decode mirrored operator schema");
+    let validator = jsonschema::draft202012::new(&schema).expect("compile operator schema");
+    let temporary = tempfile::tempdir().expect("create config fixture");
+    let config_path = temporary.path().join("runner.json");
+    let days = |count: u64| Some(Duration::from_secs(count * 86_400));
+    let bounds = |maximum_age, maximum_total_bytes| {
+        Some(KeptRunBounds {
+            maximum_age,
+            maximum_total_bytes,
+        })
+    };
+    let default_bytes = Some(53_687_091_200);
+    for (kept_runs, resolved) in [
+        (None, bounds(days(14), default_bytes)),
+        (Some(serde_json::json!({})), bounds(days(14), default_bytes)),
+        (
+            Some(serde_json::json!({"maximumAgeDays": 1})),
+            bounds(days(1), default_bytes),
+        ),
+        (
+            Some(serde_json::json!({"maximumAgeDays": 7})),
+            bounds(days(7), default_bytes),
+        ),
+        (
+            Some(serde_json::json!({"maximumAgeDays": 3650, "maximumTotalBytes": 1})),
+            bounds(days(3650), Some(1)),
+        ),
+        (
+            Some(serde_json::json!({"maximumAgeDays": null, "maximumTotalBytes": null})),
+            bounds(None, None),
+        ),
+        (Some(serde_json::json!({"maximumAgeDays": 0})), None),
+        (Some(serde_json::json!({"maximumAgeDays": 3651})), None),
+        (Some(serde_json::json!({"maximumAgeDays": -1})), None),
+        (Some(serde_json::json!({"maximumAgeDays": "14"})), None),
+        (Some(serde_json::json!({"maximumTotalBytes": 0})), None),
+        (
+            Some(serde_json::json!({"maximumAgeDays": 14, "other": 1})),
+            None,
+        ),
+        (Some(serde_json::Value::Null), None),
+        (Some(serde_json::json!([])), None),
+    ] {
+        let mut document = serde_json::json!({
+            "schemaVersion": 1,
+            "deploymentMode": "production",
+            "runnerStatePath": "/var/lib/scherzo-cloud/runner-state.json",
+            "controlSocketPath": "/run/scherzo-cloud/runner.sock",
+            "workRoot": "/var/lib/scherzo-cloud/work"
+        });
+        if let Some(kept_runs) = kept_runs {
+            document["keptRuns"] = kept_runs;
+        }
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&document).expect("encode config"),
+        )
+        .expect("write config");
+        assert_eq!(
+            validator.is_valid(&document),
+            resolved.is_some(),
+            "schema: {document}"
+        );
+        match load_operator_config(&config_path) {
+            Ok(config) => assert_eq!(Some(config.kept_run_bounds()), resolved, "{document}"),
+            Err(error) => {
+                assert_eq!(resolved, None, "loader refused: {document}");
+                assert!(
+                    matches!(error, EnrollmentError::InvalidConfig),
+                    "{document}: {error:?}"
+                );
+            }
+        }
+    }
+}
+
+// REQ-RUNNERENROLL-14, REQ-RUNNERENROLL-160
+#[test]
+fn operator_config_build_caches_is_judged_alike_by_schema_and_loader() {
+    enum Expected {
+        Accepted(Vec<BuildCache>),
+        Refused,
+        RefusedByLoaderAlone,
+    }
+    use Expected::{Accepted, Refused, RefusedByLoaderAlone};
+
+    let schema: serde_json::Value =
+        serde_json::from_str(OPERATOR_CONFIG_SCHEMA).expect("decode mirrored operator schema");
+    let validator = jsonschema::draft202012::new(&schema).expect("compile operator schema");
+    let temporary = tempfile::tempdir().expect("create config fixture");
+    let config_path = temporary.path().join("runner.json");
+    fn entries<S: AsRef<str>>(paths: &[S]) -> serde_json::Value {
+        paths
+            .iter()
+            .map(|path| serde_json::json!({"path": path.as_ref(), "maximumBytes": 1}))
+            .collect()
+    }
+    let cache = |path: &str| BuildCache {
+        path: PathBuf::from(path),
+        maximum_bytes: 1,
+    };
+    let numbered = |count: usize| {
+        (0..count)
+            .map(|index| format!("/srv/cache/{index}"))
+            .collect::<Vec<_>>()
+    };
+    let sixteen = numbered(16);
+    let seventeen = numbered(17);
+    let fleet = "/var/lib/scherzo-cloud/build-cache/cargo-target";
+
+    let mut cases = vec![
+        (None, Accepted(Vec::new())),
+        (Some(serde_json::json!([])), Accepted(Vec::new())),
+        (Some(entries(&[fleet])), Accepted(vec![cache(fleet)])),
+        (
+            Some(entries(&sixteen)),
+            Accepted(sixteen.iter().map(|path| cache(path)).collect()),
+        ),
+        (
+            Some(entries(&["/srv/a", "/srv/ab"])),
+            Accepted(vec![cache("/srv/a"), cache("/srv/ab")]),
+        ),
+        (Some(serde_json::Value::Null), Refused),
+        (Some(serde_json::json!({})), Refused),
+        (Some(entries(&seventeen)), Refused),
+        (Some(serde_json::json!([{"path": "/srv/cache"}])), Refused),
+        (
+            Some(serde_json::json!([{"path": "/srv/cache", "maximumBytes": 1, "other": 1}])),
+            Refused,
+        ),
+        (Some(serde_json::json!([["/srv/cache", 1]])), Refused),
+        (Some(entries(&["build-cache"])), Refused),
+        (Some(entries(&["/srv/cache/../work"])), Refused),
+        (Some(entries(&["/srv/.."])), Refused),
+    ];
+    for maximum_bytes in [
+        serde_json::json!(0),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("1"),
+    ] {
+        cases.push((
+            Some(serde_json::json!([{"path": "/srv/cache", "maximumBytes": maximum_bytes}])),
+            Refused,
+        ));
+    }
+    for paths in [
+        &["/var/lib/scherzo-cloud/work"][..],
+        &["/var/lib/scherzo-cloud/work/target"],
+        &["/var/lib"],
+        &["/"],
+        &["/var/lib/scherzo-cloud"],
+        &["/var/lib/scherzo-cloud/runner-state.json"],
+        &["/var/lib/scherzo-cloud/logs"],
+        &["/var/lib/scherzo-cloud/logs/archive"],
+        &["/run/scherzo-cloud"],
+        &["/run/scherzo-cloud/runner.sock"],
+        &["/run"],
+        &["/srv/cache", "/srv/cache"],
+        &["/srv/cache", "/srv/cache/target"],
+    ] {
+        cases.push((Some(entries(paths)), RefusedByLoaderAlone));
+    }
+
+    for (build_caches, expected) in cases {
+        let mut document = serde_json::json!({
+            "schemaVersion": 1,
+            "deploymentMode": "production",
+            "runnerStatePath": "/var/lib/scherzo-cloud/runner-state.json",
+            "controlSocketPath": "/run/scherzo-cloud/runner.sock",
+            "workRoot": "/var/lib/scherzo-cloud/work"
+        });
+        if let Some(build_caches) = build_caches {
+            document["buildCaches"] = build_caches;
+        }
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&document).expect("encode config"),
+        )
+        .expect("write config");
+        assert_eq!(
+            validator.is_valid(&document),
+            !matches!(expected, Refused),
+            "schema: {document}"
+        );
+        match (load_operator_config(&config_path), expected) {
+            (Ok(config), Accepted(resolved)) => {
+                assert_eq!(config.build_caches(), resolved, "{document}");
+            }
+            (Err(EnrollmentError::InvalidConfig), Refused | RefusedByLoaderAlone) => {}
+            (Ok(_), _) => panic!("loader accepted: {document}"),
+            (Err(error), _) => panic!("loader refused: {document}: {error:?}"),
+        }
+    }
+}
+
 // REQ-RUNNERENROLL-14: `minimumFreeDiskBytes` is optional, an integer from 0 to 2^53 - 1;
 // the work root and the minimum load together, the minimum 5 GiB where none is named, and
 // anything else in the member is refused by the loader and the schema alike.
@@ -248,13 +448,8 @@ fn successful_enrollment_commits_schema_valid_state_without_transmitting_secret(
     let server = ScriptedHttpServer::respond(enrollment_response());
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
 
-    let outcome = enroll(
-        Some(&fixture.activation_path),
-        &fixture.config_path,
-        false,
-        false,
-    )
-    .expect("enroll runner");
+    let outcome =
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()).expect("enroll runner");
     let EnrollmentOutcome::Enrolled {
         response,
         replacement,
@@ -322,13 +517,8 @@ fn replacement_enrollment_preserves_current_and_reuses_the_staged_pending_creden
     let fixture = EnrollmentFixture::new(&server, OTHER_ACTIVATION_ID, future_time());
     fixture.write_current_state();
 
-    let outcome = enroll(
-        Some(&fixture.activation_path),
-        &fixture.config_path,
-        true,
-        false,
-    )
-    .expect("enroll replacement credential");
+    let outcome = enroll_replacement(&fixture.config_path, fixture.key())
+        .expect("enroll replacement credential");
     assert!(matches!(
         outcome,
         EnrollmentOutcome::Enrolled {
@@ -359,13 +549,8 @@ fn replacement_enrollment_preserves_current_and_reuses_the_staged_pending_creden
 
     let staged_state = fs::read(&fixture.state_path).expect("read staged state");
     assert_json_matches_schema("runner state", RUNNER_STATE_SCHEMA, &staged_state);
-    let retry = enroll(
-        Some(&fixture.activation_path),
-        &fixture.config_path,
-        true,
-        false,
-    )
-    .expect("reuse staged pending credential without another Cloud request");
+    let retry = enroll_replacement(&fixture.config_path, fixture.key())
+        .expect("reuse staged pending credential without another Cloud request");
     assert!(matches!(
         retry,
         EnrollmentOutcome::ReplacementCredential {
@@ -392,13 +577,8 @@ fn replacement_enrollment_preserves_current_and_reuses_the_staged_pending_creden
     );
     let promoted_state = fs::read(&fixture.state_path).expect("read promoted state");
     assert_json_matches_schema("runner state", RUNNER_STATE_SCHEMA, &promoted_state);
-    let retry = enroll(
-        Some(&fixture.activation_path),
-        &fixture.config_path,
-        true,
-        false,
-    )
-    .expect("recover a lost promotion response without another Cloud request");
+    let retry = enroll_replacement(&fixture.config_path, fixture.key())
+        .expect("recover a lost promotion response without another Cloud request");
     assert!(matches!(
         retry,
         EnrollmentOutcome::ReplacementCredential {
@@ -422,12 +602,7 @@ fn enrollment_rejects_redirects_without_losing_the_journal() {
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
 
     assert!(matches!(
-        enroll(
-            Some(&fixture.activation_path),
-            &fixture.config_path,
-            false,
-            false,
-        ),
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()),
         Err(EnrollmentError::InvalidResponse)
     ));
     let journal = fs::read(fixture.journal_path()).expect("read redirect journal");
@@ -447,12 +622,7 @@ fn enrollment_journal_and_terminal_receipt_match_schemas_across_retries() {
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
 
     assert!(matches!(
-        enroll(
-            Some(&fixture.activation_path),
-            &fixture.config_path,
-            false,
-            false,
-        ),
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()),
         Err(EnrollmentError::NetworkAmbiguous(
             AmbiguousCause::CloudUnavailable(500)
         ))
@@ -468,7 +638,7 @@ fn enrollment_journal_and_terminal_receipt_match_schemas_across_retries() {
     assert!(valid_secret(&journal.credential_secret));
 
     assert!(matches!(
-        enroll(None, &fixture.config_path, false, true),
+        resend_staged_enrollment(&fixture.config_path),
         Err(EnrollmentError::Unauthorized)
     ));
     assert_eq!(
@@ -476,7 +646,7 @@ fn enrollment_journal_and_terminal_receipt_match_schemas_across_retries() {
         original
     );
     assert!(matches!(
-        enroll(None, &fixture.config_path, false, true),
+        resend_staged_enrollment(&fixture.config_path),
         Err(EnrollmentError::Conflict)
     ));
     assert_eq!(
@@ -484,7 +654,9 @@ fn enrollment_journal_and_terminal_receipt_match_schemas_across_retries() {
         original
     );
 
-    let outcome = enroll(None, &fixture.config_path, false, true).expect("resolve gone journal");
+    let outcome = resend_staged_enrollment(&fixture.config_path)
+        .expect("resolve gone journal")
+        .expect("a staged enrollment");
     assert!(matches!(
         outcome,
         EnrollmentOutcome::Gone { activation_id, .. } if activation_id == ACTIVATION_ID
@@ -527,7 +699,7 @@ fn enrollment_journal_and_terminal_receipt_match_schemas_across_retries() {
     let replacement_path = fixture.root.path().join("replacement-activation.json");
     write_artifact(&replacement_path, &replacement);
     assert!(matches!(
-        enroll(Some(&replacement_path), &fixture.config_path, false, false,),
+        enroll_unless_enrolled(&fixture.config_path, single_runner_key(&replacement_path)),
         Err(EnrollmentError::NetworkAmbiguous(
             AmbiguousCause::CloudUnavailable(500)
         ))
@@ -556,12 +728,7 @@ fn an_ambiguous_enrollment_names_its_cause() {
         let server = ScriptedHttpServer::respond(response);
         let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
 
-        let result = enroll(
-            Some(&fixture.activation_path),
-            &fixture.config_path,
-            false,
-            false,
-        );
+        let result = enroll_unless_enrolled(&fixture.config_path, fixture.key());
 
         let Err(error) = result else {
             panic!("expected an ambiguous outcome for {code}, got {result:?}");
@@ -571,17 +738,19 @@ fn an_ambiguous_enrollment_names_its_cause() {
         };
         assert_eq!(cause, expected);
         assert_eq!(cause.code(), code);
-        // The failure `useful runner enroll` prints is this error's message.
+        // The failure `useful runner serve` prints is this error's message.
         assert!(error.to_string().contains(code), "{error}");
         assert!(fixture.journal_path().is_file(), "journal kept for {code}");
         server.finish_one();
     }
 }
 
-// REQ-RUNNERENROLL-22
+// REQ-RUNNERENROLL-22: a start interrupted after it wrote the state and before it removed the
+// journal left a host that holds its credential twice; the next start sends nothing and removes
+// the journal.
 #[test]
-fn resume_finishes_after_state_commits_before_journal_removal() {
-    let server = ScriptedHttpServer::respond(enrollment_response());
+fn a_resend_after_the_state_committed_removes_the_journal_and_sends_nothing() {
+    let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
     let state_directory = fixture.state_path.parent().expect("state directory");
     ensure_private_directory(state_directory).expect("create state directory");
@@ -603,14 +772,16 @@ fn resume_finishes_after_state_commits_before_journal_removal() {
     let committed_state = fs::read(&fixture.state_path).expect("read committed state");
     assert!(fixture.journal_path().exists());
 
-    let outcome = enroll(None, &fixture.config_path, false, true).expect("resume enrollment");
-    assert!(matches!(outcome, EnrollmentOutcome::Enrolled { .. }));
+    let outcome = resend_staged_enrollment(&fixture.config_path)
+        .expect("resume enrollment")
+        .expect("a staged enrollment");
+    assert!(matches!(outcome, EnrollmentOutcome::AlreadyEnrolled));
     assert_eq!(
         fs::read(&fixture.state_path).expect("read recovered state"),
         committed_state
     );
     assert!(!fixture.journal_path().exists());
-    server.finish_one();
+    assert!(server.finish().is_empty());
 }
 
 #[test]
@@ -663,7 +834,7 @@ fn replacement_resume_recognizes_a_startup_promotion_before_journal_cleanup() {
     let promoted_state = fs::read(&fixture.state_path).expect("read promoted state");
     assert!(fixture.journal_path().exists());
 
-    let outcome = enroll(None, &fixture.config_path, false, true)
+    let outcome = resend_staged_replacement(&fixture.config_path)
         .expect("resume replacement after startup promotion");
     assert!(matches!(
         outcome,
@@ -711,9 +882,10 @@ fn resume_sends_an_expired_journal_instead_of_applying_local_expiry() {
     let server = ScriptedHttpServer::respond(enrollment_response());
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, expired_time());
     assert!(matches!(
-        read_activation_artifact(&fixture.activation_path, DeploymentMode::Development),
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()),
         Err(EnrollmentError::ExpiredArtifact)
     ));
+    assert!(!fixture.journal_path().exists());
 
     let state_directory = fixture.state_path.parent().expect("state directory");
     ensure_private_directory(state_directory).expect("create state directory");
@@ -723,18 +895,56 @@ fn resume_sends_an_expired_journal_instead_of_applying_local_expiry() {
         false,
     )
     .expect("stage expired journal");
-    let outcome = enroll(None, &fixture.config_path, false, true).expect("resume expired journal");
+    let outcome = resend_staged_enrollment(&fixture.config_path)
+        .expect("resume expired journal")
+        .expect("a staged enrollment");
     assert!(matches!(outcome, EnrollmentOutcome::Enrolled { .. }));
     assert!(!fixture.journal_path().exists());
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-6
+// REQ-RUNNERENROLL-6: the key file `runner join-key issue` writes is created private and owned by
+// the caller, and never replaces an existing path or follows a symbolic link.
 #[test]
-fn activation_file_is_created_private_and_never_replaces_an_existing_path() {
+fn artifact_file_is_created_private_and_never_replaces_an_existing_path() {
     let directory = tempfile::TempDir::new().expect("create directory");
     fs::set_permissions(directory.path(), Permissions::from_mode(0o700))
         .expect("protect directory");
+    let path = directory.path().join("key.json");
+    let destination = path.to_str().expect("key path should be UTF-8");
+
+    ArtifactDestination::prepare(destination)
+        .expect("prepare key file")
+        .write(b"first key\n")
+        .expect("write key file");
+    let metadata = fs::metadata(&path).expect("key file metadata");
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+    assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+    assert!(matches!(
+        ArtifactDestination::prepare(destination),
+        Err(PrivateArtifactError::Create(_))
+    ));
+    assert_eq!(fs::read(&path).expect("reread key file"), b"first key\n");
+
+    let customer_file = directory.path().join("customer.txt");
+    fs::write(&customer_file, b"customer content").expect("write customer file");
+    let link = directory.path().join("link.json");
+    std::os::unix::fs::symlink(&customer_file, &link).expect("create symbolic link");
+    assert!(matches!(
+        ArtifactDestination::prepare(link.to_str().expect("link path should be UTF-8")),
+        Err(PrivateArtifactError::Create(_))
+    ));
+    assert_eq!(
+        fs::read(&customer_file).expect("read customer file"),
+        b"customer content"
+    );
+}
+
+// REQ-RUNNERENROLL-6, REQ-RUNNERENROLL-167: a single-runner key is written as one line of
+// JSON, as a pool key is, and a key file an earlier release wrote on several lines reads as the
+// same key.
+#[test]
+fn an_activation_is_written_on_one_line_and_an_indented_one_still_reads() {
     let artifact = ActivationArtifact {
         schema_version: 1,
         activation_url: format!(
@@ -744,50 +954,100 @@ fn activation_file_is_created_private_and_never_replaces_an_existing_path() {
         runner_id: RUNNER_ID.to_owned(),
         expires_at: future_time(),
     };
-    let path = directory.path().join("activation.json");
-    let destination = path.to_str().expect("activation path should be UTF-8");
+    let mut line = Vec::new();
+    artifact.write_json(&mut line).expect("write activation");
+    let text = String::from_utf8(line).expect("activation is UTF-8");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(text.ends_with('\n'));
 
-    write_activation_file(destination, &artifact).expect("write activation file");
-    let metadata = fs::metadata(&path).expect("activation file metadata");
-    assert_eq!(metadata.mode() & 0o777, 0o600);
-    assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
-    let written = fs::read(&path).expect("read activation file");
-    assert!(matches!(
-        write_activation_file(destination, &artifact),
-        Err(EnrollmentError::ArtifactWrite)
-    ));
-    assert_eq!(fs::read(&path).expect("reread activation file"), written);
+    let directory = tempfile::TempDir::new().expect("create directory");
+    let path = directory.path().join("indented.json");
+    let indented = serde_json::to_vec_pretty(
+        &serde_json::from_str::<serde_json::Value>(&text).expect("activation is JSON"),
+    )
+    .expect("indent activation");
+    let mut file = create_new_private_file(&path).expect("create activation file");
+    file.write_all(&indented)
+        .expect("write indented activation");
+    file.sync_all().expect("sync activation file");
 
-    let customer_file = directory.path().join("customer.txt");
-    fs::write(&customer_file, b"customer content").expect("write customer file");
-    let link = directory.path().join("link.json");
-    std::os::unix::fs::symlink(&customer_file, &link).expect("create symbolic link");
-    assert!(matches!(
-        write_activation_file(link.to_str().expect("link path should be UTF-8"), &artifact),
-        Err(EnrollmentError::ArtifactWrite)
-    ));
-    assert_eq!(
-        fs::read(&customer_file).expect("read customer file"),
-        b"customer content"
-    );
+    let read = single_runner_key(&path);
+    assert_eq!(read.runner_id(), RUNNER_ID);
+    assert_eq!(read.activation_token, artifact.activation_token);
+}
+
+// REQ-RUNNERENROLL-167: the two kinds of key are told apart by the member each closed
+// document requires, never by an option, on one line or indented as an earlier release wrote
+// it; a document that holds neither member or both is no key.
+#[test]
+fn a_key_is_a_single_runner_key_or_a_pool_key_by_what_its_document_holds() {
+    let single_runner = serde_json::json!({
+        "schemaVersion": 1,
+        "activationUrl": format!(
+            "http://127.0.0.1:9/v1/runner-enrollments/{ACTIVATION_ID}/activate"
+        ),
+        "activationToken": format!("{ACTIVATION_ID}.{ACTIVATION_SECRET}"),
+        "runnerId": RUNNER_ID,
+        "expiresAt": future_time()
+    });
+    let pool = serde_json::json!({
+        "schemaVersion": 1,
+        "joinUrl": format!("http://127.0.0.1:9/v1/runner-join-keys/{JOIN_KEY_ID}/join"),
+        "joinKeyId": JOIN_KEY_ID,
+        "joinToken": format!("{JOIN_KEY_ID}.{JOIN_SECRET}"),
+        "expiresAt": future_time()
+    });
+    let layouts = |document: &serde_json::Value| {
+        [
+            document.to_string(),
+            serde_json::to_string_pretty(document).expect("indent key"),
+        ]
+    };
+
+    for text in layouts(&single_runner) {
+        let Ok(JoinKey::SingleRunner(key)) = JoinKey::parse(text.as_bytes()) else {
+            panic!("a single-runner key does not read as one: {text}");
+        };
+        assert_eq!(key.runner_id(), RUNNER_ID);
+    }
+    for text in layouts(&pool) {
+        let Ok(JoinKey::Pool(key)) = JoinKey::parse(text.as_bytes()) else {
+            panic!("a pool key does not read as one: {text}");
+        };
+        assert_eq!(key.join_key_id(), JOIN_KEY_ID);
+    }
+
+    let mut both = single_runner.clone();
+    both["joinUrl"] = pool["joinUrl"].clone();
+    let mut neither = single_runner.clone();
+    neither
+        .as_object_mut()
+        .expect("key is an object")
+        .remove("activationUrl");
+    for document in [both, neither, serde_json::json!(["not", "a", "key"])] {
+        for text in layouts(&document) {
+            assert!(
+                matches!(
+                    JoinKey::parse(text.as_bytes()),
+                    Err(EnrollmentError::InvalidJoinKey)
+                ),
+                "{text}"
+            );
+        }
+    }
 }
 
 // REQ-RUNNERENROLL-20
 #[test]
-fn enrollment_refuses_an_enrolled_host_and_a_replacement_for_another_runner() {
+fn enrollment_leaves_an_enrolled_host_as_it_is_and_refuses_a_replacement_for_another_runner() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
     let fixture = EnrollmentFixture::new(&server, OTHER_ACTIVATION_ID, future_time());
     fixture.write_current_state();
     let state = fs::read(&fixture.state_path).expect("read current state");
 
     assert!(matches!(
-        enroll(
-            Some(&fixture.activation_path),
-            &fixture.config_path,
-            false,
-            false,
-        ),
-        Err(EnrollmentError::StateAlreadyEnrolled)
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()),
+        Ok(EnrollmentOutcome::AlreadyEnrolled)
     ));
 
     let mut other_runner = fixture.artifact(&server, OTHER_ACTIVATION_ID, future_time());
@@ -795,7 +1055,7 @@ fn enrollment_refuses_an_enrolled_host_and_a_replacement_for_another_runner() {
     let other_runner_path = fixture.root.path().join("other-runner-activation.json");
     write_artifact(&other_runner_path, &other_runner);
     assert!(matches!(
-        enroll(Some(&other_runner_path), &fixture.config_path, true, false),
+        enroll_replacement(&fixture.config_path, single_runner_key(&other_runner_path)),
         Err(EnrollmentError::RunnerMismatch)
     ));
 
@@ -814,12 +1074,7 @@ fn an_unresolved_journal_refuses_a_different_activation_until_resumed() {
     ]);
     let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
     assert!(matches!(
-        enroll(
-            Some(&fixture.activation_path),
-            &fixture.config_path,
-            false,
-            false,
-        ),
+        enroll_unless_enrolled(&fixture.config_path, fixture.key()),
         Err(EnrollmentError::NetworkAmbiguous(
             AmbiguousCause::CloudUnavailable(500)
         ))
@@ -830,7 +1085,7 @@ fn an_unresolved_journal_refuses_a_different_activation_until_resumed() {
     let other_path = fixture.root.path().join("other-activation.json");
     write_artifact(&other_path, &other);
     assert!(matches!(
-        enroll(Some(&other_path), &fixture.config_path, false, false),
+        enroll_unless_enrolled(&fixture.config_path, single_runner_key(&other_path)),
         Err(EnrollmentError::UnresolvedJournal)
     ));
     assert_eq!(
@@ -839,11 +1094,13 @@ fn an_unresolved_journal_refuses_a_different_activation_until_resumed() {
     );
 
     assert!(matches!(
-        enroll(None, &fixture.config_path, false, true).expect("resume to a definite outcome"),
+        resend_staged_enrollment(&fixture.config_path)
+            .expect("resume to a definite outcome")
+            .expect("a staged enrollment"),
         EnrollmentOutcome::Gone { .. }
     ));
     assert!(matches!(
-        enroll(Some(&other_path), &fixture.config_path, false, false)
+        enroll_unless_enrolled(&fixture.config_path, single_runner_key(&other_path))
             .expect("enroll the different activation after resolution"),
         EnrollmentOutcome::Enrolled { .. }
     ));
@@ -889,6 +1146,11 @@ impl EnrollmentFixture {
             config_path,
             state_path,
         }
+    }
+
+    /// The fixture's single-runner key, read from its file as `serve` reads it.
+    fn key(&self) -> ActivationArtifact {
+        single_runner_key(&self.activation_path)
     }
 
     fn artifact(
@@ -948,6 +1210,14 @@ fn activation_artifact(
         activation_token: format!("{activation_id}.{ACTIVATION_SECRET}"),
         runner_id: RUNNER_ID.to_owned(),
         expires_at,
+    }
+}
+
+/// The single-runner key in the file at `path`.
+fn single_runner_key(path: &Path) -> ActivationArtifact {
+    match JoinKey::read_file(path).expect("read single-runner key") {
+        JoinKey::SingleRunner(artifact) => artifact,
+        JoinKey::Pool(_) => panic!("{} holds a pool key", path.display()),
     }
 }
 
@@ -1178,18 +1448,13 @@ fn a_staged_join_names_its_journal_and_key_to_a_start_with_another_key_or_an_enr
     ));
     assert_eq!(staged(error), expected);
 
-    // Enrollment, resumed or with an activation, cannot resolve it either.
-    let resumed = enroll(None, &fixture.config_path, false, true)
-        .expect_err("enrollment's resume cannot send a join");
+    // Enrollment, resent or with a single-runner key, cannot resolve it either.
+    let resumed = resend_staged_enrollment(&fixture.config_path)
+        .expect_err("an enrollment's resend cannot send a join");
     assert!(matches!(resumed, EnrollmentError::UnresolvedJoin { .. }));
     assert_eq!(staged(resumed), expected);
-    let activated = enroll(
-        Some(&fixture.activation_path),
-        &fixture.config_path,
-        false,
-        false,
-    )
-    .expect_err("an activation cannot supersede a staged join");
+    let activated = enroll_unless_enrolled(&fixture.config_path, fixture.key())
+        .expect_err("an activation cannot supersede a staged join");
     assert!(matches!(activated, EnrollmentError::UnresolvedJoin { .. }));
     assert_eq!(staged(activated), expected);
 
@@ -2632,70 +2897,104 @@ fn an_enrolled_host_accepts_only_the_recorded_organization_and_pool_or_their_ids
     let state = fs::read(&fixture.state_path).expect("read runner state");
     let pool = || RegistrationTarget::Pool(POOL.to_owned());
     let pool_id = || RegistrationTarget::Pool(POOL_ID.to_owned());
+    let other_pool = || RegistrationTarget::Pool("other".to_owned());
+    let personal = || RegistrationTarget::Personal;
     let pool_record = serde_json::json!({"kind": "pool", "pool": POOL, "poolId": POOL_ID});
     let personal_record = serde_json::json!({"kind": "personal"});
     let other_runner = "rnr_01k0z6r1w8f4jy2m7q9v3x5abd";
 
-    // Each case: the record, the options of the start, and whether they match.
+    // Each case: the record, the options of the start, and whether they match. A start
+    // that names no organization compares the mode and the pool alone.
     let cases = [
-        (&pool_record, RUNNER_ID, ORGANIZATION, pool(), true),
-        (&pool_record, RUNNER_ID, ORGANIZATION_ID, pool(), true),
-        (&pool_record, RUNNER_ID, ORGANIZATION, pool_id(), true),
-        (&pool_record, RUNNER_ID, ORGANIZATION_ID, pool_id(), true),
-        (&pool_record, RUNNER_ID, "other", pool(), false),
-        (&pool_record, RUNNER_ID, POOL_ID, pool(), false),
+        (&pool_record, RUNNER_ID, Some(ORGANIZATION), pool(), true),
+        (&pool_record, RUNNER_ID, Some(ORGANIZATION_ID), pool(), true),
+        (&pool_record, RUNNER_ID, Some(ORGANIZATION), pool_id(), true),
         (
             &pool_record,
             RUNNER_ID,
-            ORGANIZATION,
-            RegistrationTarget::Pool("other".to_owned()),
+            Some(ORGANIZATION_ID),
+            pool_id(),
+            true,
+        ),
+        (&pool_record, RUNNER_ID, None, pool(), true),
+        (&pool_record, RUNNER_ID, None, pool_id(), true),
+        (&pool_record, RUNNER_ID, Some("other"), pool(), false),
+        (&pool_record, RUNNER_ID, Some(POOL_ID), pool(), false),
+        (
+            &pool_record,
+            RUNNER_ID,
+            Some(ORGANIZATION),
+            other_pool(),
             false,
         ),
+        (&pool_record, RUNNER_ID, None, other_pool(), false),
         (
             &pool_record,
             RUNNER_ID,
-            ORGANIZATION,
+            Some(ORGANIZATION),
             RegistrationTarget::Pool(ORGANIZATION_ID.to_owned()),
             false,
         ),
         (
             &pool_record,
             RUNNER_ID,
-            ORGANIZATION,
-            RegistrationTarget::Personal,
+            Some(ORGANIZATION),
+            personal(),
             false,
         ),
-        (&pool_record, other_runner, ORGANIZATION, pool(), false),
+        (&pool_record, RUNNER_ID, None, personal(), false),
+        (
+            &pool_record,
+            other_runner,
+            Some(ORGANIZATION),
+            pool(),
+            false,
+        ),
+        (&pool_record, other_runner, None, pool(), false),
         (
             &personal_record,
             RUNNER_ID,
-            ORGANIZATION,
-            RegistrationTarget::Personal,
+            Some(ORGANIZATION),
+            personal(),
             true,
         ),
         (
             &personal_record,
             RUNNER_ID,
-            ORGANIZATION_ID,
-            RegistrationTarget::Personal,
+            Some(ORGANIZATION_ID),
+            personal(),
             true,
+        ),
+        (&personal_record, RUNNER_ID, None, personal(), true),
+        (
+            &personal_record,
+            RUNNER_ID,
+            Some("other"),
+            personal(),
+            false,
         ),
         (
             &personal_record,
             RUNNER_ID,
-            "other",
-            RegistrationTarget::Personal,
+            Some(ORGANIZATION),
+            pool(),
             false,
         ),
-        (&personal_record, RUNNER_ID, ORGANIZATION, pool(), false),
-        (&personal_record, RUNNER_ID, ORGANIZATION, pool_id(), false),
+        (
+            &personal_record,
+            RUNNER_ID,
+            Some(ORGANIZATION),
+            pool_id(),
+            false,
+        ),
+        (&personal_record, RUNNER_ID, None, pool(), false),
     ];
     for (target, runner_id, organization, options, matches) in cases {
         let record = write_record(&fixture, &complete_record(target.clone(), runner_id));
 
         let confirmed = confirm_registration(&fixture.config_path, organization, &options);
 
-        let case = format!("{target} {runner_id} {organization} {options:?}");
+        let case = format!("{target} {runner_id} {organization:?} {options:?}");
         if matches {
             confirmed.unwrap_or_else(|error| panic!("{case}: {error:?}"));
         } else {

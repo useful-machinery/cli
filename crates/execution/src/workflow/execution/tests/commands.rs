@@ -805,6 +805,157 @@ async fn command_handler_failures_stop_once_without_authorizing_recheck() {
     .await;
 }
 
+/// Runs a one-step workflow `check` whose target appends to `target-count.txt` and a
+/// handler, when declared, to `handler-count.txt`; returns the step's settled runtime and
+/// both counts.
+async fn run_classified_check(
+    step: &str,
+) -> (
+    crate::workflow::runtime::StepRuntimeState<
+        StepFailureCause,
+        crate::workflow::value::CapturedValue,
+    >,
+    usize,
+    usize,
+) {
+    let source = format!("schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n{step}");
+    let fixture = execution_fixture(
+        &source,
+        ResolvedInputs::default(),
+        EnvironmentSnapshot::new([(OsString::from("PATH"), env::var_os("PATH").unwrap())]),
+        CancellationSource::new(),
+        1,
+        1024,
+    );
+    let coordinated = crate::workflow::step_runtime::execute_workflow_observed(
+        fixture.admitted,
+        &fixture.artifacts,
+        &fixture.inputs,
+        &StepDiagnosticLog::default(),
+        TestClock,
+        NoopCommitPort,
+        NoopExecutionObserver,
+        AgentExecution::disabled(),
+        crate::workflow::process_group::ProcessGuardRegistry::default(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        coordinated.state.workflow,
+        WorkflowState::Failed { .. }
+    ));
+    let count =
+        |name: &str| fs::read(fixture.execution_root.join(name)).map_or(0, |bytes| bytes.len());
+    (
+        coordinated.state.steps["check"].clone(),
+        count("target-count.txt"),
+        count("handler-count.txt"),
+    )
+}
+
+fn failed_with_exit(
+    runtime: &crate::workflow::runtime::StepRuntimeState<
+        StepFailureCause,
+        crate::workflow::value::CapturedValue,
+    >,
+    exit_code: i32,
+) -> bool {
+    matches!(
+        &runtime.state,
+        StepState::Failed { detail }
+            if detail.phase == FailurePhase::Execution
+                && detail.code == FailureCode::CommandExit
+                && detail.exit_code == Some(exit_code)
+    )
+}
+
+// INV-ENGINE-47, REQ-WFRECOVERY-66, REQ-WFRECOVERY-65
+#[tokio::test]
+async fn infrastructure_classification_settles_the_failure_and_starts_no_round() {
+    use crate::workflow::evidence::FailureClass;
+    use crate::workflow::runtime::RecoveryTerminalDisposition;
+
+    with_watchdog(async {
+        let recheck_handler = r#"      handler:
+        kind: cmd
+        command:
+          argv: [/bin/sh, -c, "printf x >> handler-count.txt; printf '%s' '{\"schemaVersion\":1,\"decision\":\"recheck\",\"summary\":\"retry\",\"reason\":\"maybe\"}' > \"$USEFUL_RECOVERY_RESULT\""]
+"#;
+        let exits_75 = "    command:\n      argv: [/bin/sh, -c, \"printf x >> target-count.txt; exit 75\"]\n";
+
+        // (a) A listed code with rounds and a handler left: no round, no handler.
+        let (runtime, targets, handlers) = run_classified_check(&format!(
+            "    infrastructureExitCodes: [75]\n    recovery:\n      retries: 2\n{recheck_handler}{exits_75}"
+        ))
+        .await;
+        assert_eq!((targets, handlers), (1, 0));
+        let recovery = runtime.recovery.as_ref().unwrap();
+        assert!(recovery.rounds.is_empty());
+        assert_eq!(recovery.terminal_disposition, None);
+        assert_eq!(runtime.failure_class, Some(FailureClass::Infrastructure));
+        assert!(failed_with_exit(&runtime, 75));
+
+        // (b) A listed code with no recovery.
+        let (runtime, targets, _) =
+            run_classified_check(&format!("    infrastructureExitCodes: [75]\n{exits_75}")).await;
+        assert_eq!(targets, 1);
+        assert!(runtime.recovery.is_none());
+        assert_eq!(runtime.failure_class, Some(FailureClass::Infrastructure));
+        assert!(failed_with_exit(&runtime, 75));
+
+        // (c) An unlisted exit opens a round; the listed exit of execution 2 ends recovery in
+        // the execution form.
+        let (runtime, targets, _) = run_classified_check(
+            "    infrastructureExitCodes: [75]\n    recovery:\n      retries: 2\n    command:\n      argv: [/bin/sh, -c, \"printf x >> target-count.txt; [ $(wc -c < target-count.txt) -ge 2 ] && exit 75; exit 1\"]\n",
+        )
+        .await;
+        assert_eq!(targets, 2);
+        let recovery = runtime.recovery.as_ref().unwrap();
+        assert_eq!(recovery.rounds.len(), 1);
+        assert_eq!(
+            recovery.terminal_disposition,
+            Some(RecoveryTerminalDisposition::InfrastructureExecution {
+                execution_number: TargetExecutionNumber::fixture(2),
+            })
+        );
+        assert_eq!(runtime.failure_class, Some(FailureClass::Infrastructure));
+        assert!(failed_with_exit(&runtime, 75));
+
+        // (d) An unlisted exit is an ordinary failure.
+        let (runtime, targets, _) = run_classified_check(
+            "    infrastructureExitCodes: [75]\n    command:\n      argv: [/bin/sh, -c, \"printf x >> target-count.txt; exit 1\"]\n",
+        )
+        .await;
+        assert_eq!(targets, 1);
+        assert_eq!(runtime.failure_class, None);
+        assert!(failed_with_exit(&runtime, 1));
+
+        // (e) A handler's `infrastructure` decision is the other route.
+        let (runtime, targets, handlers) = run_classified_check(
+            r#"    recovery:
+      retries: 2
+      handler:
+        kind: cmd
+        command:
+          argv: [/bin/sh, -c, "printf x >> handler-count.txt; printf '%s' '{\"schemaVersion\":1,\"decision\":\"infrastructure\",\"summary\":\"host\",\"reason\":\"disk full\"}' > \"$USEFUL_RECOVERY_RESULT\""]
+    command:
+      argv: [/bin/sh, -c, "printf x >> target-count.txt; exit 1"]
+"#,
+        )
+        .await;
+        assert_eq!((targets, handlers), (1, 1));
+        assert_eq!(
+            runtime.recovery.as_ref().unwrap().terminal_disposition,
+            Some(RecoveryTerminalDisposition::Infrastructure {
+                round: RecoveryRoundNumber::fixture(1),
+            })
+        );
+        assert_eq!(runtime.failure_class, Some(FailureClass::Infrastructure));
+        assert!(failed_with_exit(&runtime, 1));
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn configured_inactive_local_recovery_preserves_target_execution() {
     with_watchdog(async {

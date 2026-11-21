@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "command": "useful workflow run status",
-  "outcome": "status",
+  "command": "useful workflow run show",
+  "outcome": "shown",
   "exitStatus": 1,
   "error": {
     "code": "run_directory_invalid",
-    "message": "An error envelope cannot claim a status outcome."
+    "message": "An error envelope cannot claim a shown outcome."
   }
 }

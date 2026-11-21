@@ -73,6 +73,8 @@ pub enum Kind {
     RunWorkflowWaitExternal,
     #[serde(rename = "children")]
     RunWorkflowWaitChildren,
+    #[serde(rename = "host")]
+    RunWorkflowWaitHost,
 }
 
 impl Default for Kind {

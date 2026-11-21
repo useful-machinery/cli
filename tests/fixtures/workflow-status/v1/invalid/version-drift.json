@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "command": "useful workflow run status",
+  "command": "useful workflow run show",
   "outcome": "error",
   "exitStatus": 1,
   "error": {

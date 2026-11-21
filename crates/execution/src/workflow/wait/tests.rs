@@ -48,6 +48,7 @@ fn entered(kind: WaitKind, step: &str, then: &str, on_hand_back: Option<&str>) -
         rule: None,
         interrupted: None,
         kept: None,
+        counted: false,
     }
 }
 
@@ -256,7 +257,7 @@ fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait()
     let wait = record(WaitKind::Answer, "review", "build", None);
     let run = answered_run(&wait);
     // The attempt that continues the resolved wait reads the control payload's string fields.
-    let controls = crate::workflow::local_run::attempt_controls(run.path(), 2)
+    let controls = crate::workflow::local_run::attempt_controls(run.path(), 2, None)
         .unwrap()
         .controls;
     assert_eq!(
@@ -270,7 +271,7 @@ fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait()
     // `continued`, an abandoned attempt) does not continue from that wait: `build` reached
     // again has no `wait.<field>`, while `controls.answers` still carries the latest answer.
     fs::create_dir_all(run.path().join("attempts/000002")).unwrap();
-    let controls = crate::workflow::local_run::attempt_controls(run.path(), 3)
+    let controls = crate::workflow::local_run::attempt_controls(run.path(), 3, None)
         .unwrap()
         .controls;
     assert_eq!(controls.wait, None);
@@ -291,7 +292,7 @@ fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait()
         json!({"agentProfiles": profiles, "note": "again"}),
     );
     fs::create_dir_all(run.path().join("attempts/000002")).unwrap();
-    let resolved = crate::workflow::local_run::attempt_controls(run.path(), 3).unwrap();
+    let resolved = crate::workflow::local_run::attempt_controls(run.path(), 3, None).unwrap();
     assert_eq!(resolved.controls.wait, None);
     assert_eq!(resolved.replacement, Some(("build".to_owned(), profiles)));
 }
@@ -314,7 +315,7 @@ fn attempt_controls_resume_the_element_of_a_wait_continuing_at_the_waiting_step(
         )
         .unwrap();
         let run = answered_run(&wait);
-        let controls = crate::workflow::local_run::attempt_controls(run.path(), 2)
+        let controls = crate::workflow::local_run::attempt_controls(run.path(), 2, None)
             .unwrap()
             .controls;
         assert_eq!(controls.resume_item, expected, "{then} {item:?}");
@@ -337,7 +338,7 @@ fn attempt_controls_resume_the_element_of_a_wait_continuing_at_the_waiting_step(
     .unwrap();
     let run = answered_run(&wait);
     fs::create_dir_all(run.path().join("attempts/000002")).unwrap();
-    let controls = crate::workflow::local_run::attempt_controls(run.path(), 3)
+    let controls = crate::workflow::local_run::attempt_controls(run.path(), 3, None)
         .unwrap()
         .controls;
     assert_eq!(controls.resume_item, None);
@@ -365,7 +366,7 @@ fn attempt_controls_carry_a_kept_wait_to_the_attempt_it_starts_next() {
     )
     .unwrap();
     for attempt in [2, 3] {
-        let controls = crate::workflow::local_run::attempt_controls(run.path(), attempt)
+        let controls = crate::workflow::local_run::attempt_controls(run.path(), attempt, None)
             .unwrap()
             .controls;
         assert_eq!(
@@ -465,7 +466,7 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     };
     let at_fix = |notes| Some(("fix".to_owned(), fields(notes)));
     let wait_of = |run: &tempfile::TempDir, attempt| {
-        crate::workflow::local_run::attempt_controls(run.path(), attempt)
+        crate::workflow::local_run::attempt_controls(run.path(), attempt, None)
             .unwrap()
             .controls
             .wait
@@ -535,10 +536,15 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     let nested = tempfile::tempdir().unwrap();
     write_attempt_wait(nested.path(), 1, Some(&review));
     write_attempt_wait(nested.path(), 2, Some(&repair));
-    let controls =
-        crate::workflow::local_run::AttemptControls::nested(root.path(), nested.path(), 3, &prefix)
-            .unwrap()
-            .controls;
+    let controls = crate::workflow::local_run::AttemptControls::nested(
+        root.path(),
+        nested.path(),
+        3,
+        &prefix,
+        None,
+    )
+    .unwrap()
+    .controls;
     assert_eq!(controls.wait, at_fix(Some("tighten it")));
 }
 

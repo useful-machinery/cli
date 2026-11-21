@@ -1,18 +1,18 @@
-//! Provider grant operations for the signed-in member over the generated principals client.
+//! The OAuth grant operations `useful account integration` makes for the signed-in member over the
+//! generated principals client: a provider's consent and a grant's uses.
 //!
 //! Responses decode leniently: an added server member never breaks the CLI, and nothing
 //! the models do not name (grant material above all) can reach a caller.
 use std::fmt;
 
 use reqwest::{StatusCode, Url};
-use serde::Deserialize;
 
 use super::generated::{apis, models};
 use super::http_client::zeroize_generated_bearer_access_token;
 use super::member_grants::{PROVIDER_VOCABULARY, oauth_provider};
 use super::resource::{
-    ProblemFailure, ProblemRow, ResourceFailure, classify_problem_error, confirmed_delete,
-    expect_problem_status, receive_raw, resource_configuration, validate_json_media_type,
+    ProblemFailure, ProblemRow, ResourceFailure, classify_problem_error, expect_problem_status,
+    receive_raw, resource_configuration, validate_json_media_type,
 };
 use super::{HttpTransportPolicy, UnreachableCategory, problem};
 
@@ -23,16 +23,6 @@ pub type GrantSession = models::ProviderGrantSession;
 pub type GrantState = models::provider_grant::State;
 pub type GrantSessionStatus = models::provider_grant_session::Status;
 pub type GrantSessionReason = models::provider_grant_session::ReasonCode;
-
-/// One page of the member's OAuth grants as `GET /v1/me/grants` without `kind` answers
-/// it. The contract's `GrantList` item also carries native grants' members; a list that
-/// names no kind holds OAuth grants alone, each with every member `Grant` names.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct GrantList {
-    pub items: Vec<Grant>,
-    #[serde(rename = "nextCursor")]
-    pub next_cursor: Option<String>,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GrantFailure {
@@ -184,30 +174,6 @@ impl GrantApi {
         Ok(session)
     }
 
-    /// Starts a consent at the provider of one of the member's own identity links.
-    pub fn start_for_identity(
-        &self,
-        identity_id: &str,
-        key: &str,
-    ) -> Result<GrantSession, GrantFailure> {
-        #[allow(
-            deprecated,
-            reason = "the earlier `useful auth grant` commands keep this route for one release"
-        )]
-        let session = apis::principals_api::create_identity_grant_session(
-            &self.configuration,
-            identity_id,
-            key,
-            Some(PROVIDER_VOCABULARY),
-        )
-        .map_err(classify_error)?;
-        let session = validate_session(session, None)?;
-        if session.identity_id.as_deref() != Some(identity_id) {
-            return Err(invalid());
-        }
-        Ok(session)
-    }
-
     // The generated GET discards response headers on errors. Observe the same generated
     // model through its configured client so Retry-After survives rate-limited polling.
     pub fn session(&self, id: &str) -> Result<GrantSession, GrantFailure> {
@@ -229,33 +195,6 @@ impl GrantApi {
         validate_session(session, Some(id))
     }
 
-    pub fn list(
-        &self,
-        limit: Option<i32>,
-        cursor: Option<&str>,
-    ) -> Result<GrantList, GrantFailure> {
-        let endpoint = format!(
-            "{}/v1/me/grants",
-            self.configuration.base_path.trim_end_matches('/')
-        );
-        let mut request =
-            super::generated_api_request(&self.configuration, reqwest::Method::GET, &endpoint);
-        if let Some(limit) = limit {
-            request = request.query(&[("limit", limit.to_string())]);
-        }
-        if let Some(cursor) = cursor {
-            request = request.query(&[("cursor", cursor)]);
-        }
-        request = request.query(&[("vocabulary", PROVIDER_VOCABULARY)]);
-        let response = expect_problem_status(receive_raw(request)?, StatusCode::OK, &PROBLEMS)?;
-        validate_json_media_type(&response.headers)?;
-        let page: GrantList = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-        if !page.items.iter().all(valid_grant) {
-            return Err(invalid());
-        }
-        Ok(page)
-    }
-
     pub fn uses(
         &self,
         grant_id: &str,
@@ -274,15 +213,6 @@ impl GrantApi {
             return Err(invalid());
         }
         Ok(page)
-    }
-
-    pub fn revoke(&self, grant_id: &str, key: &str) -> Result<(), GrantFailure> {
-        let endpoint = format!(
-            "{}/v1/me/grants/{}",
-            self.configuration.base_path.trim_end_matches('/'),
-            apis::urlencode(grant_id)
-        );
-        confirmed_delete(&self.configuration, &endpoint, key, &PROBLEMS)
     }
 }
 

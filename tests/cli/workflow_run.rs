@@ -55,15 +55,13 @@ pub(super) fn run_record(run_directory: &Path) -> serde_json::Value {
 /// Validates the `--json` document of run, retry and continue. The view schema is
 /// registered under its `$id` so the run schema's `$ref` resolves without retrieval.
 pub(super) fn workflow_run_schema() -> jsonschema::Validator {
-    let view: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/schemas/workflow-view-result-v1.schema.json"
-    )))
+    let view: serde_json::Value = serde_json::from_str(include_str!(
+        "../../schemas/workflow-view-result-v1.schema.json"
+    ))
     .unwrap();
-    let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/schemas/workflow-run-result-v1.schema.json"
-    )))
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../schemas/workflow-run-result-v1.schema.json"
+    ))
     .unwrap();
     let view_id = view["$id"].as_str().unwrap().to_owned();
     let registry = jsonschema::Registry::new()
@@ -403,7 +401,7 @@ const MIRROR_VARIABLES: [&str; 4] = [
 ];
 
 pub(super) fn isolated_command(args: &[String]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args(args)
         .env_remove(CREDENTIALS_FILE_VARIABLE)
@@ -684,10 +682,8 @@ exports:
 }
 
 fn response_pi_execution() -> String {
-    let frames = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/execution/src/workflow/pi/fixtures/response-success.jsonl"
-    ));
+    let frames =
+        include_str!("../../crates/execution/src/workflow/pi/fixtures/response-success.jsonl");
     let remaining = frames
         .lines()
         .skip(1)
@@ -828,6 +824,111 @@ exports:
   response:
     ref: outputs.answer.response
 "#
+}
+
+// REQ-AGENT-4, REQ-AGENT-26
+#[test]
+#[ignore = "requires pinned harness"]
+fn pinned_real_codex_exports_the_loopback_response() {
+    pinned_response(
+        "codex",
+        "USEFUL_CODEX_CONFORMANCE_EXECUTABLE",
+        response_codex_agent_source(),
+        include_str!("../fixtures/harness-response/codex.jsonl"),
+        "/responses",
+    );
+}
+
+// REQ-AGENT-4, REQ-AGENT-26
+#[test]
+#[ignore = "requires pinned harness"]
+fn pinned_real_claude_code_exports_the_loopback_response() {
+    pinned_response(
+        "claude",
+        "USEFUL_CLAUDE_CODE_CONFORMANCE_EXECUTABLE",
+        response_claude_code_agent_source(),
+        include_str!("../fixtures/harness-response/claude.jsonl"),
+        "/v1/messages",
+    );
+}
+
+fn pinned_response(program: &str, variable: &str, workflow: &str, events: &str, route: &str) {
+    let executable = std::env::var_os(variable).expect("pinned harness executable");
+    let tools = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(executable, tools.path().join(program)).unwrap();
+    let stream = events
+        .lines()
+        .map(|line| {
+            let event: serde_json::Value = serde_json::from_str(line).unwrap();
+            let kind = event["type"].as_str().unwrap();
+            format!("event: {kind}\ndata: {line}\n\n")
+        })
+        .collect::<String>();
+    let server =
+        super::OneShotServer::respond("200 OK", Some("text/event-stream"), stream.as_bytes());
+    let origin = server.api_url.strip_suffix("/api").unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = home_dir.path().canonicalize().unwrap();
+    let (grants, model) = if program == "codex" {
+        ("CODEX_HOME, OPENAI_API_KEY", "gpt-5.5")
+    } else {
+        (
+            "CLAUDE_CONFIG_DIR, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, SHELL, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, DISABLE_UPDATES",
+            "fixture/claude",
+        )
+    };
+    let workflow = workflow.replacen(
+        "schemaVersion: 1",
+        &format!("schemaVersion: 1\nenvironmentPassthrough: [{grants}]"),
+        1,
+    );
+    let bundle = RunBundle::new(&workflow.replace("fixture/codex", model));
+    bundle.write_source("system.md", "Use the synthetic provider response.");
+    bundle.write_source("message.md", "qualification prompt");
+    let destination = bundle.result("pinned-response");
+    let mut command = Command::new(crate::executable());
+    command
+        .args(bundle.args(&destination))
+        .arg("--json")
+        .env_clear()
+        .env("PATH", fixture_path_with_host_tools(&[tools.path()]))
+        .env("HOME", &home)
+        .env("CI", "1");
+    if program == "codex" {
+        fs::write(home.join("config.toml"), format!("model_provider = 'loopback'\n[model_providers.loopback]\nname = 'Qualification provider'\nbase_url = '{origin}'\nenv_key = 'OPENAI_API_KEY'\nwire_api = 'responses'\nrequest_max_retries = 0\nstream_max_retries = 0\n")).unwrap();
+        command
+            .env("CODEX_HOME", &home)
+            .env("OPENAI_API_KEY", "loopback-fixture");
+    } else {
+        command
+            .env(
+                "SHELL",
+                std::env::var_os("USEFUL_CLAUDE_CODE_CONFORMANCE_SHELL")
+                    .unwrap_or_else(|| "/bin/sh".into()),
+            )
+            .env("CLAUDE_CONFIG_DIR", &home)
+            .env("ANTHROPIC_API_KEY", "loopback-fixture")
+            .env("ANTHROPIC_BASE_URL", origin)
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            .env("CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "1")
+            .env("DISABLE_UPDATES", "1");
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{program}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = server.finish();
+    assert!(request.starts_with(&format!("POST {route}")));
+    assert!(request.contains("qualification prompt"));
+    let result = result_json(&destination);
+    let export = result["exports"]["response"]["path"].as_str().unwrap();
+    assert_eq!(
+        fs::read(attempt_result(&destination).join(export)).unwrap(),
+        b"response from qualification provider"
+    );
 }
 
 fn response_codex_agent_source() -> &'static str {
@@ -1105,7 +1206,7 @@ fn conditional_skips_persist_for_steps_and_finalizers() {
     let status = run(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ]);
@@ -1124,6 +1225,8 @@ fn conditional_skips_persist_for_steps_and_finalizers() {
     assert_eq!(status["retry"]["eligible"], false);
 
     let validation = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -1561,10 +1664,7 @@ steps:
     assert!(deploy.get("startedAt").is_none());
     assert!(!bundle.execution_root.join("deployed.marker").exists());
 
-    for (command, schema) in [
-        ("view", workflow_view_schema()),
-        ("status", status_schema()),
-    ] {
+    for (command, schema) in [("view", workflow_view_schema()), ("show", status_schema())] {
         let inspected = run(&[
             "workflow".to_owned(),
             "run".to_owned(),
@@ -1754,7 +1854,7 @@ steps:
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -1851,7 +1951,7 @@ fn finalization_runs_after_ordinary_failure_and_is_durable_before_publication() 
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -1961,7 +2061,7 @@ fn settled_failed_run_is_published_with_recovery_finalization_and_truthful_expor
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -2397,6 +2497,8 @@ exports:
     fs::write(artifact.join("result.json"), result_bytes).unwrap();
 
     let validation = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -2457,6 +2559,8 @@ exports:
         "published-result mutation must not alter retained attempt evidence"
     );
     let invalid_profile = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -2477,6 +2581,8 @@ exports:
     *wrong_checksum.last_mut().unwrap() ^= 1;
     fs::write(&carrier_path, wrong_checksum).unwrap();
     let invalid_checksum = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -2540,6 +2646,8 @@ exports:
     let artifact = attempt_result(&destination);
     assert_eq!(fs::read_dir(artifact.join("exports")).unwrap().count(), 0);
     let validation = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -2722,7 +2830,7 @@ fn claude_code_only_run_pins_the_validated_executable_without_pi_or_path_fallbac
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -3006,7 +3114,7 @@ fn codex_only_response_and_no_value_use_the_selected_production_dispatcher() {
             let status = isolated_command(&[
                 "workflow".to_owned(),
                 "run".to_owned(),
-                "status".to_owned(),
+                "show".to_owned(),
                 destination.to_string_lossy().into_owned(),
                 "--json".to_owned(),
             ])
@@ -3106,7 +3214,7 @@ fn codex_native_failure_is_attributed_without_value_publication_or_fallback() {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -3388,6 +3496,7 @@ exports:
         "run".to_owned(),
         "retry".to_owned(),
         run_directory.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         bundle.execution_root().to_string_lossy().into_owned(),
         "--json".to_owned(),
@@ -3695,6 +3804,7 @@ fn interrupted_agent_can_be_abandoned_and_retried_without_an_active_ledger_entry
         "run".to_owned(),
         "retry".to_owned(),
         destination.to_string_lossy().into_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         bundle.execution_root().to_string_lossy().into_owned(),
         "--json".to_owned(),
@@ -4194,10 +4304,7 @@ fn pinned_real_pi_runs_the_complete_mixed_value_and_export_dag() {
     );
     bundle.write_source(
         "../execution/.pi/extensions/fake-provider.ts",
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/crates/execution/src/workflow/pi-json-v1-extension/src/conformance/fake-provider.ts"
-        )),
+        include_str!("../../crates/execution/src/workflow/pi-json-v1-extension/src/conformance/fake-provider.ts"),
     );
     bundle.write_source(
         "../execution/.pi/extensions/fixture-write.ts",
@@ -4224,7 +4331,7 @@ fn pinned_real_pi_runs_the_complete_mixed_value_and_export_dag() {
     let destination = bundle.result("mixed-agent");
     let mut args = bundle.args(&destination);
     args.insert(args.len() - 1, "--json".to_owned());
-    let output = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let output = Command::new(crate::executable())
         .args(args)
         .env_clear()
         .env("PATH", isolated_path.path())
@@ -4570,6 +4677,7 @@ fn json_run_executes_named_inputs_closed_stdin_publication_and_offline_boundarie
 // Exercise the terminal-host seam from the CLI integration suite without a process-global
 // handshake variable or a readiness assertion on rendered terminal text.
 // REQ-LOCALRUN-3, REQ-LOCALRUN-57, REQ-LOCALRUN-58
+#[cfg(feature = "rust-cli-tests")]
 #[tokio::test]
 async fn injected_tui_boundary_handshakes_help_and_quit_lifecycle() {
     use useful_execution::{
@@ -4711,32 +4819,7 @@ fn tui_releases_ownership_and_restores_before_summary_handoff() {
     let original_input_mode = rustix::termios::tcgetattr(&slave).unwrap();
     let mut process = spawn_tui_run(&bundle.args(&destination), master, slave);
 
-    let status_args = vec![
-        "workflow".to_owned(),
-        "run".to_owned(),
-        "status".to_owned(),
-        destination.to_string_lossy().into_owned(),
-        "--json".to_owned(),
-    ];
-    let status = poll_until(
-        "workflow status to observe released TUI ownership",
-        || {
-            let output = isolated_command(&status_args).output().unwrap();
-            if output.status.success() {
-                Ok(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap())
-            } else {
-                Err(String::from_utf8_lossy(&output.stderr).into_owned())
-            }
-        },
-        |observation| {
-            matches!(
-                observation,
-                Ok(status) if status["recovery"] == serde_json::json!({"status": "settled"})
-            )
-        },
-    )
-    .unwrap();
-    assert_eq!(status["recovery"], serde_json::json!({"status": "settled"}));
+    let status = shown_once_settled(&destination);
     assert_eq!(
         status["retry"],
         serde_json::json!({
@@ -4793,6 +4876,98 @@ fn tui_releases_ownership_and_restores_before_summary_handoff() {
     assert!(!transcript[restored + "\u{1b}[?1049l".len()..].contains("\u{1b}[?1049h"));
     assert!(transcript[summary..].contains("result succeeded · exit 0"));
     assert!(transcript[summary..].contains("attempts/000001/result"));
+}
+
+/// What `workflow run show --json` reports of the run at `destination` once it reports the
+/// run settled, which a run still open in the terminal interface reaches when it is released.
+#[cfg(target_os = "linux")]
+fn shown_once_settled(destination: &Path) -> serde_json::Value {
+    let status_args = vec![
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "show".to_owned(),
+        destination.to_string_lossy().into_owned(),
+        "--json".to_owned(),
+    ];
+    let status = poll_until(
+        "workflow status to observe released TUI ownership",
+        || {
+            let output = isolated_command(&status_args).output().unwrap();
+            if output.status.success() {
+                Ok(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap())
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).into_owned())
+            }
+        },
+        |observation| {
+            matches!(
+                observation,
+                Ok(status) if status["recovery"] == serde_json::json!({"status": "settled"})
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(status["recovery"], serde_json::json!({"status": "settled"}));
+    status
+}
+
+// REQ-LOCALRUN-3, REQ-LOCALRUN-58: while its first step runs the interface already has the
+// terminal's input in raw mode, and its output entered the alternate screen and hid the
+// cursor. A `q` pressed then does nothing: the interface is still open after the run is
+// released, and the next `q` closes it.
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_holds_the_terminal_from_its_first_step_and_ignores_q_until_the_run_is_released() {
+    use rustix::termios::LocalModes;
+
+    let bundle = RunBundle::new(
+        "schemaVersion: 1\nsteps:\n  hold:\n    kind: cmd\n    command:\n      argv: [sh, -c, \": > started; while [ -e hold ]; do sleep 0.05; done\"]\n",
+    );
+    let hold = bundle.execution_root().join("hold");
+    fs::write(&hold, "").unwrap();
+    let destination = bundle.result("tui-early-quit");
+    let (master, slave) = open_tui_pty();
+    let mut process = spawn_tui_run(&bundle.args(&destination), master, slave);
+    let started = bundle.execution_root().join("started");
+    poll_until(
+        "the held step starts",
+        || started.exists(),
+        |exists| *exists,
+    );
+
+    let input_mode = rustix::termios::tcgetattr(process.slave()).unwrap();
+    assert!(!input_mode.local_modes.contains(LocalModes::ICANON));
+    assert!(!input_mode.local_modes.contains(LocalModes::ECHO));
+    process.master_writer().write_all(b"q").unwrap();
+    process.master_writer().flush().unwrap();
+    // The key must reach the interface while the step still runs, not wait in the terminal
+    // until `q` is offered.
+    poll_until(
+        "the interface reads the early q",
+        || rustix::io::ioctl_fionread(process.slave()).unwrap(),
+        |unread| *unread == 0,
+    );
+
+    fs::remove_file(&hold).unwrap();
+    shown_once_settled(&destination);
+    // An interface that kept the early `q` would act on it as soon as it offers `q`, which
+    // it does by the time the run reads settled (REQ-LOCALRUN-59). Give it time to.
+    crate::sleep(std::time::Duration::from_millis(300));
+    assert!(process.child_mut().try_wait().unwrap().is_none());
+
+    process.master_writer().write_all(b"q").unwrap();
+    process.master_writer().flush().unwrap();
+    let (status, transcript) = process.wait_and_finish();
+    assert!(status.success());
+    let transcript = String::from_utf8_lossy(&transcript);
+    let entered = transcript
+        .find("\u{1b}[?1049h")
+        .expect("TUI must enter the alternate screen");
+    assert!(
+        transcript.contains("\u{1b}[?25l"),
+        "TUI must hide the cursor"
+    );
+    assert!(entered < transcript.rfind("\u{1b}[?1049l").unwrap());
 }
 
 #[cfg(target_os = "linux")]
@@ -5750,7 +5925,7 @@ fn cancellation_settles_with_a_full_unread_presentation_pipe() {
             assert_eq!(ready, [1]);
         }
         let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
-        let started = useful_support::monotonic_now();
+        let started = crate::monotonic_now();
         kill_process(pid, Signal::INT).unwrap();
         if force_abort {
             let mut event = [0_u8; 1];
@@ -5765,7 +5940,7 @@ fn cancellation_settles_with_a_full_unread_presentation_pipe() {
         )
         .unwrap();
         assert!(
-            useful_support::monotonic_now().saturating_duration_since(started)
+            crate::monotonic_now().saturating_duration_since(started)
                 < std::time::Duration::from_secs(10),
             "json={json}, finalizer={finalizer}, shared_pipe={shared_pipe}, force_abort={force_abort}"
         );
@@ -5783,6 +5958,78 @@ fn cancellation_settles_with_a_full_unread_presentation_pipe() {
         }
         drop(reader);
     }
+}
+
+/// Delays the late reader past the earlier 100 ms final-output wait and well inside the
+/// current one, so the reader is late in the sense REQ-LOCALRUN-138 names.
+#[cfg(target_os = "linux")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the reader's lateness is the scenario's input, not a synchronization"
+)]
+fn read_after_the_former_output_wait() {
+    std::thread::sleep(std::time::Duration::from_millis(300));
+}
+
+// REQ-LOCALRUN-138, REQ-WFEXEC-40, INV-ENGINE-15: a destination that takes an interrupted
+// run's final output late, but within the final wait, is read, so the command keeps the
+// signal's exit status instead of reporting an output failure.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_interrupted_run_keeps_its_signal_status_when_its_output_is_read_late() {
+    use nix::fcntl::{FcntlArg, fcntl};
+    use nix::unistd::pipe;
+
+    const FILLER: usize = 4096;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let bundle = signal_bundle();
+    let destination = bundle.result("late-reader-interruption");
+    let mut args = bundle.args(&destination);
+    args.insert(args.len() - 1, "--json".to_owned());
+    let (reader, writer) = pipe().unwrap();
+    assert_eq!(fcntl(&writer, FcntlArg::F_SETPIPE_SZ(4096)).unwrap(), 4096);
+    let mut filling = File::from(writer);
+    filling.write_all(&[b'x'; FILLER]).unwrap();
+    let mut child = isolated_command(&args)
+        .env(
+            "WORKFLOW_RUN_FIXTURE_SOCKET",
+            listener.local_addr().unwrap().to_string(),
+        )
+        .env("WORKFLOW_RUN_FIXTURE_MODE", "wait")
+        .stdout(Stdio::from(filling))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (mut control, _) = listener.accept().unwrap();
+    let mut ready = [0_u8; 1];
+    control.read_exact(&mut ready).unwrap();
+    assert_eq!(ready, [1]);
+    let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+    kill_process(pid, Signal::INT).unwrap();
+    let published = attempt_result(&destination).join("result.json");
+    poll_until(
+        "published result of the interrupted run",
+        || published.exists(),
+        |exists| *exists,
+    );
+    read_after_the_former_output_wait();
+    let mut output = Vec::new();
+    File::from(reader).read_to_end(&mut output).unwrap();
+    let status = child.wait().unwrap();
+
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "{status:?} after reading {} bytes",
+        output.len()
+    );
+    assert!(output.len() > FILLER, "only {} bytes", output.len());
+    let (filler, document) = output.split_at(FILLER);
+    assert!(filler.iter().all(|byte| *byte == b'x'));
+    let terminal: serde_json::Value = serde_json::from_slice(document).unwrap();
+    assert_eq!(terminal["exitStatus"], 130, "{terminal}");
+    assert_eq!(terminal["outcome"], "failed", "{terminal}");
 }
 
 // REQ-WFEXEC-40, REQ-WFEXEC-69, REQ-LOCALRUN-127, REQ-LOCALRUN-135, REQ-LOCALRUN-136: a signal
@@ -6042,7 +6289,7 @@ fn abrupt_owner_loss_terminates_reaps_and_exposes_an_abandoned_attempt() {
     let status = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         destination.to_string_lossy().into_owned(),
         "--json".to_owned(),
     ])
@@ -6059,6 +6306,7 @@ fn abrupt_owner_loss_terminates_reaps_and_exposes_an_abandoned_attempt() {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(feature = "rust-cli-tests")]
 #[test]
 fn owner_death_before_registration_or_continuation_never_executes_user_code() {
     let staging = tempfile::Builder::new()
@@ -6090,7 +6338,7 @@ fn owner_death_before_registration_or_continuation_never_executes_user_code() {
              printf '%s\\n' \"$guard\" > \"$GUARD_PID\"; wait \"$guard\"",
         )
         .env("CONTROL", &control)
-        .env("GUARD_BIN", env!("CARGO_BIN_EXE_useful"))
+        .env("GUARD_BIN", crate::executable())
         .env("GUARD_PID", &guard_pid)
         .env("USEFUL_INTERNAL_CHILD_GUARD_WORKER", "guard-v1")
         .env("USEFUL_INTERNAL_CHILD_GUARD_ROOT", staging.path())
@@ -7646,16 +7894,14 @@ fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
         "create",
         "hand-back",
         "interrupt",
-        "lift",
         "list",
+        "pause",
         "release",
         "resume",
         "retry",
         "show",
-        "status",
-        "stop",
+        "unpause",
         "view",
-        "withdraw",
     ];
     let leaves = help
         .lines()
@@ -7663,6 +7909,20 @@ fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
         .filter(|word| expected.contains(word))
         .collect::<Vec<_>>();
     assert_eq!(leaves, expected, "{help}");
+}
+
+// REQ-LOCALRUN-194: `upgrade --from` prints a completed attempt as `useful workflow run
+// upgrade`, and a result an earlier release retained under its `restart` leaf still validates
+// against the run result contract.
+#[test]
+fn a_completed_attempt_of_upgrade_or_a_retained_restart_validates() {
+    let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
+    let mut terminal = succeeded(&run(&bundle.args(&bundle.result("completed"))));
+    let schema = workflow_run_schema();
+    for leaf in ["restart", "upgrade"] {
+        terminal["command"] = serde_json::Value::from(format!("useful workflow run {leaf}"));
+        assert!(schema.is_valid(&terminal), "{terminal}");
+    }
 }
 
 // REQ-LOCALRUN-174, REQ-LOCALRUN-175
@@ -7785,20 +8045,21 @@ fn the_run_record_carries_the_attempts_chosen_outcome_once_exited() {
     succeeded(&run(&bundle.args(&destination)));
     assert_eq!(exited(&destination)["outcome"], "succeeded");
 
-    // A retry or a resume writes its own attempt's outcome when it returns.
-    for command in ["retry", "resume"] {
+    // A retry of every step or from a step writes its own attempt's outcome when it returns.
+    for all in [true, false] {
         let (bundle, destination, _output) = run_outcome_tree("shipped");
         let destination = fs::canonicalize(destination).unwrap();
-        assert_eq!(exited(&destination)["outcome"], "failed", "{command}");
+        assert_eq!(exited(&destination)["outcome"], "failed", "{all}");
         fs::write(bundle.execution_root().join("verdict-input"), "planned").unwrap();
         let mut args = vec![
             "workflow".to_owned(),
             "run".to_owned(),
-            command.to_owned(),
+            "retry".to_owned(),
             destination.to_string_lossy().into_owned(),
         ];
-        if command == "retry" {
+        if all {
             args.extend([
+                "--all".to_owned(),
                 "--execution-root".to_owned(),
                 bundle.execution_root().to_string_lossy().into_owned(),
             ]);
@@ -7808,9 +8069,101 @@ fn the_run_record_carries_the_attempts_chosen_outcome_once_exited() {
         args.push("--json".to_owned());
         succeeded(&run(&args));
         let record = exited(&destination);
-        assert_eq!(record["outcome"], "planned", "{command}");
-        assert_eq!(record["attempts"], 2, "{command}");
+        assert_eq!(record["outcome"], "planned", "{all}");
+        assert_eq!(record["attempts"], 2, "{all}");
     }
+}
+
+/// A stage whose `decide` writes `planned` and exits with the code in the execution root's
+/// `exit-code`, and whose 71 marks its failure as the host's; `on_infrastructure` is the
+/// `outcome` line naming `onInfrastructure`, or empty.
+fn infrastructure_outcome_stage(on_infrastructure: &str) -> String {
+    format!(
+        "schemaVersion: 1
+outcomes: [planned, failed, host_failed]
+outcome:
+  from: outputs.decide.verdict
+  onFailure: failed
+{on_infrastructure}steps:
+  decide:
+    kind: cmd
+    infrastructureExitCodes: [71]
+    command:
+      argv: [decide]
+    outputs:
+      verdict:
+        kind: text
+        from: path
+        path: verdict.txt
+"
+    )
+}
+
+const INFRASTRUCTURE_OUTCOME_PROGRAM: &str =
+    "#!/bin/sh\nset -eu\nprintf planned > verdict.txt\nexit \"$(cat exit-code)\"\n";
+
+/// A `--json` run of a tree whose `workflow.yaml` is `root`, with each `extra` source beside
+/// it and `bin/decide` the program above exiting `code`; returns the bundle, the run
+/// directory and the command's output.
+fn run_infrastructure_outcome_tree(
+    root: &str,
+    extra: &[(&str, String)],
+    code: u8,
+) -> (TreeBundle, PathBuf, Output) {
+    let bundle = TreeBundle::new(root);
+    for (path, source) in extra {
+        bundle.write_source(path, source);
+    }
+    bundle.write_program("bin/decide", INFRASTRUCTURE_OUTCOME_PROGRAM);
+    fs::write(bundle.execution_root().join("exit-code"), code.to_string()).unwrap();
+    let destination = bundle.result(&format!("exit-{code}"));
+    let output = run(&bundle.args(&destination));
+    (bundle, destination, output)
+}
+
+// REQ-WFEXEC-57, REQ-WFFORMAT-110
+#[test]
+fn a_failed_run_whose_failing_step_was_the_hosts_takes_the_on_infrastructure_outcome() {
+    let declared = format!(
+        "programs: [bin]\n{}",
+        infrastructure_outcome_stage("  onInfrastructure: host_failed\n")
+    );
+    let undeclared = format!("programs: [bin]\n{}", infrastructure_outcome_stage(""));
+    for (root, code, outcome) in [
+        (&declared, 71, "host_failed"),
+        (&declared, 1, "failed"),
+        (&undeclared, 71, "failed"),
+    ] {
+        let (_bundle, destination, output) = run_infrastructure_outcome_tree(root, &[], code);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let record = run_record(&destination);
+        assert_eq!(record["state"], "exited", "{record}");
+        assert_eq!(record["outcome"], outcome, "exit {code}: {record}");
+    }
+}
+
+// REQ-WFEXEC-57, REQ-WFEXEC-77
+#[test]
+fn a_parent_routes_its_childs_on_infrastructure_outcome() {
+    let root = "schemaVersion: 1
+programs: [bin]
+outcomes: [landed, broken, host]
+steps:
+  stage:
+    kind: workflow
+    workflow: stage.yaml
+    on:
+      planned: exit.landed
+      failed: exit.broken
+      host_failed: exit.host
+";
+    let stage = infrastructure_outcome_stage("  onInfrastructure: host_failed\n");
+    let (_bundle, destination, output) =
+        run_infrastructure_outcome_tree(root, &[("stage.yaml", stage)], 71);
+    let terminal = succeeded(&output);
+    assert_eq!(run_record(&destination)["outcome"], "host", "{terminal}");
+    let step = result_step(&terminal, "stage");
+    assert_eq!(step["failedChild"]["outcome"], "host_failed", "{terminal}");
 }
 
 // REQ-WFFORMAT-108, REQ-WFEXEC-57
@@ -7949,6 +8302,85 @@ fn a_path_without_a_root_workflow_runs_the_closure_form() {
     assert!(!destination.join("run.json").exists());
 }
 
+// REQ-LOCALRUN-174, REQ-LOCALRUN-180, REQ-LOCALRUN-188
+#[test]
+fn a_tree_run_without_a_run_directory_is_recorded_under_the_home() {
+    let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
+    // Under the bundle, whose removal makes the run's read-only tree copy writable again.
+    let home = bundle.result("home");
+    let under_home = |args: &[&str]| {
+        let mut command = isolated_command(
+            &["workflow", "run"]
+                .iter()
+                .chain(args)
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        command
+            .env("USEFUL_HOME", &home)
+            .current_dir(bundle.source_root());
+        command.output().unwrap()
+    };
+    let source = bundle.source_root().to_str().unwrap();
+
+    let created = succeeded(&under_home(&["create", "--path", source, "--json"]));
+    let run_directory = PathBuf::from(created["runDirectory"].as_str().unwrap());
+    let record = run_record(&run_directory);
+    let id = record["id"].as_str().unwrap();
+    assert_eq!(
+        run_directory,
+        home.canonicalize().unwrap().join("runs").join(id),
+        "{created}"
+    );
+    assert_eq!(record["definition"], serde_json::Value::Null, "{record}");
+    assert_eq!(record["revision"], serde_json::Value::Null, "{record}");
+    assert_eq!(
+        created["result"]["execution"]["executionRoot"],
+        bundle
+            .source_root()
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "{created}"
+    );
+
+    let listed = under_home(&["list", "--on", "local", "--all", "--json"]);
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    let listed: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let runs = listed["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{listed}");
+    assert_eq!(runs[0]["id"], id, "{listed}");
+    assert_eq!(runs[0]["definition"], serde_json::Value::Null, "{listed}");
+
+    let shown = under_home(&["show", id, "--json"]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["runDirectory"], created["runDirectory"], "{shown}");
+    assert_eq!(shown["record"]["id"], id, "{shown}");
+
+    // A directory that is not a tree has no run record, so its run still needs `--run-dir`.
+    let source_root = bundle.result("source-root");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::write(source_root.join(WORKFLOW_PATH), TREE_SUCCESS_WORKFLOW).unwrap();
+    let before = fs::read_dir(home.join("runs")).unwrap().count();
+    let refused = under_home(&[
+        "create",
+        "--path",
+        source_root.to_str().unwrap(),
+        "--workflow",
+        WORKFLOW_PATH,
+        "--json",
+    ]);
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--run-dir"),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read_dir(home.join("runs")).unwrap().count(), before);
+}
+
 // REQ-LOCALRUN-80, REQ-LOCALRUN-174
 #[test]
 fn run_create_argument_conflicts_are_usage_errors() {
@@ -7958,7 +8390,6 @@ fn run_create_argument_conflicts_are_usage_errors() {
     let execution = bundle.execution_root().to_string_lossy().into_owned();
     let definition = "def_01jc0000000000000000000000";
     for args in [
-        path_args(bundle.source_root(), bundle.execution_root(), &[]),
         vec![
             "workflow".to_owned(),
             "run".to_owned(),
@@ -8438,7 +8869,7 @@ fn cancelling_the_parent_cancels_its_running_child() {
     let (_bundle, destination, child) = spawn_held_child_tree("cancelled");
     poll_until(
         "the parent holds its run",
-        || useful_execution::lock_holder(&destination).is_ok_and(|holder| holder.is_some()),
+        || crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some()),
         |held| *held,
     );
     let cancel = super::workflow_run_control::run_control(None, "cancel", &destination, &[]);
@@ -8612,7 +9043,7 @@ fn show_reports_a_running_childs_attempt_and_in_flight_steps() {
 // be read refuses the run `run_directory_invalid`, naming the child.
 #[test]
 fn show_refuses_a_run_whose_running_childs_state_is_unreadable() {
-    use super::workflow_run_control::{refused, run_control};
+    use super::workflow_run_control::run_control;
 
     let (_bundle, destination, output) = run_child_tree("planned");
     succeeded(&output);
@@ -8642,9 +9073,8 @@ fn show_refuses_a_run_whose_running_childs_state_is_unreadable() {
     );
 
     fs::write(child.join("state.json"), "{}").unwrap();
-    let document = refused(
+    let document = super::workflow_status::show_error(
         &run_control(None, "show", &run, &[]),
-        "show",
         "run_directory_invalid",
     );
     assert_eq!(
@@ -8652,8 +9082,8 @@ fn show_refuses_a_run_whose_running_childs_state_is_unreadable() {
         run.to_str().unwrap(),
         "{document}"
     );
-    // The run directory is the parent's, so the diagnostic names the child that failed.
-    let message = document["diagnostics"][0]["message"].as_str().unwrap();
+    // The run directory is the parent's, so the message names the child that failed.
+    let message = document["error"]["message"].as_str().unwrap();
     assert!(message.contains(child.to_str().unwrap()), "{document}");
 }
 
@@ -8706,8 +9136,9 @@ fn a_child_that_cannot_be_admitted_fails_the_step_at_start() {
     assert!(!destination.join("children/design").exists());
 }
 
-// REQ-WFEXEC-59, REQ-WFEXEC-61, REQ-WFEXEC-40: admission admits an `answer` wait target,
-// which the run enters and ends `waiting` with exit 0.
+// REQ-WFEXEC-59, REQ-WFEXEC-61, REQ-WFEXEC-40, REQ-LOCALRUN-182: admission admits an
+// `answer` wait target, which the run enters and ends `waiting` with exit 0; the answer
+// continues the run under its own command.
 #[test]
 fn admission_admits_an_answer_wait_target() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -8734,6 +9165,24 @@ fn admission_admits_an_answer_wait_target() {
     let build = result_step(&terminal, "build");
     assert_eq!(build["state"], "not_run", "{terminal}");
     assert_eq!(build["detail"]["code"], "not_reached", "{terminal}");
+
+    let output = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "answer".to_owned(),
+        destination.to_string_lossy().into_owned(),
+        "--text".to_owned(),
+        "go".to_owned(),
+        "--json".to_owned(),
+    ]);
+    let continued: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&continued), "{continued}");
+    assert_eq!(continued["command"], "useful workflow run answer");
+    assert_eq!(continued["attemptNumber"], 2, "{continued}");
+    assert_eq!(
+        Some(continued["exitStatus"].as_i64().unwrap()),
+        output.status.code().map(i64::from)
+    );
 }
 
 // REQ-WFEXEC-59, REQ-WFEXEC-65: admission admits an `external` wait on a condition the CLI
@@ -8840,10 +9289,14 @@ fn admission_refuses_wait_targets_and_workflow_steps_outside_a_tree() {
 /// The largest minimum the runner's disk gate may name; no disk has that much free.
 const UNREACHABLE_MINIMUM_FREE_BYTES: u64 = 9_007_199_254_740_991;
 
+/// That minimum as the executable under test writes it: in binary units, floored to one
+/// decimal below ten of the unit. The suite states the text instead of calling the
+/// implementation's formatter, which the standalone driver does not link.
+const UNREACHABLE_MINIMUM_FREE: &str = "7.9 PiB";
+
 /// The scope of each `held` record in a progress stream whose detail begins `disk space low`
-/// and gives the unreachable minimum as `format_bytes` writes it (REQ-LOCALRUN-222).
+/// and gives the unreachable minimum in binary units (REQ-LOCALRUN-222).
 fn held_disk_scopes(stream: &str) -> Vec<String> {
-    let minimum = useful_execution::format_bytes(UNREACHABLE_MINIMUM_FREE_BYTES);
     stream
         .lines()
         .filter_map(|line| {
@@ -8854,7 +9307,7 @@ fn held_disk_scopes(stream: &str) -> Vec<String> {
                     Some(&["disk", "space", "low:"][..]),
                     "{line}"
                 );
-                assert!(line.contains(&minimum), "{line}");
+                assert!(line.contains(UNREACHABLE_MINIMUM_FREE), "{line}");
                 fields[1].to_owned()
             })
         })

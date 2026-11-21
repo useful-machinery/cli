@@ -20,10 +20,15 @@ use useful_execution::{
 };
 
 use super::assignment::{AssignmentManager, AssignmentOverview, AssignmentRead};
+use super::build_caches::CacheState;
 use super::disk::DiskReadingHandle;
 use super::execution::AssignmentRunView;
 use super::history::{EventLog, LoggedEvent};
+use super::kept_runs::{
+    self, KeptRunPrune, KeptRunReport, KeptRunRequest, PruneBound, PruneResult, ReportedState,
+};
 use super::tree_run::published_path;
+use super::workspace::RetentionReason;
 use crate::agent_login::OfferedLogin;
 use crate::agent_login::ReportedSources;
 use crate::agent_login::cloud::CredentialSourcesRequest;
@@ -37,12 +42,14 @@ use crate::control_protocol::{
     AssignmentChildRun, AssignmentCommand, AssignmentDetail, AssignmentLog, AssignmentLogRecord,
     AssignmentLogSource, AssignmentLogStream, AssignmentOutput, AssignmentQuery, AssignmentRun,
     AssignmentStep, AssignmentWorkflow, ConnectionFailure, ConnectionState, ControlError,
-    ControlRequest, LOG_WINDOW_BYTES, OVERVIEW_RESPONSE_LIMIT, Operation, Overview,
-    OverviewAssignment, OverviewConnection, OverviewDisk, OverviewRunElement, OverviewRunner,
-    OverviewWait, ProcessState, ProtocolFailure, Response, StatusDisk, StatusSnapshot,
-    SyncedAgentLogins, WRITTEN_ASSIGNMENT_STEPS, WRITTEN_CHILD_RUNS, decode_request,
-    encode_assignment_not_held, encode_assignment_response, encode_overview_response,
-    encode_response,
+    ControlRequest, KeptBound, KeptCache, KeptCacheState, KeptReason, KeptReport, KeptRunsBounds,
+    KeptWorkspace, KeptWorkspaceState, LOG_WINDOW_BYTES, MAXIMUM_KEPT_ENTRIES,
+    OVERVIEW_RESPONSE_LIMIT, Operation, Overview, OverviewAssignment, OverviewConnection,
+    OverviewDisk, OverviewRunElement, OverviewRunner, OverviewWait, ProcessState, ProtocolFailure,
+    PruneReport, PruneScope, PrunedCache, PrunedDirectory, PrunedOutcome, Response, StatusDisk,
+    StatusSnapshot, SyncedAgentLogins, WRITTEN_ASSIGNMENT_STEPS, WRITTEN_CHILD_RUNS,
+    decode_request, encode_assignment_not_held, encode_assignment_response, encode_kept_response,
+    encode_overview_response, encode_prune_response, encode_response,
 };
 
 const RUNTIME_DIRECTORY_MODE: u32 = 0o700;
@@ -84,15 +91,16 @@ impl ControlTimeouts {
 
 /// What the control socket serves from: the live status, the assignment
 /// manager for its counts and entries, the places for run directory reads in
-/// progress, `RUN_READ_PLACES` of them, the reload channel, the agent-login
-/// setup, which is absent without protected state, and the runner ID and
-/// `useful` version an overview names.
+/// progress, `RUN_READ_PLACES` of them, the reload channel, the kept-run
+/// schedule's channel, the agent-login setup, which is absent without protected
+/// state, and the runner ID and `useful` version an overview names.
 #[derive(Clone)]
 pub(super) struct ControlContext {
     pub(super) status: Arc<LiveStatus>,
     pub(super) assignments: Arc<Mutex<AssignmentManager>>,
     pub(super) run_reads: Arc<Semaphore>,
     pub(super) reloads: mpsc::Sender<ReloadRequest>,
+    pub(super) kept_runs: mpsc::Sender<KeptRunRequest>,
     pub(super) agent_logins: Option<Arc<AgentLoginSetup>>,
     pub(super) timeouts: ControlTimeouts,
     pub(super) runner_id: String,
@@ -631,6 +639,257 @@ async fn overview_answer(
     .ok()?
     .ok()?
     .ok()
+}
+
+/// The `kept` answer for what the schedule reported (REQ-RUNNERENROLL-164), cut to its
+/// bound; none when it cannot be written, so the connection is closed unanswered.
+fn kept_answer(report: KeptRunReport) -> Option<Vec<u8>> {
+    let KeptRunReport {
+        scope,
+        bounds,
+        now,
+        workspaces,
+        caches,
+    } = report;
+    let workspaces = workspaces
+        .into_iter()
+        .map(|workspace| {
+            let (state, bound) = match workspace.state {
+                ReportedState::Kept => (KeptWorkspaceState::Kept, None),
+                ReportedState::Due(bound) => (KeptWorkspaceState::Due, Some(kept_bound(bound))),
+                ReportedState::InUse => (KeptWorkspaceState::InUse, None),
+                ReportedState::Failed => (KeptWorkspaceState::Failed, None),
+            };
+            let (assignment_id, run_id, attempt_id) = attempt_ids(workspace.attempt);
+            KeptWorkspace {
+                directories: workspace.paths.iter().map(|path| host_path(path)).collect(),
+                assignment_id,
+                run_id,
+                attempt_id,
+                reason: kept_reason(workspace.reason),
+                age_seconds: kept_runs::age(workspace.modified, now).as_secs(),
+                bytes: workspace.bytes,
+                state,
+                bound,
+            }
+        })
+        .collect::<Vec<_>>();
+    let build_caches = caches
+        .into_iter()
+        .map(|cache| {
+            let (state, bytes, due_bytes) = match cache.state {
+                CacheState::Measured { bytes, due_bytes } => {
+                    (KeptCacheState::Measured, Some(bytes), Some(due_bytes))
+                }
+                CacheState::Missing => (KeptCacheState::Missing, None, None),
+                CacheState::NotADirectory => (KeptCacheState::NotADirectory, None, None),
+                CacheState::Unreadable => (KeptCacheState::Unreadable, None, None),
+                CacheState::Protected => (KeptCacheState::Protected, None, None),
+            };
+            KeptCache {
+                path: host_path(&cache.path),
+                maximum_bytes: cache.maximum_bytes,
+                state,
+                bytes,
+                due_bytes,
+            }
+        })
+        .collect::<Vec<_>>();
+    let due_workspaces = workspaces
+        .iter()
+        .filter(|workspace| workspace.state == KeptWorkspaceState::Due)
+        .filter_map(|workspace| workspace.bytes);
+    let due_caches = build_caches.iter().filter_map(|cache| cache.due_bytes);
+    let due_bytes = due_workspaces
+        .chain(due_caches)
+        .fold(0_u64, u64::saturating_add);
+    let report = KeptReport {
+        all: scope == PruneScope::All,
+        kept_runs: KeptRunsBounds {
+            maximum_age_days: bounds
+                .maximum_age
+                .map(|maximum_age| maximum_age.as_secs() / 86_400),
+            maximum_total_bytes: bounds.maximum_total_bytes,
+        },
+        workspaces,
+        workspaces_omitted: 0,
+        build_caches,
+        due_bytes,
+    };
+    fit_entries(
+        report,
+        OVERVIEW_RESPONSE_LIMIT,
+        |report| (&mut report.workspaces, &mut report.workspaces_omitted),
+        encode_kept_response,
+    )
+    .ok()
+}
+
+/// The `pruned` answer for what the schedule's pass did (REQ-RUNNERENROLL-165), cut to its
+/// bound; none when it cannot be written, so the connection is closed unanswered.
+fn prune_answer(result: KeptRunPrune) -> Option<Vec<u8>> {
+    let KeptRunPrune {
+        scope,
+        complete,
+        directories,
+        caches,
+    } = result;
+    let directories = directories
+        .into_iter()
+        .map(|outcome| {
+            let (assignment_id, run_id, attempt_id) = attempt_ids(outcome.attempt);
+            PrunedDirectory {
+                path: host_path(&outcome.path),
+                assignment_id,
+                run_id,
+                attempt_id,
+                bytes: outcome.bytes,
+                bound: kept_bound(outcome.bound),
+                result: match outcome.result {
+                    PruneResult::Removed => PrunedOutcome::Removed,
+                    PruneResult::Failed => PrunedOutcome::Failed,
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    let build_caches = caches
+        .into_iter()
+        .map(|cache| PrunedCache {
+            path: host_path(&cache.path),
+            maximum_bytes: cache.maximum_bytes,
+            removed_files: cache.evicted.removed_files,
+            removed_bytes: cache.evicted.removed_bytes,
+            failed_files: cache.evicted.failed_files,
+            bytes: cache.evicted.bytes_after,
+        })
+        .collect::<Vec<_>>();
+    let failed_directories = directories
+        .iter()
+        .filter(|directory| directory.result == PrunedOutcome::Failed)
+        .count();
+    let removed_directories = directories
+        .iter()
+        .filter(|directory| directory.result == PrunedOutcome::Removed)
+        .map(|directory| directory.bytes);
+    let removed_caches = build_caches.iter().map(|cache| cache.removed_bytes);
+    let removed_bytes = removed_directories
+        .chain(removed_caches)
+        .fold(0_u64, u64::saturating_add);
+    let report = PruneReport {
+        all: scope == PruneScope::All,
+        complete,
+        directories,
+        directories_omitted: 0,
+        failed_directories: u64::try_from(failed_directories).unwrap_or(u64::MAX),
+        build_caches,
+        removed_bytes,
+    };
+    fit_entries(
+        report,
+        OVERVIEW_RESPONSE_LIMIT,
+        |report| (&mut report.directories, &mut report.directories_omitted),
+        encode_prune_response,
+    )
+    .ok()
+}
+
+/// The bytes of `answer` within `limit` and listing at most `MAXIMUM_KEPT_ENTRIES` of the
+/// entries `entries` gives with their omitted count: its first entries, as many as fit, the
+/// rest counted as omitted, as if the last were left out one at a time while the answer
+/// passed either bound. `Oversized` when it passes `limit` with none.
+fn fit_entries<T, E: Clone>(
+    mut answer: T,
+    limit: usize,
+    entries: impl Fn(&mut T) -> (&mut Vec<E>, &mut u64),
+    encode: impl Fn(&T) -> Result<Vec<u8>, ProtocolFailure>,
+) -> Result<Vec<u8>, ProtocolFailure> {
+    let (listed, omitted) = entries(&mut answer);
+    let all = std::mem::take(listed);
+    let omitted_before = *omitted;
+    // The answer listing the first `count` entries, when it is within `limit`. An answer
+    // that fits fits with fewer, each entry being longer than the count of those left out
+    // can grow, so the most that fit are found by bisection.
+    let mut written = |count: usize| -> Result<Option<Vec<u8>>, ProtocolFailure> {
+        let (listed, omitted) = entries(&mut answer);
+        *listed = all.get(..count).unwrap_or_default().to_vec();
+        let left_out = u64::try_from(all.len().saturating_sub(count)).unwrap_or(u64::MAX);
+        *omitted = omitted_before.saturating_add(left_out);
+        match encode(&answer) {
+            Ok(bytes) if bytes.len() <= limit => Ok(Some(bytes)),
+            Ok(_) | Err(ProtocolFailure::Oversized) => Ok(None),
+            Err(failure) => Err(failure),
+        }
+    };
+    let most = all.len().min(MAXIMUM_KEPT_ENTRIES);
+    if let Some(bytes) = written(most)? {
+        return Ok(bytes);
+    }
+    // Every count below `fewest_too_many` that is at most `fitting`'s fits.
+    let mut fitting = None;
+    let (mut low, mut fewest_too_many) = (0, most);
+    while low < fewest_too_many {
+        let middle = low + (fewest_too_many - low) / 2;
+        match written(middle)? {
+            Some(bytes) => {
+                fitting = Some(bytes);
+                low = middle + 1;
+            }
+            None => fewest_too_many = middle,
+        }
+    }
+    fitting.ok_or(ProtocolFailure::Oversized)
+}
+
+/// A path on the runner host as an answer names it, as `runner.workspace_pruned` does.
+fn host_path(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// An attempt's three IDs, when its records gave them.
+fn attempt_ids(
+    attempt: Option<super::workspace::KeptAttempt>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    match attempt {
+        Some(attempt) => (
+            Some(attempt.assignment_id),
+            Some(attempt.run_id),
+            Some(attempt.attempt_id),
+        ),
+        None => (None, None, None),
+    }
+}
+
+const fn kept_bound(bound: PruneBound) -> KeptBound {
+    match bound {
+        PruneBound::Age => KeptBound::Age,
+        PruneBound::TotalSize => KeptBound::TotalSize,
+        PruneBound::Operator => KeptBound::Operator,
+    }
+}
+
+const fn kept_reason(reason: RetentionReason) -> KeptReason {
+    match reason {
+        RetentionReason::Failed => KeptReason::Failed,
+        RetentionReason::Cancelled => KeptReason::Cancelled,
+        RetentionReason::Interrupted => KeptReason::Interrupted,
+        RetentionReason::ArtifactDeliveryFailed => KeptReason::ArtifactDeliveryFailed,
+        RetentionReason::OutcomeUnknown => KeptReason::OutcomeUnknown,
+        RetentionReason::ProcessStopFailed => KeptReason::ProcessStopFailed,
+        RetentionReason::CredentialTeardownFailed => KeptReason::CredentialTeardownFailed,
+        RetentionReason::ReleaseWorkerUnavailable => KeptReason::ReleaseWorkerUnavailable,
+    }
+}
+
+/// Hands `request` to the kept-run schedule and waits, with no bound, for what it answers
+/// (INV-RUNNER-54): the pass's gates end the pass, and the service's stop ends and joins it.
+/// None when the schedule no longer takes requests or dropped the answer.
+async fn kept_run_answer<A>(
+    kept_runs: &mpsc::Sender<KeptRunRequest>,
+    request: impl FnOnce(oneshot::Sender<A>) -> KeptRunRequest,
+) -> Option<A> {
+    let (answer, answered) = oneshot::channel();
+    kept_runs.send(request(answer)).await.ok()?;
+    answered.await.ok()
 }
 
 /// The `assignment` answer (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145), built under the
@@ -1274,6 +1533,7 @@ async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
         assignments,
         run_reads,
         reloads,
+        kept_runs,
         agent_logins,
         timeouts,
         runner_id,
@@ -1301,6 +1561,37 @@ async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
             if let Some(bytes) =
                 assignment_answer(assignments, run_reads, query, timeouts.snapshot).await
             {
+                let _ = control_timeout(timeouts.io, stream.write_all(&bytes)).await;
+            }
+            return;
+        }
+        Ok(ControlRequest::Kept(scope)) => {
+            let Some(report) = kept_run_answer(&kept_runs, |answer| KeptRunRequest::Report {
+                scope,
+                answer,
+            })
+            .await
+            else {
+                return;
+            };
+            if let Some(bytes) = kept_answer(report) {
+                let _ = control_timeout(timeouts.io, stream.write_all(&bytes)).await;
+            }
+            return;
+        }
+        Ok(ControlRequest::Prune(scope)) => {
+            let Some(result) =
+                kept_run_answer(&kept_runs, |answer| KeptRunRequest::Prune { scope, answer }).await
+            else {
+                return;
+            };
+            let bytes = match result {
+                Ok(result) => prune_answer(result),
+                Err(super::kept_runs::Busy) => {
+                    encode_response(&Response::Error(ControlError::RunnerBusy)).ok()
+                }
+            };
+            if let Some(bytes) = bytes {
                 let _ = control_timeout(timeouts.io, stream.write_all(&bytes)).await;
             }
             return;
@@ -1405,15 +1696,22 @@ mod tests {
     use crate::agent_login::readiness::READINESS_FILE;
     use crate::control_protocol::{
         AgentLoginCheckCause, AgentLoginProvider, AgentLoginState, AssignmentAnswer,
-        AssignmentCounts, AssignmentPhase, HeldRunState, LiveStepState, OpenWord, OverviewAnswer,
-        OverviewAssignment, OverviewCounts, OverviewRunningStep, Response, RunnerEventKind,
-        UnansweredCheck, decode_assignment_response, decode_overview_response, decode_response,
-        encode_assignment_request,
+        AssignmentCounts, AssignmentPhase, HeldRunState, KeptAnswer, LiveStepState,
+        MAXIMUM_KEPT_ENTRIES, OpenWord, OverviewAnswer, OverviewAssignment, OverviewCounts,
+        OverviewRunningStep, PruneAnswer, PruneScope, Response, RunnerEventKind, UnansweredCheck,
+        decode_assignment_response, decode_kept_response, decode_overview_response,
+        decode_prune_response, decode_response, encode_assignment_request,
     };
     use crate::credential::test_credential;
+    use crate::service::KeptRunBounds;
     use crate::service::assignment::AssignmentOffer;
     use crate::service::assignment::test_support::{
         install_run_activity, install_run_view, install_running_renewal_fixture, manager,
+    };
+    use crate::service::build_caches::{CacheEviction, CacheMeasure, CacheState};
+    use crate::service::kept_runs::{
+        KeptRunPrune, KeptRunReport, PruneBound, PruneOutcome, PruneResult, ReportedState,
+        ReportedWorkspace,
     };
     use crate::service::test_support::tree_fixture::tree_offer;
     use crate::service::test_support::{
@@ -1422,6 +1720,7 @@ mod tests {
         fixture_run_view, step_execution_transition,
     };
     use crate::service::tree_run::RunActivity;
+    use crate::service::workspace::RetentionReason;
     use crate::telemetry::test_recorder;
     use useful_execution::{
         ExecutionObservation, ExecutionObserver, StepStateKind, WorkflowNodeRole,
@@ -1453,11 +1752,13 @@ mod tests {
             None,
         ));
         let (reloads, _requests) = mpsc::channel(1);
+        let (kept_runs, _kept_run_requests) = mpsc::channel(1);
         ControlContext {
             status,
             assignments,
             run_reads: Arc::new(Semaphore::new(RUN_READ_PLACES)),
             reloads,
+            kept_runs,
             agent_logins,
             timeouts: TEST_TIMEOUTS,
             runner_id: config.credential().runner_id().to_owned(),
@@ -3018,6 +3319,176 @@ mod tests {
             fit_overview(overview, runner_alone.len() - 1),
             Err(ProtocolFailure::Oversized)
         );
+    }
+
+    /// `count` kept run directories, each a path of about `path_bytes` bytes, the third
+    /// of them failed, the rest due under the age bound or removed by it.
+    fn kept_directories(count: u64, path_bytes: usize) -> Vec<(PathBuf, u64, bool)> {
+        let stem = "d".repeat(path_bytes);
+        (0..count)
+            .map(|index| {
+                (
+                    PathBuf::from(format!("/srv/useful/work/{stem}-{index:05}")),
+                    4_096 + index,
+                    index % 3 == 2,
+                )
+            })
+            .collect()
+    }
+
+    /// The bound a cut answer was cut to: it is within its bytes and its entries, and one
+    /// entry more would pass either.
+    fn assert_cut_to_the_bound(
+        bytes: &[u8],
+        listed: usize,
+        with_one_more: Result<Vec<u8>, ProtocolFailure>,
+    ) {
+        assert!(bytes.len() <= OVERVIEW_RESPONSE_LIMIT);
+        assert!(listed <= MAXIMUM_KEPT_ENTRIES);
+        assert!(
+            listed == MAXIMUM_KEPT_ENTRIES || with_one_more == Err(ProtocolFailure::Oversized),
+            "{listed} entries were cut short of the bound"
+        );
+    }
+
+    // REQ-RUNNERENROLL-164: a kept report past its bound is cut from its last workspace, each
+    // left out counted, the bytes a prune would free counted over all of them.
+    #[test]
+    fn a_kept_report_past_its_bound_is_cut_from_its_last_workspace() {
+        let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(20_000);
+        // Long paths reach the byte bound before the entry bound, short ones the reverse.
+        for path_bytes in [400, 8] {
+            let directories = kept_directories(5_000, path_bytes);
+            let report = KeptRunReport {
+                scope: PruneScope::Bounds,
+                bounds: KeptRunBounds::default(),
+                now,
+                workspaces: directories
+                    .iter()
+                    .map(|(path, bytes, _)| ReportedWorkspace {
+                        paths: vec![path.clone()],
+                        attempt: None,
+                        reason: RetentionReason::Failed,
+                        modified: now - time::Duration::days(15),
+                        bytes: Some(*bytes),
+                        state: ReportedState::Due(PruneBound::Age),
+                    })
+                    .collect(),
+                caches: vec![CacheMeasure {
+                    path: PathBuf::from("/srv/cache/cargo-target"),
+                    maximum_bytes: 1_024,
+                    state: CacheState::Measured {
+                        bytes: 2_048,
+                        due_bytes: 1_127,
+                    },
+                }],
+            };
+            let due_bytes = directories.iter().map(|(_, bytes, _)| bytes).sum::<u64>() + 1_127;
+
+            let bytes = kept_answer(report).expect("the cut report is written");
+            let Ok(KeptAnswer::Kept(cut)) = decode_kept_response(&bytes) else {
+                panic!("the cut report is a kept report");
+            };
+            let listed = cut.workspaces.len();
+            assert_eq!(
+                cut.workspaces_omitted,
+                5_000 - u64::try_from(listed).unwrap()
+            );
+            assert_eq!(cut.due_bytes, due_bytes);
+            assert_eq!(cut.kept_runs.maximum_age_days, Some(14));
+            let paths = cut
+                .workspaces
+                .iter()
+                .map(|workspace| workspace.directories[0].clone())
+                .collect::<Vec<_>>();
+            let first = directories[..listed]
+                .iter()
+                .map(|(path, _, _)| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(paths, first);
+            let mut one_more = (*cut).clone();
+            let mut next = one_more.workspaces[listed - 1].clone();
+            next.directories = vec![directories[listed].0.to_string_lossy().into_owned()];
+            one_more.workspaces.push(next);
+            one_more.workspaces_omitted -= 1;
+            assert_cut_to_the_bound(&bytes, listed, encode_kept_response(&one_more));
+        }
+    }
+
+    // REQ-RUNNERENROLL-165: a prune result past its bound is cut from its last directory,
+    // each left out counted, the failed directories and the bytes removed counted over all
+    // of them.
+    #[test]
+    fn a_prune_result_past_its_bound_is_cut_from_its_last_directory() {
+        for path_bytes in [400, 8] {
+            let directories = kept_directories(5_000, path_bytes);
+            let result = KeptRunPrune {
+                scope: PruneScope::All,
+                complete: true,
+                directories: directories
+                    .iter()
+                    .map(|(path, bytes, failed)| PruneOutcome {
+                        path: path.clone(),
+                        attempt: None,
+                        bytes: *bytes,
+                        bound: PruneBound::Operator,
+                        result: if *failed {
+                            PruneResult::Failed
+                        } else {
+                            PruneResult::Removed
+                        },
+                    })
+                    .collect(),
+                caches: vec![CacheEviction {
+                    path: PathBuf::from("/srv/cache/cargo-target"),
+                    maximum_bytes: 1_024,
+                    evicted: useful_execution::Evicted {
+                        bytes_before: 2_048,
+                        bytes_after: 0,
+                        removed_files: 2,
+                        removed_bytes: 2_048,
+                        failed_files: 0,
+                        stopped: false,
+                    },
+                }],
+            };
+            let removed_bytes = directories
+                .iter()
+                .filter(|(_, _, failed)| !failed)
+                .map(|(_, bytes, _)| bytes)
+                .sum::<u64>()
+                + 2_048;
+            let failed = directories.iter().filter(|(_, _, failed)| *failed).count();
+
+            let bytes = prune_answer(result).expect("the cut result is written");
+            let Ok(PruneAnswer::Pruned(cut)) = decode_prune_response(&bytes) else {
+                panic!("the cut result is a prune result");
+            };
+            let listed = cut.directories.len();
+            assert_eq!(
+                cut.directories_omitted,
+                5_000 - u64::try_from(listed).unwrap()
+            );
+            assert_eq!(cut.failed_directories, u64::try_from(failed).unwrap());
+            assert_eq!(cut.removed_bytes, removed_bytes);
+            assert!(cut.all && cut.complete);
+            let paths = cut
+                .directories
+                .iter()
+                .map(|directory| directory.path.clone())
+                .collect::<Vec<_>>();
+            let first = directories[..listed]
+                .iter()
+                .map(|(path, _, _)| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(paths, first);
+            let mut one_more = (*cut).clone();
+            let mut next = one_more.directories[listed - 1].clone();
+            next.path = directories[listed].0.to_string_lossy().into_owned();
+            one_more.directories.push(next);
+            one_more.directories_omitted -= 1;
+            assert_cut_to_the_bound(&bytes, listed, encode_prune_response(&one_more));
+        }
     }
 
     /// The overview of `valid/overview-response.json`.

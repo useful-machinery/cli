@@ -186,7 +186,7 @@ useful workflow run create \
   --execution-root . \
   --run-dir ~/.useful/runs/review-001
 
-useful workflow run status ~/.useful/runs/review-001
+useful workflow run show ~/.useful/runs/review-001
 useful workflow run view ~/.useful/runs/review-001
 ```
 
@@ -217,7 +217,8 @@ The current release supports:
   Artifact Set download and inspection;
 - runner and runner-pool administration, including personal pools, pool status and pool
   join keys, plus prerequisite diagnostics; and
-- enrollment, or joining a pool with a join key when the service first starts, and service
+- enrollment with a single-runner key, or joining a pool with a pool's join key, when the
+  service first starts, and service
   operation for an outbound runner that connects only to its Cloud-issued endpoint and
   waits for explicit start authorization.
 
@@ -227,117 +228,6 @@ discover authorized repositories, manage projects and runner pools, create mixed
 or inputless runs for a ready project, administer Run Input Sets, inspect/download/delete
 retained run inputs, wait for terminal status, and download verified Artifact Sets. It
 does not yet guide the rest of Cloud onboarding.
-
-## Service principals and API keys
-
-Create a service principal while signed in as a human, and direct its show-once initial
-API key to a new private file:
-
-```sh
-useful service-principal create \
-  --display-name "Build agent" \
-  --api-key-file ./build-agent.key
-```
-
-The destination is created with mode `0600` and is never overwritten. Use
-`--api-key-file -` only for a deliberate secret pipeline; it writes only the API key to
-standard output and sends status to standard error. `--json` cannot be combined with
-that stdout form, and JSON output never contains an API key. A signal before request
-dispatch stops creation or issuance; after dispatch, the CLI completes the bounded
-request and key delivery despite a later `SIGINT` or `SIGTERM` so a committed one-time
-key is not discarded. If destination write or synchronization fails,
-`api_key_delivery_failed` preserves the known non-secret metadata, destination, and safe
-recovery classification. The receipt reports destination cleanup as `removed`,
-`not_applicable` for standard output, or `uncertain`. File cleanup is attempted immediately; `uncertain` means the key may remain
-at the destination and the operator must protect, inspect, and remove it before deciding
-whether to revoke the known credential. The CLI does not revoke it automatically. If an
-idempotent replay returns credential metadata without the show-once key, the CLI reports
-`api_key_unavailable`, preserves the metadata in JSON, attempts to remove the reserved
-output file, and does not issue or invent a replacement.
-
-Service credentials are explicit per invocation. The CLI does not persist a service API
-key or fall back between a service key and the human credential store:
-
-```sh
-useful service-principal credential list \
-  --service-api-key-file ./build-agent.key
-
-useful service-principal credential issue \
-  --service-api-key-file ./build-agent.key \
-  --api-key-file ./build-agent-next.key
-
-useful service-principal credential revoke \
-  crd_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --service-api-key-file ./build-agent-next.key \
-  --yes
-```
-
-Input key files must be regular, non-symbolic-link files owned by the current user with
-mode exactly `0600`. A trailing newline is accepted. `--service-api-key-file -` reads one
-key from standard input. Keys are redacted from debug values and are never emitted in
-JSON, diagnostics, or ordinary logs. Credential listing returns non-secret metadata
-only; issuance requires an existing platform API key, and revocation requires a
-different active key because a credential cannot revoke itself.
-
-Cloud-management leaves whose public API operation permits a service actor also accept
-`--service-api-key-file PATH|-`. This includes service-capable account profile and
-self-deletion operations; current-principal status and identity management;
-organization, invitation, GitHub, project, publication, run, retained-input, Artifact
-Set, runner-pool, and runner-administration operations. Identity linking by a service
-also requires `--workload-token-file PATH|-` containing a fresh token from a configured
-workload issuer. Both files use the same private-file checks and cannot both consume
-standard input.
-
-Human-only operations remain human-only: login, logout, signup, service-principal
-creation, account-deletion cancellation, and organization-deletion request or
-cancellation do not accept service API-key authentication. A service creating an
-organization must additionally pass `--delegator-principal-id` with the exact human
-principal from an active delegation. Delegation is attribution only: the service must
-still hold its own required organization membership and role for every organization
-operation, and the CLI never borrows authority from the human credential store.
-
-Service API keys are also separate from runner credentials. They can authorize runner
-administration when the service has the required organization role, but they cannot
-enroll a runner, start `runner serve`, authenticate the runner connection, or replace a
-runner activation or runner credential.
-
-## Delegations
-
-A signed-in human proposes a delegation to one exact active service principal:
-
-```sh
-useful delegation propose prn_01k0z6r1w8f4jy2m7q9v3x5abc
-```
-
-Proposal is deliberately human-only. Acceptance is deliberately service-only and always
-requires the nominated service's explicit API-key input; the CLI never substitutes a
-stored human session:
-
-```sh
-useful delegation accept dlg_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --service-api-key-file ./build-agent.key
-```
-
-Either exact participant may list, show, or end its relationships. Omit
-`--service-api-key-file` to use the renewable human session, or supply it to act as the
-service. Listing returns one page and exposes an opaque next cursor when another page is
-available:
-
-```sh
-useful delegation list --limit 50
-useful delegation list --cursor <CURSOR> \
-  --service-api-key-file ./build-agent.key
-useful delegation show dlg_01k0z6r1w8f4jy2m7q9v3x5abc
-useful delegation end dlg_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-```
-
-Ended relationships remain visible in delegation history with their terminal timestamp
-and reason. Accepting or ending an already ended relationship returns the stable
-`delegation_transition_unavailable` outcome; an inaccessible relationship returns
-`not_found` without revealing whether it exists. Delegations do not expire under the
-current public API contract. An expired or revoked actor credential instead returns
-`unauthenticated`. Delegation records attribution only and never lends organization
-membership or any other authority.
 
 ## Public API contract
 
@@ -352,503 +242,66 @@ generated source header records the OpenAPI Generator version and the canonical 
 path, and the contract a CLI build used is the one committed beside the client at that
 build's source commit, even when the deployed API contract has since changed.
 
-## Local workflow validation
-
-Use `useful workflow validate` to resolve a checked-out Workflow V1 bundle
-without running it:
-
-```sh
-useful workflow validate \
-  --source-root ./my-repository \
-  ./my-repository/.useful/workflows/check.yaml
-```
-
-`workflow validate` accepts the same `--agent-profiles <PATH>` replacement document as
-`workflow run create`, applies it identically, and reports the replaced profile names without
-retaining the document.
-
-Ready-to-run command and agent bundles are available under
-[`examples/workflows/`](examples/workflows/). They cover basic DAGs, command input and
-output dataflow, recovery, advisory and required failures, cancellation, all three agent
-harnesses, structured agent results, attachments, and workflow finalizers. Definition
-validation is offline; running an agent example requires its selected harness and
-provider credentials and may consume billed tokens.
-
-`--source-root` is required and defines the complete directory boundary for the
-selected workflow YAML and all static prompts, message files, attachments, and result
-schemas. The workflow file is an ordinary host path resolved from the process's initial
-working directory, then canonicalized and required to remain within that explicit root.
-The CLI does not infer the boundary from an enclosing repository or the YAML file's
-directory.
-
-For concise, version-aligned authoring guidance from the installed executable, run:
-
-```sh
-useful workflow reference
-```
-
-The command writes its version-aligned embedded Markdown unchanged to standard output.
-It includes the supported authoring loop, language semantics, safety boundaries, a
-checked example, and these stable public handoffs:
-
-- [Workflow V1 authoring guide](https://docs.usefulmachinery.com/agent/workflow-authoring.md)
-- [Workflow V1 language reference](https://docs.usefulmachinery.com/reference/workflow-v1.md)
-- [Workflow V1 raw schema](https://docs.usefulmachinery.com/schemas/workflow-v1.schema.json)
-
-It needs no source checkout, workflow file, configuration, credentials, or network
-access.
-
-Retrieve the self-contained Workflow V1 JSON Schema from an installed executable
-without a source checkout:
-
-```sh
-useful workflow schema > workflow-v1.schema.json
-```
-
-The command writes raw JSON Schema bytes without a wrapper or preamble and preserves the
-canonical asset's single terminal newline. It needs no workflow file, configuration,
-credentials, or network access. Configure a JSON Schema-aware YAML editor or validation
-tool to use the emitted file or the stable public raw-schema URL above; every schema
-reference resolves within the document. Do not add a `$schema` property to the workflow
-document.
-
-The emitted schema checks document structure only. `workflow validate` remains the
-complete workflow definition validator: it additionally checks the step graph,
-references, path containment, static files, types, and policy. Passing a schema check
-alone therefore does not establish that the CLI will accept the complete workflow
-definition and its referenced files.
-
-A successful human result reports the normalized source-root-relative workflow path,
-the SHA-256 digest of the resolved source closure, step count, and required named input
-interface. It never prints static file contents. Add `--json` for one schema-version-1
-result with `valid` or `invalid` as its closed `outcome`; invalid results contain one
-bounded CLI-owned diagnostic rather than parser or schema-library error text.
-
-This command performs definition resolution only. It does not admit or start a run,
-execute command or agent steps, check harness or model availability, read human or
-runner credentials, or contact Useful Machinery. A zero exit status means only that the
-local definition resolved successfully.
-
-## Remote artifact metadata and download
-
-List one page of a run's sealed Artifact Set without downloading it:
-
-```sh
-useful artifact list acme-research run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --limit 50
-```
-
-The result includes whole-set identity, seal and retention times, total member and byte
-counts, and each member's portable path, media type, size, and SHA-256 digest. Members
-are in portable-path order. `--limit` accepts 1 through 200, and `--cursor` continues
-from the opaque `next cursor` value; the limit may change between pages. Add `--json`
-for a schema-version-1 result with `outcome: "listed"` and the page under `artifactSet`.
-
-Listing calls only the metadata inventory operation. It does not request exact download
-capabilities, read artifact bytes, or create output files. A missing run and an
-unattached, deleted, or not-yet-sealed Artifact Set are deliberately indistinguishable
-and produce `outcome: "unavailable"`; an elapsed retention window produces
-`outcome: "expired"`. Both states return a nonzero status, as do authorization,
-network, invalid-cursor, and invalid-response outcomes.
-
-Download and verify the complete set only when its bytes are needed:
-
-```sh
-useful artifact download acme-research \
-  run_01k0z6r1w8f4jy2m7q9v3x5abc --output ./downloaded-attempt-result
-```
-
-Download continues through every inventory page, requests fresh exact capabilities in
-bounded batches, verifies each member and the complete portable set, and atomically
-creates the requested output directory only after complete validation. Add `--json` for
-one schema-version-1 receipt with `outcome: "downloaded"`, the Run and Artifact Set IDs,
-verified member and byte totals, the committed destination, and deployment. A failed
-transfer or verification emits no receipt and never commits the destination.
-
-## Portable artifact validation
-
-Validate one copied or downloaded Artifact Set V1 directory without its original run,
-workflow source, or execution checkout:
-
-```sh
-useful artifact validate ./downloaded-attempt-result
-```
-
-The command validates the complete closed `result.json` contract and every declared
-export. It checks the exact root and `exports/` inventory, aliases, portable carrier
-paths, confined regular-file identity, sizes, SHA-256 digests, media types, UTF-8 text,
-compact ordered JSON, and changed or zero-delta `git_branch` artifacts. Git validation
-checks the closed semantic metadata, carrier-presence rule, bundle-v2 header and profile,
-pack framing and checksum, and reconstructible object facts without a destination
-repository. Unknown kinds are rejected. There is no single-export selector or repair
-mode.
-
-Validation opens the selected directory read-only, follows no symbolic link beneath its
-opened root, and leaves the set unchanged. It does not read workflow-run state,
-credentials, or configuration, and it does not contact Useful Machinery, a provider, a Git
-remote, or any other network service.
-
-Add `--json` for one Artifact Validate Result Schema 1 document. A valid result has
-`outcome: "valid"`, `exitStatus: 0`, the canonical artifact-directory path, and bounded
-summary counts. An invalid result has `outcome: "invalid"`, `exitStatus: 1`, and the
-complete contractually bounded deterministic diagnostic sequence instead of a summary.
-Human mode reports the same diagnostic codes and ordering. Command-line usage errors
-return 2 and do not inspect the artifact directory.
-
-## Local workflow execution
-
-Use `useful workflow run create` to execute a mixed command, PiJsonV1,
-ClaudeCodeStreamJsonV1, and CodexAppServerV1 agent Workflow V1 DAG in an existing
-caller-owned directory and create one durable local run
-directory:
-
-```sh
-useful workflow run create \
-  --path ./my-repository \
-  --workflow .useful/workflows/check.yaml \
-  --execution-root ./my-checkout \
-  --run-dir ./runs/check-001 \
-  --max-parallel 2
-```
-
-The run directory must not exist and must be disjoint from the execution root. The CLI
-normalizes it from its nearest existing parent and creates any missing parent suffix.
-First-workflow onboarding uses the owner-private `~/.useful/runs/` durable state root
-by default; retained runs are application state and do not belong under `~/.config`.
-The CLI retains immutable workflow and named-input bytes, durable closed run and attempt
-state, and attempt 1's atomic result beneath `attempts/000001/result`. Every agent
-invocation receives a fresh profile directory under
-`attempts/<attempt>/diagnostics/` with immutable attempt, step, invocation, profile, and
-exact-version metadata. PiJsonV1 and ClaudeCodeStreamJsonV1 additionally retain fresh
-native session storage there; those sessions are never resumed, and Claude's temporary
-ambient history links are removed when the invocation quiesces. CodexAppServerV1 starts
-one fresh ephemeral thread and uses one transient owner-private SQLite directory beneath
-invocation staging. App Server events remain authoritative, the SQLite directory is
-removed after settlement, and no Codex-native thread or file is retained. A PiJsonV1 or
-CodexAppServerV1 protocol failure may retain a bounded structural rejection document there;
-ClaudeCodeStreamJsonV1 retains none, since nothing in Claude Code's stream is refused. The
-run-directory path is the local run handle. Add `--json` for one terminal
-schema-version-1 object on stdout while the live presentation remains on stderr, or
-`--plain` to force the line presentation on stdout. The `--json` object of `run create`,
-`run retry` and `run resume` conforms to
-[`schemas/workflow-run-result-v1.schema.json`](schemas/workflow-run-result-v1.schema.json),
-whose completed-attempt `result` refers to the view schema's `WorkflowResult`.
-
-Retained harness diagnostics can contain sensitive prompts, model output, tool activity,
-paths, and extension or provider state. Native sessions or diagnostic files may be
-incomplete or malformed after failure, cancellation, or forced termination and are
-diagnostic only: workflow status, results, retry, and recovery never read or reopen them
-as authority. They remain owner-private after every terminal outcome, are not included in
-published attempt results, have no stable viewer or download interface, and disappear
-only when the owning durable run directory is removed.
-
-An ordinary command or agent step may declare `recovery.retries` from 1 through 10 and
-optionally one `cmd` or fresh `agent` handler. Without a handler, Useful Machinery immediately
-rechecks the unchanged target. A handler can only return the closed `recheck` or
-`gave_up` decision through its engine-owned private result transport; it is not a DAG
-node and publishes no output. Every target recheck and handler is a fresh physical
-invocation in the same execution root. Provisional target failures remain history, and
-only the target invocation supplying terminal success commits outputs. Repeated external
-effects are at-least-once: authors supply stable domain idempotency keys through existing
-explicit inputs or admitted environment, never from Useful Machinery invocation or round IDs.
-
-Every declared root input is required. Supply Text with `--input-text <NAME> <TEXT>` or
-`--input-text-file <NAME> <PATH|->`, JSON with `--input-json <NAME> <JSON>` or
-`--input-json-file <NAME> <PATH|->`, and one File with
-`--input-file <NAME> <MEDIA_TYPE> <PATH>`; append ordered attachment members with
-`--input-attachment <NAME> <MEDIA_TYPE> <PATH>`, or provide a present empty collection
-with `--input-attachments-empty <NAME>`. JSON is strict and may be constrained by a
-retained workflow schema. File media types are explicit and optional declaration constraints
-match exactly. All bindings are acquired before execution, and one Text or JSON file input
-may exclusively claim standard input. Workflow commands always receive closed standard input.
-
-`--agent-profiles <PATH>` replaces declared agent profiles for one invocation without
-editing the workflow. The file is a closed YAML document with `schemaVersion: 1` and an
-`agentProfiles` map whose keys name profiles the selected workflow declares and whose
-values are complete harness definitions in the ordinary Workflow V1 grammar. Each named
-profile is replaced as a whole, so every step, finalizer, and recovery handler that
-references it runs on the replacement; unnamed profiles keep their declarations. A
-replacement may select a different harness kind, and only the harnesses the effective
-profiles select must be installed. The document never changes the source-closure digest.
-Its exact bytes are retained with the run and reapplied by `run retry` and `run resume`, and
-`result.json` records the digest and effective configuration under
-`workflow.agentProfileReplacement`. The structural contract is
-[`schemas/agent-profile-replacement-v1.schema.json`](schemas/agent-profile-replacement-v1.schema.json).
-
-```sh
-useful workflow run create \
-  --path . \
-  --workflow .useful/workflows/review.yaml \
-  --execution-root . \
-  --run-dir ~/.useful/runs/review-002 \
-  --agent-profiles ~/.useful/profiles/claude.yaml
-```
-
-Without `--plain` or `--json`, run uses the interactive terminal interface when stdin and
-stdout are terminals, `TERM` is present and neither empty nor `dumb`, and stdin is not
-reserved by a Text or JSON input. Every other combination keeps the plain line stream.
-Stderr terminal status does not select the interface. `NO_COLOR` disables semantic color
-under `--color=auto` but does not disable interactive mode; `--color=always` overrides it.
-
-The interface keeps a stable step selection, an inspector, and bounded per-step logs.
-Use `Up`/`Down` or `j`/`k` to select a step, `Enter` and `Escape` to enter and leave its
-full log, and `?` for all log navigation controls. Wide and narrow terminals use
-side-by-side or stacked layouts. Resizing recomputes the layout without leaving
-interactive mode; below 64 columns or 20 rows a resize notice replaces the panes while
-execution, `Ctrl-C`, and eventual `q` handling continue.
-
-`Ctrl-C` requests the existing orderly `user_request` cancellation and does not abandon
-owned child work. `q` is ignored while execution, publication, cleanup, or run ownership
-is active. Once the retained attempt is complete, the interface remains open for
-post-run inspection until `q`; Useful Machinery then restores raw mode, the alternate screen, and
-the cursor before invoking the shared standard plain-summary renderer. The summary and
-process status are therefore the same contracts used by forced plain output. Inspect the
-durable run later with `workflow run status <RUN_DIR>`; retry is always explicit.
-
-A Claude Code profile is configured independently from Pi:
-
-```yaml
-agentProfiles:
-  claude:
-    harness:
-      kind: claude_code
-      config:
-        model: claude-opus-4-1
-        effort: high
-```
-
-`model` is a nonempty native Claude model string. `effort` is one of `low`, `medium`,
-`high`, `xhigh`, or `max`; both fields are required and additional configuration is
-rejected. Useful Machinery does not query a model catalog, install Claude Code, or supply a
-fallback model or harness.
-
-A Codex profile is also independent:
-
-```yaml
-agentProfiles:
-  codex:
-    harness:
-      kind: codex
-      config:
-        model: gpt-5.4
-        effort: xhigh
-```
-
-Both Codex values are required nonempty native strings, and additional configuration is
-rejected. Useful Machinery does not read provider credentials during definition resolution,
-installation discovery, rejection presentation, or doctor checks.
-
-Local execution snapshots the inherited environment after resolution and removes
-`USEFUL_` variables before launching commands or agents. Other caller-provided values are
-retained unless the closed harness profile fixes them. ClaudeCodeStreamJsonV1 removes
-`CLAUDE_CODE_PROJECT_DIR_NAME` to keep retained-session routing authoritative and applies
-its documented native controls; values such as `GH_TOKEN`, `GITHUB_TOKEN`, and Git or SSH
-credential-helper configuration remain available for local repository setup and cloning.
-The local caller owns that authority; Runner Serve applies a separate managed
-credential-isolation policy. The CLI inspects the resolved agent steps and validates
-each required harness once: `pi` for PiJsonV1, `claude` for
-ClaudeCodeStreamJsonV1, and `codex` for CodexAppServerV1. Each search selects the first
-executable candidate in inherited `PATH` and pins its canonical absolute path, exact
-observed version, profile, and capabilities for the run. Each harness admits a
-canonical stable release in its qualified range, `>=2.1.234 <2.2.0` for Claude Code, and
-also admits, as untested, any capability-compatible stable release newer than its
-qualification release (Pi 1.3.0, Claude Code 2.1.321, Codex 0.163.0); Claude Code's
-first initialization frame must report the pinned observed version exactly. After
-admission succeeds and before any step runs, the command writes one stderr advisory line
-per selected untested harness naming the harness, the installed version, and the
-qualification release, in every presentation mode and never per agent step; `--json`
-stdout remains the result document alone. Later `PATH` changes cannot switch an admitted
-executable. Command-only workflows probe no harness; each single-harness workflow
-requires no unrelated installation. A mixed workflow requires exactly its selected
-harnesses and never substitutes or falls back between them. Workflow definitions,
-imports, and remote values cannot supply an executable or alter selection. The adapter
-does not read Useful Machinery human or runner credentials and does not contact Useful Machinery; an
-admitted agent harness may use the provider and other host authority selected by its
-closed profile and inherited environment.
-
-Workflow V1 outputs declare semantic `kind` separately from acquisition `from`. The six
-rows are `text/path`, `text/agent_response`, `json/path`, `json/agent_result`,
-`file/path`, and `git_branch/workspace`; consumers and exports observe only the semantic
-kind. A Git branch output is export-only and cannot bind a downstream command input or
-agent message. Before any step
-starts, local admission requires the execution root to be exactly one SHA-1 Git worktree
-root and pins its current commit as the baseline. Successful capture requires a clean
-committed head descended from that baseline. A changed head publishes one Git bundle
-carrier; an unchanged head publishes the semantic zero-delta result without a carrier.
-Repository remotes, destination branches, providers, credentials, and publication policy
-are not workflow fields.
-
-## Local workflow status
-
-Inspect the durable state and retry eligibility of an existing local run without changing
-it:
-
-```sh
-useful workflow run status ./runs/check-001
-```
-
-The run-directory positional is an ordinary host path resolved from the process's
-initial working directory. Retry uses the same durable handle explicitly:
-
-```sh
-useful workflow run retry ./runs/check-001 --execution-root ./my-checkout
-```
-
-To reexecute a selected ordinary step and its downstream ordinary dependents,
-inherit the other eligible ordinary steps by reference, and rerun all finalizers:
-
-```sh
-useful workflow run resume ./runs/check-001 --from build --from verify
-useful workflow run resume ./runs/check-001 --from verify \
-  --workflow ./revised-workflow.yaml --execution-root ./another-checkout
-```
-
-`--workflow` selects a replacement within the original retained source-root boundary;
-without it the immediately prior attempt's retained definition is used. The execution
-root is selected independently and defaults to the prior attempt's root. Accepted
-`--json` writes the terminal result as one stdout object conforming to
-[`schemas/workflow-run-result-v1.schema.json`](schemas/workflow-run-result-v1.schema.json)
-and emits the same accepted partition record to stderr before execution; a refused
-continuation writes its rejection document under the same schema. The initial
-run inputs and primary-workspace Git baseline remain immutable. A continuation is
-allowed only from an eligible latest failed, cancelled, or interrupted attempt, after
-all retained process groups are proven quiescent. Before actions run, plain output
-reports the ordered reexecuted and inherited partitions. Executed steps, recovery
-handlers, and finalizers can read the credential-free `USEFUL_CONTINUATION_CONTEXT`
-file; initial runs and explicit retries do not receive this variable. A continued
-step starts fresh; an inherited step has neither a new invocation nor a copied log.
-A required body-data consumer of an inherited skipped output is rejected, while
-conditions, advisory consumers, finalizers, and exports retain their normal
-unavailable-value behavior. `workflow run status` reports only base continuation
-eligibility, not request-specific admission; an unavailable or incomparable historical
-workspace snapshot yields `workspaceModified: "unknown"`.
-
-Status reads only the closed `local-run.json` and `state.json` contracts and an existing
-regular `run.lock`. For activated step recovery, plain and JSON snapshots report the
-active or terminal target/handler role, round, target execution, decision, invocation
-accounting and usage, raw terminal disposition, output ownership, and retry eligibility.
-It never scans `.private`, creates the lock, acquires execution
-ownership, waits for an owner, signals child work, or reads standard input. Its
-non-acquiring lock query combines with two matching state revisions to distinguish an
-active owner, a settled run, an abandoned nonterminal attempt, and ownership that cannot
-be proven safely. An exact live process-group identity remains `ownership_unproven`; an
-unlocked outstanding start action without its required process-guard registration makes
-the run directory invalid rather than retry-eligible. The retry projection is eligible
-or uses the first applicable closed reason in this order: `run_locked`,
-`ownership_unproven`, `latest_attempt_succeeded`, then `latest_attempt_rejected`.
-
-Without a mode option, and with `--plain`, one complete human snapshot is written to
-stdout and operational diagnostics use stderr. `--json` writes exactly one ANSI-free
-object conforming to
-[`schemas/workflow-status-result-v1.schema.json`](schemas/workflow-status-result-v1.schema.json)
-to stdout; run-directory, schema, lock-query, and unstable-snapshot failures are encoded
-in that object rather than duplicated on stderr. Status has no TUI or live presentation
-stream.
-
-`--color` accepts `auto`, `always`, or `never`. It affects only semantic tokens in plain
-output; `auto` requires terminal stdout, a usable `TERM`, and an unset or empty
-`NO_COLOR`. JSON never contains ANSI. A complete snapshot returns 0 regardless of run
-or retry disposition, an operational or output failure returns 1, and a command-line
-usage error returns 2. SIGINT or SIGTERM before completed output returns 130 or 143,
-respectively.
-
-## Local workflow archived view
-
-View a successfully published terminal attempt from one stable read-only snapshot:
-
-```sh
-useful workflow run view ./runs/check-001 [--attempt 1] [--plain | --json]
-```
-
-Omitting `--attempt` selects the current attempt from the snapshot. Without an explicit
-mode, terminal stdin plus terminal stdout plus a usable `TERM` opens the existing frozen
-archived TUI; every other stream arrangement prints a plain completed-attempt summary.
-`--plain` and `--json` force their modes regardless of terminal capability and conflict
-with each other. The command never opens `/dev/tty` or falls back after selecting the
-TUI.
-
-The plain summary contains retained attempt and execution identity, lifecycle, duration,
-node disposition, direct typed causes, activated Recovery Summary Schema 1,
-per-invocation usage and output ownership, terminal counts, outcome, cancellation, and
-finalization facts. It does not replay events or print retained stdout or stderr,
-commands, exports, artifact contents, or agent observations, and it claims no ordering
-between retained streams.
-
-`--json` writes exactly one ANSI-free document conforming to
-[`schemas/workflow-view-result-v1.schema.json`](schemas/workflow-view-result-v1.schema.json).
-A successful view returns 0 and embeds the complete validated immutable selected result,
-including when the workflow outcome is failed or cancelled. Expected acquisition and
-attempt-selection failures return 1 as the schema's closed error variant on stdout
-without duplicate stderr prose. Usage errors return 2. Local serialization, output, or
-terminal failures return 1 and do not append a replacement document after a partial
-prefix.
-
-The loader validates the retained workflow, published result, cross-document identity,
-artifact set, and retained budget before exposing either the safe archived projection or
-the complete wire result. It opens only the state-recorded publication once, never
-acquires execution ownership, and does not retarget if a retry advances the run.
-
-Use `q` to restore an active TUI and return 0 without a workflow-run summary. SIGINT and
-SIGTERM interrupt any mode with status 130 or 143; noninteractive rendering, writing,
-and flushing remain abandonable even when stdout is full. Viewer signals never cancel a
-workflow. `--color` affects only plain and TUI styling; JSON is always ANSI-free.
-
-## Version inspection
-
-Use `useful --version` or `useful version` for conventional one-line
-output. Use `useful version --json` for the schema-version-1 structured contract:
-
-```json
-{
-  "schemaVersion": 1,
-  "command": "useful",
-  "version": "0.10.0",
-  "executablePath": "/resolved/path/to/useful",
-  "buildIdentity": "unknown"
-}
-```
-
-Packaged builds replace the local `unknown` build identity with their source revision.
-Official GitHub release binaries report the public commit identified by the release tag
-as `buildIdentity`.
-The schema does not define a release channel.
+## Commands
+
+The commands live under six roots, and the sections that follow take them in this order:
+
+| Root | What it manages | Start here |
+| --- | --- | --- |
+| `useful account` | Sign-in, the account, your integrations (grants and tokens), service principals and delegations | [Human authentication](#human-authentication) |
+| `useful org` | Organizations, their invitations and their integrations (connections and tokens) | [Organization management](#organization-management) |
+| `useful project` | Projects, their runner pools and webhooks | [Project management](#project-management) |
+| `useful runner` | Runner pools, runners, join keys and the runner service | [Runner pools, registrations, and join keys](#runner-pools-registrations-and-join-keys) |
+| `useful version` | The CLI's version | [Version inspection](#version-inspection) |
+| `useful workflow` | Local and Cloud workflows, their runs and their artifacts | [Local workflow validation](#local-workflow-validation) |
+
+Coming from an earlier release, [`docs/command-migration.md`](docs/command-migration.md) maps
+each earlier command to its replacement.
 
 ## Human authentication
 
-Use `useful auth login` to authenticate through a browser on the same machine or
+Use `useful account login` to authenticate through a browser on the same machine or
 another machine. The CLI prints an activation URL and user code, never opens a browser,
 and never listens for an inbound callback. Add `--json` to receive newline-delimited
 schema-version-1 events. Use `--force` to start a new device authorization transaction
 without checking an existing credential with the API.
 
-Use `useful auth status` to ask the selected deployment whether the current
+Use `useful account show` to ask the selected deployment whether the current
 identity is authenticated, requires signup, is forbidden, is unauthenticated, or is
 unreachable. `forbidden` (exit 1) means the deployment accepts the sign-in but refuses its
 account, as it does for an account that is suspended, deleted, or scheduled for deletion;
-the stored sign-in is kept, and `useful account deletion cancel` stops a scheduled deletion
+the stored sign-in is kept, and `useful account restore` stops a scheduled deletion
 before its deadline. Add `--json` for the schema-version-1 structured result.
 Authenticated, signup-required, and forbidden results preserve any server actions as
 complete opaque JSON values. The CLI does not
 validate action IDs or guide origins, fetch guides, infer commands, or execute actions.
 Status always contacts the public API, including when no local credential exists.
 
-Manage the OIDC identities linked to the signed-in account under `auth identity`:
+When you are authenticated, `useful account show` also reports the organization and the
+project in effect, each with the source that named it, or that none is in effect; it takes
+`--org` and `--project` as the commands that act in them do (see Organizations below). With
+`--json` they are the members `organizationInEffect` and `projectInEffect` (`project`, the
+project's ID, and `source`: `flag`, `environment` or `checkout`), each omitted when none is
+in effect. A source that names something it cannot use, and a read of your memberships or
+projects that fails, are named on standard error; neither changes the exit status.
+
+Manage the OIDC identities linked to the signed-in account under `account identity`:
 
 ```sh
 # List one page; the current local-session identity is marked when that page contains it.
-useful auth identity list --limit 50
+useful account identity list --limit 50
 
 # Continue when the result includes a next cursor.
-useful auth identity list --limit 50 --cursor "$NEXT_CURSOR"
+useful account identity list --limit 50 --cursor "$NEXT_CURSOR"
 
 # Prove control of another identity in a fresh browser/device flow and link it.
-useful auth identity link
+useful account identity link
 
 # Remove a non-current identity by the opaque ID returned by list.
-useful auth identity remove idn_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful account identity remove idn_01k0z6r1w8f4jy2m7q9v3x5abc --yes
 ```
 
-`auth identity link` keeps the session that passed preflight as the acting identity
+`account identity link` keeps the session that passed preflight as the acting identity
 and uses a separately issued access token only as the proposed identity proof. It
 requests fresh browser/device authorization without `offline_access` and never writes
 the proof to the credential store. The final request stays bound to the preflight
@@ -866,11 +319,11 @@ minutes and refuses to remove either its exact identity or the last usable ident
 remove the identity currently used on this device, first find the item marked `current`
 in `list`. Listing is oldest-first and returns one page, so follow each `nextCursor` with
 `--cursor` until the marked identity appears. Record that ID, run
-`useful auth login --force`, and choose a different identity already linked to
+`useful account login --force`, and choose a different identity already linked to
 the same account. That fresh login replaces the local session. Removing the former
 identity then leaves the replacement local session signed in and unchanged. A removal
 command never deletes or revokes the current local credential. With
-`--service-api-key-file`, removal instead uses the selected service authority and never
+`--api-key-file`, removal instead uses the selected service authority and never
 reads or changes the local human session. Deployment workload-identity policy and
 service-actor authorization still apply.
 
@@ -900,7 +353,7 @@ access token, its expiration, and a rotating refresh token in
 command while the refresh session remains valid. Auth0 expires refresh sessions after 30
 days idle or 90 days total.
 
-Use `useful auth logout` to remove the human credential for the active deployment
+Use `useful account logout` to remove the human credential for the active deployment
 and ask Auth0 to revoke its refresh token. The result distinguishes confirmed and
 unconfirmed server revocation; local removal still completes when Auth0 is unreachable.
 The human store remains separate from workflow-run state and all runner credentials.
@@ -910,344 +363,6 @@ leaf command. This includes authentication and linked identity management, accou
 organization, GitHub connection, project, Cloud run, and runner administration commands;
 the option is not global.
 
-## Grants
-
-`useful integration` manages what Useful Machinery may do as you at other providers, which it
-holds as grants. A grant is an OAuth grant, your consent at the provider, whose ID begins
-`pgr_`, or a native grant
-(`claude_code`, `codex`), a coding agent's own login imported for one organization, whose ID
-begins `agl_`. The built-in OAuth providers are `github`, `gitlab.com` and `linear`; any other
-OAuth provider your deployment serves is given by its id. Each grant is used only on the
-runners you authorize for it. `useful integration` also connects a token service, such as
-`mergify` or `buildkite`, by its token, for you or with `--org` for an organization; a token,
-whose ID begins `itk_`, is used only on the runners its owner authorizes for it. With `--org`,
-an owner also connects the organization itself at GitHub or Linear, and `useful integration
-list` shows each organization's GitHub, Linear and GitLab connections after the tokens. The
-commands take your signed-in session only, never a service API key.
-
-```sh
-# Make a grant through the provider's own sign-in. For an OAuth provider this starts the
-# provider's consent, prints its URL, opens it in your browser when this machine has one (not
-# over SSH, and on Linux only with a display), and waits until the grant is active; approving
-# the URL in any browser completes it. --no-wait returns once the consent has started. The
-# built-in OAuth providers are github, gitlab.com and linear; any other OAuth provider your
-# deployment serves is given by its id, as useful integration list shows it, and the command
-# checks that the deployment serves it before starting anything. When you already hold a grant
-# of the provider, the command asks before replacing it on a terminal and otherwise exits 2
-# unless you pass --replace; the new sign-in becomes that grant's next generation, keeping its
-# ID and the runners it is authorized for.
-useful integration connect linear
-useful integration connect github --replace --json
-useful integration connect example
-
-# For codex this runs `codex login` in a private temporary Codex home (mode 0700) that it
-# removes afterwards, and imports the login it writes; your own Codex home is never read or
-# changed. With --device, or where this machine has no browser (over SSH, or on Linux without
-# a display), it runs `codex login --device-auth`, whose code you enter in any browser.
-# --login names that sign-in, the default, and is Codex's alone. --from-file imports an
-# existing auth.json from an owned mode-0600 file, or - for standard input, instead. The grant
-# is for your only organization, or the one --organization names. A coding agent's sign-in
-# has no consent to wait for, so --no-wait and --timeout are refused for codex and claude_code.
-useful integration connect codex
-useful integration connect codex --device --organization acme
-useful integration connect codex --from-file ~/backup/auth.json --replace
-
-# For claude_code this runs `claude setup-token` with a private temporary configuration
-# directory (mode 0700) that it removes afterwards; your own Claude Code configuration is never
-# read or changed. Its prompts appear in your terminal and what you type, such as a code to
-# paste, reaches it; the token it prints is imported and never shown. Without a terminal on
-# standard input the command fails at once, starting no sign-in, and names --token-file -.
-# --token-file imports a token claude setup-token printed from an owned mode-0600 file, or -
-# for standard input, instead.
-useful integration connect claude_code
-useful integration connect claude_code --token-file - --organization acme < token.txt
-
-# For a token service the deployment serves, such as mergify or buildkite, store its token.
-# The command first checks that the deployment serves the service and whether the token is
-# already held, and only then reads the token: from --from-file PATH, an owned mode-0600 file,
-# or - for standard input; without --from-file, from standard input when that is not a
-# terminal, and otherwise at a prompt that does not echo what you type. No argument, option
-# value or environment variable carries it. The token is 1 to 4096 printable ASCII characters
-# with no space; one trailing line ending is dropped, and anything else exits 2 with nothing
-# sent. The command prints the token's record (ID, service, side, version, who connected it
-# and when, and its runners) with outcome connected, never the token. --org ORGANIZATION, an
-# ID or slug, stores the organization's token instead of yours, which only an owner may do: a
-# refusal exits 1. Where the token is already held, the command asks before replacing it on a
-# terminal and otherwise exits 2 unless you pass --replace; the replacement is the token's next
-# version, keeps its ID and runners, and reaches each authorized runner within five minutes.
-# The sign-in options --login, --device, --token-file, --no-wait, --timeout and --organization
-# are refused for a token service. useful integration list shows the token after your grants,
-# and authorize, deauthorize and revoke act on it named by its service, with --org for the
-# organization's; revoking erases it from Cloud but does not end it at the service.
-useful integration connect mergify
-useful integration connect mergify --from-file ~/secrets/mergify-token
-useful integration connect buildkite --from-file - < buildkite-token.txt
-useful integration connect mergify --org acme --replace
-
-# With --org and github or linear, connect the organization at the provider instead, which only
-# an owner may do. For github this begins the GitHub App setup that
-# useful connection github setup begin ORGANIZATION begins; finish it with the
-# useful connection github setup complete command its report names. For linear it starts the
-# authorization of a new Linear workspace and waits for it, as
-# useful connection linear authorization create ORGANIZATION does, with --no-wait and --timeout
-# as that command takes them. Each sends that command's requests, prints its report and --json
-# output, exits as it does, and creates no grant, consent or identity link of yours.
-# --organization, --login, --device, --from-file, --token-file and --replace are refused with
-# exit 2 before any request, as are --no-wait and --timeout with github. gitlab.com is refused
-# with --org: its connection is the several steps of
-# useful connection gitlab create ORGANIZATION INSTANCE_URL. An organization's connection acts
-# for Cloud and is authorized for a runner only by a connection authorization, so authorize and
-# deauthorize refuse --org with github, gitlab.com and linear unless --project-id is given,
-# naming that form, and revoke refuses it and names the useful connection command that removes
-# the connection.
-useful integration connect github --org acme
-useful integration connect linear --org acme --no-wait --json
-
-# Without a provider, or with --all, run the sign-in of each provider you hold no active or
-# reconnect_required grant of, one after another: github, gitlab.com, linear, each other OAuth
-# provider this deployment serves in the order it names them, claude_code, codex. Each
-# provider's name is printed on standard error before its prompts. A sign-in that
-# fails does not stop the ones after it; a provider this deployment does not serve is reported
-# provider_unavailable and passed over. The coding agents' grants are for your only
-# organization, or the one --organization names; when you are a member of none or of several
-# and name none, a coding agent you hold nowhere is reported organization_required and passed
-# over, and the consents still run. The command ends with one outcome per provider and exits 1
-# when any sign-in failed or every provider selected was passed over; an interrupt or a
-# termination signal during a sign-in ends it there with status 130 or 143. --device applies to
-# the Codex sign-in; --no-wait and --timeout apply to the consents. --from-file and --token-file
-# need a provider, and --replace a provider or --workflow. With --json each provider's events
-# are followed by a summary event.
-useful integration connect
-useful integration connect --all --organization acme --json
-
-# With --workflow FILE, which repeats, sign in to only the providers those workflows and the
-# workflows their workflow steps run call for, derived as useful runner doctor --workflow derives
-# them; the kind gitlab means gitlab.com. Before any sign-in the command prints the workflow
-# files, each provider to sign in to and each passed over as held with what calls for it, and
-# the declarations that may use credentials the workflows do not name, for which no sign-in is
-# run. Without --source-root each file is bounded by the root of the Git repository that holds
-# it, and a file in no repository is refused with exit 2. A file that does not resolve is
-# reported as useful workflow validate reports it, with exit 1. --workflow does not take a provider.
-# A provider every grant of which you hold needs reconnecting (its consent lapsed, or a runner
-# reported its login refused) is planned to reconnect: on a terminal the command asks first,
-# before any sign-in, and --replace replaces it without asking, storing the sign-in as the
-# grant's next generation so it keeps its ID and its runners; it never replaces a healthy
-# grant. One you keep is reported reconnect_required, naming useful integration connect PROVIDER
-# --replace. With --json the plan is a first workflow_requirements event, whose selected,
-# reconnect and held arrays name each provider and what calls for it.
-useful integration connect --workflow workflow.yaml --workflow ../other/workflow.yaml
-useful integration connect --workflow workflow.yaml --source-root . --json
-useful integration connect --workflow workflow.yaml --replace
-
-# List every grant you hold: its ID, provider, kind, the account it acts as (an OAuth grant's
-# linked identity, a native grant's organization), its state and generation, and each runner
-# it is authorized for with that runner's availability and next action and, for a native
-# grant, the last use the runner reported and when. Then name each provider you hold nothing
-# for, in the order useful integration connect signs in to them: github, gitlab.com, linear,
-# each other OAuth provider this deployment serves, claude_code and codex. It reads every page;
-# there is no --limit or --cursor.
-useful integration list
-
-# After the grants, list your tokens and each organization's, and then each organization's
-# connections: its GitHub App installations, its Linear connections and its GitLab connections,
-# each as side org with its service (github, linear or gitlab.com), ID, account and state as
-# useful connection prints it. A read you may not make, such as the GitHub installations for a
-# member who is not an owner, or one the deployment has not configured, is left out and fails
-# nothing. Under each connection of an organization you own, or the one --org names, it lists
-# the runners authorized for that connection: each authorization's ID, its project and runner
-# by name and ID, who authorized it by ID and when, and the repository selection and each
-# permission the provider grants the connection, or that the provider could not be read. Where
-# Cloud refuses that read or cannot serve it, the connections are listed without it. --org
-# keeps that organization's tokens and connections alone, with no grant. A connection is named
-# to no other useful integration command but authorize and deauthorize with --project-id;
-# useful connection shows and removes it.
-useful integration list --org acme --json
-
-# Show one grant in detail: for a native grant what each runner was last delivered and
-# reported, its last use and when, and for each runner whose authorization has ended the one
-# that ended last, with its removal state and stop, also after that runner is authorized
-# again; for an OAuth grant its scopes, last use and expiries, and the newest 20 tokens issued
-# from it with the run and assignment of each (--uses LIMIT, 1 to 200, shows another number).
-# Name it by its ID, or by its provider when you hold one grant of it.
-useful integration list agl_01k0z6r1w8f4jy2m7q9v3x5abc
-useful integration list codex --json
-
-# Authorize one runner, named by the rnr_ ID that `useful runner list acme` prints, to use a
-# grant. For an OAuth grant, every run on that runner that you start can then be issued tokens
-# from it; for a native grant, every run that runner serves, whichever member caused it, can
-# use the login, and every step on that runner can read it. The command reads the grant, says
-# which applies, and does nothing without --yes. A Codex grant serves one runner at a time.
-useful integration authorize codex rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-
-# Leave the runner out to choose it from a list. At a terminal it shows the runners the grant
-# can be authorized for and is not yet, each by name, pool, online or offline, mode when not
-# enabled, and ID, online enabled runners first; Enter takes the highlighted one. It then
-# states what authorizing does, naming the runner, and asks before it acts unless --yes was
-# given: any answer but y, or Esc at the list, sends nothing and exits 2. Where the command
-# cannot prompt (no terminal, or --json), it lists the same runners and exits 2 having sent
-# nothing. `useful integration authorize --all` offers the runners of your organizations, and
-# `useful integration deauthorize INTEGRATION` only the runners the grant is authorized for.
-useful integration authorize codex
-
-# Offered more than one runner, the list ends with a choice of all of them, except for a Codex
-# grant, which serves one runner at a time, and for --all. With all chosen the command states
-# how many runners it covers, acts on each in turn and prints one outcome per runner; it exits
-# 1 when any runner was refused, and a failure that is not one runner's refusal ends it there.
-useful integration authorize claude_code
-
-# Authorize that runner for every grant of yours that can serve it: each OAuth grant and each
-# native grant of the runner's organization. It prints one outcome per grant (`authorized`,
-# `already_authorized`, `other_organization` for a native grant of another organization, or
-# the refusal, such as `authorized_elsewhere` for a Codex grant authorized for another runner)
-# and exits 1 when any grant was refused. A failure that is not one grant's refusal, such as a
-# rate limit, ends it at that grant: it prints the outcomes so far, then the failure naming
-# that grant, and exits 1.
-useful integration authorize --all rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-
-# As an owner, authorize a runner for the organization's connection at github, gitlab.com or
-# linear in one project with --org ORGANIZATION and --project-id PROJECT. The permission covers
-# every app run of that project on that runner, whoever or whatever caused the run, and reaches
-# whatever the provider grants the connection, which no authorization narrows; Cloud delivers
-# an organization's connection to no run today, so the authorization records a permission and
-# delivers nothing. The command states this and does nothing without --yes. It reads the
-# organization's connections at the provider and takes the active one; where several are
-# active, --connection-id CONNECTION names one, and without it the command names each by ID and
-# account and exits 2 (connection_required). With none active it exits 1 (connection_not_found)
-# naming the command that connects the organization, and with a --connection-id the read does
-# not list it exits 1 the same way naming useful integration list --org ORGANIZATION. Given no
-# RUNNER it offers the organization's runners that hold no authorization for that project and
-# provider, one to choose. It prints the authorization; --json prints one
-# document with outcome authorized whose authorization carries id, provider, projectId,
-# projectName, runnerId, runnerName, connectionId, connectionAccount, authorizedBy, createdAt and
-# scope: its state, current or unavailable, and for a current GitHub scope github with the
-# installation's repositorySelection and each permission's name and access. Cloud decides which
-# providers it authorizes: a refusal exits 1 as forbidden, project_not_found, runner_not_found,
-# connection_not_found, connection_inactive, provider_ineligible or already_authorized, and a
-# deployment that does not serve these authorizations as connection_authorizations_not_served.
-# --project-id needs --org and is refused with --all and with any other name, exit 2.
-useful integration authorize github rnr_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-useful integration authorize github --org acme --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --connection-id ghi_01k0z6r1w8f4jy2m7q9v3x5abc --json
-
-# End that runner's authorization. For a native grant Cloud also asks the run that runner is
-# serving, whichever member started it, to stop, and the command prints whether the runner has
-# confirmed removing its copy and the run asked to stop; for an OAuth grant no run is stopped
-# and no further token is issued there.
-useful integration deauthorize codex rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-
-# As an owner, end a runner's authorization for the organization's connection at github,
-# gitlab.com or linear in one project with --org ORGANIZATION and --project-id PROJECT. The
-# command finds the authorization in force for that project, runner and provider in the
-# organization's list, reading no connection; --connection-id CONNECTION keeps only an
-# authorization of that connection. It states that the runner's permission ends and that no run
-# is asked to stop or loses anything, and does nothing without --yes. Given no RUNNER it offers
-# the runners that hold an authorization for that project and provider, one to choose. It
-# prints the authorization's ID, project, runner and connection; --json prints one document
-# with outcome deauthorized whose authorization carries id, provider, projectId, projectName,
-# runnerId, runnerName, connectionId and connectionAccount. Where none is in force, a repeated
-# command included, it sends nothing more and exits 1 (authorization_not_found); forbidden and
-# connection_authorizations_not_served are reported as authorize reports them.
-useful integration deauthorize github rnr_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-useful integration deauthorize github --org acme --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --json
-
-# Revoke a grant everywhere. An OAuth grant is erased and revoked at the provider where the
-# provider offers it. A native grant is erased and the command prints each runner it was
-# authorized for with its removal state and the run asked to stop there; a confirmation covers
-# only the copy that runner kept, and the session at the provider stays signed in until you
-# sign out there.
-useful integration revoke github --yes
-```
-
-`list --json` prints one schema-version-1 document with outcome `listed`, `grants` (each with
-`id`, `provider`, `kind`, `account` with its `kind`, `id` and, where it is known, `name`,
-`label` where there is one, `state`, `generation`, `createdAt` and `authorizations`, each with
-`runnerId`, `organizationId`, `availability` and `nextAction` and, for a native grant whose
-runner reported a last use, `lastUse` (`accepted` or `refused`) and, where Cloud holds it,
-`lastUseAt`, or the grant's own `availability` and `nextAction` when no runner is authorized)
-and `notConnected`; `list INTEGRATION --json` prints outcome `shown` with `grant`. Each grant
-in either document also carries `side`, `member`, which no `notConnected` entry has. A
-provider name you hold no grant of reports `grant_not_found` and exits 1; one you hold several
-grants of exits 2 and names their IDs. `useful integration list --json` also carries `tokens`,
-present whatever it holds: your tokens and then each organization's, each with its `id`,
-`service`, `side`, for an organization's `organization`, `version`, `connectedBy`,
-`connectedAt`, `createdAt` and `authorizations`, none of which holds the token itself.
-It and `list --org ORGANIZATION --json` also carry `connections`, present whatever it holds:
-each organization connection with its `id`, `service`, `side` (`org`), `organization`,
-`account` where the read names one, `instanceUrl` for a GitLab connection, `state` and,
-where the organization's authorizations were read, `authorizations`, present whatever it
-holds: each with the `id`, `provider`, `projectId`, `projectName`, `runnerId`, `runnerName`,
-`connectionId`, `connectionAccount`, `authorizedBy`, `createdAt` and `scope` that
-`useful integration authorize` given `--project-id` prints under `--json`, and never a
-credential.
-`useful grant list` carries no `tokens` and no `connections`.
-
-`connect --json` prints newline-delimited events: `consent_required` with `sessionId`,
-`provider`, `authorizationUrl` and `expiresAt`, then `consent_result` with its `outcome`
-(`completed` with `grant`, or `failed`, `expired` or `recovery_required` with `reason`, which
-exit 1). A consent that cannot start reports `provider_unavailable` or `consent_in_progress`.
-For `codex` it prints one `import_result` event with outcome `imported`, or `replaced` when
-it stored the next generation of a grant you hold, and `grant`; a sign-in that made no login
-reports `provider_login_failed` and exits 1, and nothing is stored. A source option the
-provider does not take, `--organization` for an OAuth provider, and a missing organization
-when you are a member of several exit 2 before anything is run or sent.
-
-`authorize`, `deauthorize` and `revoke` take `--yes`; without it they send nothing, state what
-acting does for a grant of either kind and exit 2. `authorize` and `deauthorize` given no
-`RUNNER` read the runners they could act on instead; at a terminal they show them as a list to
-choose from and, without `--yes`, ask before acting, and otherwise exit 2 naming them; `--json`
-prints outcome `runner_required` with `grantId` (absent for `--all`) and `runners`, each with `id`,
-`name`, `pool`, `connectivity`, `mode` and `organizationId`. With no runner to offer they
-exit 1 with `runner_not_found`, `already_authorized`, `authorized_elsewhere` or
-`authorization_not_found`. Each sends its request with one
-idempotency key and replays it once when the answer is lost. `authorize --json` prints outcome
-`authorized` with `grantId` and `authorization`; `authorize --all --json` prints outcome
-`authorized`, or `refused` when any grant was refused, with `runnerId` and `grants`, each with
-`grantId`, `provider`, `kind`, `outcome` and, when it was authorized, `authorization`; a
-failure that ends it follows that document with the failure's own.
-`deauthorize --json` prints outcome `deauthorized` with `grantId`, `authorizationId`,
-`runnerId` and, for a native grant, `removal` and `stop`; `revoke --json` prints outcome
-`revoked` with `grantId`, `provider`, `kind` and, for a native grant, `endedAuthorizations`.
-A refusal exits 1 with its outcome (`runner_not_found`, `runner_holds_login`,
-`already_authorized`, `authorized_elsewhere`, `authorization_not_found`, `grant_not_found` or
-`provider_unavailable`) and a remedy.
-
-Every runner authorization `list` prints, and every provider you hold nothing for, carries one
-`availability` (`available`, `unverified`, `reconnect_required`, `pending`, `delivery_failed`,
-`not_delivered` or `not_connected`) and one `nextAction`, and the
-text form names the command or step that next action means:
-`useful integration connect PROVIDER --replace` to reconnect,
-`useful integration authorize INTEGRATION RUNNER --yes` for a grant no runner is authorized
-for, `useful runner integration sync` on the runner's host after a failed delivery, and
-`useful integration connect PROVIDER` for a provider you hold nothing for. A runner that
-has not yet reported installing what Cloud holds is `pending` with `wait_for_runner`, and a
-login in place that the runner has neither checked with its provider nor had a step use at
-this generation is `unverified`.
-
-On the runner's host, `useful runner integration sync` asks the live runner, through the
-control socket its runner home's configuration names or, with `--config PATH`, that file's, to
-set up the agent logins authorized for it now and prints each provider's readiness; see
-[Runner serve](#runner-serve).
-
-The earlier commands remain for one release with their arguments, output and exit statuses
-unchanged, but are absent from help, and each first prints a line on standard error naming
-the command that replaces it: `useful auth grant create` and `useful auth agent-login import`
-are `useful integration connect PROVIDER`; `useful auth agent-login reconnect` is
-`useful integration connect PROVIDER --replace`; `useful auth grant list`,
-`useful auth agent-login list` and `useful auth credential status` are
-`useful integration list`; `useful auth agent-login show` is
-`useful integration list INTEGRATION`; `useful auth agent-login authorize`, `deauthorize` and
-`revoke` and `useful auth grant revoke` are the `useful integration` leaf of the same name;
-and `useful runner agent-login sync` is `useful runner integration sync`; and
-`useful auth grant uses` is `useful integration list INTEGRATION`.
-
-`useful grant` and `useful runner grant sync` are the earlier names of `useful integration`
-and `useful runner integration sync`: `useful grant create` is `useful integration connect`,
-and `list`, `authorize`, `deauthorize` and `revoke` keep their names. They are absent from
-help and still work with the same arguments, standard output and exit statuses, but
-`useful grant list` states no `side`, none of them takes `--org` or reaches a token
-service's token, and each first prints a line on standard error naming
-the command that replaces it. They are the names a release that predates
-`useful integration` has.
-
 ## Account management
 
 OAuth login does not implicitly create a Useful Machinery account. When authentication
@@ -1255,14 +370,19 @@ status is `signup_required` and the deployment advertises signup, use
 `useful account signup` after the customer explicitly approves account creation.
 Add `--json` for a schema-version-1 structured result. The CLI authenticates the request
 with the existing human credential and retries an ambiguous transport failure once with
-the same opaque idempotency key.
+the same opaque idempotency key. When this device holds no sign-in the deployment accepts,
+`useful account signup` first signs in as `useful account login` does, printing the
+activation URL and code and waiting for the authorization with or without a terminal, and
+then creates the account; a sign-in that is refused, expires, cannot reach the deployment
+or is interrupted ends the command as it ends `useful account login`, and no signup request
+is sent. With `--json` the command starts no sign-in and reports `unauthenticated`.
 
 Set or clear the authenticated account's optional display name with exactly one of these
 options:
 
 ```sh
-useful account update --display-name "Ada Lovelace"
-useful account update --clear-display-name
+useful account update --name "Ada Lovelace"
+useful account update --clear-name
 ```
 
 The deployment removes surrounding Unicode whitespace and accepts 1 through 200 Unicode
@@ -1273,7 +393,7 @@ name is `set` or `cleared`; `--json` reports the same stable `outcome` and the a
 
 Each invocation generates a fresh opaque idempotency key. After an ambiguous transport
 failure, the CLI retries once with the same key and exact merge patch. If the result still
-cannot be confirmed, check `useful auth status` before issuing another update.
+cannot be confirmed, check `useful account show` before issuing another update.
 Structured failures report one of `invalid_display_name`, `unauthenticated`, `forbidden`,
 `idempotency_conflict`, `request_too_large`, `unsupported_media_type`, or `unreachable`.
 
@@ -1281,7 +401,7 @@ Schedule deletion of the authenticated human account only after reviewing the 30
 window and confirming explicitly:
 
 ```sh
-useful account deletion request --yes
+useful account delete --yes
 ```
 
 A successful request reports the principal ID, `deletion_pending` state, request time,
@@ -1296,10 +416,10 @@ until the lifecycle state has been confirmed with the deployment operator.
 If the reply to the request is lost, the command repeats the identical request with the same
 request identity. When the deployment refuses that repeat as `forbidden`, the first request
 may already have scheduled deletion, so the command reports `acceptance_unknown` (exit 4)
-instead and keeps the local credential. Run `useful auth status` to check the account's state,
-and `useful account deletion cancel` only to keep an account whose deletion is scheduled.
+instead and keeps the local credential. Run `useful account show` to check the account's state,
+and `useful account restore` only to keep an account whose deletion is scheduled.
 
-Supplying `--service-api-key-file PATH|-` to the request deletes the authenticated
+Supplying `--api-key-file PATH|-` to the request deletes the authenticated
 service principal immediately instead of creating a schedule. A successful JSON result
 reports `outcome: "deleted"`; the command does not read, remove, or update a human
 credential store.
@@ -1307,19 +427,19 @@ credential store.
 Cancel before the deadline with a fresh browser proof from the same still-linked identity:
 
 ```sh
-useful account deletion cancel
+useful account restore
 ```
 
 Cancellation does not use or require the stored local session. It requests a fresh
 browser/device access token without `offline_access`, sends that token only as the API
 bearer, and never stores it or a refresh token. A successful cancellation reports the
 returned active lifecycle transition while leaving the credential store unchanged; run
-`useful auth login` afterward to establish a renewable local session. This
+`useful account login` afterward to establish a renewable local session. This
 separation is intentional: an old stored credential, a refreshed background session, or
 a different linked identity does not replace the API's distinct, later, same-identity
 proof requirement.
 
-`account deletion request --json` emits one schema-version-1 result. Cancellation emits
+`account delete --json` emits one schema-version-1 result. Cancellation emits
 newline-delimited schema-version-1 `activation_required` and terminal `result` events
 because browser authorization is part of the command. A repeated request or cancellation
 with a new request identity reports `transition_unavailable` when the lifecycle is
@@ -1332,10 +452,389 @@ repeat of a request whose reply was lost; that result carries no `schedule` or
 deployment refuses, such as one that is suspended or already erased, reports `forbidden`
 (exit 1); no outcome weakens the linked-identity or issuance-time checks.
 
+## Account integrations
+
+`useful account integration` manages what Useful Machinery may do as you at other providers.
+A grant is an OAuth grant, your consent at the provider, whose ID begins `pgr_`, or a native
+grant (`claude_code`, `codex`), a coding agent's own login imported for one organization,
+whose ID begins `agl_`. The built-in OAuth providers are `github`, `gitlab.com` and
+`linear`; any other OAuth provider your deployment serves is given by its id. Each grant is
+used only on the runners you authorize for it. `useful account integration` also stores your
+token of a token service, such as `mergify` or `buildkite`; a token, whose ID begins `itk_`,
+is used only on the runners you authorize for it. `INTEGRATION` names a grant (its provider,
+or its ID where you hold several of one provider) or a token by its service, looked up among
+your grants first. The organization's tokens and connections are managed with
+[`useful org integration`](#organization-integrations). The commands take your signed-in
+session only, never a service API key. A workflow's `as: member` credentials are met from
+these commands.
+
+```sh
+# Make a grant through the provider's own sign-in. For an OAuth provider this starts the provider's
+# consent, prints its URL, opens it in your browser when this machine has one (not over SSH, and on
+# Linux only with a display), and waits until the grant is active; approving the URL in any browser
+# completes it. --no-wait returns once the consent has started. The built-in OAuth providers are
+# github, gitlab.com and linear; any other OAuth provider your deployment serves is given by its id,
+# as useful account integration list shows it, and the command checks that the deployment serves it before
+# starting anything. When you already hold a grant of the provider, connect never replaces it: it
+# starts no sign-in, exits 2 and names useful account integration reconnect with each grant's ID.
+useful account integration connect linear
+useful account integration connect github --json
+useful account integration connect example
+
+# For codex this runs `codex login` in a private temporary Codex home (mode 0700) that it
+# removes afterwards, and imports the login it writes; your own Codex home is never read or
+# changed. With --device, or where this machine has no browser (over SSH, or on Linux without
+# a display), it runs `codex login --device-auth`, whose code you enter in any browser.
+# --login names that sign-in, the default, and is Codex's alone. --from-file imports an
+# existing auth.json from an owned mode-0600 file, or - for standard input, instead. The grant
+# is for the organization in effect: the one --org names, then USEFUL_ORG, then the project of
+# this checkout, then your only organization. When none names one the command exits 2 and lists
+# your organizations. --org does not apply to an OAuth provider, whose grant is yours alone. A
+# coding agent's sign-in has no consent to wait for, so --no-wait and --timeout are refused for
+# codex and claude_code.
+useful account integration connect codex
+useful account integration connect codex --device --org acme
+useful account integration connect codex --from-file ~/backup/auth.json
+
+# For claude_code this runs `claude setup-token` with a private temporary configuration
+# directory (mode 0700) that it removes afterwards; your own Claude Code configuration is never
+# read or changed. Its prompts appear in your terminal and what you type, such as a code to
+# paste, reaches it; the token it prints is imported and never shown. Without a terminal on
+# standard input the command fails at once, starting no sign-in, and names --token-file -.
+# --token-file imports a token claude setup-token printed from an owned mode-0600 file, or -
+# for standard input, instead.
+useful account integration connect claude_code
+useful account integration connect claude_code --token-file - --org acme < token.txt
+
+# For a token service the deployment serves, such as mergify or buildkite, store its token.
+# The command first checks that the deployment serves the service and whether the token is
+# already held, and only then reads the token: from --from-file PATH, an owned mode-0600 file,
+# or - for standard input; without --from-file, from standard input when that is not a
+# terminal, and otherwise at a prompt that does not echo what you type. No argument, option
+# value or environment variable carries it. The token is 1 to 4096 printable ASCII characters
+# with no space; one trailing line ending is dropped, and anything else exits 2 with nothing
+# sent. The command prints the token's record (ID, service, side, version, who connected it
+# and when, and its runners) with outcome connected, never the token. Where you already hold a
+# token of the service the command exits 2 before reading any token and names
+# useful account integration reconnect PROVIDER. The sign-in options --login, --device,
+# --token-file, --no-wait and --timeout are refused for a token service with exit 2, and
+# --all and --workflow select no token service. list shows the token after your grants, and
+# show, authorize, deauthorize and disconnect act on it named by its service; disconnecting
+# erases it from Cloud but does not end it at the service.
+useful account integration connect mergify
+useful account integration connect mergify --from-file ~/secrets/mergify-token
+useful account integration connect buildkite --from-file - < buildkite-token.txt
+
+# Replace a token you hold. reconnect reads the new token as connect does and stores it as the
+# token's next version, which keeps its ID and runners and reaches each authorized runner
+# within five minutes.
+useful account integration reconnect mergify --from-file ~/secrets/mergify-token
+
+# Sign in again to a grant you hold, named by its ID or by its provider when you hold one grant
+# of it; the grant keeps its ID and the runners it is authorized for, and the command asks
+# nothing. For a coding agent it runs the same sign-in create runs, or imports the login
+# --from-file (Codex) or --token-file (Claude Code) names, and stores it as the grant's next
+# generation. For an OAuth grant it runs the provider's consent: approve it as the account the
+# grant is linked to. Approved as another account, the consent makes or renews that account's own
+# grant and leaves the named one as it was; the command then names the grant the consent made
+# and exits 1. An option that does not suit the grant's provider exits 2 before any sign-in.
+useful account integration reconnect codex
+useful account integration reconnect agl_01k0z6r1w8f4jy2m7q9v3x5abc --token-file - < token.txt
+useful account integration reconnect linear --no-wait --json
+
+# With --all, run the sign-in of each provider you hold no active or reconnect_required grant
+# of, one after another: github, gitlab.com, linear, each other OAuth
+# provider this deployment serves in the order it names them, claude_code, codex. Each
+# provider's name is printed on standard error before its prompts. A sign-in that
+# fails does not stop the ones after it; a provider this deployment does not serve is reported
+# provider_unavailable and passed over. The coding agents' grants are for the organization in
+# effect, as above; when no source names one, a coding agent you hold nowhere is reported
+# organization_required and passed over, and the consents still run. The command ends with one outcome per provider and exits 1
+# when any sign-in failed or every provider selected was passed over; an interrupt or a
+# termination signal during a sign-in ends it there with status 130 or 143. --device applies to
+# the Codex sign-in; --no-wait and --timeout apply to the consents. --from-file and --token-file
+# need a provider. With --json each provider's events are followed by a summary event. Given
+# no provider, --all or --workflow, the command signs in to nothing and exits 2.
+useful account integration connect --all
+useful account integration connect --all --org acme --json
+
+# With --workflow FILE, which repeats, sign in to only the providers those workflows and the
+# workflows their workflow steps run call for, derived as useful workflow doctor derives
+# them; the kind gitlab means gitlab.com, and a directory stands for its tree's workflow.yaml
+# and bounds it. Before any sign-in the command prints the workflow files, each provider to sign in to and each passed over as held with what calls for it, and
+# the declarations that may use credentials the workflows do not name, for which no sign-in is
+# run. Without --source-root each file is bounded by the root of the Git repository that holds
+# it, and a file in no repository is refused with exit 2. A file that does not resolve is
+# reported as useful workflow validate reports it, with exit 1. --workflow does not take a provider.
+# A provider every grant of which you hold needs reconnecting (its consent lapsed, or a runner
+# reported its login refused) is passed over without a sign-in or a question: the plan names it
+# as needing reconnecting, and it is reported reconnect_required, naming useful account integration
+# reconnect with each such grant's ID. With --json the plan is a first workflow_requirements
+# event, whose selected, reconnect, held and host arrays name each provider and what calls for it.
+useful account integration connect --workflow workflow.yaml --workflow ../other/workflow.yaml
+useful account integration connect --workflow workflow.yaml --source-root . --json
+
+# With --runner RUNNER, an ID or exact name, also pass over each coding agent that runner's host
+# supplies with its own sign-in: one of which a grant of yours is authorized for the runner, and
+# the runner last reported that its host's own sign-in is in use there. The plan names it as
+# host; it is neither signed in to nor reported as needing reconnecting. A provider of which
+# Cloud holds no such report, one you hold no grant of or an OAuth provider among them, is
+# selected as without --runner. A name is looked up among the runners of your organizations.
+useful account integration connect --workflow workflow.yaml --runner build-1
+
+# List every grant you hold: its ID, provider, kind, the account it acts as (an OAuth grant's linked
+# identity, a native grant's organization), its state and generation, and each runner it is
+# authorized for with that runner's availability and next action and, for a native grant, the last
+# use the runner reported and when. Then name each provider you hold nothing for, in the order
+# useful account integration connect signs in to them: github, gitlab.com, linear, each other OAuth
+# provider this deployment serves, claude_code and codex. It reads every page; there is no --limit
+# or --cursor. After the grants it lists your tokens, each with its ID, service, version, who
+# connected it and when, and its runners. It shows nothing of an organization's:
+# useful org integration list shows the organization's connections and tokens.
+useful account integration list
+
+# Show one grant in detail: for a native grant what each runner was last delivered and
+# reported, its last use and when, and for each runner whose authorization has ended the one
+# that ended last, with its removal state and stop, also after that runner is authorized
+# again; for an OAuth grant its scopes, last use and expiries, and the newest 20 tokens issued
+# from it with the run and assignment of each (--uses N, 1 to 200, shows another number).
+# Name it by its ID, or by its provider when you hold one grant of it. Named by a token
+# service, show shows your token of it; --uses is refused for a token.
+useful account integration show agl_01k0z6r1w8f4jy2m7q9v3x5abc
+useful account integration show codex --json
+useful account integration show mergify
+
+# Authorize one runner to use a grant, naming it with --runner by the rnr_ ID that `useful runner
+# list` prints or by its exact name. For an OAuth grant, every run on that runner that you
+# start can then be issued tokens from it; for a native grant, every run that runner serves,
+# whichever member caused it, can use the login, and every step on that runner can read it. The
+# command reads the grant and says which applies. A Codex grant serves one runner at a time.
+useful account integration authorize codex --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+
+# Name the runner by its name. The command looks the name up once, before it sends anything,
+# among the runners it can act on; a name no runner has is `runner_not_found`, and a name that
+# runners of more than one of your organizations have exits 2 naming each with its ID and
+# organization. Without --yes, at a terminal, it states what authorizing does, naming the
+# runner, and asks before it acts: any answer but y sends nothing and exits 2. Without a
+# terminal, or with --json, it sends nothing, states what authorizing does and exits 2.
+useful account integration authorize codex --runner build-1
+
+# Leave --runner out to see the runners you can name: the runners the grant can be authorized
+# for and is not yet, each by name, pool, online or offline, mode when not enabled, and ID,
+# online enabled runners first. The command sends nothing and exits 2, at a terminal too.
+# `useful account integration authorize --all` names the runners of your organizations, and `useful
+# account integration deauthorize INTEGRATION` only the runners the grant is authorized for.
+useful account integration authorize codex
+
+# Authorize that runner for every grant of yours that can serve it, each OAuth grant and each
+# native grant of the runner's organization, and for each of your tokens. The runners offered
+# for a token are those of every organization you are an active member of. It prints one
+# outcome per grant (`authorized`,
+# `already_authorized`, `other_organization` for a native grant of another organization, or
+# the refusal, such as `authorized_elsewhere` for a Codex grant authorized for another runner)
+# and exits 1 when any grant was refused. A failure that is not one grant's refusal, such as a
+# rate limit, ends it at that grant: it prints the outcomes so far, then the failure naming
+# that grant, and exits 1.
+useful account integration authorize --all --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+
+# End that runner's authorization. For a native grant Cloud also asks the run that runner is
+# serving, whichever member started it, to stop, and the command prints whether the runner has
+# confirmed removing its copy and the run asked to stop; for an OAuth grant no run is stopped
+# and no further token is issued there.
+useful account integration deauthorize codex --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+
+# Disconnect a grant everywhere. An OAuth grant is erased and revoked at the provider where the
+# provider offers it. A native grant is erased and the command prints each runner it was
+# authorized for with its removal state and the run asked to stop there; a confirmation covers
+# only the copy that runner kept, and the session at the provider stays signed in until you
+# sign out there.
+useful account integration disconnect github --yes
+```
+
+`list --json` prints one schema-version-1 document with outcome `listed`, `grants` (each with
+`id`, `provider`, `kind`, `account` with its `kind`, `id` and, where it is known, `name`,
+`label` where there is one, `state`, `generation`, `createdAt` and `authorizations`, each with
+`runnerId`, `organizationId`, `availability` and `nextAction` and, for a native grant whose
+runner reported a last use, `lastUse` (`accepted` or `refused`) and, where Cloud holds it,
+`lastUseAt`, or the grant's own `availability` and `nextAction` when no runner is authorized)
+and `notConnected`; `show INTEGRATION --json` prints outcome `shown` with `grant`. Each grant
+in either document also carries `side`, `member`, which no `notConnected` entry has. A
+provider name you hold no grant of reports `grant_not_found` and exits 1; one you hold several
+grants of exits 2 and names their IDs. `list --json` also carries `tokens`, present whatever
+it holds: your tokens, each with its `id`, `service`, `side`, `version`, `connectedBy`,
+`connectedAt`, `createdAt` and `authorizations`, none of which holds the token itself.
+
+`connect --json` prints newline-delimited events: `consent_required` with `sessionId`,
+`provider`, `authorizationUrl` and `expiresAt`, then `consent_result` with its `outcome`
+(`completed` with `grant`, or `failed`, `expired` or `recovery_required` with `reason`, which
+exit 1). A consent that cannot start reports `provider_unavailable` or `consent_in_progress`.
+For `codex` it prints one `import_result` event with outcome `imported`, or `replaced` when
+it stored the next generation of a grant you hold, and `grant`; a sign-in that made no login
+reports `provider_login_failed` and exits 1, and nothing is stored. A source option the
+provider does not take, `--org` for an OAuth provider, and a missing organization when no
+source names one exit 2 before anything is run or sent.
+
+`authorize`, `deauthorize` and `disconnect` take `--yes`; without it they send nothing, state what
+acting does for a grant of either kind and exit 2, except that `authorize` and `deauthorize`
+given `--runner` at a terminal, without `--json`, state it and ask whether to go on. `--runner`
+takes a runner ID or exact name; a name that several runners have exits 2 naming each, and
+`--json` then prints outcome `runner_required` with those runners. `authorize` and
+`deauthorize` given no `--runner` read the runners they could act on instead and exit 2 naming
+them, at a terminal too; `--json` prints outcome `runner_required` with `grantId` (absent for
+`--all`) and `runners`, each with `id`, `name`, `pool`, `connectivity`, `mode` and
+`organizationId`. With no runner to name they exit 1 with `runner_not_found`,
+`already_authorized`, `authorized_elsewhere` or `authorization_not_found`. Each sends its request with one
+idempotency key and replays it once when the answer is lost. `authorize --json` prints outcome
+`authorized` with `grantId` and `authorization`; `authorize --all --json` prints outcome
+`authorized`, or `refused` when any grant was refused, with `runnerId` and `grants`, each with
+`grantId`, `provider`, `kind`, `outcome` and, when it was authorized, `authorization`; a
+failure that ends it follows that document with the failure's own.
+`deauthorize --json` prints outcome `deauthorized` with `grantId`, `authorizationId`,
+`runnerId` and, for a native grant, `removal` and `stop`; `disconnect --json` prints outcome
+`revoked` with `grantId`, `provider`, `kind` and, for a native grant, `endedAuthorizations`.
+A refusal exits 1 with its outcome (`runner_not_found`, `runner_holds_login`,
+`already_authorized`, `authorized_elsewhere`, `authorization_not_found`, `grant_not_found` or
+`provider_unavailable`) and a remedy.
+
+Every runner authorization `list` prints, and every provider you hold nothing for, carries one
+`availability` (`available`, `unverified`, `reconnect_required`, `pending`, `delivery_failed`,
+`not_delivered` or `not_connected`) and one `nextAction`, and the text form names the command or
+step that next action means: `useful account integration reconnect PROVIDER` to reconnect, `useful
+account integration authorize INTEGRATION --runner RUNNER --yes` for a grant no runner is authorized for, `useful runner
+sync` on the runner's host after a failed delivery, and `useful account integration connect PROVIDER`
+for a provider you hold nothing for. A runner that has not yet reported installing what Cloud holds
+is `pending` with `wait_for_runner`, and a login in place that the runner has neither checked with
+its provider nor had a step use at this generation is `unverified`.
+
+On the runner's host, `useful runner sync` asks the live runner, through the control socket
+its runner home's configuration names or, with `--config PATH`, that file's, to set up the
+agent logins authorized for it now and prints each provider's readiness; see
+[Runner serve](#runner-serve).
+
+The earlier `useful grant`, `useful auth grant`, `useful auth agent-login`,
+`useful auth credential status`, `useful runner grant sync` and
+`useful runner agent-login sync` commands are gone, and no hidden name parses;
+[Command migration](docs/command-migration.md) maps each to its replacement.
+
+## Service principals and API keys
+
+Create a service principal while signed in as a human, and direct its show-once initial
+API key to a new private file:
+
+```sh
+useful account service create \
+  --name "Build agent" \
+  --key-file ./build-agent.key
+```
+
+The destination is created with mode `0600` and is never overwritten. Use
+`--key-file -` only for a deliberate secret pipeline; it writes only the API key to
+standard output and sends status to standard error. `--json` cannot be combined with
+that stdout form, and JSON output never contains an API key. A signal before request
+dispatch stops creation or issuance; after dispatch, the CLI completes the bounded
+request and key delivery despite a later `SIGINT` or `SIGTERM` so a committed one-time
+key is not discarded. If destination write or synchronization fails,
+`api_key_delivery_failed` preserves the known non-secret metadata, destination, and safe
+recovery classification. The receipt reports destination cleanup as `removed`,
+`not_applicable` for standard output, or `uncertain`. File cleanup is attempted immediately; `uncertain` means the key may remain
+at the destination and the operator must protect, inspect, and remove it before deciding
+whether to revoke the known credential. The CLI does not revoke it automatically. If an
+idempotent replay returns credential metadata without the show-once key, the CLI reports
+`api_key_unavailable`, preserves the metadata in JSON, attempts to remove the reserved
+output file, and does not issue or invent a replacement.
+
+Service credentials are explicit per invocation. The CLI does not persist a service API
+key or fall back between a service key and the human credential store:
+
+```sh
+useful account service key list \
+  --api-key-file ./build-agent.key
+
+useful account service key issue \
+  --api-key-file ./build-agent.key \
+  --key-file ./build-agent-next.key
+
+useful account service key revoke \
+  crd_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --api-key-file ./build-agent-next.key \
+  --yes
+```
+
+Input key files must be regular, non-symbolic-link files owned by the current user with
+mode exactly `0600`. A trailing newline is accepted. `--api-key-file -` reads one
+key from standard input. Keys are redacted from debug values and are never emitted in
+JSON, diagnostics, or ordinary logs. Credential listing returns non-secret metadata
+only; issuance requires an existing platform API key, and revocation requires a
+different active key because a credential cannot revoke itself.
+
+Cloud-management leaves whose public API operation permits a service actor also accept
+`--api-key-file PATH|-`. This includes service-capable account profile and
+self-deletion operations; current-principal status and identity management;
+organization, invitation, GitHub, project, publication, run, retained-input, Artifact
+Set, runner-pool, and runner-administration operations. Identity linking by a service
+also requires `--workload-token-file PATH|-` containing a fresh token from a configured
+workload issuer. Both files use the same private-file checks and cannot both consume
+standard input.
+
+Human-only operations remain human-only: login, logout, signup, service-principal
+creation, account-deletion cancellation, and organization-deletion request or
+cancellation do not accept service API-key authentication. A service creating an
+organization must additionally pass `--delegator-principal-id` with the exact human
+principal from an active delegation. Delegation is attribution only: the service must
+still hold its own required organization membership and role for every organization
+operation, and the CLI never borrows authority from the human credential store.
+
+Service API keys are also separate from runner credentials. They can authorize runner
+administration when the service has the required organization role, but they cannot
+enroll a runner, start `runner serve`, authenticate the runner connection, or replace a
+runner activation or runner credential.
+
+## Delegations
+
+A signed-in human proposes a delegation to one exact active service principal:
+
+```sh
+useful account delegation propose prn_01k0z6r1w8f4jy2m7q9v3x5abc
+```
+
+Proposal is deliberately human-only. Acceptance is deliberately service-only and always
+requires the nominated service's explicit API-key input; the CLI never substitutes a
+stored human session:
+
+```sh
+useful account delegation accept dlg_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --api-key-file ./build-agent.key
+```
+
+Either exact participant may list, show, or end its relationships. Omit
+`--api-key-file` to use the renewable human session, or supply it to act as the
+service. Listing returns one page and exposes an opaque next cursor when another page is
+available:
+
+```sh
+useful account delegation list --limit 50
+useful account delegation list --cursor <CURSOR> \
+  --api-key-file ./build-agent.key
+useful account delegation show dlg_01k0z6r1w8f4jy2m7q9v3x5abc
+useful account delegation end dlg_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+```
+
+Ended relationships remain visible in delegation history with their terminal timestamp
+and reason. Accepting or ending an already ended relationship returns the stable
+`delegation_transition_unavailable` outcome; an inaccessible relationship returns
+`not_found` without revealing whether it exists. Delegations do not expire under the
+current public API contract. An expired or revoked actor credential instead returns
+`unauthenticated`. Delegation records attribution only and never lends organization
+membership or any other authority.
+
 ## Organization management
 
+The organization commands live under `useful org`. The earlier `useful organization` tree
+and its options are gone with no alias; [`docs/command-migration.md`](docs/command-migration.md)
+maps each earlier command to its replacement.
+
 Organization commands default to the selected local human OAuth credential. Supported
-commands accept `--service-api-key-file` to use explicit service authority instead,
+commands accept `--api-key-file` to use explicit service authority instead,
 without reading the human credential store; runner credentials are never used. Service
 organization creation also requires `--delegator-principal-id` naming an authorized human
 principal, and the deployment enforces the delegation contract. Organization deletion
@@ -1344,54 +843,90 @@ below. Other operations do not start login or signup. Organization references mu
 exact `org_` ID or lowercase URL-safe slug. The CLI rejects invalid references locally
 and passes accepted references to the deployment without normalization.
 
+`org show` without an argument and the `member`, `invitation` and `audit` commands act in
+the organization in effect, the first of these that names one:
+
+1. `--org ORG` on the command line.
+2. The `USEFUL_ORG` environment variable, in the same form; an empty value is unset.
+3. The checkout: the one project, among the unarchived projects of your active
+   organizations, whose GitHub or GitLab repository a Git remote of the current directory's
+   repository names.
+4. Your only active organization membership.
+
+When none names an organization, because you belong to several or to none, the command
+exits 2 without changing anything and lists your organizations. `--org` and `USEFUL_ORG`
+cost no request; the checkout and your memberships are read only without them. `org
+update`, `leave`, `delete` and `restore` always take the organization as their argument.
+
+`org list` also takes `--org` and marks the membership of the organization in effect with
+the source that named it: `flag`, `environment`, `checkout` or `only membership`. With
+`--json` its document carries `organizationInEffect`, holding `organization` (the value
+`--org` or `USEFUL_ORG` gave, or else the organization's ID) and `source` (`flag`,
+`environment`, `checkout` or `only_membership`). When none is in effect the list says so,
+omits the member and still succeeds.
+
+The project in effect is taken, within the organization in effect, from the first of these
+that names one:
+
+1. `--project PROJECT` on the command line: a `prj_` ID, or the exact name of a project of the
+   organization in effect, archived projects included.
+2. The `USEFUL_PROJECT` environment variable, in the same form; an empty value is unset.
+3. The checkout's one project, when no organization is named by `--org` or `USEFUL_ORG` or
+   the one named is that project's.
+
+An ID costs no request; a name is looked up among the projects of the organization in
+effect. A name that organization lacks, a checkout that names several projects or a project
+of another organization than the one named leaves no project in effect. `useful account
+show` reports it.
+
 ```sh
 # Discover your organization memberships and their organization IDs and slugs.
-useful organization list --limit 50
+useful org list --limit 50
 
 # Create an organization. The deployment may assign the slug when it is omitted.
-useful organization create \
-  --display-name "Acme Research" \
+useful org create \
+  --name "Acme Research" \
   --slug acme-research
 
 # Read an accessible active organization by ID or exact slug.
-useful organization show acme-research
+useful org show acme-research
 
 # Update the display name, slug, or both. At least one option is required.
-useful organization update acme-research \
-  --display-name "Acme Labs" \
+useful org update acme-research \
+  --name "Acme Labs" \
   --slug acme-labs
 
 # Schedule deletion for 30 days as a current active human owner.
-useful organization deletion request acme-labs --yes
+useful org delete acme-labs --yes
 
 # Cancel before the deadline with a fresh browser proof.
-useful organization deletion cancel acme-labs
+useful org restore acme-labs
 
 # Read one active member-directory page. Both pagination options are optional.
-useful organization member list acme-labs \
+useful org member list --org acme-labs \
   --limit 50 \
   --cursor opaque-continuation
 
 # Read one owner-only page containing active, suspended, and ended memberships.
-useful organization member history acme-labs --limit 50
+useful org member event list --org acme-labs --limit 50
 
 # Read one owner-only page of privacy-safe audit records.
-useful organization audit list acme-labs \
+useful org audit list --org acme-labs \
   --limit 50 \
   --cursor opaque-continuation
 
-# Change another member's organization role.
-useful organization member update acme-labs \
-  mem_01k0z6r1w8f4jy2m7q9v3x5abc \
+# Change another member's organization role, naming the member by a verified email address.
+useful org member update pam@acme-labs.example \
+  --org acme-labs \
   --role owner
 
 # Permanently end another member's membership.
-useful organization member remove acme-labs \
-  mem_01k0z6r1w8f4jy2m7q9v3x5abc \
+useful org member remove mem_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --org acme-labs \
   --yes
 
 # Permanently end your own membership.
-useful organization leave acme-labs --yes
+useful org leave acme-labs --yes
 ```
 
 Add `--json` to any of these leaves for its schema-version-1 result. Organization
@@ -1406,6 +941,13 @@ page, preserve `nextCursor`, and do not follow it automatically. Their `--limit`
 accept 1 through 200. Active-member listing remains available to effective members;
 membership history and member changes require an active owner. History preserves
 lifecycle fields while leaving an inactive principal's omitted display name absent.
+
+`member update` and `member remove` take a membership ID or an email address. For an
+address, the CLI reads the whole member directory first and sends the change for the one
+member whose verified linked address it is, compared without regard to letter case. An
+address no member holds verified reports `not_found` with exit 1, a caller who is not an
+owner sees no addresses and gets `forbidden` with exit 1, and an address two members hold
+exits 2 naming both membership IDs. None of the three sends a change.
 
 Organization deletion request and cancellation require a current active human owner.
 Cancellation additionally requires the same linked identity that scheduled deletion to
@@ -1455,43 +997,43 @@ guide owns action selection, explanation, and approval.
 ## Organization invitations
 
 Invitation commands use the selected human OAuth credential by default and accept
-`--service-api-key-file PATH|-` when an API operation permits a service actor. The
+`--api-key-file PATH|-` when an API operation permits a service actor. The
 deployment authorizes the exact acting principal. Active organization owners can issue
 invitations to either an active principal ID or an email address, inspect retained
 invitation history, and revoke an outstanding invitation:
 
 ```sh
 # Issue to exactly one target kind.
-useful organization invitation issue acme-labs \
-  --principal-id prn_01k0z6r1w8f4jy2m7q9v3x5abc
-useful organization invitation issue acme-labs \
+useful org invitation issue --org acme-labs \
+  --account prn_01k0z6r1w8f4jy2m7q9v3x5abc
+useful org invitation issue --org acme-labs \
   --email teammate@example.com
 
 # Read one owner-only page, including terminal history.
-useful organization invitation list acme-labs --limit 50
+useful org invitation list --org acme-labs --limit 50
 
 # Revoke an outstanding invitation.
-useful organization invitation revoke acme-labs \
-  inv_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful org invitation revoke inv_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --org acme-labs --yes
 ```
 
-The current principal can list directly targeted outstanding invitations, preview an
+The current principal can list directly targeted outstanding invitations, show an
 invitation, and accept or decline it:
 
 ```sh
-useful invitation list --limit 50
-useful invitation preview inv_01k0z6r1w8f4jy2m7q9v3x5abc
-useful invitation accept inv_01k0z6r1w8f4jy2m7q9v3x5abc
-useful invitation decline inv_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful account invitation list --limit 50
+useful account invitation show inv_01k0z6r1w8f4jy2m7q9v3x5abc
+useful account invitation accept inv_01k0z6r1w8f4jy2m7q9v3x5abc
+useful account invitation decline inv_01k0z6r1w8f4jy2m7q9v3x5abc --yes
 ```
 
 Email-targeted invitation links contain a bearer capability. Supply it only through a
 private regular file owned by the current Unix user, or through explicit standard input:
 
 ```sh
-useful invitation preview inv_01k0z6r1w8f4jy2m7q9v3x5abc \
+useful account invitation show inv_01k0z6r1w8f4jy2m7q9v3x5abc \
   --capability-file ~/.config/useful/invitation.capability
-useful invitation accept inv_01k0z6r1w8f4jy2m7q9v3x5abc \
+useful account invitation accept inv_01k0z6r1w8f4jy2m7q9v3x5abc \
   --capability-file - < ~/.config/useful/invitation.capability
 ```
 
@@ -1503,7 +1045,7 @@ normal human or JSON output. This does not guarantee erasure of copies made by t
 HTTP or TLS stack. Avoid command-line arguments, environment variables, shell history,
 logs, and issue reports for capability values.
 
-Preview, accept, and decline intentionally collapse expired, revoked, consumed,
+Show, accept, and decline intentionally collapse expired, revoked, consumed,
 inaccessible, and wrong-capability cases into `invitation_unavailable`; they do not reveal
 which condition applied. Owner history retains `outstanding`, `accepted`, `declined`,
 `revoked`, and `expired` states. Each list reads one page, preserves `nextCursor`, and does
@@ -1515,203 +1057,269 @@ contracted HTTP response. `--json` emits schema-version-1 results. Authenticatio
 failures use exit 3 when sign-in is required, exit 4 when the deployment is unreachable
 or rate limited, and exit 1 for other rejected or unavailable outcomes.
 
-## GitHub connections
+## Organization integrations
+
+`useful org integration` acts as the organization in effect (`--org`). `INTEGRATION` names a
+connection, the organization's GitHub App installation, GitLab token or Linear authorization,
+or the organization's token of a token service, by its service. A workflow's `as: org`
+credentials are met from these commands.
+
+List the connections of the organization in effect to GitHub, GitLab and Linear in one
+list, each with its ID, provider, state and name (the GitHub account, the GitLab instance
+or the Linear workspace) and the connection authorizations in force for it, and then the
+organization's tokens:
+
+```sh
+useful org integration list --org acme-labs
+useful org integration list --provider gitlab --org acme-labs --json
+```
+
+The command reads every page of each provider's list, so it takes no `--limit` or
+`--cursor`; `--provider` reads that provider's list alone. A provider whose list the
+caller may not read, as GitHub's for a member who is not an owner, or which the
+deployment does not serve is named as not listed with its reason, and the command still
+succeeds when another provider was read. For GitHub and Linear any server error is
+reported as a list the deployment does not serve. With `--json` it writes one object whose
+`connections` carry each connection, with its `authorizations` where that read was answered,
+and whose `tokens` carry the organization's tokens; `unlisted` names each provider not listed
+with `reason` `forbidden` or `service_unavailable`. `useful account integration list` shows
+nothing of the organization's.
+
+Show one connection. `INTEGRATION` is a connection's ID (`ghi_`, `glc_` or `lcn_`), or
+`github`, `gitlab` or `linear` for the organization's one connection to that provider that
+has not been removed or revoked, or else its only one. A provider that names several
+connections is refused (exit 2) with each one's ID, state and name, and one that names none
+is refused (exit 1) naming `useful org integration connect`; in either case nothing is sent
+after the read of that provider's list:
+
+```sh
+useful org integration show gitlab --org acme-labs
+useful org integration show ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --json
+```
+
+A GitHub binding is shown with the repositories it grants while it is `active`; with
+`--json` it is one object with `outcome` `shown`, `installation` and, for an active binding,
+`items`. A GitLab or Linear connection is shown as that provider's own commands show it.
+
+### GitHub
 
 GitHub commands use the selected human OAuth credential by default and accept
-`--service-api-key-file PATH|-` when the operation permits a service actor. The deployment
+`--api-key-file PATH|-` when the operation permits a service actor. The deployment
 requires the exact acting principal to be a current active organization owner. The CLI
 uses a service credential only when explicitly selected and never substitutes a runner
 credential, GitHub personal access token, or local Git credential.
 
-Setup is deliberately split around browser consent. The CLI neither opens a browser nor
-listens for an inbound callback. Begin a ten-minute, single-use setup session:
+Connecting GitHub is deliberately split around browser consent. The CLI neither opens a
+browser nor listens for an inbound callback. Begin a ten-minute setup session and print the
+GitHub App installation page to open:
 
 ```sh
-useful connection github setup begin acme-labs
+useful org integration connect github --org acme-labs
 ```
-
-`useful integration connect github --org acme-labs` begins the same setup session and prints
-the same report under your human session; `--service-api-key-file` stays on the
-`useful connection github` commands.
 
 Open the reported URL in a browser and approve the GitHub account and repositories.
 GitHub then returns the browser to a Useful Machinery setup page that shows the decimal
-installation ID and the completion command. Run that command with the ID to complete the
-same session as the same Useful Machinery principal:
+installation ID and the completion command. Run that command with the ID:
 
 ```sh
-useful connection github setup complete \
-  acme-labs \
-  ghs_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --provider-installation-id 12345678
+useful org integration connect github --installation 12345678 --org acme-labs
 ```
 
-Completion uses the explicitly selected principal credential, while the deployment
-enforces the setup session's exact actor and organization binding and verifies the
-installation with the platform GitHub App credential. An expired or rejected completion
-does not let the CLI substitute another actor, account, repository list, or provider
-credential. Begin a
-new setup session when the old session has expired.
+With `--installation` the command begins a setup session of its own and completes it at
+once for that installation, so it needs nothing from the first invocation but the
+organization; the session the first one began expires unused. Completion uses the
+explicitly selected principal credential, while the deployment requires a pending session
+begun by the same principal in that organization and verifies the installation with the
+platform GitHub App credential. A rejected completion does not let the CLI substitute
+another actor, account, repository list, or provider credential. `--installation` belongs to
+GitHub alone, and `create github` refuses the GitLab and Linear options, such as
+`--token-file` and `--timeout`, before sending anything.
 
 List the organization's stable installation bindings and their current `active`,
 `disconnected`, or `revoked` state:
 
 ```sh
-useful connection github installation list acme-labs
+useful org integration list --provider github --org acme-labs
+```
+
+Show the binding in use, or one binding by its ID, with the repositories it grants while it
+is `active`:
+
+```sh
+useful org integration show github --org acme-labs
 ```
 
 Discover the repositories currently authorized through one active binding. This is a
 live provider-backed read and may update existing repository availability projections;
-it does not bind a project or create repository connections eagerly:
+it does not bind a project or create repository connections eagerly. GitHub returns every
+authorized repository at once, so the command refuses `--limit`, `--cursor`, `--search`,
+`--repository-id` and `--selected` for a binding:
 
 ```sh
-useful connection github repository list \
-  acme-labs \
-  ghi_01k0z6r1w8f4jy2m7q9v3x5abc
+useful org integration repository list ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration repository list github --org acme-labs
 ```
 
 Remove an installation binding from Useful Machinery with its stable binding ID:
 
 ```sh
-useful connection github installation remove \
-  acme-labs \
-  ghi_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful org integration disconnect ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --yes
 ```
 
 Disconnection marks the binding and its repository connections unavailable for new
-source use; it does not uninstall the GitHub App or rewrite accepted run provenance. A
-still-valid disconnected installation can be reactivated only through a new verified
-browser setup session. A revoked provider installation is terminal.
+source use; it does not uninstall the GitHub App or rewrite accepted run provenance.
 
-Add `--json` to any GitHub leaf for one schema-version-1 result. Setup begin returns
-`pending` and the session, setup complete returns `completed`, installation remove
-returns `disconnected`, and both list commands return `listed`. Expected failures use a
-closed outcome without copying provider responses or API problem prose. Setup completion
-and disconnection retry one ambiguous transport failure with the same session or binding
-identity because the API defines exact replay; setup initiation and reads make one
-request attempt. A later completion retry must reuse the same setup session and provider
-installation ID.
-
-## Triggers and schedules
-
-`useful project trigger` and `useful project schedule` are removed. Triggers that target a
-`workflowPath` and their Linear lifecycle policy are retired in Cloud: declare start, control
-and schedule triggers in a published workflow definition's root instead, and use the root's
-`mirror` for issue state. Retained trigger and schedule records
-stay readable through the public API; `useful run linear show` and `useful run linear history` still
-read a run's retained lifecycle binding.
-
-## GitLab.com connections and credential candidates
-
-GitLab setup is CLI-only for now. Credential activation and GitLab run admission remain
-closed pending qualification; creating a connection or submitting a candidate does
-not enable execution. See the [GitLab.com setup guide](https://docs.usefulmachinery.com/agent/gitlab-setup.md)
-for supported token kinds, Developer access, expiry and the retained-record limit.
+Renew a binding for its own installation, with no page to open. The binding keeps its ID: a
+`disconnected` binding becomes `active` again and an `active` one has the repositories it
+grants refreshed. A `revoked` binding, whose installation GitHub removed for good, is
+refused before any session is begun (exit 1, outcome `source_connection_conflict`); make a
+new connection with `useful org integration connect github` and bind each project bound
+through the old one to a repository again:
 
 ```sh
-useful connection gitlab create ORG https://gitlab.com --json
-useful connection gitlab list ORG --json
-useful connection gitlab show ORG CONNECTION --json
-useful connection gitlab credential create ORG CONNECTION --expected-version VERSION \
-  --kind service-account --token-file /path/to/private-token --json
-useful connection gitlab credential show ORG CONNECTION CANDIDATE --json
-useful connection gitlab credential activate ORG CONNECTION CANDIDATE \
-  --expected-provider-user-id ID --dedicated-automation --json
-useful connection gitlab credential cancel ORG CONNECTION CANDIDATE --json
-useful connection gitlab remove ORG CONNECTION --expected-version VERSION --yes --json
+useful org integration reconnect ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 ```
 
-Pass the credential only from an owned, regular, non-symlink mode-0600 file or
-`--token-file -` (standard input); never pass it as an argument. The CLI submits
-once and returns the candidate's current state. Show it separately for review.
-Activation checks a verified identity and requires explicit attestation (or an
-interactive identity prompt). The API currently fails real-token activation closed.
+Add `--json` to any GitHub leaf for one schema-version-1 result. `create github` returns
+`pending` and the session, `create github --installation` and `reconnect` of a binding
+return `completed`, `org integration disconnect` of a binding returns `disconnected`, and `org
+integration repository list` of a binding returns `listed`. A binding's repositories are chosen on GitHub: `org integration repository add` and
+`repository remove` take a GitLab connection alone.
+Expected failures use a
+closed outcome without copying provider responses or API problem prose. Setup completion
+and disconnection retry one ambiguous transport failure with the same session or binding
+identity because the API defines exact replay; beginning a setup session and reads make one
+request attempt.
+
+### GitLab.com
+
+GitLab setup is CLI-only for now. Credential activation and GitLab run admission remain
+closed pending qualification; connecting does not enable execution. See the
+[GitLab.com setup guide](https://docs.usefulmachinery.com/agent/gitlab-setup.md) for
+supported token kinds, Developer access, expiry and the retained-record limit.
+
+Connect GitLab.com with one command. It creates the connection, stages the token as a
+credential candidate, waits for GitLab to verify it, shows the verified identity on the
+terminal and asks you to confirm it, and then activates it:
+
+```sh
+useful org integration connect gitlab --token-file /path/to/private-token \
+  --kind group-access-token --org ORG
+```
+
+Without a terminal, or with `--json`, confirm the identity you reviewed with
+`--expected-provider-user-id ID --dedicated-automation`; a command that can neither ask
+nor was given both is refused before it sends anything. `--instance-url URL` connects
+another instance than `https://gitlab.com`, though only a GitLab.com connection can become
+active. The command waits up to `--timeout` (default 10 minutes, the candidate's review
+window) for the verification. Give an existing connection another token the same way; it
+sends the version `--expected-version` names, or else the connection's current one:
+
+```sh
+useful org integration reconnect INTEGRATION --token-file - --kind service-account \
+  --expected-provider-user-id ID --dedicated-automation --org ORG --json
+useful org integration list --provider gitlab --org ORG --json
+useful org integration show INTEGRATION --org ORG --json
+useful org integration disconnect INTEGRATION --org ORG --yes --json
+```
+
+Pass the token only from an owned, regular, non-symlink mode-0600 file or
+`--token-file -` (standard input); never pass it as an argument. The API currently fails
+real-token activation closed. A candidate lives no longer than the command that staged it:
+when GitLab does not verify the token the command exits 7 with the candidate's
+`failureCode`, and when the confirmation is refused, the identity differs (exit 8), the
+wait times out, the command is interrupted or a later request fails, it cancels the
+candidate. It then names `useful org integration reconnect INTEGRATION --token-file PATH
+--kind KIND` to supply another token. A candidate whose cancellation failed expires within
+its ten-minute review window, and a submission meanwhile is refused as a conflict (exit 6).
 Local disconnect does not revoke the upstream token: revoke it separately at GitLab.
-Every mutation accepts `--idempotency-key` to replay an uncertain response; without
-one the CLI generates and prints a key, including on ambiguous transport failures.
-A completed activation can be replayed while the server retains its receipt, even
-if candidate metadata has expired: reuse the same key with the explicitly reviewed
-provider ID and `--dedicated-automation`. A cancellation acknowledgement does not
-prove a terminal candidate was cancelled or undo activation. Neither create nor
-show polls. GitLab credential commands distinguish usage (exit 2), authentication
-(3), unavailable transport, provider or service (4), conflict (6), candidate
-unavailability (7), and identity mismatch (8). With `--json`, a failure is one JSON
-document on standard output whose `outcome` names it, such as `conflict`,
-`provider_unavailable` or `unreachable`, and which carries the request's
-`idempotencyKey`.
+
+Every mutation accepts `--idempotency-key` to replay an uncertain response; without one the
+CLI generates and prints a key, including on ambiguous transport failures. `create gitlab`
+and `reconnect` send each request with the key and a suffix naming its step, so their key
+has at most 240 characters, and the command run again with the same key replays each step
+it had completed. A completed activation can be replayed while the server retains its
+receipt, even if the candidate has since been settled: reuse the same key with the
+explicitly reviewed provider ID and `--dedicated-automation`. An activation moves the
+connection's version, so to replay a `reconnect` also pass the `--expected-version` its
+first run sent, the version the connection had before it; without it the replay is
+refused as a conflict (exit 6). GitLab commands distinguish
+usage (exit 2), authentication (3), unavailable transport, provider or service (4),
+conflict (6), candidate unavailability (7), and identity mismatch (8). With `--json`,
+`create gitlab` and `reconnect` write one document per step, `created`, `submitted` and
+`activated`; a failure is one JSON document on standard output whose `outcome` names it,
+such as `conflict`, `timed_out` or `unreachable`, and which carries the request's
+`idempotencyKey`, the `connectionId` and `candidateId` the command holds and, when it
+cancelled the candidate, `cancellation`.
 
 Once an active connection has a usable credential, discover repositories by numeric
 provider ID, then explicitly select one before binding a project. Use `--selected`
 to inspect retained selections even when upstream discovery is unavailable.
 `--search`, `--repository-id`, and `--selected` are exclusive list filters;
-`--limit` and `--cursor` paginate the list. Each link/remove requires the current
-connection version. Repeat `--repository-id REPOSITORY` in a single link/remove
-command to change multiple IDs atomically; each command supports `--idempotency-key` for replay and
-`--delegator-principal-id` for service-action attribution.
+`--limit` and `--cursor` paginate the list. `repository add` and `repository remove` take
+one or more repository IDs as arguments and change them atomically. They and `remove`
+accept `--expected-version`, the connection version you expect; without it the command
+reads the connection's current version first. Each supports `--idempotency-key` for replay
+and `--delegator-principal-id` for service-action attribution.
 
 ```sh
-useful connection gitlab repository list ORG CONNECTION --json
-useful connection gitlab repository list ORG CONNECTION --selected --json
-useful connection gitlab repository link ORG CONNECTION --repository-id REPOSITORY --expected-version VERSION --json
-useful project create ORG --name PROJECT_NAME --gitlab-connection-id CONNECTION \
-  --repository-id REPOSITORY --json
-useful project repository set ORG PROJECT --gitlab-connection-id CONNECTION \
-  --repository-id REPOSITORY --json
-useful connection gitlab repository remove ORG CONNECTION --repository-id REPOSITORY \
+useful org integration repository list INTEGRATION --org ORG --json
+useful org integration repository list INTEGRATION --org ORG --selected --json
+useful org integration repository add REPOSITORY --integration INTEGRATION --org ORG --json
+useful project create PROJECT_NAME --repository group/project --org ORG --json
+useful project update PROJECT --repository REPOSITORY --integration INTEGRATION --org ORG --json
+useful org integration repository remove REPOSITORY --integration INTEGRATION --org ORG \
   --expected-version VERSION --yes --json
 ```
 
-`--gitlab-connection-id` and `--installation-id` are mutually exclusive.
+`--integration` names the GitLab connection when another connection reaches the repository too.
 The project shows the GitLab binding and closed admission diagnostic; binding
 cannot enable GitLab execution. The [setup guide](https://docs.usefulmachinery.com/agent/gitlab-setup.md)
 explains selection, credential limitations and local disconnect.
 
-## Linear connections
+### Linear
 
 An active organization owner can connect a Linear workspace without supplying a Linear
 credential to the CLI. The deployment manages the OAuth exchange and stores the grant;
 the CLI prints only a consent URL, session identity, and nonsecret connection status.
 It does not open a browser or listen for the callback. Use the selected human session
-(or explicitly pass `--service-api-key-file PATH|-` for the same authorized principal):
+(or explicitly pass `--api-key-file PATH|-` for the same authorized principal):
 
 ```sh
-useful connection linear authorization create acme-labs
-useful connection linear authorization create acme-labs --connection-id lcn_01k0z6r1w8f4jy2m7q9v3x5abc
+useful org integration connect linear --org acme-labs
+useful org integration reconnect lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 # To request write consent explicitly on a new or read-only connection:
-useful connection linear authorization create acme-labs --enable-state-updates
+useful org integration connect linear --org acme-labs --state-updates
 ```
-
-`useful integration connect linear --org acme-labs` starts the same authorization of a new
-workspace under your human session and waits for it the same way, taking `--no-wait` and
-`--timeout`; `--service-api-key-file`, `--enable-state-updates` and `--connection-id` stay on
-the `useful connection linear` commands.
 
 Open the URL in a browser as the initiating owner. By default, the command polls the
 owner-bound authorization session until completion, failure, expiry, or recovery-required
 status (up to 15 minutes). Use `--timeout 2m` to stop waiting earlier, or `--no-wait`
 to return immediately after the consent URL. Neither stopping the CLI nor losing
 access cancels callback processing. Save the session ID and inspect it later as the
-same owner; do not start another session merely because polling stopped:
+same owner; do not start another session merely because polling stopped. `reconnect
+linear` reauthorizes the organization's one Linear connection still in use:
 
 ```sh
-useful connection linear authorization show acme-labs las_01k0z6r1w8f4jy2m7q9v3x5abc
-useful connection linear authorization wait acme-labs las_01k0z6r1w8f4jy2m7q9v3x5abc --timeout 5m
-useful connection linear list acme-labs
-useful connection linear show acme-labs lcn_01k0z6r1w8f4jy2m7q9v3x5abc
-useful connection linear team list acme-labs lcn_01k0z6r1w8f4jy2m7q9v3x5abc
-useful connection linear state list acme-labs lcn_01k0z6r1w8f4jy2m7q9v3x5abc LINEAR_TEAM_ID
-useful connection linear remove acme-labs lcn_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-useful connection linear delete acme-labs lcn_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful org integration show las_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration reconnect linear --org acme-labs --state-updates
+useful org integration list --provider linear --org acme-labs
+useful org integration show linear --org acme-labs
+useful org integration show lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration team list lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration team show LINEAR_TEAM_ID --integration lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration disconnect lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --yes
+useful org integration disconnect lcn_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --yes --release-workspace
 ```
 
-Remove erases the credential but reserves the workspace binding; delete also
-releases that binding. Reauthorization targets the exact connection ID. Once write
+Disconnect erases the credential but reserves the workspace binding; with
+`--release-workspace` it deletes the connection and also releases that binding. Reauthorization targets the exact connection ID. Once write
 consent has been verified, a plain reauthorization requests it again even after
 credential loss; it is not a downgrade. Session `requestedScopes` and connection
 `stateUpdatesConsented` are nonsecret inspection metadata. Discovery pages require
 owner access and suggest states without installing rules or writing to Linear. Use `--json`
-for schema-version-1 newline-delimited events when starting or waiting and a single
-JSON line for inspection/lifecycle commands. A lost start response is retried only
+for schema-version-1 newline-delimited events from `connect linear` and `reconnect` and a
+single JSON line for inspection/lifecycle commands. A lost start response is retried only
 with the same internally generated request key during that invocation. If commitment
 remains unknown, inspect existing connections as the initiating owner before
 deliberately starting another request; the CLI cannot recover an unknown session
@@ -1720,55 +1328,140 @@ timeout, interruption, or polling failure. `recovery_required` is not success; i
 connection and start a deliberate reauthorization if appropriate. No response includes
 Linear tokens, authorization codes, or PKCE verifiers.
 
+### Tokens and connection authorizations
+
+An owner stores the organization's token of a token service, such as `mergify` or
+`buildkite`, read as `useful account integration connect` reads a member's: from
+`--from-file PATH|-`, else standard input when that is not a terminal, else a prompt that
+does not echo. Cloud admits an owner alone, and its refusal is reported `forbidden` with exit
+1. Where the organization already holds a token of the service the command exits 2 and names
+`useful org integration reconnect`, which stores the token's next version. `show` shows the
+token, and `disconnect` erases it from Cloud; it stays valid at the service until ended there.
+
+```sh
+useful org integration connect mergify --from-file ~/secrets/mergify-token --org acme
+useful org integration reconnect mergify --from-file - --org acme < mergify-token.txt
+```
+
+`authorize INTEGRATION --runner RUNNER` for a token service lets the runner be issued the
+organization's token; `--project` is refused for a token. `authorize --all --runner RUNNER`
+covers every token of the organization and no connection.
+
+```sh
+useful org integration authorize mergify --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --yes
+useful org integration authorize --all --runner build-1 --org acme --yes
+```
+
+`authorize INTEGRATION --runner RUNNER --project PROJECT` for a connection at `github`,
+`gitlab` or `linear` makes a connection authorization: the runner may use that connection
+for the app runs of that project. `--project` must be given on the command line, since the
+project is part of what the command writes; it is never taken from the checkout, and without
+it the command exits 2 before any request and names this form. The permission covers every
+app run of that project on that runner, whoever or whatever caused the run, and reaches
+whatever the provider grants the connection, which no authorization narrows; Cloud delivers
+an organization's connection to no run today, so the authorization records a permission and
+delivers nothing. The command states this and does nothing without `--yes`. Named by its
+provider, the command reads the organization's connections at the provider and takes the
+active one; where several are active it exits 2 (`connection_required`) and lists each by ID
+and account, and a connection ID names one. With none active it exits 1
+(`connection_not_found`) naming the command that connects the organization, and a connection
+ID the read does not list exits 1 the same way naming `useful org integration list`. Given no
+`--runner` it exits 2 and lists the organization's runners that hold no authorization for
+that project and provider; it never prompts. It prints the authorization; `--json` prints one document with outcome
+`authorized` whose `authorization` carries `id`, `provider`, `projectId`, `projectName`,
+`runnerId`, `runnerName`, `connectionId`, `connectionAccount`, `authorizedBy`, `createdAt` and
+`scope`: its state, `current` or `unavailable`, and for a current GitHub scope `github` with
+the installation's `repositorySelection` and each permission's `name` and `access`. Cloud
+decides which providers it authorizes: a refusal exits 1 as `forbidden`, `project_not_found`,
+`runner_not_found`, `connection_not_found`, `connection_inactive`, `provider_ineligible` or
+`already_authorized`, and a deployment that does not serve these authorizations as
+`connection_authorizations_not_served`.
+
+```sh
+useful org integration authorize github --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --yes
+useful org integration authorize ghi_01k0z6r1w8f4jy2m7q9v3x5abc --runner build-1 --project api --org acme --json
+```
+
+`deauthorize` mirrors `authorize`. For a connection it finds the authorization in force for
+that project, runner and provider in the organization's list, reading no connection; a
+connection ID keeps only an authorization of that connection. It states that the runner's
+permission ends and that no run is asked to stop or loses anything, and does nothing without
+`--yes`. It prints the authorization's ID, project, runner and connection; `--json` prints one
+document with outcome `deauthorized` whose `authorization` carries `id`, `provider`,
+`projectId`, `projectName`, `runnerId`, `runnerName`, `connectionId` and
+`connectionAccount`. Where none is in force, a repeated command included, it sends nothing more
+and exits 1 (`authorization_not_found`); `forbidden` and `connection_authorizations_not_served`
+are reported as `authorize` reports them.
+
+```sh
+useful org integration deauthorize github --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --yes
+useful org integration deauthorize mergify --runner build-1 --org acme --yes
+```
+
 ## Project management
 
 Project commands use the selected human OAuth credential by default and accept
-`--service-api-key-file PATH|-` when an API operation permits a service actor. Project
-IDs, GitHub installation binding IDs, and provider repository IDs remain exact authority
-inputs; repository full names are display metadata only. Runner pools can be selected by ID
-or exact name. Start by discovering those values:
+`--api-key-file PATH|-` when an API operation permits a service actor. Cloud binds a
+project's repository by its connection and provider repository ID; `useful project create`
+finds both from the repository's path, and the commands below discover them for the commands
+that still take them. Runner pools can be selected by ID or exact name:
 
 ```sh
 # Discover the current account's organization memberships.
-useful organization list
+useful org list
 
 # Discover active and retained GitHub installation bindings for one organization.
-useful connection github installation list acme-labs
+useful org integration list --provider github --org acme-labs
 
 # Discover the repositories currently authorized for one installation.
-useful connection github repository list \
-  acme-labs \
-  ghi_01k0z6r1w8f4jy2m7q9v3x5abc
+useful org integration repository list ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 
 # Discover existing runner pools and copy a pool ID or exact name when needed.
-useful runner pool list acme-labs
+useful runner pool list --org acme-labs
 ```
 
-Create a project from one discovered repository. Omit `--default-branch` to select the
-provider-observed default branch, and omit `--pool-id` to create a valid project
-that reports `runner_pool_unassigned` until configured. `--pool-id` names the project's
-first pool; add more with `useful project runner-pool set`:
+Create a project from a repository, named by its path (`owner/name`, or a GitLab project's
+full path) or its provider ID, in the organization in effect. With no `--integration`, the
+command finds the one connection that reaches the repository among the organization's GitHub
+bindings in use, whose installations grant their repositories, and GitLab connections in use,
+whose selected repositories it reads; a path is compared without regard to letter case. When
+several connections reach the repository the command exits 2, lists them and creates nothing;
+name one with `--integration`, by its ID or as `github` or `gitlab`, and only that connection is
+read. When none reaches it, the command exits 1 and creates nothing. A connection ID with a
+provider repository ID sends the creation with no read before it.
+
+Omit `--default-branch` to select the provider-observed default branch, and omit `--pool` to
+create a valid project that reports `runner_pool_unassigned` until configured. `--pool` names
+a pool by ID or exact name and may be repeated: the creation carries the first, and when
+several are named the command then assigns them all as one set and prints the project that
+assignment returned. When that assignment fails, the project stays created with its first
+pool; the command exits with the failure's code and its `--json` result is the failure's, with
+`applied` `["created"]` and the created `project`:
 
 ```sh
-useful project create acme-labs \
-  --name useful \
-  --installation-id ghi_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --repository-id 123456789 \
+useful project create useful \
+  --repository acme-labs/useful \
+  --org acme-labs \
   --default-branch release \
-  --pool-id rpl_01k0z6r1w8f4jy2m7q9v3x5abc
+  --pool builders \
+  --pool shared
 
 # Page projects and show one complete configuration and readiness projection.
-useful project list acme-labs --limit 50
-useful project show \
-  acme-labs \
-  prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful project list --org acme-labs --limit 50
+useful project show prj_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 
 # Rename without changing execution configuration.
-useful project rename \
-  acme-labs \
-  prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --name useful-release
+useful project update useful --name useful-release --org acme-labs
 ```
+
+`list`, `show`, `update`, `archive` and `unarchive` act in the organization in effect: `--org`,
+then `USEFUL_ORG`, then the project of this checkout, then your only organization. `show`,
+`update`, `archive` and `unarchive` take the project as `PROJECT`, its ID or its exact name, archived
+projects included; a name no project of the organization has is reported as `not_found`.
+With no `PROJECT`, `show` shows the project in effect: `--project`, then `USEFUL_PROJECT`, then
+the project whose repository this checkout's remote names. `show` prints the repository
+binding in full, its installation or GitLab connection and the provider's repository ID
+included.
 
 An owner retires a project with `useful project archive` and brings it back with
 `useful project unarchive`; neither asks for confirmation, and repeating either changes nothing.
@@ -1780,41 +1473,44 @@ be freed for deletion. `useful project list` omits archived projects unless give
 `project_archived` and exits 1:
 
 ```sh
-useful project archive acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc
-useful project list acme-labs --include-archived
-useful project unarchive acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful project archive useful --org acme-labs
+useful project list --org acme-labs --include-archived
+useful project unarchive useful --org acme-labs
 ```
 
-Repository and runner-pool settings are independent. `set` assigns or atomically
-replaces the current value. Repeated removals are API-defined no-ops.
+Repository and runner-pool settings are independent. `useful project update PROJECT` takes at
+least one of `--name`, `--repository` with an optional `--integration`, `--default-branch` and
+`--clear-repository --yes`. `--repository` binds or atomically replaces the current binding,
+finding its connection as `create` does, with `--default-branch` as its branch or else the
+provider's default; `--default-branch` alone changes the configured branch; and
+`--clear-repository` removes the binding, which repeated is an API-defined no-op. The
+repository request is sent first and the rename last, so a project named by its name keeps that
+name until the last request. Each `--json` result has outcome `updated` and `applied`, what was
+sent in order (`repository_set`, `repository_updated`, `repository_detached`, `renamed`). When
+the rename fails after the repository changed, the change stays: the command exits with the
+failure's code, its `--json` result is the failure's with `applied` and the `project` as the
+repository request returned it, and the same command can be run again as typed.
 
-A project runs on a set of the organization's runner pools, with no order among them, and
-one pool may serve several projects. `useful project runner-pool set` replaces the whole set
-with the one or more pools it names, up to 20, each by ID or exact name; naming the same
-set again changes nothing. `useful project runner-pool remove` empties the set, after which the
-project reports `runner_pool_unassigned`. `useful project show` lists every pool of the set. A
-member's personal pool cannot serve a project, and naming one is refused:
+A project runs on a set of the organization's runner pools, up to 20, with no order among
+them, and one pool may serve several projects. `useful project pool add POOL` adds one pool to
+the set of the project in effect and `useful project pool remove POOL --yes` removes that one,
+each naming the pool by ID or exact name and leaving the set's other pools as they are. Each
+reads the project and writes the set it read with the one change, so a change another owner
+makes to the set between that read and the write is replaced. Adding a pool the set already
+holds, or removing one it does not hold, changes nothing. Removing the set's last pool leaves
+the project reporting `runner_pool_unassigned`. `useful project show` lists every pool of the
+set. A member's personal pool cannot serve a project, and naming one is refused:
 
 ```sh
-# Read, replace, update, or remove the repository binding.
-useful project repository show \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc
-useful project repository set \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --installation-id ghi_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --repository-id 123456789
-useful project repository update \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --default-branch stable
-useful project repository remove \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+# Replace, update, or remove the repository binding.
+useful project update useful --repository acme-labs/useful-next --org acme-labs
+useful project update useful --default-branch stable --org acme-labs
+useful project update useful --clear-repository --yes --org acme-labs
 
-# Replace the project's runner pools with the pools named, or remove them all.
-useful project runner-pool set \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  rpl_01k0z6r1w8f4jy2m7q9v3x5abc builders
-useful project runner-pool remove \
-  acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+# Add a pool to the project's set, or remove one from it.
+useful project pool add builders --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful project pool remove rpl_01k0z6r1w8f4jy2m7q9v3x5abc --yes \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
 ```
 
 Human output always includes the complete project's `ready` or `blocked` verdict and its
@@ -1827,8 +1523,13 @@ same-organization repository and runner-pool checks remain server-enforced.
 
 ### Signed project webhooks
 
-After a qualified maintenance cutover, owners can create a subscription with
-`useful project webhook create ORG PROJECT --config-file config.json`; use `-` for
+Every `useful project webhook` command acts in the organization and the project in effect:
+`--org`, then `USEFUL_ORG`, then the project of this checkout, then your only organization;
+`--project`, then `USEFUL_PROJECT`, then the project whose repository this checkout's remote
+names. With no project in effect it exits 2 naming `--project` before any request, and `create` and `update` check the configuration first, so an
+invalid file is `invalid_input` with nothing sent. After a qualified maintenance cutover,
+owners can create a subscription with
+`useful project webhook create --config-file config.json`; use `-` for
 bounded standard input, unless the service credential also reads standard input.
 For example, the file may contain
 `{"url":"https://receiver.example.com/hook","eventTypes":["run.failed"],"contextKeys":[]}`.
@@ -1838,16 +1539,18 @@ JSON create/rotate results retain the operation `outcome` and report
 `secretDisclosure: "shown_once"` only when a validated signing secret is included;
 `"metadata_only"` explicitly means no secret was recovered. Human output gives
 the same warning. Never treat a metadata-only response as a new signing key.
-`useful project webhook update ORG PROJECT WEBHOOK --expected-version 1 --config-file patch.json`
+`useful project webhook update WEBHOOK --expected-version 1 --config-file patch.json`
 replaces only supplied selections and never reads the version implicitly. Empty
 `contextKeys` clears that selection. URL changes require a new subscription.
 
-Members may `list ORG PROJECT`, `show ORG PROJECT WEBHOOK`,
-`delivery list ORG PROJECT WEBHOOK --limit 20 --cursor CURSOR --run-id RUN_ID --state failed`
-and `delivery show ORG PROJECT WEBHOOK DELIVERY`. Owners may also `enable`,
-`disable`, `delete`, `rotate-secret`, `revoke-previous-secret`, and `test` with
-`ORG PROJECT WEBHOOK`, or `delivery replay ORG PROJECT WEBHOOK DELIVERY`.
+Members may `list`, `show WEBHOOK`,
+`delivery list WEBHOOK --limit 20 --cursor CURSOR --run RUN --state failed`
+and `delivery show DELIVERY --webhook WEBHOOK`. Owners may also `enable`,
+`disable`, `delete`, `test`, `secret rotate` and `secret revoke` with
+`WEBHOOK`, or `delivery replay DELIVERY --webhook WEBHOOK`.
 Deletion requires `--yes` and stops future sends; it does not erase retained history.
+`secret revoke` asks for no confirmation: it ends only the overlap of the secret the last
+rotation replaced.
 One page is returned with an opaque `nextCursor`; `--json` selects schema-version-1
 results. The server enforces tenant and owner authorization. An uncertain
 mutation outcome is not permission to issue a new key blindly: inspect the
@@ -1861,547 +1564,14 @@ project is archived reports `project_archived` and exits 1. See
 [receiver and recovery guidance](../docs/operations/webhook-delivery.md) for
 raw-body signature verification, deduplication, overlap and retention.
 
-## Cloud workflow definitions
-
-`useful workflow definition publish --cloud ORGANIZATION --project PROJECT` publishes the
-tree to that project's Cloud definition and then records Cloud's revision locally: it
-uploads and seals the tree under its digest and publishes it with the bindings the
-invocation names, and Cloud keeps every other binding of the definition's current revision.
-The local revision records the bindings Cloud answered. A home's first publication creates
-the Cloud definition, or reuses the project's definition whose current revision has the
-same tree, bindings and executable bits, and records its id locally; later ones publish to
-it, and `--cloud-new` creates another. A Cloud refusal records nothing locally and exits 1.
-
-```sh
-useful workflow definition publish .useful/engineering --bindings bindings.json \
-  --cloud acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --json
-```
-
-A publish names the bindings it sets: in the `--bindings` file, which may name any subset
-and gives a binding `null` for its default, or one at a time beside it with
-`--binding KEY=VALUE` and `--binding-default KEY`. Without `--cloud`, every binding it does
-not name keeps the value of the local definition's current revision, or takes its default on
-a first publish. With `--cloud`, it keeps the value of the Cloud definition's current
-revision, whatever the home holds, and a create gives each binding not named its default, or
-is refused `binding-missing`.
-
-`--to` and `--new` choose the local definition under the home, and `--cloud-to` and
-`--cloud-new` choose the Cloud one. Cloud and the home assign their ids separately, in the
-same `def_` shape, and they are not interchangeable: `--to` takes an id
-`useful workflow definition list` prints, and `--cloud-to` one
-`useful workflow definition cloud list` prints. To publish the next revision of an existing
-Cloud definition from a home that has never published it, find its id and name it once:
-
-```sh
-useful workflow definition cloud list acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc
-useful workflow definition publish .useful/engineering \
-  --cloud acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --cloud-to DEFINITION
-```
-
-The home then records `DEFINITION` as the local definition's Cloud id, so later
-publications from it need no target. Without `--cloud-to`, such a home reuses the definition
-only when its publication is identical to the definition's current revision, and otherwise
-creates a second Cloud definition.
-
-With `--json`, `cloud.reused` is `true` when the publication reused an identical definition;
-a reused definition records no revision, and `cloud.revision` is its current one.
-`cloud.treeReused` is `true` when Cloud already held the tree sealed under its digest, so
-nothing was uploaded; tree reuse is storage and says nothing of the definition. When more
-than one of the project's definitions is identical, Cloud refuses with
-`definition-reuse-ambiguous` and the report names their ids (`cloud.workflow.definitionIds`):
-choose one with `--cloud-to`, or create another with `--cloud-new`. A home whose Cloud
-definition is not found, as after `useful workflow definition cloud delete`, publishes again
-with `--cloud-new` or `--cloud-to`.
-
-`useful workflow definition cloud` reads, changes and deletes a project's Cloud definitions,
-and lists and shows a definition's start evaluations, newest first:
-
-```sh
-useful workflow definition cloud list acme-labs prj_01k0z6r1w8f4jy2m7q9v3x5abc --limit 20
-useful workflow definition cloud show acme-labs DEFINITION \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc
-# enable, disable, archive and unarchive take the same arguments.
-useful workflow definition cloud disable acme-labs DEFINITION \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc
-# delete requires --yes and deletes only an archived definition.
-useful workflow definition cloud delete acme-labs DEFINITION \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --yes
-useful workflow definition cloud set-principal acme-labs DEFINITION PRINCIPAL \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc
-useful workflow definition cloud evaluation list acme-labs DEFINITION \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc --state failed
-useful workflow definition cloud evaluation show acme-labs DEFINITION EVALUATION \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc
-```
-
-With `--cloud ORGANIZATION`, `useful workflow run show`, `resume`, `release`, `withdraw` and
-`cancel` take a Cloud run ID as `RUN` and read or write no local run: `show` reads the run
-with its definition, subject claim, workflow state, cancellation, latest progress, exits,
-newest controls and newest trigger deliveries; `resume` asks Cloud to continue it, as `useful run continue` does;
-`release` asks Cloud, as an organization owner, to release the subject claim of the exited
-run; `withdraw` asks Cloud to carry a withdrawal to the runner executing the run; and
-`cancel` asks Cloud for a graceful cancellation, as `useful run cancel` does without
-`--force` or `--wait`. The control leaves take the same option ([Cloud runs](#cloud-runs)).
-
-```sh
-useful workflow run show run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --json
-useful workflow run resume run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --from build
-useful workflow run release run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs
-useful workflow run withdraw run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs
-useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --json
-```
-
-## Cloud runs
-
-List materialized runs within one organization (newest first) with bounded,
-opaque-cursor pages. Filters combine with AND; repeat exact context matches:
-
-```sh
-useful run list acme-labs --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --state-group active --created-after 2025-01-01T00:00:00Z \
-  --integration-context source=linear --integration-context linearIssue=LIV-123 \
-  --limit 50 --json
-useful run list acme-labs --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --state-group active --created-after 2025-01-01T00:00:00Z \
-  --integration-context source=linear --integration-context linearIssue=LIV-123 \
-  --limit 50 --cursor 'CURSOR_FROM_NEXT_CURSOR' --json
-```
-
-Text output includes run IDs, state, timestamps, project, workflow, context,
-placement when available, and the next cursor; `--json` returns `items` and
-`nextCursor` as in the API. Context is private: avoid shell-history exposure when
-using context filters, and do not put context in logs. For ticket dispatch, write
-`{"source":"linear","linearIssue":"LIV-123"}` to a protected file and supply
-`workflow run create --cloud --integration-context-file PATH`.
-
-Run commands use the selected human OAuth credential by default and accept
-`--service-api-key-file PATH|-` when an API operation permits a service actor. They use
-the configured Useful Machinery deployment. `useful workflow` runs and inspects local workflow
-definitions and run directories; with `--cloud ORGANIZATION` it also publishes a definition
-to Cloud, creates a run of a Cloud definition, and reads and controls a definition-backed
-Cloud run, and `useful workflow definition cloud` manages Cloud definitions (see
-[Cloud workflow definitions](#cloud-workflow-definitions)).
-
-Start a Cloud run of a workflow published as a Cloud definition with
-`useful workflow run create ID --cloud ORGANIZATION --project PROJECT`; `useful workflow definition
-publish DIR --bindings FILE --cloud ORGANIZATION --project PROJECT` prints the id. `ID` is
-sent as the Cloud definition id, and nothing under the `useful` home or any execution root is
-read. `--workflow FILE` names a workflow file of the definition's tree, relative to its root,
-and the root workflow is run when it is omitted. The command takes `--source-branch`,
-`--workspace-branch` or `--workspace-commit`, `--display-name`, the named-input options or
-`--input-set-id`, `--integration-context-file`, `--max-parallel` from 1 to 64, sent only when
-given, `--no-owner`, and `--wait` with `--timeout`, uses one idempotency key per invocation,
-and writes one `create` result. A run you create is owned by you unless `--no-owner` starts
-it with no owner, in the project's runner pools. The local options (`--path`,
-`--execution-root`, `--run-dir`, `--agent-profiles`, `--stop-before`, `--owner`,
-`--external`, `--source-revision`) are usage errors beside `--cloud`, as the Cloud options are without it. A run
-of a definition names no publication: publish an export of a succeeded run with
-`useful publication create`.
-
-```sh
-# Admit an inputless run of the definition's root workflow without waiting for execution.
-useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --cloud acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --source-branch main \
-  --display-name "Release checks"
-
-# Or run a workflow file of its tree and bind mixed values, including ordered and
-# explicitly empty collections.
-useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --cloud acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --workflow flows/review.yaml \
-  --input-text-file request ./request.txt \
-  --input-json settings '{"mode":"review"}' \
-  --integration-context-file ./integration-context.json \
-  --input-attachment evidence text/plain ./notes.txt \
-  --input-attachment evidence application/pdf ./report.pdf \
-  --input-attachments-empty optionalEvidence
-
-# Create an open immutable set, upload its object members, and then seal it.
-useful run input-set create acme-labs \
-  --project-id prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --input-text-file request ./request.txt \
-  --input-attachment evidence text/plain ./notes.txt \
-  --input-attachment evidence application/pdf ./report.pdf \
-  --json > input-set.json
-input_set_id=$(jq -er '.inputSet.id' input-set.json)
-
-useful run input-set upload acme-labs "$input_set_id" \
-  --member-file inputs/request ./request.txt \
-  --member-file inputs/evidence/000000 ./notes.txt \
-  --member-file inputs/evidence/000001 ./report.pdf
-useful run input-set seal acme-labs "$input_set_id"
-
-useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --cloud acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --input-set-id "$input_set_id"
-
-# Read the latest public projection.
-useful run show \
-  acme-labs \
-  run_01k0z6r1w8f4jy2m7q9v3x5abc
-
-# Observe settlement for up to 30 minutes without changing the run.
-useful run show acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --wait --timeout 30m
-
-# Read the retained Linear lifecycle binding a retired trigger admitted the run with;
-# outcome not_found when none.
-useful run linear show acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc --json
-# List the binding's retained desired-state updates, newest first; --cursor continues a page.
-useful run linear history acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc --limit 50 --json
-
-# Continue from selected steps on the same retained runner boot. Admission is not execution.
-useful run continue acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --from build --from test --expected-version 7 --json
-# Observe the immutable admission receipt with the current Run until it settles.
-useful run continue acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --from build --wait --timeout 30m
-
-# Retry an eligible terminal run; observe the durable receipt until it resolves.
-useful run retry acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --expected-version 7 --timeout 30m
-
-# Request graceful cancellation; force is a separate explicit, separately keyed choice.
-useful run cancel acme-labs run_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --wait --timeout 30m
-```
-
-A definition-backed Cloud run's wait takes the local run controls with
-`--cloud ORGANIZATION`. Each leaf but `stop` reads the run's current wait, refuses
-`run_not_waiting` or `wait_kind_mismatch` before sending anything, and asks Cloud under one
-request key to carry the control to the runner executing the run, which applies it as the
-leaf applies it to a local run. The output reports Cloud's acceptance, not the runner's
-application; `wait_not_current` means the run's wait changed after the read.
-
-```sh
-useful workflow run answer run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs \
-  --question scope --text "Only the public API"
-useful workflow run approve run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs
-useful workflow run hand-back run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs \
-  --notes "Split the migration"
-useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --json
-useful workflow run stop run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs \
-  --before review --reason "Hold for review"
-useful workflow run lift run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --before review
-```
-
-To end a Cloud run, `useful workflow run withdraw RUN --cloud ORGANIZATION` sends a
-withdrawal without reading the run; the runner ends the run `withdrawn`. Cloud refuses it
-`run_not_live` when no runner executes the run and `control_unsupported` when the runner's
-`useful` does not apply a withdrawal; `useful workflow run cancel RUN --cloud ORGANIZATION`
-then asks Cloud for a graceful cancellation and reports the cancellation request Cloud
-accepted. Either acceptance is not yet the run's end.
-
-```sh
-useful workflow run withdraw run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs --json
-useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --cloud acme-labs
-```
-
-Without an input flag, `workflow run create --cloud` admits an inputless run. The mixed-input flags may be
-repeated in one invocation: Text uses `--input-text NAME TEXT` or
-`--input-text-file NAME PATH`, JSON uses `--input-json NAME JSON` or
-`--input-json-file NAME PATH`, a singular File uses
-`--input-file NAME MEDIA_TYPE PATH`, and ordered attachment members use repeated
-`--input-attachment NAME MEDIA_TYPE PATH`. `--input-attachments-empty NAME` preserves a
-present collection with no members. A name may be bound once, except that attachment
-members append to one collection in argument order. `--integration-context-file PATH`
-supplies a private immutable flat JSON object whose keys and values are strings. It is
-returned by run readers but is not a workflow input. Omitting the flag and supplying an
-empty object have the same run semantics. The object allows at most 32 entries, 64 UTF-8
-bytes per nonempty key, 1 KiB per value, and 16 KiB of compact JSON; empty values are
-valid, U+0000 is not, and duplicate members reject locally. The encoded-size limit uses
-compact UTF-8 JSON with the shortest JSON-required escapes, so `<`, `>`, `&`, U+2028, and U+2029
-retain their literal UTF-8 size. The source document, including escapes and formatting,
-is limited to 128 KiB so file and standard-input reads remain bounded.
-
-One Text or JSON file source or the integration-context file may use `-` to claim standard
-input. Exactly one such operand may claim standard input in an invocation; competing claims
-reject before stdin is read or Cloud is contacted. File and attachment paths always name
-regular files.
-
-Text and JSON values are limited to 1 MiB, each File or attachment member to 64 MiB, all
-values together to 256 MiB, named inputs to 256, and attachment members to 256. Text must
-be UTF-8. JSON must be strict UTF-8 JSON with duplicate keys and excessive nesting
-rejected before Cloud access. Bytes and explicit valid media types are preserved exactly,
-including zero-length values. The CLI computes the canonical manifest digest, allocates
-one input set, requests upload capabilities in batches of at most 100, uploads every
-logical member, seals the set, and only then creates the run. A storage `412 Precondition
-Failed` is treated only as evidence that seal verification is required; connection and
-timeout failures are not treated as upload evidence. Storage uploads have a five-minute
-request timeout, separate from the 20-second metadata-request timeout.
-
-Use `run input-set create` to acquire local sources, compute the immutable manifest, and
-allocate an open set. It returns the set metadata and ID without requesting upload
-capabilities, writing object storage, or sealing. `run input-set show` inspects a set and
-manifest. `run input-set upload` maps each selected logical member ID to a caller-owned
-regular file with repeated `--member-file MEMBER PATH` flags. It rereads the authoritative
-manifest, requires each file's exact size and digest, and reports accepted members
-separately from `412` members that still require authoritative sealing. This permits a
-later invocation to upload all object members or resume only missing members, including
-one member such as `inputs/evidence/000001` from a larger attachment collection. Empty
-attachment collections require no upload. `run input-set seal` completes authoritative
-verification.
-`run input-set delete ... --yes` makes a set logically unavailable and schedules exact-key
-content cleanup. Once a set is sealed, pass
-its exact ID to `workflow run create --cloud --input-set-id`; this conflicts with every acquisition flag
-and never restages content.
-
-Create output reports the accepted Run ID and whether the deployment replayed the
-request. One invocation keeps each mutation's idempotency key through an ambiguous API
-transport retry and an access-token refresh; keys are not persisted for a later invocation.
-If preparation stops after input-set allocation, the CLI reports its ID and recovery
-steps on stderr even with `--json`; inspect or resume that set explicitly before
-allocating another. An interrupt after run dispatch reports unknown acceptance rather
-than claiming no run was created.
-
-Retained content is explicit run-scoped administration:
-
-```sh
-useful run input show acme-labs "$run_id" --json
-# Omit --member to download every member, or repeat it for an exact subset.
-useful run input download acme-labs "$run_id" \
-  --member inputs/request \
-  --output ./retained-inputs --json
-useful run input delete acme-labs "$run_id" --yes
-```
-
-A download first validates the retained inventory, requests capabilities in batches of at
-most 100, and verifies every selected size and SHA-256 digest. Omit `--member` to select
-all members, or repeat `--member MEMBER` to select exact logical IDs; selected members
-retain canonical manifest order. Members are written beneath the new destination using
-their deterministic logical IDs, such as `inputs/request` and
-`inputs/evidence/000000`. Private staging is atomically renamed only after all selected
-members verify, and an existing destination is never replaced. Interruption before the
-commit phase or any integrity failure leaves no committed destination; the CLI attempts
-to unlink its private staging, which is filesystem cleanup rather than physical media
-erasure. An interruption racing the atomic commit reports unknown commitment and
-directs the caller to inspect the destination. Capability URLs, input bytes, and bearer
-credentials are never included in command output. Retention expiry is reported as
-`gone`. Successful deletion makes content logically unavailable and schedules exact-key
-cleanup; it does not attest physical erasure and does not remove the run's integration
-context. Both deletion commands require literal
-`--yes`, use fresh idempotency keys, and report an unknown commitment if interrupted
-after dispatch.
-
-`workflow run create --cloud`, `run show`, and `run cancel` accept `--wait` and optional
-`--timeout DURATION` (positive integral `ms`, `s`, `m`, `h`, or bare seconds).
-`--timeout` requires `--wait`. Create and cancel budgets begin after acceptance; show
-starts immediately. The remaining wait budget caps credential refresh, read retries,
-and each observation request; it does not bound the accepted mutation. Reads continue
-through admitted creation. Without `--wait`, create returns on durable run acceptance;
-with `--wait`, it observes execution and artifact attachment. Show-wait also observes the
-automatic publication handoff and its linked Publication, which only a run created by
-workflow path before its retirement can have, under the same timeout budget. A successful
-Run with pending handoff is not settled; waiting never creates an attempt or switches
-to a later manual attempt. Cancel observes only its receipt and terminal Run. A cancellation receipt being accepted or resolved is not by itself
-proof of a stopped Run. Force requires explicit `--force`; to escalate use a new
-idempotency key. Reuse `--idempotency-key` with the same mode and Run to reconcile an
-uncertain response. Signals and timeouts stop only local observation.
-
-`run continue ORGANIZATION RUN --from STEP [--from STEP ...]` selects distinct steps
-in the supplied order. The run always continues with the definition it was created
-from; a receipt admitted earlier under a replaced definition still shows that
-definition's commit and workflow path. `--expected-version N` guards admission. A generated key is reused for at most one
-ambiguous transport replay of the identical request and principal. If both attempts
-are ambiguous, acceptance is unknown: inspect the run before another request; a 404
-is not proof of non-admission. A 201 contains an immutable accepted attempt and
-partition, **not** proof of execution. Without `--wait` it returns on admission;
-with `--wait` it reads the immutable receipt alongside the latest authorized Run
-until terminal state. `--timeout` requires `--wait` and begins after acceptance.
-JSON emits `operation: continue`, `outcome`, `request` (the immutable receipt),
-`run` (the current projection), `idempotencyKey` when acceptance is unknown, and
-`code` on failure. Admission rejection includes a `diagnostic` array of safe
-violation codes and optional node/producer/reference/prior-state details in
-JSON, also shown in human output. A `410` `path-run-retired` answer, for a run Cloud no
-longer continues because it was created by workflow path, is outcome `error` with code
-`path_run_retired` and exit 1 for `run continue` and `workflow run resume --cloud` alike.
-The Run shows selected/inherited/reexecuted steps, effective source digest, both workspace paths, pending/ready/unavailable preparation,
-modified true/false/unknown, interruption cause, and portable-result absence.
-The Run partition is not an output-producer inventory; direct producer identities
-for inherited output values are preserved in retained and portable results, not
-inferred from a preceding attempt in the Run summary. Missing portable results
-cannot supply that evidence. Signals and timeouts stop observation only, never submit a second continuation.
-
-`run retry ORGANIZATION RUN` always observes its retry receipt; `--expected-version`
-requires a positive integer and `--timeout` limits observation after acceptance.
-A single generated key is reused for ambiguous transport replay. POST acceptance alone
-never reports application: only an applied GET receipt succeeds. JSON retry results
-contain `schemaVersion`, `operation: retry`, `deployment`, `organizationRef`, `runId`,
-`outcome`, nullable `requestId`, `idempotencyKey`, `receipt`, and `code`.
-Outcomes are `applied`, exact-code `rejected`, `subject_busy` and `subject_settled`
-(another run holds the run's subject; `holderRunId` in JSON names it), `retry_pending`,
-`timed_out`, `observation_stopped`, `acceptance_unknown`, and `error`. A `409`
-`path-run-retired` answer, for a run Cloud no longer retries because it was created by
-workflow path, is outcome `error` with code `path_run_retired`; publish the workflow as a
-definition and start a run of it instead.
-Rejection, conflict, and timeout exit 1; usage exits 2; authentication
-exits 3; unresolved transport exits 4; SIGINT/SIGTERM exit 130/143. A known
-interruption retains the request ID; unknown submission retains the key. Neither
-cancels or creates another retry. Inspect the run and request before trying again.
-
-For `workflow run create --cloud`, `run show`, and `run cancel`, `--json` emits one
-schema-version-1 object with `operation`, `deployment`, `organizationRef`,
-nullable `runId`, `outcome`, full nullable `run`,
-`publication`, `cancellationRequest`, nullable create `replayed`, and nullable `error`.
-The error includes `code`, `idempotencyKey`, `requestedMode`, and `requestId` (nullable).
-A create that Cloud definitely refuses at admission (a `409` or `422` `project-archived`,
-`project-not-ready`, `workspace-selection-unsupported`, `workflow-source-unavailable`,
-`workflow-source-invalid`, `workspace-source-unavailable`, or `workspace-membership-unproven`
-problem) exits 1 with code `admission_rejected`; its error adds `httpStatus`, the full
-`problemType` URI, and `correlationId`, the response's `X-Request-ID` (omitted when absent or
-not a `req_` id), and for `project-not-ready` the project's readiness `blockers` in Cloud's
-order (omitted when the problem names none the CLI can vouch for); human mode prints the
-same facts with a remedy. Such a refusal created no run and is never
-`acceptance_unknown`, which a create reports with its key and exit 4 only when the outcome
-is unconfirmed: a transport failure, a `5xx`, or an unreadable response after dispatch.
-Progress goes to stderr. Human show results show the Run's automatic publication
-handoff and any observed Publication state, outcome, receipt disposition, failure, and
-redacted confirmed pull-request URL separately from execution. After the run's actor,
-`run show` prints one `credential PROVIDER:` line for each provider whose credential source
-the run's runner reported: `host`, `grant of` and the member's principal id, or `grant` when
-Cloud recorded no member; a run with no reported sources prints none. After them it prints
-one `integration ID:` line for each integration the run's workflow declares, in Cloud's
-order: `host`, `connected by` and the member's principal id, `connected by the organization`
-or `connected by a member` when Cloud names no principal, or `not provided`, followed by
-`, token v` and the version when there is one; a run whose read carries no integration
-sources prints none. On failure, inspect the existing publication or handoff
-and provider effects before creating another publication attempt. Human cancellation
-errors retain the requested mode, known receipt, Run state, interruption, and artifact
-delivery evidence for same-key reconciliation.
-Create-wait exits nonzero unless the run succeeded; show-wait and cancel-wait
-exit zero on observed settlement, regardless of the Run's execution result. Timeout
-exits 1; SIGINT/SIGTERM exit 130/143 without sending a new cancellation request.
-
-### Agent named-input-to-artifact loop
-
-An authenticated agent can bind a prompt file to a workflow's named Text input and
-complete the run using only stable JSON command surfaces and the downloaded local result:
-
-```sh
-set -euo pipefail
-organization=acme-labs
-project=prj_01k0z6r1w8f4jy2m7q9v3x5abc
-definition=def_01k0z6r1w8f4jy2m7q9v3x5abc
-request_path=./request.txt
-artifact_path=./downloaded-run
-
-useful workflow run create "$definition" \
-  --cloud "$organization" --project "$project" \
-  --input-text-file request "$request_path" \
-  --json > create.json
-run_id=$(jq -er 'select(.outcome == "accepted") | .runId' create.json)
-
-useful run show "$organization" "$run_id" \
-  --wait --timeout 30m --json > observed.json
-jq -e '.outcome == "settled" and .run.state == "succeeded"' observed.json >/dev/null
-
-useful artifact download "$organization" "$run_id" \
-  --output "$artifact_path" --json > download.json
-jq -e '.outcome == "downloaded"' download.json >/dev/null
-jq . "$artifact_path/result.json"
-```
-
-The input bytes remain at the caller-selected source path; they do not enter command
-arguments or JSON receipts. `result.json` is inspected only after the complete Artifact
-Set has been downloaded, verified, and committed at the requested destination.
-
-## GitHub artifact publications
-
-Publication commands use the selected human OAuth credential by default and accept
-`--service-api-key-file PATH|-` when the operation permits a service actor. They turn one
-available `git_branch` export from a succeeded Cloud run into a ready-for-review pull
-request. Run success and export declaration alone do not publish anything automatically;
-Publication commands create explicit post-run attempts. A run of a Cloud definition delivers
-no export to publish yet, so they apply to runs that already have one: runs created by
-workflow path before that form was retired, some of which named an export at creation and
-were handed off to an automatic attempt.
-
-The complete Publication command surface is:
-
-```sh
-# Create one attempt for an exact export and retain its identity.
-useful publication create acme-labs "$run_id" \
-  --export changes --json > publication-create.json
-publication_id=$(jq -er '.publication.id' publication-create.json)
-
-# Create another attempt and wait locally for its terminal outcome.
-useful publication create acme-labs "$run_id" \
-  --export changes --wait --timeout 30m
-
-# Read the current attempt, optionally waiting for a terminal snapshot.
-useful publication show \
-  acme-labs "$run_id" "$publication_id" --wait --timeout 30m
-
-# List one oldest-first page of attempts beneath the run.
-useful publication list \
-  acme-labs "$run_id" --limit 50
-```
-
-To update an existing open pull request from the run's connected GitHub repository,
-select its repository-local number. Cloud captures its head when the request is accepted;
-use the optional hash when the caller has already inspected that exact revision:
-
-```sh
-useful publication create acme-labs "$run_id" --export changes \
-  --change-request 42 --expected-head "$inspected_head" --wait --json
-```
-
-An accepted update advances only the request's own source ref by a guarded fast-forward;
-it does not create another pull request or change its title, body, review state, labels,
-reviewers, draft status or base. Existing approvals **may still count** after the update,
-and preconfigured GitHub auto-merge or workflows **may proceed** under repository rules.
-Reviewers and repository owners must enforce their own approval policy; a successful
-Publication proves the guarded ref effect, not fresh human approval. A stale hash or
-ineligible request is refused at acceptance; a later race is reported on the separate
-Publication without changing the run's outcome.
-
-An explicit publication workflow first waits for a run that has an export, then creates and
-waits for the selected Publication:
-
-```sh
-set -euo pipefail
-organization=acme-labs
-
-useful run show "$organization" "$run_id" \
-  --wait --timeout 30m --json > run-observed.json
-jq -e '.outcome == "settled" and .run.state == "succeeded"' run-observed.json >/dev/null
-
-useful publication create "$organization" "$run_id" \
-  --export changes --wait --timeout 30m --json > publication.json
-jq -e '.outcome == "succeeded"' publication.json >/dev/null
-publication_id=$(jq -er '.publication.id' publication.json)
-```
-
-For a run handed off to an automatic attempt, `run show --wait --json` follows the handoff
-and that attempt and reports `.run.state`, `.run.publication`, and `.publication` in its one
-final JSON object; it exits zero on a terminal failure but retains the failure fields.
-`no_changes` and `pull_request_already_merged` are successful Publication outcomes,
-not newly created pull requests. Neither timeout nor a signal cancels remote work.
-
-Without `--wait`, `publication create` returns after Cloud accepts the attempt. With
-`--wait`, it polls the accepted Publication and exits zero only for a succeeded outcome.
-The caller may supply an opaque `--idempotency-key`; otherwise the CLI generates one and
-preserves it across the invocation's bounded acceptance retries and terminal output. The
-command never accepts a repository, base, destination branch, pull-request metadata, or
-branch-only mode. Cloud derives those values from the run and either reports
-`no_changes`, creates or exactly reuses an open pull request, reports an exact
-already-merged pull request, or stores a structured failure.
-
-`publication show` is a read: without `--wait`, it emits the current snapshot; with
-`--wait`, it polls until any terminal snapshot. Both forms exit zero when they retrieve a
-stored failed Publication, so automation using `show --wait --json` must inspect
-`outcome`. `publication list` returns only the requested page and preserves `nextCursor`
-in JSON instead of following it automatically. `--timeout` requires `--wait`; omitting it
-waits until terminal state or a process signal. Timeout, SIGINT, and SIGTERM stop only
-local observation: they do not cancel, retry, delete, merge, or otherwise mutate the
-Publication or its provider effects. Waiting JSON output is one complete document for
-terminal, timeout, or fatal read outcomes and is empty when a process signal wins.
-
-Publication consumes the run's existing private Artifact Set and grants no public
-artifact access or download URL. Plain output contains only the public Publication
-projection and credential-free, query-free provider links; it does not stream provider
-logs or expose credentials.
+## Triggers and schedules
+
+`useful project trigger` and `useful project schedule` are removed. Triggers that target a
+`workflowPath` and their Linear lifecycle policy are retired in Cloud: declare start, control
+and schedule triggers in a published workflow definition's root instead, and use the root's
+`mirror` for issue state. Retained trigger and schedule records
+stay readable through the public API; `useful workflow run show` prints a run's retained lifecycle
+binding and `useful workflow run linear list` still lists its updates.
 
 ## Runner pools, registrations, and join keys
 
@@ -2410,20 +1580,37 @@ organization also has a personal pool, named by the service, that shows its memb
 `useful runner pool show`; it serves that member's own runners and cannot serve a project.
 Owners administer every pool. A member administers the runners in their own personal pool:
 registering, renaming, changing the mode of and deleting them, and issuing their
-activations and join keys. Creating, renaming and deleting pools and moving runners between
-pools stay with owners. Commands taking a pool or runner accept its ID or exact name.
+single-runner keys and join keys. Creating, renaming and deleting pools and moving runners between
+pools stay with owners. Commands taking a pool or runner accept its ID or exact name, and
+every one acts in the organization in effect, like the `org` commands: `--org`, then
+`USEFUL_ORG`, then the project of this checkout, then your only organization.
 
 ```sh
+# Create a pool, and rename it.
+useful runner pool create builders --org acme-labs
+useful runner pool update builders --name gpu-builders --org acme-labs
+
 # Show a pool, its member when it is personal, its waiting runs, how many of its
 # runners are online, busy, idle and offline, and the runs they hold.
-useful runner pool show acme-labs builders
+useful runner pool show gpu-builders --org acme-labs
 
-# Register a runner in a named pool, in a member's personal pool by principal ID, or,
-# naming neither, in your own personal pool. The activation file must not exist.
-useful runner create acme-labs --pool-id builders --activation-file ./runner.activation.json
-useful runner create acme-labs --member prn_01k0z6r1w8f4jy2m7q9v3x5abc \
-  --activation-file ./runner.activation.json
-useful runner create acme-labs --activation-file ./runner.activation.json
+# List the runners of one pool. The command reads every page of the organization's runners,
+# so it takes no --limit or --cursor.
+useful runner list --pool gpu-builders --org acme-labs
+
+# Move a draining or disabled runner with no unfinished work to another pool, rename it, or
+# both. The move is sent first and the rename last; if the rename then fails, the runner
+# stays moved, and the command exits with the rename's failure and reports what it applied.
+useful runner update builder-one --pool gpu-builders --name gpu-one --org acme-labs
+
+# Register a runner named builder-one in a named pool, in a member's personal pool, or,
+# naming neither, in your own personal pool, and issue its single-runner key. The key file
+# must not exist.
+useful runner join-key issue --runner builder-one --pool builders \
+  --key-file ./builder-one.key.json --org acme-labs
+useful runner join-key issue --runner builder-one --member pam@dundermifflin.com \
+  --key-file ./builder-one.key.json --org acme-labs
+useful runner join-key issue --runner builder-one --key-file ./builder-one.key.json --org acme-labs
 ```
 
 `useful runner pool show` counts a runner busy while it is working on a run and idle while it
@@ -2431,289 +1618,90 @@ is enabled, connected and working on none, a runner whose held runs all wait inc
 prints how many runs the pool's runners hold, working and in a wait, all from one snapshot;
 `--json` carries the counts, waiting runs and held runs as `status`. Against a Cloud release
 that does not report pool status, it shows the pool alone, and against one that does not
-report held runs, it omits them. `--pool-id` and `--member` cannot be combined, and a service actor must name one
-of them, since it has no personal pool.
+report held runs, it omits them.
 
-A join key lets hosts become runners in a pool without an activation each. Any number of
-hosts may join with one key until it expires or is revoked; each becomes a new runner with
-a name the service chooses and its own credential, generated on the host.
+Hosts enroll with one of two keys, each written once as one line of JSON. A single-runner
+key enrolls one host as one registered runner, within an hour of issue. A pool's join key
+lets hosts become runners in a pool without a key each: any number of hosts may join with it
+until it expires or is revoked, and each becomes a new runner with a name the service
+chooses and its own credential, generated on the host.
+
+`useful runner join-key issue --runner RUNNER` issues a single-runner key. For a name no
+runner of the organization has, it first registers a runner of that name: in the pool
+`--pool` names, in the personal pool of the member `--member` names, by principal ID,
+membership ID or verified email address, or, naming neither, in your own; a service actor
+must name one, since it has no personal pool. For a runner the organization holds by that ID
+or exact name it issues a new key, and Cloud revokes the runner's earlier unused one; a
+`--pool` or `--member` given then must name the pool the runner is in, or the command exits
+2 having issued nothing and names `useful runner update`. A runner ID no runner holds is
+`not_found`. If the runner is registered and its key then fails, the command reports the
+runner and the same command to run again, which finds the runner and registers no other.
 
 ```sh
 # Issue a key for a pool (or, naming none, your personal pool) that admits hosts for
-# seven days. A runner that joined with it is removed after one hour offline. The key's
-# one line of JSON goes to standard output, ready to paste at `useful runner serve --join-key`.
-useful runner join-key issue acme-labs \
-  --pool-id builders \
-  --expires-in 7d \
-  --remove-after 1h
+# seven days. A runner that joined with it is removed after one hour offline; with no
+# --remove-after, after 30 days. The key's one line of JSON goes to standard output, ready
+# to paste at `useful runner serve --join-key`.
+useful runner join-key issue --pool builders --expires-in 7d --remove-after 1h --org acme-labs
 
 # Or write the key to a new protected file, for hosts that start unattended.
-useful runner join-key issue acme-labs \
-  --pool-id builders \
-  --expires-in 7d \
-  --remove-after 1h \
-  --join-key-file ./builders.join-key.json
+useful runner join-key issue --pool builders --expires-in 7d --remove-after 1h \
+  --key-file ./builders.join-key.json --org acme-labs
 
-# List keys with their pool, issuer, state (issued, revoked or expired), expiry and
-# removal time. Continue with --cursor when a next cursor is shown.
-useful runner join-key list acme-labs --pool-id builders
+# List the pool keys with their pool, issuer, state (issued, revoked or expired), expiry and
+# removal time, then every runner's single-runner keys with their runner, state (issued,
+# consumed, revoked or expired) and expiry. Or list one runner's single-runner keys alone.
+useful runner join-key list --pool builders --org acme-labs
+useful runner join-key list --runner builder-one --org acme-labs
 
 # Stop new joins. The runners that joined with the key stay in the pool.
-useful runner join-key revoke acme-labs rjk_01k0z6r1w8f4jy2m7q9v3x5abc --yes
+useful runner join-key revoke rjk_01k0z6r1w8f4jy2m7q9v3x5abc --yes --org acme-labs
+
+# Revoke a single-runner key, naming its runner or letting the command find it.
+useful runner join-key revoke rna_01k0z6r1w8f4jy2m7q9v3x5abc --runner builder-one --yes \
+  --org acme-labs
 ```
 
 `--expires-in` runs from `1m` to `365d` and `--remove-after` from `5m` to `30d`, each a
 whole number of minutes, hours or days; both are fixed at issue, and a value outside its
-bounds is refused before anything is sent. The key is written once, as one line of JSON:
-with no `--join-key-file`, or with `--join-key-file -`, to standard output, with the
-command's status on standard error; with `--join-key-file PATH`, like an activation, to a
-new file only you can read, created before the key is issued. Cloud cannot show the key
-again. `--json` needs `--join-key-file PATH` and is refused before anything is sent
-otherwise; it reports the key's metadata and the file's path, never the key itself. The
-key stays a secret on the screen and in the clipboard: keep it in a secret store and out of
-version control, logs and transcripts.
+bounds is refused before anything is sent. `--expires-in` is required for a pool's key, and
+both are refused with `--runner`, as `--member` is without it. Either key is written once:
+with no `--key-file`, or with `--key-file -`, to standard output, with the command's status
+on standard error; with `--key-file PATH`, to a new file only you can read, created before
+the key is issued. Cloud cannot show the key again. `--json` needs `--key-file PATH` and is
+refused before anything is sent otherwise; it reports the key's metadata and the file's path,
+and for a single-runner key the runner, never the key itself. The key stays a secret on the
+screen and in the clipboard: keep it in a secret store and out of version control, logs and
+transcripts.
+
+`join-key list` reads every page of the pool keys, of the runners and of each runner's
+single-runner keys, one request per runner, so it takes no `--limit` or `--cursor`; it passes
+over a runner whose keys you may not read, and `--json` carries the pool keys as `items` and
+the single-runner keys as `singleRunnerKeys`. `join-key revoke` tells the two kinds apart by
+the ID; without `--runner` it finds a single-runner key's runner by reading the runners' keys
+until one holds it, and a key no runner you may read holds is `not_found`. `--runner` beside
+a pool key's ID is a usage error.
 
 A runner that joined with a key is removed automatically once it has been offline for the
 key's removal time, counted from when Cloud last saw it, or from its join if it never
 connected, and holds no reserved or unfinished work; its runs and records are kept. A
 disabled runner is not removed, and re-enabling, renaming or moving a runner starts its
-offline time again. A runner registered with an activation is never removed this way, and
+offline time again. A runner registered with a single-runner key is never removed this way, and
 revoking or expiring a key removes no runner. `useful runner show` names the key a runner
 joined with. A workspace a runner kept for a failed run does not keep the runner: once a
 runner is removed or deleted, the runs whose workspaces it kept can no longer be continued
-with `useful run continue`. Choose `--remove-after` to cover the longest outage after which
+with `useful workflow run retry --from`. Choose `--remove-after` to cover the longest outage after which
 failed runs should still be continuable on the key's runners.
-
-## Runner doctor
-
-Use `useful runner doctor` to inspect the local prerequisites currently known to
-the runner. The default set contains only `environment.command.git`. It executes the
-`git` resolved from the runner process's `PATH`, requires a parseable version at least
-`2.29.0`, and reports a pass or failure for that check. Select
-`execution.harness.pi-json-v1` explicitly to check the `pi` inherited through the same
-operator-controlled `PATH`, select `execution.harness.claude-code-stream-json-v1` to 
-check `claude`, or `execution.harness.codex-app-server-v1` to check `codex` 
-independently. A successful result does not mean the runner is ready to serve
-assignments: runner configuration, machine identity, connectivity, and other 
-execution requirements are not all checked yet.
-
-```sh
-# Run the default checks.
-useful runner doctor
-
-# Run a named check. Repeat --check to select more than one registered check.
-useful runner doctor --check environment.command.git
-
-# Validate the Pi installation selected from inherited PATH only.
-useful runner doctor \
-  --check execution.harness.pi-json-v1
-
-# Validate Claude Code independently, or repeat --check to inspect multiple harnesses.
-useful runner doctor \
-  --check execution.harness.claude-code-stream-json-v1
-
-# Validate Codex independently.
-useful runner doctor \
-  --check execution.harness.codex-app-server-v1
-
-# Check the agent-login readiness the runner serving from the runner home recorded.
-useful runner doctor --check credentials.agent-logins
-
-# The same check for a service installation that names its configuration.
-useful runner doctor \
-  --check credentials.agent-logins --config /etc/useful/runner.json
-
-# Check the free space on the disk the runner's work root is on.
-useful runner doctor --check environment.disk-space
-
-# List IDs without running any checks.
-useful runner doctor --list-checks
-
-# Emit the schema-version-1 JSON report.
-useful runner doctor --json
-```
-
-With `--workflow FILE` the doctor runs no check and instead lists the credentials a workflow
-tree needs: it resolves each named workflow and every child workflow
-its `workflow` steps name, as `useful workflow validate` does, and reports one requirement per
-kind (`github`, `gitlab`, `linear`, `claude_code`, `codex`) with every declaration that calls
-for it, followed by the nodes and forwarded variables whose credentials it cannot see. A
-`mergify` or `buildkite` that a workflow declares under `requires.integrations` is reported as
-a kind of its own that nothing verifies: it stays `unverified`, names the variable a step reads
-its token from, and no Cloud read is made for it. Agent
-profiles on Claude Code or Codex and credential-like names in the root
-`environmentPassthrough` count; nothing runs, no harness sign-in or variable value is read,
-and Cloud is not contacted, so every requirement reads `unverified` with a next action.
-Repeat `--workflow` to cover several files; `--json` prints the same as one document. Each
-file is bounded by the root of the Git repository that holds it, files of several repositories
-are listed together, and a file in no repository is refused; `--source-root ROOT` names the
-boundary instead.
-
-With `--readiness --organization-id ORGANIZATION` the doctor also asks Useful Machinery, as
-the signed-in member or, with `--service-api-key-file`, a service principal, about the
-organization's connections for the providers the workflows need: its Linear and GitLab
-connections and its GitHub App installations. A provider reads `missing`,
-`reconnect_required` (an inactive connection, or a GitLab credential that expired) or, for
-Linear, `insufficient_permission` with the `useful connection` command that fixes it, and the
-command exits 1; a connection Useful Machinery holds ready stays `unverified` with
-`cloud: ready`, because the credential reaches a runner only for a run. A read the caller may
-not make leaves its requirement `unverified` with code `not_permitted`; only an organization
-owner may list GitHub App installations. Add `--project-id PROJECT` to take the repository's
-provider from the project's repository instead of the `origin` remote: an unavailable
-repository reads `reconnect_required` with code `repository_unavailable`, or `unverified`
-with code `provider_unavailable` while the deployment's GitLab admission is closed, and names
-`useful project repository show`.
-
-With `--grants` the doctor also reads your own grants and shows, beneath each requirement, what
-you hold of its provider: each grant with, for every runner it is authorized for, its
-availability and next action as `useful integration list` reports them, or `not_connected` with
-the `useful integration connect` command that makes one. Add `--runner-id RUNNER`, the runner's
-ID as `useful runner list` prints it, to see each grant's status on that runner alone, or
-`not_connected` with the `useful integration authorize` command when it is not authorized
-there; `--organization-id` keeps only that organization's coding agent grants. Your grants
-change a requirement's state and the exit status only with `--require-grants`, which needs
-`--grants` and `--runner-id`: a provider for which you hold no grant that runner can use (one
-`available`, `unverified` or `pending` there) then reads `missing` or `reconnect_required` and
-the doctor exits 1. `--grants` uses your own sign-in, never a service API key.
-
-With `--connect` the doctor signs you in to what the workflows need and then checks again. It
-runs the flow `useful integration connect --workflow` runs over the same files: it prints the
-plan of the providers to sign in to, to reconnect and already held, runs the same sign-ins in
-the same order, and prints the same summary. `--organization-id ORGANIZATION` names the
-organization of a coding agent's grant, and `--replace` replaces each grant that needs
-reconnecting without asking. Once the sign-ins end it reads your grants again and prints the
-`--grants` report, with the organization's connections when `--readiness` is given; add
-`--runner-id RUNNER` to see each grant's status on that runner. With `--json` every line is one
-JSON document: the events `useful integration connect --workflow --json` prints, then the
-report as a last event `report`. A failure before the summary, or a signal that stops a
-sign-in, ends the command with that status and no report. Otherwise it exits 1 when a sign-in
-failed, when every provider selected was passed over, or when `--readiness` finds a requirement
-failing, and 0 otherwise. `--connect` uses your own sign-in, never a service API key. The
-doctor runs no step of the workflow in any mode, and it does not authorize a runner: the report
-names the `useful integration authorize` command that does. Without `--readiness`, `--grants`
-or `--connect` nothing is contacted.
-
-```sh
-# List the credentials a workflow tree needs without running it.
-useful runner doctor --workflow workflow.yaml
-
-# Bound the files by a directory other than their Git repository.
-useful runner doctor --workflow workflow.yaml --source-root .
-
-# Also check the organization's connections for the providers it needs.
-useful runner doctor --workflow workflow.yaml \
-  --readiness --organization-id acme
-
-# Take the repository's provider from a project instead of the origin remote.
-useful runner doctor --workflow workflow.yaml \
-  --readiness --organization-id acme --project-id PROJECT
-
-# Show your grants for the providers it needs, and their status on one runner.
-useful runner doctor --workflow workflow.yaml --grants --runner-id RUNNER
-
-# Sign in to what it lacks, replace what needs reconnecting, and report again.
-useful runner doctor --workflow workflow.yaml --connect --replace --runner-id RUNNER
-```
-
-A selected harness check identifies its execution profile and compatibility policy in
-both report formats, including when the harness is missing or incompatible. Human
-reports label an available observed version separately from a supported range or exact
-required version. When a range has a repository qualification release, the report shows
-that qualification version separately rather than presenting it as the only admitted
-release. A passing harness check also reports the detail `qualification`:
-`supported_range` for a release in the qualified range, or `untested` for a stable
-release newer than the qualification release. An untested installation still passes
-with code `ok`, and the command exits 0 when every selected check passes.
-
-The opt-in `credentials.agent-logins` check reads the readiness document
-`useful runner serve` records beside `runnerStatePath`, found through `--config PATH` or,
-without it, the runner home's configuration (see [Runner serve](#runner-serve)); a runner
-home that holds no configuration is read as its default layout, with the state at
-`runner/state.json`. Only this check and `environment.disk-space` read the configuration or
-anything under the `useful` home, so the default checks run with neither `USEFUL_HOME` nor
-`HOME` set. It passes when every agent login Cloud authorized
-for the runner is `ready` and was not refused at its last use, or Cloud authorized none
-(`revoked` or `not_authorized`), and otherwise fails with that provider's state as its code,
-such as `install_failed`, `unsupported_target`, `stale_generation` or `cloud_unavailable`, or
-`reconnect_required` for a `ready` login the provider refused at its last use. A provider in
-`foreign_login`, whose steps run on the service's own login, passes. Its details name each provider's availability and next action as
-`<provider>_availability` and `<provider>_next_action`, and where the runner recorded one the
-provider's credential source as `<provider>_source` (`host` or `grant`). It fails
-`readiness_unknown` when the runner has recorded no readiness yet, a runner home that holds
-no configuration included, `config_invalid` for a configuration it cannot load, and
-`config_required` when no `--config` is given and the `useful` home cannot be located because
-neither `USEFUL_HOME` nor `HOME` is set. It takes no lock, creates nothing, never reads the
-runner credential, contacts nothing, and reports no login material.
-
-The opt-in `environment.disk-space` check reads the work root and the minimum free space
-from the same configuration and reads that disk itself, by the rule the serving runner
-uses (see [Runner serve](#runner-serve)), so it answers whether or not a runner is serving.
-It passes when the free space is at least the minimum and fails `disk_space_low` when it is
-below it, its details giving `available_bytes`, `total_bytes` and `minimum_free_bytes`
-either way. It fails `disk_space_unreadable` when the disk cannot be read, `config_invalid`
-for a configuration it cannot load, and `config_required` when no `--config` is given and
-the runner home holds no configuration or the `useful` home cannot be located. It asks
-neither Cloud nor a serving runner and creates nothing.
-
-Checks are registered statically by components compiled into this executable. The
-command does not load plugins or change runner configuration, and it reads human
-credentials and contacts Useful Machinery only for `--readiness`, `--grants` or
-`--connect`. It executes `git --version` with a five-second deadline, bounds
-captured standard output, drains standard error without reporting it, and exposes only
-a normalized numeric version in its report.
-
-The Pi check searches inherited `PATH` in order, canonicalizes the first candidate named
-`pi` that the current process can execute, and invokes that absolute path with one version
-probe and one capability-help probe. The probes clear the child environment except for
-the captured inherited `PATH`, fresh temporary Pi state and working-directory paths, and
-the required isolation controls. Retaining `PATH` lets an environment-based launcher
-resolve its interpreter without allowing another `pi` selection. It admits
-canonical stable versions in `>=0.84.2 <0.88.0` or exactly `0.99.1`, `1.2.0`, or `1.3.0`;
-the repository qualifies exact Pi 1.3.0, and any stable release newer than 1.3.0 is
-admitted as untested when its capabilities pass. The capability probe accepts both the 0.84.2
-`pi [options] [@files...] [messages...]` usage line and the 0.84.3+
-`pi [options] [--] [@files...] [messages...]` line, while still requiring the JSON
-event, custom-session-directory, extension, system-prompt append, and
-invocation-scoped `--approve` capabilities required by `PiJsonV1`. It retains the exact
-observed release, never falls through to another candidate after selection, and does not
-inspect model metadata or
-credentials, execute the caller's project, or read or write saved Pi project-trust
-decisions. Missing, unexecutable, malformed, unsupported-version, and missing-capability
-outcomes have distinct report codes.
-
-The Claude Code check follows the same first-candidate and immutable-path rules for
-`claude`, admitting canonical stable releases in its qualified range `>=2.1.234 <2.2.0`
-and, as untested, any stable release newer than `2.1.321`. Useful Machinery does not
-install or upgrade that executable. Its isolated `--version` and `--help` probes require the closed stream
-input/output, partial-message, subagent-forwarding, explicit-session-identity,
-permission-mode, setting-source, model, effort, append-system-prompt-file, and
-MCP-configuration capabilities used by `ClaudeCodeStreamJsonV1`. The report contains only status, profile,
-observed version, supported range, exact repository qualification version,
-qualification (`supported_range` or `untested`), closed capabilities, and the selected
-absolute path. Qualification remains pinned to `2.1.321`
-and does not claim that every admitted release or unexecuted host received exact-binary
-conformance. The report never exposes environment values, credentials, or loaded Claude
-settings. The JSON report has no `ready` field.
-
-The Codex check selects `codex` independently, accepts stable `>=0.147.0 <0.164.0` and,
-as untested, any stable release newer than `0.163.0`, and requires the generated App Server schema capability used by CodexAppServerV1. Its
-isolated version and schema probes do not read ambient `CODEX_HOME`, provider
-credentials, or native configuration. The report contains the exact observed version,
-supported range, exact repository qualification version `0.163.0`, qualification
-(`supported_range` or `untested`), closed capabilities, and canonical executable without starting a thread. At execution, async-delivery
-messages, structured asynchronous questions, form elicitation, and bounded additive
-events remain unattended and cannot settle, approve, assign a project, persist, or
-commit a workflow value.
 
 ## Runner serve
 
-`runner serve` uses the protected `rrc_` credential created by `runner enroll`, by a
-signed-in registration, or by joining a pool with a join key when the service first
-starts. The service never reads human OAuth credentials: `runner serve` uses the human
+`runner serve` uses the protected `rrc_` credential it creates when it first starts on a host
+with no enrolled state: by enrolling with a single-runner key, by joining a pool with a pool's
+join key, or by a signed-in registration. Nothing enrolls a host without serving it. The service never reads human OAuth credentials: `runner serve` uses the human
 sign-in only to register a host that holds no enrolled state when `--personal` or
-`--pool-id` is given, and the runner it then serves uses its own credential. Enrollment,
-service startup, `runner status` and `runner integration sync` consume the same closed operator
-configuration. Without `--config` it is the runner home's: the
+`--pool` is given, and the runner it then serves uses its own credential. Service startup,
+the enrollment it makes, `runner show` with no `RUNNER` and `runner sync` consume the same
+closed operator configuration. Without `--config` it is the runner home's: the
 directory `runner` under the `useful` home (`$USEFUL_HOME` when it is set and not empty, otherwise
 `$HOME/.useful`, a relative home taken from the working directory) holds the configuration and
 the files it names:
@@ -2721,13 +1709,13 @@ the files it names:
 ```text
 <useful home>/runner/
 ├── config.json     operator configuration
-├── state.json      enrolled state, written by runner enroll, a registration or a join
+├── state.json      enrolled state, written by runner serve's enrollment, registration or join
 ├── control.sock    control socket, created by a serving runner
 ├── logs/           runner.log and its rotated files, created by a serving runner
 └── work/           work root
 ```
 
-`runner serve` and `runner enroll` given no `--config` first create what the home lacks, on
+`runner serve` given no `--config` first creates what the home lacks, on
 the host alone: the `useful` home, `runner/` and `runner/work/`, each with mode `0700`, and
 `runner/config.json` with mode `0600`, holding `schemaVersion` 1, `deploymentMode`
 `production` and the absolute paths of `runner/state.json`, `runner/control.sock` and
@@ -2736,7 +1724,7 @@ deployment and registers or enrolls nothing; the command then proceeds as it doe
 `--config` naming that file. What exists is kept: a configuration already there is used as
 written and never rewritten, a directory already there keeps its mode and contents, and
 when several starts initialize one home together exactly one configuration is published
-and each of them reads it. They exit 1, having enrolled, joined and overwritten nothing,
+and each of them reads it. It exits 1, having enrolled, joined and overwritten nothing,
 when `runner` is not a directory owned by the current user with mode `0700` (a link, a
 file, another owner or another mode), naming the owner and mode required; when
 `runner/config.json` is a link, a directory or a document that is not an operator
@@ -2744,7 +1732,7 @@ configuration, reported as an invalid configuration; or when the configuration n
 `runnerStatePath` other than the home's `runner/state.json` while a file exists there, as
 in a home that was moved or copied, reported as a conflict naming both paths.
 
-`runner status`, `runner watch` and `runner integration sync` given no `--config` create and
+`runner show` with no `RUNNER`, `runner watch` and `runner sync` given no `--config` create and
 change nothing under the `useful` home. When the runner home holds a configuration they ask the control socket it
 names, and one that does not load is their failure; when it holds none they ask
 `runner/control.sock`, so a home no runner serves from answers as an absent socket does,
@@ -2753,16 +1741,16 @@ with exit 4. A command that reads the configuration, given no `--config` while n
 nothing.
 
 ```sh
-useful runner enroll --activation-file /protected/path/activation.json
-useful runner serve
-useful runner status
+useful runner serve --join-key-file /protected/path/builder-one.key
+useful runner show
 ```
 
-`runner status` prints the live runner's state, one field per line. Its `assignments:` line
-gives the total and the count of each nonzero state, `preparing`, `accepted`, `running`,
-`waiting`, `finishing` and `reporting`, a run the runner last reported waiting counted
-`waiting` and not `running`; a line follows for each run the runner holds that has not ended,
-with its run ID and whether it is working or waiting, the working ones first:
+`runner show` with no `RUNNER` prints the live runner's state, one field per line. Its
+`assignments:` line gives the total and the count of each nonzero state, `preparing`,
+`accepted`, `running`, `waiting`, `finishing` and `reporting`, a run the runner last reported
+waiting counted `waiting` and not `running`; a line follows for each run the runner holds
+that has not ended, with its run ID and whether it is working or waiting, the working ones
+first:
 
 ```text
 assignments:    2 total (preparing: 1, waiting: 1)
@@ -2770,7 +1758,7 @@ run:            run_01k0z6r1w8f4jy2m7q9v3x5abp · working
 run:            run_01k0z6r1w8f4jy2m7q9v3x5abq · waiting
 ```
 
-After its `log:` line `runner status` prints a `disk:` line with the free space and the size
+After its `log:` line `runner show` prints a `disk:` line with the free space and the size
 of the disk the work root is on and the path read and, while the free space is below the
 minimum, a `disk warning:` line that gives the minimum.
 
@@ -2782,7 +1770,7 @@ running or what a waiting run waits for, the runs that ended recently and the ru
 events, times of day in UTC. `↑`/`↓` (or `k`/`j`) move through the runs, `C` reloads the
 credential, `L` sets up agent logins and shows each provider's readiness, Esc dismisses an
 outcome, `?` opens the help and `q` leaves. It needs a terminal on standard input and
-output, and without one exits 1 naming `runner status`; it asks the runner once before
+output, and without one exits 1 naming `runner show`; it asks the runner once before
 taking the terminal over and exits 4 when no runner answers. Once open it stays up while
 the runner restarts or does not answer, marking what it shows as last known until the
 runner answers again. Leaving it, with `q`, Ctrl-C or a signal, stops, cancels and changes
@@ -2803,10 +1791,12 @@ instead. A run without a workflow tree shows each step's output so far, record b
 under its label, while the step runs, and has no run log. When the run ends the
 view says so and keeps the last steps it drew. `C` and `L` act on the overview only.
 
-A start that finds no enrolled state and is given neither a join key nor `--personal` or
-`--pool-id` exits 1 saying the host is not enrolled and naming `useful runner enroll --activation-file <PATH>` and
-`useful runner serve --join-key-file <PATH>` as the ways to enroll it; it contacts no Cloud
-deployment.
+The first start enrolls the host with the single-runner key and serves; a later `useful
+runner serve`, as a service starts it, serves with the enrolled state and reads no key. A
+start that finds no enrolled state, no interrupted enrollment to resend and is given neither
+a key nor `--personal` or `--pool` exits 1 saying the host is not enrolled and naming
+`useful runner serve --join-key-file <PATH>`, `--personal` and `--pool POOL` as the ways to
+enroll it; it contacts no Cloud deployment.
 
 Another `USEFUL_HOME` selects another runner home, and with it that home's workflow storage, so
 a second runner on one host is the same commands with, for example,
@@ -2846,34 +1836,80 @@ run that continues an earlier attempt on this runner is still taken. With a mini
 the disk is never low. The runner writes a `runner.disk_space` record to its log when the
 disk turns low and when it recovers.
 
+The runner keeps the directory of a run that failed, was cancelled or was interrupted in
+its work root, so that `useful workflow run retry --from` can continue it, and removes those
+kept directories itself. When it starts, after a run ends and at least once an hour, while none
+of its runs is working, it removes the ones older than 14 days and then, oldest first, the
+ones beyond 50 GiB in total, always leaving the newest. This covers the directories earlier
+runner processes left in the work root. An optional `keptRuns` member of the configuration,
+the runner home's `config.json` included, sets other bounds, and `null` turns one off:
+
+```json
+"keptRuns": { "maximumAgeDays": 30, "maximumTotalBytes": null }
+```
+
+`maximumAgeDays` is a whole number from 1 to 3650 and `maximumTotalBytes` a positive number
+of bytes; a member left out keeps its default. A run whose kept directory was removed can
+no longer be continued. The runner reports each removal on standard error as
+`runner.workspace_pruned`, with the outcome `failed` when it could not remove a directory,
+which it then leaves as it is and does not try again.
+
+An optional `buildCaches` member names directories the runner bounds, such as the Cargo
+target directory the runner's environment gives its runs, each with a `maximumBytes`:
+
+```json
+"buildCaches": [
+  { "path": "/var/lib/useful/cargo-target", "maximumBytes": 64424509440 }
+]
+```
+
+On the same occasions, while none of its runs is working, the runner removes the least
+recently used files of each named directory down to nine tenths of its `maximumBytes`, and
+reports each eviction on standard error as `runner.build_cache_evicted`. It knows no build
+tool: it neither sets a tool's variables nor finds its directories, so point the tool at the
+directory through the runner's environment. Do not name `CARGO_HOME`, since Cargo does not
+extract a package again when one of its files is missing.
+
+`useful runner prune` asks the serving runner, through its control socket, what it keeps:
+each kept workspace with its run, why it was kept, its age and its size, each build cache
+against its bound, and what the bounds would remove now. It changes nothing without
+`--yes`; with `--yes` the runner applies its bounds at once, while none of its runs is
+working, and the command prints what it removed. `--all --yes` removes every kept run
+directory not in use, whatever its age, and every file of each build cache but its
+`CACHEDIR.TAG`. The command exits 1 when a removal failed, and 4 when no runner is live,
+when a run is working or when the pass stopped before it finished.
+
 Production operators should follow the private monorepo's
-`docs/operations/runner-v1-deployment.md` runbook for confidential activation transfer,
+`docs/operations/runner-v1-deployment.md` runbook for confidential single-runner key transfer,
 service-manager shutdown allowance, control-plane cutover, drain, and recovery. That
 operator runbook is intentionally outside this public CLI source mirror.
 
-A person signed in on the host with `useful auth login` can instead register it when the
-service first starts, with no activation file, in their own personal pool or, given the
-pool's ID or exact name, in another pool:
+A person signed in on the host with `useful account login` can instead register it when the
+service first starts, with no key, in their own personal pool or, given the
+pool's ID or exact name, in another pool, of the organization in effect:
 
 ```sh
-useful runner serve --config /etc/useful/runner.json --personal --organization my-org
-useful runner serve --config /etc/useful/runner.json --pool-id builders --organization my-org
+useful runner serve --config /etc/useful/runner.json --personal --org my-org
+useful runner serve --config /etc/useful/runner.json --pool builders --org my-org
 ```
 
-`--organization` is required with `--personal` or `--pool-id` and refused without one of
-them; `--personal`, `--pool-id` and a join key, `USEFUL_RUNNER_JOIN_KEY` included, exclude one
-another. Each violation is a usage error, exit 2, before the configuration is read. The
-command takes no organization from the environment or the sign-in, never tries another
-mode when the one given fails, never looks for an existing runner by its name and takes no
-service API key. A member may register in their own personal pool and an owner in any pool,
-as with `runner create`. `--allow-insecure-http`, accepted only with `--personal` or
-`--pool-id`, permits a plain-HTTP API address for the registration requests; the
-activation and connection addresses still follow `deploymentMode`.
+The organization in effect is the one `--org` names, then `USEFUL_ORG`, then the project of
+the checkout, then your only organization, as for every command that acts in one; with none
+the start exits 2 listing your organizations, having registered and written nothing.
+`--org` is refused without `--personal` or `--pool`; `--personal`, `--pool` and a join key,
+`USEFUL_RUNNER_JOIN_KEY` included, exclude one another. Each violation is a usage error,
+exit 2, before the configuration is read. The command never tries another mode when the
+one given fails, never looks for an existing runner by its name and takes no service API
+key. A member may register in their own personal pool and an owner in any pool, as with
+`runner join-key issue --runner`. `--allow-insecure-http`, accepted only with `--personal` or
+`--pool`, permits a plain-HTTP API address for the registration requests; the activation
+and connection addresses still follow `deploymentMode`.
 
 On a host that holds no enrolled state, the start checks the configuration, its work root
-included, before it reads the sign-in or contacts Cloud. It then registers a runner with a
-name Cloud chooses, issues its activation, enrolls with it, writes enrolled state and
-serves; the activation exists only in the host's enrollment journal until it is consumed,
+included, before it reads the sign-in or contacts Cloud, and then resolves the organization
+in effect, reading your memberships only when neither `--org` nor `USEFUL_ORG` names one.
+It then registers a runner with a name Cloud chooses, issues its activation, enrolls with
+it, writes enrolled state and serves; the activation exists only in the host's enrollment journal until it is consumed,
 and no activation file is written. It reports the runner's ID, name, pool and credential ID
 on standard error. Without a sign-in it exits 3 having registered and written nothing. The
 runner is a registration made by hand and is never removed automatically.
@@ -2881,7 +1917,8 @@ runner is a registration made by hand and is never removed automatically.
 The registration's progress is kept in `.runner-registration.json`, in the directory of
 the state file, a closed, versioned record private to the host's user that holds no
 secret and is read and written only under the state lock. It names the deployment, the
-organization and target as given, the pool's ID, the signed-in principal and the
+organization as sent (the value `--org` or `USEFUL_ORG` gave, or else the organization's
+ID), the target as given, the pool's ID, the signed-in principal and the
 registration's `Idempotency-Key`, then the registered runner, then that enrollment
 completed. A start that finds the record and no enrolled state resumes that registration
 with the same request and key, or issues an activation for the recorded runner, so one
@@ -2891,24 +1928,29 @@ kept; a definite refusal of the registration removes it.
 
 Enrolled state takes precedence: on a host whose state file is present, `runner serve`
 serves with that state, registers and issues nothing, and reads no human deployment or
-credential, also when `--personal` or `--pool-id` is still given. A start whose options
-disagree with the host fails with exit 1 and a closed `code:` before anything is sent:
-`registration_target_conflict` when the options name another organization, mode or pool
-than the record, or the host was enrolled without a registration record;
+credential, also when `--personal` or `--pool` is still given. It resolves no organization:
+the mode and the pool are compared with the record always, and the organization only when
+`--org` or `USEFUL_ORG` names one. A start whose options disagree with the host fails with
+exit 1 and a closed `code:` before anything is sent: `registration_target_conflict` when the
+options name another organization, mode or pool than the record, or the host was enrolled
+without a registration record;
 `registration_unresolved` when the record cannot be resumed (another principal or
-deployment, or staged more than six days ago), another command's enrollment or join is
-unresolved, or a join key is given beside an unfinished registration; and
+deployment, or staged more than six days ago), another start's enrollment or join is
+unresolved, which a start without `--personal` and `--pool` finishes, or a key is given beside
+an unfinished registration; and
 `registration_state_missing` when the record says enrollment completed and the state file
 is absent. Each failure names the recorded runner's ID, the file to inspect and the way
 forward. A host whose runner was deleted reports `authentication_failed` until its state
 file and `.runner-registration.json` are removed: its credential came from an activation,
 so it never rejoins as a host that joined with a key does.
 
-A host can instead join a pool when the service first starts, with no activation, by
-giving `runner serve` a join key (see
-[Runner pools, registrations, and join keys](#runner-pools-registrations-and-join-keys)).
-From a terminal, `--join-key` asks for the key's one line of JSON, as `runner join-key
-issue` printed it, at a prompt that does not echo it:
+A host is otherwise enrolled when the service first starts by giving `runner serve` a key:
+a single-runner key enrolls it as the runner the key was issued for, and a pool's join key
+joins the key's pool as a new runner (see
+[Runner pools, registrations, and join keys](#runner-pools-registrations-and-join-keys)). The
+command tells the two apart by what the key's document holds, and refuses a document that is
+neither before anything is staged or sent. From a terminal, `--join-key` asks for the key's
+one line of JSON, as `runner join-key issue` printed it, at a prompt that does not echo it:
 
 ```sh
 useful runner serve --config /etc/useful/runner.json --join-key
@@ -2918,7 +1960,7 @@ The flag takes no value, so the key is never a command-line argument. The prompt
 line of at most 4096 bytes with echo turned off and restores the terminal's settings when
 the read ends, an interrupt included. When standard input is not a terminal, the start
 fails as a usage error, exit 2, before anything is staged or sent, and names the inputs of
-an unattended start; it never waits for input. A line that is not a join key fails as an
+an unattended start; it never waits for input. A line that is neither kind of key fails as an
 unreadable key does and sends nothing.
 
 An unattended host takes the key as a file or in the `USEFUL_RUNNER_JOIN_KEY` environment
@@ -2930,12 +1972,12 @@ useful runner serve --join-key-file /protected/path/builders.join-key.json
 USEFUL_RUNNER_JOIN_KEY="$BUILDERS_JOIN_KEY" useful runner serve --config /etc/useful/runner.json
 ```
 
-On a host that holds no enrolled state, the service generates its credential, joins the
-key's pool as a new runner, writes enrolled state, and serves. On a host that already holds
-enrolled state, it serves with that state, so the same command can start the service every
-time. A host that holds enrolled state is not prompted for a key, and when its
-configuration or state does not load the start reports that cause whatever the key. A host
-whose credential came from a join key, started with a key by `--join-key-file` or
+On a host that holds no enrolled state, the service generates its credential, enrolls with a
+single-runner key or joins a pool's key as a new runner, writes enrolled state, and serves.
+On a host that already holds enrolled state, it serves with that state, so the same command
+can start the service every time. A host that holds enrolled state is not prompted for a key,
+and when its configuration or state does not load the start reports that cause whatever the
+key. A host whose credential came from a join key, started with a key by `--join-key-file` or
 `USEFUL_RUNNER_JOIN_KEY`, holds the key in memory until Cloud answers the process's first
 connection attempt, so that it can rejoin if Cloud refuses its credential, and drops it
 unused once Cloud accepts the credential; a host whose credential came from an activation
@@ -2944,12 +1986,13 @@ start: it serves as one given no key, and says so only if Cloud then refuses its
 credential. On a host that holds no enrolled state, the service checks the host's
 configuration, its work root included, before it reads the key, prompts for it or contacts
 Cloud, so a host that cannot serve registers no runner. A key given with `--join-key-file`
-is read as an activation is: from a regular file private to the current user, which is
-left in place, or from piped standard input with `--join-key-file -`; an interactive
+is read from a regular file private to the current user, which is left in place, or from piped standard input with `--join-key-file -`; an interactive
 terminal is refused there, since `--join-key` is the terminal's input. `--join-key`,
 `--join-key-file` and `USEFUL_RUNNER_JOIN_KEY` exclude one another: giving the key in more than
 one way is a usage error, and on a host that holds no enrolled state an expired key is
-refused before Cloud is contacted. The service reads the key once, removes `USEFUL_RUNNER_JOIN_KEY` from its own environment by
+refused before Cloud is contacted unless the start resends a request an earlier start staged
+with it. The
+service reads the key once, removes `USEFUL_RUNNER_JOIN_KEY` from its own environment by
 restarting itself without it, never writes the key to its state or keeps it for a later
 start, and never passes it to a workflow step.
 
@@ -2960,8 +2003,20 @@ such as a lost response, is retried as the same request, so one start never regi
 runners. Until a join resolves, the host keeps a join journal beside its state. A start
 with a different key than the journal names is refused with the journal's path and the
 key it names: start the service once more with that key, which resends the same join, or
-remove the journal after confirming in the pool that no runner joined from the host.
-`runner enroll` with an activation is refused the same way while that journal exists.
+remove the journal after confirming in the pool that no runner joined from the host. A
+single-runner key is refused the same way while that journal exists.
+
+An enrollment with a single-runner key is sent once. Cloud's acceptance writes the state, and
+the start reports the runner's ID, name, pool and credential ID on standard error and serves.
+An ambiguous outcome (a network failure, 429 or a server error, its `cause:` named) or a
+refused one (401, 409, an unusable response) keeps the enrollment journal and exits 1 without
+serving: start `useful runner serve` again, with the same key or with none, and it resends the
+same request, even after the key has expired, and serves when Cloud had committed it. When
+Cloud reports the activation revoked, expired or already used, the start replaces the journal
+with a receipt holding no secret and exits 1; a later start given that key sends nothing and
+exits 1 the same way, so a supervisor that restarts the command asks Cloud once, and a
+different single-runner key enrolls. While the journal stands, a start with a key for another
+activation, a pool's join key, or `--personal` or `--pool` is refused and sends nothing.
 
 A join resent from the journal, after an interrupted start or a lost response, may already
 have registered a runner. When Cloud rejects its token, the journal stays and the failure
@@ -2979,15 +2034,15 @@ or `USEFUL_RUNNER_JOIN_KEY`, it rejoins once it holds no work: it joins the key'
 new runner, named as the old runner was when no runner has taken that name, replaces its
 enrolled state with the new runner's, reports the new runner's ID, name, pool and
 credential ID on standard error, and serves as that runner in the same process. The
-workspaces the host kept for failed runs under the old runner stay in its work root for
-the operator to inspect or remove, and those runs can no longer be continued. The new
+workspaces the host kept for failed runs under the old runner stay in its work root until
+the new runner's kept-run bounds or the operator remove them, and those runs can no longer be continued. The new
 runner starts with no kept workspace of its own; as any runner does, it removes the
-workspaces of its successful runs and keeps the others for `useful run continue`. A lost
+workspaces of its successful runs and keeps the others for `useful workflow run retry --from`. A lost
 answer is retried as the same join, and a later start with the same key resends it, so a
 host never makes two runners from one rejoin. Cloud does not replace a runner it still
 holds: a runner an owner disabled, or whose credential was revoked, is not replaced, and a
 revoked or expired key is refused the same way; the host keeps its state, names the
-refusal on standard error with a `code:` line, and `runner status` reports
+refusal on standard error with a `code:` line, and `runner show` reports
 `authentication_failed`. `--join-key` never rejoins, since an enrolled host is not
 prompted. A host started with no key reports `authentication_failed` until its state file
 is removed and it starts with a current key, which joins it as a new runner.
@@ -3001,7 +2056,7 @@ rejoin Cloud refused, and one on a host whose credential came from an activation
 running and report `authentication_failed`.
 
 The connection URL, runner ID, and current credential come only from the enrolled state
-written by enrollment or by a join. There are no endpoint environment overrides or command-line aliases for the removed
+written by an enrollment, a registration or a join. There are no endpoint environment overrides or command-line aliases for the removed
 Gateway, credential, transport-mode, workflow-mapping, source, workflow-path, and work
 root options. `production` requires the Cloud-issued `wss://` connection URL.
 `development` additionally permits `ws://` only for exact `localhost`, IPv4 loopback,
@@ -3009,26 +2064,33 @@ or `[::1]` hosts; it never permits a caller-selected endpoint. Deployment mode c
 transport security only. Every assignment supplies a pinned Cloud repository source,
 and every runner materializes and verifies that source before admission.
 
-Rotate a running host only with a replacement activation issued for its existing runner:
+Rotate a running host only with a replacement single-runner key issued for its existing
+runner with `useful runner join-key issue --runner RUNNER --key-file PATH`:
 
 ```sh
-useful runner enroll \
+useful runner serve \
   --replace-credential \
-  --activation-file /protected/path/replacement-activation.json
+  --join-key-file /protected/path/replacement.key
 ```
 
-The command reports Cloud enrollment and live promotion separately. It stages the new
+The command does not serve: it enrolls the replacement, asks the serving process to switch to
+it, prints its report, as a document with `--json`, which `runner serve` takes with
+`--replace-credential` alone, and exits. A pool's join key is a usage error, exit 2, that sends
+nothing. It reports Cloud enrollment and live promotion separately. It stages the new
 credential as pending without replacing the current credential, then asks Runner Serve
 over the configured local socket to welcome and promote it in the existing boot. An
 unreachable service or a pending authentication, protocol, network, or state-write
 error leaves both credentials in protected state and returns nonzero; it never restarts
-the service. Rerun the same command with the same protected activation file to retry a
-staged credential without enrolling a third credential. On process startup, Runner
+the service. Rerun the same command with the same protected single-runner key to retry a
+staged credential without enrolling a third credential; `useful runner serve
+--replace-credential` with no key resends a replacement whose request did not reach a
+definite answer, as the key's own start would. On process startup, Runner
 Serve prefers a usable current connection and then retries pending promotion. Keep the
 old Cloud credential active until local status shows the replacement current and
-`runner credential list` shows its `lastAuthenticatedAt`; then retire it with the fixed
-grace or revoke it immediately if compromise is suspected. Never print an activation
-artifact or runner state while transferring or verifying it.
+`runner credential list RUNNER` shows its `lastAuthenticatedAt`; then retire it with
+`runner credential revoke CREDENTIAL --runner RUNNER --yes --after 1h`, Cloud's fixed
+one-hour grace, or revoke it at once without `--after` if compromise is suspected. Never
+print a single-runner key or runner state while transferring or verifying it.
 
 Runner Serve installs the agent logins members have authorized for the runner when it
 starts, every five minutes while no run it holds is working, and for each assignment it admits
@@ -3053,12 +2115,12 @@ with a fixed prompt that asks for a one-word answer: a login it installs when it
 on that five-minute schedule, and every `ready` login when you ask it to set up now. A check
 spends one model turn of the login owner's account at the provider, starts only while no run
 the runner holds is working, and is never made for an assignment's own setup. `useful runner
-status` shows each provider's readiness once it has set up, and you can ask the live runner
+show` shows each provider's readiness once it has set up, and you can ask the live runner
 to set up now:
 
 ```sh
-useful runner integration sync
-useful runner integration sync --json
+useful runner sync
+useful runner sync --json
 ```
 
 The command goes only through the local control socket and prints one line per provider
@@ -3072,7 +2134,7 @@ issued, and once that assignment has ended it shows it as of that run and the ti
 check, never as current, a `ready` one with availability `unverified` and `--json` carrying
 `runId` and `endedAt`
 (`github login:      ready as of run run_01k0z6r1w8f4jy2m7q9v3x5abp at 2026-11-14T15:02:11Z (generation 2), availability unverified`).
-Each line, in `useful runner status` too, ends with where the provider's credential comes from
+Each line, in `useful runner show` too, ends with where the provider's credential comes from
 where Runner Serve recorded one, and `--json` carries it as `source`: `host` when the
 service provides it (its own Claude Code or Codex login, or a `GH_TOKEN`, `GITLAB_TOKEN` or
 `USEFUL_LINEAR_ACCESS_TOKEN` in its environment, or the `_FILE` form) and `grant` when a grant
@@ -3101,9 +2163,9 @@ operator-controlled `PATH`. Useful Machinery installs none of them. Each success
 is validated once and retained as an immutable executable, exact-version, profile, and
 capability snapshot for the process lifetime: Pi admits `>=0.84.2 <0.88.0` or exactly `0.99.1`, `1.2.0`, or `1.3.0`, Claude Code
 admits `>=2.1.234 <2.2.0`, and Codex admits capability-compatible stable
-`>=0.147.0 <0.164.0` with exact repository qualification anchor `0.163.0`. Each also
+`>=0.147.0 <0.172.0` with exact repository qualification anchor `0.171.0`. Each also
 keeps, as an untested compatible harness, a capability-compatible stable release newer
-than its qualification release (Pi `1.3.0`, Claude Code `2.1.321`, Codex `0.163.0`), and
+than its qualification release (Pi `1.3.0`, Claude Code `2.1.321`, Codex `0.171.0`), and
 Runner Serve records one `runner.harness_untested` telemetry event per untested
 installation on its stderr telemetry stream at startup, before its first connection
 attempt. Admission and invocation never repeat a lookup or probe. A missing
@@ -3178,7 +2240,7 @@ neither took it. Every record on both outputs carries `time`, the UTC time it wa
 for example `2026-11-19T04:54:24.993Z`. The log is appended to across restarts, each process
 told apart by `service.instance.id`. It rotates into `runner.log.1` through `runner.log.7`
 at 32 MiB a file, and a rotated file whose last record is more than 30 days old is removed,
-so the directory holds at most 256 MiB; the limits are fixed. `runner status` prints the
+so the directory holds at most 256 MiB; the limits are fixed. `runner show` with no `RUNNER` prints the
 path of the log the serving process writes on its `log:` line. A log the runner cannot
 open, write, rotate or prune never stops it: it keeps serving with standard error and
 reports each kind of failure once as a `runner.telemetry_log` record.
@@ -3257,6 +2319,1322 @@ the publication failure code, and the failed command's bounded output when
 available. The file is mode `0600` and stays on the runner with the failed
 workspace; it is not a portable Artifact Set or a publication receipt. Command
 output may contain sensitive data, so inspect it only through operator access.
+
+## Runner doctor
+
+Use `useful runner doctor` to inspect the local prerequisites currently known to
+the runner. The default set contains only `environment.command.git`. It executes the
+`git` resolved from the runner process's `PATH`, requires a parseable version at least
+`2.29.0`, and reports a pass or failure for that check. Select
+`execution.harness.pi-json-v1` explicitly to check the `pi` inherited through the same
+operator-controlled `PATH`, select `execution.harness.claude-code-stream-json-v1` to 
+check `claude`, or `execution.harness.codex-app-server-v1` to check `codex` 
+independently. A successful result does not mean the runner is ready to serve
+assignments: runner configuration, machine identity, connectivity, and other 
+execution requirements are not all checked yet.
+
+```sh
+# Run the default checks.
+useful runner doctor
+
+# Run a named check. Repeat --check to select more than one registered check.
+useful runner doctor --check environment.command.git
+
+# Validate the Pi installation selected from inherited PATH only.
+useful runner doctor \
+  --check execution.harness.pi-json-v1
+
+# Validate Claude Code independently, or repeat --check to inspect multiple harnesses.
+useful runner doctor \
+  --check execution.harness.claude-code-stream-json-v1
+
+# Validate Codex independently.
+useful runner doctor \
+  --check execution.harness.codex-app-server-v1
+
+# Check the agent-login readiness the runner serving from the runner home recorded.
+useful runner doctor --check credentials.agent-logins
+
+# The same check for a service installation that names its configuration.
+useful runner doctor \
+  --check credentials.agent-logins --config /etc/useful/runner.json
+
+# Check the free space on the disk the runner's work root is on.
+useful runner doctor --check environment.disk-space
+
+# Emit the schema-version-1 JSON report.
+useful runner doctor --json
+```
+
+The report lists every registered check. Each check that ran is printed with its ID, its
+result and, when it fails, a failure code; each check that did not run follows with its ID
+and the `--check ID` that runs it; a summary of passed and failed checks closes the report,
+and a check that did not run counts as neither. The command exits 1 when any check that ran
+fails. `--json` carries the same: `checks` holds the checks that ran, `notRun` the `id` and
+`title` of each that did not, in registry order, and `summary` the counts. An unknown
+`--check` ID exits 2 without running any check.
+
+A selected harness check identifies its execution profile and compatibility policy in
+both report formats, including when the harness is missing or incompatible. Human
+reports label an available observed version separately from a supported range or exact
+required version. When a range has a repository qualification release, the report shows
+that qualification version separately rather than presenting it as the only admitted
+release. A passing harness check also reports the detail `qualification`:
+`supported_range` for a release in the qualified range, or `untested` for a stable
+release newer than the qualification release. An untested installation still passes
+with code `ok`, and the command exits 0 when every selected check passes.
+
+The opt-in `credentials.agent-logins` check reads the readiness document
+`useful runner serve` records beside `runnerStatePath`, found through `--config PATH` or,
+without it, the runner home's configuration (see [Runner serve](#runner-serve)); a runner
+home that holds no configuration is read as its default layout, with the state at
+`runner/state.json`. Only this check and `environment.disk-space` read the configuration or
+anything under the `useful` home, so the default checks run with neither `USEFUL_HOME` nor `HOME` set. It passes when every agent login Cloud authorized
+for the runner is `ready` and was not refused at its last use, or Cloud authorized none
+(`revoked` or `not_authorized`), and otherwise fails with that provider's state as its code,
+such as `install_failed`, `unsupported_target`, `stale_generation` or `cloud_unavailable`, or
+`reconnect_required` for a `ready` login the provider refused at its last use. A provider in
+`foreign_login`, whose steps run on the service's own login, passes. Its details name each provider's availability and next action as
+`<provider>_availability` and `<provider>_next_action`, and where the runner recorded one the
+provider's credential source as `<provider>_source` (`host` or `grant`). It fails
+`readiness_unknown` when the runner has recorded no readiness yet, a runner home that holds
+no configuration included, `config_invalid` for a configuration it cannot load, and
+`config_required` when no `--config` is given and the `useful` home cannot be located because
+neither `USEFUL_HOME` nor `HOME` is set. It takes no lock, creates nothing, never reads the
+runner credential, contacts nothing, and reports no login material.
+
+The opt-in `environment.disk-space` check reads the work root and the minimum free space
+from the same configuration and reads that disk itself, by the rule the serving runner
+uses (see [Runner serve](#runner-serve)), so it answers whether or not a runner is serving.
+It passes when the free space is at least the minimum and fails `disk_space_low` when it is
+below it, its details giving `available_bytes`, `total_bytes` and `minimum_free_bytes`
+either way. It fails `disk_space_unreadable` when the disk cannot be read, `config_invalid`
+for a configuration it cannot load, and `config_required` when no `--config` is given and
+the runner home holds no configuration or the `useful` home cannot be located. It asks
+neither Cloud nor a serving runner and creates nothing.
+
+Checks are registered statically by components compiled into this executable. The
+command does not load plugins or change runner configuration, reads no human credential
+and contacts nothing; what a workflow needs is `useful workflow doctor`. It executes
+`git --version` with a five-second deadline, bounds captured standard output, drains
+standard error without reporting it, and exposes only a normalized numeric version in its
+report.
+
+The Pi check searches inherited `PATH` in order, canonicalizes the first candidate named
+`pi` that the current process can execute, and invokes that absolute path with one version
+probe and one capability-help probe. The probes clear the child environment except for
+the captured inherited `PATH`, fresh temporary Pi state and working-directory paths, and
+the required isolation controls. Retaining `PATH` lets an environment-based launcher
+resolve its interpreter without allowing another `pi` selection. It admits
+canonical stable versions in `>=0.84.2 <0.88.0` or exactly `0.99.1`, `1.2.0`, or `1.3.0`;
+the repository qualifies exact Pi 1.3.0, and any stable release newer than 1.3.0 is
+admitted as untested when its capabilities pass. The capability probe accepts both the 0.84.2
+`pi [options] [@files...] [messages...]` usage line and the 0.84.3+
+`pi [options] [--] [@files...] [messages...]` line, while still requiring the JSON
+event, custom-session-directory, extension, system-prompt append, and
+invocation-scoped `--approve` capabilities required by `PiJsonV1`. It retains the exact
+observed release, never falls through to another candidate after selection, and does not
+inspect model metadata or
+credentials, execute the caller's project, or read or write saved Pi project-trust
+decisions. Missing, unexecutable, malformed, unsupported-version, and missing-capability
+outcomes have distinct report codes.
+
+The Claude Code check follows the same first-candidate and immutable-path rules for
+`claude`, admitting canonical stable releases in its qualified range `>=2.1.234 <2.2.0`
+and, as untested, any stable release newer than `2.1.321`. Useful Machinery does not
+install or upgrade that executable. Its isolated `--version` and `--help` probes require the closed stream
+input/output, partial-message, subagent-forwarding, explicit-session-identity,
+permission-mode, setting-source, model, effort, append-system-prompt-file, and
+MCP-configuration capabilities used by `ClaudeCodeStreamJsonV1`. The report contains only status, profile,
+observed version, supported range, exact repository qualification version,
+qualification (`supported_range` or `untested`), closed capabilities, and the selected
+absolute path. Qualification remains pinned to `2.1.321`
+and does not claim that every admitted release or unexecuted host received exact-binary
+conformance. The report never exposes environment values, credentials, or loaded Claude
+settings. The JSON report has no `ready` field.
+
+The Codex check selects `codex` independently, accepts stable `>=0.147.0 <0.172.0` and,
+as untested, any stable release newer than `0.171.0`, and requires the generated App Server schema capability used by CodexAppServerV1. Its
+isolated version and schema probes do not read ambient `CODEX_HOME`, provider
+credentials, or native configuration. The report contains the exact observed version,
+supported range, exact repository qualification version `0.171.0`, qualification
+(`supported_range` or `untested`), closed capabilities, and canonical executable without starting a thread. At execution, async-delivery
+messages, structured asynchronous questions, form elicitation, and bounded additive
+events remain unattended and cannot settle, approve, assign a project, persist, or
+commit a workflow value.
+
+## Version inspection
+
+Use `useful --version` or `useful version` for conventional one-line
+output. Use `useful version --json` for the schema-version-1 structured contract:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "useful",
+  "version": "0.10.0",
+  "executablePath": "/resolved/path/to/useful",
+  "buildIdentity": "unknown"
+}
+```
+
+Packaged builds replace the local `unknown` build identity with their source revision.
+Official GitHub release binaries report the public commit identified by the release tag
+as `buildIdentity`.
+The schema does not define a release channel.
+
+## Local workflow validation
+
+Use `useful workflow validate` to resolve a checked-out Workflow V1 bundle
+without running it:
+
+```sh
+useful workflow validate \
+  --source-root ./my-repository \
+  ./my-repository/.useful/workflows/check.yaml
+```
+
+`workflow validate` accepts the same `--agent-profiles <PATH>` replacement document as
+`workflow run create`, applies it identically, and reports the replaced profile names without
+retaining the document.
+
+Ready-to-run command and agent bundles are available under
+[`examples/workflows/`](examples/workflows/). They cover basic DAGs, command input and
+output dataflow, recovery, advisory and required failures, cancellation, all three agent
+harnesses, structured agent results, attachments, and workflow finalizers. Definition
+validation is offline; running an agent example requires its selected harness and
+provider credentials and may consume billed tokens.
+
+`--source-root` defines the complete directory boundary for the selected workflow YAML
+and all static prompts, message files, attachments, and result schemas. Without it, the
+boundary is the root of the Git repository that holds the workflow file; a file in no
+repository is refused with exit status 2 until `--source-root` names its boundary. The
+workflow file is an ordinary host path resolved from the process's initial working
+directory, then canonicalized and required to remain within that root.
+
+Given a directory, `workflow validate` checks the workflow tree it holds, the directory
+with `workflow.yaml` at its root, as `workflow definition publish` checks it before
+publishing:
+
+```sh
+useful workflow validate .useful/engineering --json
+```
+
+A tree is its own source root: every workflow file in it is validated with the tree as
+its boundary, and the report adds the tree digest, its workflow files, programs, required
+tools, triggers, and bindings. `--source-root` and `--agent-profiles` given with a
+directory are refused with exit status 2.
+
+For concise, version-aligned authoring guidance from the installed executable, run:
+
+```sh
+useful workflow reference
+```
+
+The command writes its version-aligned embedded Markdown unchanged to standard output.
+It includes the supported authoring loop, language semantics, safety boundaries, a
+checked example, and these stable public handoffs:
+
+- [Workflow V1 authoring guide](https://docs.usefulmachinery.com/agent/workflow-authoring.md)
+- [Workflow V1 language reference](https://docs.usefulmachinery.com/reference/workflow-v1.md)
+- [Workflow V1 raw schema](https://docs.usefulmachinery.com/schemas/workflow-v1.schema.json)
+
+It needs no source checkout, workflow file, configuration, credentials, or network
+access.
+
+Retrieve the self-contained Workflow V1 JSON Schema from an installed executable
+without a source checkout:
+
+```sh
+useful workflow schema > workflow-v1.schema.json
+```
+
+The command writes raw JSON Schema bytes without a wrapper or preamble and preserves the
+canonical asset's single terminal newline. It needs no workflow file, configuration,
+credentials, or network access. Configure a JSON Schema-aware YAML editor or validation
+tool to use the emitted file or the stable public raw-schema URL above; every schema
+reference resolves within the document. Do not add a `$schema` property to the workflow
+document.
+
+The emitted schema checks document structure only. `workflow validate` remains the
+complete workflow definition validator: it additionally checks the step graph,
+references, path containment, static files, types, and policy. Passing a schema check
+alone therefore does not establish that the CLI will accept the complete workflow
+definition and its referenced files.
+
+A successful human result reports the normalized source-root-relative workflow path,
+the SHA-256 digest of the resolved source closure, step count, and required named input
+interface. It never prints static file contents. Add `--json` for one schema-version-1
+result with `valid` or `invalid` as its closed `outcome`; invalid results contain one
+bounded CLI-owned diagnostic rather than parser or schema-library error text.
+
+This command performs definition resolution only. It does not admit or start a run,
+execute command or agent steps, check harness or model availability, read human or
+runner credentials, or contact Useful Machinery. A zero exit status means only that the
+local definition resolved successfully.
+
+## Workflow doctor
+
+Use `useful workflow doctor PATH...` to list the credentials a workflow tree needs and what
+meets each need. `PATH` is a workflow file or a tree directory, which stands for its
+`workflow.yaml`; it repeats. The doctor resolves each named workflow and every child workflow
+its `workflow` steps name, as `useful workflow validate` does, and reports one requirement per
+kind (`github`, `gitlab`, `linear`, `claude_code`, `codex`) with every declaration that calls for
+it, followed by the nodes and forwarded variables whose credentials it cannot see. A
+`mergify` or `buildkite` that a workflow declares under `requires.integrations` is reported as
+a kind of its own that nothing verifies: it stays `unverified`, names the variable a step reads
+its token from, and no Cloud read is made for it. Agent
+profiles on Claude Code or Codex and credential-like names in the root `environmentPassthrough`
+count; nothing runs, and no harness sign-in or variable value is read. A file is bounded by the
+root of the Git repository that holds it and a directory by itself; files of several
+repositories are listed together, a file in no repository is refused, and `--source-root ROOT`
+names the boundary instead. `--json` prints the same as one document.
+
+When the tree calls for a kind, the doctor asks Useful Machinery, as you or, with
+`--api-key-file`, a service principal, about the connections of the organization in effect for
+the providers the workflows need: its Linear and GitLab connections and its GitHub App
+installations. A connection Useful Machinery holds ready reads `met` by `connection`; a
+provider it shows missing, inactive (an inactive connection, or a GitLab credential that
+expired) or, for Linear, lacking a scope reads `missing`, `reconnect_required` or
+`insufficient_permission` with the `useful org integration` command that fixes it, and the
+command exits 1. A read you may not make leaves its requirement `unverified` with code
+`not_permitted`; only an organization owner may list GitHub App installations. With a project
+in effect the repository's provider comes from the project's repository instead of the `origin`
+remote: an unavailable repository reads `reconnect_required` with code `repository_unavailable`,
+or `unverified` with code `provider_unavailable` while the deployment's GitLab admission is
+closed, and names `useful project show`.
+
+Signed in, the doctor also reads your own grants and shows, beneath each requirement, what you
+hold of its provider: each grant with, for every runner it is authorized for, its availability
+and next action as `useful account integration list` reports them, or `not_connected` with the `useful
+account integration connect` command that makes one; of the coding agents' grants it keeps those of the
+organization in effect. Without `--runner` your grants judge nothing and a coding agent stays
+`unverified`. With `--runner RUNNER`, by ID or exact name, every requirement is judged on that
+runner: a coding agent the runner's host supplies itself reads `met` by `host`, and a
+requirement a grant of yours that runner can use serves (one `available`, `unverified` or
+`pending` there) reads `met` by `grant`. A coding agent nothing meets reads `missing` or
+`reconnect_required` with the `useful account integration` command, or `useful runner sync`, that
+would meet it, and the doctor exits 1. `--runner` takes your own sign-in, never a service API
+key.
+
+If you are not signed in and name no runner, the doctor still prints the report, every
+requirement `unverified`, and says on standard error that Useful Machinery was not asked; with
+`--runner` it exits 3. It runs no step of the workflow, signs in to nothing and changes nothing:
+`useful account integration connect --workflow` signs in to what the workflows lack, and `useful account
+integration authorize` authorizes a runner for a grant.
+
+```sh
+# List what a workflow tree needs and what the organization's connections meet.
+useful workflow doctor .useful/engineering
+
+# Bound the files by a directory other than their Git repository.
+useful workflow doctor workflow.yaml --source-root .
+
+# Judge every requirement on the runner the workflows are meant to run on.
+useful workflow doctor .useful/engineering --runner build-1
+
+# Read the connections of another organization, as a service principal.
+useful workflow doctor workflow.yaml --org acme --api-key-file service.key
+```
+
+## Cloud workflow definitions
+
+`useful workflow definition publish DIR --on project` publishes the tree to the project in
+effect and writes nothing under the `useful` home: it uploads and seals the tree under its
+digest and publishes it with the bindings the invocation names, and Cloud keeps every other
+binding of the definition's current revision. It finds its definition by the root
+workflow's `name` among the project's active definitions and publishes the next revision to
+it; when none has the name, it creates the definition, or reuses the project's definition
+whose current revision has the same tree, bindings and executable bits. `--new` creates
+another whatever the project holds, and `--to DEFINITION` publishes to the definition that ID
+or name names. A Cloud refusal exits 1.
+
+```sh
+useful workflow definition publish .useful/engineering --bindings bindings.json \
+  --on project --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --json
+```
+
+A publish names the bindings it sets: in the `--bindings` file, which may name any subset
+and gives a binding `null` for its default, or one at a time beside it with
+`--binding KEY=VALUE` and `--binding-default KEY`. Under the home, every binding it does not
+name keeps the value of the definition's current revision, or takes its default on a first
+publish. With `--on project`, it keeps the value of the Cloud definition's current revision,
+whatever the home holds, and a create gives each binding not named its default, or is
+refused `binding-missing`. When several active definitions of the project have the root's
+name, the command exits 2 before uploading anything and lists them: name one with `--to`, or
+create another with `--new`.
+
+Without `--on project` the command publishes under the home, as the runner's own publication
+does. A `--to` name is then looked up under the home alone, and a `--to` ID under the home and,
+when the home holds none, in the project in effect, which the publication then reaches. Give
+`--on local` to stay under the home whatever `--to` names. A publication that stays under the
+home refuses `--org` and `--project` with exit 2, so one meant for Cloud that omits `--on
+project` publishes nothing.
+
+With `--json`, a publication to Cloud prints `outcome` and a `cloud` object, and no
+`definition` or `revision` of a local record. `cloud.reused` is `true` when the publication
+reused an identical definition; a reused definition records no revision, and `cloud.revision`
+is its current one. `cloud.treeReused` is `true` when Cloud already held the tree sealed under
+its digest, so nothing was uploaded; tree reuse is storage and says nothing of the definition.
+When more than one of the project's definitions is identical, Cloud refuses with
+`definition-reuse-ambiguous` and the report names their ids (`cloud.workflow.definitionIds`):
+choose one with `--to`, or create another with `--new`.
+
+`useful workflow definition list` prints the definitions under the home and then every one of
+the project in effect, each line saying where the definition lives, `local` or `project`;
+`--on local` or `--on project` lists one place alone. It takes no `--limit` or `--cursor`.
+With no `--on`, when you are not signed in, no project is in effect or Cloud cannot be
+reached, it lists the home's definitions and says on standard error that Cloud was not
+asked; with `--json`, `cloud.asked` says whether it was and `cloud.reason` why not
+(`local_only`, `signed_out`, `no_project` or `unreachable`).
+
+`useful workflow definition show DEFINITION` takes a definition's ID or its name and looks
+it up under the home first, without a request, and in the project in effect only when the
+home holds none, a name among all the project's definitions, archived ones included. A name
+that several definitions of one place hold exits 2 listing their IDs; a definition found in
+neither place is `definition_not_found`, exit 1, naming the home, the project or why Cloud
+was not asked. With `--json` the document's `on` says where the definition lives.
+
+```sh
+useful workflow definition list --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful workflow definition show engineering \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+```
+
+`useful workflow definition archive`, `unarchive` and `update DEFINITION --run-as SERVICE`
+change a Cloud definition of the project in effect, `delete DEFINITION --yes` deletes an
+archived one for good, and `evaluation list` and `evaluation show` list and show its start
+evaluations, newest first. They look a name up in the project
+alone; an ID the home holds is refused with `definition_local`, exit 1, before anything is
+sent. `SERVICE` is a service principal's ID, or the display name exactly one service principal
+of the organization has, read from its member directory: a name none has is `not_found`, exit
+1, and a name several have exits 2 listing their IDs. `enable` and `disable` turn a Cloud
+definition's automatic starts on or off, and, given the ID of a definition under the home,
+set that record's `enabled` instead, without a request; a name always names the project's.
+A delete of a definition that is still active is refused `definition-not-archived`, and its
+runs, revisions and audit history are kept. A publication to a deleted definition with `--to`
+is refused `not-found`: publish again with `--new`, or with `--to` naming another.
+
+```sh
+# enable, disable, archive and unarchive take the same arguments.
+useful workflow definition disable engineering \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful workflow definition update engineering --run-as ci \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+# delete requires --yes and deletes only an archived definition.
+useful workflow definition delete engineering --yes \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful workflow definition evaluation list engineering --state failed \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+useful workflow definition evaluation show EVALUATION --definition engineering \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc
+```
+
+`useful workflow run show RUN` reads a run wherever it executes. `RUN` is a run directory, a
+run ID or a subject: an ID or a subject is looked up under the `useful` home and, when the home
+holds no such run, in Cloud in the organization in effect (`--org`, `USEFUL_ORG`, the checkout,
+then your only organization). A subject in Cloud names the newest run, for each definition,
+whose subject claim names it, among the organization's 500 newest live runs and then, when
+every live run was read, its 500 newest ended ones; runs of several definitions are refused `subject_ambiguous`, and a run no
+place holds is refused `run_not_found`, saying where the command looked and whether Cloud was
+not asked because nobody is signed in or no organization is in effect. A run under the home
+is read without a request or a sign-in. A Cloud run is read with its definition, subject
+claim, workflow state, cancellation, latest progress, exits, newest controls and newest
+trigger deliveries, beside its version, attempt, sources, inputs, placement and Linear
+binding; its `--json` document adds `on` (`personal` for a run with an owner, `project`
+otherwise) and `deployment`. `--wait` and `--timeout` follow a Cloud run until it is final;
+`--attempt N` keeps one attempt of a local run.
+
+The control commands `answer`, `approve`, `hand-back`, `pause`, `unpause`, `resume`, `retry`,
+`cancel` and `release` find their run as `show` does ([Cloud runs](#cloud-runs)); `release` of
+a Cloud run reads or writes no local run and asks Cloud, as an organization owner, to release
+the subject claim of the ended run. `interrupt` and `upgrade` look under the `useful` home
+alone, since Cloud carries neither. A control command given a run in a state it does not
+apply in changes nothing and is refused, naming the run's state and the commands that apply.
+
+```sh
+useful workflow run show run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --json
+useful workflow run show AUTO-12 --org acme-labs
+useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --from build
+useful workflow run release run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --json
+```
+
+## Local workflow execution
+
+Use `useful workflow run create` to execute a mixed command, PiJsonV1,
+ClaudeCodeStreamJsonV1, and CodexAppServerV1 agent Workflow V1 DAG in an existing
+caller-owned directory and create one durable local run
+directory:
+
+```sh
+useful workflow run create \
+  --path ./my-repository \
+  --workflow .useful/workflows/check.yaml \
+  --execution-root ./my-checkout \
+  --run-dir ./runs/check-001 \
+  --max-parallel 2
+```
+
+The execution root is the working directory when `--execution-root` is omitted. A tree,
+a `--path` directory with `workflow.yaml` directly under it, needs no `--run-dir`: its run
+directory is then `runs/<run id>/` under the `useful` home, so `useful workflow run list`
+lists the run and `useful workflow run show <run id>` finds it. A directory that is not a
+tree is the source root of a workflow file, whose run has no run record, and still needs
+`--run-dir`.
+
+The run directory must not exist and must be disjoint from the execution root. The CLI
+normalizes it from its nearest existing parent and creates any missing parent suffix.
+First-workflow onboarding uses the owner-private `~/.useful/runs/` durable state root
+by default; retained runs are application state and do not belong under `~/.config`.
+The CLI retains immutable workflow and named-input bytes, durable closed run and attempt
+state, and attempt 1's atomic result beneath `attempts/000001/result`. Every agent
+invocation receives a fresh profile directory under
+`attempts/<attempt>/diagnostics/` with immutable attempt, step, invocation, profile, and
+exact-version metadata. PiJsonV1 and ClaudeCodeStreamJsonV1 additionally retain fresh
+native session storage there; those sessions are never resumed, and Claude's temporary
+ambient history links are removed when the invocation quiesces. CodexAppServerV1 starts
+one fresh ephemeral thread and uses one transient owner-private SQLite directory beneath
+invocation staging. App Server events remain authoritative, the SQLite directory is
+removed after settlement, and no Codex-native thread or file is retained. A PiJsonV1 or
+CodexAppServerV1 protocol failure may retain a bounded structural rejection document there;
+ClaudeCodeStreamJsonV1 retains none, since nothing in Claude Code's stream is refused. The
+run-directory path is the local run handle. Add `--json` for one terminal
+schema-version-1 object on stdout while the live presentation remains on stderr, or
+`--plain` to force the line presentation on stdout. The `--json` object of `run create`,
+`run retry`, `run resume` and the control leaves that continue a run conforms to
+[`schemas/workflow-run-result-v1.schema.json`](schemas/workflow-run-result-v1.schema.json),
+whose completed-attempt `result` refers to the view schema's `WorkflowResult`.
+
+Retained harness diagnostics can contain sensitive prompts, model output, tool activity,
+paths, and extension or provider state. Native sessions or diagnostic files may be
+incomplete or malformed after failure, cancellation, or forced termination and are
+diagnostic only: workflow status, results, retry, and recovery never read or reopen them
+as authority. They remain owner-private after every terminal outcome, are not included in
+published attempt results, have no stable viewer or download interface, and disappear
+only when the owning durable run directory is removed.
+
+An ordinary command or agent step may declare `recovery.retries` from 1 through 10 and
+optionally one `cmd` or fresh `agent` handler. Without a handler, Useful Machinery immediately
+rechecks the unchanged target. A handler can only return the closed `recheck` or
+`gave_up` decision through its engine-owned private result transport; it is not a DAG
+node and publishes no output. Every target recheck and handler is a fresh physical
+invocation in the same execution root. Provisional target failures remain history, and
+only the target invocation supplying terminal success commits outputs. Repeated external
+effects are at-least-once: authors supply stable domain idempotency keys through existing
+explicit inputs or admitted environment, never from Useful Machinery invocation or round IDs.
+
+Every declared root input is required. Supply Text with `--input-text <NAME> <TEXT>` or
+`--input-text-file <NAME> <PATH|->`, JSON with `--input-json <NAME> <JSON>` or
+`--input-json-file <NAME> <PATH|->`, and one File with
+`--input-file <NAME> <MEDIA_TYPE> <PATH>`; append ordered attachment members with
+`--input-attachment <NAME> <MEDIA_TYPE> <PATH>`, or provide a present empty collection
+with `--input-attachments-empty <NAME>`. JSON is strict and may be constrained by a
+retained workflow schema. File media types are explicit and optional declaration constraints
+match exactly. All bindings are acquired before execution, and one Text or JSON file input
+may exclusively claim standard input. Workflow commands always receive closed standard input.
+
+`--agent-profiles <PATH>` replaces declared agent profiles for one invocation without
+editing the workflow. The file is a closed YAML document with `schemaVersion: 1` and an
+`agentProfiles` map whose keys name profiles the selected workflow declares and whose
+values are complete harness definitions in the ordinary Workflow V1 grammar. Each named
+profile is replaced as a whole, so every step, finalizer, and recovery handler that
+references it runs on the replacement; unnamed profiles keep their declarations. A
+replacement may select a different harness kind, and only the harnesses the effective
+profiles select must be installed. The document never changes the source-closure digest.
+Its exact bytes are retained with the run and reapplied by `run retry` and `run resume`, and
+`result.json` records the digest and effective configuration under
+`workflow.agentProfileReplacement`. The structural contract is
+[`schemas/agent-profile-replacement-v1.schema.json`](schemas/agent-profile-replacement-v1.schema.json).
+
+```sh
+useful workflow run create \
+  --path . \
+  --workflow .useful/workflows/review.yaml \
+  --execution-root . \
+  --run-dir ~/.useful/runs/review-002 \
+  --agent-profiles ~/.useful/profiles/claude.yaml
+```
+
+Without `--plain` or `--json`, run uses the interactive terminal interface when stdin and
+stdout are terminals, `TERM` is present and neither empty nor `dumb`, and stdin is not
+reserved by a Text or JSON input. Every other combination keeps the plain line stream.
+Stderr terminal status does not select the interface. `NO_COLOR` disables semantic color
+under `--color=auto` but does not disable interactive mode; `--color=always` overrides it.
+
+The interface keeps a stable step selection, an inspector, and bounded per-step logs.
+Use `Up`/`Down` or `j`/`k` to select a step, `Enter` and `Escape` to enter and leave its
+full log, and `?` for all log navigation controls. Wide and narrow terminals use
+side-by-side or stacked layouts. Resizing recomputes the layout without leaving
+interactive mode; below 64 columns or 20 rows a resize notice replaces the panes while
+execution, `Ctrl-C`, and eventual `q` handling continue.
+
+`Ctrl-C` requests the existing orderly `user_request` cancellation and does not abandon
+owned child work. `q` is ignored while execution, publication, cleanup, or run ownership
+is active. Once the retained attempt is complete, the interface remains open for
+post-run inspection until `q`; Useful Machinery then restores raw mode, the alternate screen, and
+the cursor before invoking the shared standard plain-summary renderer. The summary and
+process status are therefore the same contracts used by forced plain output. Inspect the
+durable run later with `workflow run show <RUN_DIR>`; retry is always explicit.
+
+A Claude Code profile is configured independently from Pi:
+
+```yaml
+agentProfiles:
+  claude:
+    harness:
+      kind: claude_code
+      config:
+        model: claude-opus-4-1
+        effort: high
+```
+
+`model` is a nonempty native Claude model string. `effort` is one of `low`, `medium`,
+`high`, `xhigh`, or `max`; both fields are required and additional configuration is
+rejected. Useful Machinery does not query a model catalog, install Claude Code, or supply a
+fallback model or harness.
+
+A Codex profile is also independent:
+
+```yaml
+agentProfiles:
+  codex:
+    harness:
+      kind: codex
+      config:
+        model: gpt-5.4
+        effort: xhigh
+```
+
+Both Codex values are required nonempty native strings, and additional configuration is
+rejected. Useful Machinery does not read provider credentials during definition resolution,
+installation discovery, rejection presentation, or doctor checks.
+
+Local execution snapshots the inherited environment after resolution and removes
+`USEFUL_` variables before launching commands or agents. Other caller-provided values are
+retained unless the closed harness profile fixes them. ClaudeCodeStreamJsonV1 removes
+`CLAUDE_CODE_PROJECT_DIR_NAME` to keep retained-session routing authoritative and applies
+its documented native controls; values such as `GH_TOKEN`, `GITHUB_TOKEN`, and Git or SSH
+credential-helper configuration remain available for local repository setup and cloning.
+The local caller owns that authority; Runner Serve applies a separate managed
+credential-isolation policy. The CLI inspects the resolved agent steps and validates
+each required harness once: `pi` for PiJsonV1, `claude` for
+ClaudeCodeStreamJsonV1, and `codex` for CodexAppServerV1. Each search selects the first
+executable candidate in inherited `PATH` and pins its canonical absolute path, exact
+observed version, profile, and capabilities for the run. Each harness admits a
+canonical stable release in its qualified range, `>=2.1.234 <2.2.0` for Claude Code, and
+also admits, as untested, any capability-compatible stable release newer than its
+qualification release (Pi 1.3.0, Claude Code 2.1.321, Codex 0.171.0); Claude Code's
+first initialization frame must report the pinned observed version exactly. After
+admission succeeds and before any step runs, the command writes one stderr advisory line
+per selected untested harness naming the harness, the installed version, and the
+qualification release, in every presentation mode and never per agent step; `--json`
+stdout remains the result document alone. Later `PATH` changes cannot switch an admitted
+executable. Command-only workflows probe no harness; each single-harness workflow
+requires no unrelated installation. A mixed workflow requires exactly its selected
+harnesses and never substitutes or falls back between them. Workflow definitions,
+imports, and remote values cannot supply an executable or alter selection. The adapter
+does not read Useful Machinery human or runner credentials and does not contact Useful Machinery; an
+admitted agent harness may use the provider and other host authority selected by its
+closed profile and inherited environment.
+
+Workflow V1 outputs declare semantic `kind` separately from acquisition `from`. The six
+rows are `text/path`, `text/agent_response`, `json/path`, `json/agent_result`,
+`file/path`, and `git_branch/workspace`; consumers and exports observe only the semantic
+kind. A Git branch output is export-only and cannot bind a downstream command input or
+agent message. Before any step
+starts, local admission requires the execution root to be exactly one SHA-1 Git worktree
+root and pins its current commit as the baseline. Successful capture requires a clean
+committed head descended from that baseline. A changed head publishes one Git bundle
+carrier; an unchanged head publishes the semantic zero-delta result without a carrier.
+Repository remotes, destination branches, providers, credentials, and publication policy
+are not workflow fields.
+
+## Local workflow status
+
+Inspect the durable state, retry eligibility and records of an existing local run without
+changing it:
+
+```sh
+useful workflow run show ./runs/check-001
+```
+
+The run-directory positional is an ordinary host path resolved from the process's
+initial working directory. `retry` is the one command that reruns steps, through the same durable handle. `--all`
+reruns every step as a new attempt, in the previous attempt's execution root unless
+`--execution-root` names another:
+
+```sh
+useful workflow run retry ./runs/check-001 --all
+useful workflow run retry ./runs/check-001 --all --execution-root ./my-checkout
+```
+
+To reexecute a selected ordinary step and its downstream ordinary dependents,
+inherit the other eligible ordinary steps by reference, and rerun all finalizers:
+
+```sh
+useful workflow run retry ./runs/check-001 --from build --from verify
+useful workflow run retry ./runs/check-001 --from verify \
+  --workflow ./revised-workflow.yaml --execution-root ./another-checkout
+```
+
+With neither option, `retry` of an ended run that did not succeed continues from the stage
+it stood at: the step its latest attempt started last for a workflow of edges, and otherwise
+every ordinary step its latest attempt left other than succeeded, skipped or inherited. A
+run that names none is refused `continuation_step_required`, and the message names `--from`
+and `--all`. `useful workflow run resume` reruns nothing: it continues a waiting or
+abandoned run from where it stands, keeping `--workflow` and `--execution-root`.
+
+`--workflow` selects a replacement within the original retained source-root boundary;
+without it the immediately prior attempt's retained definition is used. The execution
+root is selected independently and defaults to the prior attempt's root. Accepted
+`--json` writes the terminal result as one stdout object conforming to
+[`schemas/workflow-run-result-v1.schema.json`](schemas/workflow-run-result-v1.schema.json)
+and emits the same accepted partition record to stderr before execution; a refused
+continuation writes its rejection document under the same schema. The initial
+run inputs and primary-workspace Git baseline remain immutable. A continuation is
+allowed only from an eligible latest failed, cancelled, or interrupted attempt, after
+all retained process groups are proven quiescent. Before actions run, plain output
+reports the ordered reexecuted and inherited partitions. Executed steps, recovery
+handlers, and finalizers can read the credential-free `USEFUL_CONTINUATION_CONTEXT`
+file; initial runs and explicit retries do not receive this variable. A continued
+step starts fresh; an inherited step has neither a new invocation nor a copied log.
+A required body-data consumer of an inherited skipped output is rejected, while
+conditions, advisory consumers, finalizers, and exports retain their normal
+unavailable-value behavior. `workflow run show` reports only base continuation
+eligibility, not request-specific admission; an unavailable or incomparable historical
+workspace snapshot yields `workspaceModified: "unknown"`.
+
+`show` reads the closed `local-run.json` and `state.json` contracts, the run record, its
+children's, control and mirror records, and an existing regular `run.lock`. For activated step recovery, plain and JSON snapshots report the
+active or terminal target/handler role, round, target execution, decision, invocation
+accounting and usage, raw terminal disposition, output ownership, and retry eligibility.
+It never scans `.private`, creates the lock, acquires execution
+ownership, waits for an owner, signals child work, or reads standard input. Its
+non-acquiring lock query combines with two matching state revisions to distinguish an
+active owner, a settled run, an abandoned nonterminal attempt, and ownership that cannot
+be proven safely. An exact live process-group identity remains `ownership_unproven`; an
+unlocked outstanding start action without its required process-guard registration makes
+the run directory invalid rather than retry-eligible. The retry projection is eligible
+or uses the first applicable closed reason in this order: `run_locked`,
+`ownership_unproven`, `latest_attempt_succeeded`, then `latest_attempt_rejected`.
+
+Without a mode option, and with `--plain`, one complete human snapshot is written to
+stdout and operational diagnostics use stderr. `--json` writes exactly one ANSI-free
+object conforming to
+[`schemas/workflow-status-result-v1.schema.json`](schemas/workflow-status-result-v1.schema.json)
+to stdout; run-directory, schema, lock-query, and unstable-snapshot failures are encoded
+in that object rather than duplicated on stderr. A run of a workflow file's closure, which
+has no run record, is read with `record` and `position` null. `show` has no TUI or live
+presentation stream.
+
+`--color` accepts `auto`, `always`, or `never`. It affects only semantic tokens in plain
+output; `auto` requires terminal stdout, a usable `TERM`, and an unset or empty
+`NO_COLOR`. JSON never contains ANSI. A complete snapshot returns 0 regardless of run
+or retry disposition, an operational or output failure returns 1, and a command-line
+usage error returns 2. SIGINT or SIGTERM before completed output returns 130 or 143,
+respectively.
+
+## Local workflow archived view
+
+View a successfully published terminal attempt from one stable read-only snapshot:
+
+```sh
+useful workflow run view ./runs/check-001 [--attempt 1] [--plain | --json]
+```
+
+Omitting `--attempt` selects the current attempt from the snapshot. Without an explicit
+mode, terminal stdin plus terminal stdout plus a usable `TERM` opens the existing frozen
+archived TUI; every other stream arrangement prints a plain completed-attempt summary.
+`--plain` and `--json` force their modes regardless of terminal capability and conflict
+with each other. The command never opens `/dev/tty` or falls back after selecting the
+TUI.
+
+The plain summary contains retained attempt and execution identity, lifecycle, duration,
+node disposition, direct typed causes, activated Recovery Summary Schema 1,
+per-invocation usage and output ownership, terminal counts, outcome, cancellation, and
+finalization facts. It does not replay events or print retained stdout or stderr,
+commands, exports, artifact contents, or agent observations, and it claims no ordering
+between retained streams.
+
+`--json` writes exactly one ANSI-free document conforming to
+[`schemas/workflow-view-result-v1.schema.json`](schemas/workflow-view-result-v1.schema.json).
+A successful view returns 0 and embeds the complete validated immutable selected result,
+including when the workflow outcome is failed or cancelled. Expected acquisition and
+attempt-selection failures return 1 as the schema's closed error variant on stdout
+without duplicate stderr prose. Usage errors return 2. Local serialization, output, or
+terminal failures return 1 and do not append a replacement document after a partial
+prefix.
+
+The loader validates the retained workflow, published result, cross-document identity,
+artifact set, and retained budget before exposing either the safe archived projection or
+the complete wire result. It opens only the state-recorded publication once, never
+acquires execution ownership, and does not retarget if a retry advances the run.
+
+Use `q` to restore an active TUI and return 0 without a workflow-run summary. SIGINT and
+SIGTERM interrupt any mode with status 130 or 143; noninteractive rendering, writing,
+and flushing remain abandonable even when stdout is full. Viewer signals never cancel a
+workflow. `--color` affects only plain and TUI styling; JSON is always ANSI-free.
+
+## Cloud runs
+
+`useful workflow run list` lists the runs under the `useful` home and then one page of the
+Cloud runs of the organization in effect, those of the project in effect when one is (newest
+first), each row led by where the run executes: `local`, `personal` for a Cloud run with an
+owner, or `project` for one with none. `--on local|personal|project` keeps one place. Both
+halves list live runs unless `--all`, and `--waiting` keeps the waiting ones; `--owner`,
+`--definition` and `--drift` select among the runs under the home, so they list those alone
+and ask no Cloud. The Cloud filters combine with AND, repeat exact context matches, and
+`--state-group` replaces the default live group; none of them, nor `--org` or `--project`,
+goes with `--on local`. `--limit` and `--cursor` page the Cloud runs, and the runs under the
+home are listed with the first page alone:
+
+```sh
+useful workflow run list --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --state-group active --created-after 2025-01-01T00:00:00Z \
+  --integration-context source=linear --integration-context linearIssue=LIV-123 \
+  --limit 50 --json
+useful workflow run list --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --state-group active --created-after 2025-01-01T00:00:00Z \
+  --integration-context source=linear --integration-context linearIssue=LIV-123 \
+  --limit 50 --cursor 'CURSOR_FROM_NEXT_CURSOR' --json
+useful workflow run list --on local --all
+```
+
+Text output gives each Cloud run's ID, state, timestamps, project, workflow, wait, context and
+placement when available, then the next cursor. `--json` prints one document whose `runs` hold
+each run under the home with `on` `local` and each Cloud run with `on` beside the item as the
+API returned it, and whose `cloud` says whether Cloud was asked: `asked` true with
+`organizationRef`, `projectId` when a project narrowed it and `nextCursor`, or `asked` false
+with `reason` (`local_only`, `signed_out`, `no_organization` or `unreachable`). When nobody is
+signed in, no organization is in effect or Cloud cannot be reached, the command lists the runs
+under the home, exits 0 and says on standard error why Cloud was not asked; with `--on
+personal` or `--on project` it fails as a Cloud read does. Context is private: avoid shell-history exposure when
+using context filters, and do not put context in logs. For ticket dispatch, write
+`{"source":"linear","linearIssue":"LIV-123"}` to a protected file and supply
+`workflow run create --on personal --integration-context-file PATH`.
+
+Run commands use the selected human OAuth credential by default and accept
+`--api-key-file PATH|-` when an API operation permits a service actor. They use
+the configured Useful Machinery deployment. `useful workflow` runs and inspects local workflow
+definitions and run directories; `useful workflow definition publish --on project` publishes a
+definition to Cloud, `useful workflow run create --on personal|project` creates a run of a
+Cloud definition, `useful workflow run show` and the control commands read and control a
+definition-backed Cloud run given its ID or subject, and the `useful workflow definition` leaves manage Cloud definitions (see
+[Cloud workflow definitions](#cloud-workflow-definitions)).
+
+Start a Cloud run of a workflow published as a Cloud definition with
+`useful workflow run create DEFINITION --on personal` or `--on project`, in the organization
+and project in effect; `useful workflow definition publish DIR --bindings FILE --on project
+--org ORGANIZATION --project PROJECT` prints the id. `DEFINITION` is read in the project alone:
+an ID is sent as given, and a name is the project's one definition of that name, several of
+which exit 2 naming their IDs. Nothing under the `useful` home or any execution root is read.
+`--workflow FILE` names a workflow file of the definition's tree, relative to its root, and the
+root workflow is run when it is omitted. The command takes `--org` and `--project`,
+`--source-branch`, `--workspace-branch` or `--workspace-commit`, `--display-name`, the
+named-input options or `--input-set INPUT_SET`, `--integration-context-file`, `--max-parallel`
+from 1 to 64, sent only when given, and `--wait` with `--timeout`, uses one idempotency key per
+invocation, and writes one `create` result. `--on personal` starts a run owned by you, on your
+runners; `--on project` starts it with no owner, in the project's runner pools. The local
+options (`--path`, `--execution-root`, `--run-dir`, `--agent-profiles`, `--pause-before`,
+`--owner`, `--external`, `--source-revision`) are usage errors beside a Cloud place, as the
+Cloud options are with `--on local`, the default. A run of a definition names no publication:
+publish an export of a succeeded run with `useful workflow run publication create`.
+
+```sh
+# Admit an inputless run of the definition's root workflow without waiting for execution.
+useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc --on personal \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --source-branch main \
+  --display-name "Release checks"
+
+# Or run a workflow file of its tree and bind mixed values, including ordered and
+# explicitly empty collections.
+useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc --on personal \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --workflow flows/review.yaml \
+  --input-text-file request ./request.txt \
+  --input-json settings '{"mode":"review"}' \
+  --integration-context-file ./integration-context.json \
+  --input-attachment evidence text/plain ./notes.txt \
+  --input-attachment evidence application/pdf ./report.pdf \
+  --input-attachments-empty optionalEvidence
+
+# Create an open immutable set, upload its object members, and then seal it.
+useful workflow input-set create \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --input-text-file request ./request.txt \
+  --input-attachment evidence text/plain ./notes.txt \
+  --input-attachment evidence application/pdf ./report.pdf \
+  --json > input-set.json
+input_set_id=$(jq -er '.inputSet.id' input-set.json)
+
+useful workflow input-set upload "$input_set_id" --org acme-labs \
+  --member-file inputs/request ./request.txt \
+  --member-file inputs/evidence/000000 ./notes.txt \
+  --member-file inputs/evidence/000001 ./report.pdf
+useful workflow input-set seal "$input_set_id" --org acme-labs
+
+useful workflow run create def_01k0z6r1w8f4jy2m7q9v3x5abc --on personal \
+  --org acme-labs --project prj_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --input-set "$input_set_id"
+
+# Read the latest public projection, with any retained Linear lifecycle binding under
+# .run.linearLifecycle.
+useful workflow run show run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+
+# Observe settlement for up to 30 minutes without changing the run.
+useful workflow run show run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --wait --timeout 30m
+
+# List the binding's retained desired-state updates, newest first; --cursor continues a page.
+useful workflow run linear list run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --limit 50 --json
+
+# Continue from selected steps on the same retained runner boot. Admission is not execution.
+useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --from build --from test --expected-version 7 --json
+# Observe the immutable admission receipt with the current Run until it settles.
+useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --from build --wait --timeout 30m
+
+# Rerun every step of an eligible terminal run; observe the durable receipt until it resolves.
+useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --all --expected-version 7 --timeout 30m
+
+# End a run; force is a separate explicit, separately keyed choice.
+useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --wait --timeout 30m
+```
+
+`useful workflow run answer`, `approve`, `hand-back`, `pause` and `unpause` find their run
+under the `useful` home and then in Cloud in the organization in effect. `pause RUN --before
+STEP --reason TEXT` holds a run before a `workflow` step and `unpause RUN` releases the hold;
+`create --pause-before STEP` holds a new run from the start. On a run under the home
+`answer`, `approve` and `hand-back` each record their control and, once the wait is
+resolved, continue the run as `useful workflow run resume` would, printing the continuation
+under its own command; `--record-only` records the control alone and leaves the run for
+`resume`. `answer` without `--question` answers the one
+open question, and is refused `question_ambiguous` when several are open; an answer that
+leaves a question open is recorded alone.
+
+A definition-backed Cloud run's wait takes the same leaves, and `retry` with neither
+`--from` nor `--all`. Each leaf but `pause` reads the run's current wait, refuses
+`run_not_waiting` or `wait_kind_mismatch` before sending anything, and asks Cloud under one
+request key to carry the control to the runner executing the run, which applies it as the
+leaf applies it to a local run. The output reports Cloud's acceptance, not the runner's
+application; `wait_not_current` means the run's wait changed after the read.
+
+```sh
+useful workflow run answer run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --question scope --text "Only the public API"
+useful workflow run approve run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful workflow run hand-back run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --notes "Split the migration"
+useful workflow run retry run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --json
+useful workflow run pause run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs \
+  --before review --reason "Hold for review"
+useful workflow run unpause run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --before review
+```
+
+`useful workflow run cancel RUN` ends a run wherever it executes, found as `show` finds it.
+Under the home it ends a waiting run `withdrawn` and a running one `canceled`. A Cloud run is
+read first: one that waits is sent a withdrawal, which the runner applies to end it
+`withdrawn`, and the command prints the `accepted` document; any other is sent a graceful
+cancellation request, as is one Cloud refuses the withdrawal `run_not_live` or
+`control_unsupported`, and the command prints the cancellation document. `--force` sends the
+force cancellation request without reading the run. `--idempotency-key` keys whichever
+request is sent, and `--wait` follows the run until it settles, within `--timeout`. Either
+acceptance is not yet the run's end.
+
+```sh
+useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --json
+useful workflow run cancel run_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --force
+```
+
+Without an input flag, `workflow run create --on personal|project` admits an inputless run. The mixed-input flags may be
+repeated in one invocation: Text uses `--input-text NAME TEXT` or
+`--input-text-file NAME PATH`, JSON uses `--input-json NAME JSON` or
+`--input-json-file NAME PATH`, a singular File uses
+`--input-file NAME MEDIA_TYPE PATH`, and ordered attachment members use repeated
+`--input-attachment NAME MEDIA_TYPE PATH`. `--input-attachments-empty NAME` preserves a
+present collection with no members. A name may be bound once, except that attachment
+members append to one collection in argument order. `--integration-context-file PATH`
+supplies a private immutable flat JSON object whose keys and values are strings. It is
+returned by run readers but is not a workflow input. Omitting the flag and supplying an
+empty object have the same run semantics. The object allows at most 32 entries, 64 UTF-8
+bytes per nonempty key, 1 KiB per value, and 16 KiB of compact JSON; empty values are
+valid, U+0000 is not, and duplicate members reject locally. The encoded-size limit uses
+compact UTF-8 JSON with the shortest JSON-required escapes, so `<`, `>`, `&`, U+2028, and U+2029
+retain their literal UTF-8 size. The source document, including escapes and formatting,
+is limited to 128 KiB so file and standard-input reads remain bounded.
+
+One Text or JSON file source or the integration-context file may use `-` to claim standard
+input. Exactly one such operand may claim standard input in an invocation; competing claims
+reject before stdin is read or Cloud is contacted. File and attachment paths always name
+regular files.
+
+Text and JSON values are limited to 1 MiB, each File or attachment member to 64 MiB, all
+values together to 256 MiB, named inputs to 256, and attachment members to 256. Text must
+be UTF-8. JSON must be strict UTF-8 JSON with duplicate keys and excessive nesting
+rejected before Cloud access. Bytes and explicit valid media types are preserved exactly,
+including zero-length values. The CLI computes the canonical manifest digest, allocates
+one input set, requests upload capabilities in batches of at most 100, uploads every
+logical member, seals the set, and only then creates the run. A storage `412 Precondition
+Failed` is treated only as evidence that seal verification is required; connection and
+timeout failures are not treated as upload evidence. Storage uploads have a five-minute
+request timeout, separate from the 20-second metadata-request timeout.
+
+Use `workflow input-set create` to acquire local sources, compute the immutable manifest,
+and allocate an open set in the organization and the project in effect. It returns the set
+metadata and ID without requesting upload capabilities, writing object storage, or sealing.
+`workflow input-set show` inspects a set and manifest. `workflow input-set upload` maps each
+selected logical member ID to a caller-owned regular file with repeated
+`--member-file MEMBER PATH` flags. It rereads the authoritative manifest, requires each
+file's exact size and digest, and reports accepted members separately from `412` members
+that still require authoritative sealing. This permits a later invocation to upload all
+object members or resume only missing members, including one member such as
+`inputs/evidence/000001` from a larger attachment collection. Empty attachment collections
+require no upload. `workflow input-set seal` completes authoritative verification.
+`workflow input-set delete INPUT_SET --yes` makes a set logically unavailable and schedules
+exact-key content cleanup. Every leaf but `create` acts in the organization in effect alone.
+Once a set is sealed, pass its exact ID to `workflow run create --on personal|project --input-set`;
+this conflicts with every acquisition flag and never restages content.
+
+Create output reports the accepted Run ID and whether the deployment replayed the
+request. One invocation keeps each mutation's idempotency key through an ambiguous API
+transport retry and an access-token refresh; keys are not persisted for a later invocation.
+If preparation stops after input-set allocation, the CLI reports its ID and recovery
+steps on stderr even with `--json`; inspect or resume that set explicitly before
+allocating another. An interrupt after run dispatch reports unknown acceptance rather
+than claiming no run was created.
+
+Retained content is explicit run-scoped administration. `RUN` is a run ID or a subject,
+looked up in Cloud alone in the organization in effect; nothing under the useful home is read:
+
+```sh
+useful workflow run input show "$run_id" --org acme-labs --json
+# Omit --member to download every member, or repeat it for an exact subset.
+useful workflow run input download "$run_id" --org acme-labs \
+  --member inputs/request \
+  --output ./retained-inputs --json
+useful workflow run input delete "$run_id" --org acme-labs --yes
+```
+
+A download first validates the retained inventory, requests capabilities in batches of at
+most 100, and verifies every selected size and SHA-256 digest. Omit `--member` to select
+all members, or repeat `--member MEMBER` to select exact logical IDs; selected members
+retain canonical manifest order. Members are written beneath the new destination using
+their deterministic logical IDs, such as `inputs/request` and
+`inputs/evidence/000000`. Private staging is atomically renamed only after all selected
+members verify, and an existing destination is never replaced. Interruption before the
+commit phase or any integrity failure leaves no committed destination; the CLI attempts
+to unlink its private staging, which is filesystem cleanup rather than physical media
+erasure. An interruption racing the atomic commit reports unknown commitment and
+directs the caller to inspect the destination. Capability URLs, input bytes, and bearer
+credentials are never included in command output. Retention expiry is reported as
+`gone`. Successful deletion makes content logically unavailable and schedules exact-key
+cleanup; it does not attest physical erasure and does not remove the run's integration
+context. Both deletion commands require literal
+`--yes`, use fresh idempotency keys, and report an unknown commitment if interrupted
+after dispatch.
+
+`workflow run create --on personal|project`, `workflow run show` of a Cloud run, and `workflow run cancel` of one accept
+`--wait` and optional `--timeout DURATION` (positive integral `ms`, `s`, `m`, `h`, or bare
+seconds). `--timeout` requires `--wait`. Create and cancel budgets begin after acceptance;
+show starts immediately. The remaining wait budget caps credential refresh, read retries,
+and each observation request; it does not bound the accepted mutation. Reads continue
+through admitted creation. Without `--wait`, create returns on durable run acceptance;
+with `--wait`, it observes execution and artifact attachment. Show-wait also observes the
+automatic publication handoff and its linked Publication, which only a run created by
+workflow path before its retirement can have, under the same timeout budget. A successful
+Run with pending handoff is not settled; waiting never creates an attempt or switches
+to a later manual attempt. Cancel observes only its receipt and terminal Run. A cancellation receipt being accepted or resolved is not by itself
+proof of a stopped Run. Force requires explicit `--force`; to escalate use a new
+idempotency key. Reuse `--idempotency-key` with the same mode and Run to reconcile an
+uncertain response. Signals and timeouts stop only local observation.
+
+`useful workflow run retry RUN --from STEP [--from STEP ...]` of a Cloud run selects
+distinct steps in the supplied order; with neither `--from` nor `--all`, `retry` of a Cloud
+run that ended other than `succeeded` reads the run and sends the same request from the
+first step of its reported position, refused `continuation_step_required` when it reports
+none, and `useful workflow run resume RUN` sends it naming no step. The run always continues with the definition it was created
+from; a receipt admitted earlier under a replaced definition still shows that
+definition's commit and workflow path. `--expected-version N` guards admission. A generated key is reused for at most one
+ambiguous transport replay of the identical request and principal. If both attempts
+are ambiguous, acceptance is unknown: inspect the run before another request; a 404
+is not proof of non-admission. A 201 contains an immutable accepted attempt and
+partition, **not** proof of execution. Without `--wait` it returns on admission;
+with `--wait` it reads the immutable receipt alongside the latest authorized Run
+until terminal state. `--timeout` requires `--wait`, a usage error otherwise, and begins
+after acceptance.
+JSON emits `operation: continue`, `outcome`, `request` (the immutable receipt),
+`run` (the current projection), `idempotencyKey` when acceptance is unknown, and
+`code` on failure. Admission rejection includes a `diagnostic` array of safe
+violation codes and optional node/producer/reference/prior-state details in
+JSON, also shown in human output. A `410` `path-run-retired` answer, for a run Cloud no
+longer continues because it was created by workflow path, is outcome `error` with code
+`path_run_retired` and exit 1 for `retry` and `resume` alike.
+The Run shows selected/inherited/reexecuted steps, effective source digest, both workspace paths, pending/ready/unavailable preparation,
+modified true/false/unknown, interruption cause, and portable-result absence.
+The Run partition is not an output-producer inventory; direct producer identities
+for inherited output values are preserved in retained and portable results, not
+inferred from a preceding attempt in the Run summary. Missing portable results
+cannot supply that evidence. Signals and timeouts stop observation only, never submit a second continuation.
+
+`useful workflow run retry RUN --all` of a Cloud run always observes its retry receipt; `--expected-version`
+requires a positive integer and `--timeout` limits observation after acceptance.
+A single generated key is reused for ambiguous transport replay. POST acceptance alone
+never reports application: only an applied GET receipt succeeds. JSON retry results
+contain `schemaVersion`, `operation: retry`, `deployment`, `organizationRef`, `runId`,
+`outcome`, nullable `requestId`, `idempotencyKey`, `receipt`, and `code`.
+Outcomes are `applied`, exact-code `rejected`, `subject_busy` and `subject_settled`
+(another run holds the run's subject; `holderRunId` in JSON names it), `retry_pending`,
+`timed_out`, `observation_stopped`, `acceptance_unknown`, and `error`. A `409`
+`path-run-retired` answer, for a run Cloud no longer retries because it was created by
+workflow path, is outcome `error` with code `path_run_retired`; publish the workflow as a
+definition and start a run of it instead.
+Rejection, conflict, and timeout exit 1; usage exits 2; authentication
+exits 3; unresolved transport exits 4; SIGINT/SIGTERM exit 130/143. A known
+interruption retains the request ID; unknown submission retains the key. Neither
+cancels or creates another retry. Inspect the run and request before trying again.
+
+For `workflow run create --on personal|project` and the cancellation request `workflow run cancel` sends, `--json` emits one
+schema-version-1 object with `operation`, `deployment`, `organizationRef`,
+nullable `runId`, `outcome`, full nullable `run`,
+`publication`, `cancellationRequest`, nullable create `replayed`, and nullable `error`.
+The error includes `code`, `idempotencyKey`, `requestedMode`, and `requestId` (nullable).
+A create that Cloud definitely refuses at admission (a `409` or `422` `project-archived`,
+`project-not-ready`, `workspace-selection-unsupported`, `workflow-source-unavailable`,
+`workflow-source-invalid`, `workspace-source-unavailable`, or `workspace-membership-unproven`
+problem) exits 1 with code `admission_rejected`; its error adds `httpStatus`, the full
+`problemType` URI, and `correlationId`, the response's `X-Request-ID` (omitted when absent or
+not a `req_` id), and for `project-not-ready` the project's readiness `blockers` in Cloud's
+order (omitted when the problem names none the CLI can vouch for); human mode prints the
+same facts with a remedy. Such a refusal created no run and is never
+`acceptance_unknown`, which a create reports with its key and exit 4 only when the outcome
+is unconfirmed: a transport failure, a `5xx`, or an unreadable response after dispatch.
+Progress goes to stderr. `workflow run show` of a Cloud run prints one document with
+`command`, `outcome` (`shown`, `pending`, `refused`, `timed_out` or `observation_stopped`),
+`on`, `deployment`, `organizationRef`, `runId`, `run`, `publication`, `deliveries` and
+`controls`, a failure's code under `diagnostics`. Human show results show the Run's automatic publication
+handoff and any observed Publication state, outcome, receipt disposition, failure, and
+redacted confirmed pull-request URL separately from execution. After the run's actor,
+`workflow run show` prints one `credential PROVIDER:` line for each provider whose credential source
+the run's runner reported: `host`, `grant of` and the member's principal id, or `grant` when
+Cloud recorded no member; a run with no reported sources prints none. After them it prints
+one `integration ID:` line for each integration the run's workflow declares, in Cloud's
+order: `host`, `connected by` and the member's principal id, `connected by the organization`
+or `connected by a member` when Cloud names no principal, or `not provided`, followed by
+`, token v` and the version when there is one; a run whose read carries no integration
+sources prints none. On failure, inspect the existing publication or handoff
+and provider effects before creating another publication attempt. Human cancellation
+errors retain the requested mode, known receipt, Run state, interruption, and artifact
+delivery evidence for same-key reconciliation.
+Create-wait exits nonzero unless the run succeeded; show-wait and cancel-wait
+exit zero on observed settlement, regardless of the Run's execution result. Timeout
+exits 1; SIGINT/SIGTERM exit 130/143 without sending a new cancellation request.
+
+### Agent named-input-to-artifact loop
+
+An authenticated agent can bind a prompt file to a workflow's named Text input and
+complete the run using only stable JSON command surfaces and the downloaded local result:
+
+```sh
+set -euo pipefail
+organization=acme-labs
+project=prj_01k0z6r1w8f4jy2m7q9v3x5abc
+definition=def_01k0z6r1w8f4jy2m7q9v3x5abc
+request_path=./request.txt
+artifact_path=./downloaded-run
+
+useful workflow run create "$definition" --on personal \
+  --org "$organization" --project "$project" \
+  --input-text-file request "$request_path" \
+  --json > create.json
+run_id=$(jq -er 'select(.outcome == "accepted") | .runId' create.json)
+
+useful workflow run show "$run_id" --org "$organization" \
+  --wait --timeout 30m --json > observed.json
+jq -e '.outcome == "shown" and .run.state == "succeeded"' observed.json >/dev/null
+
+useful workflow run artifact download "$run_id" --org "$organization" \
+  --output "$artifact_path" --json > download.json
+jq -e '.outcome == "downloaded"' download.json >/dev/null
+jq . "$artifact_path/result.json"
+```
+
+The input bytes remain at the caller-selected source path; they do not enter command
+arguments or JSON receipts. `result.json` is inspected only after the complete Artifact
+Set has been downloaded, verified, and committed at the requested destination.
+
+## Remote artifact metadata and download
+
+List one page of a run's sealed Artifact Set without downloading it:
+
+```sh
+useful workflow run artifact list run_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --org acme-research --limit 50
+```
+
+`RUN` is a run ID or a subject such as `AUTO-12`, looked up in Cloud alone in the
+organization in effect: an ID is sent as given and a subject is found in the
+organization's runs listing first. Nothing under the `useful` home is read.
+
+The result includes whole-set identity, seal and retention times, total member and byte
+counts, and each member's portable path, media type, size, and SHA-256 digest. Members
+are in portable-path order. `--limit` accepts 1 through 200, and `--cursor` continues
+from the opaque `next cursor` value; the limit may change between pages. Add `--json`
+for a schema-version-1 result with `outcome: "listed"` and the page under `artifactSet`.
+
+Listing calls only the metadata inventory operation. It does not request exact download
+capabilities, read artifact bytes, or create output files. A missing run and an
+unattached, deleted, or not-yet-sealed Artifact Set are deliberately indistinguishable
+and produce `outcome: "unavailable"`; an elapsed retention window produces
+`outcome: "expired"`. Both states return a nonzero status, as do authorization,
+network, invalid-cursor, and invalid-response outcomes.
+
+Download and verify the complete set only when its bytes are needed:
+
+```sh
+useful workflow run artifact download run_01k0z6r1w8f4jy2m7q9v3x5abc \
+  --org acme-research --output ./downloaded-attempt-result
+```
+
+Download continues through every inventory page, requests fresh exact capabilities in
+bounded batches, verifies each member and the complete portable set, and atomically
+creates the requested output directory only after complete validation. Add `--json` for
+one schema-version-1 receipt with `outcome: "downloaded"`, the Run and Artifact Set IDs,
+verified member and byte totals, the committed destination, and deployment. A failed
+transfer or verification emits no receipt and never commits the destination.
+
+## Portable artifact validation
+
+Validate one copied or downloaded Artifact Set V1 directory without its original run,
+workflow source, or execution checkout:
+
+```sh
+useful workflow run artifact validate ./downloaded-attempt-result
+```
+
+The command validates the complete closed `result.json` contract and every declared
+export. It checks the exact root and `exports/` inventory, aliases, portable carrier
+paths, confined regular-file identity, sizes, SHA-256 digests, media types, UTF-8 text,
+compact ordered JSON, and changed or zero-delta `git_branch` artifacts. Git validation
+checks the closed semantic metadata, carrier-presence rule, bundle-v2 header and profile,
+pack framing and checksum, and reconstructible object facts without a destination
+repository. Unknown kinds are rejected. There is no single-export selector or repair
+mode.
+
+Validation opens the selected directory read-only, follows no symbolic link beneath its
+opened root, and leaves the set unchanged. It does not read workflow-run state,
+credentials, or configuration, and it does not contact Useful Machinery, a provider, a Git
+remote, or any other network service.
+
+Add `--json` for one Artifact Validate Result Schema 1 document. A valid result has
+`outcome: "valid"`, `exitStatus: 0`, the canonical artifact-directory path, and bounded
+summary counts. An invalid result has `outcome: "invalid"`, `exitStatus: 1`, and the
+complete contractually bounded deterministic diagnostic sequence instead of a summary.
+Human mode reports the same diagnostic codes and ordering. Command-line usage errors
+return 2 and do not inspect the artifact directory.
+
+## GitHub artifact publications
+
+Publication commands use the selected human OAuth credential by default and accept
+`--api-key-file PATH|-` when the operation permits a service actor. They turn one
+available `git_branch` export from a succeeded Cloud run into a ready-for-review pull
+request. Run success and export declaration alone do not publish anything automatically;
+Publication commands create explicit post-run attempts. A run of a Cloud definition delivers
+no export to publish yet, so they apply to runs that already have one: runs created by
+workflow path before that form was retired, some of which named an export at creation and
+were handed off to an automatic attempt.
+
+`create` and `show` name the run with `--run RUN` and `list` with its `RUN`, a run ID or a
+subject such as `AUTO-12`, looked up in Cloud alone in the organization in effect; nothing
+under the `useful` home is read. The complete Publication command surface is:
+
+```sh
+# Create one attempt for an exact export and retain its identity.
+useful workflow run publication create --run "$run_id" --org acme-labs \
+  --export changes --json > publication-create.json
+publication_id=$(jq -er '.publication.id' publication-create.json)
+
+# Create another attempt and wait locally for its terminal outcome.
+useful workflow run publication create --run "$run_id" --org acme-labs \
+  --export changes --wait --timeout 30m
+
+# Read the current attempt, optionally waiting for a terminal snapshot.
+useful workflow run publication show "$publication_id" \
+  --run "$run_id" --org acme-labs --wait --timeout 30m
+
+# List one oldest-first page of attempts beneath the run.
+useful workflow run publication list "$run_id" \
+  --org acme-labs --limit 50
+```
+
+To update an existing open pull request from the run's connected GitHub repository,
+select its repository-local number. Cloud captures its head when the request is accepted;
+use the optional hash when the caller has already inspected that exact revision:
+
+```sh
+useful workflow run publication create --run "$run_id" --org acme-labs --export changes \
+  --change-request 42 --expected-head "$inspected_head" --wait --json
+```
+
+An accepted update advances only the request's own source ref by a guarded fast-forward;
+it does not create another pull request or change its title, body, review state, labels,
+reviewers, draft status or base. Existing approvals **may still count** after the update,
+and preconfigured GitHub auto-merge or workflows **may proceed** under repository rules.
+Reviewers and repository owners must enforce their own approval policy; a successful
+Publication proves the guarded ref effect, not fresh human approval. A stale hash or
+ineligible request is refused at acceptance; a later race is reported on the separate
+Publication without changing the run's outcome.
+
+An explicit publication workflow first waits for a run that has an export, then creates and
+waits for the selected Publication:
+
+```sh
+set -euo pipefail
+organization=acme-labs
+
+useful workflow run show "$run_id" --org "$organization" \
+  --wait --timeout 30m --json > run-observed.json
+jq -e '.outcome == "shown" and .run.state == "succeeded"' run-observed.json >/dev/null
+
+useful workflow run publication create --run "$run_id" --org "$organization" \
+  --export changes --wait --timeout 30m --json > publication.json
+jq -e '.outcome == "succeeded"' publication.json >/dev/null
+publication_id=$(jq -er '.publication.id' publication.json)
+```
+
+For a run handed off to an automatic attempt, `workflow run show --wait --json` follows the handoff
+and that attempt and reports `.run.state`, `.run.publication`, and `.publication` in its one
+final JSON object; it exits zero on a terminal failure but retains the failure fields.
+`no_changes` and `pull_request_already_merged` are successful Publication outcomes,
+not newly created pull requests. Neither timeout nor a signal cancels remote work.
+
+Without `--wait`, `publication create` returns after Cloud accepts the attempt. With
+`--wait`, it polls the accepted Publication and exits zero only for a succeeded outcome.
+The caller may supply an opaque `--idempotency-key`; otherwise the CLI generates one and
+preserves it across the invocation's bounded acceptance retries and terminal output. The
+command never accepts a repository, base, destination branch, pull-request metadata, or
+branch-only mode. Cloud derives those values from the run and either reports
+`no_changes`, creates or exactly reuses an open pull request, reports an exact
+already-merged pull request, or stores a structured failure.
+
+`publication show` is a read: without `--wait`, it emits the current snapshot; with
+`--wait`, it polls until any terminal snapshot. Both forms exit zero when they retrieve a
+stored failed Publication, so automation using `show --wait --json` must inspect
+`outcome`. `publication list` returns only the requested page and preserves `nextCursor`
+in JSON instead of following it automatically. `--timeout` requires `--wait`; omitting it
+waits until terminal state or a process signal. Timeout, SIGINT, and SIGTERM stop only
+local observation: they do not cancel, retry, delete, merge, or otherwise mutate the
+Publication or its provider effects. Waiting JSON output is one complete document for
+terminal, timeout, or fatal read outcomes and is empty when a process signal wins.
+
+Publication consumes the run's existing private Artifact Set and grants no public
+artifact access or download URL. Plain output contains only the public Publication
+projection and credential-free, query-free provider links; it does not stream provider
+logs or expose credentials.
 
 ## Release policy
 

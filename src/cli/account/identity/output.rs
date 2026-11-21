@@ -1,0 +1,633 @@
+use std::io::{self, Write};
+
+use anyhow::Context;
+use serde::Serialize;
+use time::OffsetDateTime;
+
+use crate::exit_code::{ExitCode, OutcomeClass};
+use useful_api::{
+    CommonIdentityFailure, IdentityKind, LinkIdentityOutcome, ListIdentitiesOutcome, OidcIdentity,
+    RemoveIdentityOutcome, UnreachableCategory,
+};
+use useful_human_auth::Deployment;
+use useful_human_auth::DeviceAuthorization;
+use useful_human_auth::LocalCredentialState;
+
+pub(super) fn write_list(
+    deployment: &str,
+    outcome: &ListIdentitiesOutcome,
+    authentication: super::super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        // Identity and membership collections intentionally keep separate JSON contracts and
+        // human renderers because their item vocabularies evolve independently.
+        ListIdentitiesOutcome::Listed(page) => {
+            if json {
+                write_json(&ListResult {
+                    schema_version: 1,
+                    deployment,
+                    outcome: "listed",
+                    items: page.items.iter().map(PresentedIdentity::new).collect(),
+                    next_cursor: page.next_cursor.as_deref(),
+                })?;
+            } else {
+                write_identity_list_human(deployment, &page.items, page.next_cursor.as_deref())?;
+            }
+            Ok(ExitCode::Success)
+        }
+        ListIdentitiesOutcome::Common(common) => {
+            write_common(deployment, common, authentication, json)
+        }
+    }
+}
+
+pub(super) fn write_remove(
+    deployment: &str,
+    identity_id: &str,
+    outcome: &RemoveIdentityOutcome,
+    authentication: super::super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match outcome {
+        RemoveIdentityOutcome::Removed => {
+            if json {
+                write_json(&RemoveResult {
+                    schema_version: 1,
+                    deployment,
+                    outcome: "removed",
+                    identity_id,
+                    local_session_identity: "unchanged",
+                })?;
+            } else {
+                let stdout = io::stdout();
+                let mut stdout = stdout.lock();
+                writeln!(stdout, "✓ Linked identity removed.\n")?;
+                writeln!(stdout, "identity: {identity_id}")?;
+                writeln!(stdout, "local session identity: unchanged")?;
+                writeln!(stdout, "deployment: {deployment}")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        RemoveIdentityOutcome::Common(common) => {
+            write_common(deployment, common, authentication, json)
+        }
+        RemoveIdentityOutcome::WorkloadIdentityLinkingNotPermitted => write_failure(
+            deployment,
+            "workload_identity_linking_not_permitted",
+            None,
+            "! Workload identity management is not permitted by this deployment.\n\nAsk the deployment operator to enable workload identity linking.",
+            OutcomeClass::Forbidden,
+            json,
+        ),
+        RemoveIdentityOutcome::ReauthenticationRequired => write_failure(
+            deployment,
+            "reauthentication_required",
+            None,
+            authentication.rejected_notice(
+                "! Recent sign-in is required before removing a linked identity.\n\nSign in again with a linked identity that will remain:\n  useful account login --force",
+            ),
+            OutcomeClass::Forbidden,
+            json,
+        ),
+        RemoveIdentityOutcome::NotFound => write_failure(
+            deployment,
+            "not_found",
+            None,
+            "! Linked identity not found or unavailable.\n\nList the identities attached to your account:\n  useful account identity list",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        RemoveIdentityOutcome::RemovalUnavailable => write_failure(
+            deployment,
+            "removal_unavailable",
+            None,
+            "! The current or last linked identity cannot be removed.\n\nLink another identity, or sign in with a different linked identity before trying again.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        RemoveIdentityOutcome::IdempotencyConflict => write_failure(
+            deployment,
+            "idempotency_conflict",
+            None,
+            "! The identity-removal request conflicted with another request.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+    }
+}
+
+pub(super) struct LinkOutput {
+    json: bool,
+}
+
+struct LinkTerminal<'a> {
+    outcome: &'static str,
+    phase: Option<&'static str>,
+    category: Option<&'static str>,
+    identity: Option<&'a OidcIdentity>,
+    local_session_identity: &'static str,
+}
+
+impl LinkTerminal<'_> {
+    const fn new(outcome: &'static str) -> Self {
+        Self {
+            outcome,
+            phase: None,
+            category: None,
+            identity: None,
+            local_session_identity: "unchanged",
+        }
+    }
+
+    const fn with_credential_state(mut self, state: LocalCredentialState) -> Self {
+        self.local_session_identity = match state {
+            LocalCredentialState::Retained => "unchanged",
+            LocalCredentialState::Removed => "removed",
+        };
+        self
+    }
+}
+
+impl LinkOutput {
+    pub(super) const fn new(json: bool) -> Self {
+        Self { json }
+    }
+
+    pub(super) const fn is_json(&self) -> bool {
+        self.json
+    }
+
+    pub(super) fn activation(
+        &mut self,
+        deployment: &Deployment,
+        authorization: &DeviceAuthorization,
+        expires_at: OffsetDateTime,
+    ) -> anyhow::Result<()> {
+        // Keep identity-link presentation and its error context next to this command.
+        if self.json {
+            let event = useful_human_auth::activation_event(
+                deployment,
+                authorization,
+                expires_at,
+                Some("identity_link"),
+            )
+            .context("format identity-link activation expiration")?;
+            self.json_line(&event)
+        } else {
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
+            writeln!(stdout, "Link a sign-in identity to Useful Machinery\n")?;
+            writeln!(stdout, "open: {}", authorization.activation_uri())?;
+            writeln!(stdout, "code: {}", authorization.user_code())?;
+            writeln!(stdout, "\nSign in with the identity you want to link.")?;
+            stdout.flush().context("write identity-link activation")?;
+            let stderr = io::stderr();
+            let mut stderr = stderr.lock();
+            writeln!(stderr, "Waiting for authorization...")
+                .context("write identity-link progress")?;
+            stderr.flush().context("write identity-link progress")
+        }
+    }
+
+    pub(super) fn cancelled(&mut self, deployment: &str) -> anyhow::Result<ExitCode> {
+        self.write_terminal(
+            deployment,
+            LinkTerminal::new("cancelled"),
+            "! Identity linking cancelled.",
+            OutcomeClass::Interrupted,
+        )
+    }
+
+    pub(super) fn browser_failure(
+        &mut self,
+        deployment: &str,
+        outcome: &'static str,
+        phase: &'static str,
+        category: Option<UnreachableCategory>,
+        human: &str,
+        class: OutcomeClass,
+    ) -> anyhow::Result<ExitCode> {
+        self.write_terminal(
+            deployment,
+            LinkTerminal {
+                outcome,
+                phase: Some(phase),
+                category: category.map(UnreachableCategory::as_str),
+                identity: None,
+                local_session_identity: "unchanged",
+            },
+            human,
+            class,
+        )
+    }
+
+    pub(super) fn api_outcome(
+        &mut self,
+        deployment: &str,
+        outcome: &LinkIdentityOutcome,
+        credential_state: LocalCredentialState,
+        service_authentication: bool,
+    ) -> anyhow::Result<ExitCode> {
+        match outcome {
+            LinkIdentityOutcome::Linked(identity) => self.write_terminal(
+                deployment,
+                LinkTerminal {
+                    outcome: "linked",
+                    phase: None,
+                    category: None,
+                    identity: Some(identity),
+                    local_session_identity: "unchanged",
+                }
+                .with_credential_state(credential_state),
+                "✓ Sign-in identity linked.",
+                OutcomeClass::Success,
+            ),
+            LinkIdentityOutcome::Common(common) => match common {
+                CommonIdentityFailure::Unauthenticated => self.write_terminal(
+                    deployment,
+                    LinkTerminal::new("unauthenticated")
+                        .with_credential_state(credential_state),
+                    if service_authentication {
+                        "! The service API key was rejected.\n\nUse a different active service API key."
+                    } else {
+                        "! You must sign in before linking another identity.\n\nRun:\n  useful account login"
+                    },
+                    OutcomeClass::Unauthenticated,
+                ),
+                CommonIdentityFailure::Forbidden => self.write_terminal(
+                    deployment,
+                    LinkTerminal::new("forbidden").with_credential_state(credential_state),
+                    "! Your account is not permitted to link that identity.",
+                    OutcomeClass::Forbidden,
+                ),
+                CommonIdentityFailure::InvalidInput => self.write_terminal(
+                    deployment,
+                    LinkTerminal::new("invalid_input").with_credential_state(credential_state),
+                    "! The identity-link request was rejected by the deployment.",
+                    OutcomeClass::GeneralFailure,
+                ),
+                CommonIdentityFailure::Unreachable(category) => self.write_terminal(
+                    deployment,
+                    LinkTerminal {
+                        outcome: "unreachable",
+                        phase: None,
+                        category: Some(category.as_str()),
+                        identity: None,
+                        local_session_identity: "unchanged",
+                    }
+                    .with_credential_state(credential_state),
+                    "! The identity-link result is unknown.\n\nList linked identities before trying again:\n  useful account identity list",
+                    super::super::super::unreachable_outcome_class(*category),
+                ),
+            },
+            LinkIdentityOutcome::InvalidProof => self.write_terminal(
+                deployment,
+                LinkTerminal::new("invalid_identity_proof")
+                    .with_credential_state(credential_state),
+                if service_authentication {
+                    "! The workload identity proof was rejected.\n\nObtain a fresh token from a configured workload issuer."
+                } else {
+                    "! The newly authorized identity proof was rejected.\n\nStart the linking flow again."
+                },
+                OutcomeClass::GeneralFailure,
+            ),
+            LinkIdentityOutcome::IdentityUnavailable => self.write_terminal(
+                deployment,
+                LinkTerminal::new("identity_unavailable")
+                    .with_credential_state(credential_state),
+                "! That identity cannot be linked to this account.\n\nChoose a different identity or list the identities already linked.",
+                OutcomeClass::GeneralFailure,
+            ),
+            LinkIdentityOutcome::WorkloadIdentityLinkingNotPermitted => self.write_terminal(
+                deployment,
+                LinkTerminal::new("workload_identity_linking_not_permitted")
+                    .with_credential_state(credential_state),
+                "! Workload identity linking is not permitted by this deployment.\n\nAsk the deployment operator to enable workload identity linking.",
+                OutcomeClass::Forbidden,
+            ),
+            LinkIdentityOutcome::QuantityLimitReached => self.write_terminal(
+                deployment,
+                LinkTerminal::new("quantity_limit_reached")
+                    .with_credential_state(credential_state),
+                if service_authentication {
+                    "! The workload identity quantity limit has been reached.\n\nRemove an unused workload identity or ask the deployment operator to raise the limit."
+                } else {
+                    "! This account has reached its limit on linked identities, memberships, delegations and invitations.\n\nRemove an unused identity, then start the linking flow again:\n  useful account identity list"
+                },
+                OutcomeClass::GeneralFailure,
+            ),
+            LinkIdentityOutcome::IdempotencyConflict => self.write_terminal(
+                deployment,
+                LinkTerminal::new("idempotency_conflict")
+                    .with_credential_state(credential_state),
+                "! The identity-link request conflicted with another request.",
+                OutcomeClass::GeneralFailure,
+            ),
+        }
+    }
+
+    pub(super) fn acting_session_changed(&mut self, deployment: &str) -> anyhow::Result<ExitCode> {
+        self.write_terminal(
+            deployment,
+            LinkTerminal {
+                outcome: "acting_session_changed",
+                phase: None,
+                category: None,
+                identity: None,
+                local_session_identity: "changed",
+            },
+            "! The local sign-in changed while identity linking was in progress.\n\nStart the linking flow again.",
+            OutcomeClass::GeneralFailure,
+        )
+    }
+
+    fn write_terminal(
+        &mut self,
+        deployment: &str,
+        terminal: LinkTerminal<'_>,
+        human: &str,
+        class: OutcomeClass,
+    ) -> anyhow::Result<ExitCode> {
+        if self.json {
+            self.json_line(&LinkResultEvent {
+                schema_version: 1,
+                event: "result",
+                deployment,
+                outcome: terminal.outcome,
+                phase: terminal.phase,
+                category: terminal.category,
+                identity: terminal.identity.map(PresentedIdentity::new),
+                local_session_identity: terminal.local_session_identity,
+            })?;
+        } else if let Some(identity) = terminal.identity {
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
+            writeln!(stdout, "{human}\n")?;
+            write_identity_fields(&mut stdout, identity)?;
+            writeln!(
+                stdout,
+                "local session identity: {}",
+                terminal.local_session_identity
+            )?;
+            writeln!(stdout, "deployment: {deployment}")?;
+        } else {
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
+            writeln!(stdout, "\n{human}")?;
+        }
+        Ok(class.exit_code())
+    }
+
+    fn json_line(&mut self, value: &impl Serialize) -> anyhow::Result<()> {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        serde_json::to_writer(&mut stdout, value).context("serialize JSON identity-link event")?;
+        writeln!(stdout).context("write identity-link event")?;
+        stdout.flush().context("write identity-link event")
+    }
+}
+
+pub(super) fn write_common(
+    deployment: &str,
+    common: &CommonIdentityFailure,
+    authentication: super::super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    match common {
+        CommonIdentityFailure::Unauthenticated => write_failure(
+            deployment,
+            "unauthenticated",
+            None,
+            authentication.rejected_notice(
+                "! You must sign in before managing linked identities.\n\nRun:\n  useful account login",
+            ),
+            OutcomeClass::Unauthenticated,
+            json,
+        ),
+        CommonIdentityFailure::Forbidden => write_failure(
+            deployment,
+            "forbidden",
+            None,
+            "! Your account is not permitted to perform that identity operation.",
+            OutcomeClass::Forbidden,
+            json,
+        ),
+        CommonIdentityFailure::InvalidInput => write_failure(
+            deployment,
+            "invalid_input",
+            None,
+            "! The identity input was rejected by the deployment.",
+            OutcomeClass::GeneralFailure,
+            json,
+        ),
+        CommonIdentityFailure::Unreachable(category) => write_failure(
+            deployment,
+            "unreachable",
+            Some(category.as_str()),
+            &format!(
+                "! The Useful Machinery deployment is unreachable ({}).",
+                category.as_str()
+            ),
+            super::super::super::unreachable_outcome_class(*category),
+            json,
+        ),
+    }
+}
+
+fn write_failure(
+    deployment: &str,
+    outcome: &'static str,
+    category: Option<&'static str>,
+    human: &str,
+    class: OutcomeClass,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    if json {
+        write_json(&super::super::super::ApiFailureResult::new(
+            deployment, outcome, category,
+        ))?;
+    } else {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        writeln!(stdout, "{human}")?;
+    }
+    Ok(class.exit_code())
+}
+
+fn write_identity_list_human(
+    deployment: &str,
+    identities: &[OidcIdentity],
+    next_cursor: Option<&str>,
+) -> anyhow::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    writeln!(stdout, "✓ Linked sign-in identities listed.")?;
+    writeln!(stdout, "deployment: {deployment}")?;
+    writeln!(stdout, "count: {}", identities.len())?;
+    for identity in identities {
+        writeln!(stdout, "\n── identity ──")?;
+        write_identity_fields(&mut stdout, identity)?;
+    }
+    if let Some(next_cursor) = next_cursor {
+        writeln!(stdout, "\nnext cursor: {next_cursor}")?;
+    }
+    Ok(())
+}
+
+fn write_identity_fields(output: &mut impl Write, identity: &OidcIdentity) -> io::Result<()> {
+    writeln!(output, "identity: {}", identity.id)?;
+    if let Some(provider) = Provider::for_identity(identity) {
+        writeln!(output, "sign-in method: {}", provider.label())?;
+    }
+    writeln!(
+        output,
+        "current: {}",
+        if identity.current { "yes" } else { "no" }
+    )?;
+    if let Some(grant) = &identity.grant {
+        writeln!(output, "grant: {} ({})", grant.state, grant.id)?;
+    }
+    writeln!(output, "issuer: {}", identity.issuer)?;
+    writeln!(output, "subject: {}", identity.subject)?;
+    if let Some(email) = &identity.asserted_email {
+        writeln!(output, "asserted email: {email}")?;
+    }
+    if let Some(verified) = identity.email_verified {
+        writeln!(
+            output,
+            "email verified: {}",
+            if verified { "yes" } else { "no" }
+        )?;
+    }
+    writeln!(output, "linked: {}", identity.created_at)
+}
+
+fn write_json(value: &impl Serialize) -> anyhow::Result<()> {
+    super::super::super::write_pretty_json(value).context("write JSON identity result")
+}
+
+// Presentation hints only: authorization and linking use the exact issuer and subject,
+// never this label. GitLab's namespace was observed twice in the isolated Auth0
+// connection (UM-2562); production must reproduce it before that connection is bound.
+const AUTH0_ISSUER: &str = "https://auth.usefulmachinery.com/";
+const GITLAB_SUBJECT_PREFIX: &str = "oauth2|um-gitlab-com-signin|um-gitlab-com:";
+// A link a grant consent creates carries the provider's own issuer, as
+// gateway/internal/providertable/providers.json declares it, and the provider's raw user id.
+const PROVIDER_ISSUERS: [(&str, Provider); 3] = [
+    ("https://github.com", Provider::Github),
+    ("https://gitlab.com", Provider::Gitlab),
+    ("https://linear.app", Provider::Linear),
+];
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Provider {
+    Github,
+    Google,
+    #[serde(rename = "gitlab.com")]
+    Gitlab,
+    Linear,
+    Unknown,
+}
+
+impl Provider {
+    fn for_identity(identity: &OidcIdentity) -> Option<Self> {
+        if identity.kind == IdentityKind::WorkloadOidc {
+            return None;
+        }
+        let subject = identity.subject.as_str();
+        if identity.issuer != AUTH0_ISSUER {
+            return Some(
+                PROVIDER_ISSUERS
+                    .iter()
+                    .find(|(issuer, _)| *issuer == identity.issuer && !subject.is_empty())
+                    .map_or(Self::Unknown, |(_, provider)| *provider),
+            );
+        }
+        Some(
+            if subject
+                .strip_prefix("github|")
+                .is_some_and(|id| !id.is_empty())
+            {
+                Self::Github
+            } else if subject
+                .strip_prefix("google-oauth2|")
+                .is_some_and(|id| !id.is_empty())
+            {
+                Self::Google
+            } else if subject
+                .strip_prefix(GITLAB_SUBJECT_PREFIX)
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                Self::Gitlab
+            } else {
+                Self::Unknown
+            },
+        )
+    }
+
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Github => "GitHub",
+            Self::Google => "Google",
+            Self::Gitlab => "GitLab.com",
+            Self::Linear => "Linear",
+            Self::Unknown => "Other",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct PresentedIdentity<'a> {
+    #[serde(flatten)]
+    identity: &'a OidcIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<Provider>,
+}
+
+impl<'a> PresentedIdentity<'a> {
+    fn new(identity: &'a OidcIdentity) -> Self {
+        Self {
+            identity,
+            provider: Provider::for_identity(identity),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    items: Vec<PresentedIdentity<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    identity_id: &'a str,
+    local_session_identity: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkResultEvent<'a> {
+    schema_version: u8,
+    event: &'static str,
+    deployment: &'a str,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<PresentedIdentity<'a>>,
+    local_session_identity: &'static str,
+}

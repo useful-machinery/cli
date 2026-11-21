@@ -1020,6 +1020,7 @@ async fn workflow_execution_dispatches_start_actions_to_the_step_runtime() {
                 condition_passed: false,
                 failure_kind: None,
                 failed_child: None,
+                failure_class: None,
                 input_sources: Vec::new(),
             }
         );
@@ -6529,6 +6530,7 @@ async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
             rule: None,
             interrupted: None,
             kept: None,
+            counted: false,
         };
         let seed = runtime::ExecutionSeed::empty()
             .with_entry("design")

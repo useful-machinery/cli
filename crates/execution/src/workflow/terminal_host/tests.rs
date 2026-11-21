@@ -1669,6 +1669,7 @@ fn inspector_renders_authoritative_command_states_and_dispositions() {
                         )),
                     )
                     .unwrap(),
+                    failure_class: None,
                 }),
                 Some(timing.clone()),
                 WorkflowRunOutputDisposition::Unavailable(
@@ -3055,6 +3056,7 @@ fn complete_scripted_view(
             recovery: None,
             invocations: Vec::new(),
             failed_child: None,
+            failure_class: None,
             input_sources: Vec::new(),
         }],
         finalization: None,

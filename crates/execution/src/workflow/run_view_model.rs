@@ -964,7 +964,7 @@ impl WorkflowRunStepViewState {
 
     fn reconcile(&mut self, terminal: &super::publication::WorkflowRunStep) {
         self.state = terminal_state_kind(&terminal.state);
-        self.fact = terminal_step_fact(&terminal.state);
+        self.fact = terminal_step_fact(terminal);
         self.inherited = match &terminal.state {
             StepState::Inherited { detail, .. } => Some(detail.clone()),
             _ => None,
@@ -1304,12 +1304,13 @@ fn terminal_state_kind(state: &StepState<super::value::CapturedValue>) -> StepSt
 }
 
 fn terminal_step_fact(
-    state: &StepState<super::value::CapturedValue>,
+    terminal: &super::publication::WorkflowRunStep,
 ) -> Option<ObservedStepTransition> {
-    match state {
+    match &terminal.state {
         StepState::Inherited { .. } => None,
         StepState::Failed { detail } => Some(ObservedStepTransition::Failed {
             detail: detail.clone(),
+            failure_class: terminal.failure_class,
         }),
         StepState::Blocked { detail } => Some(ObservedStepTransition::Blocked {
             detail: detail.clone(),

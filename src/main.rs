@@ -35,8 +35,8 @@ fn main() -> ExitCode {
             ExitCode::GeneralFailure
         };
     }
-    if cli::grant::controlling_terminal::requested() {
-        return cli::grant::controlling_terminal::run();
+    if cli::account::grant::controlling_terminal::requested() {
+        return cli::account::grant::controlling_terminal::run();
     }
 
     match cli::parse(env::args_os()) {

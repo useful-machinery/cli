@@ -62,7 +62,7 @@ impl Command {
         };
         if presentation.mode() != PresentationMode::Tui {
             return Err(CommandFailure::new(anyhow!(
-                "runner watch needs a terminal on standard input and output; run `useful runner status` to print the runner's state once"
+                "runner watch needs a terminal on standard input and output; run `useful runner show` to print the runner's state once"
             )));
         }
         let socket_path = super::configured_control_socket_path(self.config.as_deref())?;
@@ -832,7 +832,7 @@ fn word<T: Serialize>(word: &OpenWord<T>) -> String {
 }
 
 fn known_word(value: impl Serialize) -> String {
-    super::status::enum_json(value).unwrap_or_else(|_| "unknown".to_owned())
+    super::show::enum_json(value).unwrap_or_else(|_| "unknown".to_owned())
 }
 
 #[cfg(test)]

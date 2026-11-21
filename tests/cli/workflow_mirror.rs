@@ -15,7 +15,8 @@ use super::workflow_continue::{
 };
 use super::workflow_definition::{Home, Tree, read_json};
 use super::workflow_run::{TreeBundle, isolated_command, run_record};
-use super::workflow_run_control::{LiveRun, refused, signalled_at_child_start_gate};
+use super::workflow_run_control::signalled_at_child_start_gate;
+use super::workflow_run_control::{LiveRun, refused};
 use super::workflow_run_create::Published;
 
 /// The login name the mirrored runs are created by, which `{{operator}}` renders.
@@ -1043,7 +1044,7 @@ fn with_a_resolution_record_the_guard_holds_by_state_id() {
 
     let renamed = tree.waiting(&stub, "AUTO-1");
     stub.clear();
-    let output = tree.run(&stub, &["withdraw", renamed.to_str().unwrap(), "--json"]);
+    let output = tree.run(&stub, &["cancel", renamed.to_str().unwrap(), "--json"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(stub.operations(), ["IssueState", "UpdateIssueState"]);
     assert_eq!(
@@ -1057,7 +1058,7 @@ fn with_a_resolution_record_the_guard_holds_by_state_id() {
     stub.issue_state("Engineering");
     let elsewhere = tree.waiting(&stub, "AUTO-2");
     stub.clear();
-    let output = tree.run(&stub, &["withdraw", elsewhere.to_str().unwrap(), "--json"]);
+    let output = tree.run(&stub, &["cancel", elsewhere.to_str().unwrap(), "--json"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(stub.operations(), ["IssueState"]);
     let writes = mirror_writes(&elsewhere);
@@ -1067,7 +1068,16 @@ fn with_a_resolution_record_the_guard_holds_by_state_id() {
 
     let unresolved = tree.waiting(&stub, "AUTO-3");
     stub.clear();
-    let output = tree.run(&stub, &["cancel", unresolved.to_str().unwrap(), "--json"]);
+    let output = tree.run(
+        &stub,
+        &[
+            "cancel",
+            unresolved.to_str().unwrap(),
+            "--control",
+            "cancel",
+            "--json",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(run_record(&unresolved)["outcome"], "canceled");
     assert_eq!(stub.bodies(), Vec::<Value>::new());
@@ -1276,7 +1286,7 @@ fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
 
     stub.clear();
     stub.issue_state("Backlog");
-    let withdrawn = tree.run(&stub, &["withdraw", run.to_str().unwrap(), "--json"]);
+    let withdrawn = tree.run(&stub, &["cancel", run.to_str().unwrap(), "--json"]);
     assert_eq!(withdrawn.status.code(), Some(0), "{withdrawn:?}");
     assert_eq!(run_record(&run)["outcome"], "withdrawn");
     assert_eq!(stub.operations(), ["IssueState"]);
@@ -1317,7 +1327,16 @@ fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     stub.issue_state("Engineering");
     let canceled = tree.waiting(&stub, "AUTO-2");
     stub.clear();
-    let output = tree.run(&stub, &["cancel", canceled.to_str().unwrap(), "--json"]);
+    let output = tree.run(
+        &stub,
+        &[
+            "cancel",
+            canceled.to_str().unwrap(),
+            "--control",
+            "cancel",
+            "--json",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(run_record(&canceled)["outcome"], "canceled");
     assert_eq!(stub.operations(), ["IssueState", "UpdateIssueState"]);
@@ -1341,8 +1360,8 @@ fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     );
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-191, REQ-LOCALRUN-186: a live run withdrawn while its stage runs
-// ends `withdrawn` once the stage finishes, and its process fires `onOutcome.withdrawn` once,
+// REQ-WFEXEC-73, REQ-LOCALRUN-191, REQ-LOCALRUN-186: a withdrawal of a live run while its stage runs
+// ends it `withdrawn` once the stage finishes, and its process fires `onOutcome.withdrawn` once,
 // moving the issue still in the owned state to the bound `Backlog`.
 #[test]
 fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
@@ -1385,7 +1404,12 @@ fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
     );
     let withdrawn = super::poll_until(
         "the live run's withdraw",
-        || tree.run(&stub, &["withdraw", "AUTO-4", "--json"]),
+        || {
+            tree.run(
+                &stub,
+                &["cancel", "AUTO-4", "--control", "withdraw", "--json"],
+            )
+        },
         |output| output.status.code() == Some(0),
     );
     let document: Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
@@ -1490,6 +1514,10 @@ fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
 // SC-CONTINUE-12, REQ-LOCALRUN-191, REQ-WFEXEC-72: a `retry` of a mirrored run's repair
 // wait that SIGINT stops before its stage's child is prepared keeps that wait and writes no
 // `onWait`, since the wait's was written when it was entered; nothing else is written either.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_kept_wait_writes_no_mirror_record() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1669,10 +1697,11 @@ fn refused_without_key(output: &Output, leaf: &str) {
     }
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-181, REQ-LOCALRUN-186: `withdraw` and
-// `cancel` of a mirrored waiting run from a shell with no Linear credential, its
-// `LINEAR_API_KEY` unset or empty and no grant token, are refused before anything changes and
-// nothing is sent, and the same `cancel` with the key ends the run and moves its issue.
+// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-181, REQ-LOCALRUN-186: `cancel`, and
+// `cancel --control cancel`, of a mirrored waiting run from a shell with no Linear credential,
+// its `LINEAR_API_KEY` unset or empty and no grant token, are refused before anything changes
+// and nothing is sent, and the same `cancel` with the key ends the run `withdrawn` and moves
+// its issue.
 #[test]
 fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_changes() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1684,12 +1713,10 @@ fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_chan
     let writes = mirror_names(&run);
     stub.clear();
     let path = run.to_str().unwrap();
-    for leaf in ["withdraw", "cancel"] {
+    for control in [&[][..], &["--control", "cancel"][..]] {
         for adjust in [without_key, with_empty_key] {
-            refused_without_key(
-                &tree.run_adjusted(&stub, &[leaf, path, "--json"], adjust),
-                leaf,
-            );
+            let args = [&["cancel", path][..], control, &["--json"]].concat();
+            refused_without_key(&tree.run_adjusted(&stub, &args, adjust), "cancel");
             assert_eq!(control_names(&run), Vec::<String>::new());
             assert_eq!(fs::read(run.join("run.json")).unwrap(), record);
             assert_eq!(fs::read(run.join("wait.json")).unwrap(), wait);
@@ -1702,15 +1729,19 @@ fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_chan
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let record = run_record(&run);
     assert_eq!(record["state"], "exited", "{record}");
-    assert_eq!(record["outcome"], "canceled", "{record}");
-    assert_eq!(control_names(&run), ["0001-cancel.json"]);
+    assert_eq!(record["outcome"], "withdrawn", "{record}");
+    assert_eq!(control_names(&run), ["0001-withdraw.json"]);
     let writes = mirror_writes(&run);
     let (name, write) = writes.last().unwrap();
     assert_eq!(name, "0004-outcome.json");
     assert_eq!(write["outcome"], "written", "{write}");
+    assert_eq!(
+        write["action"],
+        json!({"kind": "state", "state": "Backlog", "binding": "backlog"})
+    );
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-192: the check before `withdraw` ends a
+// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-192: the check before `cancel` ends a
 // mirrored waiting run is for any Linear credential: a token file that is missing and an
 // empty `USEFUL_LINEAR_ACCESS_TOKEN` are none, so it still refuses, and from a shell whose only
 // credential is `USEFUL_LINEAR_ACCESS_TOKEN` it proceeds and moves the issue with that token.
@@ -1724,17 +1755,17 @@ fn ending_a_mirrored_waiting_run_with_only_the_linear_access_token_proceeds() {
     stub.clear();
     let path = run.to_str().unwrap();
     refused_without_key(
-        &tree.run_adjusted(&stub, &["withdraw", path, "--json"], |command| {
+        &tree.run_adjusted(&stub, &["cancel", path, "--json"], |command| {
             without_key(command)
                 .env(TOKEN_FILE_VARIABLE, files.path().join("missing"))
                 .env(TOKEN_VARIABLE, "")
         }),
-        "withdraw",
+        "cancel",
     );
     assert_eq!(control_names(&run), Vec::<String>::new());
     assert_eq!(stub.bodies(), Vec::<Value>::new());
 
-    let output = tree.run_adjusted(&stub, &["withdraw", path, "--json"], |command| {
+    let output = tree.run_adjusted(&stub, &["cancel", path, "--json"], |command| {
         without_key(command).env(TOKEN_VARIABLE, "variable-token")
     });
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -1811,7 +1842,12 @@ fn resuming_an_abandoned_run_whose_withdrawal_is_recorded_without_the_key_is_ref
     let mut live = tree.held(&stub, "AUTO-5");
     let withdrawn = super::poll_until(
         "the live run's withdraw",
-        || tree.run(&stub, &["withdraw", "AUTO-5", "--json"]),
+        || {
+            tree.run(
+                &stub,
+                &["cancel", "AUTO-5", "--control", "withdraw", "--json"],
+            )
+        },
         |output| output.status.code() == Some(0),
     );
     let document: Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
@@ -1883,7 +1919,7 @@ fn resuming_an_abandoned_run_whose_withdrawal_is_recorded_without_the_key_is_ref
 }
 
 // REQ-LOCALRUN-204: a mirror whose `onOutcome` does not map the outcome writes nothing, so
-// `withdraw` without the key ends the run.
+// `cancel` without the key ends the run.
 #[test]
 fn a_mirror_that_does_not_map_the_outcome_needs_no_key() {
     let withdrawn = "      withdrawn: {state: $backlog, unless: issue.state != $ownedState}\n";
@@ -1895,7 +1931,7 @@ fn a_mirror_that_does_not_map_the_outcome_needs_no_key() {
     let writes = mirror_names(&run);
     let output = tree.run_adjusted(
         &stub,
-        &["withdraw", run.to_str().unwrap(), "--json"],
+        &["cancel", run.to_str().unwrap(), "--json"],
         without_key,
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -1937,7 +1973,11 @@ fn a_run_whose_issue_input_is_empty_has_no_mirror() {
     let document = shown_document(&tree.run(&stub, &["show", path, "--json"]));
     assert_eq!(document["mirror"], json!([]), "{document}");
 
-    let output = tree.run_adjusted(&stub, &["withdraw", path, "--json"], without_key);
+    let output = tree.run_adjusted(
+        &stub,
+        &["cancel", path, "--control", "withdraw", "--json"],
+        without_key,
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let record = run_record(&run);
     assert_eq!(record["state"], "exited", "{record}");

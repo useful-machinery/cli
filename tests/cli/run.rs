@@ -1,3 +1,4 @@
+use super::organization::{LIST_CURRENT_MEMBERSHIPS, active_memberships, request_lines};
 use super::*;
 
 use base64::Engine as _;
@@ -109,7 +110,9 @@ pub(super) mod continuation_command_tests {
 
     /// Runs `useful` with `args` and `environment` against a server that answers one accepted
     /// socket per step. Each accepted socket is a scripted response barrier, not a timed race.
-    /// Besides the named fixtures, `submitted` admits the POSTed request as it was sent, as
+    /// Besides the named fixtures, `show-failed-at-build` answers a read of the run failed at
+    /// `build`, `show-failed-waiting-at-build` that run with the `repair` wait it ended at
+    /// still in its last progress report, `submitted` admits the POSTed request as it was sent, as
     /// Cloud admits a definition-backed run (REQ-CONTINUE-84), and `violation:CODE` refuses it
     /// with that one admission violation, `conflict:SLUG` answers 409 with that problem type and
     /// no violation list, and `gone:SLUG` answers 410 with that problem type.
@@ -152,6 +155,20 @@ pub(super) mod continuation_command_tests {
                     }
                     let mut body = if step == "show-running" {
                         projection("running")
+                    } else if step == "show-failed-at-build"
+                        || step == "show-failed-waiting-at-build"
+                    {
+                        let mut run = run_body_with_state("failed");
+                        run["workflowProgress"] = serde_json::json!({
+                            "attempt": 1, "position": ["build"], "wait": null,
+                            "reportedAt": "2026-08-10T12:03:01Z",
+                        });
+                        if step == "show-failed-waiting-at-build" {
+                            run["workflowProgress"]["wait"] = serde_json::json!({
+                                "kind": "repair", "since": "2026-08-10T12:03:00Z", "step": ["build"],
+                            });
+                        }
+                        run
                     } else if step == "show-interrupted" {
                         projection("interrupted")
                     } else if step == "show-third" {
@@ -224,12 +241,16 @@ pub(super) mod continuation_command_tests {
         (output, server.join().unwrap())
     }
 
+    /// `useful workflow run retry RUN --org ORGANIZATION --from build --from test
+    /// --expected-version 7 --json`, a Cloud run's continuation (REQ-CONTINUE-55).
     fn args() -> Vec<&'static str> {
         vec![
+            "workflow",
             "run",
-            "continue",
-            ORGANIZATION,
+            "retry",
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--from",
             "build",
             "--from",
@@ -280,10 +301,12 @@ pub(super) mod continuation_command_tests {
         let (output, requests) = execute(
             &[],
             &[
+                "workflow",
                 "run",
-                "continue",
-                ORGANIZATION,
+                "retry",
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--from",
                 "build",
                 "--workflow-commit",
@@ -300,10 +323,12 @@ pub(super) mod continuation_command_tests {
         let (output, requests) = execute(
             &["submitted"],
             &[
+                "workflow",
                 "run",
-                "continue",
-                ORGANIZATION,
+                "retry",
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--from",
                 "build",
                 "--expected-version",
@@ -336,12 +361,20 @@ pub(super) mod continuation_command_tests {
         assert!(!text.contains("effective commit:"));
 
         // A receipt admitted before the replacement pair was retired keeps its replaced
-        // definition, and both the waiting command and `useful run show` still render it.
+        // definition, and both the waiting command and `useful workflow run show` still render it.
         args.push("--wait");
         let (waited, _) = execute(&["preparing", "third"], &args);
         let (shown, _) = execute(
             &["show-third"],
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
         );
         for output in [waited, shown] {
             assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -360,7 +393,15 @@ pub(super) mod continuation_command_tests {
         ] {
             let (output, requests) = execute(
                 &[state],
-                &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+                &[
+                    "workflow",
+                    "run",
+                    "show",
+                    RUN_ID,
+                    "--org",
+                    ORGANIZATION,
+                    "--allow-insecure-http",
+                ],
             );
             assert_eq!(output.status.code(), Some(0), "{output:?}");
             assert_eq!(requests.len(), 1);
@@ -379,10 +420,12 @@ pub(super) mod continuation_command_tests {
         let (output, requests) = execute(
             &["show-running", "show-interrupted"],
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--wait",
                 "--json",
                 "--allow-insecure-http",
@@ -439,7 +482,7 @@ pub(super) mod continuation_command_tests {
             (captured, observed)
         });
         let environment = deployment_environment(&api_url, credentials.to_str().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         let mut args = args();
         args.push("--wait");
         command
@@ -505,7 +548,15 @@ pub(super) mod continuation_command_tests {
         assert_eq!(requests.len(), 2);
         let (human, reads) = execute(
             &["show-third"],
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
         );
         assert_eq!(human.status.code(), Some(0), "{human:?}");
         assert_eq!(reads.len(), 1);
@@ -716,11 +767,8 @@ mod retry_command_tests {
             for (state, code) in script {
                 let (mut stream, _) = listener.accept().unwrap();
                 let lines = request_text(&mut stream);
-                let key = lines.lines().find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("idempotency-key: ")
-                        .map(str::to_owned)
-                });
+                let key = useful_test_support::request_header(&lines, "idempotency-key")
+                    .map(str::to_owned);
                 let reply = match state.as_str() {
                     "lost" => None,
                     "pending" | "applied" | "rejected" | "failed" | "applied-post" => {
@@ -788,12 +836,17 @@ mod retry_command_tests {
         (output, server.join().unwrap())
     }
 
-    fn args() -> [&'static str; 8] {
+    /// `useful workflow run retry RUN --org ORGANIZATION --all --expected-version 7 --json`, a
+    /// Cloud run's retry of every step (REQ-RETRY-30).
+    fn args() -> [&'static str; 11] {
         [
+            "workflow",
             "run",
             "retry",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--all",
             "--expected-version",
             "7",
             "--json",
@@ -1053,11 +1106,7 @@ mod retry_command_tests {
         release.send(()).unwrap();
         let request = server.join().unwrap();
         assert!(request.starts_with("POST "));
-        assert!(
-            request
-                .to_ascii_lowercase()
-                .contains(&format!("authorization: bearer {TOKEN}\r\n").to_ascii_lowercase())
-        );
+        assert!(header_value(&request, "authorization") == format!("Bearer {TOKEN}"));
         assert_eq!(output.status.code(), Some(3));
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(json["outcome"], "error");
@@ -1080,7 +1129,7 @@ mod retry_command_tests {
         .unwrap();
         fs::set_permissions(&key_file, Permissions::from_mode(0o600)).unwrap();
         let mut command = args().to_vec();
-        command.extend(["--service-api-key-file", key_file.to_str().unwrap()]);
+        command.extend(["--api-key-file", key_file.to_str().unwrap()]);
         let (output, requests) = execute(&[("pending", None), ("unauthorized", None)], &command);
         assert_eq!(output.status.code(), Some(3));
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1177,7 +1226,7 @@ mod retry_command_tests {
                 requests
             });
             let env = deployment_environment(&api_url, credentials_path.to_str().unwrap());
-            let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+            let mut command = Command::new(crate::executable());
             command
                 .args(args())
                 .stdin(Stdio::null())
@@ -1266,10 +1315,13 @@ mod retry_command_tests {
     #[test]
     fn retry_human_result_and_invalid_version() {
         let human = [
+            "workflow",
             "run",
             "retry",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--all",
             "--allow-insecure-http",
         ];
         let (output, requests) = execute(&[("pending", None), ("applied", None)], &human);
@@ -1286,10 +1338,13 @@ mod retry_command_tests {
         assert!(String::from_utf8_lossy(&rejected.stderr).contains("code: attempt_active"));
         assert_eq!(requests.len(), 2);
         let invalid = run(&[
+            "workflow",
             "run",
             "retry",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--all",
             "--expected-version",
             "0",
         ]);
@@ -1329,10 +1384,13 @@ mod retry_command_tests {
             assert!(json["receipt"].is_null());
             assert_eq!(requests.len(), 1);
             let human = [
+                "workflow",
                 "run",
                 "retry",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--all",
                 "--allow-insecure-http",
             ];
             let (output, _) = execute(&[(problem, Some(HOLDER))], &human);
@@ -1391,6 +1449,25 @@ pub(super) fn prepared_run(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile
     (server, credential_directory, credential_path)
 }
 
+/// The Cloud rows of a `useful workflow run list --json` document read from an empty home: the
+/// items of the page Cloud returned, each with where it executes.
+fn listed_cloud_rows(body: &serde_json::Value) -> serde_json::Value {
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            let mut row = item.clone();
+            row["on"] = serde_json::json!(if item["owner"].is_string() {
+                "personal"
+            } else {
+                "project"
+            });
+            row
+        })
+        .collect()
+}
+
 // REQ-TRIGGER-53
 // REQ-RUN-66
 #[test]
@@ -1416,10 +1493,12 @@ fn list_runs_filters_and_renders_text_and_json() {
     let (server, _directory, credential_path) = prepared_run(vec![reply.clone(), reply]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let arguments = [
+        "workflow",
         "run",
         "list",
+        "--org",
         ORGANIZATION,
-        "--project-id",
+        "--project",
         PROJECT_ID,
         "--state-group",
         "active",
@@ -1443,7 +1522,7 @@ fn list_runs_filters_and_renders_text_and_json() {
         String::from_utf8_lossy(&text.stderr)
     );
     let report = String::from_utf8(text.stdout).unwrap();
-    println!("useful run list {ORGANIZATION} [filters]:\n{report}");
+    println!("useful workflow run list --org {ORGANIZATION} [filters]:\n{report}");
     assert!(
         report.contains(RUN_ID)
             && report.contains("build-runner")
@@ -1460,10 +1539,15 @@ fn list_runs_filters_and_renders_text_and_json() {
     );
     let parsed: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
     println!(
-        "useful run list {ORGANIZATION} [filters] --json:\n{}",
+        "useful workflow run list --org {ORGANIZATION} [filters] --json:\n{}",
         String::from_utf8_lossy(&structured.stdout)
     );
-    assert_eq!(parsed, body);
+    assert_eq!(parsed["runs"], listed_cloud_rows(&body), "{parsed}");
+    assert_eq!(
+        parsed["cloud"]["nextCursor"], body["nextCursor"],
+        "{parsed}"
+    );
+    assert_eq!(parsed["cloud"]["projectId"], PROJECT_ID, "{parsed}");
     let requests = server.finish();
     assert_eq!(requests.len(), 2);
     for request in requests {
@@ -1549,8 +1633,10 @@ fn list_runs_accepts_full_pages_with_large_valid_contexts() {
         prepared_run(vec![reply(&earlier), reply(&body), reply(&body)]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let arguments = [
+        "workflow",
         "run",
         "list",
+        "--org",
         ORGANIZATION,
         "--limit",
         "100",
@@ -1568,7 +1654,7 @@ fn list_runs_accepts_full_pages_with_large_valid_contexts() {
     assert_eq!(
         report
             .lines()
-            .filter(|line| line.starts_with("run_"))
+            .filter(|line| line.starts_with("project · run_"))
             .count(),
         100
     );
@@ -1582,10 +1668,9 @@ fn list_runs_accepts_full_pages_with_large_valid_contexts() {
         "{}",
         String::from_utf8_lossy(&structured.stderr)
     );
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&structured.stdout).unwrap(),
-        body
-    );
+    let parsed = serde_json::from_slice::<serde_json::Value>(&structured.stdout).unwrap();
+    assert_eq!(parsed["runs"], listed_cloud_rows(&body));
+    assert_eq!(parsed["cloud"]["nextCursor"], "next-page");
     assert_eq!(server.finish().len(), 3);
 }
 
@@ -1647,6 +1732,7 @@ pub(super) fn run_body_with_state(state: &str) -> serde_json::Value {
             "phase": "running",
             "cause": "executor_shutdown",
             "executorFault": null,
+            "leaseLoss": null,
             "stopConfirmed": true
         })
     } else {
@@ -1809,7 +1895,7 @@ fn run_show_preserves_the_bound_existing_request_in_handoff_history() {
     server.finish();
 }
 
-// SC-RUN-6, REQ-RUN-82: `useful run show` shows the run's actor, passes it through in JSON,
+// SC-RUN-6, REQ-RUN-82: `useful workflow run show` shows the run's actor, passes it through in JSON,
 // and reports a run without a well-formed actor as an invalid response.
 #[test]
 fn run_show_reports_the_run_actor() {
@@ -1832,7 +1918,15 @@ fn run_show_reports_the_run_actor() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert!(output.status.success());
@@ -1862,7 +1956,7 @@ fn run_show_reports_the_run_actor() {
     }
 }
 
-// REQ-RUN-107: `useful run show` prints, after the run's actor, one line for each provider of
+// REQ-RUN-107: `useful workflow run show` prints, after the run's actor, one line for each provider of
 // the run's credential sources, none for a run that records none, and passes the member
 // through in JSON.
 #[test]
@@ -1900,7 +1994,15 @@ fn run_show_reports_each_providers_credential_source() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert!(output.status.success());
@@ -1924,7 +2026,7 @@ fn run_show_reports_each_providers_credential_source() {
     }
 }
 
-// REQ-RUN-109: `useful run show` prints, after the credential lines, one line for each entry
+// REQ-RUN-109: `useful workflow run show` prints, after the credential lines, one line for each entry
 // of the run's integration sources in the API's order, none for a run without the member,
 // and passes the member through in JSON as received or omitted.
 #[test]
@@ -1969,7 +2071,15 @@ fn run_show_reports_each_declared_integrations_source() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert!(output.status.success());
@@ -2009,12 +2119,20 @@ fn waiting_for_repair(mut body: serde_json::Value, step: serde_json::Value) -> s
     body
 }
 
-/// The plain `useful run show` report of `body`.
+/// The plain `useful workflow run show` report of `body`.
 fn run_show_plain(body: serde_json::Value) -> String {
     let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
-        &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+        &[
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
         &environment,
     );
     assert!(output.status.success(), "{output:?}");
@@ -2037,7 +2155,7 @@ fn wait_lines(report: &str) -> Vec<&str> {
         .collect()
 }
 
-// REQ-RUN-116: `useful run show` prints the workflow state after the run's state and, while
+// REQ-RUN-116: `useful workflow run show` prints the workflow state after the run's state and, while
 // it is waiting, the wait's kind, step and since; a running workflow state prints no wait, a
 // run without the member prints neither line, and a runner-reported step prints escaped.
 #[test]
@@ -2095,8 +2213,25 @@ fn run_show_names_the_workflow_state_and_the_wait() {
     );
 }
 
-// REQ-RUN-116: `useful run list` prints one wait line under a listed run whose item carries
-// `workflowWait`, none under one without, and passes both through under --json.
+// REQ-RUN-116: `useful workflow run show` names a wait for the host, as it names any other kind, rather
+// than refusing the run read.
+#[test]
+fn run_show_names_a_wait_for_the_host() {
+    let mut body = waiting_for_repair(run_body(), serde_json::json!(["design", "read"]));
+    body["workflowProgress"]["wait"]["kind"] = serde_json::json!("host");
+    let report = run_show_plain(body);
+    let waits = wait_lines(&report);
+    assert_eq!(waits.len(), 1, "{report}");
+    assert!(
+        waits[0].contains("host")
+            && waits[0].contains("design.read")
+            && waits[0].contains(REPAIR_SINCE),
+        "{report}"
+    );
+}
+
+// REQ-RUN-116: `useful workflow run list` prints one wait line under a listed Cloud run whose
+// item carries `workflowWait`, none under one without, and passes both through under --json.
 #[test]
 fn list_runs_names_a_listed_runs_wait() {
     let item = |id: &str, wait: serde_json::Value| {
@@ -2127,7 +2262,14 @@ fn list_runs_names_a_listed_runs_wait() {
     );
     let (server, _directory, credential_path) = prepared_run(vec![reply.clone(), reply]);
     let environment = deployment_environment(&server.api_url, &credential_path);
-    let arguments = ["run", "list", ORGANIZATION, "--allow-insecure-http"];
+    let arguments = [
+        "workflow",
+        "run",
+        "list",
+        "--org",
+        ORGANIZATION,
+        "--allow-insecure-http",
+    ];
     let text = run_with_env(&arguments, &environment);
     assert_eq!(text.status.code(), Some(0), "{text:?}");
     let report = String::from_utf8(text.stdout).unwrap();
@@ -2140,21 +2282,73 @@ fn list_runs_names_a_listed_runs_wait() {
             && waits[0].contains(REPAIR_SINCE),
         "{report}"
     );
-    let first = lines.iter().position(|line| line.starts_with(RUN_ID));
+    let first = lines.iter().position(|line| line.contains(RUN_ID));
     let wait = lines.iter().position(|line| *line == waits[0]);
-    let second = lines.iter().position(|line| line.starts_with(other));
+    let second = lines.iter().position(|line| line.contains(other));
     assert!(first < wait && wait < second && first.is_some(), "{report}");
 
     let structured = run_with_env(&[arguments.as_slice(), &["--json"]].concat(), &environment);
     assert_eq!(structured.status.code(), Some(0), "{structured:?}");
     let parsed: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
-    assert_eq!(parsed, body);
+    assert_eq!(parsed["runs"], listed_cloud_rows(&body), "{parsed}");
     server.finish();
 }
 
-// REQ-RUN-113: `useful run show --wait` names the wait in the observation line of a waiting
-// run, keeps reading until the run is final, and its result carries the final read's
-// workflow members as the API returned them.
+// REQ-RUN-116, REQ-RUN-117: `useful workflow run list` reads a listed run whose `workflowWait` and
+// closed `workflowProgress` wait both name the host, and prints its one wait line.
+#[test]
+fn list_runs_names_a_listed_wait_for_the_host() {
+    let body = serde_json::json!({
+        "items": [{
+            "id": RUN_ID, "displayName": "Release checks", "projectId": PROJECT_ID,
+            "workflowPath": WORKFLOW_PATH, "state": "running",
+            "createdAt": "2025-01-03T00:00:00Z", "updatedAt": "2025-01-03T01:00:00Z",
+            "integrationContext": {}, "placement": null,
+            "workflowState": "waiting",
+            "workflowWait": {"kind": "host", "since": REPAIR_SINCE, "step": ["design", "read"]},
+            "workflowOutcome": null,
+            "workflowProgress": {
+                "attempt": 1, "position": ["design", "read"],
+                "wait": {
+                    "kind": "host", "since": REPAIR_SINCE, "step": ["design", "read"],
+                    "questionCount": null,
+                },
+                "reportedAt": "2025-01-03T01:00:00Z",
+            },
+        }],
+        "nextCursor": null
+    });
+    let reply = http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[("Cache-Control", "private, no-store")],
+        &serde_json::to_vec(&body).unwrap(),
+    );
+    let (server, _directory, credential_path) = prepared_run(vec![reply]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let output = run_with_env(
+        &[
+            "workflow",
+            "run",
+            "list",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &environment,
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = String::from_utf8(output.stdout).unwrap();
+    let waits = wait_lines(&report);
+    assert_eq!(waits.len(), 1, "{report}");
+    assert!(waits[0].contains("host"), "{report}");
+    server.finish();
+}
+
+// REQ-RUN-61, REQ-RUN-113: `useful workflow run show --wait` of a Cloud run prints each
+// observed state on standard error, naming the wait of a waiting run, keeps reading until the
+// run is final, and prints one `shown` document carrying the final read's workflow members as
+// the API returned them.
 #[test]
 fn show_wait_names_the_wait_and_follows_to_the_final_state() {
     let waiting = waiting_for_repair(run_body(), serde_json::json!(["design", "read"]));
@@ -2168,10 +2362,12 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
         prepared_run(vec![run_response(waiting), run_response(finished.clone())]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--json",
             "--timeout",
@@ -2196,7 +2392,7 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
     );
     assert!(!observations[1].contains("repair"), "{stderr}");
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["outcome"], "settled");
+    assert_eq!(result["outcome"], "shown");
     assert_eq!(result["run"]["state"], "succeeded");
     assert_eq!(result["run"]["workflowState"], "exited");
     assert_eq!(
@@ -2215,7 +2411,7 @@ fn generated_client_requests_name_the_cli_version_in_the_user_agent() {
     let request = server.finish().pop().unwrap();
     assert_eq!(
         header_value(&request, "user-agent"),
-        format!("useful/{BUILD_VERSION}")
+        format!("useful/{}", crate::version())
     );
 }
 
@@ -2238,6 +2434,13 @@ pub(super) fn run_response(body: serde_json::Value) -> Vec<u8> {
 }
 
 const CANCELLATION_ID: &str = "cmd_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+/// The read `useful workflow run cancel` makes of a Cloud run before it sends anything
+/// (REQ-LOCALRUN-218): a run whose progress carries no wait, so the command goes on to the
+/// graceful cancellation request.
+fn unwaiting_read() -> Vec<u8> {
+    run_response(run_body())
+}
 
 fn cancellation_envelope(state: &str, mode: &str, run: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -2279,12 +2482,18 @@ fn cancellation_response(status: &str, key: &str, body: serde_json::Value) -> Ve
 #[test]
 fn cancellation_signal_before_acceptance_preserves_key_and_never_observes() {
     let key = "signal-recovery-key";
-    let mut server =
-        ScriptedServer::respond_with_paused_first_response(vec![cancellation_response(
-            "202 Accepted",
-            key,
-            cancellation_envelope("pending", "graceful", serde_json::Value::Null),
-        )]);
+    let mut server = ScriptedServer::start(
+        vec![
+            unwaiting_read(),
+            cancellation_response(
+                "202 Accepted",
+                key,
+                cancellation_envelope("pending", "graceful", serde_json::Value::Null),
+            ),
+        ],
+        Some(1),
+    );
+    let home = tempfile::tempdir().unwrap();
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
     write_credential_fixture(
@@ -2294,13 +2503,15 @@ fn cancellation_signal_before_acceptance_preserves_key_and_never_observes() {
         "2999-01-01T00:00:00Z",
     );
     let environment = deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -2317,7 +2528,12 @@ fn cancellation_signal_before_acceptance_preserves_key_and_never_observes() {
     for (name, value) in environment {
         command.env(name, value);
     }
+    command.env("USEFUL_HOME", home.path());
     let child = command.spawn().unwrap();
+    let read = server.next_request();
+    assert!(read.starts_with(&format!(
+        "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID} "
+    )));
     let request = server.next_request();
     assert!(request.contains("/cancellation-requests HTTP/1.1"));
     assert_eq!(header_value(&request, "idempotency-key"), key);
@@ -2361,13 +2577,15 @@ fn cancellation_signal_after_acceptance_stops_observation_without_new_post() {
         "2999-01-01T00:00:00Z",
     );
     let environment = deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--force",
             "--idempotency-key",
             key,
@@ -2385,6 +2603,8 @@ fn cancellation_signal_after_acceptance_stops_observation_without_new_post() {
     for (name, value) in environment {
         command.env(name, value);
     }
+    let home = tempfile::tempdir().unwrap();
+    command.env("USEFUL_HOME", home.path());
     let child = command.spawn().unwrap();
     let first = server.next_request();
     assert!(first.contains("/cancellation-requests HTTP/1.1"));
@@ -2408,17 +2628,20 @@ fn cancellation_signal_after_acceptance_stops_observation_without_new_post() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CANCEL-48, REQ-CANCEL-50, REQ-CANCEL-51
+// REQ-CANCEL-48, REQ-CANCEL-50, REQ-CANCEL-51, REQ-RUN-126
 #[test]
 fn cancellation_observation_failure_retains_reconciliation_identity_without_post_retry() {
     let key = "accepted-then-forbidden-key";
     for json in [true, false] {
         let mut run = run_body_with_state("interrupted");
+        run["interruption"]["cause"] = serde_json::json!("execution_lease_expired");
+        run["interruption"]["leaseLoss"] = serde_json::json!("lease_revoked_by_cloud");
         run["artifactDelivery"] = serde_json::json!({
             "state": "failed", "phase": "upload", "code": "carrier_upload_failed"
         });
         let pending = cancellation_envelope("pending", "graceful", run);
         let (server, _directory, credential_path) = prepared_run(vec![
+            unwaiting_read(),
             cancellation_response("202 Accepted", key, pending),
             problem_http_response(
                 "403 Forbidden",
@@ -2429,10 +2652,12 @@ fn cancellation_observation_failure_retains_reconciliation_identity_without_post
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -2460,7 +2685,6 @@ fn cancellation_observation_failure_retains_reconciliation_identity_without_post
                 "request state: pending",
                 "effective mode: not applied",
                 "run state: interrupted",
-                "interruption cause: executor_shutdown",
                 "stop confirmed: yes",
                 "artifact delivery: failed (upload: carrier_upload_failed)",
             ] {
@@ -2469,11 +2693,14 @@ fn cancellation_observation_failure_retains_reconciliation_identity_without_post
                     "missing {field} in {report}"
                 );
             }
+            let mut lines = report.lines();
+            assert!(lines.any(|line| line == "interruption cause: execution_lease_expired"));
+            assert!(lines.any(|line| line == "lease loss: lease_revoked_by_cloud"));
         }
         let requests = server.finish();
-        assert_eq!(requests.len(), 2);
-        assert!(requests[0].contains("/cancellation-requests HTTP/1.1"));
-        assert!(requests[1].contains(&format!(
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].contains("/cancellation-requests HTTP/1.1"));
+        assert!(requests[2].contains(&format!(
             "/cancellation-requests/{CANCELLATION_ID} HTTP/1.1"
         )));
     }
@@ -2486,10 +2713,12 @@ fn plain_force_cancellation_unknown_retains_requested_mode() {
     let (server, _directory, credential_path) = prepared_run(vec![Vec::new(), Vec::new()]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--force",
             "--idempotency-key",
             key,
@@ -2522,6 +2751,7 @@ fn plain_cancellation_timeout_retains_accepted_snapshot() {
     });
     let pending = cancellation_envelope("pending", "graceful", run);
     let mut server = ScriptedServer::respond_with_paused_last_response(vec![
+        unwaiting_read(),
         cancellation_response("202 Accepted", key, pending.clone()),
         http_response_with_headers(
             "200 OK",
@@ -2540,10 +2770,12 @@ fn plain_cancellation_timeout_retains_accepted_snapshot() {
     );
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -2571,9 +2803,9 @@ fn plain_cancellation_timeout_retains_accepted_snapshot() {
     }
     assert!(report.contains("wait_timed_out"));
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].contains("/cancellation-requests HTTP/1.1"));
-    assert!(requests[1].contains(&format!(
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].contains("/cancellation-requests HTTP/1.1"));
+    assert!(requests[2].contains(&format!(
         "/cancellation-requests/{CANCELLATION_ID} HTTP/1.1"
     )));
 }
@@ -2587,6 +2819,7 @@ fn cancellation_wait_ends_as_creation_rejection_without_inventing_a_run() {
     rejected["request"]["resolution"]["kind"] = serde_json::json!("creation_rejected");
     rejected["request"]["resolution"]["runVersion"] = serde_json::Value::Null;
     let (server, _directory, credential_path) = prepared_run(vec![
+        unwaiting_read(),
         cancellation_response("202 Accepted", key, pending),
         http_response_with_headers(
             "200 OK",
@@ -2598,10 +2831,12 @@ fn cancellation_wait_ends_as_creation_rejection_without_inventing_a_run() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -2619,7 +2854,7 @@ fn cancellation_wait_ends_as_creation_rejection_without_inventing_a_run() {
         result["cancellationRequest"]["resolution"]["kind"],
         "creation_rejected"
     );
-    assert_eq!(server.finish().len(), 2);
+    assert_eq!(server.finish().len(), 3);
 }
 
 // REQ-CANCEL-43
@@ -2646,10 +2881,12 @@ fn cancellation_wait_requires_resolved_receipt_and_terminal_run() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--force",
             "--idempotency-key",
             key,
@@ -2684,6 +2921,7 @@ fn cancellation_wait_does_not_observe_a_linked_publication() {
     let mut succeeded = run_body_with_state("succeeded");
     succeeded["publication"] = automatic_handoff("started");
     let (server, _directory, credential_path) = prepared_run(vec![
+        unwaiting_read(),
         cancellation_response(
             "202 Accepted",
             key,
@@ -2698,10 +2936,12 @@ fn cancellation_wait_does_not_observe_a_linked_publication() {
     ]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -2717,9 +2957,10 @@ fn cancellation_wait_does_not_observe_a_linked_publication() {
     assert_eq!(result["run"]["publication"]["state"], "started");
     assert!(result["publication"].is_null());
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with("POST "));
-    assert!(requests[1].contains(&format!("/cancellation-requests/{CANCELLATION_ID} ")));
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].starts_with("GET "));
+    assert!(requests[1].starts_with("POST "));
+    assert!(requests[2].contains(&format!("/cancellation-requests/{CANCELLATION_ID} ")));
 }
 
 // REQ-CANCEL-38
@@ -2728,6 +2969,7 @@ fn explicit_force_escalation_uses_a_separate_key_and_never_reuses_graceful_stren
     let normal_key = "normal-request-key";
     let force_key = "force-escalation-key";
     let (server, _directory, credential_path) = prepared_run(vec![
+        unwaiting_read(),
         cancellation_response(
             "202 Accepted",
             normal_key,
@@ -2742,10 +2984,12 @@ fn explicit_force_escalation_uses_a_separate_key_and_never_reuses_graceful_stren
     let environment = deployment_environment(&server.api_url, &credential_path);
     for (key, force) in [(normal_key, false), (force_key, true)] {
         let mut args = vec![
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--json",
@@ -2764,11 +3008,12 @@ fn explicit_force_escalation_uses_a_separate_key_and_never_reuses_graceful_stren
         );
     }
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(header_value(&requests[0], "idempotency-key"), normal_key);
-    assert_eq!(header_value(&requests[1], "idempotency-key"), force_key);
-    assert_eq!(request_body(&requests[0])["mode"], "graceful");
-    assert_eq!(request_body(&requests[1])["mode"], "force");
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].starts_with("GET "));
+    assert_eq!(header_value(&requests[1], "idempotency-key"), normal_key);
+    assert_eq!(header_value(&requests[2], "idempotency-key"), force_key);
+    assert_eq!(request_body(&requests[1])["mode"], "graceful");
+    assert_eq!(request_body(&requests[2])["mode"], "force");
 }
 
 // REQ-CANCEL-42
@@ -2777,13 +3022,16 @@ fn cancellation_local_authentication_failure_still_writes_one_json_result() {
     let environment = deployment_environment("http://127.0.0.1:1", "/dev/null/credentials.json");
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--force",
             "--idempotency-key",
             "never-dispatched-key",
-            "--service-api-key-file",
+            "--api-key-file",
             "/dev/null/api-key",
             "--json",
             "--allow-insecure-http",
@@ -2801,19 +3049,24 @@ fn cancellation_local_authentication_failure_still_writes_one_json_result() {
 #[test]
 fn cancellation_definite_rate_limit_is_not_reported_as_unknown_acceptance() {
     let key = "rate-limit-key";
-    let (server, _directory, credential_path) = prepared_run(vec![problem_http_response(
-        "429 Too Many Requests",
-        serde_json::json!({
-            "type": "https://api.usefulmachinery.com/problems/too-many-requests", "title": "Slow down", "status": 429
-        }),
-    )]);
+    let (server, _directory, credential_path) = prepared_run(vec![
+        unwaiting_read(),
+        problem_http_response(
+            "429 Too Many Requests",
+            serde_json::json!({
+                "type": "https://api.usefulmachinery.com/problems/too-many-requests", "title": "Slow down", "status": 429
+            }),
+        ),
+    ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--json",
@@ -2826,7 +3079,7 @@ fn cancellation_definite_rate_limit_is_not_reported_as_unknown_acceptance() {
     assert_eq!(result["outcome"], "error");
     assert_eq!(result["error"]["code"], "unavailable");
     assert_eq!(result["error"]["idempotencyKey"], key);
-    assert_eq!(server.finish().len(), 1);
+    assert_eq!(server.finish().len(), 2);
 }
 
 // REQ-CANCEL-42
@@ -2843,10 +3096,12 @@ fn cancellation_key_conflict_does_not_send_escalation_or_claim_acceptance() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--force",
             "--idempotency-key",
             key,
@@ -2880,10 +3135,12 @@ fn cancellation_retry_reuses_key_and_mode_without_a_second_control() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--force",
             "--idempotency-key",
             key,
@@ -2911,17 +3168,23 @@ fn cancellation_terminal_noop_and_explicit_force_preserve_receipt_and_run() {
     for (mode, flag) in [("graceful", None), ("force", Some("--force"))] {
         let key = "same-key-for-reconciliation";
         let body = run_body_with_state("succeeded");
-        let (server, _directory, credential_path) = prepared_run(vec![cancellation_response(
+        let mut responses = vec![cancellation_response(
             "200 OK",
             key,
             cancellation_envelope("resolved", mode, body.clone()),
-        )]);
+        )];
+        if flag.is_none() {
+            responses.insert(0, unwaiting_read());
+        }
+        let (server, _directory, credential_path) = prepared_run(responses);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--json",
@@ -2942,9 +3205,10 @@ fn cancellation_terminal_noop_and_explicit_force_preserve_receipt_and_run() {
         assert_eq!(document["replayed"], serde_json::Value::Null);
         assert_eq!(document["error"], serde_json::Value::Null);
         let requests = server.finish();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(header_value(&requests[0], "idempotency-key"), key);
-        assert!(requests[0].contains(&format!("\"mode\":\"{mode}\"")));
+        assert_eq!(requests.len(), if flag.is_none() { 2 } else { 1 });
+        let request = requests.last().unwrap();
+        assert_eq!(header_value(request, "idempotency-key"), key);
+        assert!(request.contains(&format!("\"mode\":\"{mode}\"")));
     }
 }
 
@@ -2964,13 +3228,15 @@ fn cancellation_rejects_slug_location_even_when_receipt_is_valid() {
             &format!("/organizations/{ORGANIZATION}/"),
         )
         .into_bytes();
-    let (server, _directory, credential_path) = prepared_run(vec![response]);
+    let (server, _directory, credential_path) = prepared_run(vec![unwaiting_read(), response]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--json",
@@ -2982,7 +3248,7 @@ fn cancellation_rejects_slug_location_even_when_receipt_is_valid() {
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["outcome"], "acceptance_unknown");
     assert_eq!(result["error"]["idempotencyKey"], key);
-    assert_eq!(server.finish().len(), 1);
+    assert_eq!(server.finish().len(), 2);
 }
 
 #[test]
@@ -2995,6 +3261,7 @@ fn cancellation_retry_can_observe_pending_receipt_with_prior_failed_attempt() {
     resolved["request"]["resolution"]["kind"] = serde_json::json!("applied");
     resolved["request"]["resolution"]["effectiveRequestId"] = serde_json::json!(CANCELLATION_ID);
     let (server, _directory, credential_path) = prepared_run(vec![
+        unwaiting_read(),
         cancellation_response("202 Accepted", key, pending),
         http_response_with_headers(
             "200 OK",
@@ -3005,10 +3272,12 @@ fn cancellation_retry_can_observe_pending_receipt_with_prior_failed_attempt() {
     ]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "cancel",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--idempotency-key",
             key,
             "--wait",
@@ -3023,21 +3292,23 @@ fn cancellation_retry_can_observe_pending_receipt_with_prior_failed_attempt() {
     assert_eq!(result["run"]["state"], "cancelled");
     assert_eq!(result["cancellationRequest"]["state"], "resolved");
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[1].contains(&format!(
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].contains(&format!(
         "/cancellation-requests/{CANCELLATION_ID} HTTP/1.1"
     )));
 }
 
-/// `useful workflow run create DEFINITION --cloud ORGANIZATION --project PROJECT`, the command
-/// that creates a Cloud run (REQ-RUN-94), with a source branch and a display name.
+/// `useful workflow run create DEFINITION --on personal --org ORGANIZATION --project PROJECT`,
+/// the command that creates a Cloud run (REQ-RUN-94), with a source branch and a display name.
 pub(super) fn create_args(json: bool) -> Vec<&'static str> {
     let mut args = vec![
         "workflow",
         "run",
         "create",
         DEFINITION_ID,
-        "--cloud",
+        "--on",
+        "personal",
+        "--org",
         ORGANIZATION,
         "--project",
         PROJECT_ID,
@@ -3222,7 +3493,11 @@ pub(super) fn request_body(request: &str) -> serde_json::Value {
 
 pub(super) fn assert_invalid_response(output: &Output) {
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    if result.get("operation").is_none() {
+    if result["command"] == "useful workflow run show" {
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(result["outcome"], "refused");
+        assert_eq!(result["diagnostics"][0]["code"], "protocol_error");
+    } else if result.get("operation").is_none() {
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(result["outcome"], "invalid_response");
     } else if result["operation"] == "create" {
@@ -3246,10 +3521,12 @@ fn run_show_with_response(response: Vec<u8>) -> (Output, ScriptedServer) {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -3290,15 +3567,35 @@ fn cloud_run_wait_flags_require_explicit_observation_and_bare_wait_is_absent() {
             "run",
             "create",
             DEFINITION_ID,
-            "--cloud",
+            "--on",
+            "personal",
+            "--org",
             ORGANIZATION,
             "--project",
             PROJECT_ID,
             "--timeout",
             "1s",
         ],
-        vec!["run", "show", ORGANIZATION, RUN_ID, "--timeout", "1s"],
-        vec!["run", "cancel", ORGANIZATION, RUN_ID, "--timeout", "1s"],
+        vec![
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--timeout",
+            "1s",
+        ],
+        vec![
+            "workflow",
+            "run",
+            "cancel",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--timeout",
+            "1s",
+        ],
         vec!["run", "wait", ORGANIZATION, RUN_ID],
     ] {
         let output = run(&args);
@@ -3321,7 +3618,7 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
         });
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut arguments = vec!["run", "show", ORGANIZATION, RUN_ID];
+        let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
             arguments.push("--json");
         }
@@ -3333,7 +3630,7 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
         assert_eq!(output.status.code(), Some(0));
         if json {
             let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(result["outcome"], "settled");
+            assert_eq!(result["outcome"], "shown");
             assert_eq!(result["run"]["state"], "succeeded");
             assert_eq!(result["run"]["publication"]["state"], "failed");
             assert_eq!(result["run"]["publication"], body["publication"]);
@@ -3341,7 +3638,7 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
             assert!(result["error"].is_null());
         } else {
             let report = String::from_utf8(output.stdout).unwrap();
-            assert!(report.starts_with('✗'));
+            assert!(report.starts_with("run: "), "{report}");
             for line in [
                 "state: succeeded",
                 "automatic publication handoff:",
@@ -3370,7 +3667,9 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
                 assert!(report.find("actor_authority_lost").unwrap() < report.find(*fact).unwrap());
             }
             if wait {
-                assert!(report.contains("useful publication create"));
+                assert!(report.contains(&format!(
+                    "useful workflow run publication create --run {RUN_ID}"
+                )));
             }
         }
         assert_eq!(server.finish().len(), 1);
@@ -3426,14 +3725,22 @@ fn human_run_observation_reports_failed_automatic_publication() {
             ),
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut args = vec!["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"];
+        let mut args = vec![
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ];
         if wait {
             args.insert(args.len() - 1, "--wait");
         }
         let output = run_with_env(&args, &environment);
         assert_eq!(output.status.code(), Some(0));
         let report = String::from_utf8(output.stdout).unwrap();
-        assert!(report.starts_with('✗'));
+        assert!(report.starts_with("run: "), "{report}");
         for line in [
             "state: succeeded",
             "automatic publication handoff:",
@@ -3466,7 +3773,9 @@ fn human_run_observation_reports_failed_automatic_publication() {
                 .unwrap_or_else(|| panic!("missing {text} in {report}"));
             assert!(report.find("provider_unavailable").unwrap() < report.find(*fact).unwrap());
         }
-        assert!(report.contains("useful publication show"));
+        assert!(report.contains(&format!(
+            "useful workflow run publication show {publication_id} --run {RUN_ID}"
+        )));
         assert_eq!(server.finish().len(), 2);
     }
 }
@@ -3524,7 +3833,15 @@ fn human_run_observation_reports_successful_automatic_publication_url() {
                 &serde_json::to_vec(&publication).unwrap(),
             ),
         ]);
-        let mut args = vec!["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"];
+        let mut args = vec![
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ];
         if wait {
             args.insert(args.len() - 1, "--wait");
         }
@@ -3534,7 +3851,7 @@ fn human_run_observation_reports_successful_automatic_publication_url() {
         );
         assert!(output.status.success());
         let report = String::from_utf8(output.stdout).unwrap();
-        assert!(report.starts_with('✓'));
+        assert!(report.starts_with("run: "), "{report}");
         assert!(report.contains("automatic publication:"));
         assert!(report.contains("  state: succeeded"));
         assert!(report.contains("pull request url: https://example.test/review/42"));
@@ -3566,10 +3883,12 @@ fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
         ]);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--json",
                 "--wait",
                 "--timeout",
@@ -3585,7 +3904,7 @@ fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
             String::from_utf8_lossy(&output.stderr)
         );
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["outcome"], "settled");
+        assert_eq!(result["outcome"], "shown");
         assert_eq!(result["run"]["state"], "succeeded");
         assert_eq!(
             result["run"]["publication"]["publicationId"],
@@ -3624,10 +3943,12 @@ fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
         prepared_run(vec![run_response(run), publication_response(failed)]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--wait",
             "--allow-insecure-http",
@@ -3636,7 +3957,7 @@ fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
     );
     assert_eq!(output.status.code(), Some(0));
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(document["outcome"], "settled");
+    assert_eq!(document["outcome"], "shown");
     assert_eq!(document["run"]["state"], "succeeded");
     assert_eq!(document["run"]["publication"]["state"], "started");
     assert_eq!(document["publication"]["state"], "failed");
@@ -3674,10 +3995,12 @@ fn run_wait_decodes_existing_target_workflow_policy_failure() {
     ]);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--json",
             "--allow-insecure-http",
@@ -3728,10 +4051,12 @@ fn run_wait_decodes_gitlab_merge_request_failure_phase() {
         ]);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--wait",
                 "--json",
                 "--allow-insecure-http",
@@ -3760,10 +4085,12 @@ fn run_plain_publication_outcomes_do_not_invent_a_new_pull_request() {
         ]);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--wait",
                 "--allow-insecure-http",
             ],
@@ -3796,13 +4123,15 @@ fn publication_observation_signal_stops_show_wait_and_retains_handoff() {
     let path = directory.path().join("credentials.json");
     write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
     let environment = deployment_environment(&server.api_url, path.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--wait",
             "--allow-insecure-http",
@@ -3836,7 +4165,7 @@ fn publication_observation_signal_stops_show_wait_and_retains_handoff() {
     assert_eq!(result["runId"], RUN_ID);
     assert_eq!(result["run"]["publication"]["state"], "started");
     assert!(result["publication"].is_null());
-    assert_eq!(result["error"]["code"], "observation_stopped");
+    assert_eq!(result["diagnostics"][0]["code"], "observation_stopped");
     assert_eq!(server.finish().len(), 0);
 }
 
@@ -3936,6 +4265,121 @@ fn download_capability_response_for_members(members: serde_json::Value) -> Vec<u
     )
 }
 
+/// Runs `workflow input-set` with `arguments` against a server that answers `responses`, and
+/// returns the output and the request lines the server received.
+fn run_input_set(responses: Vec<Vec<u8>>, arguments: &[&str]) -> (Output, Vec<String>) {
+    let (server, _credentials, credential_path) = prepared_run(responses);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let mut args = vec!["workflow", "input-set"];
+    args.extend_from_slice(arguments);
+    args.extend(["--json", "--allow-insecure-http"]);
+    let output = run_with_env(&args, &environment);
+    (output, server.finish())
+}
+
+// REQ-RUNINPUT-61
+#[test]
+fn input_set_create_acts_in_the_organization_and_project_in_effect() {
+    let input_bytes = b"input in effect\n";
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("request.txt");
+    fs::write(&path, input_bytes).unwrap();
+    let create = |organization: Option<&'static str>| {
+        let mut arguments = vec!["create", "--input-text-file", "request"];
+        arguments.push(path.to_str().unwrap());
+        if let Some(organization) = organization {
+            arguments.extend(["--org", organization]);
+        }
+        arguments.extend(["--project", PROJECT_ID]);
+        arguments
+    };
+
+    let (output, requests) = run_input_set(
+        vec![create_input_set_response(input_bytes, false)],
+        &create(Some(ORGANIZATION)),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "created");
+    assert_eq!(result["inputSet"]["id"], INPUT_SET_ID);
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].starts_with(&format!(
+            "POST /api/v1/organizations/{ORGANIZATION}/run-input-sets HTTP/1.1\r\n"
+        )),
+        "{}",
+        requests[0]
+    );
+    assert_eq!(request_body(&requests[0])["projectId"], PROJECT_ID);
+
+    let created_in_the_only_organization = http_response_with_headers(
+        "201 Created",
+        Some("application/json"),
+        &[
+            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
+            (
+                "Location",
+                &format!("/v1/organizations/{ORGANIZATION_ID}/run-input-sets/{INPUT_SET_ID}"),
+            ),
+        ],
+        &serde_json::to_vec(&scalar_input_set_body(
+            input_bytes,
+            "text",
+            "open",
+            false,
+            false,
+        ))
+        .unwrap(),
+    );
+    let (output, requests) = run_input_set(
+        vec![
+            active_memberships(&[(ORGANIZATION_ID, ORGANIZATION)]),
+            created_in_the_only_organization,
+        ],
+        &create(None),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_CURRENT_MEMBERSHIPS.trim_end(),
+            &format!("POST /api/v1/organizations/{ORGANIZATION_ID}/run-input-sets HTTP/1.1"),
+        ]
+    );
+    assert_eq!(request_body(&requests[1])["projectId"], PROJECT_ID);
+}
+
+// REQ-RUNINPUT-61
+#[test]
+fn input_set_show_reads_the_organization_the_option_names_and_nothing_before() {
+    let found = http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[],
+        &serde_json::to_vec(&scalar_input_set_body(
+            b"shown input\n",
+            "text",
+            "open",
+            false,
+            false,
+        ))
+        .unwrap(),
+    );
+    let (output, requests) =
+        run_input_set(vec![found], &["show", INPUT_SET_ID, "--org", ORGANIZATION]);
+
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "found");
+    assert_eq!(result["inputSet"]["id"], INPUT_SET_ID);
+    assert_eq!(
+        request_lines(&requests),
+        [format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/run-input-sets/{INPUT_SET_ID} HTTP/1.1"
+        )]
+    );
+}
+
 // REQ-RUNINPUT-61
 #[test]
 fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
@@ -3949,15 +4393,16 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     let environment = deployment_environment(&create_server.api_url, &credential_path);
     let create = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "create",
-            ORGANIZATION,
-            "--project-id",
-            PROJECT_ID,
             "--input-text-file",
             "request",
             path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+            "--project",
+            PROJECT_ID,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4001,14 +4446,15 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     let environment = deployment_environment(&upload_server.api_url, &credential_path);
     let upload = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "upload",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--member-file",
             "inputs/request",
             path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4045,11 +4491,12 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     let environment = deployment_environment(&seal_server.api_url, &credential_path);
     let seal = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "seal",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4070,7 +4517,7 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     let environment = deployment_environment(&consume_server.api_url, &credential_path);
     let mut arguments = create_args(true);
     let insertion = arguments.len() - 1;
-    arguments.splice(insertion..insertion, ["--input-set-id", INPUT_SET_ID]);
+    arguments.splice(insertion..insertion, ["--input-set", INPUT_SET_ID]);
     let consume = run_with_env(&arguments, &environment);
 
     assert!(consume.status.success());
@@ -4114,14 +4561,15 @@ fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let environment = deployment_environment(&upload_server.api_url, &credential_path);
     let upload = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "upload",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--member-file",
             "inputs/request",
             path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4161,11 +4609,12 @@ fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let environment = deployment_environment(&seal_server.api_url, &credential_path);
     let seal = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "seal",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4182,8 +4631,15 @@ fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let seal_key = header_value(&requests[1], "idempotency-key");
     assert_eq!(seal_key.len(), 64);
 
-    let unconfirmed = Command::new(env!("CARGO_BIN_EXE_useful"))
-        .args(["run", "input-set", "delete", ORGANIZATION, INPUT_SET_ID])
+    let unconfirmed = Command::new(crate::executable())
+        .args([
+            "workflow",
+            "input-set",
+            "delete",
+            INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
+        ])
         .output()
         .unwrap();
     assert_eq!(unconfirmed.status.code(), Some(2));
@@ -4198,12 +4654,13 @@ fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let environment = deployment_environment(&delete_server.api_url, &credential_path);
     let delete = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "delete",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--yes",
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4245,11 +4702,12 @@ fn sealing_an_already_sealed_input_set_reports_a_lifecycle_conflict() {
 
     let output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "seal",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4289,14 +4747,15 @@ fn input_set_upload_rejects_changed_member_bytes_before_capability_issue() {
 
     let output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "upload",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--member-file",
             "inputs/request",
             path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4406,14 +4865,15 @@ fn input_set_upload_resumes_one_exact_attachment_member() {
 
     let output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "upload",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--member-file",
             "inputs/evidence/000001",
             selected_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4471,11 +4931,12 @@ fn input_set_and_retained_input_show_commands_emit_structural_json() {
     let environment = deployment_environment(&input_set_server.api_url, &credential_path);
     let input_set_output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "show",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4495,11 +4956,13 @@ fn input_set_and_retained_input_show_commands_emit_structural_json() {
     let environment = deployment_environment(&retained_server.api_url, &credential_path);
     let retained_output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4552,11 +5015,13 @@ fn retained_input_show_reports_counts_bytes_and_content_expiry() {
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "input",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--allow-insecure-http",
             ],
             &environment,
@@ -4622,11 +5087,12 @@ fn run_input_http_decoders_reject_duplicate_members_before_using_success_respons
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "show",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4649,11 +5115,13 @@ fn run_input_http_decoders_reject_duplicate_members_before_using_success_respons
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4698,14 +5166,15 @@ fn run_input_http_decoders_reject_duplicate_members_before_using_success_respons
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
-            "run",
+            "workflow",
             "input-set",
             "upload",
-            ORGANIZATION,
             INPUT_SET_ID,
             "--member-file",
             "inputs/request",
             source.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -4735,11 +5204,13 @@ fn run_input_http_decoders_reject_duplicate_members_before_using_success_respons
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -4769,11 +5240,13 @@ fn retained_inputs_download_uses_inventory_bound_logical_paths() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -4804,7 +5277,7 @@ fn retained_inputs_download_uses_inventory_bound_logical_paths() {
     );
     let storage_request = storage.finish();
     assert!(storage_request.starts_with("GET /api/object?signature="));
-    assert!(!storage_request.contains("authorization:"));
+    assert!(useful_test_support::request_header(&storage_request, "authorization").is_none());
     assert_no_secret_output(
         &output,
         &[
@@ -4859,11 +5332,13 @@ fn retained_inputs_download_selects_exact_members_only() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--member",
@@ -4913,14 +5388,16 @@ fn retained_inputs_download_accepts_a_relative_destination() {
     ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let current_directory = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             "retained-inputs",
             "--json",
@@ -4960,9 +5437,18 @@ fn retained_inputs_json_download_rejects_an_unrepresentable_destination_before_t
     let destination = destination_parent
         .path()
         .join(std::ffi::OsString::from_vec(b"download-\xff".to_vec()));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
-        .args(["run", "input", "download", ORGANIZATION, RUN_ID, "--output"])
+        .args([
+            "workflow",
+            "run",
+            "input",
+            "download",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--output",
+        ])
         .arg(&destination)
         .args(["--json", "--allow-insecure-http"])
         .env_remove(CREDENTIALS_FILE_VARIABLE);
@@ -4997,11 +5483,13 @@ fn retained_input_integrity_failure_leaves_no_destination() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -5080,14 +5568,16 @@ fn interrupted_retained_input_download_removes_verified_private_staging() {
     let environment = deployment_environment(&server.api_url, &credential_path);
     let destination_parent = tempfile::tempdir().unwrap();
     let destination = destination_parent.path().join("must-not-be-committed");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
+            "workflow",
             "run",
             "input",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -5148,8 +5638,16 @@ fn interrupted_retained_input_download_removes_verified_private_staging() {
 // REQ-RUNINPUT-67
 #[test]
 fn retained_input_deletion_requires_confirmation_and_sends_one_idempotent_request() {
-    let unconfirmed = Command::new(env!("CARGO_BIN_EXE_useful"))
-        .args(["run", "input", "delete", ORGANIZATION, RUN_ID])
+    let unconfirmed = Command::new(crate::executable())
+        .args([
+            "workflow",
+            "run",
+            "input",
+            "delete",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+        ])
         .output()
         .unwrap();
     assert_eq!(unconfirmed.status.code(), Some(2));
@@ -5164,11 +5662,13 @@ fn retained_input_deletion_requires_confirmation_and_sends_one_idempotent_reques
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "input",
             "delete",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -5190,7 +5690,7 @@ fn retained_input_deletion_requires_confirmation_and_sends_one_idempotent_reques
 
 // REQ-RUNINPUT-45
 // REQ-WORKSPACE-12
-// REQ-RUN-59
+// REQ-RUN-59, REQ-LOCALRUN-189
 #[test]
 fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
     for json in [false, true] {
@@ -5210,7 +5710,7 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
         });
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut args = vec!["run", "show", ORGANIZATION, RUN_ID];
+        let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
             args.push("--json");
         }
@@ -5221,20 +5721,36 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
         assert!(output.status.success());
         assert!(output.stderr.is_empty());
         if json {
+            // A run by `workflowPath` carries none of a definition-backed run's observed
+            // fields, which the document reports as null (REQ-RUN-96).
+            let mut run = body.clone();
+            for field in [
+                "definition",
+                "subjectClaim",
+                "workflowState",
+                "workflowOutcome",
+                "workflowProgress",
+                "exits",
+            ] {
+                run[field] = serde_json::Value::Null;
+            }
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
                 serde_json::json!({
                     "schemaVersion": 1,
-                    "operation": "show",
+                    "command": "useful workflow run show",
+                    "outcome": "shown",
+                    "exitStatus": 0,
+                    "on": "project",
                     "deployment": server.api_url,
                     "organizationRef": ORGANIZATION,
                     "runId": RUN_ID,
-                    "outcome": "found",
-                    "run": body,
+                    "run": run,
                     "publication": null,
-                    "cancellationRequest": null,
-                    "replayed": null,
-                    "error": null
+                    "deliveries": null,
+                    "moreDeliveries": false,
+                    "controls": null,
+                    "moreControls": false
                 })
             );
         } else {
@@ -5336,7 +5852,7 @@ fn run_show_lists_the_other_runs_its_runner_holds() {
         body["observation"] = observation_held_with_two_runs();
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut args = vec!["run", "show", ORGANIZATION, RUN_ID];
+        let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
             args.push("--json");
         }
@@ -5354,11 +5870,6 @@ fn run_show_lists_the_other_runs_its_runner_holds() {
         } else {
             let text = String::from_utf8(output.stdout).unwrap();
             assert_reports_held_runs(&text);
-            let assignment = text.find("  assignment: assignment-b (active)").unwrap();
-            assert!(
-                assignment < text.find("runner also holds:").unwrap(),
-                "{text}"
-            );
         }
         server.finish();
     }
@@ -5387,18 +5898,27 @@ fn linear_lifecycle_body(state: &str, code: Option<&str>) -> serde_json::Value {
 fn linear_lifecycle_command(responses: Vec<Vec<u8>>, args: &[&str]) -> (Output, ScriptedServer) {
     let (server, _directory, credential_path) = prepared_run(responses);
     let environment = deployment_environment(&server.api_url, &credential_path);
-    let mut command = vec!["run", "linear"];
+    let mut command = vec!["workflow", "run", "linear"];
     command.extend_from_slice(args);
     command.push("--allow-insecure-http");
     (run_with_env(&command, &environment), server)
 }
 
-fn linear_lifecycle_show(response: Vec<u8>, json: bool) -> (Output, ScriptedServer) {
-    let mut args = vec!["show", ORGANIZATION, RUN_ID];
+/// `useful workflow run show RUN --org ORGANIZATION` of a run whose read carries `view` as its
+/// Linear lifecycle binding, or none.
+fn linear_lifecycle_show(view: Option<serde_json::Value>, json: bool) -> (Output, ScriptedServer) {
+    let mut body = run_body();
+    if let Some(view) = view {
+        body["linearLifecycle"] = view;
+    }
+    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
     if json {
         args.push("--json");
     }
-    linear_lifecycle_command(vec![response], &args)
+    args.push("--allow-insecure-http");
+    (run_with_env(&args, &environment), server)
 }
 
 fn lifecycle_identity_lines(indent: &str) -> Vec<String> {
@@ -5415,35 +5935,25 @@ fn lifecycle_identity_lines(indent: &str) -> Vec<String> {
 #[test]
 fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     let view = linear_lifecycle_body("skipped", Some("team_unmapped"));
-    let (output, server) = linear_lifecycle_show(run_response(view.clone()), true);
-    assert!(output.status.success());
+    let (output, server) = linear_lifecycle_show(Some(view.clone()), true);
+    assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-        serde_json::json!({
-            "schemaVersion": 1,
-            "operation": "show",
-            "deployment": server.api_url,
-            "organizationRef": ORGANIZATION,
-            "runId": RUN_ID,
-            "outcome": "found",
-            "linearLifecycle": view,
-            "error": null
-        })
-    );
+    let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(shown["command"], "useful workflow run show");
+    assert_eq!(shown["outcome"], "shown");
+    assert_eq!(shown["run"]["linearLifecycle"], view);
     let request = server.finish().pop().unwrap();
     assert!(request.starts_with(&format!(
-        "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/linear-lifecycle HTTP/1.1\r\n"
+        "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID} HTTP/1.1\r\n"
     )));
 
-    let (output, server) = linear_lifecycle_show(
-        run_response(linear_lifecycle_body("awaiting_event", None)),
-        false,
-    );
-    assert!(output.status.success());
+    let (output, server) =
+        linear_lifecycle_show(Some(linear_lifecycle_body("awaiting_event", None)), false);
+    assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let mut expected = lifecycle_identity_lines("");
-    expected.push("ownership state: awaiting_event".to_owned());
+    let mut expected = vec!["linear lifecycle:".to_owned()];
+    expected.extend(lifecycle_identity_lines("  "));
+    expected.push("  ownership state: awaiting_event".to_owned());
     for field in expected {
         assert!(
             stdout.lines().any(|line| line == field),
@@ -5483,41 +5993,41 @@ fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
             "updateId": "llu_01k0z6r1w8f4jy2m7q9v3x5abf"
         }
     });
-    let (output, server) = linear_lifecycle_show(run_response(view.clone()), true);
-    assert!(output.status.success());
+    let (output, server) = linear_lifecycle_show(Some(view.clone()), true);
+    assert!(output.status.success(), "{output:?}");
     let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(shown["linearLifecycle"], view);
+    assert_eq!(shown["run"]["linearLifecycle"], view);
     server.finish();
 
-    let (output, server) = linear_lifecycle_show(run_response(view), false);
-    assert!(output.status.success());
+    let (output, server) = linear_lifecycle_show(Some(view), false);
+    assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     let block = lines
         .iter()
-        .position(|line| *line == "latest update:")
+        .position(|line| *line == "  latest update:")
         .unwrap_or_else(|| panic!("no latest update block in {stdout:?}"));
     for field in [
-        "  id: llu_01k0z6r1w8f4jy2m7q9v3x5abd",
-        "  attempt: atm_01k0z6r1w8f4jy2m7q9v3x5abc",
-        "  attempt number: 2",
-        "  event: evt-7",
-        "  event type: step.failed",
-        "  event sequence: 7",
-        "  event occurred: 2026-10-26T12:07:00Z",
-        "  node: step deploy/build",
-        "  created: 2026-10-26T12:07:01Z",
-        "  updated: 2026-10-26T12:08:00Z",
-        "  state: retry_waiting",
-        "  reason code: outcome_unresolved",
-        "  cycle number: 1",
-        "  cycle deadline: 2026-10-27T12:07:00Z",
-        "  request count: 1",
-        "  retryable: true",
-        "  desired state: state-blocked",
-        "  observed state: state-progress",
-        "  next attempt: 2026-10-26T12:09:00Z",
-        "  blocking update: llu_01k0z6r1w8f4jy2m7q9v3x5abf (run run_01k0z6r1w8f4jy2m7q9v3x5abe)",
+        "    id: llu_01k0z6r1w8f4jy2m7q9v3x5abd",
+        "    attempt: atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "    attempt number: 2",
+        "    event: evt-7",
+        "    event type: step.failed",
+        "    event sequence: 7",
+        "    event occurred: 2026-10-26T12:07:00Z",
+        "    node: step deploy/build",
+        "    created: 2026-10-26T12:07:01Z",
+        "    updated: 2026-10-26T12:08:00Z",
+        "    state: retry_waiting",
+        "    reason code: outcome_unresolved",
+        "    cycle number: 1",
+        "    cycle deadline: 2026-10-27T12:07:00Z",
+        "    request count: 1",
+        "    retryable: true",
+        "    desired state: state-blocked",
+        "    observed state: state-progress",
+        "    next attempt: 2026-10-26T12:09:00Z",
+        "    blocking update: llu_01k0z6r1w8f4jy2m7q9v3x5abf (run run_01k0z6r1w8f4jy2m7q9v3x5abe)",
     ] {
         assert!(
             lines[block + 1..].contains(&field),
@@ -5531,27 +6041,24 @@ fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
 // REQ-TRIGGER-145
 #[test]
 fn linear_lifecycle_show_reports_absence_and_refuses_a_wrong_pair() {
-    let (output, server) = linear_lifecycle_show(
-        problem_http_response(
-            "404 Not Found",
-            serde_json::json!({
-                "type": "https://api.usefulmachinery.com/problems/not-found",
-                "title": "Not found",
-                "status": 404
-            }),
-        ),
-        true,
-    );
-    assert_eq!(output.status.code(), Some(1));
+    let (output, server) = linear_lifecycle_show(None, true);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["operation"], "show");
-    assert_eq!(result["outcome"], "not_found");
-    assert_eq!(result["error"]["code"], "not_found");
-    assert!(result["linearLifecycle"].is_null());
+    assert_eq!(result["outcome"], "shown");
+    assert!(result["run"]["linearLifecycle"].is_null(), "{result}");
+    server.finish();
+
+    let (output, server) = linear_lifecycle_show(None, false);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        !String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("linear lifecycle:")
+    );
     server.finish();
 
     let (output, server) = linear_lifecycle_show(
-        run_response(linear_lifecycle_body(
+        Some(linear_lifecycle_body(
             "awaiting_event",
             Some("team_unmapped"),
         )),
@@ -5588,7 +6095,7 @@ fn lifecycle_update(id: &str, state: &str, code: Option<&str>) -> serde_json::Va
     update
 }
 
-fn lifecycle_history_page() -> serde_json::Value {
+fn lifecycle_list_page() -> serde_json::Value {
     let mut exhausted = lifecycle_update(LIFECYCLE_UPDATE_ID, "failed", Some("retry_exhausted"));
     exhausted["retryable"] = serde_json::json!(true);
     exhausted["diagnostic"] =
@@ -5613,14 +6120,15 @@ fn lifecycle_problem(status: &str, problem: &str) -> Vec<u8> {
 
 // REQ-TRIGGER-145
 #[test]
-fn linear_lifecycle_history_writes_the_page_unchanged_and_each_update_as_show_does() {
-    let page = lifecycle_history_page();
+fn linear_lifecycle_list_writes_the_page_unchanged_and_each_update_as_show_does() {
+    let page = lifecycle_list_page();
     let (output, server) = linear_lifecycle_command(
         vec![run_response(page.clone())],
         &[
-            "history",
-            ORGANIZATION,
+            "list",
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--limit",
             "2",
             "--cursor",
@@ -5634,7 +6142,7 @@ fn linear_lifecycle_history_writes_the_page_unchanged_and_each_update_as_show_do
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
         serde_json::json!({
             "schemaVersion": 1,
-            "operation": "history",
+            "operation": "list",
             "deployment": server.api_url,
             "organizationRef": ORGANIZATION,
             "runId": RUN_ID,
@@ -5651,8 +6159,10 @@ fn linear_lifecycle_history_writes_the_page_unchanged_and_each_update_as_show_do
         "{request:?}"
     );
 
-    let (output, server) =
-        linear_lifecycle_command(vec![run_response(page)], &["history", ORGANIZATION, RUN_ID]);
+    let (output, server) = linear_lifecycle_command(
+        vec![run_response(page)],
+        &["list", RUN_ID, "--org", ORGANIZATION],
+    );
     assert!(output.status.success(), "{output:?}");
     let request = server.finish().pop().unwrap();
     assert!(request.starts_with(&format!(
@@ -5688,11 +6198,13 @@ fn linear_lifecycle_history_writes_the_page_unchanged_and_each_update_as_show_do
     }
     assert_eq!(blocks[2], ["next cursor: page-3"]);
 
-    let mut last = lifecycle_history_page();
+    let mut last = lifecycle_list_page();
     last.as_object_mut().unwrap().remove("nextCursor");
     last["items"].as_array_mut().unwrap().truncate(1);
-    let (output, server) =
-        linear_lifecycle_command(vec![run_response(last)], &["history", ORGANIZATION, RUN_ID]);
+    let (output, server) = linear_lifecycle_command(
+        vec![run_response(last)],
+        &["list", RUN_ID, "--org", ORGANIZATION],
+    );
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.contains("next cursor"), "{stdout:?}");
@@ -5702,14 +6214,14 @@ fn linear_lifecycle_history_writes_the_page_unchanged_and_each_update_as_show_do
 
 // REQ-TRIGGER-145
 #[test]
-fn linear_lifecycle_history_reports_absence_and_refuses_invalid_updates() {
+fn linear_lifecycle_list_reports_absence_and_refuses_invalid_updates() {
     let (output, server) = linear_lifecycle_command(
         vec![lifecycle_problem("404 Not Found", "not-found")],
-        &["history", ORGANIZATION, RUN_ID, "--json"],
+        &["list", RUN_ID, "--org", ORGANIZATION, "--json"],
     );
     assert_eq!(output.status.code(), Some(1));
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["operation"], "history");
+    assert_eq!(result["operation"], "list");
     assert_eq!(result["outcome"], "not_found");
     assert_eq!(result["error"]["code"], "not_found");
     assert!(result["updates"].is_null());
@@ -5725,11 +6237,11 @@ fn linear_lifecycle_history_reports_absence_and_refuses_invalid_updates() {
         &wrong_pair as &dyn Fn(&mut serde_json::Value),
         &empty_diagnostic,
     ] {
-        let mut page = lifecycle_history_page();
+        let mut page = lifecycle_list_page();
         change(&mut page);
         let (output, server) = linear_lifecycle_command(
             vec![run_response(page)],
-            &["history", ORGANIZATION, RUN_ID, "--json"],
+            &["list", RUN_ID, "--org", ORGANIZATION, "--json"],
         );
         assert_invalid_response(&output);
         server.finish();
@@ -5737,11 +6249,13 @@ fn linear_lifecycle_history_reports_absence_and_refuses_invalid_updates() {
 
     for limit in ["0", "101"] {
         let output = run(&[
+            "workflow",
             "run",
             "linear",
-            "history",
-            ORGANIZATION,
+            "list",
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--limit",
             limit,
         ]);
@@ -5758,8 +6272,10 @@ fn run_show_carries_the_linear_lifecycle_binding_only_when_present() {
     let (output, server) = run_show_with_response(run_response(body.clone()));
     assert!(output.status.success());
     let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(shown["outcome"], "found");
-    assert_eq!(shown["run"], body);
+    assert_eq!(shown["outcome"], "shown");
+    for (member, value) in body.as_object().unwrap() {
+        assert_eq!(&shown["run"][member], value, "{member}");
+    }
     server.finish();
 
     for with_binding in [true, false] {
@@ -5770,7 +6286,15 @@ fn run_show_carries_the_linear_lifecycle_binding_only_when_present() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert!(output.status.success());
@@ -5818,7 +6342,15 @@ fn run_show_displays_terminal_failure_and_rejection() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert!(
@@ -5846,7 +6378,7 @@ fn run_show_json_keeps_harness_failure_and_input_size_diagnostic() {
     for json in [true, false] {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut arguments = vec!["run", "show", ORGANIZATION, RUN_ID];
+        let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
             arguments.push("--json");
         }
@@ -5902,7 +6434,7 @@ fn run_show_json_keeps_workflow_validation_diagnostic() {
     for json in [true, false] {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut arguments = vec!["run", "show", ORGANIZATION, RUN_ID];
+        let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
             arguments.push("--json");
         }
@@ -5947,7 +6479,7 @@ fn run_show_distinguishes_pending_creation_and_creation_rejection() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let pending: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(pending["outcome"], "accepted");
+    assert_eq!(pending["outcome"], "pending");
     assert!(pending["run"].is_null());
     assert_eq!(pending["organizationRef"], ORGANIZATION);
     assert_eq!(pending["runId"], RUN_ID);
@@ -5968,8 +6500,8 @@ fn run_show_distinguishes_pending_creation_and_creation_rejection() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
     let rejected: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(rejected["outcome"], "error");
-    assert_eq!(rejected["error"]["code"], "creation_rejected");
+    assert_eq!(rejected["outcome"], "refused");
+    assert_eq!(rejected["diagnostics"][0]["code"], "creation_rejected");
     assert_eq!(rejected["runId"], RUN_ID);
     server.finish();
 }
@@ -5988,6 +6520,7 @@ fn run_show_renders_cancellation_interruption_and_artifact_delivery() {
         "phase": "running",
         "cause": "executor_fault",
         "executorFault": "runner_internal_failure",
+        "leaseLoss": null,
         "stopConfirmed": true
     });
     body["artifactDelivery"] = serde_json::json!({
@@ -5999,7 +6532,15 @@ fn run_show_renders_cancellation_interruption_and_artifact_delivery() {
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
-        &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+        &[
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
         &environment,
     );
 
@@ -6039,10 +6580,12 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
 
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--wait",
                 "--json",
                 "--allow-insecure-http",
@@ -6055,8 +6598,8 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["schemaVersion"], 1);
         assert_eq!(result["deployment"], server.api_url);
-        assert_eq!(result["operation"], "show");
-        assert_eq!(result["outcome"], "settled");
+        assert_eq!(result["command"], "useful workflow run show");
+        assert_eq!(result["outcome"], "shown");
         assert_eq!(result["run"]["id"], RUN_ID);
         assert_eq!(result["run"]["state"], state);
         let requests = server.finish();
@@ -6076,10 +6619,12 @@ fn show_wait_emits_the_terminal_plain_projection() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--allow-insecure-http",
         ],
@@ -6089,7 +6634,6 @@ fn show_wait_emits_the_terminal_plain_projection() {
     assert_eq!(output.status.code(), Some(0));
     assert!(!output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.lines().any(|line| line == "✓ Run observed."));
     assert!(stdout.lines().any(|line| line == format!("run: {RUN_ID}")));
     assert!(stdout.lines().any(|line| line == "state: failed"));
     server.finish();
@@ -6146,10 +6690,12 @@ fn show_wait_bounds_expiring_and_rejected_credential_refresh() {
             let invocation = scope.spawn(|| {
                 run_with_env(
                     &[
+                        "workflow",
                         "run",
                         "show",
-                        ORGANIZATION,
                         RUN_ID,
+                        "--org",
+                        ORGANIZATION,
                         "--wait",
                         "--json",
                         "--timeout",
@@ -6173,7 +6719,7 @@ fn show_wait_bounds_expiring_and_rejected_credential_refresh() {
         assert_eq!(output.status.code(), Some(1));
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["outcome"], "timed_out");
-        assert_eq!(result["error"]["code"], "wait_timed_out");
+        assert_eq!(result["diagnostics"][0]["code"], "wait_timed_out");
         assert_no_secret_output(&output, &[TOKEN, REFRESHED_TOKEN]);
         assert!(server.finish().is_empty());
         assert_eq!(requests.len(), if expiring { 1 } else { 2 });
@@ -6233,10 +6779,12 @@ fn show_wait_refreshes_authentication_and_recovers_from_one_server_failure() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--json",
             "--timeout",
@@ -6249,7 +6797,7 @@ fn show_wait_refreshes_authentication_and_recovers_from_one_server_failure() {
     assert!(output.status.success());
     assert!(!output.stderr.is_empty());
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["outcome"], "settled");
+    assert_eq!(result["outcome"], "shown");
     assert_eq!(result["run"]["id"], RUN_ID);
     assert_no_secret_output(&output, &[TOKEN, REFRESHED_TOKEN]);
     let requests = server.finish();
@@ -6266,11 +6814,21 @@ fn show_wait_refreshes_authentication_and_recovers_from_one_server_failure() {
 
 #[test]
 fn show_wait_preserves_fatal_response_classifications() {
-    let unauthenticated = run(&["run", "show", ORGANIZATION, RUN_ID, "--wait", "--json"]);
-    assert_eq!(unauthenticated.status.code(), Some(3));
+    let unauthenticated = run(&[
+        "workflow",
+        "run",
+        "show",
+        RUN_ID,
+        "--org",
+        ORGANIZATION,
+        "--wait",
+        "--json",
+    ]);
+    // Nobody is signed in, so Cloud is not asked and the run is not found (REQ-LOCALRUN-180).
+    assert_eq!(unauthenticated.status.code(), Some(1));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&unauthenticated.stdout).unwrap()["error"]["code"],
-        "authentication_required"
+        "run_not_found"
     );
 
     let cases = [
@@ -6294,7 +6852,7 @@ fn show_wait_preserves_fatal_response_classifications() {
                     "status": 404
                 }),
             ),
-            "not_found",
+            "run_not_found",
         ),
         (
             json_http_response("200 OK", serde_json::json!({"state": "running"})),
@@ -6307,10 +6865,12 @@ fn show_wait_preserves_fatal_response_classifications() {
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--wait",
                 "--json",
                 "--allow-insecure-http",
@@ -6321,9 +6881,14 @@ fn show_wait_preserves_fatal_response_classifications() {
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stderr.is_empty());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["outcome"], "error");
-        assert_eq!(result["error"]["code"], expected);
-        assert_eq!(result["runId"], RUN_ID);
+        if expected == "run_not_found" {
+            assert_eq!(result["outcome"], "error");
+            assert_eq!(result["error"]["code"], expected);
+        } else {
+            assert_eq!(result["outcome"], "refused");
+            assert_eq!(result["diagnostics"][0]["code"], expected);
+            assert_eq!(result["runId"], RUN_ID);
+        }
         server.finish();
     }
 }
@@ -6365,10 +6930,13 @@ fn pre_dispatch_refresh_outage_is_not_run_acceptance_unknown() {
                 create_args(json)
             } else {
                 let mut args = vec![
+                    "workflow",
                     "run",
                     "cancel",
-                    ORGANIZATION,
                     RUN_ID,
+                    "--org",
+                    ORGANIZATION,
+                    "--force",
                     "--idempotency-key",
                     "pre-refresh-key",
                     "--allow-insecure-http",
@@ -6444,6 +7012,7 @@ fn run_show_requires_confirmed_stops_for_contained_interruptions() {
             "phase": "running",
             "cause": cause,
             "executorFault": executor_fault,
+            "leaseLoss": null,
             "stopConfirmed": false
         });
 
@@ -6456,12 +7025,17 @@ fn run_show_requires_confirmed_stops_for_contained_interruptions() {
 
 #[test]
 fn run_show_accepts_lease_expiry_with_either_stop_confirmation() {
-    for stop_confirmed in [false, true] {
+    for (stop_confirmed, lease_loss) in [
+        (false, None),
+        (true, None),
+        (true, Some("lease_start_late")),
+    ] {
         let mut body = run_body_with_state("interrupted");
         body["interruption"] = serde_json::json!({
             "phase": "running",
             "cause": "execution_lease_expired",
             "executorFault": null,
+            "leaseLoss": lease_loss,
             "stopConfirmed": stop_confirmed
         });
 
@@ -6469,11 +7043,70 @@ fn run_show_accepts_lease_expiry_with_either_stop_confirmation() {
 
         assert!(output.status.success());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["outcome"], "found");
+        assert_eq!(result["outcome"], "shown");
         assert_eq!(
             result["run"]["interruption"]["stopConfirmed"],
             stop_confirmed
         );
+        server.finish();
+    }
+}
+
+// REQ-RUN-126, REQ-RUN-125
+#[test]
+fn run_show_prints_the_lease_loss_reason_after_the_cause() {
+    for lease_loss in [Some("lease_renewal_unreachable"), None] {
+        let mut body = run_body_with_state("interrupted");
+        body["interruption"]["cause"] = serde_json::json!("execution_lease_expired");
+        body["interruption"]["leaseLoss"] = serde_json::json!(lease_loss);
+        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let output = run_with_env(
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let mut lines = stdout.lines();
+        assert!(lines.any(|line| line == "  cause: execution_lease_expired"));
+        if lease_loss.is_some() {
+            assert!(lines.any(|line| line == "  lease loss: lease_renewal_unreachable"));
+        } else {
+            assert!(!stdout.lines().any(|line| line.starts_with("  lease loss:")));
+        }
+        server.finish();
+
+        let (output, server) = run_show_with_response(run_response(body));
+        assert!(output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            result["run"]["interruption"].get("leaseLoss"),
+            Some(&serde_json::json!(lease_loss))
+        );
+        server.finish();
+    }
+}
+
+// REQ-RUN-48, REQ-RUN-125
+#[test]
+fn run_show_refuses_lease_loss_outside_a_confirmed_lease_expiry() {
+    for (cause, stop_confirmed) in [
+        ("executor_shutdown", true),
+        ("execution_lease_expired", false),
+    ] {
+        let mut body = run_body_with_state("interrupted");
+        body["interruption"]["cause"] = serde_json::json!(cause);
+        body["interruption"]["stopConfirmed"] = serde_json::json!(stop_confirmed);
+        body["interruption"]["leaseLoss"] = serde_json::json!("lease_renewal_late");
+        let (output, server) = run_show_with_response(run_response(body));
+        assert_invalid_response(&output);
         server.finish();
     }
 }
@@ -6511,11 +7144,19 @@ fn run_semantic_response_validation_rejects_contract_invalid_values() {
 
 #[test]
 fn run_failures_use_registered_outcomes_without_exposing_secrets() {
-    let unauthenticated = run(&["run", "show", ORGANIZATION, RUN_ID, "--json"]);
-    assert_eq!(unauthenticated.status.code(), Some(3));
+    let unauthenticated = run(&[
+        "workflow",
+        "run",
+        "show",
+        RUN_ID,
+        "--org",
+        ORGANIZATION,
+        "--json",
+    ]);
+    assert_eq!(unauthenticated.status.code(), Some(1));
     let diagnostic: serde_json::Value = serde_json::from_slice(&unauthenticated.stdout).unwrap();
     assert_eq!(diagnostic["outcome"], "error");
-    assert_eq!(diagnostic["error"]["code"], "authentication_required");
+    assert_eq!(diagnostic["error"]["code"], "run_not_found");
     assert_no_secret_output(&unauthenticated, &[TOKEN]);
 
     let cases = [
@@ -6536,7 +7177,7 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
                 "title": "Not found",
                 "status": 404
             }),
-            "not_found",
+            "run_not_found",
         ),
     ];
     for (status, problem, expected) in cases {
@@ -6545,10 +7186,12 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
+                "workflow",
                 "run",
                 "show",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--json",
                 "--allow-insecure-http",
             ],
@@ -6556,8 +7199,13 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
         );
         assert_eq!(output.status.code(), Some(1));
         let diagnostic: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(diagnostic["outcome"], "error");
-        assert_eq!(diagnostic["error"]["code"], expected);
+        if expected == "run_not_found" {
+            assert_eq!(diagnostic["outcome"], "error");
+            assert_eq!(diagnostic["error"]["code"], expected);
+        } else {
+            assert_eq!(diagnostic["outcome"], "refused");
+            assert_eq!(diagnostic["diagnostics"][0]["code"], expected);
+        }
         assert_no_secret_output(&output, &[TOKEN, "unique-response-capability-material"]);
         server.finish();
     }
@@ -6586,10 +7234,12 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
     let environment = deployment_environment(&malformed.api_url, &credential_path);
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -6597,8 +7247,8 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
     );
     assert_eq!(output.status.code(), Some(1));
     let diagnostic: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(diagnostic["outcome"], "error");
-    assert_eq!(diagnostic["error"]["code"], "protocol_error");
+    assert_eq!(diagnostic["outcome"], "refused");
+    assert_eq!(diagnostic["diagnostics"][0]["code"], "protocol_error");
     assert_no_secret_output(&output, &[TOKEN]);
     malformed.finish();
 
@@ -6610,10 +7260,12 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
     let environment = deployment_environment(&api_url, credential_path.to_str().unwrap());
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -6621,8 +7273,8 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
     );
     assert_eq!(output.status.code(), Some(4));
     let diagnostic: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(diagnostic["outcome"], "error");
-    assert_eq!(diagnostic["error"]["code"], "unavailable");
+    assert_eq!(diagnostic["outcome"], "refused");
+    assert_eq!(diagnostic["diagnostics"][0]["code"], "unavailable");
     assert_no_secret_output(&output, &[TOKEN]);
 }
 
@@ -6634,10 +7286,12 @@ fn show_wait_bounds_transport_retries_and_emits_one_unavailable_result() {
 
     let output = run_with_env(
         &[
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--json",
             "--timeout",
@@ -6650,8 +7304,8 @@ fn show_wait_bounds_transport_retries_and_emits_one_unavailable_result() {
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stderr.is_empty());
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["outcome"], "error");
-    assert_eq!(result["error"]["code"], "observation_failed");
+    assert_eq!(result["outcome"], "refused");
+    assert_eq!(result["diagnostics"][0]["code"], "observation_failed");
     assert_eq!(result["runId"], RUN_ID);
     assert_eq!(server.finish().len(), 2);
 }
@@ -6676,15 +7330,17 @@ fn signals_stop_only_active_cloud_run_show_observation() {
         let environment =
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
         let args = [
+            "workflow",
             "run",
             "show",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--wait",
             "--json",
             "--allow-insecure-http",
         ];
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args(args)
             .stdin(Stdio::null())
@@ -6715,7 +7371,7 @@ fn signals_stop_only_active_cloud_run_show_observation() {
         assert!(output.stderr.is_empty());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["outcome"], "observation_stopped");
-        assert_eq!(result["error"]["code"], "observation_stopped");
+        assert_eq!(result["diagnostics"][0]["code"], "observation_stopped");
         assert_eq!(result["organizationRef"], ORGANIZATION);
         assert_eq!(result["runId"], RUN_ID);
         assert_no_secret_output(&output, &[TOKEN]);
@@ -6745,18 +7401,19 @@ fn signalled_input_set_create_reports_unknown_without_an_invented_id() {
         "2999-01-01T00:00:00Z",
     );
     let environment = deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "run",
+            "workflow",
             "input-set",
             "create",
-            ORGANIZATION,
-            "--project-id",
-            PROJECT_ID,
             "--input-text-file",
             "request",
             input_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+            "--project",
+            PROJECT_ID,
             "--json",
             "--allow-insecure-http",
         ])
@@ -6822,14 +7479,15 @@ fn signalled_input_set_seal_reports_one_unknown_receipt() {
         "2999-01-01T00:00:00Z",
     );
     let environment = deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args([
-            "run",
+            "workflow",
             "input-set",
             "seal",
-            ORGANIZATION,
             INPUT_SET_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ])
@@ -6873,10 +7531,346 @@ fn signalled_input_set_seal_reports_one_unknown_receipt() {
     assert!(server.finish().is_empty());
 }
 
-/// `useful workflow run show RUN --cloud ORGANIZATION`, `useful workflow run release RUN --cloud
-/// ORGANIZATION` and the control leaves with `--cloud` against the scripted Gateway the `useful
-/// run` tests use: `RUN` is a Cloud run id, and nothing under the `useful` home is read or
-/// written.
+/// `useful workflow run show RUN` finding `RUN` in Cloud when the home holds no such run
+/// (REQ-LOCALRUN-180) and reading it there (REQ-LOCALRUN-189).
+pub(crate) mod workflow_run_show {
+    use super::workflow_run_cloud::{
+        controls_response, definition_run, deliveries_response, document, route, show_in_cloud,
+    };
+    use super::*;
+
+    const SUBJECT: &str = "AUTO-12";
+    const OTHER_DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abd";
+    const OLDER_RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abd";
+    const OTHER_RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abe";
+
+    /// A row of the runs listing of a run of `definition` whose claim names `subject`.
+    pub(crate) fn row(id: &str, definition: &str, subject: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "displayName": null, "projectId": PROJECT_ID,
+            "workflowPath": "workflow.yaml", "state": "running",
+            "createdAt": "2026-08-10T12:00:00Z", "updatedAt": "2026-08-10T12:05:00Z",
+            "integrationContext": {}, "placement": null,
+            "definition": {"definitionId": definition, "revision": 3,
+                "treeDigest": "sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+                "workflowPath": "workflow.yaml"},
+            "subjectClaim": {"claimId": "wsc_01k0z6r1w8f4jy2m7q9v3x5abc", "subject": subject,
+                "state": "held", "releaseCause": null},
+            "owner": null, "workflowState": "running", "workflowWait": null,
+        })
+    }
+
+    /// A page of the runs listing holding `rows`, with a next cursor when `next` names one.
+    pub(crate) fn page(rows: &[serde_json::Value], next: Option<&str>) -> Vec<u8> {
+        run_response(serde_json::json!({"items": rows, "nextCursor": next}))
+    }
+
+    pub(crate) fn listing_route(group: &str, cursor: Option<&str>) -> String {
+        let cursor = cursor.map_or_else(String::new, |cursor| format!("&cursor={cursor}"));
+        format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/runs?limit=100{cursor}&stateGroup={group}"
+        )
+    }
+
+    fn routes(requests: &[String]) -> Vec<&str> {
+        requests.iter().map(|request| route(request)).collect()
+    }
+
+    // REQ-LOCALRUN-180: an ID the home lacks, with nobody signed in, is `run_not_found` naming
+    // the home and saying Cloud was not asked because nobody is signed in; nothing is sent.
+    #[test]
+    fn show_of_an_id_signed_out_names_the_home_and_sends_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let server = ScriptedServer::respond(Vec::new());
+        let credentials = private_credential_directory();
+        let credential_path = credentials.path().join("credentials.json");
+        let mut environment =
+            deployment_environment(&server.api_url, credential_path.to_str().unwrap()).to_vec();
+        environment.push(("USEFUL_HOME", home.path().to_str().unwrap()));
+        let output = run_with_env(
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--json",
+                "--allow-insecure-http",
+            ],
+            &environment,
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let missed = document(&output);
+        assert_eq!(missed["outcome"], "error", "{missed}");
+        assert_eq!(missed["error"]["code"], "run_not_found", "{missed}");
+        let message = missed["error"]["message"].as_str().unwrap();
+        assert!(message.contains(home.path().to_str().unwrap()), "{message}");
+        assert!(message.contains("nobody is signed in"), "{message}");
+        assert!(server.finish().is_empty());
+    }
+
+    // REQ-LOCALRUN-180, REQ-LOCALRUN-189: a subject no run under the home holds is the one
+    // live Cloud run whose claim names it, found in the `active` page of the runs listing and
+    // then read; `on` is `personal` for a run with an owner.
+    #[test]
+    fn show_of_a_subject_reads_the_live_cloud_run_that_claims_it() {
+        let home = tempfile::tempdir().unwrap();
+        let mut owned = definition_run();
+        owned["owner"] = serde_json::json!("prn_01k0z6r1w8f4jy2m7q9v3x5abd");
+        let (output, requests) = show_in_cloud(
+            SUBJECT,
+            &["--json"],
+            vec![
+                page(
+                    &[
+                        row(OTHER_RUN, OTHER_DEFINITION, "AUTO-13"),
+                        row(RUN_ID, DEFINITION_ID, SUBJECT),
+                    ],
+                    None,
+                ),
+                run_response(owned),
+                deliveries_response(false),
+                controls_response(&[], false),
+            ],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            routes(&requests)[..2],
+            [
+                listing_route("active", None),
+                format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}"),
+            ]
+        );
+        let shown = document(&output);
+        assert_eq!(shown["outcome"], "shown", "{shown}");
+        assert_eq!(shown["runId"], RUN_ID);
+        assert_eq!(shown["on"], "personal", "{shown}");
+    }
+
+    // REQ-LOCALRUN-180: with no live run of the subject, the `terminal` page is read and the
+    // newest of the subject's runs is the run.
+    #[test]
+    fn show_of_a_subject_with_no_live_run_reads_its_newest_ended_run() {
+        let home = tempfile::tempdir().unwrap();
+        let (output, requests) = show_in_cloud(
+            SUBJECT,
+            &["--json"],
+            vec![
+                page(&[row(OTHER_RUN, OTHER_DEFINITION, "AUTO-13")], None),
+                page(
+                    &[
+                        row(RUN_ID, DEFINITION_ID, SUBJECT),
+                        row(OLDER_RUN, DEFINITION_ID, SUBJECT),
+                    ],
+                    None,
+                ),
+                run_response(definition_run()),
+                deliveries_response(false),
+                controls_response(&[], false),
+            ],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            routes(&requests)[..3],
+            [
+                listing_route("active", None),
+                listing_route("terminal", None),
+                format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}"),
+            ]
+        );
+        assert_eq!(document(&output)["runId"], RUN_ID);
+    }
+
+    // REQ-LOCALRUN-180: runs of two definitions whose claims name the subject are refused
+    // `subject_ambiguous` with both IDs, and neither is read.
+    #[test]
+    fn show_of_a_subject_two_definitions_claim_is_ambiguous() {
+        let home = tempfile::tempdir().unwrap();
+        let (output, requests) = show_in_cloud(
+            SUBJECT,
+            &["--json"],
+            vec![page(
+                &[
+                    row(RUN_ID, DEFINITION_ID, SUBJECT),
+                    row(OTHER_RUN, OTHER_DEFINITION, SUBJECT),
+                ],
+                None,
+            )],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        let refused = document(&output);
+        assert_eq!(refused["error"]["code"], "subject_ambiguous", "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(RUN_ID) && message.contains(OTHER_RUN),
+            "{message}"
+        );
+    }
+
+    // REQ-LOCALRUN-180: a state group read to its bound, five pages, with no run of the subject
+    // is `run_not_found`, saying the bound was reached and that the run's ID finds an older
+    // run. Live runs read to the bound end the lookup: an ended run is not the answer while a
+    // live one may lie past the bound, so the ended runs are not read.
+    #[test]
+    fn show_of_a_subject_past_the_bound_says_the_bound_was_reached() {
+        let cursors = ["c1", "c2", "c3", "c4", "c5"];
+        let other = || row(OTHER_RUN, OTHER_DEFINITION, "AUTO-13");
+        let bounded = |group: &str| {
+            let mut routes = vec![listing_route(group, None)];
+            routes.extend(
+                cursors[..4]
+                    .iter()
+                    .map(|cursor| listing_route(group, Some(cursor))),
+            );
+            routes
+        };
+        let pages = || {
+            cursors
+                .map(|cursor| page(&[other()], Some(cursor)))
+                .to_vec()
+        };
+        let live = ("500 newest live runs", "500 newest ended runs");
+        let ended = (live.1, live.0);
+        for (responses, expected, (named, unnamed)) in [
+            (pages(), bounded("active"), live),
+            (
+                [vec![page(&[other()], None)], pages()].concat(),
+                [vec![listing_route("active", None)], bounded("terminal")].concat(),
+                ended,
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let (output, requests) = show_in_cloud(SUBJECT, &["--json"], responses, home.path());
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert_eq!(routes(&requests), expected);
+            let missed = document(&output);
+            assert_eq!(missed["error"]["code"], "run_not_found", "{missed}");
+            let message = missed["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains(named) && !message.contains(unnamed) && message.contains("ID"),
+                "{message}"
+            );
+        }
+    }
+
+    // REQ-LOCALRUN-189: `--attempt` reads a run under the home, so a Cloud run refuses it
+    // with exit 2 once it is found, before any read.
+    #[test]
+    fn show_of_a_cloud_run_refuses_attempt() {
+        let home = tempfile::tempdir().unwrap();
+        let (output, requests) =
+            show_in_cloud(RUN_ID, &["--attempt", "1"], Vec::new(), home.path());
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--attempt"),
+            "{output:?}"
+        );
+        assert!(requests.is_empty());
+    }
+}
+
+/// `useful workflow run input` of a Cloud run, which `RUN` names in Cloud alone: an ID is sent as
+/// given and a subject is found in the runs listing, and nothing under the `useful` home is read.
+mod workflow_run_input {
+    use super::workflow_run_cloud::{document, route};
+    use super::workflow_run_show::{listing_route, page, row};
+    use super::*;
+
+    const DEFINITION_ID: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+    /// `useful workflow run input show RUN --org ORGANIZATION --json --allow-insecure-http`
+    /// against a Gateway answering `responses` in order, with `USEFUL_HOME` at `home`: the
+    /// output and the requests served.
+    fn show(run: &str, responses: Vec<Vec<u8>>, home: &std::path::Path) -> (Output, Vec<String>) {
+        let (server, _directory, credential_path) = prepared_run(responses);
+        let mut environment = deployment_environment(&server.api_url, &credential_path).to_vec();
+        environment.push(("USEFUL_HOME", home.to_str().unwrap()));
+        let output = run_with_env(
+            &[
+                "workflow",
+                "run",
+                "input",
+                "show",
+                run,
+                "--org",
+                ORGANIZATION,
+                "--json",
+                "--allow-insecure-http",
+            ],
+            &environment,
+        );
+        assert_no_secret_output(&output, &[TOKEN]);
+        (output, server.finish())
+    }
+
+    // REQ-RUNINPUT-65, REQ-LOCALRUN-180: an ID is the Cloud run of that ID even when the home
+    // holds a run of it, which is neither read nor changed; the inventory read is the first
+    // request, and the document is the inventory document the earlier spelling printed.
+    #[test]
+    fn input_show_of_an_id_reads_the_cloud_run_and_not_the_homes() {
+        let published = super::super::workflow_run_control::PublishedWaitTree::new();
+        let (directory, id, _) = published.run("blocked");
+        let before = std::fs::read(directory.join("run.json")).unwrap();
+        let (output, requests) = show(
+            &id,
+            vec![retained_inputs_response(b"retained")],
+            std::path::Path::new(published.home.path()),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| route(request))
+                .collect::<Vec<_>>(),
+            [format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/runs/{id}/inputs"
+            )]
+        );
+        let shown = document(&output);
+        assert_eq!(shown["schemaVersion"], 1, "{shown}");
+        assert_eq!(shown["outcome"], "found", "{shown}");
+        assert_eq!(shown["inventory"]["inputSetId"], INPUT_SET_ID, "{shown}");
+        assert!(shown["deployment"].is_string(), "{shown}");
+        assert_eq!(std::fs::read(directory.join("run.json")).unwrap(), before);
+    }
+
+    // REQ-RUNINPUT-65, REQ-LOCALRUN-180: a subject is the run the runs listing names for it,
+    // whose inventory is then read.
+    #[test]
+    fn input_show_of_a_subject_finds_the_run_in_the_runs_listing() {
+        let home = tempfile::tempdir().unwrap();
+        let (output, requests) = show(
+            "AUTO-12",
+            vec![
+                page(&[row(RUN_ID, DEFINITION_ID, "AUTO-12")], None),
+                retained_inputs_response(b"retained"),
+            ],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| route(request))
+                .collect::<Vec<_>>(),
+            [
+                listing_route("active", None),
+                format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/inputs"),
+            ]
+        );
+        assert_eq!(document(&output)["outcome"], "found");
+    }
+}
+
+/// `useful workflow run show RUN`, `release` and the control leaves given a Cloud run, against
+/// the scripted Gateway this file's Cloud tests of `workflow run` use: `RUN` is a Cloud run id or
+/// subject the home lacks, and nothing under the `useful` home is read or written.
 mod workflow_run_cloud {
     use super::*;
 
@@ -6889,7 +7883,7 @@ mod workflow_run_cloud {
 
     /// A definition-backed run whose current attempt exited `planned` after it waited on an
     /// answer, holding its subject's claim.
-    fn definition_run() -> serde_json::Value {
+    pub(super) fn definition_run() -> serde_json::Value {
         let mut run = run_body_with_state("succeeded");
         run["definition"] = serde_json::json!({
             "definitionId": DEFINITION_ID, "revision": 3,
@@ -6945,7 +7939,7 @@ mod workflow_run_cloud {
         })
     }
 
-    fn deliveries_response(more: bool) -> Vec<u8> {
+    pub(super) fn deliveries_response(more: bool) -> Vec<u8> {
         let mut page = serde_json::json!({
             "items": [delivery(APPLIED_DELIVERY, "applied"), delivery(SKIPPED_DELIVERY, "skipped")],
         });
@@ -6974,7 +7968,7 @@ mod workflow_run_cloud {
     }
 
     /// A page of the run's controls holding `items`, with a cursor when `more` remain.
-    fn controls_response(items: &[serde_json::Value], more: bool) -> Vec<u8> {
+    pub(super) fn controls_response(items: &[serde_json::Value], more: bool) -> Vec<u8> {
         let mut page = serde_json::json!({"items": items});
         if more {
             page["nextCursor"] = serde_json::json!("older-controls");
@@ -7011,10 +8005,22 @@ mod workflow_run_cloud {
         )
     }
 
-    /// `useful workflow run LEAF RUN --cloud ORGANIZATION ARGS --allow-insecure-http` against a
-    /// Gateway answering `responses` in order, with `USEFUL_HOME` at `home`: the output and the
-    /// requests served.
-    fn cloud(
+    /// `useful workflow run show RUN --org ORGANIZATION ARGS --allow-insecure-http`, as
+    /// [`in_cloud`] runs it.
+    pub(super) fn show_in_cloud(
+        run: &str,
+        args: &[&str],
+        responses: Vec<Vec<u8>>,
+        home: &std::path::Path,
+    ) -> (Output, Vec<String>) {
+        in_cloud("show", run, args, responses, home)
+    }
+
+    /// `useful workflow run LEAF RUN --org ORGANIZATION ARGS --allow-insecure-http`, the leaf
+    /// finding `RUN` under the home and then in Cloud (REQ-LOCALRUN-180), against a Gateway
+    /// answering `responses` in order, with `USEFUL_HOME` at `home`: the output and the
+    /// requests served. `--org` costs no request, so the Gateway sees the leaf's own.
+    fn in_cloud(
         leaf: &str,
         run: &str,
         args: &[&str],
@@ -7024,7 +8030,7 @@ mod workflow_run_cloud {
         let (server, _directory, credential_path) = prepared_run(responses);
         let mut environment = deployment_environment(&server.api_url, &credential_path).to_vec();
         environment.push(("USEFUL_HOME", home.to_str().unwrap()));
-        let mut all = vec!["workflow", "run", leaf, run, "--cloud", ORGANIZATION];
+        let mut all = vec!["workflow", "run", leaf, run, "--org", ORGANIZATION];
         all.extend_from_slice(args);
         all.push("--allow-insecure-http");
         let output = run_with_env(&all, &environment);
@@ -7032,11 +8038,11 @@ mod workflow_run_cloud {
         (output, server.finish())
     }
 
-    fn document(output: &Output) -> serde_json::Value {
+    pub(super) fn document(output: &Output) -> serde_json::Value {
         serde_json::from_slice(&output.stdout).unwrap_or_else(|_| panic!("{output:?}"))
     }
 
-    fn route(request: &str) -> &str {
+    pub(super) fn route(request: &str) -> &str {
         request
             .lines()
             .next()
@@ -7044,14 +8050,14 @@ mod workflow_run_cloud {
             .trim_end_matches(" HTTP/1.1")
     }
 
-    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-LOCALRUN-189, REQ-LOCALRUN-180: Cloud show
-    // reads the run and the newest page of its deliveries, and reports the definition
-    // identity, claim, workflow state and outcome, progress, exits and deliveries.
+    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-LOCALRUN-189, REQ-LOCALRUN-180: `show` of an ID
+    // the home lacks reads the Cloud run first, then the newest page of its deliveries and of
+    // its controls, and reports where it executes, the deployment, the definition identity,
+    // claim, workflow state and outcome, progress, exits and deliveries.
     #[test]
     fn cloud_show_reports_a_definition_runs_identity_observations_and_deliveries() {
         let home = tempfile::tempdir().unwrap();
-        let (output, requests) = cloud(
-            "show",
+        let (output, requests) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![
@@ -7081,6 +8087,13 @@ mod workflow_run_cloud {
         assert_eq!(shown["command"], "useful workflow run show");
         assert_eq!(shown["outcome"], "shown");
         assert_eq!(shown["exitStatus"], 0);
+        assert_eq!(shown["on"], "project", "{shown}");
+        assert!(
+            shown["deployment"]
+                .as_str()
+                .is_some_and(|deployment| deployment.ends_with("/api")),
+            "{shown}"
+        );
         assert_eq!(shown["organizationRef"], ORGANIZATION);
         assert!(shown.get("runDirectory").is_none(), "{shown}");
         let fixture = definition_run();
@@ -7119,8 +8132,7 @@ mod workflow_run_cloud {
         assert_eq!(shown["moreDeliveries"], true);
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &[],
             vec![
@@ -7171,8 +8183,7 @@ mod workflow_run_cloud {
     /// Cloud show of `run` with `args`: its successful output.
     fn shown(run: serde_json::Value, args: &[&str]) -> Output {
         let home = tempfile::tempdir().unwrap();
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             args,
             vec![
@@ -7414,10 +8425,11 @@ mod workflow_run_cloud {
 
     // REQ-RUN-96: Cloud show of an exited run whose claim is still held names the subject,
     // the `subject-settled` refusal a start for it reads, and the release command with the
-    // run and organization as given; a released claim or a live run adds no release command.
+    // run's ID, which finds the run itself; a released claim or a live run adds no release
+    // command.
     #[test]
     fn cloud_show_says_how_to_release_an_exited_runs_held_claim() {
-        let release = format!("workflow run release {RUN_ID} --cloud {ORGANIZATION}");
+        let release = format!("useful workflow run release {RUN_ID}\n");
         let text = String::from_utf8(shown(definition_run(), &[]).stdout).unwrap();
         for fact in ["AUTO-7", "subject-settled", release.as_str()] {
             assert!(text.contains(fact), "{fact} missing from {text}");
@@ -7489,8 +8501,7 @@ mod workflow_run_cloud {
     fn cloud_show_reports_a_runs_owner_route_and_what_it_waits_for() {
         let home = tempfile::tempdir().unwrap();
         let fixture = queued_owned_run(offline_since_last_seen());
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![run_response(fixture.clone())],
@@ -7505,21 +8516,14 @@ mod workflow_run_cloud {
             fixture["observation"]["waiting"]
         );
 
-        let (output, _) = cloud(
-            "show",
-            RUN_ID,
-            &[],
-            vec![run_response(fixture)],
-            home.path(),
-        );
+        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(fixture)], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_reports_owned_route(&String::from_utf8(output.stdout).unwrap());
 
         let mut unowned = queued_owned_run(serde_json::Value::Null);
         unowned["owner"] = serde_json::Value::Null;
         unowned["routing"] = serde_json::Value::Null;
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![run_response(unowned.clone())],
@@ -7534,13 +8538,7 @@ mod workflow_run_cloud {
             run["observation"].get("waiting"),
             Some(&serde_json::Value::Null)
         );
-        let (output, _) = cloud(
-            "show",
-            RUN_ID,
-            &[],
-            vec![run_response(unowned)],
-            home.path(),
-        );
+        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(unowned)], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(reported(&text, "owner"), Some("none"), "{text}");
@@ -7548,13 +8546,7 @@ mod workflow_run_cloud {
         assert_eq!(reported(&text, "waiting"), None, "{text}");
 
         let unrecognized = queued_owned_run(serde_json::json!({"reason": "runners_asleep"}));
-        let (output, _) = cloud(
-            "show",
-            RUN_ID,
-            &[],
-            vec![run_response(unrecognized)],
-            home.path(),
-        );
+        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(unrecognized)], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(reported(&text, "waiting"), Some("runners_asleep"), "{text}");
@@ -7568,8 +8560,7 @@ mod workflow_run_cloud {
         let home = tempfile::tempdir().unwrap();
         let mut held = run_body_with_state("running");
         held["observation"] = observation_held_with_two_runs();
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![run_response(held.clone())],
@@ -7581,12 +8572,11 @@ mod workflow_run_cloud {
             held["observation"]["heldWith"]
         );
 
-        let (output, _) = cloud("show", RUN_ID, &[], vec![run_response(held)], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(held)], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_reports_held_runs(&String::from_utf8(output.stdout).unwrap());
 
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &[],
             vec![run_response(queued_owned_run(offline_since_last_seen()))],
@@ -7597,7 +8587,7 @@ mod workflow_run_cloud {
         assert_eq!(reported_held_runs(&text), None, "{text}");
     }
 
-    // REQ-RUN-101: `useful run show` names the same owner, route and waiting reason.
+    // REQ-RUN-101: `useful workflow run show` names the same owner, route and waiting reason.
     #[test]
     fn run_show_reports_a_runs_owner_route_and_what_it_waits_for() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(
@@ -7605,7 +8595,15 @@ mod workflow_run_cloud {
         )]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
-            &["run", "show", ORGANIZATION, RUN_ID, "--allow-insecure-http"],
+            &[
+                "workflow",
+                "run",
+                "show",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
             &environment,
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -7619,8 +8617,7 @@ mod workflow_run_cloud {
     #[test]
     fn cloud_show_of_a_path_run_reads_no_deliveries_and_reports_unknown_fields_as_null() {
         let home = tempfile::tempdir().unwrap();
-        let (output, requests) = cloud(
-            "show",
+        let (output, requests) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![run_response(run_body())],
@@ -7645,13 +8642,7 @@ mod workflow_run_cloud {
         assert_eq!(shown["controls"], serde_json::Value::Null);
         assert_eq!(shown["moreControls"], false);
 
-        let (output, _) = cloud(
-            "show",
-            RUN_ID,
-            &[],
-            vec![run_response(run_body())],
-            home.path(),
-        );
+        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(run_body())], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert!(String::from_utf8(output.stdout).unwrap().contains(RUN_ID));
     }
@@ -7720,8 +8711,7 @@ mod workflow_run_cloud {
                 None,
             ),
         ];
-        let (output, requests) = cloud(
-            "show",
+        let (output, requests) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![
@@ -7748,8 +8738,7 @@ mod workflow_run_cloud {
         assert_eq!(listed["controls"], serde_json::json!(controls));
         assert_eq!(listed["moreControls"], true);
 
-        let (output, _) = cloud(
-            "show",
+        let (output, _) = show_in_cloud(
             RUN_ID,
             &[],
             vec![
@@ -7786,7 +8775,11 @@ mod workflow_run_cloud {
             Some("not shown"),
             "{text}"
         );
-        assert_eq!(reported(&text, "cancellation"), None, "{text}");
+        assert_eq!(
+            reported_list(&text, "cancellation"),
+            Some(("", vec!["none"])),
+            "{text}"
+        );
         let position = |label: &str| text.lines().position(|line| line.starts_with(label));
         assert!(position("exits:") < position("controls:"), "{text}");
         assert!(position("controls:") < position("deliveries:"), "{text}");
@@ -7797,7 +8790,18 @@ mod workflow_run_cloud {
             "mode": "graceful", "gracefulRequestId": CANCELLATION_ID, "forceRequestId": null,
         });
         let text = String::from_utf8(shown(cancelling, &[]).stdout).unwrap();
-        assert_eq!(reported(&text, "cancellation"), Some("graceful"), "{text}");
+        assert_eq!(
+            reported_list(&text, "cancellation"),
+            Some((
+                "",
+                vec![
+                    "mode: graceful",
+                    &*format!("graceful request: {CANCELLATION_ID}"),
+                    "force request: none",
+                ]
+            )),
+            "{text}"
+        );
         assert_eq!(
             reported_list(&text, "controls"),
             Some(("none", vec![])),
@@ -7807,16 +8811,14 @@ mod workflow_run_cloud {
         assert_eq!(none["controls"], serde_json::json!([]));
         assert_eq!(none["moreControls"], false);
 
-        let failed_deliveries = cloud(
-            "show",
+        let failed_deliveries = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![run_response(withdrawn_run()), server_error()],
             home.path(),
         )
         .0;
-        let (failed_controls, _) = cloud(
-            "show",
+        let (failed_controls, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![
@@ -7828,7 +8830,7 @@ mod workflow_run_cloud {
         );
         let refused = document(&failed_controls);
         assert_eq!(refused["outcome"], "refused", "{refused}");
-        assert!(refused.get("controls").is_none(), "{refused}");
+        assert!(refused["controls"].is_null(), "{refused}");
         assert_eq!(
             (
                 failed_controls.status.code(),
@@ -7842,12 +8844,12 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-189: a run Cloud does not find is refused without reading any local run.
+    // REQ-LOCALRUN-180: an ID the home lacks is read in Cloud, and a run Cloud does not find
+    // is `run_not_found`, naming the home and the organization, with no local run read.
     #[test]
-    fn cloud_show_reports_a_missing_run_and_a_rejected_session() {
+    fn show_of_an_id_cloud_does_not_find_names_where_it_looked() {
         let home = tempfile::tempdir().unwrap();
-        let (output, _) = cloud(
-            "show",
+        let (output, requests) = show_in_cloud(
             RUN_ID,
             &["--json"],
             vec![problem_http_response(
@@ -7857,10 +8859,21 @@ mod workflow_run_cloud {
             home.path(),
         );
         assert_eq!(output.status.code(), Some(1), "{output:?}");
-        let refused = document(&output);
-        assert_eq!(refused["outcome"], "refused");
-        assert_eq!(refused["exitStatus"], 1);
-        assert_eq!(refused["diagnostics"][0]["code"], "not_found");
+        assert_eq!(
+            route(&requests[0]),
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}")
+        );
+        let missed = document(&output);
+        assert_eq!(missed["command"], "useful workflow run show", "{missed}");
+        assert_eq!(missed["outcome"], "error", "{missed}");
+        assert_eq!(missed["exitStatus"], 1);
+        assert_eq!(missed["error"]["code"], "run_not_found", "{missed}");
+        let message = missed["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(home.path().to_str().unwrap()) && message.contains(ORGANIZATION),
+            "{message}"
+        );
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
     // REQ-CLOUDDEF-19, REQ-LOCALRUN-187: Cloud release asks Cloud to release the run's
@@ -7869,7 +8882,7 @@ mod workflow_run_cloud {
     #[test]
     fn cloud_release_sends_one_keyed_claim_release_and_reports_the_claim() {
         let home = tempfile::tempdir().unwrap();
-        let (output, requests) = cloud(
+        let (output, requests) = in_cloud(
             "release",
             RUN_ID,
             &["--json"],
@@ -7898,16 +8911,16 @@ mod workflow_run_cloud {
         assert_eq!(released["claim"]["releaseCause"], "owner");
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 
-        let (output, requests) = cloud("release", RUN_ID, &[], vec![released_claim()], home.path());
+        let (output, requests) =
+            in_cloud("release", RUN_ID, &[], vec![released_claim()], home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(requests.len(), 1);
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains(CLAIM_ID) && text.contains("owner"), "{text}");
     }
 
-    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187, REQ-LOCALRUN-189: a live run's claim, a changed
-    // claim, a reused key and a member's release are refused with exit 1, and show or release
-    // without a session exits 3.
+    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187: a live run's claim, a changed claim, a reused key and
+    // a member's release are refused with exit 1, and release without a session exits 3.
     #[test]
     fn cloud_release_refusals_name_their_cause() {
         let home = tempfile::tempdir().unwrap();
@@ -7923,7 +8936,7 @@ mod workflow_run_cloud {
                 "forbidden",
             ),
         ] {
-            let (output, requests) = cloud(
+            let (output, requests) = in_cloud(
                 "release",
                 RUN_ID,
                 &["--json"],
@@ -7937,27 +8950,25 @@ mod workflow_run_cloud {
             assert_eq!(refused["exitStatus"], 1);
             assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
 
-            let (output, _) = cloud("release", RUN_ID, &[], vec![response], home.path());
+            let (output, _) = in_cloud("release", RUN_ID, &[], vec![response], home.path());
             assert_eq!(output.status.code(), Some(1), "{code}: {output:?}");
             assert!(output.stdout.is_empty());
             assert!(String::from_utf8(output.stderr).unwrap().contains(code));
         }
-        for leaf in ["show", "release"] {
-            let output = run(&[
-                "workflow",
-                "run",
-                leaf,
-                RUN_ID,
-                "--cloud",
-                ORGANIZATION,
-                "--json",
-            ]);
-            assert_eq!(output.status.code(), Some(3), "{leaf}: {output:?}");
-            assert_eq!(
-                document(&output)["diagnostics"][0]["code"],
-                "authentication_required"
-            );
-        }
+        let output = run(&[
+            "workflow",
+            "run",
+            "release",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        assert_eq!(
+            document(&output)["diagnostics"][0]["code"],
+            "authentication_required"
+        );
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
@@ -8019,9 +9030,10 @@ mod workflow_run_cloud {
         format!("POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/controls")
     }
 
-    // REQ-LOCALRUN-210, REQ-RUN-91: Cloud answer reads the run, sends one control naming the
-    // run's current wait under one fresh key, sent again when the response is lost, and
-    // reports the accepted control; nothing under the `useful` home is read or written.
+    // REQ-LOCALRUN-210, REQ-RUN-91: answer of a run the home lacks reads the Cloud run, sends
+    // one control naming the run's current wait under one fresh key, sent again when the
+    // response is lost, and reports the accepted control; nothing under the `useful` home is
+    // read or written.
     #[test]
     fn cloud_answer_sends_the_runs_current_wait_under_one_key_and_reports_the_control() {
         let home = tempfile::tempdir().unwrap();
@@ -8030,7 +9042,7 @@ mod workflow_run_cloud {
             "wait": {"kind": "answer", "since": WAIT_SINCE},
             "answers": [{"question": "scope", "text": "Only the API"}],
         });
-        let (output, requests) = cloud(
+        let (output, requests) = in_cloud(
             "answer",
             RUN_ID,
             &["--question", "scope", "--text", "Only the API", "--json"],
@@ -8065,7 +9077,7 @@ mod workflow_run_cloud {
         assert_eq!(accepted["control"]["wait"], request["wait"]);
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 
-        let (output, requests) = cloud(
+        let (output, requests) = in_cloud(
             "answer",
             RUN_ID,
             &["--question", "scope", "--text", "Only the API"],
@@ -8084,31 +9096,118 @@ mod workflow_run_cloud {
         );
     }
 
-    // REQ-LOCALRUN-218, REQ-RUN-91: Cloud withdraw reads no run, sends one `withdraw` control
-    // naming no wait under one fresh key, sent again when the response is lost, and reports
-    // the accepted control; nothing under the `useful` home is read or written.
+    /// A run waiting on an answer whose wait lists `questions`.
+    fn asking_run(questions: serde_json::Value) -> serde_json::Value {
+        let mut run = waiting_run(Some("answer"));
+        run["workflowProgress"]["wait"]["questions"] = questions;
+        run
+    }
+
+    // REQ-LOCALRUN-210: answer with no `--question` takes the one question the run read's wait
+    // lists, and sends `1` when it lists none; with several listed it is refused
+    // `question_ambiguous` and sends nothing, and `--record-only` is a usage error once the run
+    // is read.
     #[test]
-    fn cloud_withdraw_sends_one_control_under_one_key_and_reports_it() {
+    fn cloud_answer_without_a_question_takes_the_one_the_wait_lists() {
+        let home = tempfile::tempdir().unwrap();
+        let question = |id: &str| serde_json::json!({"id": id, "text": "Which scope?"});
+        for (questions, sent) in [
+            (serde_json::json!([question("scope")]), "scope"),
+            (serde_json::Value::Null, "1"),
+            (serde_json::json!([]), "1"),
+        ] {
+            let request = serde_json::json!({
+                "kind": "answer",
+                "wait": {"kind": "answer", "since": WAIT_SINCE},
+                "answers": [{"question": sent, "text": "x"}],
+            });
+            let (output, requests) = in_cloud(
+                "answer",
+                RUN_ID,
+                &["--text", "x", "--json"],
+                vec![
+                    run_response(asking_run(questions)),
+                    accepted_control("answer", &request),
+                ],
+                home.path(),
+            );
+            assert_eq!(output.status.code(), Some(0), "{sent}: {output:?}");
+            assert_eq!(requests.len(), 2, "{sent}");
+            assert_eq!(body(&requests[1]), request, "{sent}");
+            assert_eq!(document(&output)["outcome"], "accepted");
+        }
+
+        let (output, requests) = in_cloud(
+            "answer",
+            RUN_ID,
+            &["--text", "x", "--json"],
+            vec![run_response(asking_run(serde_json::json!([
+                question("scope"),
+                question("name")
+            ])))],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        let refused = document(&output);
+        assert_eq!(refused["command"], "useful workflow run answer");
+        assert_eq!(refused["outcome"], "refused", "{refused}");
+        assert_eq!(refused["diagnostics"][0]["code"], "question_ambiguous");
+        let message = refused["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(
+            message.contains("scope") && message.contains("name"),
+            "{message}"
+        );
+
+        let (output, requests) = in_cloud(
+            "answer",
+            RUN_ID,
+            &["--text", "x", "--record-only"],
+            vec![run_response(asking_run(serde_json::json!([question(
+                "scope"
+            )])))],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        assert!(output.stdout.is_empty());
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+
+    // REQ-LOCALRUN-218, REQ-RUN-91: `cancel` of a Cloud run whose read carries a wait sends
+    // one `withdraw` control naming no wait under one fresh key, sent again when the response
+    // is lost, and reports the accepted control; with `--wait` it then reads the run until it
+    // is final and reports it under `run`. Nothing under the `useful` home is read or written.
+    #[test]
+    fn cloud_cancel_of_a_waiting_run_sends_one_withdrawal_under_one_key() {
         let home = tempfile::tempdir().unwrap();
         let request = serde_json::json!({"kind": "withdraw"});
-        let (output, requests) = cloud(
-            "withdraw",
+        let (output, requests) = in_cloud(
+            "cancel",
             RUN_ID,
             &["--json"],
-            vec![Vec::new(), accepted_control("withdraw", &request)],
+            vec![
+                run_response(waiting_run(Some("answer"))),
+                Vec::new(),
+                accepted_control("withdraw", &request),
+            ],
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(requests.len(), 2);
-        for request_sent in &requests {
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            route(&requests[0]),
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}")
+        );
+        for request_sent in &requests[1..] {
             assert_eq!(route(request_sent), controls_route());
             assert_eq!(body(request_sent), request);
         }
-        let key = header_value(&requests[0], "idempotency-key");
+        let key = header_value(&requests[1], "idempotency-key");
         assert!(!key.is_empty());
-        assert_eq!(header_value(&requests[1], "idempotency-key"), key);
+        assert_eq!(header_value(&requests[2], "idempotency-key"), key);
         let accepted = document(&output);
-        assert_eq!(accepted["command"], "useful workflow run withdraw");
+        assert_eq!(accepted["command"], "useful workflow run cancel");
         assert_eq!(accepted["outcome"], "accepted");
         assert_eq!(accepted["exitStatus"], 0);
         assert_eq!(accepted["organizationRef"], ORGANIZATION);
@@ -8116,12 +9215,51 @@ mod workflow_run_cloud {
         assert_eq!(accepted["control"]["id"], CONTROL_ID);
         assert_eq!(accepted["control"]["kind"], "withdraw");
         assert_eq!(accepted["control"]["wait"], serde_json::Value::Null);
+        assert!(accepted.get("run").is_none(), "{accepted}");
+
+        let mut ended = waiting_run(None);
+        ended["workflowState"] = serde_json::json!("exited");
+        ended["workflowOutcome"] = serde_json::json!("withdrawn");
+        ended["state"] = serde_json::json!("succeeded");
+        let (output, requests) = in_cloud(
+            "cancel",
+            RUN_ID,
+            &["--wait", "--idempotency-key", "withdraw-key", "--json"],
+            vec![
+                run_response(waiting_run(Some("answer"))),
+                accepted_control("withdraw", &request),
+                run_response(ended),
+            ],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(route(&requests[1]), controls_route());
+        assert_eq!(
+            header_value(&requests[1], "idempotency-key"),
+            "withdraw-key"
+        );
+        assert_eq!(
+            route(&requests[2]),
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}")
+        );
+        let accepted = document(&output);
+        assert_eq!(accepted["command"], "useful workflow run cancel");
+        assert_eq!(accepted["outcome"], "accepted", "{accepted}");
+        assert_eq!(accepted["control"]["kind"], "withdraw");
+        assert_eq!(accepted["run"]["state"], "succeeded", "{accepted}");
+        assert_eq!(
+            accepted["run"]["workflowOutcome"], "withdrawn",
+            "{accepted}"
+        );
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-218, REQ-RUN-91: approve, hand-back, retry and a lift
-    // name the run's current wait with their kinds; a lift of a run that does not wait on a
-    // stop, a stop and a withdraw name none, and a stop and a withdraw do not read the run.
+    // REQ-LOCALRUN-210, REQ-LOCALRUN-218, REQ-RUN-91: approve, hand-back, retry (of a repair
+    // or a host wait) and an `unpause` name the run's current wait with their kinds, `pause`
+    // and `unpause` sending the kinds `stop` and `lift`; an `unpause` of a run that does not
+    // wait on a stop, a `pause` and the withdrawal `cancel` sends a waiting run name none, and
+    // a `pause` does not read the run.
     #[test]
     fn cloud_control_leaves_send_their_kinds() {
         let home = tempfile::tempdir().unwrap();
@@ -8146,27 +9284,38 @@ mod workflow_run_cloud {
                 serde_json::json!({"kind": "retry", "wait": wait("repair")}),
             ),
             (
-                "lift",
+                "retry",
+                &[][..],
+                Some("host"),
+                serde_json::json!({"kind": "retry", "wait": wait("host")}),
+            ),
+            (
+                "unpause",
                 &["--before", "review"][..],
                 Some("stop"),
                 serde_json::json!({"kind": "lift", "wait": wait("stop"), "before": "review"}),
             ),
-            ("lift", &[][..], None, serde_json::json!({"kind": "lift"})),
             (
-                "stop",
-                &["--before", "review", "--reason", "Hold for review"][..],
-                None,
-                serde_json::json!({"kind": "stop", "before": "review", "reason": "Hold for review"}),
-            ),
-            (
-                "withdraw",
+                "unpause",
                 &[][..],
                 None,
+                serde_json::json!({"kind": "lift"}),
+            ),
+            (
+                "pause",
+                &["--before", "review", "--reason", "hold"][..],
+                None,
+                serde_json::json!({"kind": "stop", "before": "review", "reason": "hold"}),
+            ),
+            (
+                "cancel",
+                &[][..],
+                Some("answer"),
                 serde_json::json!({"kind": "withdraw"}),
             ),
         ] {
             let kind = request["kind"].as_str().unwrap();
-            let unread = matches!(leaf, "stop" | "withdraw");
+            let unread = leaf == "pause";
             let mut responses = Vec::new();
             if !unread {
                 responses.push(run_response(waiting_run(waiting)));
@@ -8174,7 +9323,8 @@ mod workflow_run_cloud {
             responses.push(accepted_control(kind, &request));
             let mut all = args.to_vec();
             all.push("--json");
-            let (output, requests) = cloud(leaf, RUN_ID, &all, responses, home.path());
+            // Every control leaf finds its run under the home and then in Cloud.
+            let (output, requests) = in_cloud(leaf, RUN_ID, &all, responses, home.path());
             assert_eq!(output.status.code(), Some(0), "{leaf}: {output:?}");
             let posted = requests.last().unwrap();
             assert_eq!(requests.len(), if unread { 1 } else { 2 }, "{leaf}");
@@ -8189,8 +9339,8 @@ mod workflow_run_cloud {
     }
 
     // REQ-LOCALRUN-210, REQ-RUN-91: Cloud's refusals exit 1 with their slugs, a run that does
-    // not wait on the leaf's kind is refused before any control is sent, and a leaf without a
-    // session exits 3.
+    // not wait on the leaf's kind is refused before any control is sent, and an `approve`
+    // nobody is signed in to send finds no run.
     #[test]
     fn cloud_control_refusals_name_their_cause() {
         let home = tempfile::tempdir().unwrap();
@@ -8207,7 +9357,7 @@ mod workflow_run_cloud {
                 "control_too_large",
             ),
         ] {
-            let (output, requests) = cloud(
+            let (output, requests) = in_cloud(
                 "answer",
                 RUN_ID,
                 &answer,
@@ -8221,41 +9371,71 @@ mod workflow_run_cloud {
             assert_eq!(refused["exitStatus"], 1);
             assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
         }
-        // REQ-LOCALRUN-218: a withdrawal Cloud refuses because no runner executes the run or
-        // its runner's `useful` does not apply one names the cancellation that still ends it.
-        for (slug, code, names_cancel) in [
-            ("control-unsupported", "control_unsupported", true),
-            ("run-not-live", "run_not_live", true),
-            ("idempotency-conflict", "idempotency_conflict", false),
-        ] {
-            let (output, requests) = cloud(
-                "withdraw",
+        // REQ-LOCALRUN-218, REQ-CANCEL-38: a withdrawal Cloud refuses because no runner
+        // executes the run or its runner's `useful` does not apply one is followed by the
+        // graceful cancellation request under the same key, reported as that request is.
+        let echo = api_test_support::REQUEST_IDEMPOTENCY_KEY_ECHO;
+        for slug in ["control-unsupported", "run-not-live"] {
+            let (output, requests) = in_cloud(
+                "cancel",
                 RUN_ID,
                 &["--json"],
-                vec![conflict(slug)],
+                vec![
+                    run_response(waiting_run(Some("answer"))),
+                    conflict(slug),
+                    cancellation_response(
+                        "202 Accepted",
+                        echo,
+                        cancellation_envelope("pending", "graceful", serde_json::Value::Null),
+                    ),
+                ],
                 home.path(),
             );
-            assert_eq!(output.status.code(), Some(1), "{code}: {output:?}");
-            assert_eq!(requests.len(), 1, "{code}");
-            let refused = document(&output);
-            assert_eq!(refused["outcome"], "refused", "{refused}");
-            assert_eq!(refused["exitStatus"], 1);
-            assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
-            if names_cancel {
-                assert!(
-                    refused["diagnostics"][0]["message"]
-                        .as_str()
-                        .unwrap()
-                        .contains("useful workflow run cancel"),
-                    "{refused}"
-                );
-            }
+            assert_eq!(output.status.code(), Some(0), "{slug}: {output:?}");
+            assert_eq!(requests.len(), 3, "{slug}");
+            assert_eq!(route(&requests[1]), controls_route(), "{slug}");
+            assert_eq!(
+                route(&requests[2]),
+                format!(
+                    "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/cancellation-requests"
+                )
+            );
+            assert_eq!(body(&requests[2]), serde_json::json!({"mode": "graceful"}));
+            assert_eq!(
+                header_value(&requests[2], "idempotency-key"),
+                header_value(&requests[1], "idempotency-key"),
+                "{slug}"
+            );
+            let accepted = document(&output);
+            assert_eq!(accepted["operation"], "cancel", "{accepted}");
+            assert_eq!(accepted["outcome"], "accepted", "{accepted}");
+            assert_eq!(accepted["cancellationRequest"]["id"], CANCELLATION_ID);
         }
+        let (output, requests) = in_cloud(
+            "cancel",
+            RUN_ID,
+            &["--json"],
+            vec![
+                run_response(waiting_run(Some("answer"))),
+                conflict("idempotency-conflict"),
+            ],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 2);
+        let refused = document(&output);
+        assert_eq!(refused["command"], "useful workflow run cancel");
+        assert_eq!(refused["outcome"], "refused", "{refused}");
+        assert_eq!(refused["exitStatus"], 1);
+        assert_eq!(
+            refused["diagnostics"][0]["code"], "idempotency_conflict",
+            "{refused}"
+        );
         for (waiting, code) in [
             (Some("approval"), "wait_kind_mismatch"),
             (None, "run_not_waiting"),
         ] {
-            let (output, requests) = cloud(
+            let (output, requests) = in_cloud(
                 "answer",
                 RUN_ID,
                 &answer,
@@ -8266,7 +9446,7 @@ mod workflow_run_cloud {
             assert_eq!(requests.len(), 1, "{code}");
             assert_eq!(document(&output)["diagnostics"][0]["code"], code);
         }
-        let (output, _) = cloud(
+        let (output, _) = in_cloud(
             "approve",
             RUN_ID,
             &[],
@@ -8280,29 +9460,58 @@ mod workflow_run_cloud {
                 .unwrap()
                 .contains("wait_kind_mismatch")
         );
-        let output = run(&[
-            "workflow",
-            "run",
-            "approve",
+        // With nobody signed in, Cloud is not asked and the run is not found
+        // (REQ-LOCALRUN-180), for a leaf that reads the run and for `pause`, which sends its
+        // control unread.
+        for (leaf, args) in [
+            ("approve", &[][..]),
+            ("pause", &["--before", "review", "--reason", "hold"][..]),
+        ] {
+            let server = ScriptedServer::respond(Vec::new());
+            let credentials = private_credential_directory();
+            let credential_path = credentials.path().join("credentials.json");
+            let mut environment =
+                deployment_environment(&server.api_url, credential_path.to_str().unwrap()).to_vec();
+            environment.push(("USEFUL_HOME", home.path().to_str().unwrap()));
+            let mut all = vec!["workflow", "run", leaf, RUN_ID, "--org", ORGANIZATION];
+            all.extend_from_slice(args);
+            all.extend(["--json", "--allow-insecure-http"]);
+            let output = run_with_env(&all, &environment);
+            assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
+            let missed = document(&output);
+            assert_eq!(missed["command"], format!("useful workflow run {leaf}"));
+            assert_eq!(missed["outcome"], "refused", "{missed}");
+            assert_eq!(missed["diagnostics"][0]["code"], "run_not_found");
+            assert!(server.finish().is_empty(), "{leaf}");
+        }
+        // A `pause` whose control Cloud answers 404 is the lookup's miss.
+        let (output, requests) = in_cloud(
+            "pause",
             RUN_ID,
-            "--cloud",
-            ORGANIZATION,
-            "--json",
-        ]);
-        assert_eq!(output.status.code(), Some(3), "{output:?}");
+            &["--before", "review", "--reason", "hold", "--json"],
+            vec![problem_http_response(
+                "404 Not Found",
+                serde_json::json!({"type": "https://api.usefulmachinery.com/problems/not-found", "title": "Not Found", "status": 404}),
+            )],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(route(&requests[0]), controls_route());
+        let missed = document(&output);
         assert_eq!(
-            document(&output)["diagnostics"][0]["code"],
-            "authentication_required"
+            missed["diagnostics"][0]["code"], "run_not_found",
+            "{missed}"
         );
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-218, REQ-CANCEL-1, REQ-CANCEL-5: Cloud cancel reads no run and sends one
-    // graceful cancellation request under one fresh key; an accepted request and one Cloud
-    // resolved `already_terminal` are each reported with the receipt, a missing run is
-    // refused, and nothing under the `useful` home is read or written.
+    // REQ-LOCALRUN-218, REQ-CANCEL-38, REQ-CANCEL-1, REQ-CANCEL-5: `cancel` of a Cloud run
+    // whose read carries no wait sends one graceful cancellation request and prints the
+    // document of the cancellation; an accepted request and one Cloud resolved
+    // `already_terminal` are each reported with the receipt, a run Cloud does not have is the
+    // lookup's miss, and nothing under the `useful` home is read or written.
     #[test]
-    fn cloud_cancel_sends_one_graceful_request_and_reports_the_receipt() {
+    fn cloud_cancel_of_a_run_that_does_not_wait_sends_one_graceful_request() {
         let home = tempfile::tempdir().unwrap();
         let echo = api_test_support::REQUEST_IDEMPOTENCY_KEY_ECHO;
         for (status, envelope) in [
@@ -8315,27 +9524,33 @@ mod workflow_run_cloud {
                 cancellation_envelope("resolved", "graceful", run_body_with_state("succeeded")),
             ),
         ] {
-            let (output, requests) = cloud(
+            let (output, requests) = in_cloud(
                 "cancel",
                 RUN_ID,
                 &["--json"],
-                vec![cancellation_response(status, echo, envelope.clone())],
+                vec![
+                    run_response(waiting_run(None)),
+                    cancellation_response(status, echo, envelope.clone()),
+                ],
                 home.path(),
             );
             assert_eq!(output.status.code(), Some(0), "{status}: {output:?}");
-            assert_eq!(requests.len(), 1, "{status}");
+            assert_eq!(requests.len(), 2, "{status}");
             assert_eq!(
                 route(&requests[0]),
+                format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}")
+            );
+            assert_eq!(
+                route(&requests[1]),
                 format!(
                     "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/cancellation-requests"
                 )
             );
-            assert_eq!(body(&requests[0]), serde_json::json!({"mode": "graceful"}));
-            assert!(!header_value(&requests[0], "idempotency-key").is_empty());
+            assert_eq!(body(&requests[1]), serde_json::json!({"mode": "graceful"}));
+            assert!(!header_value(&requests[1], "idempotency-key").is_empty());
             let accepted = document(&output);
-            assert_eq!(accepted["command"], "useful workflow run cancel");
+            assert_eq!(accepted["operation"], "cancel", "{accepted}");
             assert_eq!(accepted["outcome"], "accepted", "{accepted}");
-            assert_eq!(accepted["exitStatus"], 0);
             assert_eq!(accepted["organizationRef"], ORGANIZATION);
             assert_eq!(accepted["runId"], RUN_ID);
             assert_eq!(accepted["cancellationRequest"]["id"], CANCELLATION_ID);
@@ -8343,27 +9558,10 @@ mod workflow_run_cloud {
                 accepted["cancellationRequest"]["state"],
                 envelope["request"]["state"]
             );
+            assert_eq!(accepted["error"], serde_json::Value::Null);
         }
-        let (output, requests) = cloud(
-            "cancel",
-            RUN_ID,
-            &[],
-            vec![cancellation_response(
-                "202 Accepted",
-                echo,
-                cancellation_envelope("pending", "graceful", serde_json::Value::Null),
-            )],
-            home.path(),
-        );
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(requests.len(), 1);
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            text.contains(CANCELLATION_ID) && text.contains(RUN_ID),
-            "{text}"
-        );
 
-        let (output, requests) = cloud(
+        let (output, requests) = in_cloud(
             "cancel",
             RUN_ID,
             &["--json"],
@@ -8375,10 +9573,64 @@ mod workflow_run_cloud {
         );
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert_eq!(requests.len(), 1);
-        let refused = document(&output);
-        assert_eq!(refused["outcome"], "refused", "{refused}");
-        assert_eq!(refused["exitStatus"], 1);
-        assert_eq!(refused["diagnostics"][0]["code"], "not_found");
+        let missed = document(&output);
+        assert_eq!(missed["command"], "useful workflow run cancel");
+        assert_eq!(missed["outcome"], "refused", "{missed}");
+        assert_eq!(missed["diagnostics"][0]["code"], "run_not_found");
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+
+    // REQ-LOCALRUN-218, REQ-CANCEL-38: `cancel --force` of a Cloud run sends the force
+    // request with no read before it, under the key `--idempotency-key` gives, and a 404 of
+    // that request is the lookup's miss.
+    #[test]
+    fn cloud_cancel_with_force_sends_the_force_request_without_a_read() {
+        let home = tempfile::tempdir().unwrap();
+        let key = "force-key";
+        let (output, requests) = in_cloud(
+            "cancel",
+            RUN_ID,
+            &["--force", "--idempotency-key", key, "--json"],
+            vec![cancellation_response(
+                "202 Accepted",
+                key,
+                cancellation_envelope("pending", "force", serde_json::Value::Null),
+            )],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            route(&requests[0]),
+            format!(
+                "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/cancellation-requests"
+            )
+        );
+        assert_eq!(body(&requests[0]), serde_json::json!({"mode": "force"}));
+        assert_eq!(header_value(&requests[0], "idempotency-key"), key);
+        let accepted = document(&output);
+        assert_eq!(accepted["operation"], "cancel", "{accepted}");
+        assert_eq!(accepted["outcome"], "accepted", "{accepted}");
+        assert_eq!(accepted["cancellationRequest"]["mode"], "force");
+
+        let (output, requests) = in_cloud(
+            "cancel",
+            RUN_ID,
+            &["--force", "--json"],
+            vec![problem_http_response(
+                "404 Not Found",
+                serde_json::json!({"type": "https://api.usefulmachinery.com/problems/not-found", "title": "Not Found", "status": 404}),
+            )],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        let missed = document(&output);
+        assert_eq!(missed["command"], "useful workflow run cancel");
+        assert_eq!(
+            missed["diagnostics"][0]["code"], "run_not_found",
+            "{missed}"
+        );
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
@@ -8387,13 +9639,7 @@ mod workflow_run_cloud {
     #[test]
     fn cloud_leaves_report_a_refused_creation_as_creation_rejected() {
         let home = tempfile::tempdir().unwrap();
-        for (leaf, args) in [
-            ("show", &["--json"][..]),
-            (
-                "answer",
-                &["--question", "scope", "--text", "Only the API", "--json"][..],
-            ),
-        ] {
+        for leaf in ["show", "answer"] {
             let rejected = http_response_with_headers(
                 "409 Conflict",
                 Some("application/problem+json"),
@@ -8405,7 +9651,17 @@ mod workflow_run_cloud {
                 }))
                 .unwrap(),
             );
-            let (output, requests) = cloud(leaf, RUN_ID, args, vec![rejected], home.path());
+            let (output, requests) = if leaf == "show" {
+                show_in_cloud(RUN_ID, &["--json"], vec![rejected], home.path())
+            } else {
+                in_cloud(
+                    leaf,
+                    RUN_ID,
+                    &["--question", "scope", "--text", "Only the API", "--json"],
+                    vec![rejected],
+                    home.path(),
+                )
+            };
             assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
             assert_eq!(requests.len(), 1, "{leaf}");
             let refused = document(&output);
@@ -8418,26 +9674,128 @@ mod workflow_run_cloud {
         }
     }
 
-    // REQ-LOCALRUN-210: a Cloud retry takes no local execution root or replacement profiles.
+    // REQ-LOCALRUN-210, REQ-LOCALRUN-80: `retry` with neither `--from` nor `--all` of a Cloud
+    // run reads it and, ended other than `succeeded`, sends the continuation from the step its
+    // reported position names; a run that names none is refused `continuation_step_required`,
+    // a succeeded run `latest_attempt_succeeded` and a running one `run_not_waiting`, each
+    // sending nothing; a local option is a usage error before any request.
     #[test]
-    fn cloud_retry_refuses_its_local_options() {
-        for local in [
-            &["--execution-root", "root"][..],
-            &["--agent-profiles", "profiles.json"][..],
+    fn cloud_retry_continues_an_ended_run_from_its_position_or_refuses() {
+        let home = tempfile::tempdir().unwrap();
+        let ended = |state: &str, position: serde_json::Value| {
+            let mut run = definition_run();
+            run["state"] = serde_json::json!(state);
+            run["workflowProgress"]["position"] = position;
+            run["workflowProgress"]["wait"] = serde_json::Value::Null;
+            run_response(run)
+        };
+        for (state, position, code) in [
+            (
+                "failed",
+                serde_json::json!([]),
+                "continuation_step_required",
+            ),
+            (
+                "succeeded",
+                serde_json::json!(["build"]),
+                "latest_attempt_succeeded",
+            ),
         ] {
-            let mut all = vec!["workflow", "run", "retry", RUN_ID, "--cloud", ORGANIZATION];
-            all.extend_from_slice(local);
-            let output = run(&all);
+            let (output, requests) = in_cloud(
+                "retry",
+                RUN_ID,
+                &["--json"],
+                vec![ended(state, position)],
+                home.path(),
+            );
+            assert_eq!(output.status.code(), Some(1), "{state}: {output:?}");
+            assert_eq!(requests.len(), 1, "{state}");
+            let refused = document(&output);
+            assert_eq!(refused["command"], "useful workflow run retry", "{refused}");
+            assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
+        }
+        let (output, requests) = in_cloud(
+            "retry",
+            RUN_ID,
+            &["--json"],
+            vec![run_response(waiting_run(None))],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            document(&output)["diagnostics"][0]["code"],
+            "run_not_waiting"
+        );
+
+        // REQ-CONTINUE-55: a run whose runner never reported the end of its wait, the runner
+        // lost or the run ended by Cloud, still reads that wait in its last progress report;
+        // it is an ended run all the same, continued from its position with no control sent.
+        for read in ["show-failed-at-build", "show-failed-waiting-at-build"] {
+            let (output, requests) = super::continuation_command_tests::execute_with_env(
+                &[read, "submitted"],
+                &[
+                    "workflow",
+                    "run",
+                    "retry",
+                    RUN_ID,
+                    "--org",
+                    ORGANIZATION,
+                    "--json",
+                    "--allow-insecure-http",
+                ],
+                &[("USEFUL_HOME", home.path().to_str().unwrap())],
+            );
+            assert_eq!(output.status.code(), Some(0), "{read}: {output:?}");
+            assert_eq!(requests.len(), 2, "{read}");
+            assert_eq!(
+                route(&requests[1]),
+                format!(
+                    "POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/continuation-requests"
+                ),
+                "{read}"
+            );
+            assert_eq!(
+                body(&requests[1]),
+                serde_json::json!({"fromSteps": ["build"], "definition": "inherited"}),
+                "{read}"
+            );
+            let accepted = document(&output);
+            assert_eq!(accepted["operation"], "continue", "{read}: {accepted}");
+            assert_eq!(accepted["outcome"], "accepted", "{read}: {accepted}");
+        }
+
+        for local in [
+            &["--execution-root", "."][..],
+            &["--agent-profiles", "profiles.json"][..],
+            &["--from", "build", "--workflow", "repair.yaml"][..],
+        ] {
+            let (output, requests) = in_cloud("retry", RUN_ID, local, Vec::new(), home.path());
             assert_eq!(output.status.code(), Some(2), "{local:?}: {output:?}");
             assert!(output.stdout.is_empty(), "{local:?}");
+            assert!(requests.is_empty(), "{local:?}");
         }
+        // REQ-CONTINUE-85: `resume` of a Cloud run continues it under its own definition, so
+        // a replacement workflow or another execution root is refused, never dropped.
+        for local in [
+            &["--workflow", "repair.yaml"][..],
+            &["--execution-root", "."][..],
+        ] {
+            let (output, requests) = in_cloud("resume", RUN_ID, local, Vec::new(), home.path());
+            assert_eq!(output.status.code(), Some(2), "{local:?}: {output:?}");
+            assert!(output.stdout.is_empty(), "{local:?}");
+            assert!(requests.is_empty(), "{local:?}");
+        }
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-180, REQ-LOCALRUN-181, REQ-LOCALRUN-187, REQ-LOCALRUN-189: with
-    // `--cloud`, a local run's id is sent to Cloud as typed and the local run is neither read
-    // nor changed; without it, show and release keep resolving and acting on the local run.
+    // REQ-LOCALRUN-180, REQ-LOCALRUN-181, REQ-LOCALRUN-187, REQ-LOCALRUN-189: `show` and
+    // `release` of an ID the home holds read and change the local run and send nothing, with
+    // `--org` given and a session stored: `release` refuses the waiting run `run_live`, naming
+    // the verbs its state takes (REQ-LOCALRUN-223), and records `control.release` once the
+    // run has ended.
     #[test]
-    fn cloud_show_and_release_leave_a_same_named_local_run_unchanged() {
+    fn show_and_release_act_on_a_run_the_home_holds_and_ask_no_cloud() {
         let published = super::super::workflow_run_control::PublishedWaitTree::new();
         let (directory, id, terminal) = published.run("blocked");
         assert_eq!(terminal["wait"]["kind"], "answer", "{terminal}");
@@ -8446,55 +9804,114 @@ mod workflow_run_cloud {
             std::fs::read_dir(directory.join("controls")).map_or(0, |entries| entries.count())
         };
         let controls_before = controls(&directory);
+        let home = std::path::Path::new(published.home.path());
 
-        let mut cloud_run = definition_run();
-        cloud_run["id"] = serde_json::json!(id);
-        let (output, requests) = cloud(
-            "show",
-            &id,
-            &["--json"],
-            vec![
-                run_response(cloud_run),
-                deliveries_response(false),
-                controls_response(&[], false),
-            ],
-            std::path::Path::new(published.home.path()),
-        );
+        let (output, requests) = show_in_cloud(&id, &["--json"], Vec::new(), home);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(
-            route(&requests[0]),
-            format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{id}")
-        );
+        assert!(requests.is_empty(), "{requests:?}");
         let shown = document(&output);
-        assert!(shown.get("runDirectory").is_none(), "{shown}");
-        assert_eq!(shown["run"]["definition"]["definitionId"], DEFINITION_ID);
+        assert_eq!(shown["command"], "useful workflow run show", "{shown}");
+        assert_eq!(shown["outcome"], "shown", "{shown}");
+        assert_eq!(shown["runDirectory"], directory.to_str().unwrap());
+        assert_eq!(shown["record"]["id"], id.as_str());
+        assert!(shown.get("deployment").is_none(), "{shown}");
 
-        let (output, requests) = cloud(
-            "release",
-            &id,
-            &["--json"],
-            vec![released_claim()],
-            std::path::Path::new(published.home.path()),
-        );
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(
-            route(&requests[0]),
-            format!("POST /api/v1/organizations/{ORGANIZATION}/runs/{id}/claim-release")
-        );
+        let (output, requests) = in_cloud("release", &id, &["--json"], Vec::new(), home);
+        assert!(requests.is_empty(), "{requests:?}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let refused = document(&output);
+        assert_eq!(refused["command"], "useful workflow run release");
+        assert_eq!(refused["diagnostics"][0]["code"], "run_live", "{refused}");
+        assert_eq!(refused["runDirectory"], directory.to_str().unwrap());
+        let message = refused["diagnostics"][0]["message"].as_str().unwrap();
+        for verb in ["answer", "cancel"] {
+            assert!(message.contains(verb), "{verb} missing from {message}");
+        }
         assert_eq!(std::fs::read(directory.join("run.json")).unwrap(), before);
         assert_eq!(controls(&directory), controls_before);
 
-        let home = Some(&published.home);
-        let local = super::super::workflow_run_control::run_control(home, "show", &id, &[]);
-        let local = document(&local);
-        assert_eq!(local["outcome"], "shown", "{local}");
-        assert_eq!(local["runDirectory"], directory.to_str().unwrap());
-        let refused = super::super::workflow_run_control::refused(
-            &super::super::workflow_run_control::run_control(home, "release", &id, &[]),
-            "release",
-            "run_live",
+        let home_arg = Some(&published.home);
+        assert_eq!(
+            super::super::workflow_run_control::run_control(home_arg, "cancel", &id, &[])
+                .status
+                .code(),
+            Some(0)
         );
-        assert_eq!(refused["runDirectory"], directory.to_str().unwrap());
-        assert_eq!(controls(&directory), controls_before);
+        let (output, requests) = in_cloud("release", &id, &["--json"], Vec::new(), home);
+        assert!(requests.is_empty(), "{requests:?}");
+        let released = super::super::workflow_run_control::recorded_as(
+            &output, "release", "recorded", &directory,
+        );
+        assert_eq!(
+            released["control"]["event"], "control.release",
+            "{released}"
+        );
+    }
+
+    // REQ-LOCALRUN-223, REQ-LOCALRUN-210: a control verb given a Cloud run in a state it does
+    // not apply in is refused before anything is sent, keeping its code, with a message naming
+    // the verbs the run's state takes there.
+    #[test]
+    fn cloud_control_refused_for_the_runs_state_names_the_verbs_that_apply() {
+        let home = tempfile::tempdir().unwrap();
+        for (leaf, args, waiting, code, verbs) in [
+            (
+                "answer",
+                &["--text", "x", "--json"][..],
+                Some("approval"),
+                "wait_kind_mismatch",
+                &["approve", "hand-back"][..],
+            ),
+            (
+                "approve",
+                &["--json"][..],
+                None,
+                "run_not_waiting",
+                &["pause", "cancel"][..],
+            ),
+        ] {
+            let (output, requests) = in_cloud(
+                leaf,
+                RUN_ID,
+                args,
+                vec![run_response(waiting_run(waiting))],
+                home.path(),
+            );
+            assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
+            assert_eq!(requests.len(), 1, "{leaf}");
+            let refused = document(&output);
+            assert_eq!(refused["command"], format!("useful workflow run {leaf}"));
+            assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
+            let message = refused["diagnostics"][0]["message"].as_str().unwrap();
+            for verb in verbs {
+                assert!(
+                    message.contains(verb),
+                    "{leaf}: {verb} missing from {message}"
+                );
+            }
+            assert!(!message.contains("interrupt"), "{leaf}: {message}");
+        }
+        // A run that ended at a wait whose end no runner reported still reads the wait in its
+        // last progress report: it has ended, and no control is sent for that wait.
+        let mut ended = definition_run();
+        ended["state"] = serde_json::json!("failed");
+        ended["workflowProgress"]["wait"]["kind"] = serde_json::json!("approval");
+        let (output, requests) = in_cloud(
+            "approve",
+            RUN_ID,
+            &["--json"],
+            vec![run_response(ended)],
+            home.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(requests.len(), 1);
+        let refused = document(&output);
+        assert_eq!(
+            refused["diagnostics"][0]["code"], "run_not_waiting",
+            "{refused}"
+        );
+        let message = refused["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains("release"), "{message}");
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 }

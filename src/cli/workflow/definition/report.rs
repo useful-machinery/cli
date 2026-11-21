@@ -1,5 +1,6 @@
-//! Reports shared by the `useful workflow definition` leaves: an invalid tree exactly as
-//! `validate` prints it (REQ-WFDEF-15) and a refused definition command (REQ-WFDEF-27).
+//! Reports shared by the `useful workflow definition` leaves and the tree form of `useful
+//! workflow validate`: an invalid tree exactly as `useful workflow validate DIR` prints it
+//! (REQ-WFDEF-15) and a refused definition command (REQ-WFDEF-27).
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -11,12 +12,12 @@ use useful_execution::{
     DefinitionError, RejectionLocation, TreeDiagnostic, TreeLocation, normalize_terminal_scalar,
 };
 
-pub(super) fn display(value: &str) -> String {
+pub(in crate::cli::workflow) fn display(value: &str) -> String {
     normalize_terminal_scalar(value.as_bytes())
 }
 
 /// A `members` value as `["a", "b"]`, each member normalized as [`display`] does.
-pub(super) fn display_members(members: &[String]) -> String {
+pub(in crate::cli::workflow) fn display_members(members: &[String]) -> String {
     let members = members
         .iter()
         .map(|member| format!("\"{}\"", display(member)))
@@ -24,28 +25,32 @@ pub(super) fn display_members(members: &[String]) -> String {
     format!("[{}]", members.join(", "))
 }
 
-pub(super) fn display_path(path: &Path) -> String {
+pub(in crate::cli::workflow) fn display_path(path: &Path) -> String {
     normalize_terminal_scalar(path.as_os_str().as_encoded_bytes())
 }
 
-pub(super) fn write_json(report: &impl Serialize, what: &'static str) -> anyhow::Result<()> {
+pub(in crate::cli::workflow) fn write_json(
+    report: &impl Serialize,
+    what: &'static str,
+) -> anyhow::Result<()> {
     super::super::super::write_pretty_json(report).with_context(|| format!("write {what}"))
 }
 
 #[derive(Serialize)]
-pub(super) struct JsonTree {
+pub(in crate::cli::workflow) struct JsonTree {
     pub(super) path: String,
 }
 
 impl JsonTree {
-    pub(super) fn new(directory: &Path) -> Self {
+    pub(in crate::cli::workflow) fn new(directory: &Path) -> Self {
         Self {
             path: directory.to_string_lossy().into_owned(),
         }
     }
 }
 
-/// `outcome` `invalid`: every failure found in the tree, as `validate --json` writes it.
+/// `outcome` `invalid`: every failure found in the tree, as `useful workflow validate DIR --json`
+/// writes it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InvalidReport<'a> {
@@ -111,7 +116,7 @@ fn write_human_invalid(directory: &Path, diagnostics: &[TreeDiagnostic]) -> anyh
 }
 
 /// Writes the invalid-tree report of `command` in the form `json` selects.
-pub(super) fn write_invalid(
+pub(in crate::cli::workflow) fn write_invalid(
     command: &'static str,
     directory: &Path,
     diagnostics: &[TreeDiagnostic],
@@ -217,3 +222,121 @@ pub(super) fn write_refused(
         write_human_refused(summary, error)
     }
 }
+
+/// `outcome` `refused` with `definition_not_found`: what was named, the home the lookup looked
+/// under, and whether it asked Cloud, in which project, or why not (REQ-CLOUDDEF-42).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NotFoundReport<'a> {
+    schema_version: u8,
+    command: &'static str,
+    outcome: &'static str,
+    diagnostics: [NotFoundDiagnostic<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct NotFoundDiagnostic<'a> {
+    code: &'static str,
+    definition: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    home: Option<String>,
+    cloud: &'a super::target::Asked,
+}
+
+/// Writes that `command` found no definition `named` where `looked` says, in the form `json`
+/// selects; `summary` heads the human form.
+pub(super) fn write_not_found(
+    command: &'static str,
+    summary: &str,
+    named: &str,
+    looked: &super::target::Looked,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        return write_json(
+            &NotFoundReport {
+                schema_version: 1,
+                command,
+                outcome: "refused",
+                diagnostics: [NotFoundDiagnostic {
+                    code: NOT_FOUND,
+                    definition: named,
+                    home: looked
+                        .home
+                        .as_ref()
+                        .map(|home| home.to_string_lossy().into_owned()),
+                    cloud: &looked.cloud,
+                }],
+            },
+            "workflow definition refusal",
+        );
+    }
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    writeln!(stdout, "✗ {summary}")?;
+    writeln!(stdout, "code: {NOT_FOUND}  definition: {}", display(named))?;
+    if let Some(home) = &looked.home {
+        writeln!(stdout, "home: {}", display_path(home))?;
+    }
+    match &looked.cloud {
+        super::target::Asked::Asked(project) => writeln!(
+            stdout,
+            "project: {}  organization: {}",
+            display(&project.project),
+            display(&project.organization)
+        )?,
+        super::target::Asked::NotAsked(not_asked) => {
+            writeln!(stdout, "Cloud was not asked: {}", not_asked.why())?;
+        }
+    }
+    Ok(())
+}
+
+const NOT_FOUND: &str = "definition_not_found";
+
+/// Writes that `command`, which acts on a Cloud definition alone, refused definition `id` under
+/// the home at `path` with `definition_local` (REQ-CLOUDDEF-42), in the form `json` selects, as
+/// [`write_refused`] writes a refusal; `summary` heads the human form.
+pub(super) fn write_local(
+    command: &'static str,
+    summary: &str,
+    id: &str,
+    path: &Path,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        return write_json(
+            &RefusedReport {
+                schema_version: 1,
+                command,
+                outcome: "refused",
+                diagnostics: [RefusalDiagnostic {
+                    code: LOCAL,
+                    definition: Some(id),
+                    definitions: None,
+                    integration: None,
+                    binding: None,
+                    path: Some(path.to_string_lossy().into_owned()),
+                }],
+            },
+            "workflow definition refusal",
+        );
+    }
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    writeln!(stdout, "✗ {summary}")?;
+    writeln!(
+        stdout,
+        "code: {LOCAL}  definition: {}  path: {}",
+        display(id),
+        display_path(path)
+    )?;
+    writeln!(stdout)?;
+    writeln!(
+        stdout,
+        "The definition is under the useful home, and {command} acts on a Cloud definition."
+    )?;
+    Ok(())
+}
+
+const LOCAL: &str = "definition_local";

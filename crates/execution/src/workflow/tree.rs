@@ -35,7 +35,7 @@ const ROOT_WORKFLOW: &str = "workflow.yaml";
 const TREE_DIGEST_DOMAIN: &[u8] = b"um.workflow.tree.v1\0";
 const MAX_TREE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// A tree that passed validation, with what `useful workflow definition validate` reports.
+/// A tree that passed validation, with what `useful workflow validate DIR` reports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedTree {
     /// The canonical tree root.
@@ -47,6 +47,9 @@ pub struct ValidatedTree {
     pub workflow_files: Vec<String>,
     pub programs: Vec<String>,
     pub required_tools: Vec<String>,
+    /// The argv of the root's `requires.check`, which only the host condition runs
+    /// (REQ-WFDEF-42, REQ-WFEXEC-81).
+    pub required_check: Option<Vec<String>>,
     /// The root's declared integrations by provider id, each with the `as` that applies to
     /// it (the entry's own, else `requires.as`, else none) as its `acting_as`, and its
     /// bindings as declared (REQ-WFDEF-14, REQ-WFDEF-34, REQ-WFDEF-37).
@@ -76,7 +79,7 @@ impl fmt::Debug for TreeFile {
     }
 }
 
-/// A trigger as `useful workflow definition validate` reports it: a provider rule's source,
+/// A trigger as `useful workflow validate DIR` reports it: a provider rule's source,
 /// event and `where`, a schedule's timetable or a definition rule's binding and outcomes, and
 /// a start trigger's `subject`, `inputs`, `stopBefore`, `owner` and `busyBehavior`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -361,6 +364,7 @@ pub fn validate_workflow_tree(root: &Path) -> Result<ValidatedTree, Vec<TreeDiag
     let definition = root_workflow.definition;
     let RootRequires {
         tools: required_tools,
+        check: required_check,
         acting_as,
         integrations,
     } = blocks.requires.unwrap_or_default();
@@ -371,6 +375,7 @@ pub fn validate_workflow_tree(root: &Path) -> Result<ValidatedTree, Vec<TreeDiag
         version: definition.version,
         workflow_files,
         required_tools,
+        required_check,
         required_integrations: integrations
             .into_iter()
             .map(|(provider, integration)| {
@@ -1164,7 +1169,8 @@ fn root_exit_outcomes(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
             ValidatedEdgeTarget::Exit(outcome) => {
                 outcomes.insert(outcome);
             }
-            ValidatedEdgeTarget::Limited { else_, .. } => exits(else_, outcomes),
+            ValidatedEdgeTarget::Limited { else_, .. }
+            | ValidatedEdgeTarget::HostWait { else_, .. } => exits(else_, outcomes),
             ValidatedEdgeTarget::Wait { then, .. } => exits(then, outcomes),
             ValidatedEdgeTarget::Step(_) => {}
         }

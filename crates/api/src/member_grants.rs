@@ -4,7 +4,7 @@
 //! Responses decode leniently into the generated models, which name no material, so nothing
 //! a response wrongly adds can reach a caller, and a generated error is never formatted: its
 //! body is untrusted text. Material travels only in a request body built here from zeroizing
-//! storage. The earlier `GrantApi` and `AgentLoginApi` stay for the earlier commands.
+//! storage. `GrantApi` makes a provider's consent and reads an OAuth grant's uses.
 use std::fmt;
 
 use reqwest::StatusCode;

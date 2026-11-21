@@ -84,6 +84,15 @@ fn removed_top_level_github_family_is_a_usage_error_without_contacting_the_deplo
             ORGANIZATION,
             "--allow-insecure-http",
         ][..],
+        &[
+            "connection",
+            "github",
+            "setup",
+            "begin",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ][..],
+        &["connection", "github", "installation", "list", ORGANIZATION][..],
     ] {
         let output = run_with_env(args, &environment);
 
@@ -94,59 +103,57 @@ fn removed_top_level_github_family_is_a_usage_error_without_contacting_the_deplo
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-16, REQ-CONNECTION-17
+/// A response beginning the setup session `id`, whose page is `setup_url`.
+pub(super) fn setup_session_response(id: &str, setup_url: &str) -> Vec<u8> {
+    let mut session = setup_session();
+    session["id"] = id.into();
+    session["setupUrl"] = setup_url.into();
+    json_http_response("201 Created", session)
+}
+
+/// `useful org integration ARGS... --org ORGANIZATION --allow-insecure-http`.
+fn org_connection<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    ["org", "integration"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .chain(["--org", ORGANIZATION, "--allow-insecure-http"])
+        .collect()
+}
+
+// REQ-CONNECTION-16, REQ-CONNECTION-17, REQ-INTEGRATION-21
 #[test]
-fn setup_begin_and_complete_preserve_the_browser_handoff() {
+fn create_github_prints_the_page_and_then_completes_for_the_installation_alone() {
     let setup_url = setup_url();
+    let second_session = "ghs_01k0z6r1w8f4jy2m7q9v3x5abd";
+    let mut installation = installation_body("active");
+    installation["providerInstallationId"] = serde_json::Value::String("714".to_owned());
     let (server, _directory, credential_path) = prepared_github(vec![
-        json_http_response("201 Created", setup_session()),
-        json_http_response("200 OK", installation_body("active")),
+        setup_session_response(SETUP_SESSION, &setup_url),
+        setup_session_response(second_session, &setup_url),
+        json_http_response("200 OK", installation),
     ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
 
-    let begin = run_with_env(
-        &[
-            "connection",
-            "github",
-            "setup",
-            "begin",
-            ORGANIZATION,
-            "--allow-insecure-http",
-        ],
-        &environment,
-    );
+    let begin = run_with_env(&org_connection(&["connect", "github"]), &environment);
 
-    assert!(begin.status.success());
+    assert!(begin.status.success(), "{begin:?}");
     let human = String::from_utf8(begin.stdout).unwrap();
     assert!(human.starts_with("✓ GitHub setup started.\n"));
-    assert!(human.contains(&format!("  Setup session: {SETUP_SESSION}\n")));
     assert!(human.contains(&format!("  {setup_url}\n")));
     assert!(human.contains(&format!(
-        "useful connection github setup complete {ORGANIZATION} {SETUP_SESSION} --provider-installation-id <INSTALLATION_ID>"
+        "\n  useful org integration connect github --installation <INSTALLATION_ID> --org {ORGANIZATION}\n"
     )));
-    // The callback page erases its query string, so the hint points at the page, not the URL.
-    assert!(human.contains("installation ID"));
-    assert!(!human.contains("return URL"));
+    // The second invocation needs nothing from the first, so no session is printed to type.
+    assert!(!human.replace(&setup_url, "").contains(SETUP_SESSION));
     assert!(!human.contains("setup-response-sentinel"));
     assert!(begin.stderr.is_empty());
 
     let complete = run_with_env(
-        &[
-            "connection",
-            "github",
-            "setup",
-            "complete",
-            ORGANIZATION,
-            SETUP_SESSION,
-            "--provider-installation-id",
-            "713",
-            "--json",
-            "--allow-insecure-http",
-        ],
+        &org_connection(&["connect", "github", "--installation", "714", "--json"]),
         &environment,
     );
 
-    assert!(complete.status.success());
+    assert!(complete.status.success(), "{complete:?}");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&complete.stdout).unwrap(),
         serde_json::json!({
@@ -156,10 +163,10 @@ fn setup_begin_and_complete_preserve_the_browser_handoff() {
             "outcome": "completed",
             "installation": {
                 "id": INSTALLATION,
-                "providerInstallationId": "713",
+                "providerInstallationId": "714",
                 "providerAccountId": "829",
                 "providerAccountLogin": "acme",
-        "providerAccountType": "Organization",
+                "providerAccountType": "Organization",
                 "state": "active",
                 "createdAt": "2026-09-05T12:00:00Z",
                 "updatedAt": "2026-09-05T12:01:00Z"
@@ -170,28 +177,203 @@ fn setup_begin_and_complete_preserve_the_browser_handoff() {
     assert!(complete.stderr.is_empty());
 
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with(&format!(
-        "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions HTTP/1.1\r\n"
-    )));
-    assert!(request_body(&requests[0]).is_empty());
-    assert!(requests[1].starts_with(&format!(
-        "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions/{SETUP_SESSION}/completion HTTP/1.1\r\n"
+    assert_eq!(requests.len(), 3);
+    for request in &requests[..2] {
+        assert!(request.starts_with(&format!(
+            "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions HTTP/1.1\r\n"
+        )));
+        assert!(request_body(request).is_empty());
+    }
+    assert!(requests[2].starts_with(&format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions/{second_session}/completion HTTP/1.1\r\n"
     )));
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(request_body(&requests[1])).unwrap(),
-        serde_json::json!({"providerInstallationId": "713"})
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[2])).unwrap(),
+        serde_json::json!({"providerInstallationId": "714"})
     );
     for request in requests {
         assert_eq!(
             header_value(&request, "authorization"),
             format!("Bearer {TOKEN}")
         );
-        assert!(!request.contains("idempotency-key:"));
+        assert!(useful_test_support::request_header(&request, "idempotency-key").is_none());
     }
 }
 
-// REQ-CONNECTION-16
+// REQ-CONNECTION-17
+#[test]
+fn create_github_with_a_failed_begin_sends_no_completion() {
+    let (server, _directory, credential_path) = prepared_github(vec![github_problem(
+        "403 Forbidden",
+        403,
+        "https://api.usefulmachinery.com/problems/forbidden",
+    )]);
+
+    let output = run_with_env(
+        &org_connection(&["connect", "github", "--installation", "714", "--json"]),
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "forbidden");
+    assert_eq!(server.finish().len(), 1);
+}
+
+/// The organization's list of bindings holding `installation` alone.
+pub(super) fn installation_list(installation: serde_json::Value) -> Vec<u8> {
+    json_http_response("200 OK", serde_json::json!({"items": [installation]}))
+}
+
+// REQ-CONNECTION-108, REQ-CONNECTION-6
+#[test]
+fn reconnect_of_a_disconnected_binding_completes_a_session_for_its_own_installation() {
+    let setup_url =
+        format!("https://github.example/apps/scherzo/installations/new?state={SETUP_SESSION}");
+    let (server, _directory, credential_path) = prepared_github(vec![
+        installation_list(installation_body("disconnected")),
+        setup_session_response(SETUP_SESSION, &setup_url),
+        json_http_response("200 OK", installation_body("active")),
+    ]);
+
+    let output = run_with_env(
+        &org_connection(&["reconnect", INSTALLATION, "--json"]),
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "completed");
+    assert_eq!(document["installation"]["id"], INSTALLATION);
+    assert_eq!(document["installation"]["state"], "active");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&setup_url));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].starts_with(&format!(
+        "GET /api/v1/organizations/{ORGANIZATION}/github/installations HTTP/1.1\r\n"
+    )));
+    assert!(requests[1].starts_with(&format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions HTTP/1.1\r\n"
+    )));
+    assert!(requests[2].starts_with(&format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions/{SETUP_SESSION}/completion HTTP/1.1\r\n"
+    )));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[2])).unwrap(),
+        serde_json::json!({"providerInstallationId": "713"})
+    );
+}
+
+// REQ-CONNECTION-108
+#[test]
+fn reconnect_of_a_completion_that_names_another_binding_is_a_protocol_failure() {
+    let setup_url =
+        format!("https://github.example/apps/scherzo/installations/new?state={SETUP_SESSION}");
+    let mut other = installation_body("active");
+    other["id"] = serde_json::Value::String("ghi_01k0z6r1w8f4jy2m7q9v3x5abd".to_owned());
+    let (server, _directory, credential_path) = prepared_github(vec![
+        installation_list(installation_body("disconnected")),
+        setup_session_response(SETUP_SESSION, &setup_url),
+        json_http_response("200 OK", other),
+    ]);
+
+    let output = run_with_env(
+        &org_connection(&["reconnect", INSTALLATION, "--json"]),
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "invalid_response");
+    assert_eq!(server.finish().len(), 3);
+}
+
+// REQ-CONNECTION-108, REQ-CONNECTION-10
+#[test]
+fn reconnect_of_a_revoked_binding_is_refused_before_any_session() {
+    let (server, _directory, credential_path) = prepared_github(vec![
+        installation_list(installation_body("revoked")),
+        installation_list(installation_body("revoked")),
+    ]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+
+    let json = run_with_env(
+        &org_connection(&["reconnect", INSTALLATION, "--json"]),
+        &environment,
+    );
+
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let document: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(document["schemaVersion"], 1);
+    assert_eq!(document["organizationRef"], ORGANIZATION);
+    assert_eq!(document["outcome"], "source_connection_conflict");
+    assert!(json.stderr.is_empty());
+
+    let human = run_with_env(&org_connection(&["reconnect", "github"]), &environment);
+
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty());
+    let diagnostic = String::from_utf8(human.stderr).unwrap();
+    assert!(diagnostic.starts_with("error: "));
+    assert!(diagnostic.contains("\n  useful org integration connect github\n"));
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert!(request.starts_with(&format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/github/installations HTTP/1.1\r\n"
+        )));
+    }
+}
+
+// REQ-CONNECTION-106
+#[test]
+fn options_of_another_provider_are_refused_before_any_request() {
+    let (server, _directory, credential_path) = prepared_github(Vec::new());
+    let environment = deployment_environment(&server.api_url, &credential_path);
+
+    for args in [
+        &["connect", "github", "--state-updates"][..],
+        &["connect", "github", "--no-wait"][..],
+        &["connect", "github", "--timeout", "5m"][..],
+        &[
+            "connect",
+            "github",
+            "--token-file",
+            "t",
+            "--kind",
+            "service-account",
+        ][..],
+        &["connect", "linear", "--installation", "7"][..],
+        &["connect", "github", "--installation", "seven"][..],
+        &["reconnect", INSTALLATION, "--state-updates"][..],
+        &["reconnect", INSTALLATION, "--installation", "7"][..],
+    ] {
+        let output = run_with_env(&org_connection(args), &environment);
+
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+    }
+    assert!(server.finish().is_empty());
+}
+
+/// `useful org integration repository list INTEGRATION --json` in the organization `ORGANIZATION`.
+fn list_repositories(connection: &str) -> [&str; 9] {
+    [
+        "org",
+        "integration",
+        "repository",
+        "list",
+        connection,
+        "--org",
+        ORGANIZATION,
+        "--json",
+        "--allow-insecure-http",
+    ]
+}
+
+// REQ-CONNECTION-16, REQ-CONNECTION-73, REQ-CONNECTION-104
 #[test]
 fn installation_and_repository_lists_expose_current_provider_state() {
     let mut disconnected = installation_body("disconnected");
@@ -206,6 +388,7 @@ fn installation_and_repository_lists_expose_current_provider_state() {
                 "future": "installation-list-sentinel"
             }),
         ),
+        super::connection::no_authorizations(),
         json_http_response(
             "200 OK",
             serde_json::json!({
@@ -231,10 +414,12 @@ fn installation_and_repository_lists_expose_current_provider_state() {
 
     let installations = run_with_env(
         &[
-            "connection",
-            "github",
-            "installation",
+            "org",
+            "integration",
             "list",
+            "--provider",
+            "github",
+            "--org",
             ORGANIZATION,
             "--json",
             "--allow-insecure-http",
@@ -246,28 +431,17 @@ fn installation_and_repository_lists_expose_current_provider_state() {
         serde_json::from_slice(&installations.stdout).unwrap();
     assert_eq!(installations_json["outcome"], "listed");
     assert_eq!(installations_json["organizationRef"], ORGANIZATION);
+    assert_eq!(installations_json["items"][0]["provider"], "github");
     assert_eq!(installations_json["items"][0]["state"], "active");
     assert_eq!(installations_json["items"][1]["state"], "disconnected");
     assert_eq!(
-        installations_json["items"][1]["providerAccountType"],
+        installations_json["items"][1]["connection"]["providerAccountType"],
         "User"
     );
     assert!(!String::from_utf8_lossy(&installations.stdout).contains("sentinel"));
     assert!(installations.stderr.is_empty());
 
-    let repositories = run_with_env(
-        &[
-            "connection",
-            "github",
-            "repository",
-            "list",
-            ORGANIZATION,
-            INSTALLATION,
-            "--json",
-            "--allow-insecure-http",
-        ],
-        &environment,
-    );
+    let repositories = run_with_env(&list_repositories(INSTALLATION), &environment);
     assert!(repositories.status.success());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&repositories.stdout).unwrap(),
@@ -308,7 +482,11 @@ fn installation_and_repository_lists_expose_current_provider_state() {
             "GET /api/v1/organizations/acme-research/github/installations HTTP/1.1\r\n"
         )
     );
-    assert!(requests[1].starts_with(&format!(
+    // The installations' authorizations in force are read after them (REQ-INTEGRATION-34).
+    assert!(requests[1].starts_with(
+        "GET /api/v1/organizations/acme-research/connection-authorizations?limit=200 HTTP/1.1\r\n"
+    ));
+    assert!(requests[2].starts_with(&format!(
         "GET /api/v1/organizations/acme-research/github/installations/{INSTALLATION}/repositories HTTP/1.1\r\n"
     )));
 }
@@ -327,6 +505,7 @@ fn github_successes_reject_mismatched_response_subjects() {
         serde_json::Value::String(mismatched_binding_id.to_owned());
 
     let (server, _directory, credential_path) = prepared_github(vec![
+        setup_session_response(SETUP_SESSION, "https://github.example/apps/scherzo"),
         json_http_response("200 OK", mismatched_provider),
         json_http_response("200 OK", mismatched_binding),
         json_http_response(
@@ -340,39 +519,19 @@ fn github_successes_reject_mismatched_response_subjects() {
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let commands = [
+        org_connection(&["connect", "github", "--installation", "713", "--json"]),
         vec![
-            "connection",
-            "github",
-            "setup",
-            "complete",
-            ORGANIZATION,
-            SETUP_SESSION,
-            "--provider-installation-id",
-            "713",
-            "--json",
-            "--allow-insecure-http",
-        ],
-        vec![
-            "connection",
-            "github",
-            "installation",
-            "remove",
-            ORGANIZATION,
+            "org",
+            "integration",
+            "disconnect",
             INSTALLATION,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
         ],
-        vec![
-            "connection",
-            "github",
-            "repository",
-            "list",
-            ORGANIZATION,
-            INSTALLATION,
-            "--json",
-            "--allow-insecure-http",
-        ],
+        list_repositories(INSTALLATION).to_vec(),
     ];
 
     let observed = commands
@@ -387,7 +546,7 @@ fn github_successes_reject_mismatched_response_subjects() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(server.finish().len(), 3);
+    assert_eq!(server.finish().len(), 4);
     assert_eq!(
         observed,
         vec![
@@ -402,20 +561,11 @@ fn github_successes_reject_mismatched_response_subjects() {
 // REQ-CONNECTION-19
 #[test]
 fn replayable_connection_mutations_retry_one_ambiguous_transport_failure() {
+    let setup = || setup_session_response(SETUP_SESSION, "https://github.example/apps/scherzo");
     let cases = [
         (
-            &[
-                "connection",
-                "github",
-                "setup",
-                "complete",
-                ORGANIZATION,
-                SETUP_SESSION,
-                "--provider-installation-id",
-                "713",
-                "--json",
-                "--allow-insecure-http",
-            ][..],
+            org_connection(&["connect", "github", "--installation", "713", "--json"]),
+            vec![setup()],
             "active",
             "completed",
             format!(
@@ -423,17 +573,20 @@ fn replayable_connection_mutations_retry_one_ambiguous_transport_failure() {
             ),
         ),
         (
-            &[
-                "connection",
-                "github",
-                "installation",
-                "remove",
-                ORGANIZATION,
-                INSTALLATION,
-                "--yes",
-                "--json",
-                "--allow-insecure-http",
-            ][..],
+            org_connection(&["reconnect", INSTALLATION, "--json"]),
+            vec![
+                installation_list(installation_body("disconnected")),
+                setup(),
+            ],
+            "active",
+            "completed",
+            format!(
+                "POST /api/v1/organizations/{ORGANIZATION}/github/setup-sessions/{SETUP_SESSION}/completion HTTP/1.1\r\n"
+            ),
+        ),
+        (
+            org_connection(&["disconnect", INSTALLATION, "--yes", "--json"]),
+            Vec::new(),
             "disconnected",
             "disconnected",
             format!(
@@ -442,24 +595,29 @@ fn replayable_connection_mutations_retry_one_ambiguous_transport_failure() {
         ),
     ];
 
-    for (args, state, expected_outcome, expected_request) in cases {
-        let (server, _directory, credential_path) = prepared_github(vec![
-            Vec::new(),
-            json_http_response("200 OK", installation_body(state)),
-        ]);
+    for (args, leading, state, expected_outcome, expected_request) in cases {
+        let before = leading.len();
+        let responses = leading
+            .into_iter()
+            .chain([
+                Vec::new(),
+                json_http_response("200 OK", installation_body(state)),
+            ])
+            .collect();
+        let (server, _directory, credential_path) = prepared_github(responses);
         let environment = deployment_environment(&server.api_url, &credential_path);
 
-        let output = run_with_env(args, &environment);
+        let output = run_with_env(&args, &environment);
 
-        assert!(output.status.success());
+        assert!(output.status.success(), "{args:?}: {output:?}");
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["outcome"], expected_outcome);
         assert_eq!(value["installation"]["state"], state);
         assert!(output.stderr.is_empty());
         let requests = server.finish();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0], requests[1]);
-        assert!(requests[0].starts_with(&expected_request));
+        assert_eq!(requests.len(), before + 2, "{args:?}");
+        assert_eq!(requests[before], requests[before + 1]);
+        assert!(requests[before].starts_with(&expected_request));
     }
 }
 
@@ -472,14 +630,7 @@ fn meaningful_api_failures_have_closed_json_and_exit_statuses() {
             409,
             "https://api.usefulmachinery.com/problems/source-connection-conflict",
         ),
-        vec![
-            "connection",
-            "github",
-            "repository",
-            "list",
-            ORGANIZATION,
-            INSTALLATION,
-        ],
+        list_repositories(INSTALLATION)[..7].to_vec(),
         "source_connection_conflict",
         1,
     )];
@@ -516,21 +667,14 @@ fn setup_conflict_is_actionable_on_standard_error_without_problem_prose() {
         409,
         "https://api.usefulmachinery.com/problems/source-connection-conflict",
     );
-    let (server, _directory, credential_path) = prepared_github(vec![response]);
+    let (server, _directory, credential_path) = prepared_github(vec![
+        setup_session_response(SETUP_SESSION, "https://github.example/apps/scherzo"),
+        response,
+    ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
-        &[
-            "connection",
-            "github",
-            "setup",
-            "complete",
-            ORGANIZATION,
-            SETUP_SESSION,
-            "--provider-installation-id",
-            "713",
-            "--allow-insecure-http",
-        ],
+        &org_connection(&["connect", "github", "--installation", "713"]),
         &environment,
     );
 
@@ -538,11 +682,12 @@ fn setup_conflict_is_actionable_on_standard_error_without_problem_prose() {
     assert!(output.stdout.is_empty());
     let diagnostic = String::from_utf8(output.stderr).unwrap();
     assert!(diagnostic.starts_with("error: "));
-    assert!(diagnostic.contains("\n\n"));
-    assert!(diagnostic.contains("useful connection github setup begin <ORGANIZATION>"));
+    let (_, remedy) = diagnostic.split_once("\n\n").unwrap();
+    assert!(remedy.contains("\n  useful org integration list\n"));
+    assert!(remedy.contains("\n  useful org integration connect github\n"));
     assert!(!diagnostic.contains("private-github"));
     assert!(!diagnostic.contains(TOKEN));
-    assert_eq!(server.finish().len(), 1);
+    assert_eq!(server.finish().len(), 2);
 }
 
 #[test]
@@ -566,19 +711,7 @@ fn oversized_github_success_response_is_rejected() {
     let (server, _directory, credential_path) = prepared_github(vec![response]);
     let environment = deployment_environment(&server.api_url, &credential_path);
 
-    let output = run_with_env(
-        &[
-            "connection",
-            "github",
-            "repository",
-            "list",
-            ORGANIZATION,
-            INSTALLATION,
-            "--json",
-            "--allow-insecure-http",
-        ],
-        &environment,
-    );
+    let output = run_with_env(&list_repositories(INSTALLATION), &environment);
 
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
@@ -606,15 +739,7 @@ fn remote_insecure_setup_url_is_rejected_before_browser_handoff() {
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
-        &[
-            "connection",
-            "github",
-            "setup",
-            "begin",
-            ORGANIZATION,
-            "--json",
-            "--allow-insecure-http",
-        ],
+        &org_connection(&["connect", "github", "--json"]),
         &environment,
     );
 
@@ -639,12 +764,12 @@ fn malformed_success_is_a_redacted_protocol_failure() {
 
     let output = run_with_env(
         &[
-            "connection",
-            "github",
-            "installation",
-            "remove",
-            ORGANIZATION,
+            "org",
+            "integration",
+            "disconnect",
             INSTALLATION,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -665,4 +790,138 @@ fn malformed_success_is_a_redacted_protocol_failure() {
     assert!(!combined.contains("private-invalid-provider-id-sentinel"));
     assert!(!combined.contains(TOKEN));
     server.finish();
+}
+
+fn show_installation(server: &ScriptedServer, credential_path: &str) -> Output {
+    run_with_env(
+        &[
+            "org",
+            "integration",
+            "show",
+            INSTALLATION,
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, credential_path),
+    )
+}
+
+// REQ-CONNECTION-105
+#[test]
+fn show_of_an_active_binding_reads_it_from_the_list_and_then_its_repositories() {
+    let mut other = installation_body("revoked");
+    other["id"] = serde_json::Value::String("ghi_01k0z6r1w8f4jy2m7q9v3x5abd".to_owned());
+    let (server, _directory, credential_path) = prepared_github(vec![
+        super::connection::no_authorizations(),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": [other, installation_body("active")]}),
+        ),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({
+                "installation": installation_body("active"),
+                "items": [{
+                    "providerRepositoryId": "991",
+                    "fullName": "acme/widgets",
+                    "defaultBranch": "main"
+                }]
+            }),
+        ),
+    ]);
+
+    let output = show_installation(&server, &credential_path);
+
+    assert!(output.status.success(), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["schemaVersion"], 1);
+    assert_eq!(document["deployment"], server.api_url);
+    assert_eq!(document["organizationRef"], ORGANIZATION);
+    assert_eq!(document["outcome"], "shown");
+    assert_eq!(document["installation"]["id"], INSTALLATION);
+    assert_eq!(document["installation"]["state"], "active");
+    assert_eq!(document["items"][0]["fullName"], "acme/widgets");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("omitted"));
+    assert_eq!(document["authorizations"], serde_json::json!([]));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[1].starts_with(
+            "GET /api/v1/organizations/acme-research/github/installations HTTP/1.1\r\n"
+        )
+    );
+    assert!(requests[2].starts_with(&format!(
+        "GET /api/v1/organizations/acme-research/github/installations/{INSTALLATION}/repositories HTTP/1.1\r\n"
+    )));
+}
+
+// REQ-CONNECTION-105
+#[test]
+fn show_of_a_disconnected_binding_reads_no_repositories() {
+    let (server, _directory, credential_path) = prepared_github(vec![
+        super::connection::no_authorizations(),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": [installation_body("disconnected")]}),
+        ),
+    ]);
+
+    let output = show_installation(&server, &credential_path);
+
+    assert!(output.status.success(), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "shown");
+    assert_eq!(document["installation"]["state"], "disconnected");
+    assert!(document.get("items").is_none(), "{document}");
+    assert_eq!(server.finish().len(), 2);
+}
+
+// REQ-CONNECTION-105
+#[test]
+fn show_of_a_binding_the_list_does_not_hold_is_not_found() {
+    let (server, _directory, credential_path) = prepared_github(vec![
+        super::connection::no_authorizations(),
+        json_http_response("200 OK", serde_json::json!({"items": []})),
+    ]);
+
+    let output = show_installation(&server, &credential_path);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "not_found");
+    assert_eq!(server.finish().len(), 2);
+}
+
+// REQ-CONNECTION-73, REQ-CONNECTION-107
+#[test]
+fn repository_list_of_github_lists_the_repositories_of_the_binding_in_use() {
+    let mut revoked = installation_body("revoked");
+    revoked["id"] = serde_json::Value::String("ghi_01k0z6r1w8f4jy2m7q9v3x5abd".to_owned());
+    let (server, _directory, credential_path) = prepared_github(vec![
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": [revoked, installation_body("active")]}),
+        ),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"installation": installation_body("active"), "items": []}),
+        ),
+    ]);
+
+    let output = run_with_env(
+        &list_repositories("github"),
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["outcome"], "listed");
+    assert_eq!(document["installation"]["id"], INSTALLATION);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].starts_with(&format!(
+        "GET /api/v1/organizations/acme-research/github/installations/{INSTALLATION}/repositories HTTP/1.1\r\n"
+    )));
 }

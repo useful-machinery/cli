@@ -1,3 +1,9 @@
+//! `useful runner join-key`: a pool's join keys and the runners' single-runner keys
+//! (REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-11, REQ-RUNNERENROLL-93,
+//! REQ-RUNNERENROLL-94).
+
+mod single;
+
 use std::io::{self, Write};
 
 use anyhow::{Context, anyhow};
@@ -5,16 +11,19 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use super::{
-    CloudOptions, OrganizationArg, PaginationArgs, PoolArg, cloud, completed_cloud_result,
-};
+use super::{CloudOptions, LIST_PAGE, OrgArgs, PoolArg, cloud, completed_cloud_result};
+use crate::cli::{CommandFailure, CommandResult};
 use crate::exit_code::ExitCode;
+use useful_api::{RunnerActivation, RunnerApi, RunnerFailure};
 use useful_human_auth::Deployment;
 use useful_runner::ArtifactDestination;
 use useful_support::generate_idempotency_key;
 
-pub(super) const ABOUT: &str = "Manage runner pool join keys";
+pub(super) const ABOUT: &str = "Manage runner join keys and single-runner keys";
 const COMMAND_PATH: &[&str] = &["runner", "join-key"];
+// The same help as the `account integration` and `runner credential` leaves' `--runner`, one help
+// class.
+const RUNNER_HELP: &str = "Runner ID or exact name";
 // Largest unit first, so a removal time prints as it is usually written.
 const DURATION_UNITS: [(&str, u32); 3] = [("d", 86_400), ("h", 3_600), ("m", 60)];
 
@@ -37,8 +46,16 @@ struct JoinKeyListResult<'a, K> {
     deployment: &'a str,
     outcome: &'static str,
     items: &'a [K],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_cursor: Option<&'a str>,
+    single_runner_keys: &'a [RunnerActivation],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SingleRunnerKeyRevocationResult<'a> {
+    schema_version: u8,
+    deployment: &'a str,
+    outcome: &'static str,
+    activation: &'a RunnerActivation,
 }
 
 #[derive(Debug, Args)]
@@ -50,40 +67,68 @@ pub(super) struct Command {
 #[derive(Debug, Subcommand)]
 enum JoinKeyCommand {
     #[command(
-        about = "Issue a runner pool join key",
-        after_help = "Join key:\n  Any number of hosts can join the pool with one key until it expires or is revoked."
+        about = "Issue a runner join key or single-runner key",
+        after_help = "Keys:\n  Without --runner, the key is the pool's join key: any number of hosts can join the pool with it until it expires or is revoked.\n  With --runner, the key is a single-runner key: one host enrolls that runner with it within an hour. A name no runner has registers the runner first."
     )]
     Issue(IssueCommand),
-    #[command(about = "List runner pool join keys")]
+    #[command(
+        about = "List runner join keys and single-runner keys",
+        after_help = "Reads:\n  Without --runner, the command reads every page of the join keys, of the runners and of each runner's single-runner keys, and passes over a runner whose keys you may not read."
+    )]
     List(ListCommand),
     #[command(
-        about = "Revoke a runner pool join key",
-        after_help = "Revocation:\n  The runners that joined with the key stay in the pool."
+        about = "Revoke a runner join key or single-runner key",
+        after_help = "Revocation:\n  The runners that joined with a pool's join key stay in the pool. Without --runner, a single-runner key is found by reading the runners' keys."
     )]
     Revoke(RevokeCommand),
 }
 
+// `--member` requires `--runner` through this group, since clap passes over an argument that
+// is missing when one it conflicts with, such as `--expires-in`, is present.
 #[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("single_runner").args(["runner"])))]
 struct IssueCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    // With no pool named, the key is for the caller's own personal pool.
-    #[arg(long = "pool-id", value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
+    // With neither a pool nor a member named, the key is for the caller's own personal pool.
+    #[arg(
+        long,
+        value_name = PoolArg::VALUE_NAME,
+        conflicts_with = "member",
+        help = "Runner pool ID or exact name; with neither --pool nor --member, your own personal pool"
+    )]
     pool: Option<PoolArg>,
+
+    #[arg(
+        long,
+        value_name = "MEMBER",
+        value_parser = single::parse_member,
+        requires = "single_runner",
+        help = "Register the runner in this member's personal pool: principal ID, membership ID or verified email address"
+    )]
+    member: Option<single::MemberArg>,
+
+    #[arg(
+        long,
+        value_name = "RUNNER",
+        conflicts_with_all = ["expires_in", "remove_after"],
+        help = "Issue a single-runner key for this runner ID or exact name; a name no runner has registers the runner"
+    )]
+    runner: Option<String>,
 
     #[arg(
         long,
         value_name = "DURATION",
         value_parser = parse_expiry,
-        help = "Set how long the key admits hosts, from 1m to 365d"
+        required_unless_present = "runner",
+        help = "Set how long the pool's key admits hosts, from 1m to 365d"
     )]
-    expires_in: i32,
+    expires_in: Option<i32>,
 
     #[arg(
         long,
         value_name = "DURATION",
         value_parser = parse_removal_time,
+        // The API requires a removal time, and 30 days is the longest it admits.
+        default_value = "30d",
         help = "Set how long a runner that joined may stay offline before removal, from 5m to 30d"
     )]
     remove_after: i32,
@@ -91,9 +136,12 @@ struct IssueCommand {
     #[arg(
         long,
         value_name = "PATH|-",
-        help = "Create the protected join key file; with - or when omitted, write only the join key to stdout"
+        help = "Create the protected key file, or with - or when omitted write only the key to standard output"
     )]
-    join_key_file: Option<String>,
+    key_file: Option<String>,
+
+    #[command(flatten)]
+    org: OrgArgs,
 
     #[command(flatten)]
     options: CloudOptions,
@@ -101,14 +149,19 @@ struct IssueCommand {
 
 #[derive(Debug, Args)]
 struct ListCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(long = "pool-id", value_name = PoolArg::VALUE_NAME, help = PoolArg::HELP)]
+    #[arg(
+        long,
+        value_name = PoolArg::VALUE_NAME,
+        conflicts_with = "runner",
+        help = "List only this pool's keys and runners, by runner pool ID or exact name"
+    )]
     pool: Option<PoolArg>,
 
+    #[arg(long, value_name = "RUNNER", help = RUNNER_HELP)]
+    runner: Option<String>,
+
     #[command(flatten)]
-    pagination: PaginationArgs,
+    org: OrgArgs,
 
     #[command(flatten)]
     options: CloudOptions,
@@ -116,25 +169,49 @@ struct ListCommand {
 
 #[derive(Debug, Args)]
 struct RevokeCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
+    #[arg(
+        value_name = "KEY",
+        value_parser = parse_key_id,
+        help = "Runner join key ID or single-runner key ID"
+    )]
+    key: KeyId,
 
-    #[arg(value_name = "KEY", value_parser = parse_join_key_id, help = "Runner join key ID")]
-    join_key: String,
+    #[arg(long, value_name = "RUNNER", help = RUNNER_HELP)]
+    runner: Option<String>,
 
     #[command(flatten)]
     confirmation: super::super::ConfirmationArgs,
 
     #[command(flatten)]
+    org: OrgArgs,
+
+    #[command(flatten)]
     options: CloudOptions,
 }
 
+/// A key as `revoke` names it; the two kinds are told apart by the ID alone.
+#[derive(Clone, Debug)]
+enum KeyId {
+    Pool(String),
+    SingleRunner(String),
+}
+
+fn parse_key_id(value: &str) -> Result<KeyId, String> {
+    if useful_support::valid_typed_id(value, "rjk_") {
+        Ok(KeyId::Pool(value.to_owned()))
+    } else if useful_support::valid_typed_id(value, "rna_") {
+        Ok(KeyId::SingleRunner(value.to_owned()))
+    } else {
+        Err("must be an exact runner join key ID (rjk_) or single-runner key ID (rna_)".to_owned())
+    }
+}
+
 impl Command {
-    pub(super) fn execute(self) -> super::super::CommandResult {
+    pub(super) fn execute(self) -> CommandResult {
         let Some(command) = self.command else {
             return super::super::print_help(COMMAND_PATH);
         };
-        super::execute_cloud(command, |command, deployment| match command {
+        super::execute_in_cloud(command, |command, deployment| match command {
             JoinKeyCommand::Issue(command) => command.execute(deployment),
             JoinKeyCommand::List(command) => command.execute(deployment),
             JoinKeyCommand::Revoke(command) => command.execute(deployment),
@@ -143,21 +220,72 @@ impl Command {
 }
 
 impl IssueCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    fn execute(self, deployment: &Deployment) -> CommandResult {
+        let Self {
+            pool,
+            member,
+            runner,
+            expires_in,
+            remove_after,
+            key_file,
+            org,
+            options,
+        } = self;
         // The file exists before the key does, so a refused path costs no key.
-        let destination = prepare_destination(self.join_key_file.as_deref(), self.options.json)?;
+        let destination = prepare_destination(key_file.as_deref(), options.json)?;
+        if let Some(runner) = runner {
+            return single::issue(
+                single::Request {
+                    runner,
+                    pool,
+                    member,
+                },
+                destination,
+                org,
+                options,
+                deployment,
+            );
+        }
+        let expires_in =
+            expires_in.ok_or_else(|| anyhow!("--expires-in is required without --runner"))?;
+        super::execute_in(org, options, deployment, |options, organization| {
+            PoolKey {
+                pool,
+                expires_in,
+                remove_after,
+            }
+            .issue(deployment, &options, organization, destination)
+        })
+    }
+}
+
+/// A pool's join key to issue (REQ-RUNNERENROLL-93).
+struct PoolKey {
+    pool: Option<PoolArg>,
+    expires_in: i32,
+    remove_after: i32,
+}
+
+impl PoolKey {
+    fn issue(
+        self,
+        deployment: &Deployment,
+        options: &CloudOptions,
+        organization: &str,
+        destination: ArtifactDestination,
+    ) -> anyhow::Result<ExitCode> {
         let key = generate_idempotency_key().context("generate join key request identity")?;
         let result = cloud::with_api(
             deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
+            options.http.transport_policy(),
+            &options.authentication,
             |api| {
                 let pool_id = match &self.pool {
-                    Some(pool) => pool.resolve_id(api, &self.organization)?,
-                    None => api.get_personal_pool(&self.organization)?.id,
+                    Some(pool) => pool.resolve_id(api, organization)?,
+                    None => api.get_personal_pool(organization)?.id,
                 };
                 api.issue_join_key(
-                    &self.organization,
+                    organization,
                     &pool_id,
                     &key,
                     self.expires_in,
@@ -168,8 +296,8 @@ impl IssueCommand {
         let issuance = match completed_cloud_result(
             deployment,
             result,
-            self.options.authentication.kind(),
-            self.options.json,
+            options.authentication.kind(),
+            options.json,
         )? {
             Ok(issuance) => issuance,
             Err(exit_code) => return Ok(exit_code),
@@ -179,10 +307,9 @@ impl IssueCommand {
                 "join key issuance replay omitted its secret; issue a replacement join key with a new command"
             )
         })?;
-        let join_key_file = destination
-            .file_path()
-            .map(|path| path.display().to_string());
-        write_artifact(destination, artifact)?;
+        let mut line = Zeroizing::new(serde_json::to_vec(artifact).context("serialize join key")?);
+        line.push(b'\n');
+        let join_key_file = write_key(destination, &line)?;
         let join_key = &*issuance.join_key;
         let Some(join_key_file) = join_key_file else {
             // Standard output carries the key alone, so the status goes to stderr.
@@ -194,7 +321,7 @@ impl IssueCommand {
             )?;
             return Ok(ExitCode::Success);
         };
-        if self.options.json {
+        if options.json {
             cloud::write_json(&JoinKeyResult {
                 schema_version: 1,
                 deployment: deployment.fingerprint().api_url(),
@@ -220,132 +347,304 @@ impl IssueCommand {
     }
 }
 
+/// The keys `list` prints: the pool keys, then the single-runner keys of every runner in scope.
+struct Listing<K> {
+    join_keys: Vec<K>,
+    single_runner_keys: Vec<RunnerActivation>,
+}
+
 impl ListCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| {
-                let pool_id = self
-                    .pool
-                    .as_ref()
-                    .map(|pool| pool.resolve_id(api, &self.organization))
-                    .transpose()?;
-                api.list_join_keys(
-                    &self.organization,
-                    pool_id.as_deref(),
-                    self.pagination.limit,
-                    self.pagination.cursor.as_deref(),
-                )
-            },
-        )?;
-        let page = match result {
-            Ok(page) => page,
-            Err(failure) => return self.options.write_failure(deployment, &failure),
-        };
-        let api_url = deployment.fingerprint().api_url();
-        if self.options.json {
-            cloud::write_json(&JoinKeyListResult {
-                schema_version: 1,
-                deployment: api_url,
-                outcome: "listed",
-                items: &page.items,
-                next_cursor: page.next_cursor.as_deref(),
-            })?;
-            return Ok(ExitCode::Success);
-        }
-        let stdout = io::stdout();
-        let mut stdout = stdout.lock();
-        writeln!(stdout, "✓ Runner join keys listed.\n")?;
-        for join_key in &page.items {
-            writeln!(
-                stdout,
-                "  Join key: {}  Pool: {}  Issuer: {}  State: {}  Expires: {}  Remove after: {}",
-                join_key.id,
-                join_key.runner_pool_id,
-                join_key.issued_by_principal_id,
-                cloud::enum_text(&join_key.state)?,
-                join_key.expires_at,
-                duration_text(join_key.offline_removal_seconds)
+    fn execute(self, deployment: &Deployment) -> CommandResult {
+        let Self {
+            pool,
+            runner,
+            org,
+            options,
+        } = self;
+        super::execute_in(org, options, deployment, |options, organization| {
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| match &runner {
+                    Some(runner) => {
+                        let runner = api.get_registration(organization, runner)?;
+                        Ok(Listing {
+                            join_keys: Vec::new(),
+                            single_runner_keys: every_activation(api, organization, &runner.id)?,
+                        })
+                    }
+                    None => {
+                        let pool_id = pool
+                            .as_ref()
+                            .map(|pool| pool.resolve_id(api, organization))
+                            .transpose()?;
+                        let join_keys =
+                            crate::cli::paging::every_page(RunnerFailure::Protocol, |cursor| {
+                                api.list_join_keys(
+                                    organization,
+                                    pool_id.as_deref(),
+                                    Some(LIST_PAGE),
+                                    cursor,
+                                )
+                                .map(|page| (page.items, page.next_cursor))
+                            })?;
+                        Ok(Listing {
+                            join_keys,
+                            single_runner_keys: readable_keys(
+                                api,
+                                organization,
+                                pool_id.as_deref(),
+                            )?,
+                        })
+                    }
+                },
             )?;
-        }
-        if !page.items.is_empty() {
-            writeln!(stdout)?;
-        }
-        if let Some(cursor) = &page.next_cursor {
-            writeln!(stdout, "  Next cursor: {cursor}")?;
-        }
-        writeln!(stdout, "  Deployment: {api_url}")?;
-        Ok(ExitCode::Success)
+            let listing = match result {
+                Ok(listing) => listing,
+                Err(failure) => return options.write_failure(deployment, &failure),
+            };
+            let api_url = deployment.fingerprint().api_url();
+            if options.json {
+                cloud::write_json(&JoinKeyListResult {
+                    schema_version: 1,
+                    deployment: api_url,
+                    outcome: "listed",
+                    items: &listing.join_keys,
+                    single_runner_keys: &listing.single_runner_keys,
+                })?;
+                return Ok(ExitCode::Success);
+            }
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
+            writeln!(stdout, "✓ Runner join keys listed.\n")?;
+            for join_key in &listing.join_keys {
+                writeln!(
+                    stdout,
+                    "  Join key: {}  Pool: {}  Issuer: {}  State: {}  Expires: {}  Remove after: {}",
+                    join_key.id,
+                    join_key.runner_pool_id,
+                    join_key.issued_by_principal_id,
+                    cloud::enum_text(&join_key.state)?,
+                    join_key.expires_at,
+                    duration_text(join_key.offline_removal_seconds)
+                )?;
+            }
+            for key in &listing.single_runner_keys {
+                writeln!(
+                    stdout,
+                    "  Single-runner key: {}  Runner: {}  State: {}  Expires: {}",
+                    key.id,
+                    key.runner_id,
+                    cloud::enum_text(&key.state)?,
+                    key.expires_at
+                )?;
+            }
+            if !listing.join_keys.is_empty() || !listing.single_runner_keys.is_empty() {
+                writeln!(stdout)?;
+            }
+            writeln!(stdout, "  Deployment: {api_url}")?;
+            Ok(ExitCode::Success)
+        })
     }
+}
+
+/// Every single-runner key of `runner_id`, its activation list read to its last page.
+fn every_activation(
+    api: &RunnerApi,
+    organization: &str,
+    runner_id: &str,
+) -> Result<Vec<RunnerActivation>, RunnerFailure> {
+    crate::cli::paging::every_page(RunnerFailure::Protocol, |cursor| {
+        api.list_activations(organization, runner_id, Some(LIST_PAGE), cursor)
+            .map(|page| (page.items, page.next_cursor))
+    })
+}
+
+/// The single-runner keys of each runner of `organization`, of the pool `pool_id` names when
+/// one is given; a runner whose keys the caller may not read is passed over
+/// (REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-12).
+fn readable_keys(
+    api: &RunnerApi,
+    organization: &str,
+    pool_id: Option<&str>,
+) -> Result<Vec<RunnerActivation>, RunnerFailure> {
+    let mut readable = Vec::new();
+    for runner in super::every_registration(api, organization, pool_id)? {
+        match every_activation(api, organization, &runner.id) {
+            Ok(keys) => readable.extend(keys),
+            Err(RunnerFailure::Forbidden) => {}
+            Err(failure) => return Err(failure),
+        }
+    }
+    Ok(readable)
+}
+
+/// The runner that holds the single-runner key `activation_id`: the runners read in order,
+/// each runner's keys to their last page, stopping at the first that holds it; a runner whose
+/// keys the caller may not read is passed over, and a key none holds is `NotFound`
+/// (REQ-RUNNERENROLL-11).
+fn holder_of(
+    api: &RunnerApi,
+    organization: &str,
+    activation_id: &str,
+) -> Result<String, RunnerFailure> {
+    for runner in super::every_registration(api, organization, None)? {
+        match every_activation(api, organization, &runner.id) {
+            Ok(keys) if keys.iter().any(|key| key.id == activation_id) => return Ok(runner.id),
+            Ok(_) | Err(RunnerFailure::Forbidden) => {}
+            Err(failure) => return Err(failure),
+        }
+    }
+    Err(RunnerFailure::NotFound)
 }
 
 impl RevokeCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let key = generate_idempotency_key().context("generate join key revocation identity")?;
-        let result = cloud::with_api(
-            deployment,
-            self.options.http.transport_policy(),
-            &self.options.authentication,
-            |api| api.revoke_join_key(&self.organization, &self.join_key, &key),
-        )?;
-        let join_key = match result {
-            Ok(join_key) => join_key,
-            Err(failure) => return self.options.write_failure(deployment, &failure),
-        };
-        let api_url = deployment.fingerprint().api_url();
-        if self.options.json {
-            cloud::write_json(&JoinKeyResult {
-                schema_version: 1,
-                deployment: api_url,
-                outcome: "revoked",
-                join_key: &join_key,
-                join_key_file: None,
-            })?;
-        } else {
-            writeln!(
-                io::stdout().lock(),
-                "✓ Runner join key revoked.\n\n  Join key:   {}\n  Deployment: {api_url}",
-                join_key.id
-            )?;
+    fn execute(self, deployment: &Deployment) -> CommandResult {
+        let Self {
+            key,
+            runner,
+            confirmation: _,
+            org,
+            options,
+        } = self;
+        if matches!(key, KeyId::Pool(_)) && runner.is_some() {
+            return Err(CommandFailure::with_exit_code(
+                anyhow!(
+                    "--runner names the runner of a single-runner key (rna_), and a pool's join key (rjk_) has none; nothing was revoked\n\nRun the command again without --runner."
+                ),
+                ExitCode::UsageError,
+            ));
         }
-        Ok(ExitCode::Success)
+        super::execute_in(
+            org,
+            options,
+            deployment,
+            |options, organization| match key {
+                KeyId::Pool(join_key) => {
+                    revoke_pool_key(deployment, &options, organization, &join_key)
+                }
+                KeyId::SingleRunner(activation) => revoke_single_runner_key(
+                    deployment,
+                    &options,
+                    organization,
+                    &activation,
+                    runner.as_deref(),
+                ),
+            },
+        )
     }
 }
 
-/// Prepares where an issued join key goes (REQ-RUNNERENROLL-93): no
-/// `--join-key-file`, like `-`, means standard output, which structured
-/// output never shares with a token; a path is a new file only its owner can
-/// read.
+fn revoke_pool_key(
+    deployment: &Deployment,
+    options: &CloudOptions,
+    organization: &str,
+    join_key: &str,
+) -> anyhow::Result<ExitCode> {
+    let key = generate_idempotency_key().context("generate join key revocation identity")?;
+    let result = cloud::with_api(
+        deployment,
+        options.http.transport_policy(),
+        &options.authentication,
+        |api| api.revoke_join_key(organization, join_key, &key),
+    )?;
+    let join_key = match result {
+        Ok(join_key) => join_key,
+        Err(failure) => return options.write_failure(deployment, &failure),
+    };
+    let api_url = deployment.fingerprint().api_url();
+    if options.json {
+        cloud::write_json(&JoinKeyResult {
+            schema_version: 1,
+            deployment: api_url,
+            outcome: "revoked",
+            join_key: &join_key,
+            join_key_file: None,
+        })?;
+    } else {
+        writeln!(
+            io::stdout().lock(),
+            "✓ Runner join key revoked.\n\n  Join key:   {}\n  Deployment: {api_url}",
+            join_key.id
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+fn revoke_single_runner_key(
+    deployment: &Deployment,
+    options: &CloudOptions,
+    organization: &str,
+    activation: &str,
+    runner: Option<&str>,
+) -> anyhow::Result<ExitCode> {
+    let key =
+        generate_idempotency_key().context("generate single-runner key revocation identity")?;
+    let result = cloud::with_api(
+        deployment,
+        options.http.transport_policy(),
+        &options.authentication,
+        |api| {
+            let runner_id = match runner {
+                Some(runner) => api.get_registration(organization, runner)?.id,
+                None => holder_of(api, organization, activation)?,
+            };
+            api.revoke_activation(organization, &runner_id, activation, &key)
+        },
+    )?;
+    let activation = match result {
+        Ok(activation) => activation,
+        Err(failure) => return options.write_failure(deployment, &failure),
+    };
+    let api_url = deployment.fingerprint().api_url();
+    if options.json {
+        cloud::write_json(&SingleRunnerKeyRevocationResult {
+            schema_version: 1,
+            deployment: api_url,
+            outcome: "revoked",
+            activation: &activation,
+        })?;
+    } else {
+        writeln!(
+            io::stdout().lock(),
+            "✓ Single-runner key revoked.\n\n  Single-runner key: {}\n  Runner:            {}\n  Deployment:        {api_url}",
+            activation.id,
+            activation.runner_id
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Prepares where an issued key goes (REQ-RUNNERENROLL-5, REQ-RUNNERENROLL-62,
+/// REQ-RUNNERENROLL-93): no `--key-file`, like `-`, means standard output, which structured
+/// output never shares with a token; a path is a new file only its owner can read.
 fn prepare_destination(
     destination: Option<&str>,
     json: bool,
 ) -> anyhow::Result<ArtifactDestination> {
     match destination {
-        None if json => Err(anyhow!("--json requires --join-key-file PATH")),
-        Some("-") if json => Err(anyhow!("--json cannot be combined with --join-key-file -")),
+        None if json => Err(anyhow!("--json requires --key-file PATH")),
+        Some("-") if json => Err(anyhow!("--json cannot be combined with --key-file -")),
         None => Ok(ArtifactDestination::Stdout),
-        Some(path) => ArtifactDestination::prepare(path)
-            .with_context(|| format!("create join key file {path}")),
+        Some(path) => {
+            ArtifactDestination::prepare(path).with_context(|| format!("create key file {path}"))
+        }
     }
 }
 
-/// Writes the artifact as one line of JSON, so the same text can also be
-/// held in an environment variable.
-fn write_artifact(
-    destination: ArtifactDestination,
-    artifact: &impl Serialize,
-) -> anyhow::Result<()> {
-    let mut line = Zeroizing::new(serde_json::to_vec(artifact).context("serialize join key")?);
-    line.push(b'\n');
+/// Writes `line`, one line of JSON, to the prepared destination, so the same text can be
+/// pasted at the `--join-key` prompt or held in an environment variable; answers the file's
+/// path, or none for standard output.
+fn write_key(destination: ArtifactDestination, line: &[u8]) -> anyhow::Result<Option<String>> {
     let path = destination
         .file_path()
         .map(|path| path.display().to_string());
-    destination.write(&line).with_context(|| match path {
-        Some(path) => format!("write join key file {path}"),
-        None => "write join key to stdout".to_owned(),
-    })
+    destination.write(line).with_context(|| match &path {
+        Some(path) => format!("write key file {path}"),
+        None => "write key to stdout".to_owned(),
+    })?;
+    Ok(path)
 }
 
 fn parse_expiry(value: &str) -> Result<i32, String> {
@@ -391,14 +690,6 @@ fn duration_text(seconds: i32) -> String {
             || format!("{seconds}s"),
             |(suffix, unit_seconds)| format!("{}{suffix}", unsigned / unit_seconds),
         )
-}
-
-fn parse_join_key_id(value: &str) -> Result<String, String> {
-    if useful_support::valid_typed_id(value, "rjk_") {
-        Ok(value.to_owned())
-    } else {
-        Err("must be an exact runner join key ID".to_owned())
-    }
 }
 
 #[cfg(test)]

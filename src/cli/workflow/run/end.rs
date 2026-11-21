@@ -1,12 +1,14 @@
-//! `useful workflow run withdraw`, `cancel` and `release` (REQ-LOCALRUN-186, REQ-LOCALRUN-187);
-//! with `--cloud ORGANIZATION`, `withdraw` and `cancel` ask Cloud to end a Cloud run instead
-//! (REQ-LOCALRUN-218) and `release` releases its subject claim (REQ-CLOUDDEF-19).
+//! `useful workflow run cancel` and `release` (REQ-LOCALRUN-186, REQ-LOCALRUN-187): each acts on
+//! the run `RUN` names wherever it executes, found under the `useful` home and then in Cloud
+//! (REQ-LOCALRUN-180). `cancel` ends it, a Cloud run through the API (REQ-LOCALRUN-218), and
+//! `release` records the release of an ended run under the home or releases a Cloud run's
+//! subject claim (REQ-CLOUDDEF-19).
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use rustix::process::{Pid, Signal, kill_process};
 use useful_execution::{
     CANCELED_OUTCOME, CONTROL_CANCEL, CONTROL_RELEASE, CONTROL_WITHDRAW, LocalContinuationOpen,
@@ -15,16 +17,29 @@ use useful_execution::{
     lock_holder, read_controls,
 };
 
+use super::cloud_api::{RunWaitArgs, parse_idempotency_key};
 use super::control::{Acted, ControlFailure, ControlTarget, Refusal};
+use super::target::{Found, RunArg};
+use crate::cli::context::OrgArgs;
+use crate::cli::{CommandFailure, HttpOptions, PrincipalAuthenticationArgs};
+use crate::exit_code::ExitCode;
 
-pub(super) const WITHDRAW_ABOUT: &str = "End a run without continuing it";
-pub(super) const CANCEL_ABOUT: &str = "End a run, signalling the process that runs it";
-pub(super) const RELEASE_ABOUT: &str =
-    "Record the release of an exited run, or release a Cloud run's claim with --cloud";
-pub(super) const RELEASE_AFTER_HELP: &str = "With --cloud ORGANIZATION, RUN is a Cloud run ID: the command asks Cloud, as an organization owner, to release the subject claim of that exited run under one request key, sent again if the response is lost. It reads and writes no local run.";
-pub(super) const WITHDRAW_AFTER_HELP: &str = "With --cloud ORGANIZATION, RUN is a Cloud run ID: the command asks Cloud, under one request key sent again if the response is lost, to carry a withdrawal to the runner executing that run, which ends it withdrawn as this command ends a local run. It does not read the run first. Cloud's acceptance is not the run's end: the runner applies the withdrawal when it receives it, and a runner whose useful does not apply one is refused. It reads and writes no local run.";
-pub(super) const CANCEL_AFTER_HELP: &str = "With --cloud ORGANIZATION, RUN is a Cloud run ID: the command asks Cloud for a graceful cancellation of that run under one request key sent again if the response is lost, as useful run cancel does, and reports the cancellation request Cloud answers. Cloud's acceptance is not the run's end. Forcing a cancellation and waiting for it to settle stay useful run cancel's. It reads and writes no local run.";
-const WITHDRAW_COMMAND: &str = "useful workflow run withdraw";
+pub(super) const CANCEL_ABOUT: &str = "End a run, on this machine or in Cloud";
+pub(super) const CANCEL_AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
+
+The command applies to a run that is running, waiting or abandoned. An ended run under the home is refused, and the refusal names the commands that apply; Cloud answers the cancellation of an ended Cloud run with its receipt.
+
+For a run under the home the command ends a waiting run at its wait, as withdrawn. It ends a run a live process holds by signalling that process, and a run whose process is gone, as canceled.
+
+For a Cloud run the command reads the run first. One that waits is sent a withdrawal, which Cloud carries to the runner executing it; any other is sent a graceful cancellation request, and so is one whose runner cannot apply a withdrawal. --force requests immediate containment instead, without reading the run. Each request goes under one key, sent again if the response is lost; --idempotency-key reuses a key to reconcile an uncertain request. Cloud's acceptance is not the run's end: --wait follows the run until it settles, within --timeout.";
+pub(super) const RELEASE_ABOUT: &str = "Free an ended run's subject, on this machine or in Cloud";
+pub(super) const RELEASE_AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
+
+The command applies to an ended run. A run under the home that has not ended is refused, and the refusal names the commands that apply; Cloud refuses the release of a live Cloud run.
+
+For a run under the home the command records the release, which frees the run's subject for a new run.
+
+For a Cloud run the command asks Cloud, as an organization owner, to release the run's subject claim under one request key, sent again if the response is lost.";
 const CANCEL_COMMAND: &str = "useful workflow run cancel";
 const RELEASE_COMMAND: &str = "useful workflow run release";
 
@@ -35,106 +50,227 @@ const RELEASE_COMMAND: &str = "useful workflow run release";
 const RELEASE_POLL: Duration = Duration::from_millis(200);
 const RELEASE_POLLS: u32 = 300;
 
-/// The arguments every leaf here takes.
+/// The one transition `cancel --control` applies to a run under the home whatever its state
+/// (REQ-LOCALRUN-186): the runner passes it for a Cloud cancellation and a carried withdrawal
+/// (REQ-RUNNERENROLL-123).
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Transition {
+    /// End the run canceled, as cancel_run does
+    Cancel,
+    /// Withdraw the run, as withdraw_run does
+    Withdraw,
+}
+
+/// `useful workflow run cancel RUN`: the run, the hidden transition a runner selects, and the
+/// options a Cloud run's cancellation reads.
 #[derive(Debug, Args)]
-pub(super) struct Command {
+pub(super) struct Cancel {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
+    run: RunArg,
+
+    #[arg(
+        long,
+        value_enum,
+        hide = true,
+        value_name = "TRANSITION",
+        help = "Apply this one transition to a run under the useful home whatever its state; the runner passes it"
+    )]
+    control: Option<Transition>,
+
+    #[arg(
+        long,
+        help = "Request immediate containment of a Cloud run instead of graceful stopping"
+    )]
+    force: bool,
+
+    #[arg(long, value_name = "KEY", value_parser = parse_idempotency_key,
+        help = "Reuse this key to reconcile an uncertain request to Cloud")]
+    idempotency_key: Option<String>,
+
+    #[command(flatten)]
+    wait: RunWaitArgs,
 
     #[command(flatten)]
     output: super::control::JsonOutput,
-}
-
-/// The arguments of `withdraw`, `cancel` and `release`: the shared ones beside the Cloud
-/// selector, which sends the leaf to the Cloud run `RUN` names instead of the local run.
-#[derive(Debug, Args)]
-pub(super) struct Ending {
-    #[command(flatten)]
-    command: Command,
 
     #[command(flatten)]
-    cloud: super::CloudSelector,
+    org: OrgArgs,
+
+    #[command(flatten)]
+    authentication: PrincipalAuthenticationArgs,
+
+    #[command(flatten)]
+    http: HttpOptions,
 }
 
-impl Ending {
-    /// Withdraws the local run, or asks Cloud to carry a withdrawal to the Cloud run's runner
-    /// (REQ-LOCALRUN-218).
-    pub(super) fn withdraw(self) -> super::super::super::CommandResult {
-        self.select(
-            |cloud| cloud.control(super::cloud::Control::Withdraw),
-            Command::withdraw,
-        )
+impl Cancel {
+    /// Finds the run and ends it: a run under the home as `cancel` (or `--control`'s
+    /// transition) ends it, and a Cloud run as `CloudRun::cancel` does. An option the place
+    /// the run is found in does not read is a usage error, exit 2.
+    pub(super) fn execute(self) -> super::super::super::CommandResult {
+        let json = self.output.json;
+        let found = match super::control::find(
+            CANCEL_COMMAND,
+            &self.run,
+            &self.org,
+            &self.authentication,
+            &self.http,
+            json,
+        ) {
+            Ok(found) => found,
+            Err(result) => return result,
+        };
+        match found {
+            Found::Home(run_directory) => {
+                if let Some(option) = self.cloud_option() {
+                    return Err(usage(&format!(
+                        "{option} applies to a Cloud run, and RUN names a run under the useful home\n\n\
+                         Leave out {option}: the command ends a run under the home itself."
+                    )));
+                }
+                let act = match self.control {
+                    None => cancel,
+                    Some(Transition::Cancel) => cancel_run,
+                    Some(Transition::Withdraw) => withdraw_run,
+                };
+                match super::control::act_on(CANCEL_COMMAND, &run_directory, json, act) {
+                    Ok((target, acted)) => {
+                        super::control::write_recorded(CANCEL_COMMAND, &target, &acted, json)
+                    }
+                    Err(result) => result,
+                }
+            }
+            Found::Cloud(_) if self.control.is_some() => Err(usage(
+                "--control applies to a run under the useful home, and RUN names a Cloud run\n\n\
+                 Leave out --control: the runner executing the Cloud run applies its cancellation.",
+            )),
+            Found::Cloud(run) => {
+                super::cloud::CloudRun::found(*run, self.authentication, self.http, json, false)
+                    .cancel(super::cloud::Cancel {
+                        force: self.force,
+                        idempotency_key: self.idempotency_key,
+                        wait: self.wait,
+                    })
+            }
+        }
     }
 
-    /// Cancels the local run, or asks Cloud to cancel the Cloud run gracefully
-    /// (REQ-LOCALRUN-218).
-    pub(super) fn cancel(self) -> super::super::super::CommandResult {
-        self.select(super::cloud::CloudRun::cancel, Command::cancel)
-    }
-
-    /// Records the local run's release, or asks Cloud to release the Cloud run's claim
-    /// (REQ-CLOUDDEF-19).
-    pub(super) fn release(self) -> super::super::super::CommandResult {
-        self.select(super::cloud::CloudRun::release, Command::release)
-    }
-
-    /// `cloud` for the Cloud run `RUN` names when `--cloud` is given, and `local` otherwise.
-    fn select(
-        mut self,
-        cloud: impl FnOnce(super::cloud::CloudRun) -> super::super::super::CommandResult,
-        local: impl FnOnce(Command) -> super::super::super::CommandResult,
-    ) -> super::super::super::CommandResult {
-        match self.cloud.organization.take() {
-            Some(organization) => cloud(super::cloud::CloudRun::new(
-                self.command.run,
-                organization,
-                self.cloud,
-                self.command.output.json,
-            )?),
-            None => local(self.command),
+    /// The first option given that only a Cloud run's cancellation reads.
+    fn cloud_option(&self) -> Option<&'static str> {
+        if self.force {
+            Some("--force")
+        } else if self.wait.wait {
+            Some("--wait")
+        } else if self.idempotency_key.is_some() {
+            Some("--idempotency-key")
+        } else {
+            None
         }
     }
 }
 
-impl Command {
-    fn withdraw(self) -> super::super::super::CommandResult {
-        super::control::execute(WITHDRAW_COMMAND, &self.run, self.output.json, withdraw_run)
-    }
+/// A usage error, exit 2, of an option the run `RUN` names does not read.
+fn usage(message: &str) -> CommandFailure {
+    CommandFailure::with_exit_code(anyhow!("{message}"), ExitCode::UsageError)
+}
 
-    fn cancel(self) -> super::super::super::CommandResult {
-        super::control::execute(CANCEL_COMMAND, &self.run, self.output.json, cancel_run)
-    }
+/// `useful workflow run release RUN`: the run, and the options a Cloud run's claim release
+/// reads.
+#[derive(Debug, Args)]
+pub(super) struct Release {
+    #[command(flatten)]
+    run: RunArg,
 
-    fn release(self) -> super::super::super::CommandResult {
-        super::control::execute(RELEASE_COMMAND, &self.run, self.output.json, |target| {
-            if !matches!(
-                target.inspection,
-                WaitInspection::NoWait {
-                    state: Some(RunState::Exited),
-                    ..
+    #[command(flatten)]
+    output: super::control::JsonOutput,
+
+    #[command(flatten)]
+    org: OrgArgs,
+
+    #[command(flatten)]
+    authentication: PrincipalAuthenticationArgs,
+
+    #[command(flatten)]
+    http: HttpOptions,
+}
+
+impl Release {
+    /// Finds the run and releases it (REQ-LOCALRUN-187): a run under the home by recording
+    /// `control.release`, and a Cloud run by asking Cloud to release its subject claim
+    /// (REQ-CLOUDDEF-19).
+    pub(super) fn execute(self) -> super::super::super::CommandResult {
+        let json = self.output.json;
+        let found = match super::control::find(
+            RELEASE_COMMAND,
+            &self.run,
+            &self.org,
+            &self.authentication,
+            &self.http,
+            json,
+        ) {
+            Ok(found) => found,
+            Err(result) => return result,
+        };
+        match found {
+            Found::Home(run_directory) => {
+                match super::control::act_on(RELEASE_COMMAND, &run_directory, json, release) {
+                    Ok((target, acted)) => {
+                        super::control::write_recorded(RELEASE_COMMAND, &target, &acted, json)
+                    }
+                    Err(result) => result,
                 }
-            ) {
-                return Err(Refusal::new(
-                    "run_live",
-                    "The run has not exited; only an exited run is released.",
-                )
-                .into());
             }
-            if read_controls(&target.run_directory)?
-                .iter()
-                .any(|control| control.event == CONTROL_RELEASE)
-            {
-                return Err(Refusal::new("run_released", "The run is already released.").into());
+            Found::Cloud(run) => {
+                super::cloud::CloudRun::found(*run, self.authentication, self.http, json, false)
+                    .release()
             }
-            let control = target.record(CONTROL_RELEASE, None, None)?;
-            Ok(Acted::recorded(control, None))
-        })
+        }
     }
 }
 
-/// Withdraws the run `target` opened, as `useful workflow run withdraw` does (REQ-LOCALRUN-186);
-/// `useful workflow run event` applies a control trigger's `withdraw` through it
-/// (REQ-LOCALRUN-208). A run a live process holds goes to `withdraw_live`, and so does a
+/// Records the release of the ended run `target` opened, once (REQ-LOCALRUN-187): a run that
+/// has not ended is `run_live`, naming its state and the verbs that apply (REQ-LOCALRUN-223).
+fn release(target: &ControlTarget) -> Result<Acted, ControlFailure> {
+    if !matches!(
+        target.inspection,
+        WaitInspection::NoWait {
+            state: Some(RunState::Exited),
+            ..
+        }
+    ) {
+        return Err(target.refusal("run_live").into());
+    }
+    if read_controls(&target.run_directory)?
+        .iter()
+        .any(|control| control.event == CONTROL_RELEASE)
+    {
+        return Err(Refusal::new("run_released", "The run is already released.").into());
+    }
+    let control = target.record(CONTROL_RELEASE, None, None)?;
+    Ok(Acted::recorded(control, None))
+}
+
+/// Ends the run `target` opened as `useful workflow run cancel` does with no `--control`
+/// (REQ-LOCALRUN-186): a run a live process holds through `cancel_live`, a waiting run
+/// `withdrawn` at its wait, and anything else as `end_unheld` ends it `canceled`.
+fn cancel(target: &ControlTarget) -> Result<Acted, ControlFailure> {
+    match &target.inspection {
+        WaitInspection::Locked(_) => cancel_live(target),
+        WaitInspection::Held { .. }
+        | WaitInspection::Satisfied { .. }
+        | WaitInspection::RuleInvalid { .. }
+        | WaitInspection::ConditionUnavailable { .. } => {
+            end_unheld(target, CONTROL_WITHDRAW, WITHDRAWN_OUTCOME)
+        }
+        WaitInspection::NoWait { .. } | WaitInspection::Continued { .. } => {
+            end_unheld(target, CONTROL_CANCEL, CANCELED_OUTCOME)
+        }
+    }
+}
+
+/// Withdraws the run `target` opened, as `useful workflow run cancel --control withdraw` does
+/// (REQ-LOCALRUN-186); `useful workflow run event` applies a control trigger's `withdraw`
+/// through it (REQ-LOCALRUN-208). A run a live process holds goes to `withdraw_live`, and so does a
 /// `running` one found without a lock holder, which may be a process between the attempts it
 /// chains (REQ-LOCALRUN-214); anything else is ended as `end_unheld` does.
 pub(super) fn withdraw_run(target: &ControlTarget) -> Result<Acted, ControlFailure> {
@@ -149,8 +285,8 @@ pub(super) fn withdraw_run(target: &ControlTarget) -> Result<Acted, ControlFailu
     }
 }
 
-/// Cancels the run `target` opened, as `useful workflow run cancel` does (REQ-LOCALRUN-186);
-/// `useful workflow run event` applies a control trigger's `cancel` through it
+/// Cancels the run `target` opened, as `useful workflow run cancel --control cancel` does
+/// (REQ-LOCALRUN-186); `useful workflow run event` applies a control trigger's `cancel` through it
 /// (REQ-LOCALRUN-208): a live one through `cancel_live`, and otherwise as `end_unheld` does.
 pub(super) fn cancel_run(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     match &target.inspection {
@@ -179,15 +315,11 @@ fn end_unheld(
         WaitInspection::NoWait {
             state: Some(RunState::Exited),
             ..
-        } => Err(run_exited().into()),
+        } => Err(target.refusal("run_exited").into()),
         WaitInspection::NoWait { .. } | WaitInspection::Continued { .. } => {
             end_abandoned(target, event, outcome)
         }
     }
-}
-
-pub(super) fn run_exited() -> Refusal {
-    Refusal::new("run_exited", "The run has exited.")
 }
 
 /// The run's continuation lock, or `run_locked` when a process took the run since it was

@@ -1,6 +1,7 @@
+use super::organization::{
+    LIST_CURRENT_MEMBERSHIPS, OTHER_IN_EFFECT_ID, active_memberships, request_lines, run_in_effect,
+};
 use super::*;
-
-use std::process::Stdio;
 
 const TOKEN: &str = "unique-runner-command-token-sentinel";
 const SERVICE_API_KEY: &str =
@@ -158,16 +159,18 @@ fn runner_deletion_requires_literal_confirmation_before_local_or_network_access(
         vec![
             "runner",
             "delete",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ],
         vec![
             "runner",
             "pool",
             "delete",
-            ORGANIZATION,
             POOL_ID,
+            "--org",
+            ORGANIZATION,
             "--yes=false",
             "--allow-insecure-http",
         ],
@@ -188,7 +191,7 @@ fn runner_deletion_requires_literal_confirmation_before_local_or_network_access(
 // REQ-RUNNERPOOL-72
 #[test]
 fn runner_show_without_a_credential_reports_sign_in_on_stderr() {
-    let output = run(&["runner", "show", ORGANIZATION, RUNNER_ID]);
+    let output = run(&["runner", "show", RUNNER_ID, "--org", ORGANIZATION]);
 
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
@@ -197,7 +200,7 @@ fn runner_show_without_a_credential_reports_sign_in_on_stderr() {
         concat!(
             "error: runner administration requires sign-in\n\n",
             "Sign in first:\n",
-            "  useful auth login\n"
+            "  useful account login\n"
         )
     );
 }
@@ -215,8 +218,9 @@ fn runner_protocol_failure_uses_the_shared_general_failure_status() {
         &[
             "runner",
             "show",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -255,9 +259,9 @@ fn pool_create_sends_the_name_and_reports_the_created_pool() {
             "runner",
             "pool",
             "create",
-            ORGANIZATION,
-            "--name",
             "builders",
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ],
         &environment,
@@ -305,8 +309,9 @@ fn deletion_by_name_resolves_once_and_emits_exact_success_json() {
             vec![
                 "runner",
                 "delete",
-                ORGANIZATION,
                 "builder-one",
+                "--org",
+                ORGANIZATION,
                 "--yes",
                 "--json",
                 "--allow-insecure-http",
@@ -322,8 +327,9 @@ fn deletion_by_name_resolves_once_and_emits_exact_success_json() {
                 "runner",
                 "pool",
                 "delete",
-                ORGANIZATION,
                 "builders",
+                "--org",
+                ORGANIZATION,
                 "--yes",
                 "--json",
                 "--allow-insecure-http",
@@ -388,10 +394,11 @@ fn runner_deletion_reads_a_service_key_from_stdin_once() {
         &[
             "runner",
             "delete",
-            ORGANIZATION,
             "builder-one",
+            "--org",
+            ORGANIZATION,
             "--yes",
-            "--service-api-key-file",
+            "--api-key-file",
             "-",
             "--json",
             "--allow-insecure-http",
@@ -464,8 +471,9 @@ fn deletion_refresh_reuses_the_resolved_id_and_invocation_key() {
         &[
             "runner",
             "delete",
-            ORGANIZATION,
             "builder-one",
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -497,7 +505,10 @@ fn deletion_refresh_reuses_the_resolved_id_and_invocation_key() {
         header_value(deletes[0], "idempotency-key"),
         header_value(deletes[1], "idempotency-key")
     );
-    assert!(deletes[1].contains("authorization: Bearer unique-refreshed-delete-access-token\r\n"));
+    assert_eq!(
+        crate::header_value(deletes[1], "authorization"),
+        "Bearer unique-refreshed-delete-access-token"
+    );
 }
 
 // REQ-RUNNERPOOL-69, REQ-RUNNERPOOL-78
@@ -522,8 +533,9 @@ fn deletion_blockers_remain_ordered_and_bound_to_the_resolved_id() {
         &[
             "runner",
             "delete",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -570,8 +582,9 @@ fn post_dispatch_transport_server_and_protocol_failures_report_unknown_commitmen
             &[
                 "runner",
                 "delete",
-                ORGANIZATION,
                 RUNNER_ID,
+                "--org",
+                ORGANIZATION,
                 "--yes",
                 "--json",
                 "--allow-insecure-http",
@@ -612,8 +625,9 @@ fn later_owner_directed_deletion_uses_a_new_key_after_unknown_commitment() {
         &[
             "runner",
             "delete",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -633,8 +647,9 @@ fn later_owner_directed_deletion_uses_a_new_key_after_unknown_commitment() {
         &[
             "runner",
             "delete",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--yes",
             "--json",
             "--allow-insecure-http",
@@ -669,13 +684,14 @@ fn post_dispatch_interrupt_and_termination_report_unknown_without_retry() {
         );
         let environment =
             deployment_environment(&server.api_url, credential_path.to_str().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+        let mut command = Command::new(crate::executable());
         command
             .args([
                 "runner",
                 "delete",
-                ORGANIZATION,
                 RUNNER_ID,
+                "--org",
+                ORGANIZATION,
                 "--yes",
                 "--json",
                 "--allow-insecure-http",
@@ -709,57 +725,64 @@ fn post_dispatch_interrupt_and_termination_report_unknown_without_retry() {
     }
 }
 
-#[test]
-fn runner_create_refreshes_a_token_rejected_during_activation() {
-    let registration = http_response_with_headers(
-        "201 Created",
-        Some("application/json"),
-        &[
-            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-            (
-                "Location",
-                "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            ),
-        ],
-        &serde_json::to_vec(&registration_body()).unwrap(),
-    );
-    let issuance = http_response_with_headers(
-        "201 Created",
-        Some("application/json"),
-        &[
-            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-            (
-                "Location",
-                "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc/activations/rna_01k0z6r1w8f4jy2m7q9v3x5abc",
-            ),
-        ],
-        &serde_json::to_vec(&activation_issuance_body()).unwrap(),
-    );
-    let rejected = problem_http_response(
+/// The name lookup of a runner the organization does not hold: its one page of registrations.
+fn no_registrations() -> Vec<u8> {
+    json_http_response("200 OK", serde_json::json!({"items": []}))
+}
+
+fn registration_lookup() -> String {
+    format!("GET /api/v1/organizations/{ORGANIZATION}/runner-registrations?limit=200 HTTP/1.1")
+}
+
+fn registration_creation() -> String {
+    format!("POST /api/v1/organizations/{ORGANIZATION}/runner-registrations HTTP/1.1")
+}
+
+fn activation_creation(runner_id: &str) -> String {
+    format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations/{runner_id}/activations HTTP/1.1"
+    )
+}
+
+fn unauthorized_response() -> Vec<u8> {
+    problem_http_response(
         "401 Unauthorized",
         serde_json::json!({
             "type": "https://api.usefulmachinery.com/problems/unauthorized",
             "title": "Unauthorized",
             "status": 401
         }),
-    );
-    let server = ScriptedServer::respond(vec![
-        json_http_response("200 OK", pool_body()),
-        registration.clone(),
-        rejected,
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-refreshed-runner-create-access-token",
-                "refresh_token": "unique-refreshed-runner-create-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 3600
-            }),
-        ),
-        json_http_response("200 OK", pool_body()),
-        registration,
-        issuance,
-    ]);
+    )
+}
+
+fn forbidden_response() -> Vec<u8> {
+    problem_http_response(
+        "403 Forbidden",
+        serde_json::json!({
+            "type": "https://api.usefulmachinery.com/problems/forbidden",
+            "title": "Forbidden",
+            "status": 403
+        }),
+    )
+}
+
+fn refreshed_token_response() -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "access_token": "unique-refreshed-single-runner-key-access-token",
+            "refresh_token": "unique-refreshed-single-runner-key-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }),
+    )
+}
+
+/// A runner with a session whose token the deployment's issuer can refresh.
+fn refreshable_runner(
+    responses: Vec<Vec<u8>>,
+) -> (ScriptedServer, tempfile::TempDir, Vec<(String, String)>) {
+    let server = ScriptedServer::respond(responses);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
     write_credential_fixture_for_deployment(
@@ -773,388 +796,745 @@ fn runner_create_refreshes_a_token_rejected_during_activation() {
         &server.api_url,
         &server.issuer,
         credential_path.to_str().unwrap(),
-    );
-    let activation_directory = private_credential_directory();
-    let activation_path = activation_directory.path().join("activation.json");
+    )
+    .iter()
+    .map(|(name, value)| ((*name).to_owned(), value.to_string()))
+    .collect();
+    (server, credential_directory, environment)
+}
+
+fn borrowed(environment: &[(String, String)]) -> Vec<(&str, &str)> {
+    environment
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect()
+}
+
+// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-8: a credential refreshed between the registration and
+// the key issues the key for the runner it registered, under the same request identity.
+#[test]
+fn single_runner_key_refreshes_a_token_rejected_after_the_registration() {
+    let (server, _credentials, environment) = refreshable_runner(vec![
+        no_registrations(),
+        json_http_response("200 OK", pool_body()),
+        registration_created_response(),
+        unauthorized_response(),
+        refreshed_token_response(),
+        activation_issued_response(),
+    ]);
+    let key_directory = private_credential_directory();
+    let key_path = key_directory.path().join("builder-one.key");
 
     let output = run_with_env(
         &[
             "runner",
-            "create",
-            ORGANIZATION,
-            "--pool-id",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--pool",
             POOL_ID,
-            "--activation-file",
-            activation_path.to_str().unwrap(),
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
-        &environment,
+        &borrowed(&environment),
     );
 
-    assert!(
-        output.status.success(),
-        "runner create should refresh and replay after activation rejects its token: {output:?}"
-    );
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["runner"]["id"], RUNNER_ID);
     let requests = server.finish();
-    assert_eq!(requests.len(), 7);
-    assert!(requests[3].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
-    assert!(
-        requests[6]
-            .contains("authorization: Bearer unique-refreshed-runner-create-access-token\r\n")
+    assert_eq!(
+        request_lines(&requests),
+        [
+            registration_lookup().as_str(),
+            &format!("GET /api/v1/organizations/{ORGANIZATION}/runner-pools/{POOL_ID} HTTP/1.1"),
+            &registration_creation(),
+            &activation_creation(RUNNER_ID),
+            "POST /auth/oauth/token HTTP/1.1",
+            &activation_creation(RUNNER_ID),
+        ]
     );
     assert_eq!(
-        header_value(&requests[1], "idempotency-key"),
+        crate::header_value(&requests[5], "authorization"),
+        "Bearer unique-refreshed-single-runner-key-access-token"
+    );
+    assert_eq!(
+        header_value(&requests[3], "idempotency-key"),
         header_value(&requests[5], "idempotency-key")
     );
-    assert_eq!(
-        header_value(&requests[2], "idempotency-key"),
-        header_value(&requests[6], "idempotency-key")
-    );
-    assert!(activation_path.exists());
+    assert!(key_path.exists());
 }
 
 // REQ-RUNNERENROLL-8
 #[test]
-fn runner_create_preserves_registration_when_refresh_replay_fails_early() {
-    let registration = http_response_with_headers(
-        "201 Created",
-        Some("application/json"),
-        &[
-            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-            (
-                "Location",
-                "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            ),
-        ],
-        &serde_json::to_vec(&registration_body()).unwrap(),
-    );
-    let rejected = problem_http_response(
-        "401 Unauthorized",
-        serde_json::json!({
-            "type": "https://api.usefulmachinery.com/problems/unauthorized",
-            "title": "Unauthorized",
-            "status": 401
-        }),
-    );
-    let server = ScriptedServer::respond(vec![
+fn single_runner_key_keeps_the_registered_runner_when_the_refreshed_issue_fails() {
+    let (server, _credentials, environment) = refreshable_runner(vec![
+        no_registrations(),
         json_http_response("200 OK", pool_body()),
-        registration,
-        rejected,
-        json_http_response(
-            "200 OK",
-            serde_json::json!({
-                "access_token": "unique-refreshed-runner-create-access-token",
-                "refresh_token": "unique-refreshed-runner-create-refresh-token",
-                "token_type": "Bearer",
-                "expires_in": 3600
-            }),
-        ),
+        registration_created_response(),
+        unauthorized_response(),
+        refreshed_token_response(),
         rate_limit_response(),
     ]);
-    let credential_directory = private_credential_directory();
-    let credential_path = credential_directory.path().join("credentials.json");
-    write_credential_fixture_for_deployment(
-        &credential_path,
-        &server.api_url,
-        &server.issuer,
-        TOKEN,
-        "2999-01-01T00:00:00Z",
-    );
-    let environment = deployment_environment_with_issuer(
-        &server.api_url,
-        &server.issuer,
-        credential_path.to_str().unwrap(),
-    );
-    let activation_directory = private_credential_directory();
-    let activation_path = activation_directory.path().join("activation.json");
+    let key_directory = private_credential_directory();
+    let key_path = key_directory.path().join("builder-one.key");
 
     let output = run_with_env(
         &[
             "runner",
-            "create",
-            ORGANIZATION,
-            "--pool-id",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--pool",
             POOL_ID,
-            "--activation-file",
-            activation_path.to_str().unwrap(),
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
-        &environment,
+        &borrowed(&environment),
     );
 
     assert_eq!(output.status.code(), Some(4), "{output:?}");
     assert!(output.stderr.is_empty());
     let failure: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(failure["outcome"], "rate_limited");
-    assert_eq!(
-        failure["runnerId"], RUNNER_ID,
-        "the committed registration must survive a failed refresh replay"
-    );
-    assert!(!activation_path.exists());
-    assert_eq!(server.finish().len(), 5);
+    assert_eq!(failure["runnerId"], RUNNER_ID);
+    assert!(!key_path.exists());
+    assert_eq!(server.finish().len(), 6);
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-2, REQ-RUNNERENROLL-5
+// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-2, REQ-RUNNERENROLL-5, REQ-RUNNERENROLL-62: with `-`,
+// as with no file, standard output carries the key alone, as one line, and standard error
+// the status.
 #[test]
-fn runner_creation_commands_stdout_contains_only_the_transferable_artifact() {
-    for (arguments, creates_runner) in [
-        (
-            vec![
-                "runner",
-                "create",
-                ORGANIZATION,
-                "--pool-id",
-                "builders",
-                "--activation-file",
-                "-",
-                "--allow-insecure-http",
-            ],
-            true,
-        ),
-        (
-            vec![
-                "runner",
-                "activation",
-                "issue",
-                ORGANIZATION,
-                RUNNER_ID,
-                "--activation-file",
-                "-",
-                "--allow-insecure-http",
-            ],
-            false,
-        ),
+fn single_runner_key_without_a_file_writes_only_the_key_to_stdout() {
+    for (destination, registers) in [
+        (Some("-"), true),
+        (None, true),
+        (Some("-"), false),
+        (None, false),
     ] {
-        let registration = http_response_with_headers(
-            "201 Created",
-            Some("application/json"),
-            &[
-                ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-                (
-                    "Location",
-                    "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-                ),
-            ],
-            &serde_json::to_vec(&registration_body()).unwrap(),
-        );
-        let issuance = http_response_with_headers(
-            "201 Created",
-            Some("application/json"),
-            &[
-                ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-                (
-                    "Location",
-                    "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc/activations/rna_01k0z6r1w8f4jy2m7q9v3x5abc",
-                ),
-            ],
-            &serde_json::to_vec(&activation_issuance_body()).unwrap(),
-        );
-        let mut responses = vec![json_http_response(
-            "200 OK",
-            if creates_runner {
-                pool_list_body()
-            } else {
-                registration_body()
-            },
-        )];
-        if creates_runner {
-            responses.push(registration);
+        let mut responses = if registers {
+            vec![no_registrations(), registration_created_response()]
+        } else {
+            vec![json_http_response("200 OK", registration_list_body())]
+        };
+        responses.push(activation_issued_response());
+        let (server, _credentials, credential_path) = prepared_runner(responses);
+        let working_directory = tempfile::tempdir().unwrap();
+        let mut args = vec!["runner", "join-key", "issue", "--runner", "builder-one"];
+        if let Some(destination) = destination {
+            args.extend(["--key-file", destination]);
         }
-        responses.push(issuance);
-        let (server, _directory, credential_path) = prepared_runner(responses);
-        let environment = deployment_environment(&server.api_url, &credential_path);
+        args.extend(["--org", ORGANIZATION, "--allow-insecure-http"]);
 
-        let output = run_with_env(&arguments, &environment);
+        let output = run_with_env_in(
+            &args,
+            &deployment_environment(&server.api_url, &credential_path),
+            working_directory.path(),
+        );
 
-        assert!(output.status.success());
-        let artifact: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(artifact, activation_issuance_body()["artifact"]);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "{stdout}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stdout).unwrap(),
+            activation_issuance_body()["artifact"]
+        );
         let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(!stderr.contains(ACTIVATION_SECRET));
-
+        assert!(stderr.contains(RUNNER_ID), "{stderr}");
+        assert!(!stderr.contains(ACTIVATION_SECRET), "{stderr}");
+        assert_eq!(fs::read_dir(working_directory.path()).unwrap().count(), 0);
         let requests = server.finish();
-        let mut expected_paths = Vec::new();
-        if creates_runner {
-            assert!(requests[0].starts_with(&format!(
-                "GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=200 HTTP/1.1\r\n"
-            )));
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(request_body(&requests[1])).unwrap()["runnerPoolId"],
-                POOL_ID
-            );
-            expected_paths.push(format!(
-                "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations HTTP/1.1\r\n"
-            ));
+        let mut expected = vec![registration_lookup()];
+        if registers {
+            expected.push(registration_creation());
         }
-        expected_paths.push(format!(
-            "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/activations HTTP/1.1\r\n"
-        ));
-        assert_eq!(requests.len(), expected_paths.len() + 1);
-        for (request, expected_path) in requests.iter().skip(1).zip(expected_paths) {
-            assert!(request.starts_with(&expected_path));
-        }
+        expected.push(activation_creation(RUNNER_ID));
+        assert_eq!(request_lines(&requests), expected);
     }
 }
 
-// REQ-RUNNERENROLL-7
+// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-6, REQ-RUNNERENROLL-7: a name no runner has registers
+// the runner by that name in the pool, then issues its key into a file only its owner can
+// read; the result names the runner and never carries the token.
 #[test]
-fn runner_creation_json_includes_deployment_without_exposing_the_artifact() {
-    for creates_runner in [true, false] {
-        let registration = http_response_with_headers(
-            "201 Created",
-            Some("application/json"),
-            &[
-                ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-                (
-                    "Location",
-                    &format!("/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}"),
-                ),
-            ],
-            &serde_json::to_vec(&registration_body()).unwrap(),
-        );
-        let issuance = http_response_with_headers(
-            "201 Created",
-            Some("application/json"),
-            &[
-                ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-                (
-                    "Location",
-                    &format!(
-                        "/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/activations/{ACTIVATION_ID}"
-                    ),
-                ),
-            ],
-            &serde_json::to_vec(&activation_issuance_body()).unwrap(),
-        );
-        let mut responses = vec![json_http_response(
-            "200 OK",
-            if creates_runner {
-                pool_list_body()
-            } else {
-                registration_body()
-            },
-        )];
-        if creates_runner {
-            responses.push(registration);
-        }
-        responses.push(issuance);
-        let (server, _credentials, credential_path) = prepared_runner(responses);
-        let directory = tempfile::tempdir().unwrap();
-        let artifact_path = directory.path().join("activation.json");
-        let artifact_path = artifact_path.to_str().unwrap();
-        let mut args = if creates_runner {
-            vec!["runner", "create", ORGANIZATION, "--pool-id", "builders"]
-        } else {
-            vec!["runner", "activation", "issue", ORGANIZATION, RUNNER_ID]
-        };
-        args.extend([
-            "--activation-file",
-            artifact_path,
+fn single_runner_key_for_a_new_name_registers_the_runner_in_the_pool() {
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        no_registrations(),
+        json_http_response("200 OK", pool_list_body()),
+        registration_created_response(),
+        activation_issued_response(),
+    ]);
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("builder-one.key");
+    let key_path = key_path.to_str().unwrap();
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--pool",
+            "builders",
+            "--key-file",
+            key_path,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains(ACTIVATION_SECRET), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["outcome"], "created");
+    assert_eq!(report["deployment"], server.api_url);
+    assert_eq!(report["runner"]["id"], RUNNER_ID);
+    assert_eq!(report["runner"]["name"], "builder-one");
+    assert_eq!(
+        report["activation"],
+        activation_issuance_body()["activation"]
+    );
+    assert_eq!(report["activationFile"], key_path);
+    let requests = server.finish();
+    assert_eq!(
+        request_lines(&requests),
+        [
+            registration_lookup(),
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=200 HTTP/1.1"),
+            registration_creation(),
+            activation_creation(RUNNER_ID),
+        ]
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[2])).unwrap(),
+        serde_json::json!({"runnerPoolId": POOL_ID, "name": "builder-one"})
+    );
+    assert_eq!(
+        fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let written = fs::read_to_string(key_path).unwrap();
+    assert_eq!(written.lines().count(), 1, "{written}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&written).unwrap(),
+        activation_issuance_body()["artifact"]
+    );
+}
+
+/// The organization's directory as an owner reads it: Pam holds `pam@dundermifflin.com`
+/// verified, and a colleague holds it unverified.
+fn pam_directory() -> Vec<u8> {
+    let row = |membership: &str, principal: &str, verified: bool| {
+        serde_json::json!({
+            "id": membership,
+            "principalId": principal,
+            "principalType": "human",
+            "principalState": "active",
+            "displayName": "Pam Beesly",
+            "linkedEmails": [{"email": "pam@dundermifflin.com", "verified": verified}],
+            "role": "member",
+            "state": "active"
+        })
+    };
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "items": [
+                row("mem_01k0z6r1w8f4jy2m7q9v3x5abd", OTHER_MEMBER_ID, false),
+                row(PAM_MEMBERSHIP, MEMBER_ID, true),
+            ]
+        }),
+    )
+}
+
+const PAM_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-86: `--member` sends the member's principal ID and no
+// pool: a principal ID as it is, a membership ID or a verified address as the directory
+// resolves it.
+#[test]
+fn single_runner_key_by_member_sends_the_members_principal_and_no_pool() {
+    for (member, directory) in [
+        (MEMBER_ID, false),
+        (PAM_MEMBERSHIP, true),
+        ("pam@dundermifflin.com", true),
+    ] {
+        let mut responses = Vec::new();
+        if directory {
+            responses.push(pam_directory());
+        }
+        responses.extend([
+            no_registrations(),
+            registration_created_response(),
+            activation_issued_response(),
         ]);
+        let (server, _credentials, credential_path) = prepared_runner(responses);
+        let key_directory = tempfile::tempdir().unwrap();
+        let key_path = key_directory.path().join("builder-one.key");
+
+        let output = run_with_env(
+            &[
+                "runner",
+                "join-key",
+                "issue",
+                "--runner",
+                "builder-one",
+                "--member",
+                member,
+                "--key-file",
+                key_path.to_str().unwrap(),
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+
+        assert!(output.status.success(), "{member}: {output:?}");
+        let requests = server.finish();
+        let mut expected = Vec::new();
+        if directory {
+            expected.push(format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/memberships?limit=200 HTTP/1.1"
+            ));
+        }
+        expected.extend([
+            registration_lookup(),
+            registration_creation(),
+            activation_creation(RUNNER_ID),
+        ]);
+        assert_eq!(request_lines(&requests), expected, "{member}");
+        let creation = &requests[expected.len() - 2];
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(request_body(creation)).unwrap(),
+            serde_json::json!({"memberId": MEMBER_ID, "name": "builder-one"}),
+            "{member}"
+        );
+    }
+}
+
+// REQ-RUNNERENROLL-1: a `--member` the directory does not hold registers nothing, in no
+// pool, the caller's own included.
+#[test]
+fn single_runner_key_for_a_member_the_directory_does_not_hold_registers_nothing() {
+    let (server, _credentials, credential_path) = prepared_runner(vec![pam_directory()]);
+    let key_directory = tempfile::tempdir().unwrap();
+    let key_path = key_directory.path().join("builder-one.key");
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--member",
+            "nobody@dundermifflin.com",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "not_found");
+    assert_eq!(
+        request_lines(&server.finish()),
+        [format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/memberships?limit=200 HTTP/1.1"
+        )]
+    );
+}
+
+// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
+#[test]
+fn single_runner_key_with_neither_pool_nor_member_sends_neither() {
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        no_registrations(),
+        registration_created_response(),
+        activation_issued_response(),
+    ]);
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("builder-one.key");
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(RUNNER_ID), "{stdout}");
+    assert!(!stdout.contains(ACTIVATION_SECRET), "{stdout}");
+    let requests = server.finish();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&requests[1])).unwrap(),
+        serde_json::json!({"name": "builder-one"})
+    );
+    let artifact: serde_json::Value =
+        serde_json::from_slice(&fs::read(&key_path).unwrap()).unwrap();
+    assert_eq!(artifact["runnerId"], RUNNER_ID);
+}
+
+// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
+#[test]
+fn single_runner_key_without_a_personal_pool_exits_with_pool_personal_unavailable() {
+    for json in [true, false] {
+        let refused = problem_http_response(
+            "409 Conflict",
+            serde_json::json!({
+                "type": "https://api.usefulmachinery.com/problems/runner-pool-personal-unavailable",
+                "title": "Personal runner pool unavailable",
+                "status": 409
+            }),
+        );
+        let (server, _credentials, credential_path) =
+            prepared_runner(vec![no_registrations(), refused]);
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("builder-one.key");
+        let mut args = vec![
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+        ];
+        if json {
+            args.push("--json");
+        }
+        args.push("--allow-insecure-http");
+
         let output = run_with_env(
             &args,
             &deployment_environment(&server.api_url, &credential_path),
         );
-        assert!(output.status.success(), "{output:?}");
+
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        if json {
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["outcome"], "pool_personal_unavailable");
+            assert!(result.get("runnerId").is_none(), "{result}");
+        } else {
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("--pool") && stderr.contains("--member"),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("--pool-id"), "{stderr}");
+        }
+        assert!(!key_path.exists());
+        assert_eq!(server.finish().len(), 2);
+    }
+}
+
+// REQ-RUNNERENROLL-1: `--member` beside `--pool`, or without `--runner`, a member that is no
+// principal ID, membership ID or address, and `--expires-in` or `--remove-after` beside
+// `--runner` are usage errors before anything is read.
+#[test]
+fn single_runner_key_refuses_a_malformed_target_before_network_access() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api_url = format!("http://{}/api", listener.local_addr().unwrap());
+    let missing_credentials = tempfile::tempdir().unwrap().path().join("missing.json");
+    let environment = deployment_environment(&api_url, missing_credentials.to_str().unwrap());
+
+    for target in [
+        vec![
+            "--runner",
+            "builder-one",
+            "--member",
+            MEMBER_ID,
+            "--pool",
+            POOL_ID,
+        ],
+        vec!["--runner", "builder-one", "--member", "prn_malformed"],
+        vec!["--runner", "builder-one", "--member", POOL_ID],
+        vec!["--member", MEMBER_ID, "--expires-in", "1d"],
+        vec!["--runner", "builder-one", "--expires-in", "1d"],
+        vec!["--runner", "builder-one", "--remove-after", "1d"],
+    ] {
+        let mut args = vec!["runner", "join-key", "issue"];
+        args.extend(target);
+        args.extend(["--org", ORGANIZATION, "--allow-insecure-http"]);
+        let output = run_with_env(&args, &environment);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+// REQ-RUNNERENROLL-2: a runner the organization holds gets a key of its own and no second
+// registration; `--pool` or `--member` naming the pool it is in is accepted.
+#[test]
+fn single_runner_key_for_a_runner_that_exists_issues_its_key_alone() {
+    for (target, reads) in [
+        (vec![], vec![]),
+        (
+            vec!["--pool", "builders"],
+            vec![format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=200 HTTP/1.1"
+            )],
+        ),
+        (
+            vec!["--member", MEMBER_ID],
+            vec![format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/runner-pools/{POOL_ID} HTTP/1.1"
+            )],
+        ),
+    ] {
+        let mut responses = vec![json_http_response("200 OK", registration_list_body())];
+        if target.first() == Some(&"--pool") {
+            responses.push(json_http_response("200 OK", pool_list_body()));
+        } else if !target.is_empty() {
+            responses.push(json_http_response("200 OK", personal_pool_body()));
+        }
+        responses.push(activation_issued_response());
+        let (server, _credentials, credential_path) = prepared_runner(responses);
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("builder-one.key");
+        let mut args = vec!["runner", "join-key", "issue", "--runner", "builder-one"];
+        args.extend(target.iter().copied());
+        args.extend([
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ]);
+
+        let output = run_with_env(
+            &args,
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+
+        assert!(output.status.success(), "{args:?}: {output:?}");
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["deployment"], server.api_url);
+        assert_eq!(report["outcome"], "created");
+        assert_eq!(report["runner"]["id"], RUNNER_ID);
         assert_eq!(
             report["activation"],
             activation_issuance_body()["activation"]
         );
-        assert!(report.get("activationToken").is_none());
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&fs::read(artifact_path).unwrap()).unwrap(),
-            activation_issuance_body()["artifact"]
-        );
-        server.finish();
+        assert_eq!(report["activationFile"], key_path.to_str().unwrap());
+        let requests = server.finish();
+        let mut expected = vec![registration_lookup()];
+        expected.extend(reads);
+        expected.push(activation_creation(RUNNER_ID));
+        assert_eq!(request_lines(&requests), expected, "{args:?}");
     }
 }
 
-// REQ-RUNNERENROLL-8
+// REQ-RUNNERENROLL-2: `--pool` or `--member` for a runner in another pool exits 2 naming the
+// runner's pool and `useful runner update`, and issues nothing.
 #[test]
-fn runner_create_reports_activation_failure_with_the_created_registration() {
-    let registration = http_response_with_headers(
-        "201 Created",
-        Some("application/json"),
-        &[
-            ("Idempotency-Key", ECHO_IDEMPOTENCY_KEY),
-            (
-                "Location",
-                "/v1/organizations/acme-research/runner-registrations/rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
-            ),
-        ],
-        &serde_json::to_vec(&registration_body()).unwrap(),
-    );
-    let (server, _directory, credential_path) = prepared_runner(vec![
-        json_http_response("200 OK", pool_body()),
-        registration,
-        rate_limit_response(),
-    ]);
-    let environment = deployment_environment(&server.api_url, &credential_path);
-    let activation_directory = private_credential_directory();
-    let activation_path = activation_directory
-        .path()
-        .join("created-runner-activation.json");
-
-    let created = run_with_env(
-        &[
-            "runner",
-            "create",
+fn single_runner_key_for_a_runner_in_another_pool_exits_2_and_issues_nothing() {
+    for (target, pool_read) in [
+        (
+            ["--pool", "ci"],
+            json_http_response("200 OK", serde_json::json!({"items": [shared_pool_body()]})),
+        ),
+        (
+            ["--member", OTHER_MEMBER_ID],
+            json_http_response("200 OK", personal_pool_body()),
+        ),
+    ] {
+        let (server, _credentials, credential_path) = prepared_runner(vec![
+            json_http_response("200 OK", registration_list_body()),
+            pool_read,
+        ]);
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("builder-one.key");
+        let mut args = vec!["runner", "join-key", "issue", "--runner", "builder-one"];
+        args.extend(target);
+        args.extend([
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
             ORGANIZATION,
-            "--pool-id",
-            POOL_ID,
-            "--activation-file",
-            activation_path.to_str().unwrap(),
-            "--json",
             "--allow-insecure-http",
-        ],
-        &environment,
-    );
+        ]);
 
-    assert_eq!(created.status.code(), Some(4));
-    assert!(created.stderr.is_empty());
-    let created_failure: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
-    assert_eq!(created_failure["outcome"], "rate_limited");
-    assert_eq!(created_failure["runnerId"], RUNNER_ID);
-    assert_eq!(created_failure["deployment"], server.api_url);
-    assert!(!activation_path.exists());
-    assert_eq!(server.finish().len(), 3);
+        let output = run_with_env(
+            &args,
+            &deployment_environment(&server.api_url, &credential_path),
+        );
 
-    let (server, _directory, credential_path) = prepared_runner(vec![
-        json_http_response("200 OK", registration_body()),
-        rate_limit_response(),
-    ]);
-    let environment = deployment_environment(&server.api_url, &credential_path);
-    let standalone_path = activation_directory
-        .path()
-        .join("standalone-activation.json");
-    let standalone = run_with_env(
-        &[
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("builders"), "{stderr}");
+        assert!(stderr.contains("useful runner update"), "{stderr}");
+        assert!(!key_path.exists());
+        let requests = server.finish();
+        assert_eq!(requests.len(), 2, "{args:?}");
+        assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    }
+}
+
+// REQ-RUNNERENROLL-8: a registration that succeeds and a key that fails reports the runner and
+// names the command that issues its key without registering another; a runner that existed is
+// reported as the failure alone.
+#[test]
+fn single_runner_key_reports_a_failed_issue_with_the_registered_runner() {
+    for json in [true, false] {
+        let (server, _directory, credential_path) = prepared_runner(vec![
+            no_registrations(),
+            registration_created_response(),
+            rate_limit_response(),
+        ]);
+        let key_directory = private_credential_directory();
+        let key_path = key_directory.path().join("builder-one.key");
+        let mut args = vec![
             "runner",
-            "activation",
+            "join-key",
             "issue",
+            "--runner",
+            "builder-one",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
             ORGANIZATION,
-            RUNNER_ID,
-            "--activation-file",
-            standalone_path.to_str().unwrap(),
+            "--allow-insecure-http",
+        ];
+        if json {
+            args.push("--json");
+        }
+
+        let output = run_with_env(
+            &args,
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        if json {
+            assert!(output.stderr.is_empty());
+            let failure: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(failure["outcome"], "rate_limited");
+            assert_eq!(failure["runnerId"], RUNNER_ID);
+            assert_eq!(failure["deployment"], server.api_url);
+        } else {
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(
+                stderr.contains(&format!(
+                    "useful runner join-key issue --runner {RUNNER_ID} --key-file <PATH> --org {ORGANIZATION}"
+                )),
+                "{stderr}"
+            );
+        }
+        assert!(!key_path.exists());
+        assert_eq!(server.finish().len(), 3);
+    }
+
+    let (server, _directory, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", registration_list_body()),
+        rate_limit_response(),
+    ]);
+    let key_directory = private_credential_directory();
+    let key_path = key_directory.path().join("builder-one.key");
+    let existing = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            "builder-one",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
-        &environment,
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert_eq!(existing.status.code(), Some(4), "{existing:?}");
+    let failure: serde_json::Value = serde_json::from_slice(&existing.stdout).unwrap();
+    assert_eq!(failure["outcome"], "rate_limited");
+    assert!(failure.get("runnerId").is_none(), "{failure}");
+    assert!(!key_path.exists());
+    assert_eq!(server.finish().len(), 2);
+}
+
+// REQ-RUNNERENROLL-1: a runner ID the organization does not hold is `not_found`, and nothing
+// is registered under it.
+#[test]
+fn single_runner_key_for_an_unknown_runner_id_registers_nothing() {
+    let missing = problem_http_response(
+        "404 Not Found",
+        serde_json::json!({
+            "type": "https://api.usefulmachinery.com/problems/not-found",
+            "title": "Not found",
+            "status": 404
+        }),
+    );
+    let (server, _directory, credential_path) = prepared_runner(vec![missing]);
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "issue",
+            "--runner",
+            RUNNER_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
     );
 
-    assert_eq!(standalone.status.code(), created.status.code());
-    assert!(standalone.stderr.is_empty());
-    let standalone_failure: serde_json::Value = serde_json::from_slice(&standalone.stdout).unwrap();
-    assert_eq!(standalone_failure["outcome"], created_failure["outcome"]);
-    assert!(standalone_failure.get("runnerId").is_none());
-    assert!(!standalone_path.exists());
-    assert_eq!(server.finish().len(), 2);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        request_lines(&server.finish()),
+        [format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID} HTTP/1.1"
+        )]
+    );
 }
 
 /// The API's answer to the read of the signed-in principal, `MEMBER_ID`.
@@ -1203,127 +1583,6 @@ pub(super) fn activation_issued_response_with(issuance: &serde_json::Value) -> V
     )
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-86
-#[test]
-fn runner_create_by_member_sends_the_member_and_no_pool() {
-    let (server, _credentials, credential_path) = prepared_runner(vec![
-        registration_created_response(),
-        activation_issued_response(),
-    ]);
-    let directory = tempfile::tempdir().unwrap();
-    let artifact_path = directory.path().join("activation.json");
-
-    let output = run_with_env(
-        &[
-            "runner",
-            "create",
-            ORGANIZATION,
-            "--member",
-            MEMBER_ID,
-            "--activation-file",
-            artifact_path.to_str().unwrap(),
-            "--allow-insecure-http",
-        ],
-        &deployment_environment(&server.api_url, &credential_path),
-    );
-
-    assert!(output.status.success(), "{output:?}");
-    let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with(&format!(
-        "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations HTTP/1.1\r\n"
-    )));
-    let body: serde_json::Value = serde_json::from_str(request_body(&requests[0])).unwrap();
-    assert_eq!(body["memberId"], MEMBER_ID);
-    assert!(body.get("runnerPoolId").is_none(), "{body}");
-}
-
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
-#[test]
-fn runner_create_with_neither_pool_nor_member_sends_neither_and_issues_the_activation() {
-    let (server, _credentials, credential_path) = prepared_runner(vec![
-        registration_created_response(),
-        activation_issued_response(),
-    ]);
-    let directory = tempfile::tempdir().unwrap();
-    let artifact_path = directory.path().join("activation.json");
-
-    let output = run_with_env(
-        &[
-            "runner",
-            "create",
-            ORGANIZATION,
-            "--activation-file",
-            artifact_path.to_str().unwrap(),
-            "--allow-insecure-http",
-        ],
-        &deployment_environment(&server.api_url, &credential_path),
-    );
-
-    assert!(output.status.success(), "{output:?}");
-    let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with(&format!(
-        "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations HTTP/1.1\r\n"
-    )));
-    let body: serde_json::Value = serde_json::from_str(request_body(&requests[0])).unwrap();
-    assert!(body.get("runnerPoolId").is_none(), "{body}");
-    assert!(body.get("memberId").is_none(), "{body}");
-    assert!(requests[1].starts_with(&format!(
-        "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/activations HTTP/1.1\r\n"
-    )));
-    let artifact: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&artifact_path).unwrap()).unwrap();
-    assert_eq!(artifact["runnerId"], RUNNER_ID);
-}
-
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
-#[test]
-fn runner_create_without_a_personal_pool_exits_with_pool_personal_unavailable() {
-    for json in [true, false] {
-        let refused = problem_http_response(
-            "409 Conflict",
-            serde_json::json!({
-                "type": "https://api.usefulmachinery.com/problems/runner-pool-personal-unavailable",
-                "title": "Personal runner pool unavailable",
-                "status": 409
-            }),
-        );
-        let (server, _credentials, credential_path) = prepared_runner(vec![refused]);
-        let directory = tempfile::tempdir().unwrap();
-        let artifact_path = directory.path().join("activation.json");
-        let mut args = vec![
-            "runner",
-            "create",
-            ORGANIZATION,
-            "--activation-file",
-            artifact_path.to_str().unwrap(),
-        ];
-        if json {
-            args.push("--json");
-        }
-        args.push("--allow-insecure-http");
-
-        let output = run_with_env(
-            &args,
-            &deployment_environment(&server.api_url, &credential_path),
-        );
-
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        if json {
-            assert!(output.stderr.is_empty(), "{output:?}");
-            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(result["outcome"], "pool_personal_unavailable");
-            assert!(result.get("runnerId").is_none(), "{result}");
-        } else {
-            assert!(output.stdout.is_empty());
-            assert!(String::from_utf8_lossy(&output.stderr).contains("--pool-id"));
-        }
-        assert!(!artifact_path.exists());
-        assert_eq!(server.finish().len(), 1);
-    }
-}
-
 // REQ-RUNNERENROLL-12, REQ-RUNNERPOOL-87
 #[test]
 fn runner_disable_refused_by_cloud_exits_with_forbidden() {
@@ -1344,8 +1603,9 @@ fn runner_disable_refused_by_cloud_exits_with_forbidden() {
         &[
             "runner",
             "disable",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -1360,86 +1620,6 @@ fn runner_disable_refused_by_cloud_exits_with_forbidden() {
     assert!(requests[1].starts_with(&format!(
         "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/mode HTTP/1.1\r\n"
     )));
-}
-
-// REQ-RUNNERENROLL-1
-#[test]
-fn runner_create_refuses_a_member_with_a_pool_or_a_malformed_member_before_network_access() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let api_url = format!("http://{}/api", listener.local_addr().unwrap());
-    let missing_credentials = tempfile::tempdir().unwrap().path().join("missing.json");
-    let environment = deployment_environment(&api_url, missing_credentials.to_str().unwrap());
-
-    for target in [
-        vec!["--member", MEMBER_ID, "--pool-id", POOL_ID],
-        vec!["--member", "prn_malformed"],
-        vec!["--member", POOL_ID],
-    ] {
-        let mut args = vec!["runner", "create", ORGANIZATION];
-        args.extend(target);
-        args.extend(["--activation-file", "-", "--allow-insecure-http"]);
-        let output = run_with_env(&args, &environment);
-        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
-        assert!(output.stdout.is_empty());
-    }
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
-}
-
-// REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-11
-#[test]
-fn activation_list_and_revoke_report_the_deployment() {
-    let activation = activation_issuance_body()["activation"].clone();
-    for revoke in [false, true] {
-        let body = if revoke {
-            let mut revoked = activation.clone();
-            revoked["state"] = serde_json::json!("revoked");
-            revoked
-        } else {
-            serde_json::json!({"items": [activation]})
-        };
-        let response = if revoke {
-            http_response_with_headers(
-                "200 OK",
-                Some("application/json"),
-                &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
-                &serde_json::to_vec(&body).unwrap(),
-            )
-        } else {
-            json_http_response("200 OK", body.clone())
-        };
-        let (server, _directory, credential_path) = prepared_runner(vec![
-            json_http_response("200 OK", registration_body()),
-            response,
-        ]);
-        let mut args = vec![
-            "runner",
-            "activation",
-            if revoke { "revoke" } else { "list" },
-            ORGANIZATION,
-            RUNNER_ID,
-        ];
-        if revoke {
-            args.extend([ACTIVATION_ID, "--yes"]);
-        }
-        args.extend(["--json", "--allow-insecure-http"]);
-        let output = run_with_env(
-            &args,
-            &deployment_environment(&server.api_url, &credential_path),
-        );
-        assert!(output.status.success(), "{output:?}");
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["deployment"], server.api_url);
-        if revoke {
-            assert_eq!(report["activation"], body);
-        } else {
-            assert_eq!(report["items"], body["items"]);
-        }
-        server.finish();
-    }
 }
 
 // REQ-RUNNERENROLL-52
@@ -1460,10 +1640,11 @@ fn credential_list_returns_only_lifecycle_metadata() {
             "runner",
             "credential",
             "list",
-            ORGANIZATION,
             RUNNER_ID,
             "--limit",
             "1",
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ],
@@ -1489,9 +1670,10 @@ fn credential_list_returns_only_lifecycle_metadata() {
 // REQ-RUNNERENROLL-53, REQ-RUNNERENROLL-54
 #[test]
 fn credential_mutations_send_empty_bodies_and_idempotency_keys() {
-    for (command, subresource, state) in [
-        ("retire", "retirement", "retiring"),
-        ("revoke", "revocation", "revoked"),
+    for (after, subresource, state) in [
+        (Some("1h"), "retirement", "retiring"),
+        (Some("60m"), "retirement", "retiring"),
+        (None, "revocation", "revoked"),
     ] {
         let response = http_response_with_headers(
             "200 OK",
@@ -1505,25 +1687,27 @@ fn credential_mutations_send_empty_bodies_and_idempotency_keys() {
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
 
-        let output = run_with_env(
-            &[
-                "runner",
-                "credential",
-                command,
-                ORGANIZATION,
-                RUNNER_ID,
-                CREDENTIAL_ID,
-                "--yes",
-                "--json",
-                "--allow-insecure-http",
-            ],
-            &environment,
-        );
+        let mut args = vec![
+            "runner",
+            "credential",
+            "revoke",
+            CREDENTIAL_ID,
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+        ];
+        if let Some(after) = after {
+            args.extend(["--after", after]);
+        }
+        args.extend(["--org", ORGANIZATION, "--json", "--allow-insecure-http"]);
 
-        assert!(output.status.success());
+        let output = run_with_env(&args, &environment);
+
+        assert!(output.status.success(), "{args:?}: {output:?}");
         assert!(output.stderr.is_empty());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["deployment"], server.api_url);
+        assert_eq!(result["outcome"], state);
         assert_eq!(result["credential"], credential_body(state));
 
         let requests = server.finish();
@@ -1535,6 +1719,63 @@ fn credential_mutations_send_empty_bodies_and_idempotency_keys() {
         assert_eq!(key.len(), 64);
         assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
+}
+
+// REQ-RUNNERENROLL-53, REQ-RUNNERENROLL-54
+#[test]
+fn credential_revoke_refuses_another_grace_or_no_runner_before_network_access() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api_url = format!("http://{}/api", listener.local_addr().unwrap());
+    let missing_credentials = tempfile::tempdir().unwrap().path().join("missing.json");
+    let environment = deployment_environment(&api_url, missing_credentials.to_str().unwrap());
+
+    for (args, grace) in [
+        (
+            vec![
+                "runner",
+                "credential",
+                "revoke",
+                CREDENTIAL_ID,
+                "--runner",
+                RUNNER_ID,
+                "--yes",
+                "--after",
+                "2h",
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
+            true,
+        ),
+        (
+            vec![
+                "runner",
+                "credential",
+                "revoke",
+                CREDENTIAL_ID,
+                "--yes",
+                "--org",
+                ORGANIZATION,
+                "--allow-insecure-http",
+            ],
+            false,
+        ),
+    ] {
+        let output = run_with_env(&args, &environment);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        if grace {
+            assert!(stderr.contains("--after 1h"), "{stderr}");
+        } else {
+            assert!(stderr.contains("--runner"), "{stderr}");
+        }
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }
 
 // REQ-RUNNERENROLL-55, REQ-RUNNERENROLL-83
@@ -1557,11 +1798,15 @@ fn refused_credential_transition_reports_its_outcome_and_advises_listing_credent
         let mut args = vec![
             "runner",
             "credential",
-            "retire",
-            ORGANIZATION,
-            RUNNER_ID,
+            "revoke",
             CREDENTIAL_ID,
+            "--runner",
+            RUNNER_ID,
             "--yes",
+            "--after",
+            "1h",
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ];
         if json {
@@ -1587,9 +1832,49 @@ fn refused_credential_transition_reports_its_outcome_and_advises_listing_credent
     }
 }
 
+/// A development operator configuration in `directory` whose state, socket and work root
+/// lie under it, answering the configuration's and the state's paths.
+fn enrollment_host(directory: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    for child in ["run", "work"] {
+        let path = directory.join(child);
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o700)).unwrap();
+    }
+    let state_path = directory.join("state/runner-state.json");
+    let config_path = directory.join("runner.json");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "deploymentMode": "development",
+            "runnerStatePath": state_path,
+            "controlSocketPath": directory.join("run/runner.sock"),
+            "workRoot": directory.join("work")
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    (config_path, state_path)
+}
+
+/// The single-runner key of `RUNNER_ID` for Cloud at `api_url`.
+fn single_runner_key(api_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": 1,
+        "activationUrl": format!(
+            "{}/v1/runner-enrollments/{ACTIVATION_ID}/activate",
+            api_url.trim_end_matches("/api")
+        ),
+        "activationToken": format!("{ACTIVATION_ID}.{ACTIVATION_SECRET}"),
+        "runnerId": RUNNER_ID,
+        "expiresAt": "2999-01-01T00:00:00Z"
+    })
+}
+
 // REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-17, REQ-RUNNERENROLL-19
 #[test]
-fn enrollment_accepts_an_artifact_from_explicit_stdin() {
+fn enrollment_accepts_a_key_from_explicit_stdin_without_a_sign_in() {
+    let witness = super::runner_enrollment::ConnectionWitness::new();
     let enrollment = serde_json::json!({
         "schemaVersion": 1,
         "runnerId": RUNNER_ID,
@@ -1603,76 +1888,35 @@ fn enrollment_accepts_an_artifact_from_explicit_stdin() {
             "name": "builders"
         },
         "credentialId": "rrc_01k0z6r1w8f4jy2m7q9v3x5abc",
-        "connectionUrl": "ws://127.0.0.1:8765/v1/runner/connect"
+        "connectionUrl": witness.url
     });
     let server = ScriptedServer::respond(vec![json_http_response("201 Created", enrollment)]);
     let directory = tempfile::tempdir().unwrap();
-    let state_path = directory.path().join("state/runner-state.json");
-    let config_path = directory.path().join("runner.json");
-    fs::write(
-        &config_path,
-        serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": 1,
-            "deploymentMode": "development",
-            "runnerStatePath": state_path,
-            "controlSocketPath": directory.path().join("run/runner.sock"),
-            "workRoot": directory.path().join("work")
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let activation_url = format!(
-        "{}/v1/runner-enrollments/{ACTIVATION_ID}/activate",
-        server.api_url.trim_end_matches("/api")
-    );
-    let artifact = serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": 1,
-        "activationUrl": activation_url,
-        "activationToken": format!("{ACTIVATION_ID}.{ACTIVATION_SECRET}"),
-        "runnerId": RUNNER_ID,
-        "expiresAt": "2999-01-01T00:00:00Z"
-    }))
-    .unwrap();
+    let (config_path, state_path) = enrollment_host(directory.path());
+    let artifact = single_runner_key(&server.api_url).to_string();
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
-    command
-        .args([
-            "runner",
-            "enroll",
-            "--activation-file",
-            "-",
-            "--config",
-            config_path.to_str().unwrap(),
-            "--json",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove(CREDENTIALS_FILE_VARIABLE);
-    for variable in DEPLOYMENT_VARIABLES
-        .into_iter()
-        .chain(RUNNER_TELEMETRY_VARIABLES)
-    {
+    let mut command = super::runner_enrollment::serve_command(&[
+        "--join-key-file",
+        "-",
+        "--config",
+        config_path.to_str().unwrap(),
+    ]);
+    command.env_remove(CREDENTIALS_FILE_VARIABLE);
+    for variable in DEPLOYMENT_VARIABLES {
         command.env_remove(variable);
     }
-    let mut child = command.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(&artifact).unwrap();
-    let output = child.wait_with_output().unwrap();
+    let serve = super::runner_enrollment::ServeProcess::start(
+        command,
+        super::runner_enrollment::StandardInput::Piped(&artifact),
+    );
+    let (_, stderr) = super::runner_enrollment::first_connection(serve, &witness);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["outcome"], "enrolled");
-    assert_eq!(
-        result["deployment"],
-        server.api_url.trim_end_matches("/api")
-    );
     let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert_eq!(state["runnerId"], RUNNER_ID);
     let secret = state["currentCredential"]["secret"].as_str().unwrap();
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
+    assert!(stderr.contains(RUNNER_ID), "{stderr}");
+    assert!(!stderr.contains(secret), "{stderr}");
+    assert!(!stderr.contains(ACTIVATION_SECRET), "{stderr}");
 
     let request = server.finish().pop().unwrap();
     assert!(request.starts_with(&format!(
@@ -1690,60 +1934,37 @@ fn enrollment_accepts_an_artifact_from_explicit_stdin() {
 fn enrollment_gone_reports_that_the_commit_did_not_complete() {
     let server = ScriptedServer::respond(vec![http_response("410 Gone", None, &[])]);
     let directory = private_credential_directory();
-    let state_path = directory.path().join("state/runner-state.json");
-    let config_path = directory.path().join("runner.json");
-    fs::write(
-        &config_path,
-        serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": 1,
-            "deploymentMode": "development",
-            "runnerStatePath": state_path,
-            "controlSocketPath": directory.path().join("run/runner.sock"),
-            "workRoot": directory.path().join("work")
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let (config_path, state_path) = enrollment_host(directory.path());
     let activation_path = directory.path().join("activation.json");
-    let activation_url = format!(
-        "{}/v1/runner-enrollments/{ACTIVATION_ID}/activate",
-        server.api_url.trim_end_matches("/api")
-    );
     fs::write(
         &activation_path,
-        serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": 1,
-            "activationUrl": activation_url,
-            "activationToken": format!("{ACTIVATION_ID}.{ACTIVATION_SECRET}"),
-            "runnerId": RUNNER_ID,
-            "expiresAt": "2999-01-01T00:00:00Z"
-        }))
-        .unwrap(),
+        single_runner_key(&server.api_url).to_string(),
     )
     .unwrap();
     fs::set_permissions(&activation_path, Permissions::from_mode(0o600)).unwrap();
 
-    let output = run(&[
-        "runner",
-        "enroll",
-        "--activation-file",
+    let output = super::runner_enrollment::serve_command(&[
+        "--join-key-file",
         activation_path.to_str().unwrap(),
         "--config",
         config_path.to_str().unwrap(),
-        "--json",
-    ]);
+    ])
+    .output()
+    .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stderr.is_empty());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-        serde_json::json!({
-            "schemaVersion": 1,
-            "outcome": "gone",
-            "deployment": server.api_url.trim_end_matches("/api"),
-            "activationId": ACTIVATION_ID
-        })
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(ACTIVATION_ID),
+        "{output:?}"
     );
+    assert!(!state_path.exists());
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &fs::read(state_path.with_file_name(".runner-enrollment.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["activationId"], ACTIVATION_ID);
+    assert_eq!(receipt["disposition"], "gone");
     assert_eq!(server.finish().len(), 1);
 }
 
@@ -1771,8 +1992,9 @@ fn runner_mode_commands_send_closed_targets_with_idempotency() {
             &[
                 "runner",
                 command,
-                ORGANIZATION,
                 RUNNER_ID,
+                "--org",
+                ORGANIZATION,
                 "--json",
                 "--allow-insecure-http",
             ],
@@ -1799,17 +2021,74 @@ fn runner_mode_commands_send_closed_targets_with_idempotency() {
     }
 }
 
+const GPU_POOL_ID: &str = "rpl_01k0z6r1w8f4jy2m7q9v3x5abe";
+
+/// The registration of `registration_body` as Cloud returns it once moved to the `gpu` pool,
+/// and renamed to `name`.
+fn moved_registration_body(name: &str) -> serde_json::Value {
+    let mut runner = registration_body();
+    runner["runnerPool"] = serde_json::json!({"id": GPU_POOL_ID, "name": "gpu"});
+    runner["name"] = serde_json::json!(name);
+    runner
+}
+
+fn gpu_pool_list_body() -> serde_json::Value {
+    let mut pool = pool_body();
+    pool["id"] = serde_json::json!(GPU_POOL_ID);
+    pool["name"] = serde_json::json!("gpu");
+    serde_json::json!({"items": [pool]})
+}
+
+/// A change Cloud answers with the registration, echoing the request's key.
+fn registration_change_response(runner: &serde_json::Value) -> Vec<u8> {
+    http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
+        &serde_json::to_vec(runner).unwrap(),
+    )
+}
+
+/// The responses `runner update builder-one --pool gpu --name builder-two` reads, ending with
+/// `rename`, the answer to its rename.
+fn update_responses(rename: Vec<u8>) -> Vec<Vec<u8>> {
+    vec![
+        json_http_response("200 OK", registration_list_body()),
+        json_http_response("200 OK", registration_body()),
+        json_http_response("200 OK", gpu_pool_list_body()),
+        registration_change_response(&moved_registration_body("builder-one")),
+        json_http_response("200 OK", moved_registration_body("builder-one")),
+        rename,
+    ]
+}
+
+const UPDATE_ARGUMENTS: [&str; 10] = [
+    "runner",
+    "update",
+    "builder-one",
+    "--pool",
+    "gpu",
+    "--name",
+    "builder-two",
+    "--org",
+    ORGANIZATION,
+    "--json",
+];
+
+/// The changes among `requests`: every request but a read.
+fn changes(requests: &[String]) -> Vec<&String> {
+    requests
+        .iter()
+        .filter(|request| !request.starts_with("GET "))
+        .collect()
+}
+
 // REQ-RUNNERPOOL-47, REQ-RUNNERPOOL-57
 #[test]
-fn runner_move_resolves_the_destination_and_sends_only_its_id() {
+fn runner_update_resolves_the_destination_pool_and_sends_only_its_id() {
     for pool in [POOL_ID, "builders"] {
-        let response = http_response_with_headers(
-            "200 OK",
-            Some("application/json"),
-            &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
-            &serde_json::to_vec(&registration_body()).unwrap(),
-        );
         let (server, _directory, credential_path) = prepared_runner(vec![
+            json_http_response("200 OK", registration_body()),
             json_http_response("200 OK", registration_body()),
             json_http_response(
                 "200 OK",
@@ -1819,42 +2098,377 @@ fn runner_move_resolves_the_destination_and_sends_only_its_id() {
                     pool_list_body()
                 },
             ),
-            response,
+            registration_change_response(&registration_body()),
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
 
         let output = run_with_env(
             &[
                 "runner",
-                "move",
-                ORGANIZATION,
+                "update",
                 RUNNER_ID,
-                "--pool-id",
+                "--pool",
                 pool,
+                "--org",
+                ORGANIZATION,
                 "--json",
                 "--allow-insecure-http",
             ],
             &environment,
         );
 
-        assert!(output.status.success());
+        assert!(output.status.success(), "{output:?}");
         assert!(output.stderr.is_empty());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["outcome"], "moved");
+        assert_eq!(result["outcome"], "updated");
+        assert_eq!(result["applied"], serde_json::json!(["pool"]));
         let requests = server.finish();
         if pool != POOL_ID {
-            assert!(requests[1].starts_with(&format!(
+            assert!(requests[2].starts_with(&format!(
                 "GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=200 HTTP/1.1\r\n"
             )));
         }
-        assert!(requests[2].starts_with(&format!(
-        "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/pool HTTP/1.1\r\n"
-    )));
+        let changes = changes(&requests);
+        assert_eq!(changes.len(), 1, "{requests:?}");
+        assert!(changes[0].starts_with(&format!(
+            "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/pool HTTP/1.1\r\n"
+        )));
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(request_body(&requests[2])).unwrap(),
+            serde_json::from_str::<serde_json::Value>(request_body(changes[0])).unwrap(),
             serde_json::json!({"runnerPoolId": POOL_ID})
         );
     }
+}
+
+// REQ-RUNNERPOOL-47, REQ-RUNNERPOOL-57: the runner's name is resolved once, the move is sent
+// before the rename, and each change has its own key.
+#[test]
+fn runner_update_moves_then_renames_each_under_its_own_key() {
+    let (server, _directory, credential_path) = prepared_runner(update_responses(
+        registration_change_response(&moved_registration_body("builder-two")),
+    ));
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let mut args = UPDATE_ARGUMENTS.to_vec();
+    args.push("--allow-insecure-http");
+
+    let output = run_with_env(&args, &environment);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "updated");
+    assert_eq!(result["applied"], serde_json::json!(["pool", "name"]));
+    assert_eq!(result["runner"]["runnerPool"]["id"], GPU_POOL_ID);
+    assert_eq!(result["runner"]["name"], "builder-two");
+    let requests = server.finish();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.contains("/runner-registrations?"))
+            .count(),
+        1,
+        "the runner's name is looked up once: {requests:?}"
+    );
+    let changes = changes(&requests);
+    assert_eq!(changes.len(), 2, "{requests:?}");
+    assert!(changes[0].starts_with(&format!(
+        "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/pool HTTP/1.1\r\n"
+    )));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(changes[0])).unwrap(),
+        serde_json::json!({"runnerPoolId": GPU_POOL_ID})
+    );
+    assert!(changes[1].starts_with(&format!(
+        "PATCH /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID} HTTP/1.1\r\n"
+    )));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(changes[1])).unwrap(),
+        serde_json::json!({"name": "builder-two"})
+    );
+    let keys = changes
+        .iter()
+        .map(|request| header_value(request, "idempotency-key"))
+        .collect::<Vec<_>>();
+    assert!(keys.iter().all(|key| key.len() == 64), "{keys:?}");
+    assert_ne!(keys[0], keys[1]);
+}
+
+// REQ-RUNNERPOOL-57: a rename that fails after the move leaves the move in place, and the
+// command exits with the rename's failure, naming what was applied and the runner as moved.
+#[test]
+fn runner_update_whose_rename_fails_reports_the_move_it_kept() {
+    for json in [true, false] {
+        let (server, _directory, credential_path) =
+            prepared_runner(update_responses(problem_http_response(
+                "409 Conflict",
+                serde_json::json!({
+                    "type": "https://api.usefulmachinery.com/problems/runner-name-unavailable",
+                    "title": "Runner name unavailable",
+                    "status": 409
+                }),
+            )));
+        let environment = deployment_environment(&server.api_url, &credential_path);
+        let mut args = UPDATE_ARGUMENTS.to_vec();
+        if !json {
+            args.pop();
+        }
+        args.push("--allow-insecure-http");
+
+        let output = run_with_env(&args, &environment);
+
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        if json {
+            assert!(output.stderr.is_empty());
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["outcome"], "name_unavailable");
+            assert_eq!(result["applied"], serde_json::json!(["pool"]));
+            assert_eq!(result["runner"]["runnerPool"]["id"], GPU_POOL_ID);
+            assert_eq!(result["runner"]["name"], "builder-one");
+        } else {
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.starts_with("error: "), "{stderr}");
+            assert!(stderr.contains(RUNNER_ID), "{stderr}");
+        }
+        assert_eq!(changes(&server.finish()).len(), 2);
+    }
+}
+
+// REQ-RUNNERPOOL-57: the move is sent first, so a move Cloud refuses sends no rename and a
+// runner named by its name is still found by it.
+#[test]
+fn runner_update_whose_move_is_refused_sends_no_rename() {
+    let (server, _directory, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", registration_list_body()),
+        json_http_response("200 OK", registration_body()),
+        json_http_response("200 OK", gpu_pool_list_body()),
+        problem_http_response(
+            "409 Conflict",
+            serde_json::json!({
+                "type": "https://api.usefulmachinery.com/problems/runner-pool-move-unavailable",
+                "title": "Runner pool move unavailable",
+                "status": 409
+            }),
+        ),
+    ]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let mut args = UPDATE_ARGUMENTS.to_vec();
+    args.push("--allow-insecure-http");
+
+    let output = run_with_env(&args, &environment);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "pool_move_unavailable");
+    assert!(result.get("applied").is_none(), "{result}");
+    let requests = server.finish();
+    let changes = changes(&requests);
+    assert_eq!(changes.len(), 1, "{requests:?}");
+    assert!(changes[0].starts_with("PUT "), "{requests:?}");
+}
+
+// REQ-RUNNERPOOL-57
+#[test]
+fn runner_update_without_a_change_exits_2_and_sends_nothing() {
+    let (server, _directory, credential_path) = prepared_runner(vec![]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "update",
+            "builder-one",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &environment,
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(server.finish().is_empty());
+}
+
+// REQ-RUNNERPOOL-47: a runner command acts in the organization in effect: the one `--org`
+// names, with no request before its own, or else the caller's only active membership, by ID;
+// with several memberships and no `--org` it exits 2 naming `--org` after the membership read.
+#[test]
+fn runner_show_acts_in_the_organization_in_effect() {
+    let (output, requests) = run_in_effect(
+        &["runner", "show", "builder-one", "--json"],
+        vec![json_http_response("200 OK", registration_list_body())],
+        &["--org", ORGANIZATION],
+        &[],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(!requests.is_empty());
+    for line in request_lines(&requests) {
+        assert!(
+            line.contains(&format!(" /api/v1/organizations/{ORGANIZATION}/")),
+            "{line}"
+        );
+    }
+
+    let (output, requests) = run_in_effect(
+        &["runner", "show", "builder-one", "--json"],
+        vec![
+            active_memberships(&[(ORGANIZATION_ID, ORGANIZATION)]),
+            json_http_response("200 OK", registration_list_body()),
+        ],
+        &[],
+        &[],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request_lines(&requests),
+        [
+            LIST_CURRENT_MEMBERSHIPS.trim_end(),
+            &format!(
+                "GET /api/v1/organizations/{ORGANIZATION_ID}/runner-registrations?limit=200 HTTP/1.1"
+            ),
+        ]
+    );
+
+    let (output, requests) = run_in_effect(
+        &["runner", "show", "builder-one", "--json"],
+        vec![active_memberships(&[
+            (ORGANIZATION_ID, ORGANIZATION),
+            (OTHER_IN_EFFECT_ID, "acme-labs"),
+        ])],
+        &[],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--org"));
+    assert_eq!(
+        request_lines(&requests),
+        [LIST_CURRENT_MEMBERSHIPS.trim_end()]
+    );
+}
+
+/// A registration of `registration_body` with its own ID and name, in the pool `pool_id`.
+fn registration_in(id: &str, name: &str, pool_id: &str) -> serde_json::Value {
+    let mut runner = registration_body();
+    runner["id"] = serde_json::json!(id);
+    runner["name"] = serde_json::json!(name);
+    runner["runnerPool"]["id"] = serde_json::json!(pool_id);
+    runner
+}
+
+// REQ-RUNNERPOOL-91
+#[test]
+fn runner_list_with_a_pool_reads_every_page_and_prints_only_the_pools_runners() {
+    const FIRST: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5ab1";
+    const OTHER: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5ab2";
+    const LAST: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5ab3";
+    let (server, _directory, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", pool_list_body()),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({
+                "items": [
+                    registration_in(FIRST, "builder-one", POOL_ID),
+                    registration_in(OTHER, "gpu-one", GPU_POOL_ID),
+                ],
+                "nextCursor": "page-2"
+            }),
+        ),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": [registration_in(LAST, "builder-two", POOL_ID)]}),
+        ),
+    ]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "list",
+            "--pool",
+            "builders",
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &environment,
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "listed");
+    assert_eq!(
+        result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|runner| runner["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [FIRST, LAST]
+    );
+    assert!(result.get("nextCursor").is_none(), "{result}");
+    let requests = server.finish();
+    assert_eq!(
+        request_lines(&requests),
+        [
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=200 HTTP/1.1"),
+            format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/runner-registrations?limit=200 HTTP/1.1"
+            ),
+            format!(
+                "GET /api/v1/organizations/{ORGANIZATION}/runner-registrations?limit=200&cursor=page-2 HTTP/1.1"
+            ),
+        ]
+    );
+}
+
+// REQ-RUNNERPOOL-46
+#[test]
+fn pool_update_sends_the_rename_and_reports_the_renamed_pool() {
+    let mut renamed = pool_body();
+    renamed["name"] = serde_json::json!("renamed");
+    let (server, _directory, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", pool_list_body()),
+        http_response_with_headers(
+            "200 OK",
+            Some("application/json"),
+            &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
+            &serde_json::to_vec(&renamed).unwrap(),
+        ),
+    ]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "pool",
+            "update",
+            "builders",
+            "--name",
+            "renamed",
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &environment,
+    );
+
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "renamed");
+    assert_eq!(result["pool"]["name"], "renamed");
+    let request = server.finish().pop().unwrap();
+    assert!(request.starts_with(&format!(
+        "PATCH /api/v1/organizations/{ORGANIZATION}/runner-pools/{POOL_ID} HTTP/1.1\r\n"
+    )));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(request_body(&request)).unwrap(),
+        serde_json::json!({"name": "renamed"})
+    );
 }
 
 fn personal_pool_body() -> serde_json::Value {
@@ -1910,11 +2524,12 @@ fn personal_pool_rename_refusal_exits_with_pool_personal() {
         let mut args = vec![
             "runner",
             "pool",
-            "rename",
-            ORGANIZATION,
+            "update",
             POOL_ID,
             "--name",
             "renamed",
+            "--org",
+            ORGANIZATION,
         ];
         if json {
             args.push("--json");
@@ -1949,7 +2564,15 @@ fn personal_pool_deletion_refusal_exits_with_pool_personal() {
             personal_pool_refusal_response(),
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
-        let mut args = vec!["runner", "pool", "delete", ORGANIZATION, POOL_ID, "--yes"];
+        let mut args = vec![
+            "runner",
+            "pool",
+            "delete",
+            POOL_ID,
+            "--org",
+            ORGANIZATION,
+            "--yes",
+        ];
         if json {
             args.push("--json");
         }
@@ -1993,8 +2616,9 @@ fn pool_show_prints_the_personal_pool_member() {
             "runner",
             "pool",
             "show",
-            ORGANIZATION,
             POOL_ID,
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ],
         &environment,
@@ -2040,7 +2664,7 @@ fn pool_status_unavailable_response() -> Vec<u8> {
 
 fn pool_show(server: &ScriptedServer, credential_path: &str, json: bool) -> std::process::Output {
     let environment = deployment_environment(&server.api_url, credential_path);
-    let mut args = vec!["runner", "pool", "show", ORGANIZATION, "builders"];
+    let mut args = vec!["runner", "pool", "show", "builders", "--org", ORGANIZATION];
     if json {
         args.push("--json");
     }
@@ -2201,8 +2825,9 @@ fn runner_commands_report_reserved_run_and_idle_capacity() {
         let environment = deployment_environment(&server.api_url, &credential_path);
         for (command, arguments) in [("show", vec![RUNNER_ID]), ("list", vec![])] {
             for json in [false, true] {
-                let mut args = vec!["runner", command, ORGANIZATION];
+                let mut args = vec!["runner", command];
                 args.extend(arguments.iter().copied());
+                args.extend(["--org", ORGANIZATION]);
                 if json {
                     args.push("--json");
                 }
@@ -2352,8 +2977,9 @@ fn runner_commands_print_every_run_a_runner_holds_with_its_state() {
         let runs = held.iter().map(|(run, _)| *run).collect::<Vec<_>>();
         for (command, arguments) in [("show", vec![RUNNER_ID]), ("list", vec![])] {
             for json in [false, true] {
-                let mut args = vec!["runner", command, ORGANIZATION];
+                let mut args = vec!["runner", command];
                 args.extend(arguments.iter().copied());
+                args.extend(["--org", ORGANIZATION]);
                 if json {
                     args.push("--json");
                 }
@@ -2419,8 +3045,9 @@ fn runner_show_reports_independent_cloud_and_informational_projections() {
         &[
             "runner",
             "show",
-            ORGANIZATION,
             RUNNER_ID,
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ],
         &environment,
@@ -2540,14 +3167,15 @@ fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact(
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
-            "--pool-id",
+            "--pool",
             "ci",
             "--expires-in",
             "7d",
             "--remove-after",
             "1h",
-            "--join-key-file",
+            "--key-file",
             artifact_path,
             "--allow-insecure-http",
         ],
@@ -2588,14 +3216,15 @@ fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact(
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
-            "--pool-id",
+            "--pool",
             "ci",
             "--expires-in",
             "7d",
             "--remove-after",
             "1h",
-            "--join-key-file",
+            "--key-file",
             artifact_path,
             "--allow-insecure-http",
         ],
@@ -2631,12 +3260,13 @@ fn join_key_issue_without_a_pool_uses_the_callers_personal_pool_and_writes_only_
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
             "--expires-in",
             "30m",
             "--remove-after",
             "5m",
-            "--join-key-file",
+            "--key-file",
             "-",
             "--allow-insecure-http",
         ],
@@ -2676,8 +3306,9 @@ fn join_key_issue_without_a_file_writes_only_the_artifact_to_stdout() {
         "runner",
         "join-key",
         "issue",
+        "--org",
         ORGANIZATION,
-        "--pool-id",
+        "--pool",
         SHARED_POOL_ID,
         "--expires-in",
         "1h",
@@ -2753,12 +3384,13 @@ fn join_key_issue_without_a_personal_pool_sends_no_issuance() {
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
             "--expires-in",
             "1d",
             "--remove-after",
             "1h",
-            "--join-key-file",
+            "--key-file",
             artifact_path.to_str().unwrap(),
             "--json",
             "--allow-insecure-http",
@@ -2789,14 +3421,15 @@ fn join_key_issue_json_reports_the_key_without_its_token() {
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
-            "--pool-id",
+            "--pool",
             SHARED_POOL_ID,
             "--expires-in",
             "365d",
             "--remove-after",
             "30d",
-            "--join-key-file",
+            "--key-file",
             artifact_path,
             "--json",
             "--allow-insecure-http",
@@ -2831,14 +3464,15 @@ fn join_key_issue_json_reports_the_key_without_its_token() {
             "runner",
             "join-key",
             "issue",
+            "--org",
             ORGANIZATION,
-            "--pool-id",
+            "--pool",
             SHARED_POOL_ID,
             "--expires-in",
             expires,
             "--remove-after",
             removal,
-            "--join-key-file",
+            "--key-file",
             destination,
         ];
         if json {
@@ -2849,81 +3483,450 @@ fn join_key_issue_json_reports_the_key_without_its_token() {
         assert!(!refused.status.success(), "{args:?}");
         assert!(refused.stdout.is_empty(), "{args:?}");
     }
+    // REQ-RUNNERENROLL-5: with no `--key-file` the key of either kind goes to standard output,
+    // which `--json` never shares with it.
+    for kind in [
+        &["--pool", SHARED_POOL_ID, "--expires-in", "7d"][..],
+        &["--runner", "builder-one"][..],
+    ] {
+        let mut args = vec!["runner", "join-key", "issue", "--org", ORGANIZATION];
+        args.extend(kind);
+        args.extend(["--json", "--allow-insecure-http"]);
+        let refused = run_with_env(&args, &deployment_environment(&api_url, &credential_path));
+        assert!(!refused.status.success(), "{args:?}");
+        assert!(refused.stdout.is_empty(), "{args:?}");
+    }
     assert_eq!(
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
 }
 
-// REQ-RUNNERENROLL-94
+// REQ-RUNNERENROLL-93: with no `--remove-after` the request carries 30 days, the longest the
+// API admits, and the result prints it.
 #[test]
-fn join_key_list_prints_each_keys_pool_state_expiry_and_removal_time() {
-    let page = serde_json::json!({
-        "items": [join_key_body(POOL_ID, "issued"), join_key_body(SHARED_POOL_ID, "revoked")],
-        "nextCursor": "next-join-keys"
-    });
+fn join_key_issue_without_a_removal_time_sends_thirty_days() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
-        json_http_response("200 OK", page.clone()),
-        json_http_response("200 OK", shared_pool_body()),
-        json_http_response("200 OK", page.clone()),
+        json_http_response("200 OK", serde_json::json!({"items": [shared_pool_body()]})),
+        join_key_issued_response(SHARED_POOL_ID),
     ]);
-    let environment = deployment_environment(&server.api_url, &credential_path);
+    let directory = tempfile::tempdir().unwrap();
+    let key_path = directory.path().join("ci.key");
 
     let output = run_with_env(
         &[
             "runner",
             "join-key",
-            "list",
+            "issue",
+            "--pool",
+            "ci",
+            "--expires-in",
+            "7d",
+            "--key-file",
+            key_path.to_str().unwrap(),
+            "--org",
             ORGANIZATION,
             "--allow-insecure-http",
         ],
-        &environment,
+        &deployment_environment(&server.api_url, &credential_path),
     );
 
     assert!(output.status.success(), "{output:?}");
+    let requests = server.finish();
+    assert_join_key_issuance_request(&requests[1], SHARED_POOL_ID, 604_800, 2_592_000);
+    assert!(key_path.exists());
+}
+
+const UNREADABLE_RUNNER_ID: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abd";
+const SECOND_ACTIVATION_ID: &str = "rna_01k0z6r1w8f4jy2m7q9v3x5abd";
+
+/// A single-runner key of `runner_id` in `state`, as the API lists it.
+fn activation_in(id: &str, runner_id: &str, state: &str) -> serde_json::Value {
+    let mut activation = activation_issuance_body()["activation"].clone();
+    activation["id"] = serde_json::json!(id);
+    activation["runnerId"] = serde_json::json!(runner_id);
+    activation["state"] = serde_json::json!(state);
+    activation
+}
+
+/// Two runners: `builder-one` in the builders pool, whose keys the caller may read, and a second
+/// in the ci pool.
+fn two_registrations() -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({
+            "items": [
+                registration_body(),
+                registration_in(UNREADABLE_RUNNER_ID, "builder-two", SHARED_POOL_ID),
+            ]
+        }),
+    )
+}
+
+fn activation_list(runner_id: &str, cursor: Option<&str>) -> String {
+    let cursor = cursor.map_or_else(String::new, |cursor| format!("&cursor={cursor}"));
+    format!(
+        "GET /api/v1/organizations/{ORGANIZATION}/runner-registrations/{runner_id}/activations?limit=200{cursor} HTTP/1.1"
+    )
+}
+
+// REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-94: the list reads every page of the join keys, of the
+// registrations and of each runner's single-runner keys, passes over a runner whose keys the
+// caller may not read, and prints the pool keys and then the single-runner keys, with no
+// cursor.
+#[test]
+fn join_key_list_prints_the_pool_keys_and_every_runners_single_runner_keys() {
+    let issued = activation_in(ACTIVATION_ID, RUNNER_ID, "issued");
+    let consumed = activation_in(SECOND_ACTIVATION_ID, RUNNER_ID, "consumed");
+    let responses = || {
+        vec![
+            json_http_response(
+                "200 OK",
+                serde_json::json!({
+                    "items": [join_key_body(POOL_ID, "issued")],
+                    "nextCursor": "next-join-keys"
+                }),
+            ),
+            json_http_response(
+                "200 OK",
+                serde_json::json!({"items": [join_key_body(SHARED_POOL_ID, "revoked")]}),
+            ),
+            two_registrations(),
+            json_http_response(
+                "200 OK",
+                serde_json::json!({"items": [issued.clone()], "nextCursor": "next-keys"}),
+            ),
+            json_http_response("200 OK", serde_json::json!({"items": [consumed.clone()]})),
+            forbidden_response(),
+        ]
+    };
+    let expected_requests = [
+        format!("GET /api/v1/organizations/{ORGANIZATION}/runner-join-keys?limit=200 HTTP/1.1"),
+        format!(
+            "GET /api/v1/organizations/{ORGANIZATION}/runner-join-keys?limit=200&cursor=next-join-keys HTTP/1.1"
+        ),
+        registration_lookup(),
+        activation_list(RUNNER_ID, None),
+        activation_list(RUNNER_ID, Some("next-keys")),
+        activation_list(UNREADABLE_RUNNER_ID, None),
+    ];
+
+    let (server, _credentials, credential_path) = prepared_runner(responses());
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "list",
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "listed");
+    assert_eq!(report["deployment"], server.api_url);
+    assert_eq!(
+        report["items"],
+        serde_json::json!([
+            join_key_body(POOL_ID, "issued"),
+            join_key_body(SHARED_POOL_ID, "revoked")
+        ])
+    );
+    assert_eq!(
+        report["singleRunnerKeys"],
+        serde_json::json!([issued, consumed])
+    );
+    assert!(report.get("nextCursor").is_none(), "{report}");
+    assert_eq!(request_lines(&server.finish()), expected_requests);
+
+    let (server, _credentials, credential_path) = prepared_runner(responses());
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "list",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let rows: Vec<_> = stdout
+    let pool_keys: Vec<_> = stdout
         .lines()
         .filter(|line| line.contains(JOIN_KEY_ID))
         .collect();
-    assert_eq!(rows.len(), 2, "{stdout}");
+    assert_eq!(pool_keys.len(), 2, "{stdout}");
     for (row, pool, state) in [
-        (rows[0], POOL_ID, "issued"),
-        (rows[1], SHARED_POOL_ID, "revoked"),
+        (pool_keys[0], POOL_ID, "issued"),
+        (pool_keys[1], SHARED_POOL_ID, "revoked"),
     ] {
         for field in [pool, MEMBER_ID, state, "2026-11-16T12:00:00Z", "1h"] {
             assert!(row.contains(field), "missing {field:?} in {row:?}");
         }
     }
-    assert!(stdout.contains("next-join-keys"));
+    for (id, state) in [
+        (ACTIVATION_ID, "issued"),
+        (SECOND_ACTIVATION_ID, "consumed"),
+    ] {
+        let row = stdout
+            .lines()
+            .find(|line| line.contains(id))
+            .unwrap_or_else(|| panic!("no row for {id} in {stdout}"));
+        for field in [RUNNER_ID, state, "2026-08-09T13:00:00Z"] {
+            assert!(row.contains(field), "missing {field:?} in {row:?}");
+        }
+    }
+    let last_pool_key = stdout.find(pool_keys[1]).unwrap();
+    assert!(
+        stdout.find(ACTIVATION_ID).unwrap() > last_pool_key,
+        "{stdout}"
+    );
+    assert!(!stdout.contains(UNREADABLE_RUNNER_ID), "{stdout}");
+    assert!(!stdout.contains("cursor"), "{stdout}");
+    assert_eq!(request_lines(&server.finish()), expected_requests);
+}
 
-    let filtered = run_with_env(
+// REQ-RUNNERENROLL-10: `--pool` keeps the pool's keys and runners; `--runner` reads that
+// runner's single-runner keys alone, with no join-key read.
+#[test]
+fn join_key_list_by_pool_or_runner_reads_only_their_keys() {
+    let issued = activation_in(ACTIVATION_ID, RUNNER_ID, "issued");
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", serde_json::json!({"items": [shared_pool_body()]})),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({"items": [join_key_body(SHARED_POOL_ID, "issued")]}),
+        ),
+        two_registrations(),
+        json_http_response("200 OK", serde_json::json!({"items": []})),
+    ]);
+    let output = run_with_env(
         &[
             "runner",
             "join-key",
             "list",
+            "--pool",
+            "ci",
+            "--org",
             ORGANIZATION,
-            "--pool-id",
-            SHARED_POOL_ID,
             "--json",
             "--allow-insecure-http",
         ],
-        &environment,
+        &deployment_environment(&server.api_url, &credential_path),
     );
-    assert!(filtered.status.success(), "{filtered:?}");
-    let report: serde_json::Value = serde_json::from_slice(&filtered.stdout).unwrap();
-    assert_eq!(report["outcome"], "listed");
-    assert_eq!(report["items"], page["items"]);
-    assert_eq!(report["nextCursor"], "next-join-keys");
-
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["items"],
+        serde_json::json!([join_key_body(SHARED_POOL_ID, "issued")])
+    );
+    assert_eq!(report["singleRunnerKeys"], serde_json::json!([]));
     let requests = server.finish();
-    assert_eq!(requests.len(), 3);
-    assert!(requests[0].starts_with(&format!(
-        "GET /api/v1/organizations/{ORGANIZATION}/runner-join-keys HTTP/1.1\r\n"
-    )));
-    assert!(requests[2].starts_with(&format!(
-        "GET /api/v1/organizations/{ORGANIZATION}/runner-join-keys?runnerPoolId={SHARED_POOL_ID} HTTP/1.1\r\n"
-    )));
+    let lines = request_lines(&requests);
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(
+        lines[1].contains(&format!("runnerPoolId={SHARED_POOL_ID}")),
+        "{lines:?}"
+    );
+    assert_eq!(lines[2], registration_lookup());
+    assert_eq!(lines[3], activation_list(UNREADABLE_RUNNER_ID, None));
+
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", registration_list_body()),
+        json_http_response("200 OK", serde_json::json!({"items": [issued.clone()]})),
+    ]);
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "list",
+            "--runner",
+            "builder-one",
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["items"], serde_json::json!([]));
+    assert_eq!(report["singleRunnerKeys"], serde_json::json!([issued]));
+    assert_eq!(
+        request_lines(&server.finish()),
+        [registration_lookup(), activation_list(RUNNER_ID, None)]
+    );
+}
+
+fn revoked_response(body: &serde_json::Value) -> Vec<u8> {
+    http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
+        &serde_json::to_vec(body).unwrap(),
+    )
+}
+
+fn activation_revocation(runner_id: &str, activation_id: &str) -> String {
+    format!(
+        "POST /api/v1/organizations/{ORGANIZATION}/runner-registrations/{runner_id}/activations/{activation_id}/revocation HTTP/1.1"
+    )
+}
+
+// REQ-RUNNERENROLL-11: a single-runner key's ID finds the runner that holds it, reading
+// runners' keys and passing over one the caller may not read, and revokes it there; with
+// `--runner` it goes straight to that runner.
+#[test]
+fn join_key_revoke_finds_the_runner_that_holds_a_single_runner_key() {
+    const HELD_ID: &str = "rna_01k0z6r1w8f4jy2m7q9v3x5abe";
+    let revoked = activation_in(HELD_ID, RUNNER_ID, "revoked");
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        json_http_response(
+            "200 OK",
+            serde_json::json!({
+                "items": [
+                    registration_in(UNREADABLE_RUNNER_ID, "builder-two", SHARED_POOL_ID),
+                    registration_body(),
+                ]
+            }),
+        ),
+        forbidden_response(),
+        json_http_response(
+            "200 OK",
+            serde_json::json!({
+                "items": [
+                    activation_in(ACTIVATION_ID, RUNNER_ID, "consumed"),
+                    activation_in(HELD_ID, RUNNER_ID, "issued"),
+                ]
+            }),
+        ),
+        revoked_response(&revoked),
+    ]);
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "revoke",
+            HELD_ID,
+            "--yes",
+            "--org",
+            ORGANIZATION,
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["outcome"], "revoked");
+    assert_eq!(report["deployment"], server.api_url);
+    assert_eq!(report["activation"], revoked);
+    let requests = server.finish();
+    assert_eq!(
+        request_lines(&requests),
+        [
+            registration_lookup(),
+            activation_list(UNREADABLE_RUNNER_ID, None),
+            activation_list(RUNNER_ID, None),
+            activation_revocation(RUNNER_ID, HELD_ID),
+        ]
+    );
+    assert_eq!(header_value(&requests[3], "idempotency-key").len(), 64);
+
+    let (server, _credentials, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", registration_list_body()),
+        revoked_response(&revoked),
+    ]);
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "revoke",
+            HELD_ID,
+            "--runner",
+            "builder-one",
+            "--yes",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8(output.stdout).unwrap().contains(HELD_ID));
+    assert_eq!(
+        request_lines(&server.finish()),
+        [
+            registration_lookup(),
+            activation_revocation(RUNNER_ID, HELD_ID)
+        ]
+    );
+}
+
+// REQ-RUNNERENROLL-11: a single-runner key no runner holds is `not_found` with nothing
+// revoked, and `--runner` beside a pool key's ID is a usage error before anything is sent.
+#[test]
+fn join_key_revoke_of_an_unheld_key_or_a_pool_key_with_a_runner_revokes_nothing() {
+    for json in [true, false] {
+        let (server, _credentials, credential_path) = prepared_runner(vec![
+            two_registrations(),
+            json_http_response("200 OK", serde_json::json!({"items": []})),
+            json_http_response("200 OK", serde_json::json!({"items": []})),
+        ]);
+        let mut args = vec![
+            "runner",
+            "join-key",
+            "revoke",
+            ACTIVATION_ID,
+            "--yes",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ];
+        if json {
+            args.push("--json");
+        }
+        let output = run_with_env(
+            &args,
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        if json {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["outcome"], "not_found");
+        } else {
+            assert!(output.stdout.is_empty());
+        }
+        let requests = server.finish();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    }
+
+    let (server, _credentials, credential_path) = prepared_runner(vec![]);
+    let output = run_with_env(
+        &[
+            "runner",
+            "join-key",
+            "revoke",
+            JOIN_KEY_ID,
+            "--runner",
+            "builder-one",
+            "--yes",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(server.finish().is_empty());
 }
 
 // REQ-RUNNERENROLL-94
@@ -2936,6 +3939,7 @@ fn join_key_revoke_requires_confirmation_and_sends_the_revocation() {
             "runner",
             "join-key",
             "revoke",
+            "--org",
             ORGANIZATION,
             JOIN_KEY_ID,
             "--allow-insecure-http",
@@ -2959,6 +3963,7 @@ fn join_key_revoke_requires_confirmation_and_sends_the_revocation() {
             "runner",
             "join-key",
             "revoke",
+            "--org",
             ORGANIZATION,
             JOIN_KEY_ID,
             "--yes",
@@ -2995,8 +4000,9 @@ fn runner_show_prints_the_join_key_of_a_joined_runner() {
     let args = [
         "runner",
         "show",
-        ORGANIZATION,
         RUNNER_ID,
+        "--org",
+        ORGANIZATION,
         "--allow-insecure-http",
     ];
 
@@ -3017,4 +4023,63 @@ fn runner_show_prints_the_join_key_of_a_joined_runner() {
             .contains("Join key")
     );
     assert_eq!(server.finish().len(), 2);
+}
+
+// REQ-RUNNERPOOL-38, REQ-RUNNERPOOL-46
+#[test]
+fn pool_list_reads_one_page_and_returns_its_continuation() {
+    let cursor = "more/+";
+    let mut page = pool_list_body();
+    page["nextCursor"] = cursor.into();
+    let (server, _dir, credential) = prepared_runner(vec![
+        json_http_response("200 OK", page),
+        json_http_response("200 OK", serde_json::json!({"items": [pool_body()]})),
+        json_http_response("200 OK", serde_json::json!({"items": []})),
+        forbidden_response(),
+    ]);
+    let env = deployment_environment(&server.api_url, &credential);
+    let list = |options: &[&str]| {
+        let mut args = vec![
+            "runner",
+            "pool",
+            "list",
+            "--org",
+            ORGANIZATION,
+            "--limit",
+            "1",
+            "--allow-insecure-http",
+        ];
+        args.extend_from_slice(options);
+        run_with_env(&args, &env)
+    };
+    let output = list(&["--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "listed");
+    assert_eq!(result["items"][0]["id"], POOL_ID);
+    assert_eq!(result["items"][0]["name"], "builders");
+    assert_eq!(result["nextCursor"], cursor);
+    let output = list(&["--cursor", result["nextCursor"].as_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(human.contains(POOL_ID) && human.contains("builders"));
+    let output = list(&["--json"]);
+    assert!(output.status.success());
+    let empty: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(empty["items"], serde_json::json!([]));
+    assert!(empty.get("nextCursor").is_none());
+    let refused = list(&["--json"]);
+    assert!(!refused.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(result["outcome"], "forbidden");
+    let base = format!("GET /api/v1/organizations/{ORGANIZATION}/runner-pools?limit=1");
+    assert_eq!(
+        request_lines(&server.finish()),
+        [
+            format!("{base} HTTP/1.1"),
+            format!("{base}&cursor=more%2F%2B HTTP/1.1"),
+            format!("{base} HTTP/1.1"),
+            format!("{base} HTTP/1.1")
+        ]
+    );
 }

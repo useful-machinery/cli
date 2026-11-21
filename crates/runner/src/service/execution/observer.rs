@@ -617,7 +617,7 @@ impl ExecutionObserver<RunnerExecutionInstant> for RunnerExecutionObserver {
                 });
             }
             let diagnostic = match transition.step.as_ref() {
-                Some(ObservedStepTransition::Failed { detail }) => detail.runner_diagnostic(),
+                Some(ObservedStepTransition::Failed { detail, .. }) => detail.runner_diagnostic(),
                 _ => None,
             };
             let workflow_event =

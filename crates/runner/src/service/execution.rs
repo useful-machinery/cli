@@ -23,9 +23,10 @@ use super::artifact_delivery::{
 };
 use super::assignment::{
     AcceptedAssignment, AcceptedExecution, AssignmentObservation, CausalLease, ExecutionReport,
-    LeaseAuthority, ManagerEvent, ObservationOutbox, OutboxFailure, PhaseEnd,
-    RenewalRequestFailure, RunEvent, RunPhase, lease_clock_cause,
+    LeaseAuthority, LeaseLoss, LeaseLossReason, ManagerEvent, ObservationOutbox, OutboxFailure,
+    PhaseEnd, RenewalRequestFailure, RunEvent, RunPhase, lease_clock_cause,
 };
+use super::command_fence::CommandFence;
 use super::lease_clock::{
     LeaseClock, LeaseClockError, LeaseInstant, LeaseWait, LeaseWaitCancellation,
 };
@@ -181,12 +182,16 @@ impl ExecutionCompletion {
 }
 
 pub(super) struct ExecutionAuthority {
+    pub(super) lease_loss: LeaseLoss,
     pub(super) lease_clock: LeaseClock,
     pub(super) causal_lease: CausalLease,
     pub(super) updates: tokio::sync::watch::Receiver<LeaseAuthority>,
     pub(super) start_authority: tokio::sync::watch::Receiver<bool>,
     pub(super) infrastructure_interruption:
         tokio::sync::watch::Receiver<Option<InfrastructureInterruption>>,
+    /// The runner's command fence, which a single-workflow run's execution enters before
+    /// its engine starts and stays in until the engine's execution ends (INV-RUNNER-53).
+    pub(super) command_fence: Arc<CommandFence>,
 }
 
 trait PreservableStaging {
@@ -262,6 +267,7 @@ async fn mark_engine_terminal<Output>(
 }
 
 pub(super) struct ExecutionJob {
+    lease_loss: LeaseLoss,
     accepted: AcceptedAssignment,
     outbox: ObservationOutbox,
     artifact_delivery: ArtifactDeliveryBroker,
@@ -277,6 +283,9 @@ pub(super) struct ExecutionJob {
     run_event: RunEvent,
     /// The view of a single-workflow run the manager also holds; none for a tree run.
     view: Option<AssignmentRunView>,
+    /// The fence a single-workflow run's execution stays in while its engine executes; a tree
+    /// run's commands enter it on their own (INV-RUNNER-53).
+    command_fence: Arc<CommandFence>,
     /// The start gate a single-workflow run's engine consults before each command or agent
     /// step (REQ-RUNNERENROLL-155): the disk monitor's published reading, or an empty
     /// reading, which never holds a step, when the service runs no monitor.
@@ -672,10 +681,10 @@ pub(super) mod test_support {
         authority_updates: tokio::sync::watch::Receiver<LeaseAuthority>,
         causal_lease: CausalLease,
         cancellation: CancellationSource,
+        lease_loss: LeaseLoss,
         assignment_id: String,
         attempt_id: String,
     ) -> LiveLeaseExecution {
-        let observed_cancellation = cancellation.clone();
         let outbox = ObservationOutbox::new();
         let fence = PostStopFence::with_workflow_git(None);
         let observed_fence = fence.clone();
@@ -692,7 +701,7 @@ pub(super) mod test_support {
                     observed_invocations.fetch_add(1, Ordering::Release);
                     completed.await.expect("live lease execution completion")
                 },
-                &cancellation,
+                &lease_loss,
                 &lease_clock,
                 authority_updates,
                 infrastructure_updates,
@@ -709,7 +718,7 @@ pub(super) mod test_support {
         LiveLeaseExecution {
             completion,
             task,
-            cancellation: observed_cancellation,
+            cancellation,
             fence: observed_fence,
             guards: observed_guards,
             invocations,

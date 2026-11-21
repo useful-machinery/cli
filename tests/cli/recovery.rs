@@ -22,7 +22,7 @@ fn read_json(path: impl AsRef<Path>) -> serde_json::Value {
 
 fn fixture_source(name: &str) -> String {
     fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+        crate::fixture_root()
             .join("tests/fixtures/workflow-run")
             .join(name),
     )
@@ -30,7 +30,7 @@ fn fixture_source(name: &str) -> String {
 }
 
 fn schema(path: &str) -> jsonschema::Validator {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let path = crate::fixture_root().join(path);
     let schema: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     jsonschema::draft202012::new(&schema).unwrap()
 }
@@ -41,6 +41,7 @@ fn retry_args(run_directory: &Path, execution_root: &Path) -> Vec<String> {
         "run".to_owned(),
         "retry".to_owned(),
         "--json".to_owned(),
+        "--all".to_owned(),
         "--execution-root".to_owned(),
         execution_root.to_string_lossy().into_owned(),
         run_directory.to_string_lossy().into_owned(),
@@ -165,7 +166,7 @@ fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
         let status = run(&[
             "workflow".to_owned(),
             "run".to_owned(),
-            "status".to_owned(),
+            "show".to_owned(),
             "--json".to_owned(),
             run_directory.to_string_lossy().into_owned(),
         ]);
@@ -190,7 +191,7 @@ fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
         let plain_status = run(&[
             "workflow".to_owned(),
             "run".to_owned(),
-            "status".to_owned(),
+            "show".to_owned(),
             "--plain".to_owned(),
             "--color".to_owned(),
             "never".to_owned(),
@@ -215,6 +216,8 @@ fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
 
         let result_directory = run_directory.join("attempts/000001/result");
         let artifact = run(&[
+            "workflow".to_owned(),
+            "run".to_owned(),
             "artifact".to_owned(),
             "validate".to_owned(),
             "--json".to_owned(),
@@ -370,7 +373,7 @@ fn advisory_exhaustion_is_one_terminal_issue_after_all_target_executions() {
     assert!(plain.contains("1 advisory issues"));
 }
 
-// REQ-WFRECOVERY-3, REQ-WFRECOVERY-25, REQ-WFRECOVERY-26, REQ-WFRECOVERY-32, REQ-WFRECOVERY-36, REQ-WFRECOVERY-37
+// REQ-WFRECOVERY-3, REQ-WFRECOVERY-25, REQ-WFRECOVERY-26, REQ-WFRECOVERY-32, REQ-WFRECOVERY-36, REQ-WFRECOVERY-37, REQ-WFRECOVERY-65, REQ-WFEXEC-79, REQ-LOCALRUN-145
 #[test]
 fn gave_up_and_handler_failure_preserve_the_raw_target_failure() {
     let scenarios = [
@@ -381,6 +384,12 @@ fn gave_up_and_handler_failure_preserve_the_raw_target_failure() {
             "gave_up",
         ),
         ("handler-failed", "exit 9", "handler_failed", "failed"),
+        (
+            "infrastructure",
+            "printf '%s' '{\"schemaVersion\":1,\"decision\":\"infrastructure\",\"summary\":\"Inspected the failure.\",\"reason\":\"The host is out of disk.\"}' > \"$USEFUL_RECOVERY_RESULT\"",
+            "infrastructure",
+            "infrastructure",
+        ),
     ];
     for (name, handler_command, termination, handler_outcome) in scenarios {
         let bundle = RunBundle::new(&format!(
@@ -401,7 +410,103 @@ fn gave_up_and_handler_failure_preserve_the_raw_target_failure() {
             handler_outcome
         );
         assert_eq!(step["invocations"].as_array().unwrap().len(), 2);
+        let failure_class = (name == "infrastructure").then_some("infrastructure");
+        assert_failure_class_is_published(step, &run_directory, failure_class);
+        if name == "infrastructure" {
+            assert_infrastructure_decision_is_published(step, &run_directory);
+        }
     }
+}
+
+fn inspect_run(run_directory: &Path, command: &str, format: &[&str]) -> Vec<u8> {
+    let mut args = vec!["workflow".to_owned(), "run".to_owned(), command.to_owned()];
+    args.extend(format.iter().map(|argument| (*argument).to_owned()));
+    args.push(run_directory.to_string_lossy().into_owned());
+    let output = run(&args);
+    assert!(output.status.success(), "{command} {format:?}");
+    output.stdout
+}
+
+/// Asserts that `step`, its `state.json` progress entry and its `status --json` and
+/// `view --json` entries carry `failureClass` exactly as `expected` says, and that the plain
+/// status and view name it the same way.
+fn assert_failure_class_is_published(
+    step: &serde_json::Value,
+    run_directory: &Path,
+    expected: Option<&str>,
+) {
+    let status: serde_json::Value =
+        serde_json::from_slice(&inspect_run(run_directory, "show", &["--json"])).unwrap();
+    assert!(schema("schemas/workflow-status-result-v1.schema.json").is_valid(&status));
+    let view: serde_json::Value =
+        serde_json::from_slice(&inspect_run(run_directory, "view", &["--json"])).unwrap();
+    assert!(schema("schemas/workflow-view-result-v1.schema.json").is_valid(&view));
+    let state = read_json(run_directory.join("state.json"));
+    for (document, entry) in [
+        ("result", step),
+        ("state.json", &state["attempts"][0]["progress"]["steps"][0]),
+        (
+            "status",
+            &status["state"]["attempts"][0]["progress"]["steps"][0],
+        ),
+        ("view", &view["result"]["steps"][0]),
+    ] {
+        assert_eq!(
+            entry
+                .get("failureClass")
+                .and_then(serde_json::Value::as_str),
+            expected,
+            "{document}: {entry}"
+        );
+    }
+    let plain = ["--plain", "--color", "never"];
+    let plain_status = String::from_utf8(inspect_run(run_directory, "show", &plain)).unwrap();
+    let plain_view = String::from_utf8(inspect_run(run_directory, "view", &plain)).unwrap();
+    let id = step["id"].as_str().unwrap();
+    let failed_line = plain_view
+        .lines()
+        .find(|line| line.contains(id) && line.contains("command_exit"))
+        .unwrap_or_else(|| panic!("no failed line for {id}:\n{plain_view}"));
+    match expected {
+        Some(class) => {
+            assert!(
+                plain_status.contains(&format!("failure class: {id} · {class}")),
+                "{plain_status}"
+            );
+            assert!(failed_line.contains(class), "{failed_line}");
+        }
+        None => {
+            assert!(!plain_status.contains("failure class:"), "{plain_status}");
+            assert!(!failed_line.contains("infrastructure"), "{failed_line}");
+        }
+    }
+}
+
+fn assert_infrastructure_decision_is_published(step: &serde_json::Value, run_directory: &Path) {
+    assert_eq!(
+        step["recovery"]["termination"],
+        serde_json::json!({"kind": "infrastructure", "round": 1})
+    );
+    let handler = &step["recovery"]["rounds"][0]["handler"];
+    assert_eq!(handler["summary"], "Inspected the failure.");
+    assert_eq!(handler["reason"], "The host is out of disk.");
+    let plain = ["--plain", "--color", "never"];
+    let plain_status = String::from_utf8(inspect_run(run_directory, "show", &plain)).unwrap();
+    assert!(plain_status.contains("step recovery: verify · infrastructure · round 1"));
+    let plain_view = String::from_utf8(inspect_run(run_directory, "view", &plain)).unwrap();
+    assert!(plain_view.contains("recovery infrastructure at round 1"));
+    let artifact = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "artifact".to_owned(),
+        "validate".to_owned(),
+        "--json".to_owned(),
+        run_directory
+            .join("attempts/000001/result")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    assert!(artifact.status.success());
 }
 
 // REQ-WFRECOVERY-60, REQ-WFRECOVERY-62
@@ -447,6 +552,63 @@ fn handler_launch_refusal_is_classified_like_a_step_command() {
     let view: serde_json::Value = serde_json::from_slice(&view.stdout).unwrap();
     assert!(schema("schemas/workflow-view-result-v1.schema.json").is_valid(&view));
     assert_eq!(view["result"]["steps"][0], *step);
+}
+
+// SC-WFRECOVERY-6: REQ-WFRECOVERY-66, REQ-WFRECOVERY-36
+#[test]
+fn listed_exit_code_classifies_the_failure_without_a_recovery_round() {
+    for (name, command) in [
+        ("listed-first", "printf x >> target-runs; exit 71"),
+        (
+            "listed-after-a-round",
+            "printf x >> target-runs; [ \"$(wc -c < target-runs)\" -ge 2 ] && exit 71; exit 1",
+        ),
+    ] {
+        let bundle = RunBundle::new(&format!(
+            "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    infrastructureExitCodes: [71]\n    recovery:\n      retries: 2\n    command:\n      argv: [/bin/sh, -c, {}]\n",
+            serde_json::to_string(command).unwrap(),
+        ));
+        let run_directory = bundle.result(name);
+        let output = run(&json_run_args(&bundle, &run_directory));
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let step = &terminal["result"]["steps"][0];
+        assert_eq!(step["state"], "failed", "{name}");
+        assert_eq!(step["detail"]["code"], "command_exit", "{name}");
+        assert_eq!(step["detail"]["exitCode"], 71, "{name}");
+        assert_eq!(step["failureClass"], "infrastructure", "{name}");
+        if name == "listed-first" {
+            assert!(step.get("recovery").is_none(), "{step}");
+            assert!(step.get("invocations").is_none(), "{step}");
+            assert_eq!(
+                fs::read(bundle.execution_root().join("target-runs")).unwrap(),
+                b"x"
+            );
+        } else {
+            assert_eq!(
+                step["recovery"]["termination"],
+                serde_json::json!({"kind": "infrastructure", "executionNumber": 2})
+            );
+            assert_eq!(step["recovery"]["rounds"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                fs::read(bundle.execution_root().join("target-runs")).unwrap(),
+                b"xx"
+            );
+        }
+        assert_failure_class_is_published(step, &run_directory, Some("infrastructure"));
+        let artifact = run(&[
+            "workflow".to_owned(),
+            "run".to_owned(),
+            "artifact".to_owned(),
+            "validate".to_owned(),
+            "--json".to_owned(),
+            run_directory
+                .join("attempts/000001/result")
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+        assert!(artifact.status.success(), "{name}");
+    }
 }
 
 // REQ-WFRECOVERY-1, REQ-WFRECOVERY-4, REQ-WFRECOVERY-36, REQ-WFRECOVERY-55
@@ -531,7 +693,7 @@ fn active_status_reports_handler_kind_and_recheck_decision() {
     let handler_status = run(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         "--plain".to_owned(),
         "--color".to_owned(),
         "never".to_owned(),
@@ -557,7 +719,7 @@ fn active_status_reports_handler_kind_and_recheck_decision() {
     let target_status = run(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         "--plain".to_owned(),
         "--color".to_owned(),
         "never".to_owned(),
@@ -604,7 +766,17 @@ fn cancellation_quiesces_the_ready_handler_and_publishes_no_recheck() {
     let owner = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
     kill_process(owner, Signal::INT).unwrap();
     let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(130));
+    // The run's files live in a temporary directory the panic removes, so the message is the
+    // only record of why the exit status was wrong.
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stdout={} stderr={} state={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        fs::read_to_string(run_directory.join("state.json"))
+            .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+    );
     let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let step = &terminal["result"]["steps"][0];
     assert_eq!(terminal["outcome"], "failed");
@@ -648,7 +820,7 @@ fn status_and_view_dispatch_unsupported_recovery_versions_without_rewriting() {
     let status = run(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         "--json".to_owned(),
         run_directory.to_string_lossy().into_owned(),
     ]);
@@ -669,6 +841,8 @@ fn status_and_view_dispatch_unsupported_recovery_versions_without_rewriting() {
     write_json(&result_path, &published);
     let bytes_before = fs::read(&result_path).unwrap();
     let artifact = run(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
         "artifact".to_owned(),
         "validate".to_owned(),
         "--json".to_owned(),
@@ -719,7 +893,7 @@ fn terminal_pending_publication_reconciles_the_committed_result() {
     let status = run(&[
         "workflow".to_owned(),
         "run".to_owned(),
-        "status".to_owned(),
+        "show".to_owned(),
         "--json".to_owned(),
         run_directory.to_string_lossy().into_owned(),
     ]);

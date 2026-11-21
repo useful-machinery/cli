@@ -301,7 +301,7 @@
             "executionRoot": {"$ref": "#/$defs/AbsolutePath"}
           }
         },
-        "reason": {"enum": ["resume", "retry", "edge", "restart"]},
+        "reason": {"enum": ["resume", "retry", "host", "edge", "restart"]},
         "edge": {"$ref": "#/$defs/ContinuationEdge"},
         "fromSteps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "reexecutedSteps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
@@ -770,6 +770,11 @@
         "failedChild": {
           "$ref": "#/$defs/FailedChild"
         },
+        "failureClass": {
+          "enum": [
+            "infrastructure"
+          ]
+        },
         "inputSources": {
           "type": "array",
           "minItems": 1,
@@ -817,6 +822,23 @@
             "properties": {
               "state": {
                 "const": "succeeded"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "failureClass"
+            ]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              },
+              "role": {
+                "const": "step"
               }
             }
           }
@@ -1161,6 +1183,7 @@
           "enum": [
             "recheck",
             "gave_up",
+            "infrastructure",
             "failed",
             "cancelled"
           ]
@@ -1234,7 +1257,8 @@
             "kind": {
               "enum": [
                 "recovered",
-                "exhausted"
+                "exhausted",
+                "infrastructure"
               ]
             },
             "executionNumber": {
@@ -1253,7 +1277,10 @@
           ],
           "properties": {
             "kind": {
-              "const": "gave_up"
+              "enum": [
+                "gave_up",
+                "infrastructure"
+              ]
             },
             "round": {
               "type": "integer",
@@ -1354,6 +1381,7 @@
           "enum": [
             "recheck",
             "gave_up",
+            "infrastructure",
             "failed",
             "cancelled"
           ]
@@ -3097,7 +3125,8 @@
             "repair",
             "stop",
             "external",
-            "children"
+            "children",
+            "host"
           ]
         },
         "since": {
@@ -3182,17 +3211,22 @@
         "state",
         "record",
         "recovery",
-        "retry"
+        "retry",
+        "position",
+        "attempts",
+        "children",
+        "controls",
+        "mirror"
       ],
       "properties": {
         "schemaVersion": {
           "const": 1
         },
         "command": {
-          "const": "useful workflow run status"
+          "const": "useful workflow run show"
         },
         "outcome": {
-          "const": "status"
+          "const": "shown"
         },
         "exitStatus": {
           "const": 0
@@ -3241,7 +3275,27 @@
                 "reason": {"enum": ["run_locked", "ownership_unproven", "continuation_disposition_ineligible"]}}}
           ]
         },
-        "workspaceModified": {"oneOf": [{"type": "boolean"}, {"const": "unknown"}]}
+        "workspaceModified": {"oneOf": [{"type": "boolean"}, {"const": "unknown"}]},
+        "position": {
+          "description": "The step path the run is at: the wait's step while the run waits, else the record's position; null for a run without a run record or with no position.",
+          "oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]
+        },
+        "attempts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ShownAttempt"}
+        },
+        "children": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ShownChild"}
+        },
+        "controls": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ShownControl"}
+        },
+        "mirror": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ShownMirrorWrite"}
+        }
       },
       "allOf": [
         {
@@ -3280,6 +3334,112 @@
         }
       ]
     },
+    "ShownAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "trigger", "state", "reason", "edge", "result"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "trigger": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1},
+        "reason": {"description": "The continuation reason the attempt's state.json entry records, or null."},
+        "edge": {"description": "The edge that started the attempt, as its state.json entry records it, or null."},
+        "imported": {"description": "The run a successor imported this attempt from, present only when it did."},
+        "result": {
+          "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["status", "reason"],
+              "properties": {"status": {"const": "not_published"}, "reason": {"type": "string", "minLength": 1}}},
+            {"type": "object", "additionalProperties": false, "required": ["status", "directory"],
+              "properties": {"status": {"const": "published"}, "directory": {"type": "string", "minLength": 1}}},
+            {"type": "object", "additionalProperties": false, "required": ["status", "phase"],
+              "properties": {"status": {"const": "publication_failed"}, "phase": {"type": "string", "minLength": 1}}}
+          ]
+        }
+      }
+    },
+    "ShownChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "item", "ordinal", "id", "state", "outcome", "directory", "progress"],
+      "properties": {
+        "step": {"type": "string", "minLength": 1},
+        "item": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]},
+        "ordinal": {"type": "integer", "minimum": 1},
+        "id": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1},
+        "outcome": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "directory": {"$ref": "#/$defs/AbsolutePath"},
+        "progress": {
+          "description": "A running child's current attempt and in-flight steps, read from its own records; null for a child that is not running.",
+          "oneOf": [
+            {"type": "null"},
+            {"type": "object", "additionalProperties": false,
+              "required": ["attempt", "state", "startedAt", "recovery", "steps"],
+              "properties": {
+                "attempt": {"type": "integer", "minimum": 1},
+                "state": {"type": "string", "minLength": 1},
+                "startedAt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Timestamp"}]},
+                "recovery": {"enum": ["active", "settled", "abandoned", "ownership_unproven"]},
+                "steps": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+                  "required": ["id", "role", "state", "startedAt"],
+                  "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "role": {"type": "string", "minLength": 1},
+                    "state": {"type": "string", "minLength": 1},
+                    "startedAt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Timestamp"}]}}}}
+              }}
+          ]
+        },
+        "edges": {
+          "description": "A nested run's edge counts; absent for a plain stage's child.",
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "children": {
+          "description": "A nested run's own children; absent for a plain stage's child.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/ShownChild"}
+        }
+      }
+    },
+    "ShownControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "event", "by", "at", "wait", "payload"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 1},
+        "event": {"type": "string", "minLength": 1},
+        "by": {"type": "string", "minLength": 1},
+        "at": {"$ref": "#/$defs/Timestamp"},
+        "wait": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "payload": {"oneOf": [{"type": "null"}, {"type": "object"}]}
+      }
+    },
+    "ShownMirrorWrite": {
+      "description": "One mirror/<NNNN>-<hook>.json write with the ordinal of its file name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "schemaVersion", "hook", "at", "issue", "action", "outcome"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 1},
+        "schemaVersion": {"const": 1},
+        "hook": {"enum": ["start", "stage", "wait", "outcome"]},
+        "at": {"$ref": "#/$defs/Timestamp"},
+        "issue": {"type": "string", "minLength": 1},
+        "action": {
+          "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["kind", "body"],
+              "properties": {"kind": {"const": "comment"}, "body": {"type": "string"}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind", "binding"],
+              "properties": {"kind": {"const": "state"}, "state": {"type": "string"}, "binding": {"type": "string", "minLength": 1}}}
+          ]
+        },
+        "outcome": {"enum": ["written", "skipped", "failed"]},
+        "reason": {"enum": ["guard_held", "start_announced"]},
+        "code": {"type": "string", "minLength": 1},
+        "diagnostic": {"type": "string"}
+      }
+    },
     "StatusError": {
       "type": "object",
       "additionalProperties": false,
@@ -3295,7 +3455,7 @@
           "const": 1
         },
         "command": {
-          "const": "useful workflow run status"
+          "const": "useful workflow run show"
         },
         "outcome": {
           "const": "error"
@@ -3319,6 +3479,8 @@
                 "run_directory_unavailable",
                 "run_directory_invalid",
                 "run_not_found",
+                "subject_ambiguous",
+                "attempt_not_found",
                 "home_unavailable",
                 "recovery_schema_unsupported",
                 "lock_query_failed",

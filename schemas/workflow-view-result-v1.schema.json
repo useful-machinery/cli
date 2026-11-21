@@ -635,6 +635,7 @@
           "enum": [
             "recheck",
             "gave_up",
+            "infrastructure",
             "failed",
             "cancelled"
           ]
@@ -708,7 +709,8 @@
             "kind": {
               "enum": [
                 "recovered",
-                "exhausted"
+                "exhausted",
+                "infrastructure"
               ]
             },
             "executionNumber": {
@@ -727,7 +729,10 @@
           ],
           "properties": {
             "kind": {
-              "const": "gave_up"
+              "enum": [
+                "gave_up",
+                "infrastructure"
+              ]
             },
             "round": {
               "type": "integer",
@@ -1089,6 +1094,11 @@
         "failedChild": {
           "$ref": "#/$defs/FailedChild"
         },
+        "failureClass": {
+          "enum": [
+            "infrastructure"
+          ]
+        },
         "inputSources": {
           "type": "array",
           "minItems": 1,
@@ -1135,6 +1145,23 @@
             "properties": {
               "state": {
                 "const": "succeeded"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "failureClass"
+            ]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              },
+              "role": {
+                "const": "step"
               }
             }
           }
@@ -2061,6 +2088,7 @@
             "enum": [
               "resume",
               "retry",
+              "host",
               "edge",
               "restart"
             ]
@@ -2492,7 +2520,8 @@
             "repair",
             "stop",
             "external",
-            "children"
+            "children",
+            "host"
           ]
         },
         "since": {

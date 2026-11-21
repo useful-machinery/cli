@@ -1,7 +1,7 @@
 //! Reading a secret the member gives: a private file, `-` for standard input, or a line typed
 //! at a prompt on the terminal that does not echo it. `useful runner serve --join-key` and
-//! `useful integration connect` for a token service read a typed secret through the one prompt
-//! here.
+//! `useful account integration connect` for a token service read a typed secret through the one
+//! prompt here.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -117,6 +117,24 @@ impl SecretInput {
         }
         Ok(())
     }
+}
+
+/// `bytes`, read as the secret `name` names, once one trailing line ending is trimmed, when they
+/// are one line of 1 to `max` printable characters without a space: the form of a Claude Code
+/// token and of an integration token (REQ-INTEGRATION-1). The refusal never quotes them.
+pub(super) fn one_line(
+    name: &str,
+    max: usize,
+    mut bytes: Zeroizing<Vec<u8>>,
+) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    trim_line_ending(&mut bytes);
+    if bytes.is_empty()
+        || bytes.len() > max
+        || !bytes.iter().all(|byte| (b'!'..=b'~').contains(byte))
+    {
+        bail!("{name} must be one line of 1 to {max} printable characters without spaces");
+    }
+    Ok(bytes)
 }
 
 /// Trims one trailing LF or CRLF.

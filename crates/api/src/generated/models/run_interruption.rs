@@ -23,6 +23,9 @@ pub struct RunInterruption {
     pub cause: Cause,
     #[serde(rename = "executorFault", deserialize_with = "Option::deserialize")]
     pub executor_fault: Option<ExecutorFault>,
+    /// Why the runner lost its lease for cause execution_lease_expired, null when Cloud settled the interruption on its own lease expiry or no reason was recorded.
+    #[serde(rename = "leaseLoss", deserialize_with = "Option::deserialize")]
+    pub lease_loss: Option<LeaseLoss>,
     #[serde(rename = "stopConfirmed")]
     pub stop_confirmed: bool,
 }
@@ -32,12 +35,14 @@ impl RunInterruption {
         phase: Phase,
         cause: Cause,
         executor_fault: Option<ExecutorFault>,
+        lease_loss: Option<LeaseLoss>,
         stop_confirmed: bool,
     ) -> RunInterruption {
         RunInterruption {
             phase,
             cause,
             executor_fault,
+            lease_loss,
             stop_confirmed,
         }
     }
@@ -87,5 +92,27 @@ pub enum ExecutorFault {
 impl Default for ExecutorFault {
     fn default() -> ExecutorFault {
         Self::ExecutionEnvironmentLost
+    }
+}
+/// Why the runner lost its lease for cause execution_lease_expired, null when Cloud settled the interruption on its own lease expiry or no reason was recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum LeaseLoss {
+    #[serde(rename = "lease_start_late")]
+    LeaseStartLate,
+    #[serde(rename = "lease_renewal_unreachable")]
+    LeaseRenewalUnreachable,
+    #[serde(rename = "lease_renewal_late")]
+    LeaseRenewalLate,
+    #[serde(rename = "lease_revoked_by_cloud")]
+    LeaseRevokedByCloud,
+    #[serde(rename = "lease_clock_failed")]
+    LeaseClockFailed,
+    #[serde(rename = "lease_authority_missing")]
+    LeaseAuthorityMissing,
+}
+
+impl Default for LeaseLoss {
+    fn default() -> LeaseLoss {
+        Self::LeaseStartLate
     }
 }

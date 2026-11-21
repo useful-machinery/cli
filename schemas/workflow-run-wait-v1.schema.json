@@ -40,7 +40,7 @@
       "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
     },
     "WaitKind": {
-      "enum": ["answer", "approval", "repair", "stop", "external", "children"]
+      "enum": ["answer", "approval", "repair", "stop", "external", "children", "host"]
     },
     "PositionElement": {
       "oneOf": [
@@ -63,7 +63,7 @@
         "source": {
           "type": "string",
           "minLength": 1,
-          "description": "The resolved source name: um for the derived kinds, a provider for an external wait."
+          "description": "The resolved source name: um for the kinds controls resolve, host for a host wait, a provider for an external wait."
         },
         "event": {
           "oneOf": [

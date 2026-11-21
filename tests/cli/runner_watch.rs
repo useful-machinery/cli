@@ -5,7 +5,7 @@ use std::os::unix::net::UnixListener;
 use super::runner_status::write_status_config;
 
 // REQ-RUNNERENROLL-139: without a terminal the command reads no configuration's socket,
-// asks the runner nothing and names `useful runner status`.
+// asks the runner nothing and names `useful runner show`.
 #[test]
 fn runner_watch_without_a_terminal_names_runner_status_and_asks_nothing() {
     let directory = private_credential_directory();
@@ -19,7 +19,7 @@ fn runner_watch_without_a_terminal_names_runner_status_and_asks_nothing() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("useful runner status"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("useful runner show"));
     assert_eq!(
         listener.accept().map(|_| ()).unwrap_err().kind(),
         io::ErrorKind::WouldBlock,
@@ -54,7 +54,7 @@ mod terminal {
 
     fn fixture(path: &str) -> Vec<u8> {
         fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
+            crate::fixture_root()
                 .join("tests/fixtures/runner-control/v1")
                 .join(path),
         )

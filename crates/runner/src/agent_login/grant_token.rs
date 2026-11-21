@@ -417,7 +417,7 @@ pub(crate) struct AssignmentGrantTokens {
 }
 
 /// What a refresh, and the end of the assignment, publishes each readiness
-/// document it records to: the live status, so that `useful runner status`
+/// document it records to: the live status, so that `useful runner show`
 /// shows it without waiting for a pass.
 pub(crate) type PublishReadiness = Arc<dyn Fn(&ReadinessDocument) + Send + Sync>;
 

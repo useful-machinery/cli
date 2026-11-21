@@ -5,6 +5,7 @@
 )]
 mod build_profile;
 mod credential_status;
+mod git_remote;
 mod idempotency;
 mod public_id;
 mod timing;
@@ -13,6 +14,7 @@ mod wire;
 mod workflow_contract;
 
 pub use credential_status::{Availability, CredentialStatus, NextAction};
+pub use git_remote::{RemoteAddress, remote_address};
 pub use idempotency::generate_idempotency_key;
 pub use public_id::{
     valid_lowercase_hyphenated, valid_organization_ref, valid_typed_id, valid_url_safe_name,

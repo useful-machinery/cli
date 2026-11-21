@@ -16,36 +16,38 @@ use useful_execution::{
     resolve_workflow_file_with_agent_profiles, superseded_rejection_message,
 };
 
-use super::super::super::OrganizationArg;
-use super::super::super::run::{ContinuationSubmission, parse_continuation_step};
+use super::cloud_api::RunWaitArgs;
 use super::create::{ChildRecovery, ExecutionLeaf};
+use super::target::{Found, RunArg};
+use crate::cli::context::OrgArgs;
+use crate::cli::{HttpOptions, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
 
-pub(super) const ABOUT: &str = "Continue a local workflow run, or a Cloud run with --cloud";
-pub(super) const AFTER_HELP: &str = "Select one or more ordinary steps with --from. Their downstream ordinary dependents run again; other eligible ordinary steps are inherited. Every finalizer runs again. The original run inputs and Git baseline remain authoritative.
+pub(super) const ABOUT: &str = "Continue a run from where it stands, rerunning nothing";
+pub(super) const AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
 
-Without --from, a waiting run continues once a control resolves its wait and otherwise reports the wait unchanged, and a run whose process died continues from the step it was running.
+A run under the home continues once a control resolves its wait, and otherwise the command reports the wait unchanged; a run whose process died continues from the step it was running, and one whose latest attempt chained continues from the edge it took. An ended run is not resumed: the command refuses it, naming the commands that apply, useful workflow run retry among them unless the run succeeded.
 
-With --cloud ORGANIZATION, RUN is a Cloud run ID: the command asks Cloud to continue that run under its own definition from the steps --from names, or with none from where its record stands, and reports the request as useful run continue does. It reads and writes no local run.";
+For a Cloud run the command asks Cloud to continue the run under its own definition from where its record stands, and reports the request. It takes no --workflow or --execution-root.";
 
 const COMMAND: &str = "useful workflow run resume";
 const RETRY_COMMAND: &str = "useful workflow run retry";
-const RESTART_COMMAND: &str = "useful workflow run restart";
 const UPGRADE_COMMAND: &str = "useful workflow run upgrade";
 
 /// The command a continuation's own documents name.
 pub(super) fn command_name(leaf: ExecutionLeaf) -> &'static str {
     match leaf {
         ExecutionLeaf::Retry => RETRY_COMMAND,
-        ExecutionLeaf::Restart => RESTART_COMMAND,
-        ExecutionLeaf::Upgrade => UPGRADE_COMMAND,
+        ExecutionLeaf::Restart | ExecutionLeaf::Upgrade => UPGRADE_COMMAND,
+        ExecutionLeaf::Control(control) => control.command(),
         ExecutionLeaf::Run | ExecutionLeaf::Resume => COMMAND,
     }
 }
 
 /// The output a refused continuation of the run at `run_directory` is reported on: as
-/// `useful workflow run resume` reports it, under `restart`'s or `upgrade`'s name for those
-/// (REQ-LOCALRUN-184, REQ-LOCALRUN-194, REQ-LOCALRUN-197).
+/// `useful workflow run resume` reports it, under `retry`'s, `upgrade`'s or the
+/// continuing control command's name for those (REQ-LOCALRUN-182, REQ-LOCALRUN-183,
+/// REQ-LOCALRUN-184, REQ-LOCALRUN-194, REQ-LOCALRUN-197).
 pub(super) fn continuation_output(
     config: useful_execution::PresentationConfig,
     leaf: ExecutionLeaf,
@@ -53,11 +55,10 @@ pub(super) fn continuation_output(
 ) -> WorkflowRunOutput<io::Stdout, io::Stderr> {
     let output = WorkflowRunOutput::new(config, io::stdout(), io::stderr());
     match leaf {
-        ExecutionLeaf::Restart => output.for_restart(run_directory),
-        ExecutionLeaf::Upgrade => output.for_upgrade(run_directory),
-        ExecutionLeaf::Run | ExecutionLeaf::Retry | ExecutionLeaf::Resume => {
-            output.for_resume(run_directory)
-        }
+        ExecutionLeaf::Restart | ExecutionLeaf::Upgrade => output.for_upgrade(run_directory),
+        ExecutionLeaf::Control(control) => output.for_control(control, run_directory),
+        ExecutionLeaf::Retry => output.for_retry_continuation(run_directory),
+        ExecutionLeaf::Run | ExecutionLeaf::Resume => output.for_resume(run_directory),
     }
 }
 
@@ -87,6 +88,9 @@ enum Selection {
     Edge(ContinuationEdgeV1),
     /// A run whose process died while it ran (REQ-CONTINUE-76).
     Abandoned,
+    /// An ended run `retry` continues with neither `--from` nor `--all` (REQ-LOCALRUN-184):
+    /// from the stage it stood at, read under the continuation's lock.
+    Ended,
 }
 
 /// The documents of a resume that creates no attempt (REQ-CONTINUE-74, REQ-CONTINUE-75).
@@ -106,107 +110,107 @@ struct UnattemptedDocument<'a> {
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
-    #[arg(
-        long = "from",
-        required = false,
-        value_name = "STEP",
-        help = "Ordinary step to reexecute (repeatable); without it, resume a waiting or abandoned run"
-    )]
-    from_steps: Vec<String>,
+    run: RunArg,
     #[arg(
         long,
         value_name = "FILE",
-        conflicts_with = "cloud",
-        help = "Replacement workflow file within the run's original source root"
+        help = "Replacement workflow file within the run's original source root, for a run under the useful home"
     )]
     workflow: Option<PathBuf>,
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with = "cloud",
-        help = "Existing execution root; defaults to the previous attempt's root"
+        help = "Existing execution root, for a run under the useful home; defaults to the previous attempt's root"
     )]
     execution_root: Option<PathBuf>,
     #[command(flatten)]
+    org: OrgArgs,
+    #[command(flatten)]
     presentation: super::PresentationOptions,
     #[command(flatten)]
-    cloud: super::CloudSelector,
+    authentication: PrincipalAuthenticationArgs,
+    #[command(flatten)]
+    http: HttpOptions,
 }
 
 impl Command {
-    pub(super) fn execute(mut self) -> super::super::super::CommandResult {
-        if let Some(organization) = self.cloud.organization.take() {
-            return self.continue_in_cloud(organization);
-        }
-        super::create::execute_with_runtime(
-            "start local workflow continuation runtime",
-            self.execute_async(),
-        )
-    }
-
-    /// REQ-CONTINUE-85: asks Cloud to continue the run `RUN` names, under its own definition
-    /// and from the steps `--from` names or none, as `useful run continue` submits it. `RUN` is
-    /// the Cloud run id as typed, and nothing under the `useful` home is read or written.
-    fn continue_in_cloud(
-        self,
-        organization: OrganizationArg,
-    ) -> super::super::super::CommandResult {
-        let usage = |error| {
-            super::super::super::CommandFailure::with_exit_code(error, ExitCode::UsageError)
-        };
-        for step in &self.from_steps {
-            parse_continuation_step(step).map_err(|reason| {
-                usage(anyhow::anyhow!(
-                    "invalid value '{step}' for '--from <STEP>': {reason}"
-                ))
-            })?;
-        }
-        let run_id = self
-            .run
-            .run_dir
-            .into_os_string()
-            .into_string()
-            .map_err(|_| usage(anyhow::anyhow!("the Cloud run id RUN must be valid UTF-8")))?;
-        let submission = ContinuationSubmission::inherited(
-            organization,
-            run_id,
-            self.from_steps,
+    /// Finds the run and continues it: a run under the home as `continue_run` continues it
+    /// without `--from` (REQ-CONTINUE-74 to REQ-CONTINUE-78), and a Cloud run through the
+    /// continuation request naming no step (REQ-CONTINUE-85), for which `--workflow` and
+    /// `--execution-root` are usage errors, exit 2.
+    pub(super) fn execute(self) -> super::super::super::CommandResult {
+        let found = match super::control::find(
+            COMMAND,
+            &self.run,
+            &self.org,
+            &self.authentication,
+            &self.http,
             self.presentation.output.json,
-            self.cloud.authentication,
-            self.cloud.http,
-        );
-        super::super::super::execute_deployment_command(
-            Some(submission),
-            &["workflow", "run", "resume"],
-            "configure Useful Machinery run continuation",
-            |submission, deployment| submission.submit(deployment.clone()),
-        )
-    }
-
-    async fn execute_async(self) -> super::super::super::CommandResult {
-        let run_directory = self.run.resolve().map_err(anyhow::Error::new)?;
+        ) {
+            Ok(found) => found,
+            Err(result) => return result,
+        };
+        let run_directory = match found {
+            Found::Home(run_directory) => run_directory,
+            Found::Cloud(run) => {
+                if let Some(option) = [
+                    self.workflow.as_ref().map(|_| "--workflow"),
+                    self.execution_root.as_ref().map(|_| "--execution-root"),
+                ]
+                .into_iter()
+                .flatten()
+                .next()
+                {
+                    return Err(super::super::super::CommandFailure::with_exit_code(
+                        anyhow::anyhow!(
+                            "{option} applies to a run under the useful home, and RUN names a Cloud run\n\n\
+                             Leave out {option}: the Cloud run continues under its own definition."
+                        ),
+                        ExitCode::UsageError,
+                    ));
+                }
+                let json = self.presentation.output.json;
+                return super::cloud::CloudRun::found(
+                    *run,
+                    self.authentication,
+                    self.http,
+                    json,
+                    false,
+                )
+                .continue_from(
+                    COMMAND,
+                    Vec::new(),
+                    None,
+                    RunWaitArgs {
+                        wait: false,
+                        timeout: None,
+                    },
+                );
+            }
+        };
         let config = super::create::presentation_config(&self.presentation);
-        let cancellation = CancellationSource::new();
-        let signal_task = super::create::start_signal_observation(
-            cancellation.clone(),
-            super::create::UnixSignals::new()?,
-        );
-        continue_run(
-            Continuation {
-                run_directory,
-                from_steps: self.from_steps,
-                workflow: self.workflow,
-                execution_root: self.execution_root,
-                leaf: ExecutionLeaf::Resume,
-                edge: None,
-                bridge: None,
-            },
-            config,
-            cancellation,
-            signal_task,
-        )
-        .await
+        super::create::execute_with_runtime("start local workflow continuation runtime", async {
+            let cancellation = CancellationSource::new();
+            let signal_task = super::create::start_signal_observation(
+                cancellation.clone(),
+                super::create::UnixSignals::new()?,
+            );
+            continue_run(
+                Continuation {
+                    run_directory,
+                    from_steps: Vec::new(),
+                    workflow: self.workflow,
+                    execution_root: self.execution_root,
+                    leaf: ExecutionLeaf::Resume,
+                    edge: None,
+                    bridge: None,
+                },
+                config,
+                cancellation,
+                signal_task,
+            )
+            .await
+        })
     }
 }
 
@@ -227,11 +231,13 @@ pub(super) struct Continuation {
 }
 
 /// Continues the run as `useful workflow run resume` does (REQ-CONTINUE-74 to REQ-CONTINUE-78):
-/// without `--from`, from the wait a control resolves, the step an abandoned attempt was
+/// without `from_steps`, from the wait a control resolves, the step an abandoned attempt was
 /// running or the target of the edge a `continued` attempt took, reporting a held wait
-/// unchanged. `useful workflow run retry` on a repair wait continues through here once it
-/// recorded its control (REQ-LOCALRUN-184), and the attempt loop continues here from the
-/// edge an attempt ended `continued` on (REQ-WFEXEC-64), so every command chains.
+/// unchanged, and for `retry` from the stage an ended run stood at; with them, from the steps
+/// `retry --from` names (REQ-CONTINUE-1). `useful workflow run retry` on a repair wait
+/// continues through here once it recorded its control (REQ-LOCALRUN-184), and the attempt
+/// loop continues here from the edge an attempt ended `continued` on (REQ-WFEXEC-64), so every
+/// command chains.
 pub(super) async fn continue_run(
     continuation: Continuation,
     config: useful_execution::PresentationConfig,
@@ -297,7 +303,7 @@ pub(super) async fn continue_run(
     let selection = if let Some(edge) = edge {
         Selection::Edge(edge)
     } else if from_steps.is_empty() {
-        match probe(config.clone(), &run_directory, command_name(leaf)).await {
+        match probe(config.clone(), &run_directory, leaf).await {
             Ok(Probed::Continue(selection)) => selection,
             Ok(Probed::Finished(result)) => {
                 signal_task.abort();
@@ -333,8 +339,8 @@ pub(super) async fn continue_run(
         }
     };
     // REQ-LOCALRUN-186, REQ-LOCALRUN-213: a withdrawal no process honored over the run's open
-    // latest attempt ends the run `withdrawn` without another attempt, as `withdraw` of the run
-    // would, whatever the continuation starts from; settling the attempt for one would spend it.
+    // latest attempt ends the run `withdrawn` without another attempt, as `cancel` of the waiting
+    // run would, whatever the continuation starts from; settling the attempt for one would spend it.
     // An edge continuation begins the chained attempt, which honors it at its first step
     // boundary (REQ-CONTINUE-78).
     if !matches!(selection, Selection::Edge(_))
@@ -347,7 +353,8 @@ pub(super) async fn continue_run(
     }
     // The probe ran without the lock: the wait it evaluated must still be the run's. The reason
     // is the command's intent; `begin` records `restart` for any run-definition continuation,
-    // including a `resume --from` that finishes an interrupted restart (REQ-CONTINUE-79).
+    // including a `retry --from` that finishes an interrupted `upgrade --from`
+    // (REQ-CONTINUE-79).
     let (from, reason) = match &selection {
         Selection::Explicit(from) if leaf == ExecutionLeaf::Restart => {
             (from.clone(), ContinuationReasonV1::Restart)
@@ -395,16 +402,32 @@ pub(super) async fn continue_run(
                     leaf,
                     &pending,
                     "continuation_definition_invalid",
-                    "The abandoned attempt left no single running step to continue from; continue the run with --from STEP.",
+                    "The abandoned attempt left no single running step to continue from; rerun it from a step with useful workflow run retry RUN --from STEP.",
                 );
                 return reject_after_settlement(pending, &signal_task, result).await;
             }
         },
+        // REQ-LOCALRUN-184: an ended run continues from the stage it stood at.
+        Selection::Ended => {
+            let steps = pending.ended_attempt_restart();
+            if steps.is_empty() {
+                let result = refusal(
+                    &config,
+                    leaf,
+                    &pending,
+                    "continuation_step_required",
+                    "The run names no stage it stood at; name the steps to rerun with --from STEP, or rerun every step with --all.",
+                );
+                return reject_after_settlement(pending, &signal_task, result).await;
+            }
+            (steps, ContinuationReasonV1::Resume)
+        }
     };
     // REQ-CONTINUE-76, REQ-WFEXEC-68: the child run the abandoned step left, for a fan-out
     // that of the element the run's `position` names, is adopted or retried, a nested run's
-    // retry settled by its record once the run is admitted (REQ-CONTINUE-91); a repair retry
-    // adopts the child an independent repair completed (REQ-CONTINUE-75).
+    // retry settled by its record once the run is admitted (REQ-CONTINUE-91); a repair retry,
+    // or a host wait's resolution, adopts the child an independent repair completed
+    // (REQ-CONTINUE-75, REQ-CONTINUE-93).
     let child_recovery = match (&selection, from.as_slice()) {
         (Selection::Abandoned, [step]) => {
             let run_directory = pending.run_directory().to_owned();
@@ -453,7 +476,7 @@ pub(super) async fn continue_run(
         }
         (
             Selection::Wait {
-                reason: ContinuationReasonV1::Retry,
+                reason: ContinuationReasonV1::Retry | ContinuationReasonV1::Host,
                 ..
             },
             [step],
@@ -635,7 +658,7 @@ pub(super) async fn continue_run(
     let admitted_for_begin = admitted.clone();
     // REQ-WFEXEC-72: an attempt a resolved wait starts, whatever resolved it and a successor's
     // carried wait included, continues from that wait and keeps it when an interruption stops
-    // it before any step has started; `--from`, an edge and an abandoned run continue from none.
+    // it before any step has started; `--from`, an edge and an abandoned run start from none.
     let mut pending = pending;
     if matches!(selection_edge, Selection::Wait { .. }) {
         pending.keep_resolved_wait();
@@ -740,8 +763,9 @@ enum Probed {
 async fn probe(
     config: useful_execution::PresentationConfig,
     requested: &Path,
-    command: &'static str,
+    leaf: ExecutionLeaf,
 ) -> Result<Probed, super::super::super::CommandFailure> {
+    let command = command_name(leaf);
     let requested = requested.to_owned();
     let WaitProbe {
         run_directory,
@@ -753,17 +777,16 @@ async fn probe(
     .await
     .map_err(anyhow::Error::new)?
     .map_err(anyhow::Error::new)?;
-    let refuse = |code: &'static str, message: &str| {
-        Ok(Probed::Finished(super::create::rejection_exit(
-            WorkflowRunOutput::new(config.clone(), io::stdout(), io::stderr())
-                .for_resume(&run_directory)
-                .render_continuation_refusal(&run_directory, attempt_number, code, message),
-        )))
-    };
+    let refuse =
+        |code: &'static str, message: &str| {
+            Ok(Probed::Finished(super::create::rejection_exit(
+                continuation_output(config.clone(), leaf, &run_directory)
+                    .render_continuation_refusal(&run_directory, attempt_number, code, message),
+            )))
+        };
     match inspection {
         WaitInspection::Locked(rejection) => Ok(Probed::Finished(super::create::rejection_exit(
-            WorkflowRunOutput::new(config.clone(), io::stdout(), io::stderr())
-                .for_resume(rejection.run_directory())
+            continuation_output(config.clone(), leaf, rejection.run_directory())
                 .render_retry_rejection(&rejection),
         ))),
         WaitInspection::Held { wait } => Ok(Probed::Finished(write_unattempted(
@@ -780,14 +803,19 @@ async fn probe(
         } if control.event == CONTROL_WITHDRAW => {
             Ok(Probed::Continue(Selection::Withdraw { wait: wait.id() }))
         }
-        // REQ-CONTINUE-75: an observed external event continues at the wait's `then`.
+        // REQ-CONTINUE-75, REQ-CONTINUE-77: an observed external event continues at the
+        // wait's `then`, with reason `host` when the host condition observed it.
         WaitInspection::Satisfied {
             wait,
             by: ResolvedBy::External(_),
         } => Ok(Probed::Continue(Selection::Wait {
             wait: wait.id(),
             target: wait.then.clone(),
-            reason: ContinuationReasonV1::Resume,
+            reason: if wait.kind == useful_execution::WaitKind::Host {
+                ContinuationReasonV1::Host
+            } else {
+                ContinuationReasonV1::Resume
+            },
         })),
         WaitInspection::Satisfied {
             wait,
@@ -812,7 +840,7 @@ async fn probe(
         WaitInspection::Continued { edge } => Ok(Probed::Continue(Selection::Edge(edge))),
         WaitInspection::RuleInvalid { .. } => refuse(
             useful_execution::RuleError::CODE,
-            "The wait's rule is not a conjunction of supported equalities; continue the run with --from STEP.",
+            "The wait's rule is not a conjunction of supported equalities; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
         // REQ-CONTINUE-74: a condition that cannot be read is refused, never reported held.
         WaitInspection::ConditionUnavailable { error, .. } => refuse(error.code, &error.message),
@@ -828,23 +856,41 @@ async fn probe(
             "continuation_disposition_ineligible",
             &superseded_rejection_message(Some(&successor)),
         ),
+        // REQ-LOCALRUN-223: `retry` continues an ended run that did not succeed, and `resume`
+        // continues no ended run; each refusal names the state and the verbs that apply.
         WaitInspection::NoWait {
             state: Some(RunState::Exited),
             successor: None,
-        } => refuse(
-            "continuation_disposition_ineligible",
-            "An exited run cannot be continued without --from; create a new run.",
-        ),
+        } => match super::control::ended(&run_directory) {
+            ended @ super::control::Standing::Ended { succeeded: true }
+                if leaf == ExecutionLeaf::Retry =>
+            {
+                refuse(
+                    "continuation_disposition_ineligible",
+                    &ended.message(super::control::Placed::Home),
+                )
+            }
+            _ if leaf == ExecutionLeaf::Retry => Ok(Probed::Continue(Selection::Ended)),
+            ended => refuse(
+                "continuation_disposition_ineligible",
+                &ended.message(super::control::Placed::Home),
+            ),
+        },
         WaitInspection::NoWait {
             state: Some(RunState::Waiting),
             ..
         } => refuse(
             "wait_record_missing",
-            "The run reads waiting but holds no wait record; continue it with --from STEP.",
+            "The run reads waiting but holds no wait record; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
+        // A run admitted from a workflow file's closure has no record: `retry` continues it
+        // from the steps its latest attempt left (REQ-LOCALRUN-184).
+        WaitInspection::NoWait { state: None, .. } if leaf == ExecutionLeaf::Retry => {
+            Ok(Probed::Continue(Selection::Ended))
+        }
         WaitInspection::NoWait { state: None, .. } => refuse(
             "continuation_definition_invalid",
-            "This run does not wait; name the steps to continue from with --from STEP.",
+            "This run does not wait; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
     }
 }
@@ -867,6 +913,7 @@ fn still_waits(pending: &PendingLocalContinuation, wait: &str) -> bool {
 
 /// REQ-CONTINUE-75: consume an independently completed repair only for the exact child
 /// named by this wait. A normal retry or requested profile replacement still runs afresh.
+/// The host condition that resolved a host wait recorded no control (REQ-CONTINUE-93).
 fn repaired_child(
     pending: &PendingLocalContinuation,
     step: &str,
@@ -879,28 +926,33 @@ fn repaired_child(
 }
 
 /// `repaired_child` for the run `pending` holds waiting on `wait`, which `control` resolved:
-/// recorded on the run itself or, for a nested run, on its root (REQ-CONTINUE-92).
+/// recorded on the run itself or, for a nested run, on its root (REQ-CONTINUE-92). A `host`
+/// wait without a control was resolved by the host condition and counts as a retry without
+/// an agent-profile replacement (REQ-CONTINUE-93).
 pub(super) fn adopted_repair(
     pending: &PendingLocalContinuation,
     step: &str,
     wait: &useful_execution::WaitRecord,
     control: Option<useful_execution::ControlEvent>,
 ) -> anyhow::Result<Option<ChildRecovery>> {
-    if wait.kind != useful_execution::WaitKind::Repair
+    let host = wait.kind == useful_execution::WaitKind::Host;
+    if !(host || wait.kind == useful_execution::WaitKind::Repair)
         || wait.then != step
         || wait.step.first().and_then(serde_json::Value::as_str) != Some(step)
     {
         return Ok(None);
     }
-    let Some(control) = control else {
-        return Ok(None);
+    let retried = match control {
+        Some(control) => {
+            control.event == "control.retry"
+                && control
+                    .payload
+                    .as_ref()
+                    .is_none_or(|payload| !payload.contains_key("agentProfiles"))
+        }
+        None => host,
     };
-    if control.event != "control.retry"
-        || control
-            .payload
-            .as_ref()
-            .is_some_and(|payload| payload.contains_key("agentProfiles"))
-    {
+    if !retried {
         return Ok(None);
     }
     let Some((directory, RunState::Exited, item)) =

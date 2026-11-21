@@ -401,7 +401,7 @@ pub(crate) fn confirmed_delete<'a, F: ProblemFailure + From<ResourceFailure> + '
 }
 
 /// The schema version of both native providers' material form (REQ-GRANT-12).
-pub const RECORD_SCHEMA_VERSION: i32 = 1;
+pub(crate) const RECORD_SCHEMA_VERSION: i32 = 1;
 
 /// A native provider's material as the base64 a request body carries, in zeroizing storage.
 pub(crate) fn encode_material(material: &[u8]) -> Zeroizing<String> {

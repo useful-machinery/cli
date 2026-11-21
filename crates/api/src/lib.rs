@@ -72,11 +72,7 @@ fn bearer_authorization(access_token: &str) -> Result<HeaderValue, InvalidHeader
     HeaderValue::from_str(&value)
 }
 
-pub use agent_logins::{
-    AGENT_LOGIN_RECORD_SCHEMA_VERSION, AgentLogin, AgentLoginApi, AgentLoginApiError,
-    AgentLoginAuthorization, AgentLoginFailure, AgentLoginImport, AgentLoginImportProvider,
-    AgentLoginList, AgentLoginProvider, AgentLoginReportState, AgentLoginState,
-};
+pub use agent_logins::AgentLoginReportState;
 pub use artifacts::{
     ArtifactApi, ArtifactApiError, ArtifactCapabilityMember, ArtifactInventoryPage, ArtifactMember,
     ArtifactSource,
@@ -116,7 +112,7 @@ pub use gitlab::{
     GitLabApi, GitLabFailure, GitLabRepositoryQuery, GitLabSelection, GitLabSubmission,
 };
 pub use grants::{
-    Grant, GrantApi, GrantApiError, GrantFailure, GrantList, GrantSession, GrantSessionReason,
+    Grant, GrantApi, GrantApiError, GrantFailure, GrantSession, GrantSessionReason,
     GrantSessionStatus, GrantState, GrantUse, GrantUseList,
 };
 pub use http_client::{

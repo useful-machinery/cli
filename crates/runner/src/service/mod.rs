@@ -1,6 +1,8 @@
 mod artifact_delivery;
 mod assignment;
 mod backoff;
+mod build_caches;
+mod command_fence;
 mod config;
 mod connection;
 mod control;
@@ -11,6 +13,7 @@ mod determinism_spike;
 mod disk;
 mod execution;
 mod history;
+mod kept_runs;
 mod lease_clock;
 mod run_inputs;
 mod source;
@@ -24,6 +27,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use opentelemetry::KeyValue;
@@ -32,6 +36,9 @@ use opentelemetry::KeyValue;
 pub(crate) use assignment::run_nested_workflow_delivery_failure_scenario;
 #[cfg(test)]
 pub(crate) use config::AssignmentConfig;
+pub(crate) use config::BuildCache;
+pub(crate) use config::KeptRunBounds;
+pub(crate) use config::LOG_DIRECTORY;
 pub use config::{Config, ConfigError};
 #[cfg(test)]
 pub(crate) use test_support::{
@@ -43,7 +50,7 @@ pub(crate) use test_support::{
 
 use crate::agent_login::check::ProgramLoginCheck;
 use crate::agent_login::setup::{AgentLoginSetup, AssignmentGate, SetupCaller, SetupDependencies};
-use crate::control_protocol::{AssignmentCounts, ConnectionFailure, ControlError};
+use crate::control_protocol::{AssignmentCounts, ConnectionFailure, ControlError, PruneScope};
 use crate::telemetry::{self, Event, Outcome, Recorder};
 use assignment::{AssignmentDependencies, AssignmentManager};
 // Enrollment resends an ambiguous join with the same reconnect backoff.
@@ -57,6 +64,7 @@ use control::{
     AdmissionAgentLogins, ControlContext, ControlServer, ControlServerError, ControlTimeouts,
     LiveStatus, RUN_READ_PLACES, ReloadRequest,
 };
+use kept_runs::{Busy, KeptRunPrune, KeptRunReport, KeptRunRequest};
 use lease_clock::{LeaseClock, LeaseClockError};
 use useful_execution::MAXIMUM_CANCELLATION_GRACE;
 use useful_execution::untested_harness_advisories;
@@ -103,6 +111,9 @@ impl Sequence {
 
 /// How long the runner waits between agent-login setups (REQ-GRANT-39).
 const AGENT_LOGIN_SETUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// How long a serving runner with no held run working goes without a kept-run pass
+/// (REQ-RUNNERENROLL-158).
+const KEPT_RUN_PASS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SHUTDOWN_DELIVERY_RESERVE: std::time::Duration = std::time::Duration::from_secs(10);
 const SHUTDOWN_CLEANUP_RESERVE: std::time::Duration = std::time::Duration::from_secs(5);
 /// A stop interrupts every held run at once, each within its own cancellation grace, so one
@@ -415,6 +426,296 @@ impl Drop for AgentLoginSchedule {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// The serving process's kept-run passes (REQ-RUNNERENROLL-158): one when it starts, one
+/// once no held run is working after a run has ended, and one when `KEPT_RUN_PASS_INTERVAL`
+/// passes, the hour starting again after each pass. A pass is due only while no held run is
+/// working, at the read level of its own held-run gate: one due at the hour while a run
+/// works is skipped, not queued, and one due after a run's end waits for the next end or the
+/// hour. Each runs on the blocking pool and asks again before each directory, so a run that
+/// starts working, or the schedule's stop, ends it before its next removal. Stopping lets
+/// the directory being removed finish and starts nothing else; the service joins the pass
+/// in flight before it releases its boot root or returns, since the pass holds the work-root
+/// lease's lock-bearing trees.
+///
+/// A pass first applies the kept-run bounds, which need no exclusion from a command: the
+/// claim fence covers their one race. It then evicts from the build caches
+/// (REQ-RUNNERENROLL-162), which holds the command fence (INV-RUNNER-53): it is skipped
+/// while a command is in the fence, and ends once a command asks to enter, the schedule
+/// stops or a held run is working, the next pass beginning it again.
+///
+/// The schedule's task also serves the control socket's `kept` and `prune` requests from
+/// its channel (INV-RUNNER-54), one at a time and only between its passes, each on the
+/// blocking pool as a pass is, so no two passes or reports overlap and its stop ends and
+/// joins an operator's pass as it does its own. A `prune` asks the pass's own question
+/// first and is answered `runner_busy` when a held run is working; a report asks only
+/// whether the schedule is stopping. A request leaves the hour as it is. A request the
+/// schedule no longer takes, once it has stopped, is dropped, and its connection closed
+/// unanswered.
+struct KeptRunSchedule {
+    stopping: Arc<AtomicBool>,
+    stopped: Arc<tokio::sync::Notify>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// What one kept-run pass is run with.
+struct KeptRunPass {
+    work_root: Arc<workspace::WorkRootLease>,
+    bounds: KeptRunBounds,
+    build_caches: Arc<BuildCacheEviction>,
+    gate: Arc<HeldRunGate>,
+    stopping: Arc<AtomicBool>,
+    sleeper: Arc<dyn Sleeper>,
+    recorder: Arc<Recorder>,
+}
+
+impl KeptRunPass {
+    /// Runs a scheduled pass under the bounds on the blocking pool when no held run is
+    /// working and the schedule is not stopped, and answers whether it ran.
+    async fn run(&self) -> bool {
+        matches!(self.prune(PruneScope::Bounds).await, Some(Ok(_)))
+    }
+
+    /// Serves one control socket request, dropping its answer's sender when the request
+    /// cannot be answered.
+    async fn serve(&self, request: KeptRunRequest) {
+        match request {
+            KeptRunRequest::Report { scope, answer } => {
+                if let Some(report) = self.report(scope).await {
+                    let _ = answer.send(report);
+                }
+            }
+            KeptRunRequest::Prune { scope, answer } => {
+                if let Some(result) = self.prune(scope).await {
+                    let _ = answer.send(result);
+                }
+            }
+        }
+    }
+
+    /// Reports the kept workspaces and the build caches under `scope` on the blocking pool,
+    /// whatever the held runs are doing (REQ-RUNNERENROLL-164); none once the schedule is
+    /// stopping.
+    async fn report(&self, scope: PruneScope) -> Option<KeptRunReport> {
+        let work_root = Arc::clone(&self.work_root);
+        let stopping = Arc::clone(&self.stopping);
+        let eviction = Arc::clone(&self.build_caches);
+        let bounds = self.bounds;
+        let now = self.sleeper.utc_now();
+        tokio::task::spawn_blocking(move || {
+            let may_continue = || !stopping.load(Ordering::Acquire);
+            let workspaces = kept_runs::kept_report(&work_root, bounds, scope, now, &may_continue)?;
+            let caches = build_caches::measure_build_caches(
+                &eviction.caches,
+                &eviction.protected,
+                scope,
+                &may_continue,
+            )?;
+            Some(KeptRunReport {
+                scope,
+                bounds,
+                now,
+                workspaces,
+                caches,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Applies the kept-run bounds, or removes every kept workspace under `All`, and evicts
+    /// from the build caches on the blocking pool (REQ-RUNNERENROLL-165): `Busy`, touching
+    /// nothing, when a held run is working or the schedule is stopping; otherwise what it
+    /// did, not `complete` once either ended it or the command fence ended or skipped the
+    /// eviction. None when the pass did not return.
+    async fn prune(&self, scope: PruneScope) -> Option<Result<KeptRunPrune, Busy>> {
+        let work_root = Arc::clone(&self.work_root);
+        let gate = Arc::clone(&self.gate);
+        let stopping = Arc::clone(&self.stopping);
+        let recorder = Arc::clone(&self.recorder);
+        let eviction = Arc::clone(&self.build_caches);
+        let bounds = self.bounds;
+        let now = self.sleeper.utc_now();
+        tokio::task::spawn_blocking(move || {
+            let ended = std::cell::Cell::new(false);
+            let may_continue = || {
+                let more = !stopping.load(Ordering::Acquire) && gate.none_working();
+                if !more {
+                    ended.set(true);
+                }
+                more
+            };
+            if !may_continue() {
+                return Err(Busy);
+            }
+            let directories = kept_runs::prune_kept_runs(
+                &work_root,
+                bounds,
+                scope,
+                now,
+                &may_continue,
+                Some(&recorder),
+            );
+            let mut caches = Vec::new();
+            let mut evicted = true;
+            if !eviction.caches.is_empty() && may_continue() {
+                match build_caches::evict_under_fence(
+                    &eviction.caches,
+                    &eviction.protected,
+                    scope,
+                    &eviction.fence,
+                    &may_continue,
+                    Some(&recorder),
+                ) {
+                    Some(evictions) => caches = evictions,
+                    None => evicted = false,
+                }
+            }
+            let complete =
+                evicted && !ended.get() && caches.iter().all(|cache| !cache.evicted.stopped);
+            Ok(KeptRunPrune {
+                scope,
+                complete,
+                directories,
+                caches,
+            })
+        })
+        .await
+        .ok()
+    }
+}
+
+/// What a kept-run pass evicts from its build caches with (REQ-RUNNERENROLL-162).
+struct BuildCacheEviction {
+    caches: Vec<BuildCache>,
+    /// The work root and the directories that hold the state file and the control socket.
+    protected: Vec<PathBuf>,
+    fence: Arc<command_fence::CommandFence>,
+}
+
+impl KeptRunSchedule {
+    fn new() -> Self {
+        Self {
+            stopping: Arc::new(AtomicBool::new(false)),
+            stopped: Arc::new(tokio::sync::Notify::new()),
+            task: None,
+        }
+    }
+
+    /// Starts the passes over the kept directories of `assignment_manager`'s work root,
+    /// under `config`'s kept-run bounds, and over its build caches, whose eviction enters
+    /// none of its protected directories (`protected_paths`), and serves `requests` between
+    /// them until the channel closes or the schedule stops.
+    fn start(
+        &mut self,
+        assignment_manager: &Arc<Mutex<AssignmentManager>>,
+        config: &Config,
+        sleeper: Arc<dyn Sleeper>,
+        recorder: Arc<Recorder>,
+        requests: tokio::sync::mpsc::Receiver<KeptRunRequest>,
+    ) {
+        let (work_root, run_ended, fence) = {
+            let manager = assignment_manager
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (
+                manager.work_root(),
+                manager.run_ended(),
+                manager.command_fence(),
+            )
+        };
+        let pass = KeptRunPass {
+            work_root,
+            bounds: config.assignment().kept_runs(),
+            build_caches: Arc::new(BuildCacheEviction {
+                caches: config.assignment().build_caches().to_vec(),
+                protected: protected_paths(config),
+                fence,
+            }),
+            gate: Arc::new(HeldRunGate::new(Arc::clone(assignment_manager))),
+            stopping: Arc::clone(&self.stopping),
+            sleeper: Arc::clone(&sleeper),
+            recorder,
+        };
+        let stopped = Arc::clone(&self.stopped);
+        self.task = Some(tokio::spawn(async move {
+            // Cleared once the channel closes, so a closed channel neither ends the schedule
+            // nor is polled again.
+            let mut requests = Some(requests);
+            pass.run().await;
+            loop {
+                let mut hour = sleeper.sleep(KEPT_RUN_PASS_INTERVAL);
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = stopped.notified() => return,
+                        request = next_request(&mut requests), if requests.is_some() => {
+                            match request {
+                                Some(request) => pass.serve(request).await,
+                                None => requests = None,
+                            }
+                        }
+                        () = run_ended.notified() => {
+                            if pass.run().await {
+                                break;
+                            }
+                        }
+                        () = &mut hour => {
+                            pass.run().await;
+                            break;
+                        }
+                    }
+                }
+            }
+        }));
+    }
+
+    /// Stops the schedule: the pass in flight ends after the directory it is removing, and
+    /// no other starts.
+    fn stop(&self) {
+        self.stopping.store(true, Ordering::Release);
+        self.stopped.notify_one();
+    }
+
+    /// Stops the schedule and waits until its pass in flight, if any, has ended.
+    async fn stop_and_join(&mut self) {
+        self.stop();
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
+/// The next request on the schedule's channel; none once it has closed.
+async fn next_request(
+    requests: &mut Option<tokio::sync::mpsc::Receiver<KeptRunRequest>>,
+) -> Option<KeptRunRequest> {
+    match requests {
+        Some(requests) => requests.recv().await,
+        None => None,
+    }
+}
+
+impl Drop for KeptRunSchedule {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// What a build-cache eviction never enters (REQ-RUNNERENROLL-161): the work root and the
+/// directories that hold the state file and the control socket, each `config` holds.
+fn protected_paths(config: &Config) -> Vec<PathBuf> {
+    let state = config
+        .state_access()
+        .and_then(|access| access.path().parent());
+    let socket = config.control_socket_path().and_then(Path::parent);
+    std::iter::once(config.assignment().work_root())
+        .chain(state)
+        .chain(socket)
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 trait Connector: Send + Sync {
@@ -762,14 +1063,23 @@ fn run_connection_loop_in_mode<'a>(
     work_root: Arc<workspace::WorkRootLease>,
     join_key: JoinKeyMode,
 ) -> Pin<Box<impl Future<Output = Result<ServiceEnd, ServiceError>> + 'a>> {
-    Box::pin(connection_loop_with_work_root(
-        dependencies,
-        connector,
-        backoff,
-        shutdown,
-        work_root,
-        join_key,
-    ))
+    Box::pin(async move {
+        let mut kept_runs = KeptRunSchedule::new();
+        let result = Box::pin(connection_loop_with_work_root(
+            dependencies,
+            connector,
+            backoff,
+            shutdown,
+            work_root,
+            join_key,
+            &mut kept_runs,
+        ))
+        .await;
+        // Every end, an early one's included, waits for the kept-run pass in flight, so a
+        // rejoined runner's next service can lease the work root again.
+        kept_runs.stop_and_join().await;
+        result
+    })
 }
 
 /// The loop of a start that holds no join key, whose only end is a stop.
@@ -800,6 +1110,7 @@ async fn connection_loop_with_work_root(
     shutdown: &mut dyn Shutdown,
     work_root: Arc<workspace::WorkRootLease>,
     mut join_key: JoinKeyMode,
+    kept_runs: &mut KeptRunSchedule,
 ) -> Result<ServiceEnd, ServiceError> {
     let ConnectionLoopDependencies {
         mut config,
@@ -913,6 +1224,9 @@ async fn connection_loop_with_work_root(
         manager.refresh_grant_tokens_with(Arc::clone(&sleeper), Arc::clone(&live_status));
     }
     let (reload_sender, mut reload_requests) = tokio::sync::mpsc::channel::<ReloadRequest>(1);
+    // Made whether or not a control socket is configured: without one the sender is dropped
+    // and the schedule's channel is closed.
+    let (kept_run_sender, kept_run_requests) = tokio::sync::mpsc::channel::<KeptRunRequest>(1);
     let _control_server = config
         .control_socket_path()
         .map(|path| {
@@ -923,6 +1237,7 @@ async fn connection_loop_with_work_root(
                     assignments: Arc::clone(&assignment_manager),
                     run_reads: Arc::new(tokio::sync::Semaphore::new(RUN_READ_PLACES)),
                     reloads: reload_sender,
+                    kept_runs: kept_run_sender,
                     agent_logins: agent_login_setup.clone(),
                     timeouts: ControlTimeouts::production(),
                     runner_id: config.credential().runner_id().to_owned(),
@@ -942,6 +1257,15 @@ async fn connection_loop_with_work_root(
             Arc::clone(&sleeper),
         )
     });
+    // The kept-run passes start after the startup report of what earlier processes left
+    // (REQ-RUNNERENROLL-69), on tasks of their own that connecting never waits for.
+    kept_runs.start(
+        &assignment_manager,
+        &config,
+        Arc::clone(&sleeper),
+        Arc::clone(&recorder),
+        kept_run_requests,
+    );
     let mut opening_sequence = 1;
     let sequence = Sequence::new(2);
     let mut opening_message_id = frame_source.public_id("rmsg_");
@@ -991,7 +1315,7 @@ async fn connection_loop_with_work_root(
             let Some(deadline) = shutdown_deadline.as_mut() else {
                 return Err(ServiceError::AssignmentShutdown);
             };
-            return finish_shutdown_cleanup(&work_root, &recorder, shutdown, deadline)
+            return finish_shutdown_cleanup(&work_root, &recorder, shutdown, deadline, kept_runs)
                 .await
                 .map(|()| ending);
         }
@@ -1090,9 +1414,11 @@ async fn connection_loop_with_work_root(
                     let Some(deadline) = shutdown_deadline.as_mut() else {
                         return Err(ServiceError::AssignmentShutdown);
                     };
-                    return finish_shutdown_cleanup(&work_root, &recorder, shutdown, deadline)
-                        .await
-                        .map(|()| ending);
+                    return finish_shutdown_cleanup(
+                        &work_root, &recorder, shutdown, deadline, kept_runs,
+                    )
+                    .await
+                    .map(|()| ending);
                 }
                 if shutting_down {
                     let Some(deadline) = shutdown_deadline.as_mut() else {
@@ -1139,8 +1465,12 @@ async fn connection_loop_with_work_root(
                         }
                         ActiveEvent::AssignmentNotification => None,
                         ActiveEvent::Shutdown => {
-                            shutdown_deadline =
-                                Some(begin_shutdown(&live_status, &assignment_manager, &sleeper)?);
+                            shutdown_deadline = Some(begin_shutdown(
+                                &live_status,
+                                &assignment_manager,
+                                &sleeper,
+                                kept_runs,
+                            )?);
                             shutting_down = true;
                             None
                         }
@@ -1171,8 +1501,12 @@ async fn connection_loop_with_work_root(
                             break ActiveAttemptResult::Promoted(promoted);
                         }
                         ConnectedReloadResult::Shutdown => {
-                            shutdown_deadline =
-                                Some(begin_shutdown(&live_status, &assignment_manager, &sleeper)?);
+                            shutdown_deadline = Some(begin_shutdown(
+                                &live_status,
+                                &assignment_manager,
+                                &sleeper,
+                                kept_runs,
+                            )?);
                             shutting_down = true;
                         }
                         ConnectedReloadResult::Finished(result) => {
@@ -1278,7 +1612,7 @@ async fn connection_loop_with_work_root(
                             .shutdown_complete()
                         {
                             return finish_shutdown_cleanup(
-                                &work_root, &recorder, shutdown, deadline,
+                                &work_root, &recorder, shutdown, deadline, kept_runs,
                             )
                             .await
                             .map(|()| ending);
@@ -1322,8 +1656,12 @@ async fn connection_loop_with_work_root(
                         };
                         if let Some(end) = end {
                             ending = end;
-                            shutdown_deadline =
-                                Some(begin_shutdown(&live_status, &assignment_manager, &sleeper)?);
+                            shutdown_deadline = Some(begin_shutdown(
+                                &live_status,
+                                &assignment_manager,
+                                &sleeper,
+                                kept_runs,
+                            )?);
                             shutting_down = true;
                             continue;
                         }
@@ -1357,6 +1695,7 @@ async fn connection_loop_with_work_root(
                                 &live_status,
                                 &assignment_manager,
                                 &sleeper,
+                                kept_runs,
                             )?);
                             shutting_down = true;
                             break;
@@ -1458,6 +1797,7 @@ async fn connection_loop_with_work_root(
                         &live_status,
                         &assignment_manager,
                         &sleeper,
+                        kept_runs,
                     )?);
                     shutting_down = true;
                 }
@@ -1583,9 +1923,14 @@ async fn finish_shutdown_cleanup(
     recorder: &Recorder,
     shutdown: &mut dyn Shutdown,
     deadline: &mut Pin<Box<dyn Future<Output = ()> + Send>>,
+    kept_runs: &mut KeptRunSchedule,
 ) -> Result<(), ServiceError> {
-    let pending = work_root.release_boot_root_pending();
-    let completion = pending.wait_async();
+    // The boot root is released only once the kept-run pass in flight has ended.
+    let completion = async {
+        kept_runs.stop_and_join().await;
+        let pending = work_root.release_boot_root_pending();
+        pending.wait_async().await
+    };
     tokio::pin!(completion);
     tokio::select! {
         biased;
@@ -1610,8 +1955,10 @@ fn begin_shutdown(
     live_status: &LiveStatus,
     assignment_manager: &Mutex<AssignmentManager>,
     sleeper: &Arc<dyn Sleeper>,
+    kept_runs: &KeptRunSchedule,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, ServiceError> {
     live_status.stopping();
+    kept_runs.stop();
     assignment_manager
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2189,7 +2536,9 @@ mod tests {
         run_until_cancelled_with_dependencies,
     };
     use crate::control_protocol::{
-        AssignmentCounts, ConnectionState, ControlError, Operation, Response, StatusSnapshot,
+        AssignmentCounts, ConnectionState, ControlError, KeptAnswer, KeptBound, KeptCacheState,
+        KeptReason, KeptReport, KeptWorkspaceState, Operation, PruneAnswer, PruneReport,
+        PruneScope, PrunedOutcome, Response, StatusSnapshot,
     };
     use crate::credential::test_credential;
     use crate::enrollment::{AmbiguousCause, JoinRetry};
@@ -3426,6 +3775,649 @@ mod tests {
         server.abort();
     }
 
+    const KEPT_BOOT: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abc";
+    const KEPT_ASSIGNMENT: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abk";
+
+    /// Leaves in `work_root` an earlier boot holding one kept attempt, as a process that
+    /// ended without removing it leaves them, its directory dated `modified`, and answers
+    /// the boot's and the kept directory's paths.
+    fn keep_earlier_boot_attempt(
+        work_root: &Path,
+        modified: time::OffsetDateTime,
+    ) -> (PathBuf, PathBuf) {
+        let earlier = WorkRootLease::acquire_for_test(work_root, KEPT_BOOT).unwrap();
+        let kept = earlier
+            .create_assignment_for_attempt(
+                KEPT_ASSIGNMENT,
+                "run_01k0z6r1w8f4jy2m7q9v3x5abk",
+                "atm_01k0z6r1w8f4jy2m7q9v3x5abk",
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            kept.release_pending(
+                super::workspace::ProcessQuiescence::Proven,
+                super::workspace::WorkspaceDisposition::Retain(
+                    super::workspace::RetentionReason::Failed
+                ),
+            )
+            .wait(),
+            super::workspace::CleanupResult::Retained
+        );
+        let boot = earlier.boot_path().to_owned();
+        drop(earlier);
+        let directory = boot.join(KEPT_ASSIGNMENT);
+        let stamp = rustix::fs::Timespec {
+            tv_sec: modified.unix_timestamp(),
+            tv_nsec: 0,
+        };
+        rustix::fs::utimensat(
+            rustix::fs::CWD,
+            &directory,
+            &rustix::fs::Timestamps {
+                last_access: stamp,
+                last_modification: stamp,
+            },
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .unwrap();
+        (boot, directory)
+    }
+
+    /// A serving runner on the controlled sleeper whose work root holds an earlier boot's
+    /// kept attempt, and a Cloud that opens its session, offers an assignment when asked
+    /// to, sends what the test hands it and acknowledges every runner frame.
+    struct KeptRunService {
+        _fixture: RotationFixture,
+        socket: PathBuf,
+        cache: Option<FilledCache>,
+        boot: PathBuf,
+        directory: PathBuf,
+        capture: TestCapture,
+        sleeps: tokio::sync::mpsc::UnboundedReceiver<(Duration, SleepRelease)>,
+        cloud: tokio::sync::mpsc::UnboundedSender<Message>,
+        connected: tokio::sync::oneshot::Receiver<()>,
+        task: tokio::task::JoinHandle<Result<ServiceEnd, ServiceError>>,
+        server: tokio::task::JoinHandle<()>,
+        _shutdown: ControlledShutdownTrigger,
+    }
+
+    impl KeptRunService {
+        /// `age` is how old the kept directory is by the service's clock when it starts.
+        async fn start(age: time::Duration, offer_assignment: bool) -> Self {
+            Self::start_with_cache(age, offer_assignment, None).await
+        }
+
+        /// As `start`, with a configuration that names `cache` as its one build cache.
+        async fn start_with_cache(
+            age: time::Duration,
+            offer_assignment: bool,
+            cache: Option<FilledCache>,
+        ) -> Self {
+            let (listener, endpoint) = fixture_listener().await;
+            let fixture = RotationFixture::without_pending(&endpoint);
+            let config = match &cache {
+                Some(cache) => fixture
+                    .config
+                    .clone()
+                    .with_build_caches(vec![cache.build_cache()]),
+                None => fixture.config.clone(),
+            };
+            let (sleeper, sleeps) = controlled_sleeper();
+            let (boot, directory) = keep_earlier_boot_attempt(
+                fixture.config.assignment().work_root(),
+                sleeper.utc_now() - age,
+            );
+            let (source_broker, offer) = fixture.accepted_source();
+            let offer = offer_assignment.then_some(offer);
+            let (cloud, mut sent) = tokio::sync::mpsc::unbounded_channel::<Message>();
+            let (connected_sent, connected) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let mut socket = match offer {
+                    Some(offer) => {
+                        let (mut socket, accepted) =
+                            accept_offered_assignment(&listener, offer).await;
+                        acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance")
+                            .await;
+                        socket
+                    }
+                    None => {
+                        let mut socket = accept_opened_fixture_socket(&listener).await;
+                        socket.send(welcome()).await.unwrap();
+                        socket
+                            .send(observation_acknowledgement(
+                                "rmsg_00000000000000000000000002",
+                                1,
+                            ))
+                            .await
+                            .unwrap();
+                        socket
+                    }
+                };
+                connected_sent.send(()).unwrap();
+                loop {
+                    tokio::select! {
+                        Some(message) = sent.recv() => socket.send(message).await.unwrap(),
+                        frame = socket.next() => match frame {
+                            Some(Ok(Message::Text(frame))) => {
+                                let frame: serde_json::Value =
+                                    serde_json::from_str(&frame).unwrap();
+                                if frame["messageId"].is_string() && frame["sequence"].is_u64() {
+                                    acknowledge_runner_frame(&mut socket, &frame, "acknowledge")
+                                        .await;
+                                }
+                            }
+                            Some(Ok(_)) => {}
+                            _ => break,
+                        },
+                    }
+                }
+            });
+            let (task, capture, shutdown) = spawn_service_with_join_key(
+                config,
+                sleeper,
+                Some(source_broker),
+                None,
+                JoinKeyMode::None,
+            );
+            Self {
+                socket: fixture.config.control_socket_path().unwrap().to_owned(),
+                _fixture: fixture,
+                cache,
+                boot,
+                directory,
+                capture,
+                sleeps,
+                cloud,
+                connected,
+                task,
+                server,
+                _shutdown: shutdown,
+            }
+        }
+
+        /// Asks the control socket what the runner keeps under `scope`, and answers its
+        /// report.
+        async fn kept(&self, scope: PruneScope) -> KeptReport {
+            let socket = self.socket.clone();
+            let answer = with_watchdog(tokio::task::spawn_blocking(move || {
+                crate::control_client::request_kept(&socket, scope)
+            }))
+            .await
+            .expect("the kept report was not answered")
+            .unwrap()
+            .unwrap();
+            let KeptAnswer::Kept(report) = answer else {
+                panic!("a kept report: {answer:?}");
+            };
+            *report
+        }
+
+        /// Asks the control socket to prune what `scope` covers, and answers its answer.
+        async fn prune(&self, scope: PruneScope) -> PruneAnswer {
+            let socket = self.socket.clone();
+            with_watchdog(tokio::task::spawn_blocking(move || {
+                crate::control_client::request_prune(&socket, scope)
+            }))
+            .await
+            .expect("the prune was not answered")
+            .unwrap()
+            .unwrap()
+        }
+
+        /// Asks the control socket to prune what `scope` covers, and answers its result.
+        async fn pruned_by_operator(&self, scope: PruneScope) -> PruneReport {
+            let answer = self.prune(scope).await;
+            let PruneAnswer::Pruned(report) = answer else {
+                panic!("a prune result: {answer:?}");
+            };
+            *report
+        }
+
+        /// Waits until the runner has connected, or accepted the offered assignment.
+        async fn connected(&mut self) {
+            with_watchdog(&mut self.connected)
+                .await
+                .expect("the runner did not connect")
+                .expect("the fixture Cloud ended");
+        }
+
+        /// Waits until the pass in flight has ended, which the schedule shows by waiting
+        /// for the next hour, and answers that hour's sleep.
+        async fn pass_ended(&mut self) -> SleepRelease {
+            with_watchdog(sleep_request(
+                &mut self.sleeps,
+                super::KEPT_RUN_PASS_INTERVAL,
+            ))
+            .await
+            .expect("the kept-run schedule did not wait for its next hour")
+        }
+
+        fn pruned(&self) -> Vec<serde_json::Map<String, serde_json::Value>> {
+            self.capture
+                .records()
+                .into_iter()
+                .filter(|record| record["event.name"] == "runner.workspace_pruned")
+                .collect()
+        }
+
+        /// Asserts that the kept directory and its emptied boot are gone and that one
+        /// record says the age bound removed the directory.
+        fn assert_removed_by_age(&self) {
+            assert!(!self.directory.exists());
+            assert!(!self.boot.exists());
+            let pruned = self.pruned();
+            let [record] = pruned.as_slice() else {
+                panic!("one pruned record: {pruned:?}");
+            };
+            assert_eq!(
+                record["um.workspace.path"],
+                self.directory.to_string_lossy().as_ref()
+            );
+            assert_eq!(record["um.assignment.id"], KEPT_ASSIGNMENT);
+            assert_eq!(record["um.workspace.prune_bound"], "age");
+            assert_eq!(record["um.workspace.prune_outcome"], "removed");
+        }
+
+        fn assert_kept(&self) {
+            assert!(self.directory.is_dir());
+            assert!(self.pruned().is_empty());
+        }
+
+        /// Has Cloud let the offered assignment go, which ends it.
+        fn release_assignment(&self) {
+            self.cloud
+                .send(cloud_frame(
+                    "assignment_release",
+                    "cmsg_01k0z6r1w8f4jy2m7q9v3x5abt",
+                    serde_json::json!({
+                        "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abt",
+                        "assignmentId": "asn_01k0z6r1w8f4jy2m7q9v3x5abh",
+                        "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
+                        "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+                        "reason": "stale_or_invalid_acceptance",
+                    }),
+                ))
+                .unwrap();
+        }
+
+        fn evicted(&self) -> Vec<serde_json::Map<String, serde_json::Value>> {
+            self.capture
+                .records()
+                .into_iter()
+                .filter(|record| record["event.name"] == "runner.build_cache_evicted")
+                .collect()
+        }
+
+        fn cache(&self) -> &FilledCache {
+            self.cache
+                .as_ref()
+                .expect("the service names a build cache")
+        }
+
+        /// Asserts that the cache occupies at most nine tenths of its bound and that one
+        /// record says so.
+        fn assert_evicted(&self) {
+            let cache = self.cache();
+            assert!(cache.occupied() <= cache.maximum_bytes * 9 / 10);
+            let evicted = self.evicted();
+            let [record] = evicted.as_slice() else {
+                panic!("one evicted record: {evicted:?}");
+            };
+            assert_eq!(
+                record["um.build_cache.path"],
+                cache.path.to_string_lossy().as_ref()
+            );
+            assert!(record["um.build_cache.removed_files"].as_u64() > Some(0));
+        }
+
+        /// Asserts that every file of the cache stays and that no record says otherwise.
+        fn assert_cache_untouched(&self) {
+            let cache = self.cache();
+            assert_eq!(cache.files(), cache.written);
+            assert!(self.evicted().is_empty());
+        }
+
+        async fn end(self) {
+            abort_service(self.task).await;
+            self.server.abort();
+        }
+    }
+
+    const CACHE_FILES: usize = 8;
+
+    /// A build cache in a directory of its own, outside the work root, of `CACHE_FILES`
+    /// files of 64 KiB, each last used a minute after the one before.
+    struct FilledCache {
+        _root: tempfile::TempDir,
+        path: PathBuf,
+        maximum_bytes: u64,
+        written: usize,
+    }
+
+    impl FilledCache {
+        /// Bounded at half of what its files occupy when `over`, at twice that otherwise.
+        fn new(over: bool) -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("cargo-target");
+            fs::create_dir(&path).unwrap();
+            let mut cache = Self {
+                _root: root,
+                path,
+                maximum_bytes: 0,
+                written: 0,
+            };
+            cache.write(CACHE_FILES);
+            let occupied = cache.occupied();
+            cache.maximum_bytes = if over { occupied / 2 } else { occupied * 2 };
+            cache
+        }
+
+        /// Writes `count` more files, each last used a minute after the one before.
+        fn write(&mut self, count: usize) {
+            for index in self.written..self.written + count {
+                let file = self.path.join(format!("artifact-{index}"));
+                fs::write(&file, vec![7_u8; 64 * 1024]).unwrap();
+                // 2026-01-01, a minute apart; eviction orders by use, so the service's
+                // clock does not matter.
+                let stamp = rustix::fs::Timespec {
+                    tv_sec: 1_767_225_600 + 60 * i64::try_from(index).unwrap(),
+                    tv_nsec: 0,
+                };
+                rustix::fs::utimensat(
+                    rustix::fs::CWD,
+                    &file,
+                    &rustix::fs::Timestamps {
+                        last_access: stamp,
+                        last_modification: stamp,
+                    },
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .unwrap();
+            }
+            self.written += count;
+        }
+
+        fn build_cache(&self) -> super::BuildCache {
+            super::BuildCache {
+                path: self.path.clone(),
+                maximum_bytes: self.maximum_bytes,
+            }
+        }
+
+        fn files(&self) -> usize {
+            fs::read_dir(&self.path).unwrap().count()
+        }
+
+        /// What the files below the cache's `path` occupy.
+        fn occupied(&self) -> u64 {
+            use std::os::unix::fs::MetadataExt as _;
+            fs::read_dir(&self.path)
+                .unwrap()
+                .map(|entry| entry.unwrap().metadata().unwrap().blocks() * 512)
+                .sum()
+        }
+    }
+
+    /// Thirty minutes short of the default age bound, 14 days.
+    fn short_of_the_age_bound() -> time::Duration {
+        14 * time::Duration::DAY - 30 * time::Duration::MINUTE
+    }
+
+    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159, REQ-RUNNERENROLL-69
+    #[tokio::test]
+    async fn a_starting_runner_removes_a_kept_run_past_the_age_bound_after_reporting_it() {
+        // Dated 2026-07-01, 22 days before the clock's origin.
+        let mut service = KeptRunService::start(22 * time::Duration::DAY, false).await;
+        service.connected().await;
+        let _hour = service.pass_ended().await;
+
+        service.assert_removed_by_age();
+        let records = service.capture.records();
+        let retained = records
+            .iter()
+            .position(|record| {
+                record["event.name"] == "runner.workspace_retained"
+                    && record["um.workspace.path"]
+                        .as_str()
+                        .is_some_and(|path| Path::new(path).starts_with(&service.boot))
+            })
+            .expect("the startup report of the kept directory");
+        let pruned = records
+            .iter()
+            .position(|record| record["event.name"] == "runner.workspace_pruned")
+            .expect("the record of its removal");
+        assert!(retained < pruned);
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
+    #[tokio::test]
+    async fn a_starting_runner_keeps_a_kept_run_within_its_bounds() {
+        // Dated 2026-07-20, 3 days before the clock's origin.
+        let mut service = KeptRunService::start(3 * time::Duration::DAY, false).await;
+        service.connected().await;
+        let _hour = service.pass_ended().await;
+
+        service.assert_kept();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
+    #[tokio::test]
+    async fn an_idle_runner_applies_the_kept_run_bounds_each_hour() {
+        let mut service = KeptRunService::start(short_of_the_age_bound(), false).await;
+        service.connected().await;
+        let hour = service.pass_ended().await;
+        service.assert_kept();
+
+        hour.release();
+        let _next = service.pass_ended().await;
+
+        service.assert_removed_by_age();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
+    #[tokio::test]
+    async fn a_working_runner_applies_the_kept_run_bounds_once_its_run_ends() {
+        let mut service = KeptRunService::start(short_of_the_age_bound(), true).await;
+        service.connected().await;
+        let hour = service.pass_ended().await;
+
+        // The hour passes while the accepted assignment works.
+        hour.release();
+        let _next = service.pass_ended().await;
+        service.assert_kept();
+
+        service.release_assignment();
+        let _after_the_run = service.pass_ended().await;
+
+        service.assert_removed_by_age();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-162, REQ-RUNNERENROLL-161
+    #[tokio::test]
+    async fn a_starting_runner_evicts_a_build_cache_over_its_bound_after_reporting_kept_runs() {
+        let mut service = KeptRunService::start_with_cache(
+            3 * time::Duration::DAY,
+            false,
+            Some(FilledCache::new(true)),
+        )
+        .await;
+        service.connected().await;
+        let _hour = service.pass_ended().await;
+
+        service.assert_kept();
+        service.assert_evicted();
+        let records = service.capture.records();
+        let evicted = records
+            .iter()
+            .position(|record| record["event.name"] == "runner.build_cache_evicted")
+            .expect("the record of the eviction");
+        let retained = records
+            .iter()
+            .rposition(|record| record["event.name"] == "runner.workspace_retained")
+            .expect("the startup report of the kept directory");
+        assert!(retained < evicted);
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-162, REQ-RUNNERENROLL-161
+    #[tokio::test]
+    async fn a_starting_runner_leaves_a_build_cache_within_its_bound() {
+        let mut service = KeptRunService::start_with_cache(
+            3 * time::Duration::DAY,
+            false,
+            Some(FilledCache::new(false)),
+        )
+        .await;
+        service.connected().await;
+        let _hour = service.pass_ended().await;
+
+        service.assert_cache_untouched();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-162
+    #[tokio::test]
+    async fn a_working_runner_evicts_its_build_caches_once_its_run_ends() {
+        let mut service = KeptRunService::start_with_cache(
+            3 * time::Duration::DAY,
+            true,
+            Some(FilledCache::new(false)),
+        )
+        .await;
+        service.connected().await;
+        let hour = service.pass_ended().await;
+        service.assert_cache_untouched();
+
+        // While the accepted assignment works, the cache grows past its bound and the hour
+        // passes.
+        service.cache.as_mut().unwrap().write(2 * CACHE_FILES);
+        assert!(service.cache().occupied() > service.cache().maximum_bytes);
+        hour.release();
+        let _next = service.pass_ended().await;
+        service.assert_cache_untouched();
+
+        service.release_assignment();
+        let _after_the_run = service.pass_ended().await;
+
+        service.assert_evicted();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-164, INV-RUNNER-54: a report never meets a pass in flight.
+    #[tokio::test]
+    async fn a_kept_report_asked_for_at_startup_is_answered_after_the_startup_pass() {
+        let mut service = KeptRunService::start(22 * time::Duration::DAY, false).await;
+        // The startup pass runs beside connecting, so it may be in flight still.
+        service.connected().await;
+        let report = service.kept(PruneScope::Bounds).await;
+
+        assert!(report.workspaces.is_empty(), "{report:?}");
+        service.assert_removed_by_age();
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-159, INV-RUNNER-54
+    #[tokio::test]
+    async fn an_operator_reports_and_prunes_a_kept_run_within_its_bounds() {
+        let mut service = KeptRunService::start(3 * time::Duration::DAY, false).await;
+        service.connected().await;
+        let directory = service.directory.to_string_lossy().into_owned();
+
+        let report = service.kept(PruneScope::Bounds).await;
+        let [workspace] = report.workspaces.as_slice() else {
+            panic!("one kept workspace: {report:?}");
+        };
+        assert_eq!(workspace.directories, std::slice::from_ref(&directory));
+        assert_eq!(workspace.state, KeptWorkspaceState::Kept);
+        assert_eq!(workspace.reason, KeptReason::Failed);
+        assert_eq!(workspace.assignment_id.as_deref(), Some(KEPT_ASSIGNMENT));
+        assert!(workspace.bytes > Some(0));
+        assert_eq!(report.due_bytes, 0);
+
+        let report = service.kept(PruneScope::All).await;
+        let [workspace] = report.workspaces.as_slice() else {
+            panic!("one kept workspace: {report:?}");
+        };
+        assert_eq!(workspace.state, KeptWorkspaceState::Due);
+        assert_eq!(workspace.bound, Some(KeptBound::Operator));
+        assert_eq!(workspace.bytes, Some(report.due_bytes));
+        service.assert_kept();
+
+        let pruned = service.pruned_by_operator(PruneScope::All).await;
+        assert!(pruned.complete);
+        let [removed] = pruned.directories.as_slice() else {
+            panic!("one pruned directory: {pruned:?}");
+        };
+        assert_eq!(removed.path, directory);
+        assert_eq!(removed.bound, KeptBound::Operator);
+        assert_eq!(removed.result, PrunedOutcome::Removed);
+        assert!(!service.directory.exists());
+        assert!(!service.boot.exists());
+        let records = service.pruned();
+        let [record] = records.as_slice() else {
+            panic!("one pruned record: {records:?}");
+        };
+        assert_eq!(record["um.workspace.path"], directory.as_str());
+        assert_eq!(record["um.workspace.prune_bound"], "operator");
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-164, INV-RUNNER-54
+    #[tokio::test]
+    async fn a_working_runner_refuses_a_prune_and_still_reports_what_it_keeps() {
+        let mut service = KeptRunService::start(3 * time::Duration::DAY, true).await;
+        service.connected().await;
+
+        assert_eq!(
+            service.prune(PruneScope::All).await,
+            PruneAnswer::Refused(ControlError::RunnerBusy)
+        );
+        service.assert_kept();
+
+        let report = service.kept(PruneScope::Bounds).await;
+        let directory = service.directory.to_string_lossy().into_owned();
+        assert!(
+            report
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.directories == std::slice::from_ref(&directory)),
+            "{report:?}"
+        );
+        service.end().await;
+    }
+
+    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165
+    #[tokio::test]
+    async fn an_operator_reports_and_empties_a_build_cache_within_its_bound() {
+        let mut service = KeptRunService::start_with_cache(
+            3 * time::Duration::DAY,
+            false,
+            Some(FilledCache::new(false)),
+        )
+        .await;
+        service.connected().await;
+
+        let report = service.kept(PruneScope::Bounds).await;
+        let [cache] = report.build_caches.as_slice() else {
+            panic!("one build cache: {report:?}");
+        };
+        assert_eq!(cache.state, KeptCacheState::Measured);
+        assert_eq!(cache.due_bytes, Some(0));
+
+        let pruned = service.pruned_by_operator(PruneScope::All).await;
+        let [cache] = pruned.build_caches.as_slice() else {
+            panic!("one evicted build cache: {pruned:?}");
+        };
+        assert_eq!(cache.removed_files, u64::try_from(CACHE_FILES).unwrap());
+        assert_eq!(service.cache().files(), 0);
+        service.end().await;
+    }
+
     // INV-RUNNER-35, REQ-RUNNERENROLL-127, REQ-RUNNERENROLL-128
     #[test]
     fn a_refused_credential_is_answered_only_once_no_assignment_is_held() {
@@ -4200,7 +5192,7 @@ mod tests {
             .expect("captured gateway connection should exist")
     }
 
-    // REQ-RUNNERENROLL-38
+    // REQ-RUNNERENROLL-38, REQ-COMPAT-25
     // REQ-TELEMETRY-11, REQ-TELEMETRY-13, REQ-TELEMETRY-32
     #[tokio::test]
     async fn exits_when_the_gateway_closes_with_policy_violation() {

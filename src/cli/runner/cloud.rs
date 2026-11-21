@@ -305,21 +305,26 @@ pub(super) fn write_runner_show(
     )
 }
 
-// Rename and show are separate public commands even though both render one registration.
-pub(super) fn write_runner_rename(
+/// The runner `useful runner update` changed, with `applied`, the names of what it sent, in
+/// order (REQ-RUNNERPOOL-57).
+pub(super) fn write_runner_update(
     deployment: &str,
-    result: &Result<RunnerRegistration, RunnerFailure>,
-    authentication: super::super::PrincipalAuthenticationKind,
+    applied: &[&'static str],
+    runner: &RunnerRegistration,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
-    write_runner(
-        deployment,
-        result,
-        "renamed",
-        "✓ Runner renamed.",
-        authentication,
-        json,
-    )
+    if json {
+        write_json(&RunnerResult {
+            schema_version: 1,
+            deployment,
+            outcome: "updated",
+            applied: Some(applied),
+            runner,
+        })?;
+    } else {
+        write_runner_human(deployment, "✓ Runner updated.", runner)?;
+    }
+    Ok(ExitCode::Success)
 }
 
 // Transition headings are caller-owned so mode, move, and future concrete transitions cannot
@@ -350,6 +355,7 @@ fn write_runner(
                     schema_version: 1,
                     deployment,
                     outcome,
+                    applied: None,
                     runner,
                 })?;
             } else {
@@ -633,10 +639,65 @@ pub(super) fn write_failure(
     write_failure_with_context(deployment, failure, authentication, json, None, None)
 }
 
+/// A refused read of the memberships that name the organization in effect (REQ-ORG-87),
+/// written with the closed outcome a runner command reports for the same refusal.
+pub(super) fn write_context_failure(
+    deployment: &str,
+    failure: &useful_api::CommonOrganizationFailure,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    write_failure(deployment, &context_failure(failure), authentication, json)
+}
+
+/// The closed outcome a runner command reports for a refused read of the memberships that
+/// name the organization in effect.
+pub(super) const fn context_failure(
+    failure: &useful_api::CommonOrganizationFailure,
+) -> RunnerFailure {
+    use useful_api::CommonOrganizationFailure;
+    match failure {
+        CommonOrganizationFailure::Unauthenticated => RunnerFailure::Unauthenticated,
+        CommonOrganizationFailure::Forbidden => RunnerFailure::Forbidden,
+        CommonOrganizationFailure::InvalidInput => RunnerFailure::InvalidInput,
+        CommonOrganizationFailure::Unreachable(category) => RunnerFailure::Unreachable(*category),
+    }
+}
+
+/// A request of `useful runner update` that failed after an earlier one succeeded, whose
+/// change stays (REQ-RUNNERPOOL-57): the command exits with the failure's code. Under `--json`
+/// the result is the failure's document with `applied`, what was sent and succeeded, and
+/// `runner`, the runner as the last successful request returned it; in human output the
+/// failure's diagnostic and remedy are followed by `kept`, what stays and how to finish.
+pub(super) fn write_partial_failure(
+    deployment: &str,
+    failure: &RunnerFailure,
+    applied: &[&'static str],
+    runner: &RunnerRegistration,
+    kept: &str,
+    authentication: super::super::PrincipalAuthenticationKind,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let presentation = FailurePresentation::of(deployment, failure, authentication, false);
+    if json {
+        write_json(&PartialFailureResult {
+            failure: presentation.result(deployment, None, None, None),
+            applied,
+            runner,
+        })?;
+    } else {
+        writeln!(io::stderr().lock(), "{}\n\n{kept}", presentation.human)
+            .context("write runner failure")?;
+    }
+    Ok(presentation.class.exit_code())
+}
+
+/// A single-runner key that failed after `useful runner join-key issue --runner` registered
+/// `runner_id` (REQ-RUNNERENROLL-8); `organization` is the `--org` value, when one was named.
 pub(super) fn write_activation_failure(
     deployment: &str,
     failure: &RunnerFailure,
-    organization: &str,
+    organization: Option<&str>,
     runner_id: &str,
     authentication: super::super::PrincipalAuthenticationKind,
     json: bool,
@@ -675,9 +736,10 @@ pub(super) fn write_registration_failure(
 /// What the command that failed adds after the closed outcome's remedy.
 #[derive(Clone, Copy)]
 enum FollowUp<'a> {
-    /// `useful runner create` registered `runner_id` and issued no activation.
+    /// `useful runner join-key issue --runner` registered `runner_id` and issued no key; the
+    /// remedy names `--org` when `organization` is given.
     Created {
-        organization: &'a str,
+        organization: Option<&'a str>,
         runner_id: &'a str,
     },
     /// `useful runner serve` stopped registering the host.
@@ -685,8 +747,8 @@ enum FollowUp<'a> {
 }
 
 const SIGN_IN_TO_ADMINISTER: &str =
-    "error: runner administration requires sign-in\n\nSign in first:\n  useful auth login";
-const SIGN_IN_TO_REGISTER: &str = "error: runner registration requires sign-in\n\nSign in, then start the runner again with the same options:\n  useful auth login\n\nOn a host with no sign-in, start the runner with a join key instead of --personal or --pool-id: --join-key-file PATH|-, --join-key or USEFUL_RUNNER_JOIN_KEY.";
+    "error: runner administration requires sign-in\n\nSign in first:\n  useful account login";
+const SIGN_IN_TO_REGISTER: &str = "error: runner registration requires sign-in\n\nSign in, then start the runner again with the same options:\n  useful account login\n\nOn a host with no sign-in, start the runner with a join key instead of --personal or --pool: --join-key-file PATH|-, --join-key or USEFUL_RUNNER_JOIN_KEY.";
 
 fn write_failure_with_context(
     deployment: &str,
@@ -697,132 +759,8 @@ fn write_failure_with_context(
     follow_up: Option<FollowUp<'_>>,
 ) -> anyhow::Result<ExitCode> {
     let registration = matches!(follow_up, Some(FollowUp::Registration { .. }));
-    let (outcome, category, human, outcome_class) = match failure {
-        RunnerFailure::Unauthenticated => (
-            "unauthenticated",
-            None,
-            authentication
-                .rejected_error(if registration {
-                    SIGN_IN_TO_REGISTER
-                } else {
-                    SIGN_IN_TO_ADMINISTER
-                })
-                .to_owned(),
-            OutcomeClass::Unauthenticated,
-        ),
-        RunnerFailure::Forbidden => (
-            "forbidden",
-            None,
-            "error: runner operation is not permitted for this account\n\nAsk an organization owner to perform this operation.".to_owned(),
-            OutcomeClass::Forbidden,
-        ),
-        RunnerFailure::InvalidInput => (
-            "invalid_input",
-            None,
-            format!("error: runner input rejected by {deployment}\n\nCheck the organization, resource identifier, and name, then try again."),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::NotFound => (
-            "not_found",
-            None,
-            "error: runner resource not found or unavailable\n\nCheck the organization and resource reference, then try again.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::LookupLimitReached => (
-            "lookup_limit_reached",
-            None,
-            "error: runner name lookup reached its page limit\n\nUse the resource ID instead.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::NameUnavailable => (
-            "name_unavailable",
-            None,
-            "error: runner resource name unavailable\n\nChoose another name and try again.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::QuantityLimitReached => (
-            "quantity_limit_reached",
-            None,
-            "error: runner resource quantity limit reached\n\nRemove an unused resource or ask the deployment operator to raise the limit.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::RateLimited => (
-            "rate_limited",
-            None,
-            "error: runner resource creation rate limited\n\nTry again later.".to_owned(),
-            OutcomeClass::RateLimited,
-        ),
-        RunnerFailure::IdempotencyConflict => (
-            "idempotency_conflict",
-            None,
-            "error: runner request identity conflicted with another request\n\nRun the command again to use a new request identity.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::CredentialLimit => (
-            "credential_limit_reached",
-            None,
-            "error: runner credential limit reached\n\nRevoke a credential or wait for retirement before issuing another activation.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::ActivationUnavailable => (
-            "activation_unavailable",
-            None,
-            "error: runner activation is no longer available\n\nList activations and issue a replacement when needed.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::CredentialTransitionUnavailable => (
-            "credential_transition_unavailable",
-            None,
-            "error: runner credential transition is unavailable\n\nList credentials and choose an active or retiring credential.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::PoolMoveUnavailable => (
-            "pool_move_unavailable",
-            None,
-            "error: runner cannot move while it has active work\n\nDrain or disable the runner, then wait for its reservation and assignments to finish.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::PoolPersonal => (
-            "pool_personal",
-            None,
-            "error: runner pool is a member's personal pool, which Cloud protects; nothing was renamed or deleted\n\nAn organization owner can delete this pool once its member has left the organization. Use another runner pool until then.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::PoolPersonalUnavailable if !registration => (
-            "pool_personal_unavailable",
-            None,
-            "error: this account has no personal runner pool\n\nName a runner pool with --pool-id, or a member with --member.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        // `useful runner serve` names no member, so its remedy is a pool alone.
-        RunnerFailure::PoolPersonalUnavailable | RunnerFailure::PersonalPoolNotFound => (
-            "pool_personal_unavailable",
-            None,
-            "error: this account has no personal runner pool in this organization\n\nName a runner pool with --pool-id.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::DeletionUnavailable(_) => (
-            "delete_unavailable",
-            None,
-            "error: runner resource deletion has active blockers\n\nWait for every reported blocker to clear, then run the deletion again.".to_owned(),
-            OutcomeClass::GeneralFailure,
-        ),
-        RunnerFailure::Unreachable(category) => (
-            "unreachable",
-            Some(category.as_str()),
-            format!(
-                "error: contact runner API at {deployment}: {}\n\nCheck network access to the deployment and try again.",
-                category.as_str()
-            ),
-            super::super::unreachable_outcome_class(*category),
-        ),
-        RunnerFailure::Protocol => (
-            "invalid_response",
-            None,
-            "error: runner API response does not match the public contract\n\nTry again later.".to_owned(),
-            OutcomeClass::Protocol,
-        ),
-    };
+    let presentation = FailurePresentation::of(deployment, failure, authentication, registration);
+    let (outcome, human) = (presentation.outcome, &presentation.human);
     // Runner failures own a closed machine vocabulary distinct from organization
     // failures, so the small stream-selection adapter remains domain-local.
     let (runner_id, runner_pool_id) = match target {
@@ -838,15 +776,7 @@ fn write_failure_with_context(
         _ => None,
     };
     if json {
-        write_json(&FailureResult {
-            schema_version: 1,
-            deployment,
-            outcome,
-            runner_id,
-            runner_pool_id,
-            category,
-            blockers,
-        })?;
+        write_json(&presentation.result(deployment, runner_id, runner_pool_id, blockers))?;
     } else if let Some(target) = target {
         let (diagnostic, remedy) = human.split_once("\n\n").unwrap_or((
             human.as_str(),
@@ -868,12 +798,15 @@ fn write_failure_with_context(
             Some(FollowUp::Created {
                 organization,
                 runner_id,
-            }) => writeln!(
-                stderr,
-                "{human}\n\nRunner {runner_id} was created without an activation. Issue one without creating another runner:\n  useful runner activation issue {organization} {runner_id} --activation-file <PATH>"
-            )?,
+            }) => {
+                let org = organization.map_or_else(String::new, |org| format!(" --org {org}"));
+                writeln!(
+                    stderr,
+                    "{human}\n\nRunner {runner_id} was registered without a single-runner key. Issue its key without registering another runner:\n  useful runner join-key issue --runner {runner_id} --key-file <PATH>{org}"
+                )?;
+            }
             Some(FollowUp::Registration { progress }) => {
-                let (diagnostic, remedy) = human.split_once("\n\n").unwrap_or((&human, ""));
+                let (diagnostic, remedy) = human.split_once("\n\n").unwrap_or((human, ""));
                 writeln!(
                     stderr,
                     "{diagnostic}\ncode: {outcome}\n\n{remedy}\n\n{progress}"
@@ -881,7 +814,176 @@ fn write_failure_with_context(
             }
         }
     }
-    Ok(outcome_class.exit_code())
+    Ok(presentation.class.exit_code())
+}
+
+/// A runner failure as its closed outcome, its category, its human diagnostic and remedy, and
+/// its outcome class; `registration` holds for `useful runner serve`'s signed-in registration.
+struct FailurePresentation {
+    outcome: &'static str,
+    category: Option<&'static str>,
+    human: String,
+    class: OutcomeClass,
+}
+
+impl FailurePresentation {
+    fn of(
+        deployment: &str,
+        failure: &RunnerFailure,
+        authentication: super::super::PrincipalAuthenticationKind,
+        registration: bool,
+    ) -> Self {
+        let (outcome, category, human, class) = match failure {
+            RunnerFailure::Unauthenticated => (
+                "unauthenticated",
+                None,
+                authentication
+                    .rejected_error(if registration {
+                        SIGN_IN_TO_REGISTER
+                    } else {
+                        SIGN_IN_TO_ADMINISTER
+                    })
+                    .to_owned(),
+                OutcomeClass::Unauthenticated,
+            ),
+            RunnerFailure::Forbidden => (
+                "forbidden",
+                None,
+                "error: runner operation is not permitted for this account\n\nAsk an organization owner to perform this operation.".to_owned(),
+                OutcomeClass::Forbidden,
+            ),
+            RunnerFailure::InvalidInput => (
+                "invalid_input",
+                None,
+                format!("error: runner input rejected by {deployment}\n\nCheck the organization, resource identifier, and name, then try again."),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::NotFound => (
+                "not_found",
+                None,
+                "error: runner resource not found or unavailable\n\nCheck the organization and resource reference, then try again.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::LookupLimitReached => (
+                "lookup_limit_reached",
+                None,
+                "error: runner name lookup reached its page limit\n\nUse the resource ID instead.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::NameUnavailable => (
+                "name_unavailable",
+                None,
+                "error: runner resource name unavailable\n\nChoose another name and try again.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::QuantityLimitReached => (
+                "quantity_limit_reached",
+                None,
+                "error: runner resource quantity limit reached\n\nRemove an unused resource or ask the deployment operator to raise the limit.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::RateLimited => (
+                "rate_limited",
+                None,
+                "error: runner resource creation rate limited\n\nTry again later.".to_owned(),
+                OutcomeClass::RateLimited,
+            ),
+            RunnerFailure::IdempotencyConflict => (
+                "idempotency_conflict",
+                None,
+                "error: runner request identity conflicted with another request\n\nRun the command again to use a new request identity.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::CredentialLimit => (
+                "credential_limit_reached",
+                None,
+                "error: runner credential limit reached\n\nRevoke a credential or wait for retirement before issuing another single-runner key.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::ActivationUnavailable => (
+                "activation_unavailable",
+                None,
+                "error: single-runner key is no longer available\n\nList the runner's keys with useful runner join-key list --runner RUNNER and issue a replacement when needed.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::CredentialTransitionUnavailable => (
+                "credential_transition_unavailable",
+                None,
+                "error: runner credential transition is unavailable\n\nList credentials and choose an active or retiring credential.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::PoolMoveUnavailable => (
+                "pool_move_unavailable",
+                None,
+                "error: runner cannot move while it has active work\n\nDrain or disable the runner, then wait for its reservation and assignments to finish.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::PoolPersonal => (
+                "pool_personal",
+                None,
+                "error: runner pool is a member's personal pool, which Cloud protects; nothing was renamed or deleted\n\nAn organization owner can delete this pool once its member has left the organization. Use another runner pool until then.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::PoolPersonalUnavailable if !registration => (
+                "pool_personal_unavailable",
+                None,
+                "error: this account has no personal runner pool\n\nName a runner pool with --pool, or a member with --member.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            // `useful runner serve` names no member, so its remedy is a pool alone.
+            RunnerFailure::PoolPersonalUnavailable | RunnerFailure::PersonalPoolNotFound => (
+                "pool_personal_unavailable",
+                None,
+                "error: this account has no personal runner pool in this organization\n\nName a runner pool with --pool.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::DeletionUnavailable(_) => (
+                "delete_unavailable",
+                None,
+                "error: runner resource deletion has active blockers\n\nWait for every reported blocker to clear, then run the deletion again.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            RunnerFailure::Unreachable(category) => (
+                "unreachable",
+                Some(category.as_str()),
+                format!(
+                    "error: contact runner API at {deployment}: {}\n\nCheck network access to the deployment and try again.",
+                    category.as_str()
+                ),
+                super::super::unreachable_outcome_class(*category),
+            ),
+            RunnerFailure::Protocol => (
+                "invalid_response",
+                None,
+                "error: runner API response does not match the public contract\n\nTry again later.".to_owned(),
+                OutcomeClass::Protocol,
+            ),
+        };
+        Self {
+            outcome,
+            category,
+            human,
+            class,
+        }
+    }
+
+    const fn result<'a>(
+        &self,
+        deployment: &'a str,
+        runner_id: Option<&'a str>,
+        runner_pool_id: Option<&'a str>,
+        blockers: Option<&'a [RunnerDeletionBlocker]>,
+    ) -> FailureResult<'a> {
+        FailureResult {
+            schema_version: 1,
+            deployment,
+            outcome: self.outcome,
+            runner_id,
+            runner_pool_id,
+            category: self.category,
+            blockers,
+        }
+    }
 }
 
 pub(super) fn write_json(value: &impl Serialize) -> anyhow::Result<()> {
@@ -919,6 +1021,17 @@ struct RunnerResult<'a> {
     schema_version: u8,
     deployment: &'a str,
     outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    applied: Option<&'a [&'static str]>,
+    runner: &'a RunnerRegistration,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PartialFailureResult<'a> {
+    #[serde(flatten)]
+    failure: FailureResult<'a>,
+    applied: &'a [&'static str],
     runner: &'a RunnerRegistration,
 }
 

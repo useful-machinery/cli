@@ -61,10 +61,13 @@ fn problem_response(status: &str, code: u16) -> Vec<u8> {
 
 fn list_args(json: bool) -> Vec<&'static str> {
     let mut args = vec![
+        "workflow",
+        "run",
         "artifact",
         "list",
-        ORGANIZATION,
         RUN_ID,
+        "--org",
+        ORGANIZATION,
         "--limit",
         "1",
         "--cursor",
@@ -186,16 +189,34 @@ fn download_capability_response(result: &[u8], url: &str) -> Vec<u8> {
 // REQ-ARTIFACTSET-35, REQ-ARTIFACTSET-38
 #[test]
 fn artifact_download_json_reports_only_the_verified_committed_set() {
+    downloads_the_committed_set(false);
+}
+
+// REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-29, REQ-ARTIFACTSET-35, REQ-ARTIFACTSET-38: `download`
+// takes the run `list` printed and receives the set `list` named, and `validate` accepts the
+// directory the download receipt names.
+#[test]
+fn a_listed_artifact_set_downloads_to_a_directory_that_validates() {
+    downloads_the_committed_set(true);
+}
+
+/// `workflow run artifact download --json` of the committed set, alone or as the `journey`
+/// from `list` through `validate`, each given what the command before it printed.
+fn downloads_the_committed_set(journey: bool) {
     let result = portable_result_bytes();
     let storage = OneShotServer::respond("200 OK", Some("application/json"), &result);
     let signed_url = format!(
         "{}/result.json?signature=unique-artifact-capability-sentinel",
         storage.api_url
     );
-    let server = ScriptedServer::respond(vec![
+    let mut responses = vec![
         complete_inventory_response(&result),
         download_capability_response(&result, &signed_url),
-    ]);
+    ];
+    if journey {
+        responses.insert(0, complete_inventory_response(&result));
+    }
+    let server = ScriptedServer::respond(responses);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
     write_credential_fixture(
@@ -208,12 +229,36 @@ fn artifact_download_json_reports_only_the_verified_committed_set() {
     let output_root = tempfile::tempdir().unwrap();
     let destination = output_root.path().join("downloaded");
 
+    let inventory = journey.then(|| {
+        let inventory = run_with_env(
+            &[
+                "workflow",
+                "run",
+                "artifact",
+                "list",
+                RUN_ID,
+                "--org",
+                ORGANIZATION,
+                "--json",
+                "--allow-insecure-http",
+            ],
+            &environment,
+        );
+        assert!(inventory.status.success(), "{inventory:?}");
+        serde_json::from_slice::<serde_json::Value>(&inventory.stdout).unwrap()
+    });
+    let run_id = inventory
+        .as_ref()
+        .map_or(RUN_ID, |inventory| inventory["runId"].as_str().unwrap());
     let output = run_with_env(
         &[
+            "workflow",
+            "run",
             "artifact",
             "download",
+            run_id,
+            "--org",
             ORGANIZATION,
-            RUN_ID,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -230,8 +275,9 @@ fn artifact_download_json_reports_only_the_verified_committed_set() {
     assert!(output.stderr.is_empty());
     assert_eq!(fs::read(destination.join("result.json")).unwrap(), result);
     assert!(destination.join("exports").is_dir());
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        receipt,
         serde_json::json!({
             "schemaVersion": 1,
             "deployment": server.api_url,
@@ -246,13 +292,33 @@ fn artifact_download_json_reports_only_the_verified_committed_set() {
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains("unique-artifact-capability-sentinel")
     );
-    let requests = server.finish();
+    let mut requests = server.finish();
+    if let Some(inventory) = inventory {
+        assert_eq!(
+            receipt["artifactSetId"],
+            inventory["artifactSet"]["artifactSetId"]
+        );
+        let verified = run(&[
+            "workflow",
+            "run",
+            "artifact",
+            "validate",
+            receipt["destination"].as_str().unwrap(),
+            "--json",
+        ]);
+        assert!(verified.status.success(), "{verified:?}");
+        let verified: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
+        assert_eq!(verified["outcome"], "valid");
+        assert_eq!(verified["artifactDirectory"], receipt["destination"]);
+        let listing = requests.remove(0);
+        assert!(listing.lines().next().unwrap().contains("/artifact-set"));
+    }
     assert_eq!(requests.len(), 2);
     assert!(requests[0].contains("/artifact-set?limit=200 HTTP/1.1"));
     assert!(requests[1].contains("/download-capabilities HTTP/1.1"));
     let download = storage.finish();
     assert!(download.starts_with("GET "));
-    assert!(!download.contains("authorization:"));
+    assert!(useful_test_support::request_header(&download, "authorization").is_none());
 }
 
 // REQ-ARTIFACTSET-36
@@ -282,10 +348,13 @@ fn artifact_download_verification_failure_emits_no_receipt_or_destination() {
 
     let output = run_with_env(
         &[
+            "workflow",
+            "run",
             "artifact",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
             "--json",
@@ -302,7 +371,7 @@ fn artifact_download_verification_failure_emits_no_receipt_or_destination() {
     storage.finish();
 }
 
-// REQ-ARTIFACTSET-30, REQ-ARTIFACTSET-31
+// REQ-ARTIFACTSET-29, REQ-ARTIFACTSET-30, REQ-ARTIFACTSET-31
 #[test]
 fn artifact_list_reports_one_inventory_page_without_download_authority_or_files() {
     for json in [false, true] {
@@ -373,7 +442,7 @@ fn artifact_list_reports_one_inventory_page_without_download_authority_or_files(
             format!("Bearer {TOKEN}")
         );
         assert!(!requests[0].contains("download-capabilities"));
-        assert!(!requests[0].contains("idempotency-key:"));
+        assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
     }
 }
 
@@ -421,10 +490,13 @@ fn artifact_list_reports_unsealed_or_missing_sets_as_unavailable_in_human_mode()
 
     let output = run_with_env(
         &[
+            "workflow",
+            "run",
             "artifact",
             "list",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--allow-insecure-http",
         ],
         &environment,
@@ -465,10 +537,13 @@ fn artifact_list_rejects_inventory_pages_that_ignore_request_bounds() {
             prepared_artifact(inventory_response(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
+            "workflow",
+            "run",
             "artifact",
             "list",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--json",
             "--allow-insecure-http",
         ];
@@ -513,7 +588,16 @@ fn artifact_list_escapes_untrusted_remote_text_only_in_human_output() {
 // REQ-ARTIFACTSET-34
 #[test]
 fn artifact_list_json_preserves_meaningful_api_failure_classes() {
-    let unauthenticated = run(&["artifact", "list", ORGANIZATION, RUN_ID, "--json"]);
+    let unauthenticated = run(&[
+        "workflow",
+        "run",
+        "artifact",
+        "list",
+        RUN_ID,
+        "--org",
+        ORGANIZATION,
+        "--json",
+    ]);
     assert_eq!(unauthenticated.status.code(), Some(3));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&unauthenticated.stdout).unwrap()["outcome"],
@@ -599,10 +683,13 @@ fn artifact_list_json_preserves_meaningful_api_failure_classes() {
 
         let output = run_with_env(
             &[
+                "workflow",
+                "run",
                 "artifact",
                 "list",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--json",
                 "--allow-insecure-http",
             ],
@@ -647,11 +734,14 @@ fn artifact_list_and_download_authenticate_with_a_service_api_key_file() {
         deployment_environment(&server.api_url, missing_human_store.to_str().unwrap());
     let listed = run_with_env(
         &[
+            "workflow",
+            "run",
             "artifact",
             "list",
-            ORGANIZATION,
             RUN_ID,
-            "--service-api-key-file",
+            "--org",
+            ORGANIZATION,
+            "--api-key-file",
             key_path,
             "--json",
             "--allow-insecure-http",
@@ -686,13 +776,16 @@ fn artifact_list_and_download_authenticate_with_a_service_api_key_file() {
     let destination = output_root.path().join("downloaded");
     let downloaded = run_with_env(
         &[
+            "workflow",
+            "run",
             "artifact",
             "download",
-            ORGANIZATION,
             RUN_ID,
+            "--org",
+            ORGANIZATION,
             "--output",
             destination.to_str().unwrap(),
-            "--service-api-key-file",
+            "--api-key-file",
             key_path,
             "--json",
             "--allow-insecure-http",
@@ -714,7 +807,7 @@ fn artifact_list_and_download_authenticate_with_a_service_api_key_file() {
             format!("Bearer {SERVICE_API_KEY}")
         );
     }
-    assert!(!storage.finish().contains("authorization:"));
+    assert!(useful_test_support::request_header(&storage.finish(), "authorization").is_none());
     assert!(!missing_human_store.exists());
 }
 
@@ -736,10 +829,13 @@ fn artifact_download_refuses_an_existing_output_path() {
 
         let output = run_with_env(
             &[
+                "workflow",
+                "run",
                 "artifact",
                 "download",
-                ORGANIZATION,
                 RUN_ID,
+                "--org",
+                ORGANIZATION,
                 "--output",
                 destination.to_str().unwrap(),
                 "--allow-insecure-http",

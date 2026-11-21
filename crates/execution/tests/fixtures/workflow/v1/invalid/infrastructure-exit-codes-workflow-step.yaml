@@ -1,0 +1,9 @@
+schemaVersion: 1
+outcomes: [done]
+steps:
+  child:
+    kind: workflow
+    workflow: child.yaml
+    infrastructureExitCodes: [75]
+    on:
+      done: exit.done

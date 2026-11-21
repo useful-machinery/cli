@@ -3,6 +3,7 @@
   # identity changes with the CLI source and with nothing else.
   buildIdentity ? null,
   cacert,
+  cargo-nextest,
   craneLib,
   git,
   jq,
@@ -12,20 +13,31 @@
 }:
 
 let
+  sourceFiles = [
+    ../.config/nextest.toml
+    ../Cargo.lock
+    ../Cargo.toml
+    ../crates
+    ../docs/command-migration.md
+    ../docs/workflow-v1.md
+    ../examples
+    ../schemas
+    ../src
+    ../tests
+    ../vendor
+  ];
+
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [
-      ../.config/nextest.toml
-      ../Cargo.lock
-      ../Cargo.toml
-      ../crates
-      ../docs/workflow-v1.md
-      ../examples
-      ../schemas
-      ../src
-      ../tests
-      ../vendor
-    ];
+    fileset = lib.fileset.unions sourceFiles;
+  };
+
+  # The grammar suite reads the output-style guide's verb lexicon (INV-CLI-19);
+  # the binary does not, so the guide joins only the test source and an edit to
+  # it leaves the package and its build identity unchanged.
+  testSrc = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions (sourceFiles ++ [ ../docs/output-style.md ]);
   };
 
   resolvedBuildIdentity =
@@ -89,6 +101,7 @@ let
   testBuildIdentity = "0000000000000000000000000000000000000000";
 
   testArgs = commonArgs // {
+    src = testSrc;
     version = testVersion;
     nativeBuildInputs = [
       git
@@ -119,57 +132,101 @@ let
       '';
     }
   );
-in
-craneLib.buildPackage (
-  commonArgs
-  // {
-    inherit cargoArtifacts version;
-    doCheck = false;
-
-    nativeBuildInputs = [ jq ];
-
-    env = certificateEnv // {
-      USEFUL_BUILD_IDENTITY = resolvedBuildIdentity;
-      USEFUL_VERSION = version;
+  # Compile the standalone manifest against its own lock and exercise the actual
+  # packaged program. The native nextest derivation selects a different workspace.
+  e2eTests = craneLib.mkCargoDerivation {
+    # Keep the implementation out of the driver's build sandbox. The executable
+    # enters separately below, just as a rewrite candidate would.
+    src = lib.fileset.toSource {
+      root = ../.;
+      fileset = lib.fileset.unions [
+        ../tests
+        ../scripts/test-e2e
+        ../crates/test-support/src
+        ../crates/execution/tests/fixtures
+        ../crates/execution/src/workflow/pi/fixtures
+        ../crates/execution/src/workflow/pi-json-v1-extension/src/conformance/fake-provider.ts
+        ../docs/command-migration.md
+        ../docs/workflow-v1.md
+        ../examples
+        ../schemas
+      ];
     };
+    pname = "useful-e2e";
+    inherit version;
+    cargoArtifacts = null;
+    cargoVendorDir = craneLib.vendorCargoDeps { cargoLock = ../tests/Cargo.lock; };
+    nativeBuildInputs = [
+      cargo-nextest
+      git
+    ];
+    # The candidate builds its HTTP client before reading local runs.
+    env = certificateEnv // testProfileEnv;
+    buildPhaseCargoCommand = ''
+      bash scripts/test-e2e ${package}/bin/useful \
+        -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run) | test(help_snapshots_match_rendered_output)'
+    '';
+    installPhaseCommand = "mkdir -p $out";
+    doInstallCargoArtifacts = false;
+  };
 
-    passthru = {
-      inherit cargoArtifacts nextestTests testCargoArtifacts;
-    };
+  package = craneLib.buildPackage (
+    commonArgs
+    // {
+      inherit cargoArtifacts version;
+      doCheck = false;
 
-    postInstall = ''
-      expected="useful ${version}"
-      for invocation in "version" "--version"; do
-        actual="$($out/bin/useful "$invocation")"
-        if [ "$actual" != "$expected" ]; then
-          echo "unexpected version output for $invocation: $actual" >&2
-          echo "expected: $expected" >&2
+      nativeBuildInputs = [ jq ];
+
+      env = certificateEnv // {
+        USEFUL_BUILD_IDENTITY = resolvedBuildIdentity;
+        USEFUL_VERSION = version;
+      };
+
+      passthru = {
+        inherit
+          cargoArtifacts
+          nextestTests
+          testCargoArtifacts
+          e2eTests
+          ;
+      };
+
+      postInstall = ''
+        expected="useful ${version}"
+        for invocation in "version" "--version"; do
+          actual="$($out/bin/useful "$invocation")"
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected version output for $invocation: $actual" >&2
+            echo "expected: $expected" >&2
+            exit 1
+          fi
+        done
+
+        json="$($out/bin/useful version --json)"
+        if ! printf '%s\n' "$json" | jq --exit-status \
+          --arg buildIdentity ${lib.escapeShellArg resolvedBuildIdentity} \
+          --arg executablePath "$out/bin/useful" \
+          --arg version ${lib.escapeShellArg version} \
+          '. == {
+            "schemaVersion": 1,
+            "command": "useful",
+            "version": $version,
+            "executablePath": $executablePath,
+            "buildIdentity": $buildIdentity
+          }' >/dev/null; then
+          echo "unexpected JSON version output: $json" >&2
           exit 1
         fi
-      done
+      '';
 
-      json="$($out/bin/useful version --json)"
-      if ! printf '%s\n' "$json" | jq --exit-status \
-        --arg buildIdentity ${lib.escapeShellArg resolvedBuildIdentity} \
-        --arg executablePath "$out/bin/useful" \
-        --arg version ${lib.escapeShellArg version} \
-        '. == {
-          "schemaVersion": 1,
-          "command": "useful",
-          "version": $version,
-          "executablePath": $executablePath,
-          "buildIdentity": $buildIdentity
-        }' >/dev/null; then
-        echo "unexpected JSON version output: $json" >&2
-        exit 1
-      fi
-    '';
-
-    meta = {
-      description = "Command-line interface and runner for Useful Machinery";
-      license = lib.licenses.asl20;
-      mainProgram = "useful";
-      platforms = lib.platforms.unix;
-    };
-  }
-)
+      meta = {
+        description = "Command-line interface and runner for Useful Machinery";
+        license = lib.licenses.asl20;
+        mainProgram = "useful";
+        platforms = lib.platforms.unix;
+      };
+    }
+  );
+in
+package

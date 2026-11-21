@@ -1,0 +1,22 @@
+schemaVersion: 1
+outcomes: [landed, failed]
+steps:
+  build:
+    kind: workflow
+    workflow: build.yaml
+    on:
+      built: review
+      failed: exit.failed
+      host_failed:
+        wait: host
+        then: build
+        limit: 3
+        else:
+          wait: repair
+          then: build
+  review:
+    kind: workflow
+    workflow: review.yaml
+    on:
+      approved: exit.landed
+      failed: exit.failed

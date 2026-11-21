@@ -4,7 +4,9 @@
 use std::fs;
 use std::path::Path;
 
-use super::workflow_continue::{attempt_count, completed, ordinals_of, read_json};
+use super::workflow_continue::{
+    attempt_count, completed, host_waiting_run, ordinals_of, read_json,
+};
 use super::workflow_run::{
     INHERITED_SOURCE_COMMIT, TreeBundle, given_source_revision, isolated_command, progress_records,
     run_record, source_revision_options,
@@ -597,6 +599,91 @@ fn a_nested_runs_wait_is_carried_by_the_root_at_its_full_path() {
     assert_eq!(status["record"]["state"], "waiting", "{status}");
 }
 
+/// A root whose plain `outer` step runs `NESTED_HOST_PART`; it declares neither tools nor a
+/// check, so its host is healthy at once (REQ-WFEXEC-81).
+const NESTED_HOST_ROOT: &str = "schemaVersion: 1
+programs: [bin]
+outcomes: [landed, failed]
+steps:
+  outer:
+    kind: workflow
+    workflow: part.yaml
+    on:
+      landed: exit.landed
+      failed: exit.failed
+";
+
+/// A nested workflow whose `build` stage (`HOST_FAILING_STAGE`) routes `host_failed` to a host
+/// wait under a limit of two, then to a `repair` wait.
+const NESTED_HOST_PART: &str = "schemaVersion: 1
+outcomes: [landed, failed]
+steps:
+  build:
+    kind: workflow
+    workflow: stage.yaml
+    on:
+      planned: exit.landed
+      failed: exit.failed
+      host_failed:
+        wait: host
+        then: build
+        limit: 2
+        else:
+          wait: repair
+          then: build
+";
+
+/// The nested host tree under `root`: `NESTED_HOST_PART` and its failing stage, which exits
+/// with the code in the execution root's `exit-code`, here 71, the host's.
+fn nested_host_tree(root: &str) -> TreeBundle {
+    let bundle = TreeBundle::new(root);
+    bundle.write_source("part.yaml", NESTED_HOST_PART);
+    bundle.write_source("stage.yaml", super::workflow_continue::HOST_FAILING_STAGE);
+    bundle.write_program("bin/decide", super::workflow_continue::HOST_FAILING_PROGRAM);
+    fs::write(bundle.execution_root().join("exit-code"), "71").unwrap();
+    bundle
+}
+
+// REQ-WFEXEC-75, REQ-WFEXEC-80, REQ-WFDEF-4: a nested stage that fails on its host enters
+// the nested run's host wait, counted in the nested run's own record, and the root carries it
+// at its full path with the kind and the rule a host wait derives.
+#[test]
+fn a_nested_runs_host_wait_is_counted_by_the_nested_run_and_carried_by_the_root() {
+    let bundle = nested_host_tree(NESTED_HOST_ROOT);
+    let run = host_waiting_run(&bundle, "host-nested");
+
+    let wait = read_json(&run.join("wait.json"));
+    assert!(
+        super::workflow_definition::schema("workflow-run-wait-v1.schema.json").is_valid(&wait),
+        "{wait}"
+    );
+    assert_eq!(wait["kind"], "host", "{wait}");
+    assert_eq!(
+        wait["step"],
+        serde_json::json!(["outer", "build"]),
+        "{wait}"
+    );
+    assert_eq!(wait["then"], "outer", "{wait}");
+    assert_eq!(
+        wait["rule"],
+        super::workflow_continue::host_rule(),
+        "{wait}"
+    );
+
+    let nested = run.join("children/outer/000001");
+    let nested_record = run_record(&nested);
+    assert_eq!(nested_record["state"], "waiting", "{nested_record}");
+    assert_eq!(
+        nested_record["edges"],
+        serde_json::json!({"build.host_failed": 1}),
+        "{nested_record}"
+    );
+    assert_eq!(read_json(&nested.join("wait.json"))["kind"], "host");
+    let record = run_record(&run);
+    assert_eq!(record["state"], "waiting", "{record}");
+    assert_eq!(record["edges"], serde_json::json!({}), "{record}");
+}
+
 /// A nested workflow for the asking tree whose `check` hands back to `ask` once under a
 /// limit before it exits: `ask` waits for answers when it is blocked.
 const LOOPING_ASKING_PART: &str = "schemaVersion: 1
@@ -782,7 +869,7 @@ fn an_interrupted_nested_stage_leaves_the_root_in_the_carried_repair_wait() {
         "the nested stage's held step",
         || {
             execution.join("held-work-a").exists()
-                && useful_execution::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
+                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
         },
         |held| *held,
     );
@@ -922,7 +1009,7 @@ fn answered_nested_run(bundle: &TreeBundle, name: &str) -> std::path::PathBuf {
         None,
         "answer",
         &run,
-        &["--question", "1", "--text", "left"],
+        &["--question", "1", "--text", "left", "--record-only"],
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     run
@@ -965,15 +1052,13 @@ fn a_plain_steps_nested_run_waits_at_its_two_element_path_and_continues_in_place
     );
     assert_eq!(read_json(&nested.join("wait.json"))["since"], wait["since"]);
 
-    let output = super::workflow_run_control::run_control(
+    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
+    let terminal = completed(&super::workflow_run_control::run_control(
         None,
         "answer",
         &run,
-        &["--question", "1", "--text", "left"],
-    );
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
-    let terminal = completed(&super::workflow_continue::resume(&run));
+        &["--text", "left"],
+    ));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
     assert_eq!(run_record(&run)["outcome"], "landed");
     assert_eq!(ordinals_of(&run.join("children/outer")), ["000001"]);
@@ -1089,6 +1174,49 @@ fn a_carried_wait_continues_its_nested_run_in_place() {
     );
 }
 
+// REQ-CONTINUE-92, REQ-CONTINUE-93: the root's carried host wait, resolved by the host
+// condition, continues the nested run in place from its waiting stage, and the nested run
+// continues that stage's failed child in place, each attempt with reason `host`.
+#[test]
+fn a_carried_host_wait_continues_its_nested_run_and_failed_stage_in_place() {
+    let bundle = nested_host_tree(NESTED_HOST_ROOT);
+    let run = host_waiting_run(&bundle, "host-carried");
+    let nested = run.join("children/outer/000001");
+    fs::write(bundle.execution_root().join("exit-code"), "0").unwrap();
+    let terminal = completed(&super::workflow_continue::resume(&run));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(terminal["result"]["continuation"]["reason"], "host");
+    let record = run_record(&run);
+    assert_eq!(record["outcome"], "landed", "{record}");
+    assert!(!run.join("wait.json").exists());
+    assert!(!nested.join("wait.json").exists());
+
+    assert_eq!(ordinals_of(&run.join("children/outer")), ["000001"]);
+    assert_eq!(attempt_count(&nested), 2);
+    let resumed = attempt_result(&nested, 2);
+    assert_eq!(resumed["continuation"]["reason"], "host", "{resumed}");
+    assert_eq!(
+        resumed["continuation"]["reexecutedSteps"],
+        serde_json::json!(["build"]),
+        "{resumed}"
+    );
+    let stage = nested.join("children/build");
+    assert_eq!(ordinals_of(&stage), ["000001"]);
+    let stage = stage.join("000001");
+    assert_eq!(attempt_count(&stage), 2);
+    let stage_result = attempt_result(&stage, 2);
+    assert_eq!(
+        stage_result["continuation"]["reason"], "host",
+        "{stage_result}"
+    );
+    assert_eq!(
+        stage_result["continuation"]["reexecutedSteps"],
+        serde_json::json!(["decide"]),
+        "{stage_result}"
+    );
+    assert_eq!(run_record(&stage)["outcome"], "planned");
+}
+
 // REQ-CONTINUE-92, REQ-CONTINUE-82: a carried wait whose `payload.child` lies under another
 // run than the waiting element's nested run is refused before the root's wait is consumed:
 // no attempt begins, no stage runs and both runs keep waiting.
@@ -1152,16 +1280,16 @@ fn stopped_before_check(
     bundle: &TreeBundle,
     name: &str,
 ) -> (std::path::PathBuf, serde_json::Value) {
-    let args = nested_args(bundle, name, &["--stop-before", "check"]);
+    let args = nested_args(bundle, name, &["--pause-before", "check"]);
     let terminal = completed(&isolated_command(&args).output().unwrap());
     assert_eq!(terminal["outcome"], "waiting", "{terminal}");
     (fs::canonicalize(bundle.result(name)).unwrap(), terminal)
 }
 
-// REQ-WFEXEC-76, REQ-LOCALRUN-185, REQ-WFEXEC-75, REQ-CONTINUE-92: `create --stop-before`
+// REQ-WFEXEC-76, REQ-LOCALRUN-185, REQ-WFEXEC-75, REQ-CONTINUE-92: `create --pause-before`
 // naming a nested step parks the nested run before element 1's `check` and the root carries
-// the `stop` wait at the full path; `stop` accepts the nested step's id and refuses an unknown
-// one, and once `lift` resolves the wait, `resume` continues the same nested run at `check`,
+// the `stop` wait at the full path; `pause` accepts the nested step's id and refuses an unknown
+// one, and once `unpause` resolves the wait, `resume` continues the same nested run at `check`,
 // which starts again later in the run, and in element 2, without holding.
 #[test]
 fn a_stop_holds_a_nested_step_until_it_is_lifted() {
@@ -1202,20 +1330,20 @@ fn a_stop_holds_a_nested_step_until_it_is_lifted() {
 
     // A nested `workflow` step's id is one a stop may name; any other id is unknown.
     let control =
-        |args: &[&str]| super::workflow_run_control::run_control(None, "stop", &run, args);
+        |args: &[&str]| super::workflow_run_control::run_control(None, "pause", &run, args);
     super::workflow_run_control::refused(
         &control(&["--before", "check", "--reason", "again"]),
-        "stop",
+        "pause",
         "stop_in_force",
     );
     super::workflow_run_control::refused(
         &control(&["--before", "nothere", "--reason", "again"]),
-        "stop",
+        "pause",
         "step_unknown",
     );
 
-    let output = super::workflow_run_control::run_control(None, "lift", &run, &[]);
-    let lifted = super::workflow_run_control::recorded_as(&output, "lift", "recorded", &run);
+    let output = super::workflow_run_control::run_control(None, "unpause", &run, &[]);
+    let lifted = super::workflow_run_control::recorded_as(&output, "unpause", "recorded", &run);
     assert_eq!(
         lifted["control"]["wait"],
         format!("stop@{}", wait["since"].as_str().unwrap()),
@@ -1246,8 +1374,8 @@ fn a_stop_holds_a_nested_step_until_it_is_lifted() {
         "work a\ncheck a\nwork a\ncheck a\nwork b\ncheck b\nwork b\ncheck b\nfinish -\n"
     );
 
-    // REQ-LOCALRUN-80: `--stop-before` naming no step of the tree's workflows is a usage error.
-    let args = nested_args(&bundle, "stop-nowhere", &["--stop-before", "nothere"]);
+    // REQ-LOCALRUN-80: `--pause-before` naming no step of the tree's workflows is a usage error.
+    let args = nested_args(&bundle, "stop-nowhere", &["--pause-before", "nothere"]);
     super::workflow_run::assert_usage_error(&args);
     assert!(!bundle.result("stop-nowhere").exists());
 }
@@ -1255,7 +1383,7 @@ fn a_stop_holds_a_nested_step_until_it_is_lifted() {
 /// Withdrawing the root `run` carries a wait from element `item`'s nested run ends both runs
 /// `withdrawn` and removes both wait records, with no attempt begun.
 fn assert_withdrawn_with_its_nested_run(run: &Path, item: u64) {
-    let output = super::workflow_run_control::run_control(None, "withdraw", run, &[]);
+    let output = super::workflow_run_control::run_control(None, "cancel", run, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let nested = nested_run(run, item);
     let attempts = attempt_count(&nested);
@@ -1356,7 +1484,11 @@ fn a_withdrawal_is_honored_at_the_next_nested_step_boundary() {
     );
     let withdrawn = super::poll_until(
         "the live run's withdraw",
-        || command(&["withdraw", "AUTO-7", "--json"]).output().unwrap(),
+        || {
+            command(&["cancel", "AUTO-7", "--control", "withdraw", "--json"])
+                .output()
+                .unwrap()
+        },
         |output| output.status.code() == Some(0),
     );
     let document = last_document(&withdrawn);
@@ -1428,7 +1560,7 @@ fn abandoned_while_held(bundle: &TreeBundle, name: &str, held: &str) -> std::pat
         "the nested stage's held step",
         || {
             execution.join(format!("held-{held}")).exists()
-                && useful_execution::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
+                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
         },
         |held| *held,
     );
@@ -1552,15 +1684,13 @@ fn resuming_an_abandoned_root_enters_the_wait_its_nested_run_recorded() {
         log
     );
 
-    let output = super::workflow_run_control::run_control(
+    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
+    let terminal = completed(&super::workflow_run_control::run_control(
         None,
         "answer",
         &run,
-        &["--question", "1", "--text", "left"],
-    );
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
-    let terminal = completed(&super::workflow_continue::resume(&run));
+        &["--text", "left"],
+    ));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
     assert_eq!(run_record(&run)["outcome"], "landed");
     assert_eq!(attempt_count(&nested), 3);
@@ -1671,15 +1801,13 @@ fn an_upgrade_carries_a_nested_wait_and_starts_its_nested_run_afresh() {
     assert_eq!(read_json(&successor.join("wait.json"))["step"], path);
     assert_eq!(run_record(&predecessor)["outcome"], "superseded");
 
-    let output = super::workflow_run_control::run_control(
+    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
+    let terminal = completed(&super::workflow_run_control::run_control(
         Some(&home),
         "answer",
         record["id"].as_str().unwrap(),
-        &["--question", "1", "--text", "left"],
-    );
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    fs::remove_file(execution.join("verdict-ask-b")).unwrap();
-    let terminal = completed(&super::workflow_continue::resume(&successor));
+        &["--text", "left"],
+    ));
     assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
     let record = run_record(&successor);
     assert_eq!(record["outcome"], "landed", "{record}");
@@ -1698,6 +1826,74 @@ fn an_upgrade_carries_a_nested_wait_and_starts_its_nested_run_afresh() {
         "ask a\nwork a\nask b\nask b\nwork b\nfinish -\n"
     );
     assert_eq!(attempt_count(&nested_run(&predecessor, 2)), 1);
+}
+
+// REQ-CONTINUE-92, REQ-CONTINUE-80, REQ-CONTINUE-77: `upgrade` of a root waiting in a carried
+// host wait carries the wait and its position, and the predecessor's nested run keeps its
+// count; the successor's `resume` resolves the wait through the host condition with reason
+// `host` and starts a fresh nested run at the step.
+#[test]
+fn an_upgrade_carries_a_nested_host_wait_and_starts_its_nested_run_afresh() {
+    let bundle = nested_host_tree(&NESTED_HOST_ROOT.replacen(
+        "schemaVersion: 1\n",
+        "schemaVersion: 1\nname: hosting\n",
+        1,
+    ));
+    let home = super::workflow_definition::Home::new();
+    let publish = || {
+        let report = home.json(&["publish", bundle.source_root().to_str().unwrap()]);
+        assert_eq!(report["outcome"], "published", "{report}");
+        report
+    };
+    let definition = publish()["definition"]["id"].as_str().unwrap().to_owned();
+    let execution = bundle.execution_root().to_owned();
+    let mut create = isolated_command(&[
+        "workflow".to_owned(),
+        "run".to_owned(),
+        "create".to_owned(),
+        definition,
+        "--execution-root".to_owned(),
+        execution.to_str().unwrap().to_owned(),
+        "--json".to_owned(),
+    ]);
+    create.env("USEFUL_HOME", home.path());
+    let terminal = completed(&create.output().unwrap());
+    assert_eq!(terminal["wait"]["kind"], "host", "{terminal}");
+    let predecessor = std::path::PathBuf::from(terminal["runDirectory"].as_str().unwrap());
+    let predecessor_record = run_record(&predecessor);
+    let wait = fs::read(predecessor.join("wait.json")).unwrap();
+    let counted = serde_json::json!({"build.host_failed": 1});
+    let predecessor_nested = predecessor.join("children/outer/000001");
+    assert_eq!(run_record(&predecessor_nested)["edges"], counted);
+
+    bundle.write_source("part.yaml", &format!("{NESTED_HOST_PART}# revision 2\n"));
+    assert_eq!(publish()["revision"]["n"], 2);
+    let document = completed(&super::workflow_run_control::run_control(
+        Some(&home),
+        "upgrade",
+        predecessor_record["id"].as_str().unwrap(),
+        &[],
+    ));
+    assert_eq!(document["outcome"], "upgraded", "{document}");
+    let successor = std::path::PathBuf::from(document["runDirectory"].as_str().unwrap());
+    let record = run_record(&successor);
+    assert_eq!(record["state"], "waiting", "{record}");
+    assert_eq!(record["position"], serde_json::json!(["outer", "build"]));
+    assert_eq!(record["edges"], predecessor_record["edges"], "{record}");
+    assert_eq!(fs::read(successor.join("wait.json")).unwrap(), wait);
+
+    fs::write(execution.join("exit-code"), "0").unwrap();
+    let terminal = completed(&super::workflow_continue::resume(&successor));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(terminal["result"]["continuation"]["reason"], "host");
+    assert_eq!(run_record(&successor)["outcome"], "landed");
+    // The successor ran a fresh nested run and stage; the predecessor's are as they were.
+    assert_eq!(ordinals_of(&successor.join("children/outer")), ["000001"]);
+    let fresh = successor.join("children/outer/000001");
+    assert_eq!(attempt_count(&fresh), 1);
+    assert_eq!(attempt_count(&fresh.join("children/build/000001")), 1);
+    assert_eq!(attempt_count(&predecessor_nested), 1);
+    assert_eq!(run_record(&predecessor_nested)["edges"], counted);
 }
 
 // REQ-CONTINUE-92, REQ-CONTINUE-80, REQ-CONTINUE-75: a successor waiting in a carried wait it
@@ -1720,7 +1916,7 @@ fn withdrawing_a_successor_ends_a_carried_wait_it_imported() {
     assert_eq!(run_record(&successor)["state"], "waiting");
     assert!(!successor.join("children").exists());
 
-    let output = super::workflow_run_control::run_control(Some(&home), "withdraw", &successor, &[]);
+    let output = super::workflow_run_control::run_control(Some(&home), "cancel", &successor, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let record = run_record(&successor);
     assert_eq!(record["state"], "exited", "{record}");

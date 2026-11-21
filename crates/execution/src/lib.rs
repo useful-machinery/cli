@@ -33,7 +33,10 @@ pub use disk_space::{
     RUNNER_DISK_GATE_ENVIRONMENT, RunnerDiskGate, RunnerDiskGateError, RunnerDiskStartGate,
     format_bytes, read_disk_space,
 };
-pub use owned_tree::{RemovalError, open_directory_at, open_regular_file_at, remove_open_tree_at};
+pub use owned_tree::{
+    Evicted, Eviction, RemovalError, allocated_tree_bytes, evict_least_recently_used,
+    open_directory_at, open_regular_file_at, remove_open_tree_at,
+};
 pub use pi::{
     PI_JSON_V1_QUALIFICATION_VERSION, PI_JSON_V1_SUPPORTED_RANGE, PiIncompatibility,
     PiInstallationFailure, PiProbe, ValidatedPiInstallation, discover_and_validate_pi_installation,
@@ -87,10 +90,10 @@ pub use workflow::coordinator::{
 };
 pub use workflow::definition_store::{
     BindingOption, BindingsFile, BindingsSnapshot, BoundBinding, BoundIntegrationBinding,
-    DefinitionError, DefinitionRecord, EnabledChange, Named, NamedBindings, PublishPlace,
-    PublishTarget, Published, RevisionRecord, StoredDefinition, WorkflowHome, check_definition_id,
+    DefinitionError, DefinitionRecord, EnabledChange, Named, NamedBindings, PublishTarget,
+    Published, RevisionRecord, StoredDefinition, WorkflowHome, check_definition_id,
     list_definitions, publish, read_current_bindings, read_definition, read_revision_bindings,
-    record_publication, resolve_publish, set_enabled,
+    set_enabled,
 };
 pub use workflow::diagnostic::StepDiagnosticLog;
 pub use workflow::diagnostic::{CapturedDiagnosticStream, StepDiagnostic};
@@ -105,7 +108,7 @@ pub use workflow::document::{
 pub use workflow::document::{BusyBehavior, OwnerDeclaration, OwnerSource, StopBefore};
 pub use workflow::evidence::{BlockedDetail, Prerequisite};
 pub use workflow::evidence::{
-    FailedChild, FailingNode, FailingNodeState, FailureDetail, InheritedDetail,
+    FailedChild, FailingNode, FailingNodeState, FailureClass, FailureDetail, InheritedDetail,
     InheritedPriorState, InputSource, NodeDetail, PrimaryIssue,
 };
 pub use workflow::execution::{
@@ -113,6 +116,7 @@ pub use workflow::execution::{
     execute_workflow_with_children, failure_outcome,
 };
 pub use workflow::git_capture::CloudGitCaptureProjection;
+pub use workflow::host_condition::{HOST_CHECK_BOUND, observe_host_condition};
 pub use workflow::input::InputStaging;
 pub use workflow::invocation_accounting::InvocationAccountingLog;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -152,7 +156,7 @@ pub use workflow::portable_artifact::{
     PortableArtifactValidationFailure, validate_portable_artifact_set,
 };
 pub use workflow::presentation::{
-    ChildRunPresentation, ColorChoice, PresentationConfig, PresentationFailure,
+    ChildRunPresentation, ColorChoice, ContinuingControl, PresentationConfig, PresentationFailure,
     PresentationFailureOperation, PresentationMode, PublicationPresentation,
     RequestedPresentationMode, SystemObservationClock, TerminalCapabilities, WorkflowRunOutput,
     WorkflowRunPresentation, WorkflowRunPresentationResult, failed_child_detail, human_duration,

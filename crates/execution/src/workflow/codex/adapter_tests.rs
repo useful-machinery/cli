@@ -1542,6 +1542,60 @@ fn codex_process_fixture() {
         return;
     }
 
+    if matches!(
+        scenario.as_str(),
+        "progress-noise-result" | "builder-only-result" | "lead-failed-builder-completed"
+    ) {
+        let child = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
+        write_server_frame(
+            &mut output,
+            json!({"method":"item/completed","params":{"threadId":child,"turnId":"builder-turn",
+            "item":{"id":"builder","type":"agentMessage","text":result_envelope(json!(99)),"phase":"final_answer"}}}),
+        );
+        write_server_frame(
+            &mut output,
+            json!({"method":"turn/completed","params":{"threadId":child,"turn":{"id":"builder-turn","status":"completed"}}}),
+        );
+        match scenario.as_str() {
+            "progress-noise-result" => {
+                for frame in super::tests::progress_noise(THREAD_ID, TURN_ID)
+                    .into_iter()
+                    .flatten()
+                {
+                    write_server_frame(&mut output, frame);
+                }
+                send_result_turn(
+                    &mut output,
+                    TURN_ID,
+                    "lead",
+                    Some(&result_envelope(json!(7))),
+                    "completed",
+                    vec![json!({"id":"unseen", "type":"future"})],
+                );
+                write_server_frame(
+                    &mut output,
+                    json!({"method":"turn/completed","params":{"threadId":THREAD_ID,"turn":{"id":TURN_ID,"status":"completed","itemsView":"future"}}}),
+                );
+            }
+            "builder-only-result" => {
+                send_result_turn(&mut output, TURN_ID, "lead", None, "completed", vec![])
+            }
+            _ => send_turn_terminal(
+                &mut output,
+                "failed",
+                vec![],
+                Some(("lead failed", Value::Null)),
+            ),
+        }
+        expect_client_eof(&mut input);
+        // A builder still running asks for input after the adapter closed Codex's input.
+        write_server_frame(
+            &mut output,
+            json!({"id":77,"method":"mcpServer/elicitation/request","params":{"threadId":child}}),
+        );
+        return;
+    }
+
     if scenario.starts_with("result-") {
         let first_candidate = match scenario.as_str() {
             "result-correction"
@@ -1551,6 +1605,9 @@ fn codex_process_fixture() {
             "result-oversized" => Some(result_envelope(json!(
                 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
             ))),
+            "result-envelope-corrected" | "result-envelope-exhausted" => {
+                Some("invalid JSON".to_owned())
+            }
             "result-settlement-blocked" => Some(result_envelope(json!(7))),
             "result-root-object" => Some(result_envelope(json!({"answer": 7}))),
             "result-root-array" => Some(result_envelope(json!([1, 2]))),
@@ -1637,7 +1694,10 @@ fn codex_process_fixture() {
                 }),
             );
             let (candidate, status) = match scenario.as_str() {
-                "result-correction" => (Some(result_envelope(json!(7))), "completed"),
+                "result-correction" | "result-envelope-corrected" => {
+                    (Some(result_envelope(json!(7))), "completed")
+                }
+                "result-envelope-exhausted" => (Some("invalid JSON again".to_owned()), "completed"),
                 "result-exhausted" => (Some(result_envelope(json!(0))), "completed"),
                 "result-oversized" => (Some(result_envelope(json!("ok"))), "completed"),
                 "result-correction-failed" => (None, "failed"),
@@ -4460,7 +4520,7 @@ pub(super) mod response_authority {
 
     #[tokio::test]
     async fn only_the_bounded_settled_completed_message_commits() {
-        for scenario in ["absent", "empty", "async-only"] {
+        for scenario in ["absent", "empty", "async-only", "delta-only"] {
             let (outcome, started) = run_response_fixture(scenario).await;
             assert!(started);
             assert_eq!(
@@ -4486,7 +4546,6 @@ pub(super) mod response_authority {
 
         for (scenario, expected) in [
             ("oversized", AgentFailureCause::CapturedValueTooLarge),
-            ("delta-only", AgentFailureCause::HarnessProtocolFailed),
             (
                 "failure-after-output",
                 AgentFailureCause::HarnessFailed {
@@ -4521,6 +4580,61 @@ pub(super) mod structured_result {
             "type": "integer",
             "minimum": 1,
         })
+    }
+
+    // SC-AGENT-11, REQ-AGENT-91, REQ-AGENT-90, REQ-AGENT-38, REQ-AGENT-33
+    // INV-HARNESS-6
+    #[tokio::test]
+    async fn a_lead_result_settles_through_progress_noise_and_builder_traffic() {
+        for scenario in [
+            "progress-noise-result",
+            "builder-only-result",
+            "lead-failed-builder-completed",
+        ] {
+            with_scenario_watchdog(scenario, async {
+                let fixture =
+                    ProcessFixture::new(scenario, result_mode(positive_integer_schema()), 1024);
+                let (fixture, outcome, started) = run_fixture(fixture).await;
+                assert!(started, "{scenario}: {outcome:?}");
+                assert_fixture_quiescent(&fixture);
+                match scenario {
+                    "progress-noise-result" => {
+                        assert_eq!(
+                            fixture
+                                .observations
+                                .snapshot()
+                                .iter()
+                                .filter(|entry| matches!(
+                                    entry.observation(),
+                                    AgentObservation::UnrecognizedHarnessEvent { event }
+                                        if event["method"] == "turn/completed"
+                                ))
+                                .count(),
+                            1
+                        );
+                        let AgentOutcome::Completed(CompletedAgentInvocation::Result(result)) =
+                            outcome
+                        else {
+                            panic!("{scenario}: {outcome:?}");
+                        };
+                        assert_eq!(result.value(), &json!(7));
+                    }
+                    "builder-only-result" => assert_eq!(
+                        outcome,
+                        AgentOutcome::Failed(AgentFailureCause::MissingResult.into())
+                    ),
+                    _ => assert_started_failure(
+                        scenario,
+                        outcome,
+                        started,
+                        AgentFailureCause::HarnessFailed {
+                            detail: AgentHarnessFailureDetail::ModelError,
+                        },
+                    ),
+                }
+            })
+            .await;
+        }
     }
 
     // REQ-AGENT-32
@@ -4589,63 +4703,64 @@ pub(super) mod structured_result {
         .await;
     }
 
-    // REQ-AGENT-29
+    // REQ-AGENT-29, REQ-AGENT-31
     #[tokio::test]
-    async fn schema_rejection_is_corrected_once_on_the_same_settled_thread() {
-        with_watchdog(async {
-            let fixture = ProcessFixture::new(
-                "result-correction",
-                result_mode(positive_integer_schema()),
-                1024,
-            );
-            let observations = fixture.observations.clone();
-            let requests = fixture.requests.clone();
-            let (fixture, outcome, started) = run_fixture(fixture).await;
-            assert!(started);
-            let AgentOutcome::Completed(CompletedAgentInvocation::Result(result)) = outcome else {
-                panic!(
-                    "corrected result must complete: {outcome:?}; requests: {:?}; stderr: {:?}",
-                    captured_requests(&fixture.requests),
-                    fixture.diagnostics.get("agent-step").map(|diagnostic| {
-                        String::from_utf8_lossy(diagnostic.standard_error().bytes()).into_owned()
-                    }),
+    async fn invalid_results_are_corrected_once_on_the_same_thread() {
+        for scenario in ["result-correction", "result-envelope-corrected"] {
+            with_scenario_watchdog(scenario, async {
+                let fixture =
+                    ProcessFixture::new(scenario, result_mode(positive_integer_schema()), 1024);
+                let observations = fixture.observations.clone();
+                let requests = fixture.requests.clone();
+                let (fixture, outcome, started) = run_fixture(fixture).await;
+                assert!(started);
+                let AgentOutcome::Completed(CompletedAgentInvocation::Result(result)) = outcome
+                else {
+                    panic!(
+                        "corrected result must complete: {outcome:?}; requests: {:?}; stderr: {:?}",
+                        captured_requests(&fixture.requests),
+                        fixture.diagnostics.get("agent-step").map(|diagnostic| {
+                            String::from_utf8_lossy(diagnostic.standard_error().bytes())
+                                .into_owned()
+                        }),
+                    );
+                };
+                assert_eq!(result.value(), &json!(7));
+
+                let requests = captured_requests(&requests);
+                assert_eq!(requests.len(), 6);
+                let first = &requests[4];
+                let correction = &requests[5];
+                assert_eq!(first["method"], "turn/start");
+                assert_eq!(correction["method"], "turn/start");
+                assert_eq!(first["params"]["threadId"], THREAD_ID);
+                assert_eq!(correction["params"]["threadId"], THREAD_ID);
+                assert_eq!(
+                    first["params"]["outputSchema"],
+                    correction["params"]["outputSchema"]
                 );
-            };
-            assert_eq!(result.value(), &json!(7));
+                let feedback = correction["params"]["input"][0]["text"].as_str().unwrap();
+                assert!(!feedback.is_empty());
+                assert!(feedback.len() <= 512);
 
-            let requests = captured_requests(&requests);
-            assert_eq!(requests.len(), 6);
-            let first = &requests[4];
-            let correction = &requests[5];
-            assert_eq!(first["method"], "turn/start");
-            assert_eq!(correction["method"], "turn/start");
-            assert_eq!(first["params"]["threadId"], THREAD_ID);
-            assert_eq!(correction["params"]["threadId"], THREAD_ID);
-            assert_eq!(
-                first["params"]["outputSchema"],
-                correction["params"]["outputSchema"]
-            );
-            let feedback = correction["params"]["input"][0]["text"].as_str().unwrap();
-            assert!(!feedback.is_empty());
-            assert!(feedback.len() <= 512);
-
-            let observations = observations.snapshot();
-            assert_eq!(
-                observations
-                    .iter()
-                    .filter(|observation| matches!(
-                        observation.observation(),
-                        AgentObservation::ValueRejected {
-                            kind: AgentValueKind::Result,
-                            ..
-                        }
-                    ))
-                    .count(),
-                1,
-            );
-            assert_last_observation_is_quiescent(&observations);
-        })
-        .await;
+                let observations = observations.snapshot();
+                assert_eq!(
+                    observations
+                        .iter()
+                        .filter(|observation| matches!(
+                            observation.observation(),
+                            AgentObservation::ValueRejected {
+                                kind: AgentValueKind::Result,
+                                ..
+                            }
+                        ))
+                        .count(),
+                    1,
+                );
+                assert_last_observation_is_quiescent(&observations);
+            })
+            .await;
+        }
     }
 
     // REQ-AGENT-33
@@ -4707,6 +4822,10 @@ pub(super) mod structured_result {
 
         for (scenario, expected) in [
             ("result-exhausted", AgentFailureCause::MissingResult),
+            (
+                "result-envelope-exhausted",
+                AgentFailureCause::MissingResult,
+            ),
             ("result-missing", AgentFailureCause::MissingResult),
             (
                 "result-correction-failed",

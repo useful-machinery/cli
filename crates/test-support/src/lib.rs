@@ -209,6 +209,17 @@ impl ScriptedHttpServer {
     }
 }
 
+/// Returns the first matching field in the HTTP head, preserving the value's case.
+pub fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    let (head, _) = request.split_once("\r\n\r\n")?;
+    head.lines().skip(1).find_map(|line| {
+        let (field, value) = line.split_once(':')?;
+        field
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim_matches([' ', '\t']))
+    })
+}
+
 #[allow(
     clippy::expect_used,
     clippy::panic,
@@ -219,11 +230,7 @@ fn response_for_request(response: Vec<u8>, request: &str) -> Vec<u8> {
         .windows(REQUEST_IDEMPOTENCY_KEY_ECHO.len())
         .any(|window| window == REQUEST_IDEMPOTENCY_KEY_ECHO.as_bytes())
     {
-        let idempotency_key = request.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("idempotency-key")
-                .then(|| value.trim())
-        });
+        let idempotency_key = request_header(request, "Idempotency-Key");
         // Name the request line only: the other headers hold the bearer credential.
         let Some(idempotency_key) = idempotency_key else {
             panic!(
@@ -395,6 +402,17 @@ mod tests {
     use std::io::ErrorKind;
 
     use super::*;
+
+    #[test]
+    fn http_fields_ignore_name_case_and_exclude_the_request_body() {
+        let request =
+            "POST / HTTP/1.1\r\naUtHoRiZaTiOn:\tBearer MixedCase \r\n\r\nIdempotency-Key: in-body";
+        assert_eq!(
+            request_header(request, "authorization"),
+            Some("Bearer MixedCase")
+        );
+        assert_eq!(request_header(request, "Idempotency-Key"), None);
+    }
 
     // INV-TESTING-22
     #[test]

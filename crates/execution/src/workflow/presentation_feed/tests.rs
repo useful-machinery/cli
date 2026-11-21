@@ -343,6 +343,7 @@ steps:
             Some(ObservedStepTransition::Failed {
                 detail: crate::workflow::evidence::failure_detail(FailurePhase::Execution, &cause)
                     .unwrap(),
+                failure_class: None,
             }),
         ),
     );
@@ -409,7 +410,7 @@ steps:
                         to: StepStateKind::Failed,
                         ..
                     },
-                    step: Some(ObservedStepTransition::Failed { detail }),
+                    step: Some(ObservedStepTransition::Failed { detail, .. }),
                     ..
                 } if detail
                     == &crate::workflow::evidence::failure_detail(

@@ -7,7 +7,7 @@ use super::admission::AdmittedWorkflow;
 use super::artifact::ArtifactStaging;
 use super::coordinator::{CommitPort, CommittedReduction, CoordinationError, CoordinatorClock};
 use super::diagnostic::StepDiagnosticLog;
-use super::evidence::{FailedChild, InputSource};
+use super::evidence::{FailedChild, FailureClass, InputSource};
 use super::input::InputStaging;
 use super::local_run::{CANCELED_OUTCOME, WITHDRAWN_OUTCOME};
 use super::observation::{
@@ -26,7 +26,8 @@ use super::step_runtime::{
     WorkflowExecutionStart, execute_workflow_observed_with_children,
 };
 use super::validated::{
-    FirstOfChoice, ResolvedOutputSource, Scheduling, SourceEnd, ValidatedWorkflow, choose_first_of,
+    FirstOfChoice, ResolvedOutputSource, Scheduling, SourceEnd, ValidatedWorkflow,
+    WorkflowNodeRole, choose_first_of,
 };
 use super::value::CapturedValue;
 
@@ -52,6 +53,8 @@ pub struct WorkflowExecutionResult<Deadline = ()> {
     pub exit_outcome: Option<String>,
     /// The failed child each `succeeded` `workflow` step recorded, by step (REQ-WFEXEC-77).
     pub failed_children: BTreeMap<String, FailedChild>,
+    /// The class of each `failed` step's failure that has one, by step (REQ-WFEXEC-79).
+    pub failure_classes: BTreeMap<String, FailureClass>,
     /// The sources each step that started with a `firstOf` took, by step (REQ-EVIDENCE-28).
     pub input_sources: BTreeMap<String, Vec<InputSource>>,
 }
@@ -60,8 +63,10 @@ pub struct WorkflowExecutionResult<Deadline = ()> {
 /// whose cancellation was a withdrawal (REQ-WFEXEC-73), `canceled` for any other cancelled
 /// run; for a workflow that declares `outcome`, the text of its `from` output when
 /// the run succeeded, for a `firstOf` that of the first source in written order that
-/// succeeded or was inherited as succeeded, and `onFailure` when it failed or every source of
-/// the `firstOf` was skipped; for an edge-scheduled workflow the exit
+/// succeeded or was inherited as succeeded, the declared `onInfrastructure` when it failed and
+/// its primary issue is an ordinary step whose failure is classified `infrastructure`
+/// (REQ-WFFORMAT-110, REQ-WFEXEC-79), and `onFailure` when it failed otherwise or every source
+/// of the `firstOf` was skipped; for an edge-scheduled workflow the exit
 /// outcome its walk recorded in `exit_outcome` when it succeeded, or `failed` when it
 /// recorded none, and `failed` when it failed; otherwise
 /// `succeeded` or `failed`. A waiting or continued attempt chooses no outcome and the run
@@ -76,7 +81,16 @@ pub fn chosen_outcome<Deadline>(
             return WITHDRAWN_OUTCOME.to_owned();
         }
         (RunOutcome::Cancelled { .. }, _) => return CANCELED_OUTCOME.to_owned(),
-        (RunOutcome::Failed { .. }, _) => return failure_outcome(workflow).to_owned(),
+        (RunOutcome::Failed { primary_issue, .. }, Some(declared)) => {
+            let classified = primary_issue.node.role == WorkflowNodeRole::Step
+                && result.failure_classes.get(&primary_issue.node.id)
+                    == Some(&FailureClass::Infrastructure);
+            return match &declared.on_infrastructure {
+                Some(on_infrastructure) if classified => on_infrastructure.clone(),
+                _ => declared.on_failure.clone(),
+            };
+        }
+        (RunOutcome::Failed { .. }, None) => return failure_outcome(workflow).to_owned(),
         (RunOutcome::Waiting { wait }, _) => {
             tracing::error!(event = "chosen_outcome_waiting", step = %wait.step());
             return failure_outcome(workflow).to_owned();
@@ -356,6 +370,9 @@ fn observed_step_transition<Deadline>(
                     super::runtime::RecoveryHandlerOutcome::GaveUp { .. } => {
                         Some(super::runtime::RecoveryDecisionKind::GaveUp)
                     }
+                    super::runtime::RecoveryHandlerOutcome::Infrastructure { .. } => {
+                        Some(super::runtime::RecoveryDecisionKind::Infrastructure)
+                    }
                     super::runtime::RecoveryHandlerOutcome::Starting
                     | super::runtime::RecoveryHandlerOutcome::Running
                     | super::runtime::RecoveryHandlerOutcome::Failed { .. }
@@ -382,6 +399,7 @@ fn observed_step_transition<Deadline>(
         (StepStateKind::Failed, StepState::Failed { detail }) => {
             Some(ObservedStepTransition::Failed {
                 detail: detail.clone(),
+                failure_class: runtime.failure_class,
             })
         }
         (StepStateKind::Blocked, StepState::Blocked { detail }) => {
@@ -499,9 +517,10 @@ fn observed_executions<Deadline>(
         ),
         StepStateKind::Failed => {
             let settled = match recovery.and_then(|recovery| recovery.terminal_disposition) {
-                Some(RecoveryTerminalDisposition::GaveUp { .. }) => {
-                    handler.and_then(|handler| settles(handler, ExecutionSettlement::Succeeded))
-                }
+                Some(
+                    RecoveryTerminalDisposition::GaveUp { .. }
+                    | RecoveryTerminalDisposition::Infrastructure { .. },
+                ) => handler.and_then(|handler| settles(handler, ExecutionSettlement::Succeeded)),
                 Some(RecoveryTerminalDisposition::HandlerFailed { .. }) => {
                     handler.and_then(|handler| {
                         settles(
@@ -644,6 +663,7 @@ where
         }
     };
     let mut failed_children = BTreeMap::new();
+    let mut failure_classes = BTreeMap::new();
     let mut input_sources = BTreeMap::new();
     let (steps, recoveries) = coordinated
         .state
@@ -652,6 +672,9 @@ where
         .map(|(step, runtime)| {
             if let Some(failed_child) = runtime.failed_child {
                 failed_children.insert(step.clone(), failed_child);
+            }
+            if let Some(failure_class) = runtime.failure_class {
+                failure_classes.insert(step.clone(), failure_class);
             }
             if !runtime.input_sources.is_empty() {
                 input_sources.insert(step.clone(), runtime.input_sources);
@@ -684,6 +707,7 @@ where
         withdrawn,
         exit_outcome,
         failed_children,
+        failure_classes,
         input_sources,
     })
 }

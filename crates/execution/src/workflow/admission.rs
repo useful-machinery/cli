@@ -825,10 +825,34 @@ impl EnvironmentSnapshot {
         }
     }
 
+    /// REQ-WFEXEC-53: `PATH` led by `<copy_root>/<program>` for each of `programs` in
+    /// declared order, ahead of this environment's value, and `USEFUL_WORKFLOW_ROOT` naming
+    /// `copy_root`. A copy root that cannot be a `PATH` entry, one containing `:`, fails with
+    /// the cause.
+    pub(crate) fn with_tree_copy(
+        &self,
+        copy_root: &Path,
+        programs: &[String],
+    ) -> Result<Self, env::JoinPathsError> {
+        let mut environment = self.with_variable(
+            "USEFUL_WORKFLOW_ROOT".into(),
+            copy_root.as_os_str().to_owned(),
+        );
+        if !programs.is_empty() {
+            let mut path = env::join_paths(program_directories(programs, copy_root))?;
+            if let Some(inherited) = self.variable(OsStr::new("PATH")) {
+                path.push(":");
+                path.push(inherited);
+            }
+            environment = environment.with_variable("PATH".into(), path);
+        }
+        Ok(environment)
+    }
+
     /// Keeps the fixed inherited names, the root's `environmentPassthrough` and the names
     /// of the run's declared integrations (REQ-WFFORMAT-33, REQ-WFEXEC-78), after dropping
     /// every runner-private name (INV-ENGINE-43).
-    fn for_workflow_children(
+    pub(crate) fn for_workflow_children(
         &self,
         passthrough: &BTreeSet<String>,
         integrations: &BTreeSet<&'static str>,
@@ -1633,37 +1657,19 @@ impl AdmittedTree {
         &self.files
     }
 
-    /// Each `programs` directory under `root`, in declared order.
-    fn program_directories<'a>(&'a self, root: &'a Path) -> impl Iterator<Item = PathBuf> + 'a {
-        self.programs
-            .iter()
-            .map(move |program| root.join(program.trim_end_matches('/')))
-    }
-
-    /// REQ-WFEXEC-55: each required tool is an executable regular file in a `programs`
-    /// directory of the source tree or on the inherited `PATH`, looked up as a step looks
-    /// up a bare program (REQ-WFEXEC-20); a relative `PATH` entry is taken from the
-    /// execution root, a step's default working directory.
+    /// REQ-WFEXEC-55: each required tool is looked up in the source tree's `programs`
+    /// directories and on the inherited `PATH` (`unavailable_required_tool`).
     fn probe_required_tools(
         &self,
         environment: &EnvironmentSnapshot,
         execution_root: &Path,
     ) -> Result<(), AdmissionFailure> {
-        let directories = self
-            .program_directories(&self.root)
-            .chain(
-                environment
-                    .variable(OsStr::new("PATH"))
-                    .into_iter()
-                    .flat_map(env::split_paths),
-            )
-            .map(|directory| execution_root.join(directory))
-            .collect::<Vec<_>>();
-        match self.required_tools.iter().find(|tool| {
-            !directories
-                .iter()
-                .any(|directory| is_executable_file(&directory.join(tool)))
-        }) {
+        match unavailable_required_tool(
+            program_directories(&self.programs, &self.root),
+            &self.required_tools,
+            environment,
+            execution_root,
+        ) {
             Some(tool) => Err(AdmissionFailure::new(
                 AdmissionFailureKind::RequiredToolUnavailable,
                 AdmissionLocation::RequiredTool { name: tool.clone() },
@@ -1671,6 +1677,59 @@ impl AdmittedTree {
             None => Ok(()),
         }
     }
+}
+
+/// Each `programs` directory under `root`, in declared order.
+pub(crate) fn program_directories<'a>(
+    programs: &'a [String],
+    root: &'a Path,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    programs
+        .iter()
+        .map(move |program| root.join(program.trim_end_matches('/')))
+}
+
+/// Where a bare program name is looked up, as a step looks one up (REQ-WFEXEC-20): each of
+/// `program_directories` in order, then each entry of `environment`'s `PATH`, a relative
+/// entry taken from the execution root, a step's default working directory.
+pub(crate) fn program_search_directories(
+    program_directories: impl Iterator<Item = PathBuf>,
+    environment: &EnvironmentSnapshot,
+    execution_root: &Path,
+) -> Vec<PathBuf> {
+    program_directories
+        .chain(
+            environment
+                .variable(OsStr::new("PATH"))
+                .into_iter()
+                .flat_map(env::split_paths),
+        )
+        .map(|directory| execution_root.join(directory))
+        .collect()
+}
+
+/// The first of `directories` holding `program` as an executable regular file, joined.
+pub(crate) fn find_program(directories: &[PathBuf], program: &str) -> Option<PathBuf> {
+    directories
+        .iter()
+        .map(|directory| directory.join(program))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+/// REQ-WFEXEC-55: the first of `tools` that is no executable regular file in a
+/// `program_directories` directory or on `environment`'s `PATH`, looked up as
+/// `program_search_directories` states. Admission asks it over the source tree's
+/// directories, the host condition over the run's copy of them (REQ-WFEXEC-81).
+pub(crate) fn unavailable_required_tool<'a>(
+    program_directories: impl Iterator<Item = PathBuf>,
+    tools: &'a [String],
+    environment: &EnvironmentSnapshot,
+    execution_root: &Path,
+) -> Option<&'a String> {
+    let directories = program_search_directories(program_directories, environment, execution_root);
+    tools
+        .iter()
+        .find(|tool| find_program(&directories, tool).is_none())
 }
 
 #[derive(Clone, Debug)]
@@ -1793,19 +1852,10 @@ impl AdmittedWorkflow {
         let Some(tree) = self.tree.clone() else {
             return Ok(self);
         };
-        let mut environment = self.execution.environment.with_variable(
-            "USEFUL_WORKFLOW_ROOT".into(),
-            copy_root.as_os_str().to_owned(),
-        );
-        if !tree.programs.is_empty() {
-            let mut path = env::join_paths(tree.program_directories(copy_root))?;
-            if let Some(inherited) = self.execution.environment.variable(OsStr::new("PATH")) {
-                path.push(":");
-                path.push(inherited);
-            }
-            environment = environment.with_variable("PATH".into(), path);
-        }
-        self.execution.environment = environment;
+        self.execution.environment = self
+            .execution
+            .environment
+            .with_tree_copy(copy_root, &tree.programs)?;
         Ok(self)
     }
 
@@ -2017,7 +2067,7 @@ fn first_workflow_step(workflow: &ResolvedWorkflow) -> Option<&str> {
 /// none, and no admission runs an edge whose target is a wait whose `then` is an exit, or
 /// an `external` wait whose rule names a `source` and `event` pair
 /// outside `conditions` (REQ-WFEXEC-65), at any depth of a wait's `then` or a limited
-/// edge's `else`.
+/// edge's or a host wait's `else`.
 fn admit_workflow_steps(
     workflow: &ResolvedWorkflow,
     execution_contract: WorkflowExecutionContract,
@@ -2032,7 +2082,8 @@ fn admit_workflow_steps(
                 true
             }
             ValidatedEdgeTarget::Wait { then, .. } => waits(then),
-            ValidatedEdgeTarget::Limited { else_, .. } => waits(else_),
+            ValidatedEdgeTarget::Limited { else_, .. }
+            | ValidatedEdgeTarget::HostWait { else_, .. } => waits(else_),
             ValidatedEdgeTarget::Step(_) | ValidatedEdgeTarget::Exit(_) => false,
         }
     }
@@ -2042,7 +2093,8 @@ fn admit_workflow_steps(
                 found.extend(rule);
                 rules(then, found);
             }
-            ValidatedEdgeTarget::Limited { else_, .. } => rules(else_, found),
+            ValidatedEdgeTarget::Limited { else_, .. }
+            | ValidatedEdgeTarget::HostWait { else_, .. } => rules(else_, found),
             ValidatedEdgeTarget::Step(_) | ValidatedEdgeTarget::Exit(_) => {}
         }
     }
@@ -2187,7 +2239,7 @@ pub fn admit_workflow(
 /// root's declaration in a run admitted from a tree, for the root and every child run
 /// alike, and otherwise the admitted file's own `requires.integrations`. A stage file's
 /// override names a subset of the root's (REQ-WFDEF-35), so it is never read alone.
-fn declared_integration_environment_names(
+pub(crate) fn declared_integration_environment_names(
     tree: Option<&ValidatedTree>,
     workflow: &ResolvedWorkflow,
 ) -> BTreeSet<&'static str> {
@@ -2943,8 +2995,8 @@ mod untested_advisory_tests {
         let untested = context()
             .with_codex_installation(ValidatedCodexInstallation::fixture_with_version(
                 PathBuf::from("/bin/codex"),
-                (0, 164, 0),
-                "0.164.0",
+                (0, 172, 0),
+                "0.172.0",
             ))
             .with_claude_code_installation(ValidatedClaudeCodeInstallation::fixture(PathBuf::from(
                 "/bin/claude",
@@ -2967,7 +3019,7 @@ mod untested_advisory_tests {
             .collect::<Vec<_>>();
         assert_eq!(
             named,
-            [("Pi", "1.4.0", "1.3.0"), ("Codex", "0.164.0", "0.163.0")]
+            [("Pi", "1.4.0", "1.3.0"), ("Codex", "0.172.0", "0.171.0")]
         );
     }
 }

@@ -1,4 +1,5 @@
-//! `useful workflow run interrupt` (REQ-LOCALRUN-202).
+//! `useful workflow run interrupt` (REQ-LOCALRUN-202): interrupts a running run under the
+//! `useful` home, looked up there alone, since Cloud carries no interrupt (REQ-LOCALRUN-180).
 
 use clap::Args;
 use rustix::process::{Pid, Signal};
@@ -10,12 +11,18 @@ use useful_execution::{
 use super::control::{Acted, ControlFailure, ControlTarget, Refusal};
 
 pub(super) const ABOUT: &str = "Interrupt a running run so that retry continues its stage";
+pub(super) const AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject, looked up under the useful home alone: Cloud carries no interrupt, and a Cloud run is ended with useful workflow run cancel.
+
+The command applies to a running run that a live process holds; in any other state it changes nothing and names the commands that apply.";
 const COMMAND: &str = "useful workflow run interrupt";
+/// What a `RUN` the home does not hold is told (REQ-LOCALRUN-202).
+const ELSEWHERE: &str =
+    "Cloud carries no interrupt; end a Cloud run with useful workflow run cancel.";
 
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(flatten)]
-    run: super::ExistingLocalRun,
+    run: super::target::RunArg,
 
     #[arg(long, value_name = "TEXT", help = "Why the run is interrupted")]
     reason: String,
@@ -26,7 +33,7 @@ pub(super) struct Command {
 
 impl Command {
     pub(super) fn execute(self) -> super::super::super::CommandResult {
-        super::control::execute(COMMAND, &self.run, self.output.json, |target| {
+        super::control::execute_at_home(COMMAND, &self.run, ELSEWHERE, self.output.json, |target| {
             self.interrupt(target)
         })
     }
@@ -39,22 +46,18 @@ impl Command {
             WaitInspection::NoWait {
                 state: Some(RunState::Exited),
                 ..
-            } => return Err(super::end::run_exited().into()),
+            } => return Err(target.refusal("run_exited").into()),
             WaitInspection::Held { .. }
             | WaitInspection::Satisfied { .. }
             | WaitInspection::RuleInvalid { .. }
             | WaitInspection::ConditionUnavailable { .. } => {
-                return Err(Refusal::new(
-                    "run_not_running",
-                    "The run waits; only a running run is interrupted.",
-                )
-                .into());
+                return Err(target.refusal("run_not_running").into());
             }
             WaitInspection::NoWait { .. } | WaitInspection::Continued { .. } => {
-                return Err(run_not_live().into());
+                return Err(super::control::run_not_live().into());
             }
         }
-        let pid = lock_holder(&target.run_directory)?.ok_or_else(run_not_live)?;
+        let pid = lock_holder(&target.run_directory)?.ok_or_else(super::control::run_not_live)?;
         live_child(target, pid)?;
         let payload = Map::from_iter([("reason".to_owned(), Value::String(self.reason.clone()))]);
         let control = target.record(CONTROL_INTERRUPT, None, Some(payload))?;
@@ -75,13 +78,6 @@ impl Command {
     }
 }
 
-fn run_not_live() -> Refusal {
-    Refusal::new(
-        "run_not_live",
-        "No live process holds the run; resume or cancel it.",
-    )
-}
-
 /// Refuses `child_not_live` a run positioned at a `workflow` step whose latest child is not
 /// `running` under `pid`, the process that holds the run: the run is between stages. A run
 /// with no position (a run started by path, or a flat workflow) has no child to check. The
@@ -99,7 +95,7 @@ fn live_child(target: &ControlTarget, pid: Pid) -> Result<(), ControlFailure> {
         Some((child, RunState::Running, _)) if lock_holder(&child)? == Some(pid) => Ok(()),
         _ => Err(Refusal::new(
             "child_not_live",
-            "The run is between stages; stop it before a step with `useful workflow run stop --before STEP` instead.",
+            "The run is between stages; pause it before a step with `useful workflow run pause --before STEP` instead.",
         )
         .into()),
     }

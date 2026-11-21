@@ -1,5 +1,5 @@
 //! Webhook commands keep config acquisition ahead of all credential and Cloud I/O.
-use super::{Options, ProjectReference};
+use super::{Options, OrgArgs, ProjectArgs, ProjectSubject};
 use crate::exit_code::{ExitCode, OutcomeClass};
 use anyhow::{Context, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -16,6 +16,7 @@ use useful_api::{
 use useful_human_auth::Deployment;
 use zeroize::Zeroizing;
 
+type CommandResult = super::super::CommandResult;
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[command(subcommand)]
@@ -25,20 +26,49 @@ pub(super) struct Command {
 enum Leaf {
     #[command(about = "Create an enabled webhook subscription")]
     Create(Create),
+    #[command(about = "Delete a webhook subscription")]
     Delete(Delete),
     #[command(about = "Manage webhook deliveries")]
     Delivery(DeliveryCommand),
+    #[command(about = "Disable a webhook subscription")]
     Disable(Target),
+    #[command(about = "Enable a webhook subscription")]
     Enable(Target),
     #[command(about = "List webhook subscriptions")]
     List(List),
-    RevokePreviousSecret(Target),
-    RotateSecret(Target),
+    #[command(about = "Manage a webhook's signing secret")]
+    Secret(SecretCommand),
     #[command(about = "Show subscription metadata")]
     Show(Target),
+    #[command(about = "Queue a test delivery to a webhook")]
     Test(Target),
     #[command(about = "Replace selected filters or context keys")]
     Update(Update),
+}
+/// The organization and the project in effect every leaf acts in (REQ-WEBHOOK-71).
+#[derive(Debug, Args)]
+struct InEffect {
+    #[command(flatten)]
+    org: OrgArgs,
+    #[command(flatten)]
+    project: ProjectArgs,
+}
+impl InEffect {
+    /// Runs `run` with the options, the organization reference to send and the project's ID.
+    fn execute(
+        self,
+        options: Options,
+        deployment: &Deployment,
+        run: impl FnOnce(Options, &str, &str) -> anyhow::Result<ExitCode>,
+    ) -> CommandResult {
+        super::execute_in_project(
+            self.org,
+            ProjectSubject::InEffect(self.project),
+            options,
+            deployment,
+            run,
+        )
+    }
 }
 #[derive(Debug, Args)]
 struct Source {
@@ -52,34 +82,31 @@ struct Source {
 #[derive(Debug, Args)]
 struct Create {
     #[command(flatten)]
-    project: ProjectReference,
-    #[command(flatten)]
     source: Source,
+    #[command(flatten)]
+    in_effect: InEffect,
     #[command(flatten)]
     options: Options,
 }
 #[derive(Debug, Args)]
 struct Update {
-    #[command(flatten)]
-    target: TargetRef,
+    #[arg(value_name = "WEBHOOK")]
+    webhook: String,
     #[command(flatten)]
     source: Source,
     #[arg(long, value_name = "VERSION", value_parser = clap::value_parser!(i64).range(1..), help = "Current subscription version")]
     expected_version: i64,
     #[command(flatten)]
+    in_effect: InEffect,
+    #[command(flatten)]
     options: Options,
 }
 #[derive(Debug, Args)]
-struct TargetRef {
-    #[command(flatten)]
-    project: ProjectReference,
+struct Target {
     #[arg(value_name = "WEBHOOK")]
     webhook: String,
-}
-#[derive(Debug, Args)]
-struct Target {
     #[command(flatten)]
-    target: TargetRef,
+    in_effect: InEffect,
     #[command(flatten)]
     options: Options,
 }
@@ -93,11 +120,25 @@ struct Delete {
 #[derive(Debug, Args)]
 struct List {
     #[command(flatten)]
-    project: ProjectReference,
-    #[command(flatten)]
     page: super::super::PaginationArgs<100>,
     #[command(flatten)]
+    in_effect: InEffect,
+    #[command(flatten)]
     options: Options,
+}
+#[derive(Debug, Args)]
+struct SecretCommand {
+    #[command(subcommand)]
+    command: Option<SecretLeaf>,
+}
+// `revoke` ends only the overlap of a secret a rotation already replaced, so it asks for no
+// confirmation (REQ-WEBHOOK-75).
+#[derive(Debug, Subcommand)]
+enum SecretLeaf {
+    #[command(about = "Stop accepting the secret the last rotation replaced")]
+    Revoke(Target),
+    #[command(about = "Replace the signing secret and show the new one once")]
+    Rotate(Target),
 }
 #[derive(Debug, Args)]
 struct DeliveryCommand {
@@ -106,47 +147,63 @@ struct DeliveryCommand {
 }
 #[derive(Debug, Subcommand)]
 enum DeliveryLeaf {
+    #[command(about = "List a webhook's deliveries")]
     List(DeliveryList),
+    #[command(about = "Replay a webhook delivery")]
     Replay(DeliveryTarget),
+    #[command(about = "Show a webhook delivery and its attempts")]
     Show(DeliveryTarget),
 }
 #[derive(Debug, Args)]
 struct DeliveryList {
-    #[command(flatten)]
-    target: TargetRef,
+    #[arg(value_name = "WEBHOOK")]
+    webhook: String,
     #[command(flatten)]
     page: super::super::PaginationArgs<100>,
-    #[arg(long, value_name = "RUN_ID")]
-    run_id: Option<String>,
+    #[arg(long, value_name = "RUN")]
+    run: Option<String>,
     #[arg(long, value_parser = ["queued", "in_flight", "succeeded", "failed", "cancelled"])]
     state: Option<String>,
+    #[command(flatten)]
+    in_effect: InEffect,
     #[command(flatten)]
     options: Options,
 }
 #[derive(Debug, Args)]
 struct DeliveryTarget {
-    #[command(flatten)]
-    target: TargetRef,
     #[arg(value_name = "DELIVERY")]
     delivery: String,
+    #[arg(
+        long,
+        value_name = "WEBHOOK",
+        help = "Webhook subscription ID the delivery belongs to"
+    )]
+    webhook: String,
+    #[command(flatten)]
+    in_effect: InEffect,
     #[command(flatten)]
     options: Options,
 }
 
 impl Command {
-    pub(super) fn execute(self) -> super::super::CommandResult {
-        let Some(command) = self.command else {
-            return super::super::print_help(&["project", "webhook"]);
-        };
-        if matches!(command, Leaf::Delivery(DeliveryCommand { command: None })) {
-            return super::super::print_help(&["project", "webhook", "delivery"]);
+    pub(super) fn execute(self) -> CommandResult {
+        match self.command {
+            None => super::super::print_help(&["project", "webhook"]),
+            Some(Leaf::Delivery(DeliveryCommand { command: None })) => {
+                super::super::print_help(&["project", "webhook", "delivery"])
+            }
+            Some(Leaf::Secret(SecretCommand { command: None })) => {
+                super::super::print_help(&["project", "webhook", "secret"])
+            }
+            Some(command) => super::execute_command(command, Leaf::execute),
         }
-        super::execute_leaf(command, Leaf::execute)
     }
 }
 impl Leaf {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    fn execute(self, deployment: &Deployment) -> CommandResult {
         match self {
+            // The configuration is read and checked before the context is resolved, so a bad
+            // file is `invalid_input` with no credential used and no request (REQ-WEBHOOK-73).
             Self::Create(cmd) => {
                 let config = match acquire(
                     &cmd.source.config_file,
@@ -154,33 +211,38 @@ impl Leaf {
                     cmd.options.authentication.uses_stdin(),
                 ) {
                     Ok(config) => config,
-                    Err(error) => return input_failure(deployment, &cmd.options, &error),
+                    Err(error) => {
+                        return input_failure(deployment, &cmd.options, &error).map_err(Into::into);
+                    }
                 };
-                let key = key()?;
-                let result = call(deployment, &cmd.options, |api| {
-                    Ok(api.mutate::<WebhookSubscription>(
-                        WebhookMutation::Create,
-                        &cmd.project.organization,
-                        &cmd.project.project_id,
-                        (None, None),
-                        &key,
-                        Some(&config),
-                    ))
-                })?;
-                subscription_result(
-                    deployment,
-                    &cmd.options,
-                    result,
-                    "created",
-                    true,
-                    (None, &cmd.project.project_id),
-                    Some(MutationContext {
-                        key: &key,
-                        project: &cmd.project.project_id,
-                        webhook: None,
-                        delivery: None,
-                    }),
-                )
+                cmd.in_effect
+                    .execute(cmd.options, deployment, |options, organization, project| {
+                        let key = key()?;
+                        let result = call(deployment, &options, |api| {
+                            Ok(api.mutate::<WebhookSubscription>(
+                                WebhookMutation::Create,
+                                organization,
+                                project,
+                                (None, None),
+                                &key,
+                                Some(&config),
+                            ))
+                        })?;
+                        subscription_result(
+                            deployment,
+                            &options,
+                            result,
+                            "created",
+                            true,
+                            (None, project),
+                            Some(MutationContext {
+                                key: &key,
+                                project,
+                                webhook: None,
+                                delivery: None,
+                            }),
+                        )
+                    })
             }
             Self::Update(cmd) => {
                 let mut config = match acquire(
@@ -189,125 +251,159 @@ impl Leaf {
                     cmd.options.authentication.uses_stdin(),
                 ) {
                     Ok(config) => config,
-                    Err(error) => return input_failure(deployment, &cmd.options, &error),
+                    Err(error) => {
+                        return input_failure(deployment, &cmd.options, &error).map_err(Into::into);
+                    }
                 };
                 config.insert(
                     "expectedVersion".to_owned(),
                     Value::from(cmd.expected_version),
                 );
-                let key = key()?;
-                let result = call(deployment, &cmd.options, |api| {
-                    Ok(api.mutate::<WebhookSubscription>(
-                        WebhookMutation::Update,
-                        &cmd.target.project.organization,
-                        &cmd.target.project.project_id,
-                        (Some(&cmd.target.webhook), None),
-                        &key,
-                        Some(&config),
-                    ))
-                })?;
-                subscription_result(
-                    deployment,
-                    &cmd.options,
-                    result,
-                    "updated",
-                    false,
-                    (Some(&cmd.target.webhook), &cmd.target.project.project_id),
-                    Some(MutationContext {
-                        key: &key,
-                        project: &cmd.target.project.project_id,
-                        webhook: Some(&cmd.target.webhook),
-                        delivery: None,
-                    }),
-                )
+                let webhook = cmd.webhook;
+                cmd.in_effect
+                    .execute(cmd.options, deployment, |options, organization, project| {
+                        let key = key()?;
+                        let result = call(deployment, &options, |api| {
+                            Ok(api.mutate::<WebhookSubscription>(
+                                WebhookMutation::Update,
+                                organization,
+                                project,
+                                (Some(&webhook), None),
+                                &key,
+                                Some(&config),
+                            ))
+                        })?;
+                        subscription_result(
+                            deployment,
+                            &options,
+                            result,
+                            "updated",
+                            false,
+                            (Some(&webhook), project),
+                            Some(MutationContext {
+                                key: &key,
+                                project,
+                                webhook: Some(&webhook),
+                                delivery: None,
+                            }),
+                        )
+                    })
             }
             Self::List(cmd) => {
-                let result = call(deployment, &cmd.options, |api| {
-                    Ok(api.subscriptions(
-                        &cmd.project.organization,
-                        &cmd.project.project_id,
-                        cmd.page.limit,
-                        cmd.page.cursor.as_deref(),
-                    ))
-                })?;
-                match result {
-                    Ok(page) => subscription_list_result(
-                        deployment,
-                        &cmd.options,
-                        &page.items,
-                        page.next_cursor.as_deref(),
-                    ),
-                    Err(failure) => failure_result(deployment, &cmd.options, failure),
-                }
+                let page = cmd.page;
+                cmd.in_effect
+                    .execute(cmd.options, deployment, |options, organization, project| {
+                        let result = call(deployment, &options, |api| {
+                            Ok(api.subscriptions(
+                                organization,
+                                project,
+                                page.limit,
+                                page.cursor.as_deref(),
+                            ))
+                        })?;
+                        match result {
+                            Ok(page) => subscription_list_result(
+                                deployment,
+                                &options,
+                                &page.items,
+                                page.next_cursor.as_deref(),
+                            ),
+                            Err(failure) => failure_result(deployment, &options, failure),
+                        }
+                    })
             }
             Self::Show(cmd) => {
-                let result = call(deployment, &cmd.options, |api| {
-                    Ok(api.subscription(
-                        &cmd.target.project.organization,
-                        &cmd.target.project.project_id,
-                        &cmd.target.webhook,
-                    ))
-                })?;
-                subscription_result(
-                    deployment,
-                    &cmd.options,
-                    result.map(Some),
-                    "found",
-                    false,
-                    (Some(&cmd.target.webhook), &cmd.target.project.project_id),
-                    None,
-                )
+                let webhook = cmd.webhook;
+                cmd.in_effect
+                    .execute(cmd.options, deployment, |options, organization, project| {
+                        let result = call(deployment, &options, |api| {
+                            Ok(api.subscription(organization, project, &webhook))
+                        })?;
+                        subscription_result(
+                            deployment,
+                            &options,
+                            result.map(Some),
+                            "found",
+                            false,
+                            (Some(&webhook), project),
+                            None,
+                        )
+                    })
             }
             Self::Enable(cmd) => change(deployment, cmd, WebhookMutation::Enable, "enabled"),
             Self::Disable(cmd) => change(deployment, cmd, WebhookMutation::Disable, "disabled"),
             Self::Delete(cmd) => change(deployment, cmd.target, WebhookMutation::Delete, "deleted"),
-            Self::RotateSecret(cmd) => change(deployment, cmd, WebhookMutation::Rotate, "rotated"),
-            Self::RevokePreviousSecret(cmd) => {
-                change(deployment, cmd, WebhookMutation::Revoke, "revoked")
-            }
-            Self::Test(cmd) => test(deployment, cmd),
+            Self::Secret(cmd) => match cmd.command {
+                Some(SecretLeaf::Rotate(cmd)) => {
+                    change(deployment, cmd, WebhookMutation::Rotate, "rotated")
+                }
+                Some(SecretLeaf::Revoke(cmd)) => {
+                    change(deployment, cmd, WebhookMutation::Revoke, "revoked")
+                }
+                None => Err(anyhow!("secret subcommand missing after help dispatch").into()),
+            },
+            Self::Test(cmd) => queued_delivery(
+                deployment,
+                (cmd.webhook, None),
+                cmd.in_effect,
+                cmd.options,
+                WebhookMutation::Test,
+                "queued",
+            ),
             Self::Delivery(cmd) => match cmd.command {
                 Some(DeliveryLeaf::List(cmd)) => {
-                    let result = call(deployment, &cmd.options, |api| {
-                        Ok(api.deliveries(
-                            &cmd.target.project.organization,
-                            &cmd.target.project.project_id,
-                            &cmd.target.webhook,
-                            cmd.page.limit,
-                            cmd.page.cursor.as_deref(),
-                            (cmd.run_id.as_deref(), cmd.state.as_deref()),
-                        ))
-                    })?;
-                    match result {
-                        Ok(page) => delivery_list_result(
-                            deployment,
-                            &cmd.options,
-                            &page.items,
-                            page.next_cursor.as_deref(),
-                        ),
-                        Err(failure) => failure_result(deployment, &cmd.options, failure),
-                    }
+                    let DeliveryList {
+                        webhook,
+                        page,
+                        run,
+                        state,
+                        in_effect,
+                        options,
+                    } = cmd;
+                    in_effect.execute(options, deployment, |options, organization, project| {
+                        let result = call(deployment, &options, |api| {
+                            Ok(api.deliveries(
+                                organization,
+                                project,
+                                &webhook,
+                                page.limit,
+                                page.cursor.as_deref(),
+                                (run.as_deref(), state.as_deref()),
+                            ))
+                        })?;
+                        match result {
+                            Ok(page) => delivery_list_result(
+                                deployment,
+                                &options,
+                                &page.items,
+                                page.next_cursor.as_deref(),
+                            ),
+                            Err(failure) => failure_result(deployment, &options, failure),
+                        }
+                    })
                 }
                 Some(DeliveryLeaf::Show(cmd)) => {
-                    let result = call(deployment, &cmd.options, |api| {
-                        Ok(api.delivery(
-                            &cmd.target.project.organization,
-                            &cmd.target.project.project_id,
-                            &cmd.target.webhook,
-                            &cmd.delivery,
-                        ))
-                    })?;
-                    delivery_result(deployment, &cmd.options, result, "found", None)
+                    let (webhook, delivery) = (cmd.webhook, cmd.delivery);
+                    cmd.in_effect.execute(
+                        cmd.options,
+                        deployment,
+                        |options, organization, project| {
+                            let result = call(deployment, &options, |api| {
+                                Ok(api.delivery(organization, project, &webhook, &delivery))
+                            })?;
+                            delivery_result(deployment, &options, result, "found", None)
+                        },
+                    )
                 }
                 Some(DeliveryLeaf::Replay(cmd)) => queued_delivery(
                     deployment,
-                    &cmd.target,
-                    &cmd.options,
-                    Some(&cmd.delivery),
+                    (cmd.webhook, Some(cmd.delivery)),
+                    cmd.in_effect,
+                    cmd.options,
                     WebhookMutation::Replay,
                     "replayed",
                 ),
-                None => Err(anyhow!("delivery subcommand missing after help dispatch")),
+                None => Err(anyhow!("delivery subcommand missing after help dispatch").into()),
             },
         }
     }
@@ -320,96 +416,89 @@ fn change(
     cmd: Target,
     mutation: WebhookMutation,
     outcome: &'static str,
-) -> anyhow::Result<ExitCode> {
-    let key = key()?;
-    let result = call(deployment, &cmd.options, |api| {
-        Ok(api.mutate::<WebhookSubscription>(
-            mutation,
-            &cmd.target.project.organization,
-            &cmd.target.project.project_id,
-            (Some(&cmd.target.webhook), None),
-            &key,
-            None::<&Value>,
-        ))
-    })?;
-    let context = Some(MutationContext {
-        key: &key,
-        project: &cmd.target.project.project_id,
-        webhook: Some(&cmd.target.webhook),
-        delivery: None,
-    });
-    if matches!(mutation, WebhookMutation::Delete) {
-        return match result {
-            Ok(None) => write_value(
+) -> CommandResult {
+    let webhook = cmd.webhook;
+    cmd.in_effect
+        .execute(cmd.options, deployment, |options, organization, project| {
+            let key = key()?;
+            let result = call(deployment, &options, |api| {
+                Ok(api.mutate::<WebhookSubscription>(
+                    mutation,
+                    organization,
+                    project,
+                    (Some(&webhook), None),
+                    &key,
+                    None::<&Value>,
+                ))
+            })?;
+            let context = Some(MutationContext {
+                key: &key,
+                project,
+                webhook: Some(&webhook),
+                delivery: None,
+            });
+            if matches!(mutation, WebhookMutation::Delete) {
+                return match result {
+                    Ok(None) => write_value(
+                        deployment,
+                        &options,
+                        outcome,
+                        "webhook",
+                        &serde_json::json!({"id":webhook}),
+                        format!("Webhook {webhook} deleted."),
+                    ),
+                    Ok(Some(_)) => failure_result_with_context(
+                        deployment,
+                        &options,
+                        WebhookFailure::Protocol {
+                            credential_rejected: false,
+                        },
+                        context,
+                    ),
+                    Err(failure) => {
+                        failure_result_with_context(deployment, &options, failure, context)
+                    }
+                };
+            }
+            subscription_result(
                 deployment,
-                &cmd.options,
+                &options,
+                result,
                 outcome,
-                "webhook",
-                &serde_json::json!({"id":cmd.target.webhook}),
-                format!("Webhook {} deleted.", cmd.target.webhook),
-            ),
-            Ok(Some(_)) => failure_result_with_context(
-                deployment,
-                &cmd.options,
-                WebhookFailure::Protocol {
-                    credential_rejected: false,
-                },
+                matches!(mutation, WebhookMutation::Rotate),
+                (Some(&webhook), project),
                 context,
-            ),
-            Err(failure) => failure_result_with_context(deployment, &cmd.options, failure, context),
-        };
-    }
-    subscription_result(
-        deployment,
-        &cmd.options,
-        result,
-        outcome,
-        matches!(mutation, WebhookMutation::Rotate),
-        (Some(&cmd.target.webhook), &cmd.target.project.project_id),
-        context,
-    )
+            )
+        })
 }
-fn test(deployment: &Deployment, cmd: Target) -> anyhow::Result<ExitCode> {
-    queued_delivery(
-        deployment,
-        &cmd.target,
-        &cmd.options,
-        None,
-        WebhookMutation::Test,
-        "queued",
-    )
-}
+/// Queues a test delivery of the webhook, or a replay of its delivery.
 fn queued_delivery(
     deployment: &Deployment,
-    target: &TargetRef,
-    options: &Options,
-    delivery: Option<&str>,
+    (webhook, delivery): (String, Option<String>),
+    in_effect: InEffect,
+    options: Options,
     mutation: WebhookMutation,
     outcome: &'static str,
-) -> anyhow::Result<ExitCode> {
-    let key = key()?;
-    let result = call(deployment, options, |api| {
-        Ok(api.queue_delivery(
-            mutation,
-            &target.project.organization,
-            &target.project.project_id,
-            &target.webhook,
-            delivery,
-            &key,
-        ))
-    })?;
-    delivery_result(
-        deployment,
-        options,
-        result,
-        outcome,
-        Some(MutationContext {
-            key: &key,
-            project: &target.project.project_id,
-            webhook: Some(&target.webhook),
-            delivery,
-        }),
-    )
+) -> CommandResult {
+    in_effect.execute(options, deployment, |options, organization, project| {
+        let delivery = delivery.as_deref();
+        let key = key()?;
+        let result = call(deployment, &options, |api| {
+            Ok(api.queue_delivery(mutation, organization, project, &webhook, delivery, &key))
+        })?;
+        delivery_result(
+            deployment,
+            &options,
+            result,
+            outcome,
+            Some(MutationContext {
+                key: &key,
+                project,
+                webhook: Some(&webhook),
+                delivery,
+            }),
+        )
+    })
 }
 fn call<T>(
     deployment: &Deployment,

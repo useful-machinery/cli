@@ -93,7 +93,7 @@
     },
     "edges": {
       "type": "object",
-      "description": "The continuations each limited edge of the workflow started under its limit, by `<step>.<outcome>`; empty for a run that took none.",
+      "description": "The continuations each limited edge of the workflow started under its limit, and the `host` waits each host-wait edge entered under its limit, by `<step>.<outcome>`; empty for a run that took none.",
       "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*\\.[a-z][a-z0-9_]*$" },
       "additionalProperties": { "type": "integer", "minimum": 1 }
     }

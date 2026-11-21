@@ -31,6 +31,7 @@ mod finalization_context;
 mod force_abort_evidence;
 mod git_artifact;
 pub(crate) mod git_capture;
+pub(crate) mod host_condition;
 mod identity;
 pub(crate) mod input;
 pub(crate) mod invocation_accounting;

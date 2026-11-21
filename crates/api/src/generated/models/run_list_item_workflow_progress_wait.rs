@@ -60,6 +60,8 @@ pub enum Kind {
     RunListItemWorkflowProgressWaitExternal,
     #[serde(rename = "children")]
     RunListItemWorkflowProgressWaitChildren,
+    #[serde(rename = "host")]
+    RunListItemWorkflowProgressWaitHost,
 }
 
 impl Default for Kind {

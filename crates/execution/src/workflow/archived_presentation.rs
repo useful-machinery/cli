@@ -353,7 +353,10 @@ pub(super) fn archived_step_detail(
             super::render_style::inherited_detail(detail)
         }
         ArchivedStepDetail::Evidence(NodeDetail::Failed(failure)) => {
-            archived_failure_detail(failure)
+            super::presentation::classified_failure_detail(
+                archived_failure_detail(failure),
+                step.failure_class,
+            )
         }
         ArchivedStepDetail::Evidence(NodeDetail::Blocked(detail)) => blocked_detail(detail),
         ArchivedStepDetail::Evidence(NodeDetail::Skipped(detail)) => format!(
@@ -830,6 +833,7 @@ mod tests {
             recovery: None,
             invocations: Vec::new(),
             failed_child: None,
+            failure_class: None,
             input_sources: Vec::new(),
             committed_outputs: None,
         };
@@ -894,6 +898,7 @@ mod tests {
                     crate::workflow::evidence::FailureDetail::interrupted_in_execution(),
                 )),
             }),
+            failure_class: None,
             input_sources: Vec::new(),
             committed_outputs: Some(1),
         };
@@ -1150,6 +1155,7 @@ mod tests {
                 recovery: None,
                 invocations: Vec::new(),
                 failed_child: None,
+                failure_class: None,
                 input_sources: Vec::new(),
                 committed_outputs: None,
             }],

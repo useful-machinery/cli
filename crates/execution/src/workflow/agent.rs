@@ -994,7 +994,8 @@ impl HarnessFailureDiagnostic {
                 "context_window_exceeded"
             }
             "usage_limit_exceeded" | "usageLimitExceeded" => "usage_limit_exceeded",
-            "rate_limited" | "rateLimit" | "rate_limit" | "rate_limit_error" => "rate_limited",
+            "rate_limited" | "rateLimit" | "rateLimitExceeded" | "rate_limit"
+            | "rate_limit_error" => "rate_limited",
             "unauthorized"
             | "authentication_error"
             | "authentication_failed"

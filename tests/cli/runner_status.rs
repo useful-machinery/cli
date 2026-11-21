@@ -35,7 +35,7 @@ pub(super) fn write_status_config_at(config: &std::path::Path, socket_path: &std
     .unwrap();
 }
 
-/// The control socket request `useful runner status` sends.
+/// The control socket request `useful runner show` with no `RUNNER` sends.
 pub(super) const STATUS_REQUEST: &[u8] = b"{\"schemaVersion\":1,\"operation\":\"status\"}\n";
 
 /// A live runner's answer to a status request: connected, one assignment
@@ -70,6 +70,22 @@ impl ServeStatusFixture {
     /// offer it is sent (REQ-RUNNERENROLL-154).
     pub(super) fn new(endpoint: &str) -> Self {
         Self::new_inner(endpoint, false, 0)
+    }
+
+    /// A fixture whose configuration also names one `buildCaches` entry, `path` with its
+    /// `maximumBytes`, which should lie outside the fixture's work root.
+    pub(super) fn with_build_cache(
+        endpoint: &str,
+        path: &std::path::Path,
+        maximum_bytes: u64,
+    ) -> Self {
+        let fixture = Self::new_inner(endpoint, false, 0);
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
+        config["buildCaches"] =
+            serde_json::json!([{ "path": path, "maximumBytes": maximum_bytes }]);
+        fs::write(&fixture.config, serde_json::to_vec(&config).unwrap()).unwrap();
+        fixture
     }
 
     fn with_pending(endpoint: &str) -> Self {
@@ -328,8 +344,25 @@ pub(super) async fn accept_runner_socket(
 ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
     tokio_tungstenite::accept_hdr_async(
         stream,
-        |_request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+        |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
          mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+            assert_eq!(
+                request
+                    .headers()
+                    .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+                    .iter()
+                    .count(),
+                1
+            );
+            assert_eq!(
+                request.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+                "um.runner.v1"
+            );
+            assert!(
+                request.headers()[header::AUTHORIZATION]
+                    .as_bytes()
+                    .starts_with(b"Bearer rrc_")
+            );
             response.headers_mut().insert(
                 header::SEC_WEBSOCKET_PROTOCOL,
                 HeaderValue::from_static("um.runner.v1"),
@@ -341,11 +374,12 @@ pub(super) async fn accept_runner_socket(
     .unwrap()
 }
 
-// REQ-RUNNERENROLL-41, REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80: a status
-// without readiness, as from a runner that has set up nothing, prints no
-// agent-login line.
+// REQ-RUNNERENROLL-41, REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80: `runner show` with no
+// `RUNNER` asks the control socket alone, whatever deployment and organization the
+// environment names; a status without readiness, as from a runner that has set up nothing,
+// prints no agent-login line.
 #[test]
-fn runner_status_queries_only_the_configured_local_socket() {
+fn runner_show_without_a_runner_queries_only_the_configured_local_socket() {
     let directory = private_credential_directory();
     let runtime = tempfile::tempdir_in("/tmp").unwrap();
     let socket_path = runtime.path().join("runner.sock");
@@ -360,11 +394,14 @@ fn runner_status_queries_only_the_configured_local_socket() {
     });
 
     let output = run_with_env(
-        &["runner", "status", "--config", &config],
-        &[(
-            "USEFUL_API_URL",
-            "https://cloud-status-must-not-be-read.example",
-        )],
+        &["runner", "show", "--config", &config],
+        &[
+            (
+                "USEFUL_API_URL",
+                "https://cloud-status-must-not-be-read.example",
+            ),
+            ("USEFUL_ORG", "organization-must-not-be-read"),
+        ],
     );
 
     assert!(output.status.success());
@@ -401,7 +438,7 @@ fn terminal_authentication_remains_locally_inspectable() {
             .write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n")
             .unwrap();
     });
-    let mut serve = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let mut serve = Command::new(crate::executable())
         .args(["runner", "serve", "--config", &fixture.config])
         .env("OTEL_SDK_DISABLED", "true")
         .stdout(std::process::Stdio::null())
@@ -479,7 +516,7 @@ fn terminal_authentication_remains_locally_inspectable() {
         let serve_stderr = stderr_reader.join().unwrap();
         panic!("{wait_failure}: {serve_status:?}\n{serve_stderr}");
     }
-    let status = run(&["runner", "status", "--config", &fixture.config]);
+    let status = run(&["runner", "show", "--config", &fixture.config]);
     if serve.try_wait().unwrap().is_none() {
         serve.kill().unwrap();
     }
@@ -572,7 +609,7 @@ fn pending_handshake_preserves_contiguous_current_boot_sequences() {
                     .unwrap();
             });
     });
-    let mut serve = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let mut serve = Command::new(crate::executable())
         .args(["runner", "serve", "--config", &fixture.config])
         .env("OTEL_SDK_DISABLED", "true")
         .stdout(std::process::Stdio::null())
@@ -610,10 +647,10 @@ fn a_runner_on_a_low_disk_declines_an_offer_before_preparing_it() {
     let fixture =
         ServeStatusFixture::with_minimum_free_disk_bytes(&endpoint, 9_007_199_254_740_991);
     let offer: serde_json::Value = serde_json::from_slice(
-        &fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer.json"
-        ))
+        &fs::read(
+            crate::fixture_root()
+                .join("tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer.json"),
+        )
         .unwrap(),
     )
     .unwrap();
@@ -680,7 +717,7 @@ fn a_runner_on_a_low_disk_declines_an_offer_before_preparing_it() {
                 }
             });
     });
-    let mut serve = Command::new(env!("CARGO_BIN_EXE_useful"))
+    let mut serve = Command::new(crate::executable())
         .args(["runner", "serve", "--config", &fixture.config])
         .env("OTEL_SDK_DISABLED", "true")
         .stdout(std::process::Stdio::null())
@@ -694,8 +731,7 @@ fn a_runner_on_a_low_disk_declines_an_offer_before_preparing_it() {
             if let Some(status) = serve.try_wait().unwrap() {
                 panic!("Runner Serve exited {status} before its status warned of its disk");
             }
-            String::from_utf8(run(&["runner", "status", "--config", &fixture.config]).stdout)
-                .unwrap()
+            String::from_utf8(run(&["runner", "show", "--config", &fixture.config]).stdout).unwrap()
         },
         |stdout| stdout.lines().any(|line| line.starts_with("disk warning:")),
     );
@@ -733,7 +769,7 @@ fn run_status_with_response(response: &'static [u8]) -> Output {
     });
     let config = write_status_config(&directory, &socket_path);
 
-    let output = run(&["runner", "status", "--config", &config]);
+    let output = run(&["runner", "show", "--config", &config]);
 
     server.join().unwrap();
     output
@@ -743,10 +779,9 @@ fn run_status_with_response(response: &'static [u8]) -> Output {
 // nonzero count, a waiting run's among them, and one line follows for each held run.
 #[test]
 fn runner_status_counts_waiting_runs_and_lists_each_held_run() {
-    let output = run_status_with_response(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/runner-control/v1/valid/status-held-runs-response.json"
-    )));
+    let output = run_status_with_response(include_bytes!(
+        "../fixtures/runner-control/v1/valid/status-held-runs-response.json"
+    ));
 
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -815,10 +850,7 @@ fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     };
     assert!(line("github").contains("(generation 4)"), "{stdout}");
     assert!(line("gitlab").contains("sync_runner"), "{stdout}");
-    assert!(
-        !line("gitlab").contains("useful runner integration sync"),
-        "{stdout}"
-    );
+    assert!(!line("gitlab").contains("useful runner sync"), "{stdout}");
     assert!(output.stderr.is_empty());
 }
 
@@ -926,7 +958,7 @@ fn runner_status_names_the_grant_to_reconnect_by_its_grant_provider() {
             .unwrap();
         assert!(
             line.contains(&format!(
-                "`useful integration connect {grant_provider} --replace`"
+                "`useful account integration reconnect {grant_provider}`"
             )),
             "{stdout}"
         );
@@ -934,7 +966,7 @@ fn runner_status_names_the_grant_to_reconnect_by_its_grant_provider() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-42, REQ-GRANT-53, REQ-GRANT-77, REQ-GRANT-38
+// REQ-RUNNERENROLL-42, REQ-GRANT-53, REQ-GRANT-38
 #[test]
 fn runner_status_prints_the_availability_the_state_and_last_use_give() {
     let output = run_status_with_response(
@@ -963,10 +995,12 @@ fn runner_status_prints_the_availability_the_state_and_last_use_give() {
         .unwrap();
     assert!(line.contains("reconnect"), "{line}");
     assert!(line.contains("agl_01k0z6r1w8f4jy2m7q9v3x5abc"), "{line}");
-    // Its owner reconnects it with `useful integration connect` (REQ-GRANT-77).
+    // Its owner signs in to it again with `useful account integration reconnect`, naming the agent
+    // login, which is the grant (REQ-GRANT-73, REQ-GRANT-53).
     let codex = stdout.lines().find(|line| line.starts_with("codex login:"));
     assert!(
-        codex.is_some_and(|line| line.contains("`useful integration connect codex --replace`")),
+        codex.is_some_and(|line| line
+            .contains("`useful account integration reconnect agl_01k0z6r1w8f4jy2m7q9v3x5abc`")),
         "{stdout}"
     );
     assert!(output.stderr.is_empty());
@@ -1001,7 +1035,7 @@ fn runner_status_reports_absent_and_refused_sockets_as_not_reachable() {
     let runtime = tempfile::tempdir_in("/tmp").unwrap();
     let socket_path = runtime.path().join("runner.sock");
     let config = write_status_config(&directory, &socket_path);
-    let output = run(&["runner", "status", "--config", &config]);
+    let output = run(&["runner", "show", "--config", &config]);
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
@@ -1011,8 +1045,110 @@ fn runner_status_reports_absent_and_refused_sockets_as_not_reachable() {
     let socket_path = runtime.path().join("runner.sock");
     drop(UnixListener::bind(&socket_path).unwrap());
     let config = write_status_config(&directory, &socket_path);
-    let output = run(&["runner", "status", "--config", &config]);
+    let output = run(&["runner", "show", "--config", &config]);
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
+}
+
+type RunnerSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+async fn open_runner_session(
+    listener: &tokio::net::TcpListener,
+) -> (RunnerSocket, serde_json::Value) {
+    let mut socket = accept_runner_socket(accept_runner_connection(listener).await).await;
+    let Some(Ok(Message::Text(text))) = socket.next().await else {
+        panic!("missing hello")
+    };
+    let hello: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(hello["type"], "hello");
+    socket.send(cloud_welcome()).await.unwrap();
+    socket
+        .send(cloud_observation_ack(
+            hello["messageId"].as_str().unwrap(),
+            hello["sequence"].as_u64().unwrap(),
+        ))
+        .await
+        .unwrap();
+    (socket, hello)
+}
+
+// INV-RUNNER-1, INV-RUNNER-2, INV-RUNNER-4, REQ-RUNNERENROLL-37, REQ-RUNNERENROLL-38
+#[tokio::test]
+async fn reconnect_retains_the_boot_and_does_not_replay_an_old_effect_receipt() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
+    let fixture = ServeStatusFixture::new(&endpoint);
+    let home = tempfile::tempdir().unwrap();
+    let start = || {
+        tokio::process::Command::new(crate::executable())
+            .args(["runner", "serve", "--config", &fixture.config])
+            .env("HOME", home.path())
+            .env("USEFUL_HOME", home.path().join("useful"))
+            .env("OTEL_SDK_DISABLED", "true")
+            .env("PATH", "")
+            .env_remove("USEFUL_RUNNER_JOIN_KEY")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    };
+    let mut child = start();
+    let (mut first, hello) = open_runner_session(&listener).await;
+    let release =
+        include_str!("../fixtures/runner-protocol/v1/valid/cloud-assignment-release.json");
+    first.send(Message::Text(release.into())).await.unwrap();
+    let receipt = loop {
+        let Some(Ok(Message::Text(text))) = first.next().await else {
+            panic!("missing effect receipt")
+        };
+        let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if frame["type"] == "effect_acknowledged" {
+            break frame;
+        }
+    };
+    let effect: serde_json::Value = serde_json::from_str(release).unwrap();
+    assert_eq!(
+        receipt["payload"]["effectId"],
+        effect["payload"]["effectId"]
+    );
+    drop(first); // Deliberately lose the receipt acknowledgment.
+    let (mut second, reconnect) = open_runner_session(&listener).await;
+    assert_eq!(reconnect["bootId"], hello["bootId"]);
+    let ping = b"reconnected".as_slice();
+    second.send(Message::Ping(ping.into())).await.unwrap();
+    loop {
+        match second.next().await.unwrap().unwrap() {
+            Message::Text(text) => {
+                let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_ne!(frame["type"], "effect_acknowledged");
+            }
+            Message::Pong(bytes) if bytes.as_ref() == ping => break,
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    // An invalid effect must close the session without acknowledging or applying it.
+    let malformed = include_str!(
+        "../fixtures/runner-protocol/v1/invalid/cloud-run-control-answer-without-wait.json"
+    );
+    second.send(Message::Text(malformed.into())).await.unwrap();
+    while let Some(Ok(message)) = second.next().await {
+        match message {
+            Message::Text(text) => {
+                let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_ne!(frame["type"], "effect_acknowledged");
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    assert!(!child.wait().await.unwrap().success());
+    drop(second);
+    let mut restarted = start();
+    let (_socket, fresh) = open_runner_session(&listener).await;
+    assert_eq!(fresh["runnerId"], hello["runnerId"]);
+    assert_ne!(fresh["bootId"], hello["bootId"]);
+    restarted.kill().await.unwrap();
 }

@@ -1,0 +1,9 @@
+[profile.default]
+test-threads = 4
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+# Each family probes every retired option in a separate process on every command.
+# A candidate with an interpreter pays its startup cost for every probe.
+filter = "test(command_tree::retired_flags_)"
+slow-timeout = { period = "60s", terminate-after = 10 }

@@ -209,7 +209,7 @@ pub(super) fn write_accept(
             "human_display_name_required",
             None,
             None,
-            "error: your account needs a display name before joining this organization\n\nSet it with useful account update --display-name, then explicitly retry accepting the invitation.",
+            "error: your account needs a display name before joining this organization\n\nSet it with useful account update --name, then explicitly retry accepting the invitation.",
             OutcomeClass::GeneralFailure,
             json,
         ),
@@ -316,8 +316,9 @@ pub(super) fn write_capability_error(
 }
 
 // Invitation authorization remedies distinguish recipients from organization owners, so this
-// mapping stays beside invitation output instead of reusing membership-specific prose.
-fn write_common(
+// mapping stays beside invitation output instead of reusing membership-specific prose. A failed
+// read of the organization in effect is written here too, as the leaf's own failure is.
+pub(super) fn write_common(
     deployment: &str,
     failure: &CommonOrganizationFailure,
     authentication: super::super::PrincipalAuthenticationKind,
@@ -329,7 +330,7 @@ fn write_common(
             None,
             authentication
                 .rejected_error(
-                    "error: invitation management requires sign-in\n\nSign in first:\n  useful auth login",
+                    "error: invitation management requires sign-in\n\nSign in first:\n  useful account login",
                 )
                 .to_owned(),
             OutcomeClass::Unauthenticated,

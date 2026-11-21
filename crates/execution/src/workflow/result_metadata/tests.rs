@@ -1106,6 +1106,226 @@ fn launch_failure_with_terminal_recovery_validates_for_publication() {
     }
 }
 
+fn handler_decided_result(outcome: &str, termination: Value) -> Value {
+    let mut result = launch_failed_result_with_command_handler();
+    if termination["kind"] == "infrastructure" {
+        result["steps"][0]["failureClass"] = json!("infrastructure");
+    }
+    result["steps"][0]["recovery"]["rounds"][0]["handler"] = json!({
+        "kind": "cmd", "invocationId": 2, "outcome": outcome,
+        "summary": "Disk full.", "reason": "The host is out of space."
+    });
+    result["steps"][0]["recovery"]["termination"] = termination;
+    result
+}
+
+// REQ-WFRECOVERY-42
+#[test]
+fn infrastructure_termination_requires_the_round_handler_that_decided_it() {
+    let result_with = handler_decided_result;
+    let decided = result_with(
+        "infrastructure",
+        json!({ "kind": "infrastructure", "round": 1 }),
+    );
+    let decoded = decode(&encode(&decided)).expect("infrastructure at round 1");
+    assert_eq!(validate_with_invariant(&decoded), Ok(()));
+
+    for (case, result) in [
+        (
+            "a handler that gave up",
+            result_with("gave_up", json!({ "kind": "infrastructure", "round": 1 })),
+        ),
+        (
+            "a gave_up termination",
+            result_with("infrastructure", json!({ "kind": "gave_up", "round": 1 })),
+        ),
+        (
+            "an execution beside the round",
+            result_with(
+                "infrastructure",
+                json!({ "kind": "infrastructure", "round": 1, "executionNumber": 1 }),
+            ),
+        ),
+        (
+            "neither a round nor an execution",
+            result_with("infrastructure", json!({ "kind": "infrastructure" })),
+        ),
+    ] {
+        assert_eq!(decode(&encode(&result)), Err(ResultMetadataError), "{case}");
+    }
+}
+
+// REQ-WFRECOVERY-42, REQ-WFEXEC-79
+#[test]
+fn failure_class_agrees_with_the_steps_termination() {
+    let decided = handler_decided_result(
+        "infrastructure",
+        json!({ "kind": "infrastructure", "round": 1 }),
+    );
+    assert_eq!(decided["steps"][0]["failureClass"], "infrastructure");
+    let decoded = decode(&encode(&decided)).expect("a classified infrastructure step");
+    assert_eq!(validate_with_invariant(&decoded), Ok(()));
+
+    let mut unclassified = decided.clone();
+    unclassified["steps"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("failureClass");
+    let mut gave_up = handler_decided_result("gave_up", json!({ "kind": "gave_up", "round": 1 }));
+    let decoded = decode(&encode(&gave_up)).expect("an unclassified gave_up step");
+    assert_eq!(validate_with_invariant(&decoded), Ok(()));
+    gave_up["steps"][0]["failureClass"] = json!("infrastructure");
+    let mut succeeded = result_fixture();
+    assert_eq!(succeeded["steps"][0]["state"], "succeeded");
+    succeeded["steps"][0]["failureClass"] = json!("infrastructure");
+    for (case, result) in [
+        (
+            "an infrastructure termination without the class",
+            unclassified,
+        ),
+        ("a gave_up step carrying the class", gave_up),
+        ("a succeeded step carrying the class", succeeded),
+    ] {
+        assert_eq!(decode(&encode(&result)), Err(ResultMetadataError), "{case}");
+    }
+}
+
+/// A failed `cmd` step whose command exited 71, classified by its exit status
+/// (REQ-WFRECOVERY-66), with no recovery.
+fn exit_classified_result() -> Value {
+    let mut result = failed_result_fixture(
+        "execution",
+        json!({ "code": "command_exit", "exitCode": 71 }),
+    );
+    result["exports"] = json!({});
+    result["steps"][0]["kind"] = json!("cmd");
+    let empty = json!({
+        "encoding": "base64",
+        "data": "",
+        "retainedBytes": 0,
+        "discardedBytes": 0,
+        "truncated": false,
+        "fullyDrained": true
+    });
+    result["steps"][0]["commandOutput"] = json!({ "stdout": empty, "stderr": empty });
+    result["steps"][0]["failureClass"] = json!("infrastructure");
+    result
+}
+
+/// The classified step after one round whose target exited 1, its handler, when `handler`,
+/// deciding `recheck`, and whose execution 2 exited 71.
+fn exit_classified_after_a_round(handler: bool, termination: Value) -> Value {
+    let mut result = exit_classified_result();
+    let target = |invocation_id: u64, execution: u8, started: &str, finished: &str| {
+        json!({
+            "invocationId": invocation_id,
+            "role": "target",
+            "targetExecution": execution,
+            "state": "settled",
+            "startedAt": started,
+            "finishedAt": finished,
+            "durationMilliseconds": 100,
+            "usage": { "inputTokens": 0, "outputTokens": 0 }
+        })
+    };
+    let mut invocations = vec![target(
+        1,
+        1,
+        "2026-08-02T12:01:44Z",
+        "2026-08-02T12:01:44.1Z",
+    )];
+    let mut recovery = json!({
+        "schemaVersion": 1,
+        "configuredRetries": 2,
+        "rounds": [{
+            "number": 1,
+            "failedExecution": {
+                "executionNumber": 1,
+                "invocationId": 1,
+                "failure": {
+                    "phase": "execution",
+                    "cause": { "code": "command_exit", "exitCode": 1 }
+                }
+            }
+        }],
+        "termination": termination
+    });
+    if handler {
+        recovery["handlerKind"] = json!("cmd");
+        recovery["rounds"][0]["handler"] = json!({
+            "kind": "cmd", "invocationId": 2, "outcome": "recheck",
+            "summary": "Retry.", "reason": "The fixture is flaky."
+        });
+        invocations.push(handler_invocation_fixture());
+    }
+    invocations.push(target(
+        3,
+        2,
+        "2026-08-02T12:01:44.2Z",
+        "2026-08-02T12:01:44.3Z",
+    ));
+    result["steps"][0]["recovery"] = recovery;
+    result["steps"][0]["invocations"] = Value::Array(invocations);
+    result
+}
+
+// REQ-WFRECOVERY-42, REQ-WFRECOVERY-66, REQ-WFEXEC-79
+#[test]
+fn exit_status_classification_validates_after_rechecked_rounds_or_without_recovery() {
+    let execution_form = json!({ "kind": "infrastructure", "executionNumber": 2 });
+    for (case, result) in [
+        ("no recovery", exit_classified_result()),
+        (
+            "after a rechecked round",
+            exit_classified_after_a_round(true, execution_form.clone()),
+        ),
+        (
+            "after a handlerless round",
+            exit_classified_after_a_round(false, execution_form.clone()),
+        ),
+    ] {
+        let decoded = decode(&encode(&result)).expect(case);
+        assert_eq!(validate_with_invariant(&decoded), Ok(()), "{case}");
+    }
+
+    let mut agent = exit_classified_result();
+    agent["steps"][0]["kind"] = json!("agent");
+    let step = agent["steps"][0].as_object_mut().unwrap();
+    step.remove("commandOutput");
+    step.remove("failureClass");
+    let unclassified_agent = decode(&encode(&agent)).expect("an unclassified agent step");
+    assert_eq!(validate_with_invariant(&unclassified_agent), Ok(()));
+    agent["steps"][0]["failureClass"] = json!("infrastructure");
+    let mut gave_up_round = exit_classified_after_a_round(true, execution_form.clone());
+    gave_up_round["steps"][0]["recovery"]["rounds"][0]["handler"]["outcome"] = json!("gave_up");
+    let mut unclassified = exit_classified_after_a_round(false, execution_form);
+    unclassified["steps"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("failureClass");
+    for (case, result) in [
+        (
+            "an execution that is not the last round's next",
+            exit_classified_after_a_round(
+                false,
+                json!({ "kind": "infrastructure", "executionNumber": 1 }),
+            ),
+        ),
+        (
+            "an execution past the last target",
+            exit_classified_after_a_round(
+                false,
+                json!({ "kind": "infrastructure", "executionNumber": 3 }),
+            ),
+        ),
+        ("a round whose handler gave up", gave_up_round),
+        ("the execution form without the class", unclassified),
+        ("an agent step classified with no recovery", agent),
+    ] {
+        assert_eq!(decode(&encode(&result)), Err(ResultMetadataError), "{case}");
+    }
+}
+
 // REQ-WFRECOVERY-60, REQ-WFRECOVERY-62
 #[test]
 fn handler_launch_diagnostic_accompanies_only_command_launch_failed() {

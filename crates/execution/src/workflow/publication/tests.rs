@@ -323,6 +323,7 @@ fn succeeded_step(id: &str, outputs: OutputSet<CapturedValue>) -> WorkflowRunSte
         recovery: None,
         invocations: Vec::new(),
         failed_child: None,
+        failure_class: None,
         input_sources: Vec::new(),
     }
 }
@@ -2749,6 +2750,7 @@ fn repair_wait(
                 step: "work".to_owned(),
             }),
             kept,
+            counted: false,
         },
     }
 }

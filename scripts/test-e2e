@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 || ! -f $1 || ! -x $1 ]]; then
+  echo "usage: scripts/test-e2e PATH-TO-USEFUL [nextest run options]" >&2
+  exit 2
+fi
+# Resolve before changing directory. Several cases clear PATH and change cwd.
+USEFUL_TEST_BINARY=$(realpath -- "$1")
+export USEFUL_TEST_BINARY
+shift
+unset USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE
+cd "$(dirname "$0")/.."
+# Unix sockets need a short lexical name. Some fixtures deliberately resolve it.
+work=$(mktemp -d /tmp/cli-e2e.XXXXXX)
+trap 'find "$work" -type d -exec chmod u+rwx {} + 2>/dev/null || true; rm -rf "$work"' EXIT
+mkdir "$work/isolated-temporary-directory-for-cli-process-fixtures"
+ln -s "$work/isolated-temporary-directory-for-cli-process-fixtures" "$work/t"
+export TMPDIR="$work/t"
+cargo nextest run --manifest-path tests/Cargo.toml --locked \
+  --target-dir "${CARGO_TARGET_DIR:-target}/e2e" "$@"

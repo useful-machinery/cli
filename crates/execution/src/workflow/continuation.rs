@@ -100,7 +100,8 @@ fn edge_step_targets<'a>(target: &'a ValidatedEdgeTarget, targets: &mut Vec<&'a 
     match target {
         ValidatedEdgeTarget::Step(id) => targets.push(id),
         ValidatedEdgeTarget::Exit(_) => {}
-        ValidatedEdgeTarget::Limited { then, else_, .. } => {
+        ValidatedEdgeTarget::Limited { then, else_, .. }
+        | ValidatedEdgeTarget::HostWait { then, else_, .. } => {
             targets.push(then);
             edge_step_targets(else_, targets);
         }
@@ -426,7 +427,8 @@ fn add_rule_references(
                 }
             }
         }
-        ValidatedEdgeTarget::Limited { else_, .. } => add_rule_references(else_, visit),
+        ValidatedEdgeTarget::Limited { else_, .. }
+        | ValidatedEdgeTarget::HostWait { else_, .. } => add_rule_references(else_, visit),
         ValidatedEdgeTarget::Wait { rule: None, .. }
         | ValidatedEdgeTarget::Step(_)
         | ValidatedEdgeTarget::Exit(_) => {}

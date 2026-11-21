@@ -1335,7 +1335,7 @@ fn pre_execution_cancellation_application(
     assert!(matches!(
         &terminal.observation,
         AssignmentObservation::Execution {
-            report: ExecutionReport::AssignmentInterrupted { reason },
+            report: ExecutionReport::AssignmentInterrupted { reason, .. },
             ..
         } if reason == "user_request"
     ));
@@ -1493,7 +1493,7 @@ fn spawn_execution(manager: &mut AssignmentManager, offered: &AssignmentOffer) {
     execution_job(manager, offered).spawn();
 }
 
-async fn cancellable_running_fixture() -> (
+pub(super) async fn cancellable_running_fixture() -> (
     tempfile::TempDir,
     AssignmentManager,
     AssignmentOffer,
@@ -1543,7 +1543,9 @@ async fn controlled_execution_job(
     (control, waits, job)
 }
 
-async fn controlled_running_fixture() -> (
+async fn controlled_running_fixture(
+    recorder: Option<Arc<crate::telemetry::Recorder>>,
+) -> (
     tempfile::TempDir,
     AssignmentManager,
     tokio::sync::mpsc::UnboundedReceiver<(Duration, LeaseTimerRelease)>,
@@ -1552,13 +1554,16 @@ async fn controlled_running_fixture() -> (
 ) {
     controlled_running_fixture_of(
         "schemaVersion: 1\nsteps:\n  wait:\n    kind: cmd\n    command:\n      argv: [\"sh\", \"-c\", \"sleep 60\"]\n",
+        recorder,
     )
     .await
 }
 
-/// `workflow` started, its lease timers controlled, beside a sentinel in its workspace.
+/// `workflow` started, its lease timers controlled, beside a sentinel in its workspace, with
+/// `recorder` as the manager's telemetry recorder.
 async fn controlled_running_fixture_of(
     workflow: &str,
+    recorder: Option<Arc<crate::telemetry::Recorder>>,
 ) -> (
     tempfile::TempDir,
     AssignmentManager,
@@ -1567,6 +1572,7 @@ async fn controlled_running_fixture_of(
     PathBuf,
 ) {
     let (temporary, mut manager) = manager_fixture(workflow);
+    manager.recorder = recorder;
     let (lease_clock, _control, lease_waits) = controlled_lease_clock();
     manager.lease_clock = lease_clock;
     let offered = offer("bg");
@@ -4753,7 +4759,7 @@ async fn accepted_phase_shutdown_omits_non_authoritative_finalization() {
     assert!(matches!(
         &pending[1].observation,
         AssignmentObservation::Execution {
-            report: ExecutionReport::AssignmentInterrupted { reason },
+            report: ExecutionReport::AssignmentInterrupted { reason, .. },
             ..
         } if reason == "graceful_shutdown"
     ));
@@ -6853,6 +6859,126 @@ async fn lease_authority_arithmetic_failure_grants_no_execution() {
     ));
 }
 
+fn encoded_lease_loss(report: &ExecutionReport, offer: &AssignmentOffer) -> Value {
+    let frame = report.runner_frame(
+        RunnerEnvelope {
+            message_id: "rmsg_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            runner_id: "rnr_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            sequence: 1,
+            sent_at: NOW.to_owned(),
+        },
+        offer.assignment_id.clone(),
+        offer.attempt_id.clone(),
+    );
+    let encoded: Value = serde_json::from_slice(&encode_runner_frame(&frame).unwrap()).unwrap();
+    encoded["payload"]["leaseLoss"].clone()
+}
+
+async fn assert_refused_start_loss(
+    before_start: impl FnOnce(&mut AssignmentManager, &ControlledLeaseClock),
+    expected_loss: &str,
+) {
+    let workflow =
+        "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
+    let (_temporary, mut manager) = manager_fixture(workflow);
+    let (clock, control, _waits) = controlled_lease_clock();
+    manager.lease_clock = clock;
+    let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
+    manager.recorder = Some(recorder);
+    let offered = offer("bg");
+    offer_then_prepare(&mut manager, &offered).await;
+    before_start(&mut manager, &control);
+
+    assert!(manager.handle_start(start_for(&offered)).unwrap().is_none());
+    let terminal = manager
+        .pending_observations(&BTreeSet::new(), 100)
+        .into_iter()
+        .find(|entry| entry.observation.is_terminal())
+        .expect("interrupted start");
+    let AssignmentObservation::Execution { report, .. } = &terminal.observation else {
+        panic!("unexpected terminal observation");
+    };
+    assert!(
+        matches!(report, ExecutionReport::AssignmentInterrupted { reason, lease_loss: Some(loss) } if reason == "execution_lease_expired" && loss.as_str() == expected_loss)
+    );
+    assert_eq!(encoded_lease_loss(report, &offered), expected_loss);
+    manager.acknowledge_observation(terminal.id);
+
+    let runs = captured_events(&capture, "runner.run");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].get("um.lease.loss_reason"),
+        Some(&json!(expected_loss))
+    );
+}
+
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
+#[tokio::test]
+async fn refused_start_at_deadline_names_lease_loss() {
+    assert_refused_start_loss(
+        |_, clock| clock.advance(Duration::from_secs(359)),
+        "lease_start_late",
+    )
+    .await;
+}
+
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
+#[tokio::test]
+async fn refused_start_without_policy_names_lease_loss() {
+    assert_refused_start_loss(
+        |manager, _| manager.lease_policy = None,
+        "lease_authority_missing",
+    )
+    .await;
+}
+
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
+#[tokio::test]
+async fn refused_start_without_causal_lease_names_lease_loss() {
+    assert_refused_start_loss(
+        |manager, _| manager.decisions.back_mut().unwrap().causal_lease = None,
+        "lease_authority_missing",
+    )
+    .await;
+}
+
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn start_authorization_deadline_fences_assignment_and_names_start_late() {
+    let (_temporary, mut manager) = manager_fixture(
+        "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n",
+    );
+    let (clock, _control, mut waits) = controlled_lease_clock();
+    manager.lease_clock = clock;
+    let offered = offer("bg");
+    offer_then_prepare(&mut manager, &offered).await;
+    let job = manager.handle_start(start_for(&offered)).unwrap().unwrap();
+    let loss = manager
+        .running(&offered.assignment_id)
+        .unwrap()
+        .lease_loss
+        .clone();
+    job.spawn();
+    lease_wait_request(&mut waits, Duration::from_secs(359))
+        .await
+        .release();
+    with_watchdog(wait_for_manager_state(&mut manager, |manager| {
+        manager.drain_events();
+        held_assignment(manager).is_none()
+    }))
+    .await
+    .unwrap();
+    assert!(
+        manager
+            .pending_observations(&BTreeSet::new(), 100)
+            .iter()
+            .all(|pending| !pending.observation.is_terminal())
+    );
+    assert_eq!(loss.reason(), Some(LeaseLossReason::StartLate));
+}
+
+// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_timer_failure_marks_runner_boot_unsuccessful_after_terminal_report() {
     let workflow =
@@ -6860,6 +6986,11 @@ async fn lease_timer_failure_marks_runner_boot_unsuccessful_after_terminal_repor
     let (_temporary, mut manager) = manager_fixture(workflow);
     let offered = offer("bg");
     let (control, _waits, job) = controlled_execution_job(&mut manager, &offered).await;
+    let loss = manager
+        .running(&offered.assignment_id)
+        .unwrap()
+        .lease_loss
+        .clone();
     control.make_timer_unavailable();
     job.spawn();
 
@@ -6888,6 +7019,7 @@ async fn lease_timer_failure_marks_runner_boot_unsuccessful_after_terminal_repor
             ..
         }
     )));
+    assert_eq!(loss.reason(), Some(LeaseLossReason::ClockFailed));
 }
 
 #[tokio::test]
@@ -7020,6 +7152,118 @@ async fn ordinary_terminal_delivery_uses_the_welcomed_budget() {
     assert_eq!(delivery_duration, Duration::from_secs(5));
 }
 
+struct PendingResultDelivery {
+    _temporary: tempfile::TempDir,
+    manager: AssignmentManager,
+    capture: crate::telemetry::TestCapture,
+    clock: ControlledLeaseClock,
+    waits: tokio::sync::mpsc::UnboundedReceiver<(Duration, LeaseTimerRelease)>,
+    renewal: LeaseTimerRelease,
+}
+
+async fn pending_result_delivery() -> PendingResultDelivery {
+    let (temporary, mut manager) = manager_fixture(
+        "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n",
+    );
+    let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
+    manager.recorder = Some(recorder);
+    let (clock, mut waits, job) = controlled_execution_job(&mut manager, &offer("bg")).await;
+    let acceptance = manager.pending_observations(&BTreeSet::new(), 1)[0].id;
+    manager.acknowledge_observation(acceptance);
+    job.spawn();
+    // Execution and delivery schedule separate renewal waits on the same grant, each a
+    // third of the way to its cancellation 359 seconds after the basis.
+    let lead = Duration::from_secs(359) / 3;
+    with_watchdog(lease_wait_request(&mut waits, lead))
+        .await
+        .unwrap();
+    with_watchdog(wait_for_manager_state(&mut manager, |manager| {
+        manager
+            .pending_observations(&BTreeSet::new(), 100)
+            .iter()
+            .any(|entry| {
+                matches!(
+                    entry.observation,
+                    AssignmentObservation::Artifact {
+                        request: ArtifactRequest::RegisterResult { .. },
+                        ..
+                    }
+                )
+            })
+    }))
+    .await
+    .expect("workflow did not request result registration");
+    let renewal = with_watchdog(lease_wait_request(&mut waits, lead))
+        .await
+        .unwrap();
+    PendingResultDelivery {
+        _temporary: temporary,
+        manager,
+        capture,
+        clock,
+        waits,
+        renewal,
+    }
+}
+
+// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
+#[tokio::test]
+async fn pending_result_delivery_names_unacknowledged_renewal_at_expiry() {
+    let mut delivery = pending_result_delivery().await;
+    delivery.renewal.release();
+    wait_for_renewal_request(&mut delivery.manager).await;
+    // The delivery waits for its grant's local expiry, 371 seconds after the basis.
+    with_watchdog(lease_wait_request(
+        &mut delivery.waits,
+        Duration::from_secs(371) - Duration::from_secs(359) / 3,
+    ))
+    .await
+    .unwrap()
+    .release();
+    wait_for_execution_finalization(&mut delivery.manager).await;
+    assert!(
+        delivery
+            .manager
+            .pending_observations(&BTreeSet::new(), 100)
+            .iter()
+            .all(|entry| !entry.observation.is_terminal())
+    );
+    let run = delivery.capture.event("runner.run");
+    assert_eq!(run["um.run.result"], "fenced");
+    assert_eq!(
+        run.get("um.lease.loss_reason"),
+        Some(&json!("lease_renewal_unreachable"))
+    );
+}
+
+// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
+#[tokio::test]
+async fn pending_result_delivery_names_lease_timer_failure_on_abort() {
+    let mut delivery = pending_result_delivery().await;
+    delivery.clock.make_timer_unavailable();
+    delivery.renewal.release();
+    wait_for_execution_finalization(&mut delivery.manager).await;
+    assert!(
+        delivery
+            .manager
+            .pending_observations(&BTreeSet::new(), 100)
+            .iter()
+            .any(
+                |entry| matches!(&entry.observation, AssignmentObservation::Execution {
+            report: ExecutionReport::Aborted { reason, .. }, ..
+        } if reason == "runner_internal_failure")
+            )
+    );
+    assert_acknowledged_run(&mut delivery.manager, &delivery.capture, "aborted");
+    assert_eq!(
+        delivery
+            .capture
+            .event("runner.run")
+            .get("um.lease.loss_reason"),
+        Some(&json!("lease_clock_failed"))
+    );
+}
+
 #[tokio::test]
 async fn completion_without_a_terminal_report_fences_assignment_writes() {
     let workflow =
@@ -7056,7 +7300,7 @@ async fn completion_without_a_terminal_report_fences_assignment_writes() {
     assert!(held_assignment(&manager).is_none());
 }
 
-// INV-LIFECYCLE-5
+// INV-LIFECYCLE-5, REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn expiry_release_revokes_running_authority_immediately() {
     let workflow =
@@ -7071,6 +7315,14 @@ async fn expiry_release_revokes_running_authority_immediately() {
         .unwrap();
 
     assert!(job.authority_updates.borrow().revoked);
+    assert_eq!(
+        manager
+            .running(&offered.assignment_id)
+            .unwrap()
+            .lease_loss
+            .reason(),
+        Some(LeaseLossReason::RevokedByCloud)
+    );
     assert!(matches!(
         held_assignment(&manager),
         Some(HeldAssignment::Running(running))
@@ -7079,11 +7331,14 @@ async fn expiry_release_revokes_running_authority_immediately() {
     ));
 }
 
+// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn delayed_execution_job_does_not_start_at_cancellation_boundary() {
     let placeholder =
         "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
     let (temporary, mut manager) = manager_fixture(placeholder);
+    let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
+    manager.recorder = Some(recorder);
     let marker = temporary.path().join("launched");
     fs::write(
             temporary.path().join("source/workflow.yaml"),
@@ -7120,13 +7375,67 @@ async fn delayed_execution_job_does_not_start_at_cancellation_boundary() {
         !marker.exists(),
         "a delayed execution job launched its command"
     );
+    let run = capture.event("runner.run");
+    assert_eq!(run["um.run.result"], "fenced");
+    assert_eq!(
+        run.get("um.lease.loss_reason"),
+        Some(&json!("lease_start_late"))
+    );
+}
+
+// INV-RUNNER-53: a single-workflow run's execution enters the runner's command fence before
+// its engine starts, so while the fence is held it marks the hold wanted and runs no step
+// until the hold is dropped.
+#[tokio::test]
+async fn a_single_workflow_run_starts_its_engine_only_once_the_fence_is_released() {
+    let placeholder =
+        "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
+    let (temporary, mut manager) = manager_fixture(placeholder);
+    let marker = temporary.path().join("observed");
+    fs::write(
+        temporary.path().join("source/workflow.yaml"),
+        format!(
+            "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"sh\", \"-c\", \"touch {}\"]\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let source = temporary.path().join("source");
+    run_fixture_git(&source, &["add", "workflow.yaml"]);
+    run_fixture_git(&source, &["commit", "--quiet", "-m", "update workflow"]);
+    let offered = offer("bg");
+    offer_then_prepare(&mut manager, &offered).await;
+    let hold = manager.command_fence().try_hold().unwrap();
+    spawn_execution(&mut manager, &offered);
+
+    with_watchdog(async {
+        while !hold.wanted() && !marker.exists() {
+            crate::service::Sleeper::sleep(
+                &crate::service::TokioSleeper,
+                Duration::from_millis(10),
+            )
+            .await;
+        }
+    })
+    .await
+    .expect("the execution did not ask for the fence");
+    // A step that did not wait would run in this time.
+    crate::service::Sleeper::sleep(&crate::service::TokioSleeper, Duration::from_millis(100)).await;
+    assert!(!marker.exists());
+    assert!(hold.wanted());
+
+    drop(hold);
+    with_watchdog(wait_for_terminal(&mut manager))
+        .await
+        .expect("the run did not end once the fence was released");
+    assert!(marker.exists());
 }
 
 // REQ-RUNNERENROLL-75
 #[tokio::test]
 async fn schedules_renewal_before_initial_lease_loss_cancellation() {
     let (_temporary, _manager, mut sleep_requests, _offered, _workspace) =
-        controlled_running_fixture().await;
+        controlled_running_fixture(None).await;
 
     let (duration, _release) = with_watchdog(sleep_requests.recv())
         .await
@@ -7137,11 +7446,16 @@ async fn schedules_renewal_before_initial_lease_loss_cancellation() {
     assert_eq!(duration, Duration::from_secs(359) / 3);
 }
 
-// REQ-RUNNERENROLL-75
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report() {
-    let (_temporary, mut manager, mut sleep_requests, _offered, workspace) =
-        controlled_running_fixture().await;
+    let (_temporary, mut manager, mut sleep_requests, offered, workspace) =
+        controlled_running_fixture(None).await;
+    let loss = manager
+        .running(&offered.assignment_id)
+        .unwrap()
+        .lease_loss
+        .clone();
 
     lease_wait_request(&mut sleep_requests, Duration::from_secs(359) / 3)
         .await
@@ -7199,6 +7513,11 @@ async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report
     })
     .await
     .expect("lease-loss delivery did not close");
+    assert_eq!(
+        encoded_lease_loss(&report, &offered),
+        "lease_renewal_unreachable"
+    );
+    assert_eq!(loss.reason(), Some(LeaseLossReason::RenewalUnreachable));
 
     assert!(
         matches!(
@@ -7206,6 +7525,7 @@ async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report
             ExecutionReport::Interrupted {
                 reason,
                 artifact_delivery,
+                lease_loss: Some(LeaseLossReason::RenewalUnreachable),
                 ..
             } if reason == "execution_lease_expired"
                 && artifact_delivery == &json!({
@@ -7222,6 +7542,88 @@ async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report
     );
 }
 
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn grant_after_supervisor_deadline_preserves_unacknowledged_reason() {
+    let (_temporary, mut manager, mut waits, offered, _workspace) =
+        controlled_running_fixture(None).await;
+    let running = manager.running(&offered.assignment_id).unwrap();
+    let loss = running.lease_loss.clone();
+    let cancellation = running.cancellation.clone();
+    lease_wait_request(&mut waits, Duration::from_secs(359) / 3)
+        .await
+        .release();
+    lease_wait_request(
+        &mut waits,
+        Duration::from_secs(359) - Duration::from_secs(359) / 3,
+    )
+    .await
+    .release();
+    with_watchdog(cancellation.wait_for_cancellation())
+        .await
+        .unwrap();
+    let decision = manager.handle_renewal(renewal_for(&offered)).unwrap();
+    assert_eq!(
+        decision.disposition,
+        RenewalDisposition::CancellationStarted
+    );
+    assert_eq!(loss.reason(), Some(LeaseLossReason::RenewalUnreachable));
+}
+
+// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-39, REQ-TELEMETRY-56
+#[tokio::test]
+async fn acknowledged_request_without_a_new_grant_records_late_renewal() {
+    let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
+    let (_temporary, mut manager, mut waits, offered, _workspace) =
+        controlled_running_fixture(Some(recorder)).await;
+    let loss = manager
+        .running(&offered.assignment_id)
+        .unwrap()
+        .lease_loss
+        .clone();
+    lease_wait_request(&mut waits, Duration::from_secs(359) / 3)
+        .await
+        .release();
+    let requested = wait_for_renewal_request(&mut manager).await;
+    manager.acknowledge_observation(requested.id);
+    lease_wait_request(
+        &mut waits,
+        Duration::from_secs(359) - Duration::from_secs(359) / 3,
+    )
+    .await
+    .release();
+    let reports = with_watchdog(wait_for_terminal(&mut manager))
+        .await
+        .unwrap();
+    wait_for_execution_finalization(&mut manager).await;
+    assert_acknowledged_run(&mut manager, &capture, "interrupted");
+    assert_eq!(
+        capture.event("runner.run")["um.lease.loss_reason"],
+        "lease_renewal_late"
+    );
+    let report = reports.last().unwrap();
+    assert!(matches!(
+        report,
+        ExecutionReport::Interrupted {
+            lease_loss: Some(LeaseLossReason::RenewalLate),
+            ..
+        }
+    ));
+    assert_eq!(
+        encoded_lease_loss(report, &offered),
+        capture.event("runner.run")["um.lease.loss_reason"]
+    );
+    assert_run_phase(
+        &capture,
+        &offered,
+        "runner.run.execution",
+        "timeout",
+        Some("lease_renewal_late"),
+    );
+    assert_eq!(loss.reason(), Some(LeaseLossReason::RenewalLate));
+}
+
+// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn renewal_at_cancellation_boundary_cannot_restore_authority() {
     let workflow =
@@ -7240,6 +7642,17 @@ async fn renewal_at_cancellation_boundary_cannot_restore_authority() {
         RenewalDisposition::CancellationStarted
     );
     assert_eq!(decision.cancellation_headroom_ms, Some(0));
+    assert_eq!(
+        manager
+            .running(&offered.assignment_id)
+            .unwrap()
+            .lease_loss
+            .reason(),
+        Some(LeaseLossReason::RenewalLate)
+    );
+    manager
+        .handle_release(release_for(&offered, "br", "execution_lease_expired"))
+        .unwrap();
     control.advance(Duration::from_secs(2));
     let late = manager.handle_renewal(renewal_for(&offered)).unwrap();
     assert_eq!(late.disposition, RenewalDisposition::CancellationStarted);
@@ -7258,13 +7671,47 @@ async fn renewal_at_cancellation_boundary_cannot_restore_authority() {
         Some(CancellationReason::ExecutionLeaseExpired)
     );
     assert!(running.authority_updates.borrow().revoked);
+    assert_eq!(
+        running.lease_loss.reason(),
+        Some(LeaseLossReason::RenewalLate)
+    );
+}
+
+// REQ-RUNNERENROLL-156
+#[tokio::test]
+async fn renewal_clock_failure_names_the_loss_for_each_running_assignment() {
+    let (_temporary, mut manager) = manager_fixture("schemaVersion: 1\nsteps: {}\n");
+    let first = offer("ra");
+    let second = offer("rb");
+    let timing = install_running_renewal_fixture(&mut manager, first.clone());
+    let _other = install_running_renewal_fixture_beside(&mut manager, second.clone(), &timing);
+    manager
+        .lease_policy
+        .as_mut()
+        .unwrap()
+        .lease_duration_milliseconds = u64::MAX;
+
+    assert_eq!(
+        manager.handle_renewal(renewal_for(&first)),
+        Err(AssignmentManagerFailure::LeaseClock)
+    );
+    for offered in [first, second] {
+        assert_eq!(
+            manager
+                .running(&offered.assignment_id)
+                .unwrap()
+                .lease_loss
+                .reason(),
+            Some(LeaseLossReason::ClockFailed)
+        );
+    }
 }
 
 // INV-LIFECYCLE-5
 #[tokio::test]
 async fn exact_next_renewal_replaces_the_running_authority() {
     let (_temporary, mut manager, mut sleep_requests, offered, _workspace) =
-        controlled_running_fixture().await;
+        controlled_running_fixture(None).await;
 
     let (duration, release) = with_watchdog(sleep_requests.recv()).await.unwrap().unwrap();
     assert_eq!(duration, Duration::from_secs(359) / 3);
@@ -7364,7 +7811,7 @@ async fn a_single_workflow_assignments_read_gives_its_step_in_flight_and_output(
         serde_json::to_string(&argv).unwrap()
     );
     let (_temporary, mut manager, mut lease_waits, offered, _workspace) =
-        controlled_running_fixture_of(&workflow).await;
+        controlled_running_fixture_of(&workflow, None).await;
 
     wait_until_step_printed(&mut manager, &offered.assignment_id, "speak").await;
     let before = manager.status_assignments();
@@ -8006,6 +8453,7 @@ fn a_second_terminal_report_is_refused_without_logging_a_full_outbox() {
         attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5abc".into(),
         report: ExecutionReport::AssignmentInterrupted {
             reason: "execution_lease_expired".into(),
+            lease_loss: Some(LeaseLossReason::StartLate),
         },
     };
     outbox.enqueue(interrupted.clone()).unwrap();

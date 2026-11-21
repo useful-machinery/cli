@@ -4,12 +4,14 @@
 //! `workflow-run-control-v1.schema.json`, the rule each local wait kind derives
 //! (`derive_rule`, the only place a kind is named), the substitution of an `external` wait's
 //! run-value operands, the matcher that resolves a wait through its rule alone over any
-//! `Event` (`evaluate`), the `ConditionSource` an `external` wait's events come from, the
+//! `Event` (`evaluate`), the `ConditionSource` an `external` or `host` wait's events come
+//! from, the
 //! action a root's control trigger takes on a delivered event in the same grammar
 //! (`ControlTrigger`), the stop-in-force rule, and the numbered record directory's
 //! writer and reader, which the controls directory and the mirror's `mirror/` share.
 //! `local_run` writes the wait record into the run directory.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::os::fd::OwnedFd;
@@ -39,8 +41,13 @@ use super::tree_copy::file_locator;
 use super::validated::ValidatedWorkflow;
 use super::value::CapturedValue;
 
-/// The source every derived rule and every control event names.
+/// The source every control event names, and every derived rule but a host wait's.
 pub(crate) const SOURCE: &str = "um";
+/// The source a `host` wait's derived rule names: the host condition, not a control
+/// (REQ-WFEXEC-80).
+pub(crate) const HOST_SOURCE: &str = "host";
+/// The event the host condition observes for a run waiting on `host` (REQ-WFEXEC-80).
+pub(crate) const HOST_HEALTHY: &str = "host.healthy";
 const RUN_ID_PREFIX: &str = "run_";
 const CONTROL_PREFIX: &str = "control.";
 /// The control that answers an `answer` wait's questions (REQ-LOCALRUN-182).
@@ -178,7 +185,7 @@ pub fn wait_questions(payload: &Map<String, Value>) -> WaitQuestions {
 }
 
 /// The failed child `payload`, a wait record's payload, records (REQ-WFEXEC-77): its
-/// `failedChild` when that reads as the record, else none. `useful workflow run status`,
+/// `failedChild` when that reads as the record, else none. `useful workflow run show`,
 /// the summary's wait line and the runner's progress report read a wait's failed child
 /// through this one function (REQ-LOCALRUN-221, REQ-RUNNERENROLL-125).
 pub fn wait_failed_child(payload: &Map<String, Value>) -> Option<FailedChild> {
@@ -287,18 +294,27 @@ impl fmt::Display for ConditionError {
 
 impl std::error::Error for ConditionError {}
 
-/// Where an `external` wait's events come from (REQ-WFEXEC-65): the execution crate declares
-/// it and the CLI implements it. `supports` answers whether a `source` and `event` pair is
-/// evaluated, which admission asks before a run starts (REQ-WFEXEC-59); `observe` reads the
-/// condition the wait's rule names now and answers the events it saw, which `evaluate`
-/// matches against the rule as it matches controls.
+/// Where an `external` or `host` wait's events come from (REQ-WFEXEC-65, REQ-WFEXEC-81): the
+/// execution crate declares it and the CLI implements it. `supports` answers whether a
+/// `source` and `event` pair is evaluated, which admission asks of an `external` wait before
+/// a run starts (REQ-WFEXEC-59); `observe` reads the condition an `external` wait's rule
+/// names now and answers the events it saw, which `evaluate` matches against the rule as it
+/// matches controls. `observe_host` evaluates the host condition for the run at
+/// `run_directory` waiting on the `host` wait `wait`; an unreadable run is the run's own
+/// error, never an unavailable condition.
 pub trait ConditionSource {
     fn supports(&self, source: &str, event: &str) -> bool;
     fn observe(&self, wait: &WaitRecord) -> Result<Vec<ExternalEvent>, ConditionError>;
+    fn observe_host(
+        &self,
+        run_directory: &Path,
+        wait: &WaitRecord,
+    ) -> Result<Vec<ExternalEvent>, LocalRunDirectoryError>;
 }
 
 /// The condition source that evaluates nothing: it supports no pair and observes no event,
-/// so an `external` wait holds. The control commands, which never resolve a wait, use it.
+/// so an `external` or `host` wait holds and no host check runs. The control commands, which
+/// never resolve a wait, use it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoConditions;
 
@@ -308,6 +324,14 @@ impl ConditionSource for NoConditions {
     }
 
     fn observe(&self, _wait: &WaitRecord) -> Result<Vec<ExternalEvent>, ConditionError> {
+        Ok(Vec::new())
+    }
+
+    fn observe_host(
+        &self,
+        _run_directory: &Path,
+        _wait: &WaitRecord,
+    ) -> Result<Vec<ExternalEvent>, LocalRunDirectoryError> {
         Ok(Vec::new())
     }
 }
@@ -337,27 +361,50 @@ impl fmt::Display for RuleError {
 
 impl std::error::Error for RuleError {}
 
-/// The rule a local wait kind derives (REQ-WFEXEC-61, REQ-WFEXEC-62): the controls that
-/// resolve it on source `um`, correlated by the run and the wait's identity (for an answer
-/// only once the answer set is complete), or for a stop by the step it holds and the stop's
-/// `at`. An approval without a hand-back step has no `control.hand_back`.
-/// `external` and `children` waits carry an authored rule and derive none.
+/// The rule a local wait kind derives (REQ-WFEXEC-61, REQ-WFEXEC-62, REQ-WFEXEC-80): the
+/// controls that resolve it on source `um`, correlated by the run and the wait's identity
+/// (for an answer only once the answer set is complete), or for a stop by the step it holds
+/// and the stop's `at`; for a host wait `host.healthy` on source `host`, correlated by the
+/// run and the wait's identity. An approval without a hand-back step has no
+/// `control.hand_back`. `external` and `children` waits carry an authored rule and derive
+/// none.
 pub(crate) fn derive_rule(kind: WaitKind, has_hand_back: bool) -> Option<WaitRule> {
-    let (events, where_): (&[&str], _) = match kind {
-        WaitKind::Answer => (&[CONTROL_ANSWER], WHERE_RUN_WAIT_AND_COMPLETE),
-        WaitKind::Approval if has_hand_back => {
-            (&[CONTROL_APPROVE, CONTROL_HAND_BACK], WHERE_RUN_AND_WAIT)
-        }
-        WaitKind::Approval => (&[CONTROL_APPROVE], WHERE_RUN_AND_WAIT),
-        WaitKind::Repair => (&[CONTROL_RETRY, CONTROL_WITHDRAW], WHERE_RUN_AND_WAIT),
-        WaitKind::Stop => (&[CONTROL_LIFT], WHERE_RUN_STEP_AND_STOP),
+    let (source, events, where_): (_, &[&str], _) = match kind {
+        WaitKind::Answer => (SOURCE, &[CONTROL_ANSWER], WHERE_RUN_WAIT_AND_COMPLETE),
+        WaitKind::Approval if has_hand_back => (
+            SOURCE,
+            &[CONTROL_APPROVE, CONTROL_HAND_BACK],
+            WHERE_RUN_AND_WAIT,
+        ),
+        WaitKind::Approval => (SOURCE, &[CONTROL_APPROVE], WHERE_RUN_AND_WAIT),
+        WaitKind::Repair => (
+            SOURCE,
+            &[CONTROL_RETRY, CONTROL_WITHDRAW],
+            WHERE_RUN_AND_WAIT,
+        ),
+        WaitKind::Stop => (SOURCE, &[CONTROL_LIFT], WHERE_RUN_STEP_AND_STOP),
+        WaitKind::Host => (HOST_SOURCE, &[HOST_HEALTHY], WHERE_RUN_AND_WAIT),
         WaitKind::External | WaitKind::Children => return None,
     };
     Some(WaitRule {
-        source: SOURCE.to_owned(),
+        source: source.to_owned(),
         event: events.iter().map(|event| (*event).to_owned()).collect(),
         where_: where_.to_owned(),
     })
+}
+
+/// The rule `wait`'s controls are read by (REQ-CONTINUE-74, INV-ENGINE-48): its own for a rule
+/// on source `um`; for a `host` wait, whose own rule names the host condition, the rule a
+/// `repair` wait derives, so a `control.retry` or `control.withdraw` naming it resolves it;
+/// and none for a wait on any other source, which no control resolves (REQ-WFEXEC-65).
+pub(crate) fn controls_rule(wait: &WaitRecord) -> Option<Cow<'_, WaitRule>> {
+    if wait.rule.source == SOURCE {
+        Some(Cow::Borrowed(&wait.rule))
+    } else if wait.kind == WaitKind::Host {
+        derive_rule(WaitKind::Repair, false).map(Cow::Owned)
+    } else {
+        None
+    }
 }
 
 impl WaitRecord {
@@ -929,7 +976,7 @@ impl<'a> ControlTrigger<'a> {
 }
 
 /// Whether a control's `when` is a rule `control_when_holds` can evaluate at the wait, the
-/// grammar `useful workflow definition validate` holds it to (REQ-WFDEF-10): parsed by the
+/// grammar `useful workflow validate` of a tree holds it to (REQ-WFDEF-10): parsed by the
 /// evaluator itself over an empty event, so validation and evaluation cannot disagree.
 pub(crate) fn control_when_parses(clause: &str) -> bool {
     control_when_holds(clause, &Value::Null, &|_| None).is_ok()

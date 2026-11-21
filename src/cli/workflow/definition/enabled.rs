@@ -1,69 +1,77 @@
 //! `useful workflow definition enable` and `disable` (REQ-WFDEF-24): one command whose
-//! target value the leaf supplies.
+//! target value the leaf supplies. A definition the home holds, named by its ID, has its
+//! record's `enabled` set without a request; any other ID, or a name, names a Cloud definition of
+//! the project in effect, whose automatic starts are turned on or off (REQ-CLOUDDEF-15).
 
 use std::io::{self, Write};
 
 use clap::Args;
 use serde::Serialize;
 
+use super::change::{self, Change};
 use super::report::{display, write_json};
-use useful_execution::{EnabledChange, WorkflowHome, set_enabled};
+use super::target::{self, InEffect, Named, Options};
+use crate::cli::CommandResult;
+use useful_execution::{EnabledChange, set_enabled};
 
-pub(super) const ENABLE_ABOUT: &str = "Enable a local workflow definition";
-pub(super) const DISABLE_ABOUT: &str = "Disable a local workflow definition";
+pub(super) const ENABLE_ABOUT: &str =
+    "Turn on a Cloud workflow definition's automatic starts, or enable one under the useful home";
+pub(super) const DISABLE_ABOUT: &str =
+    "Turn off a Cloud workflow definition's automatic starts, or disable one under the useful home";
 
 #[derive(Debug, Args)]
 pub(super) struct Command {
-    #[arg(value_name = "ID", help = super::ID_HELP)]
-    id: String,
+    #[arg(value_name = target::DEFINITION, help = target::DEFINITION_HELP)]
+    definition: Named,
 
     #[command(flatten)]
-    output: super::super::super::JsonArgs<super::super::super::WorkflowJson>,
+    in_effect: InEffect,
+
+    #[command(flatten)]
+    options: Options,
 }
 
 /// What one of the two leaves sets and how it names itself.
 struct Leaf {
     enabled: bool,
-    command: &'static str,
-    outcome: &'static str,
-    refused: &'static str,
+    change: Change<'static>,
     done: &'static str,
 }
 
 const ENABLE: Leaf = Leaf {
     enabled: true,
-    command: "useful workflow definition enable",
-    outcome: "enabled",
-    refused: "Enable refused.",
+    change: Change::Enable,
     done: "Enabled",
 };
 
 const DISABLE: Leaf = Leaf {
     enabled: false,
-    command: "useful workflow definition disable",
-    outcome: "disabled",
-    refused: "Disable refused.",
+    change: Change::Disable,
     done: "Disabled",
 };
 
 impl Command {
-    pub(super) fn execute(self, enabled: bool) -> super::super::super::CommandResult {
+    pub(super) fn execute(self, enabled: bool) -> CommandResult {
         let leaf = if enabled { &ENABLE } else { &DISABLE };
-        let result = WorkflowHome::from_environment()
-            .and_then(|home| set_enabled(&home, &self.id, leaf.enabled));
-        super::finish(
-            leaf.command,
-            leaf.refused,
-            result,
-            self.output.json,
-            |change, json| {
-                if json {
-                    write_json(&enabled_report(leaf, change), "workflow definition state")
-                } else {
-                    write_human(leaf, change)
-                }
-            },
-        )
+        let json = self.options.json;
+        let named = leaf.change.leaf(json);
+        match target::held(&self.definition, named) {
+            Ok(Some((home, definition))) => super::finish(
+                named.command,
+                named.refused,
+                set_enabled(&home, &definition.record.id, leaf.enabled),
+                json,
+                |change, json| {
+                    if json {
+                        write_json(&enabled_report(leaf, change), "workflow definition state")
+                    } else {
+                        write_human(leaf, change)
+                    }
+                },
+            ),
+            Ok(None) => change::send(self.definition, self.in_effect, self.options, leaf.change),
+            Err(ended) => ended,
+        }
     }
 }
 
@@ -83,7 +91,7 @@ fn write_human(leaf: &Leaf, change: &EnabledChange) -> anyhow::Result<()> {
             stdout,
             "✓ Definition {} is already {}.",
             display(&record.name),
-            leaf.outcome
+            leaf.change.outcome()
         )?;
     }
     writeln!(stdout, "definition: {}", display(&record.id))?;
@@ -96,8 +104,8 @@ fn enabled_report<'a>(leaf: &Leaf, change: &'a EnabledChange) -> JsonEnabled<'a>
     let record = &change.definition.record;
     JsonEnabled {
         schema_version: 1,
-        command: leaf.command,
-        outcome: leaf.outcome,
+        command: leaf.change.leaf(true).command,
+        outcome: leaf.change.outcome(),
         definition: JsonDefinition {
             id: &record.id,
             name: &record.name,

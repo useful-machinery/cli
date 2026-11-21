@@ -12,6 +12,7 @@ impl ExecutionJob {
     ) -> Self {
         Self {
             accepted,
+            lease_loss: authority.lease_loss,
             outbox,
             artifact_delivery,
             manager_events,
@@ -25,6 +26,7 @@ impl ExecutionJob {
             workspace_release_reported: AtomicBool::new(false),
             run_event,
             view: None,
+            command_fence: authority.command_fence,
             start_gate: Arc::new(super::super::disk::DiskReadingHandle::new()),
         }
     }
@@ -182,8 +184,31 @@ impl ExecutionJob {
                         admitted.execution().limits().maximum_parallel_steps().get(),
                     )
                 });
-                Box::pin(self.run_workflow(*admitted, view, &assignment_id, &attempt_id, &run_id))
-                    .await
+                // The engine executes inside the runner's command fence, entered on a
+                // blocking worker since it waits while a holder holds the fence
+                // (INV-RUNNER-53). A tree run's commands enter it on their own, so a waiting
+                // tree run leaves it open.
+                let fence = Arc::clone(&self.command_fence);
+                match tokio::task::spawn_blocking(move || fence.enter()).await {
+                    Ok(entry) => {
+                        let completion = Box::pin(self.run_workflow(
+                            *admitted,
+                            view,
+                            &assignment_id,
+                            &attempt_id,
+                            &run_id,
+                        ))
+                        .await;
+                        drop(entry);
+                        completion
+                    }
+                    Err(_) => self.abort_retained(
+                        &assignment_id,
+                        &attempt_id,
+                        0,
+                        "runner_internal_failure",
+                    ),
+                }
             }
             AcceptedExecution::Tree(tree) => {
                 Box::pin(self.run_tree(&tree, &assignment_id, &attempt_id)).await
@@ -443,6 +468,7 @@ impl ExecutionJob {
                 .ok_or_else(|| RunnerResultFailure::new("cancellation_inconsistent"))?;
         let mut states = execution.steps;
         let mut recoveries = execution.recoveries;
+        let mut failure_classes = execution.failure_classes;
         let mut input_sources = execution.input_sources;
         let mut steps = Vec::with_capacity(states.len());
         for id in &workflow.definition.presentation_order {
@@ -474,6 +500,7 @@ impl ExecutionJob {
                 invocations: observer.invocations_for_step(id),
                 // The runner runs no child.
                 failed_child: None,
+                failure_class: failure_classes.remove(id),
                 input_sources: input_sources.remove(id).unwrap_or_default(),
             });
         }
@@ -533,6 +560,7 @@ impl ExecutionJob {
                         recovery: None,
                         invocations: observer.invocations_for_step(id),
                         failed_child: None,
+                        failure_class: None,
                         input_sources: Vec::new(),
                     });
                 }
@@ -702,12 +730,13 @@ impl ExecutionJob {
         assignment_id: &str,
         delivery: ArtifactDeliverySpec,
     ) -> Result<ArtifactDeliveryOutcome, LeaseClockError> {
-        if !self
-            .authority_updates
-            .borrow()
-            .permits_artifact_delivery(self.lease_clock.now()?)?
         {
-            return Ok(ArtifactDeliveryOutcome::AuthorityLost);
+            let authority = self.authority_updates.borrow();
+            if !authority.permits_artifact_delivery(self.lease_clock.now()?)? {
+                self.lease_loss
+                    .name(self.causal_lease.deadline_reason(authority.sequence));
+                return Ok(ArtifactDeliveryOutcome::AuthorityLost);
+            }
         }
         let Ok(mut completion) = self.artifact_delivery.start(delivery) else {
             return Ok(internal_delivery_failure("registration"));
@@ -717,6 +746,8 @@ impl ExecutionJob {
             let authority = authority_updates.borrow_and_update().clone();
             let now = self.lease_clock.now()?;
             if !authority.permits_artifact_delivery(now)? {
+                self.lease_loss
+                    .name(self.causal_lease.deadline_reason(authority.sequence));
                 self.artifact_delivery.cancel_assignment(assignment_id);
                 return Ok(ArtifactDeliveryOutcome::AuthorityLost);
             }
@@ -760,12 +791,14 @@ impl ExecutionJob {
                     result = &mut completion => return Ok(self.delivery_completion(result)),
                     changed = authority_updates.changed() => {
                         if changed.is_err() {
+                            self.lease_loss.name(LeaseLossReason::AuthorityMissing);
                             self.artifact_delivery.cancel_assignment(assignment_id);
                             return Ok(ArtifactDeliveryOutcome::AuthorityLost);
                         }
                     }
                     result = wait_for_lease_deadline(&self.lease_clock, authority.local_expiry) => {
                         result?;
+                        self.lease_loss.name(self.causal_lease.deadline_reason(authority.sequence));
                         self.artifact_delivery.cancel_assignment(assignment_id);
                         return Ok(ArtifactDeliveryOutcome::AuthorityLost);
                     }
@@ -784,6 +817,7 @@ impl ExecutionJob {
                 result = &mut completion => return Ok(self.delivery_completion(result)),
                 changed = authority_updates.changed() => {
                     if changed.is_err() {
+                        self.lease_loss.name(LeaseLossReason::AuthorityMissing);
                         self.artifact_delivery.cancel_assignment(assignment_id);
                         return Ok(ArtifactDeliveryOutcome::AuthorityLost);
                     }
@@ -819,24 +853,14 @@ impl ExecutionJob {
         loop {
             if *self.start_authority.borrow() {
                 return self
-                    .ensure_execution_authority(
-                        cancellation,
-                        post_stop_fence,
-                        assignment_id,
-                        attempt_id,
-                    )
+                    .ensure_execution_authority(post_stop_fence, assignment_id, attempt_id)
                     .await;
             }
             if let Some(reason) = cancellation.cancellation_reason() {
                 return Err(cancellation_before_start_completion(reason));
             }
-            self.ensure_execution_authority(
-                cancellation,
-                post_stop_fence,
-                assignment_id,
-                attempt_id,
-            )
-            .await?;
+            self.ensure_execution_authority(post_stop_fence, assignment_id, attempt_id)
+                .await?;
             let cancellation_start = self.authority_updates.borrow().cancellation_start;
             tokio::select! {
                 biased;
@@ -858,7 +882,6 @@ impl ExecutionJob {
                         self.lease_clock_failure(error);
                         return Err(self
                             .fail_before_execution(
-                                cancellation,
                                 post_stop_fence,
                                 assignment_id,
                                 attempt_id,
@@ -866,7 +889,8 @@ impl ExecutionJob {
                             .await);
                     }
                     begin_forced_containment(
-                        cancellation,
+                        &self.lease_loss,
+                        LeaseLossReason::StartLate,
                         post_stop_fence,
                         &self.accepted.process_guards,
                     );
@@ -878,18 +902,20 @@ impl ExecutionJob {
 
     pub(super) async fn ensure_execution_authority(
         &self,
-        cancellation: &CancellationSource,
         post_stop_fence: &PostStopFence,
         assignment_id: &str,
         attempt_id: &str,
     ) -> Result<(), ExecutionCompletion> {
         match self.has_execution_authority() {
             Ok(true) => Ok(()),
-            Ok(false) => Err(ExecutionCompletion::fenced(None)),
+            Ok(false) => {
+                self.lease_loss.name(LeaseLossReason::StartLate);
+                Err(ExecutionCompletion::fenced(None))
+            }
             Err(error) => {
                 self.lease_clock_failure(error);
                 Err(self
-                    .fail_before_execution(cancellation, post_stop_fence, assignment_id, attempt_id)
+                    .fail_before_execution(post_stop_fence, assignment_id, attempt_id)
                     .await)
             }
         }
@@ -897,12 +923,16 @@ impl ExecutionJob {
 
     pub(super) async fn fail_before_execution(
         &self,
-        cancellation: &CancellationSource,
         post_stop_fence: &PostStopFence,
         assignment_id: &str,
         attempt_id: &str,
     ) -> ExecutionCompletion {
-        begin_forced_containment(cancellation, post_stop_fence, &self.accepted.process_guards);
+        begin_forced_containment(
+            &self.lease_loss,
+            LeaseLossReason::ClockFailed,
+            post_stop_fence,
+            &self.accepted.process_guards,
+        );
         ExecutionCompletion::lease_clock_failed(self.abort(
             assignment_id,
             attempt_id,
@@ -1014,7 +1044,7 @@ impl ExecutionJob {
                 self.describe_outcome(outcome);
             }
             ExecutionReport::Interrupted { reason, .. }
-            | ExecutionReport::AssignmentInterrupted { reason } => {
+            | ExecutionReport::AssignmentInterrupted { reason, .. } => {
                 self.run_event.result("interrupted");
                 self.run_event.interruption_cause(reason);
             }

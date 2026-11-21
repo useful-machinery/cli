@@ -90,9 +90,9 @@ impl PendingEnrollmentFixture {
     fn command(&self) -> [&str; 8] {
         [
             "runner",
-            "enroll",
+            "serve",
             "--replace-credential",
-            "--activation-file",
+            "--join-key-file",
             &self.activation,
             "--config",
             &self.config,
@@ -216,11 +216,7 @@ fn enrolls_then_promotes_a_replacement_without_exposing_credential_material() {
     assert!(output.stderr.is_empty());
 
     let cloud_request = cloud_server.join().unwrap();
-    assert!(
-        cloud_request
-            .to_ascii_lowercase()
-            .contains("idempotency-key:")
-    );
+    assert!(useful_test_support::request_header(&cloud_request, "idempotency-key").is_some());
     let control_request = String::from_utf8(control_server.join().unwrap()).unwrap();
     assert_eq!(
         control_request,
@@ -348,7 +344,7 @@ fn reports_cloud_enrollment_separately_when_runner_serve_is_unreachable() {
 pub(super) const JOIN_KEY_ID: &str = "rjk_01k0z6r1w8f4jy2m7q9v3x5abc";
 const JOIN_SECRET: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 /// The `Idempotency-Key` of a join a test stages on the host.
-const STAGED_IDEMPOTENCY_KEY: &str =
+const STAGED_JOIN_IDEMPOTENCY_KEY: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const JOIN_KEY_VARIABLE: &str = "USEFUL_RUNNER_JOIN_KEY";
 const JOINED_CREDENTIAL_IDS: [&str; 3] = [
@@ -512,7 +508,7 @@ impl JoinHost {
                 "joinKey": join_key,
                 "credentialSecret": secret,
                 "credentialSecretVerifier": verifier_of(secret),
-                "idempotencyKey": STAGED_IDEMPOTENCY_KEY,
+                "idempotencyKey": STAGED_JOIN_IDEMPOTENCY_KEY,
                 "replaceCredential": false,
                 "stagedAt": "2026-08-06T12:00:00Z"
             }),
@@ -562,17 +558,18 @@ pub(super) fn write_private_json(path: &Path, document: &serde_json::Value) {
     fs::set_permissions(path, Permissions::from_mode(0o600)).unwrap();
 }
 
-/// `useful runner serve ARGUMENTS` with telemetry off and no join key inherited
-/// from the suite's environment. Its work root keeps cleanup identities in
-/// directory metadata, so a service run that ends, such as the one a rejoin
-/// ends, can release its boot root in the Nix build sandbox, which rejects
-/// extended attributes.
+/// `useful runner serve ARGUMENTS` with telemetry off and no join key, organization or
+/// project inherited from the suite's environment. Its work root keeps cleanup identities in
+/// directory metadata, so a service run that ends, such as the one a rejoin ends, can release
+/// its boot root in the Nix build sandbox, which rejects extended attributes.
 pub(super) fn serve_command(arguments: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_useful"));
+    let mut command = Command::new(crate::executable());
     command
         .args(["runner", "serve"])
         .args(arguments)
-        .env_remove(JOIN_KEY_VARIABLE);
+        .env_remove(JOIN_KEY_VARIABLE)
+        .env_remove("USEFUL_ORG")
+        .env_remove("USEFUL_PROJECT");
     for variable in RUNNER_TELEMETRY_VARIABLES {
         command.env_remove(variable);
     }
@@ -746,14 +743,22 @@ impl ConnectionWitness {
 }
 
 pub(super) fn connection_bearer(serve: ServeProcess, witness: &ConnectionWitness) -> String {
-    let mut serve = serve;
+    let (request, stderr) = first_connection(serve, witness);
+    assert!(!stderr.contains(JOIN_SECRET), "{stderr}");
+    header_value(&request, "authorization").to_owned()
+}
+
+/// The first connection `serve` makes to `witness`, and what it wrote to standard error
+/// before it was stopped.
+pub(super) fn first_connection(
+    mut serve: ServeProcess,
+    witness: &ConnectionWitness,
+) -> (String, String) {
     let Some(request) = witness.next_connection(&mut serve) else {
         let stderr = serve.stop();
         panic!("Runner Serve stopped before connecting: {stderr}");
     };
-    let stderr = serve.stop();
-    assert!(!stderr.contains(JOIN_SECRET), "{stderr}");
-    header_value(&request, "authorization").to_owned()
+    (request, serve.stop())
 }
 
 pub(super) fn verifier_of(secret: &str) -> String {
@@ -1487,10 +1492,10 @@ fn an_enrolled_host_removes_only_its_completed_joins_journal() {
     );
 }
 
-/// The `connection:` field of what `useful runner status --config CONFIG`
+/// The `connection:` field of what `useful runner show --config CONFIG`
 /// answers.
 fn connection_state(config: &str) -> String {
-    let output = run(&["runner", "status", "--config", config]);
+    let output = run(&["runner", "show", "--config", config]);
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout)
         .unwrap()
@@ -1753,7 +1758,7 @@ fn a_staged_rejoin_is_resent_as_the_same_request() {
     let request = server.finish_one();
     assert_eq!(
         assert_rejoin_request(&request, PENDING_SECRET),
-        STAGED_IDEMPOTENCY_KEY
+        STAGED_JOIN_IDEMPOTENCY_KEY
     );
 }
 
@@ -2023,4 +2028,376 @@ fn a_signal_during_the_join_key_prompt_restores_the_terminal() {
         cloud.accept().unwrap_err().kind(),
         io::ErrorKind::WouldBlock
     );
+}
+
+/// The idempotency key of the enrollment journals the tests below stage.
+const STAGED_IDEMPOTENCY_KEY: &str =
+    "1111111111111111111111111111111111111111111111111111111111111111";
+/// A credential secret staged in an enrollment journal: 32 bytes of `0x01`.
+const STAGED_SECRET: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
+const OTHER_ACTIVATION_ID: &str = "rna_01k0z6r1w8f4jy2m7q9v3x5abe";
+
+/// Cloud's 201 to the activation of `RUNNER_ID`, naming `connection_url`.
+fn enrolled_answer(connection_url: &str) -> Vec<u8> {
+    let mut body = enrollment_body();
+    body["connectionUrl"] = connection_url.into();
+    json_http_response("201 Created", body)
+}
+
+/// A single-runner key for `activation_id` at `base` that expired in 2020.
+fn expired_activation_artifact(base: &str, activation_id: &str) -> serde_json::Value {
+    let mut artifact = activation_artifact(base, activation_id);
+    artifact["expiresAt"] = "2020-01-01T00:00:00Z".into();
+    artifact
+}
+
+/// A host with no state whose key file holds `artifact` on one line, as `join-key issue
+/// --runner` writes it.
+fn single_runner_host(artifact: &serde_json::Value) -> JoinHost {
+    JoinHost::new(&artifact.to_string())
+}
+
+impl JoinHost {
+    /// An enrollment journal staged for the single-runner key `artifact` with
+    /// `STAGED_SECRET`, as a replacement when `replace`.
+    fn write_activation_journal(&self, artifact: &serde_json::Value, replace: bool) {
+        let directory = self.journal.parent().unwrap();
+        fs::create_dir_all(directory).unwrap();
+        fs::set_permissions(directory, Permissions::from_mode(0o700)).unwrap();
+        write_private_json(
+            &self.journal,
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "activationArtifact": artifact,
+                "credentialSecret": STAGED_SECRET,
+                "credentialSecretVerifier": verifier_of(STAGED_SECRET),
+                "idempotencyKey": STAGED_IDEMPOTENCY_KEY,
+                "replaceCredential": replace,
+                "stagedAt": "2026-08-06T12:00:00Z"
+            }),
+        );
+    }
+}
+
+fn assert_activation_request(request: &str, activation_id: &str, secret: &str) {
+    assert!(
+        request.starts_with(&format!(
+            "POST /v1/runner-enrollments/{activation_id}/activate HTTP/1.1\r\n"
+        )),
+        "{request}"
+    );
+    assert_eq!(
+        header_value(request, "authorization"),
+        format!("Bearer {activation_id}.{CURRENT_SECRET}")
+    );
+    assert_eq!(
+        join_body(request),
+        serde_json::json!({"schemaVersion": 1, "credentialSecretVerifier": verifier_of(secret)})
+    );
+    assert!(!request.contains(secret));
+}
+
+/// Asserts that the host holds the state its activation `ACTIVATION_ID` enrolled and no
+/// journal, and answers the enrolled secret.
+fn assert_enrolled_state(host: &JoinHost) -> String {
+    assert_eq!(
+        fs::metadata(&host.state).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!host.journal.exists());
+    let state = host.state_document();
+    assert_eq!(state["runnerId"], RUNNER_ID);
+    assert_eq!(state["currentCredential"]["id"], PENDING_CREDENTIAL_ID);
+    assert_eq!(state["currentCredential"]["activationId"], ACTIVATION_ID);
+    state["currentCredential"]["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn assert_silent(cloud: &TcpListener) {
+    cloud.set_nonblocking(true).unwrap();
+    assert_eq!(
+        cloud.accept().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-167
+#[test]
+fn serve_enrolls_with_a_single_runner_key_given_any_way_and_connects_with_its_own_credential() {
+    for input in ["file", "standard input", "variable"] {
+        let witness = ConnectionWitness::new();
+        let server = api_test_support::ScriptedHttpServer::respond(enrolled_answer(&witness.url));
+        let artifact = activation_artifact(&join_base(&server), ACTIVATION_ID);
+        let text = artifact.to_string();
+        let host = single_runner_host(&artifact);
+        let key_file = host.key_file.to_string_lossy().into_owned();
+
+        let serve = match input {
+            "file" => host.serve(&["--join-key-file", &key_file], &[]),
+            "standard input" => {
+                host.serve_with_input(&["--join-key-file", "-"], &[], StandardInput::Piped(&text))
+            }
+            _ => host.serve(&[], &[(JOIN_KEY_VARIABLE, &text)]),
+        };
+        let (connection, stderr) = first_connection(serve, &witness);
+
+        let secret = assert_enrolled_state(&host);
+        assert_eq!(
+            header_value(&connection, "authorization"),
+            format!("Bearer {PENDING_CREDENTIAL_ID}.{secret}"),
+            "{input}"
+        );
+        for reported in [RUNNER_ID, "runner-test", "builders", PENDING_CREDENTIAL_ID] {
+            assert!(stderr.contains(reported), "{input}: {reported}: {stderr}");
+        }
+        assert!(!stderr.contains(&secret), "{input}: {stderr}");
+        assert!(!stderr.contains(CURRENT_SECRET), "{input}: {stderr}");
+        assert_activation_request(&server.finish_one(), ACTIVATION_ID, &secret);
+    }
+
+    // A host that holds state serves with it and never reads its key, here one it would refuse.
+    let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
+    let witness = ConnectionWitness::new();
+    let host = single_runner_host(&activation_artifact(
+        &format!("http://{}", cloud.local_addr().unwrap()),
+        ACTIVATION_ID,
+    ));
+    fs::set_permissions(&host.key_file, Permissions::from_mode(0o644)).unwrap();
+    host.write_enrolled_state(&witness.url);
+    let original = fs::read(&host.state).unwrap();
+
+    let bearer = connection_bearer(host.serve_with_key_file(), &witness);
+
+    assert_eq!(
+        bearer,
+        format!("Bearer {CURRENT_CREDENTIAL_ID}.{CURRENT_SECRET}")
+    );
+    assert_eq!(fs::read(&host.state).unwrap(), original);
+    assert_silent(&cloud);
+}
+
+// REQ-RUNNERENROLL-21
+#[test]
+fn an_ambiguous_enrollment_keeps_its_journal_and_says_to_start_the_runner_again() {
+    let server = api_test_support::ScriptedHttpServer::respond(http_response(
+        "503 Service Unavailable",
+        None,
+        b"",
+    ));
+    let host = single_runner_host(&activation_artifact(&join_base(&server), ACTIVATION_ID));
+
+    let (exit, stderr) = host.serve_with_key_file().wait_for_exit();
+
+    assert_eq!(exit.code(), Some(1), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line == "cause: cloud_unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("useful runner serve"), "{stderr}");
+    assert!(host.journal.is_file());
+    assert!(!host.state.exists());
+    server.finish_one();
+}
+
+// REQ-RUNNERENROLL-22
+#[test]
+fn a_staged_enrollment_is_resent_with_no_key_or_its_own_after_the_key_expired() {
+    for with_key in [false, true] {
+        let witness = ConnectionWitness::new();
+        let server = api_test_support::ScriptedHttpServer::respond(enrolled_answer(&witness.url));
+        let artifact = expired_activation_artifact(&join_base(&server), ACTIVATION_ID);
+        let host = single_runner_host(&artifact);
+        host.write_activation_journal(&artifact, false);
+        let key_file = host.key_file.to_string_lossy().into_owned();
+        let arguments: &[&str] = if with_key {
+            &["--join-key-file", &key_file]
+        } else {
+            &[]
+        };
+
+        let (connection, stderr) = first_connection(host.serve(arguments, &[]), &witness);
+
+        assert_eq!(assert_enrolled_state(&host), STAGED_SECRET, "{stderr}");
+        assert_eq!(
+            header_value(&connection, "authorization"),
+            format!("Bearer {PENDING_CREDENTIAL_ID}.{STAGED_SECRET}")
+        );
+        let request = server.finish_one();
+        assert_eq!(
+            header_value(&request, "idempotency-key"),
+            STAGED_IDEMPOTENCY_KEY
+        );
+        assert_activation_request(&request, ACTIVATION_ID, STAGED_SECRET);
+    }
+}
+
+// REQ-RUNNERENROLL-23
+#[test]
+fn a_gone_activation_leaves_its_receipt_and_a_later_start_with_its_key_sends_nothing() {
+    let server =
+        api_test_support::ScriptedHttpServer::respond(http_response("410 Gone", None, b""));
+    let host = single_runner_host(&activation_artifact(&join_base(&server), ACTIVATION_ID));
+
+    let (exit, stderr) = host.serve_with_key_file().wait_for_exit();
+
+    assert_eq!(exit.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(ACTIVATION_ID), "{stderr}");
+    assert_eq!(server.finish().len(), 1);
+    assert!(!host.state.exists());
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(&host.journal).unwrap()).unwrap();
+    assert_eq!(receipt["activationId"], ACTIVATION_ID);
+    assert_eq!(receipt["disposition"], "gone");
+    let receipt = fs::read(&host.journal).unwrap();
+
+    // The same activation, at a Cloud that must not be asked.
+    let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
+    write_private_json(
+        &host.key_file,
+        &activation_artifact(
+            &format!("http://{}", cloud.local_addr().unwrap()),
+            ACTIVATION_ID,
+        ),
+    );
+
+    let (exit, stderr) = host.serve_with_key_file().wait_for_exit();
+
+    assert_eq!(exit.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(ACTIVATION_ID), "{stderr}");
+    assert_eq!(fs::read(&host.journal).unwrap(), receipt);
+    assert!(!host.state.exists());
+    assert_silent(&cloud);
+}
+
+// REQ-RUNNERENROLL-24
+#[test]
+fn an_unresolved_enrollment_refuses_another_single_runner_key_and_a_pool_key() {
+    let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", cloud.local_addr().unwrap());
+    for key in [
+        activation_artifact(&base, OTHER_ACTIVATION_ID).to_string(),
+        join_key_artifact(&base, &future_expiry()),
+    ] {
+        let host = JoinHost::new(&key);
+        host.write_activation_journal(&activation_artifact(&base, ACTIVATION_ID), false);
+        let journal = fs::read(&host.journal).unwrap();
+
+        let (exit, stderr) = host.serve_with_key_file().wait_for_exit();
+
+        assert_eq!(exit.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("useful runner serve"), "{stderr}");
+        assert_eq!(fs::read(&host.journal).unwrap(), journal);
+        assert!(!host.state.exists());
+    }
+    assert_silent(&cloud);
+}
+
+// REQ-RUNNERENROLL-48, REQ-RUNNERENROLL-22: the staged request is resent as it was staged by
+// a replacement start with no key and by one with the key it was staged for, after that
+// key's expiry included.
+#[test]
+fn a_staged_replacement_is_resent_by_a_replacement_start_with_no_key_or_with_its_key() {
+    for with_key in [false, true] {
+        let fixture = PendingEnrollmentFixture::new();
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.state).unwrap()).unwrap();
+        state.as_object_mut().unwrap().remove("pendingCredential");
+        write_private_json(&fixture.state, &state);
+        let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
+            "201 Created",
+            enrollment_body(),
+        ));
+        let journal = fixture.state.with_file_name(".runner-enrollment.json");
+        write_private_json(
+            &journal,
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "activationArtifact": activation_artifact(&join_base(&server), ACTIVATION_ID),
+                "credentialSecret": STAGED_SECRET,
+                "credentialSecretVerifier": verifier_of(STAGED_SECRET),
+                "idempotencyKey": STAGED_IDEMPOTENCY_KEY,
+                "replaceCredential": true,
+                "stagedAt": "2026-08-06T12:00:00Z"
+            }),
+        );
+        let listener = UnixListener::bind(&fixture.socket).unwrap();
+        let control = thread::spawn(move || {
+            let (mut stream, request) = accept_control_request(&listener);
+            stream
+                .write_all(
+                    format!(
+                        "{{\"schemaVersion\":1,\"outcome\":\"reloaded\",\"credentialId\":\"{PENDING_CREDENTIAL_ID}\"}}\n"
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            request
+        });
+        let mut arguments = vec![
+            "runner",
+            "serve",
+            "--replace-credential",
+            "--config",
+            &fixture.config,
+            "--json",
+        ];
+        if with_key {
+            write_private_json(
+                Path::new(&fixture.activation),
+                &expired_activation_artifact(&join_base(&server), ACTIVATION_ID),
+            );
+            arguments.extend(["--join-key-file", &fixture.activation]);
+        }
+
+        let output = run(&arguments);
+
+        assert!(output.status.success(), "{with_key}: {output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "rotation_completed");
+        assert_eq!(report["cloudEnrollment"]["outcome"], "enrolled");
+        let request = server.finish_one();
+        assert_eq!(
+            header_value(&request, "idempotency-key"),
+            STAGED_IDEMPOTENCY_KEY,
+            "{with_key}"
+        );
+        assert_activation_request(&request, ACTIVATION_ID, STAGED_SECRET);
+        control.join().unwrap();
+        assert!(!journal.exists());
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.state).unwrap()).unwrap();
+        assert_eq!(state["pendingCredential"]["secret"], STAGED_SECRET);
+    }
+}
+
+// REQ-RUNNERENROLL-48
+#[test]
+fn a_replacement_start_with_a_pool_key_is_a_usage_error_that_sends_nothing() {
+    let fixture = PendingEnrollmentFixture::new();
+    let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
+    fs::write(
+        &fixture.activation,
+        join_key_artifact(
+            &format!("http://{}", cloud.local_addr().unwrap()),
+            &future_expiry(),
+        ),
+    )
+    .unwrap();
+    let state = fs::read(&fixture.state).unwrap();
+
+    let output = run(&fixture.command());
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("useful runner join-key issue --runner"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&fixture.state).unwrap(), state);
+    assert_silent(&cloud);
 }

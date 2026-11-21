@@ -1,17 +1,10 @@
-mod grants;
-mod readiness;
-pub(in crate::cli) mod roots;
-pub(in crate::cli) mod workflow;
-
 use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow};
-use clap::{ArgGroup, Args};
+use clap::Args;
 use serde::Serialize;
 
-use super::super::grant::Flow;
-use super::super::{OrganizationArg, PrincipalAuthenticationArgs, ProjectArg};
 use crate::exit_code::ExitCode;
 use useful_runner::{AgentLoginProvider, CheckResult, Report, Status, built_in_registry};
 use useful_support::{Availability, CredentialStatus, NextAction};
@@ -19,200 +12,31 @@ use useful_support::{Availability, CredentialStatus, NextAction};
 pub(super) const ABOUT: &str = "Check local runner prerequisites";
 const COMMAND_NAME: &str = "useful runner doctor";
 
+// What a workflow needs is `useful workflow doctor` (REQ-CREDREADY-1); this command checks the
+// host alone and makes no request, so it takes no authentication or HTTP option
+// (REQ-RUNNERENROLL-45). Its report names every check, run or not, so nothing else lists them
+// (REQ-RUNNERENROLL-47).
 #[derive(Debug, Args)]
-// `--organization-id` serves each Cloud read and the sign-ins (REQ-CREDREADY-13).
-#[command(group(
-    ArgGroup::new("cloud_read")
-        .args(["readiness", "grants", "connect"])
-        .multiple(true)
-))]
-// `--runner-id` narrows the grants report either prints (REQ-CREDREADY-23).
-#[command(group(ArgGroup::new("grants_read").args(["grants", "connect"]).multiple(true)))]
 pub(super) struct Command {
     #[arg(long = "check", value_name = "ID", help = "Run only the named check")]
     checks: Vec<String>,
 
-    #[arg(
-        long = "workflow",
-        value_name = "FILE",
-        conflicts_with_all = ["checks", "list_checks"],
-        help = "Report the credentials a workflow and its child workflows need instead of running checks"
-    )]
-    workflows: Vec<PathBuf>,
-
-    #[arg(
-        long,
-        value_name = "ROOT",
-        requires = "workflows",
-        help = "Directory boundary for the --workflow files"
-    )]
-    source_root: Option<PathBuf>,
-
-    #[arg(
-        long,
-        conflicts_with_all = ["checks", "json"],
-        help = "List registered checks without running them"
-    )]
-    list_checks: bool,
-
-    #[arg(
-        long,
-        requires = "workflows",
-        requires = "organization_id",
-        help = "Ask Cloud about the organization's connections for the providers the workflows need"
-    )]
-    readiness: bool,
-
-    #[arg(
-        long,
-        requires = "workflows",
-        help = "Show your grants for the providers the workflows need"
-    )]
-    grants: bool,
-
-    #[arg(
-        long,
-        requires = "workflows",
-        help = "Sign in to the providers the workflows need that you lack, then show your grants for them"
-    )]
-    connect: bool,
-
-    #[arg(
-        long,
-        requires = "connect",
-        help = "Replace each grant that needs reconnecting without asking"
-    )]
-    replace: bool,
-
-    #[arg(
-        long,
-        value_name = "RUNNER",
-        requires = "grants_read",
-        value_parser = super::super::grant::parse_runner_id,
-        help = "Show each grant's status on this runner alone, by ID as useful runner list prints it"
-    )]
-    runner_id: Option<String>,
-
-    // A grant fails the report only when asked, and only on the named runner (REQ-CREDREADY-26).
-    #[arg(
-        long,
-        requires = "grants",
-        requires = "runner_id",
-        help = "Fail when you hold no grant the --runner-id runner can use for a provider the workflows need"
-    )]
-    require_grants: bool,
-
-    #[arg(
-        long,
-        value_name = OrganizationArg::VALUE_NAME,
-        requires = "cloud_read",
-        help = "Organization whose connections --readiness reads, and whose coding agent grants --grants keeps and --connect makes, by ID or exact slug"
-    )]
-    organization_id: Option<OrganizationArg>,
-
-    #[arg(
-        long,
-        value_name = ProjectArg::VALUE_NAME,
-        requires = "readiness",
-        help = ProjectArg::HELP
-    )]
-    project_id: Option<ProjectArg>,
-
     /// Read the runner operator configuration for a selected check that needs it.
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["list_checks", "workflows"])]
+    #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    // Doctor and enrollment have unrelated operation inputs and execution paths; sharing their
-    // command shells would couple those contracts merely because both use runner JSON output.
-    // The authentication options serve only --readiness, the HTTP options it, --grants and
-    // --connect.
     #[command(flatten)]
-    options: super::super::CommonArgs<super::super::RunnerJson, PrincipalAuthenticationArgs>,
+    output: super::super::JsonArgs<super::super::RunnerJson>,
 }
 
 impl Command {
     pub(super) fn execute(self) -> super::super::CommandResult {
-        // Flattened options cannot carry `requires`, so they are refused here (REQ-CREDREADY-13,
-        // REQ-CREDREADY-22, REQ-CREDREADY-24). The grants resource admits only a human session.
-        let service_api_key = self.options.authentication.service_api_key_file.is_some();
-        let refusal = if service_api_key && self.connect {
-            Some(
-                "--service-api-key-file cannot be used with --connect, which signs in with your own session",
-            )
-        } else if service_api_key && self.grants {
-            Some(
-                "--service-api-key-file cannot be used with --grants, which reads your grants with your own session",
-            )
-        } else if service_api_key && !self.readiness {
-            Some("--service-api-key-file requires --readiness")
-        } else if self.options.http.allow_insecure_http
-            && !self.readiness
-            && !self.grants
-            && !self.connect
-        {
-            Some("--allow-insecure-http requires --readiness, --grants or --connect")
-        } else {
-            None
-        };
-        if let Some(refusal) = refusal {
-            return Err(super::super::CommandFailure::with_exit_code(
-                anyhow!(refusal),
-                ExitCode::UsageError,
-            ));
-        }
-        if !self.workflows.is_empty() {
-            let readiness = self
-                .organization_id
-                .as_ref()
-                .filter(|_| self.readiness)
-                .map(|organization| readiness::Readiness {
-                    organization,
-                    project: self.project_id.as_deref(),
-                    authentication: &self.options.authentication,
-                    policy: self.options.http.transport_policy(),
-                });
-            // `--connect` prints the report of `--grants` once its sign-ins end (REQ-CREDREADY-25).
-            let grants = (self.grants || self.connect).then(|| grants::Request {
-                organization: self.organization_id.as_deref(),
-                runner: self.runner_id.as_deref(),
-                require: self.require_grants,
-                policy: self.options.http.transport_policy(),
-            });
-            // The flow's defaults hold for the rest: Codex signs in by browser or by device code
-            // as this machine allows, and each consent is waited for (REQ-CREDREADY-24).
-            let connect = self.connect.then(|| Flow {
-                json: self.options.json,
-                allow_insecure_http: self.options.http.allow_insecure_http,
-                organization: self.organization_id.as_deref(),
-                replace: self.replace,
-                ..Flow::default()
-            });
-            return workflow::execute(
-                self.source_root.as_deref(),
-                &self.workflows,
-                self.options.json,
-                readiness.as_ref(),
-                grants.as_ref(),
-                connect.as_ref(),
-            );
-        }
-        // `--list-checks` runs no check, so it locates no configuration (REQ-RUNNERENROLL-45).
-        let config = if self.list_checks {
-            None
-        } else {
-            super::doctor_operator_config(self.config.as_deref())?
-        };
+        let config = super::doctor_operator_config(self.config.as_deref())?;
         let registry = built_in_registry(config).map_err(|error| anyhow!(error))?;
-
-        if self.list_checks {
-            write_check_list(&registry.descriptors())?;
-            return Ok(ExitCode::Success);
-        }
-
         let report = registry.run(&self.checks).map_err(|error| {
             super::super::CommandFailure::with_exit_code(anyhow!(error), ExitCode::UsageError)
         })?;
-        if self.options.json {
+        if self.output.json {
             write_json_report(&report)?;
         } else {
             write_human_report(&report).context("write runner doctor report")?;
@@ -223,15 +47,6 @@ impl Command {
             ExitCode::Success
         })
     }
-}
-
-fn write_check_list(descriptors: &[useful_runner::CheckDescriptor]) -> anyhow::Result<()> {
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    for descriptor in descriptors {
-        writeln!(stdout, "{}", descriptor.id).context("write runner doctor check list")?;
-    }
-    Ok(())
 }
 
 fn write_human_report(report: &Report) -> anyhow::Result<()> {
@@ -249,13 +64,26 @@ fn write_human_report_to(output: &mut impl Write, report: &Report) -> anyhow::Re
             Status::Pass => '✓',
             Status::Fail => '✗',
         };
-        writeln!(output, "{marker} {}", result.descriptor.title)?;
+        writeln!(
+            output,
+            "{marker} {} · {}",
+            result.descriptor.title, result.descriptor.id
+        )?;
         writeln!(output, "  {}", result.outcome.message)?;
         if result.outcome.status == Status::Fail {
             writeln!(output, "  code: {}", result.outcome.code)?;
         }
         write_harness_compatibility_details(output, &result.outcome.details)?;
         write_agent_login_details(output, &result.outcome.details)?;
+        writeln!(output)?;
+    }
+
+    if !report.not_run.is_empty() {
+        writeln!(output, "── not run ──")?;
+        for descriptor in &report.not_run {
+            writeln!(output, "{} · {}", descriptor.title, descriptor.id)?;
+            writeln!(output, "  run: {COMMAND_NAME} --check {}", descriptor.id)?;
+        }
         writeln!(output)?;
     }
 
@@ -315,7 +143,7 @@ fn write_agent_login_details(
             availability,
             next_action,
         };
-        let step = super::agent_login::runner_step(status, None);
+        let step = super::sync::runner_step(status, None);
         writeln!(
             output,
             "  {provider} login: {}",
@@ -341,6 +169,7 @@ struct JsonReport<'a> {
     command: &'static str,
     deployment: Option<&'static str>,
     checks: Vec<JsonCheck<'a>>,
+    not_run: Vec<JsonNotRun>,
     summary: JsonSummary,
 }
 
@@ -353,6 +182,14 @@ impl<'a> JsonReport<'a> {
             // Local prerequisite checks do not load a Cloud deployment.
             deployment: None,
             checks: report.results.iter().map(JsonCheck::from_result).collect(),
+            not_run: report
+                .not_run
+                .iter()
+                .map(|descriptor| JsonNotRun {
+                    id: descriptor.id,
+                    title: descriptor.title,
+                })
+                .collect(),
             summary: JsonSummary {
                 passed: summary.passed,
                 failed: summary.failed,
@@ -383,6 +220,13 @@ impl<'a> JsonCheck<'a> {
             details: &result.outcome.details,
         }
     }
+}
+
+/// A check the run did not select (REQ-RUNNERENROLL-47).
+#[derive(Serialize)]
+struct JsonNotRun {
+    id: &'static str,
+    title: &'static str,
 }
 
 #[derive(Serialize)]
@@ -448,6 +292,7 @@ mod tests {
                     BTreeMap::from([("version".to_owned(), "1.2.3".to_owned())]),
                 ),
             ],
+            not_run: Vec::new(),
         };
         let mut output = Vec::new();
 

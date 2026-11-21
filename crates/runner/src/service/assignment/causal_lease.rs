@@ -18,6 +18,8 @@ pub(super) struct RenewalRequest {
     pub(super) observation_id: u64,
     /// When, on the lease clock, the request was enqueued.
     pub(super) enqueued_at: LeaseInstant,
+    /// Whether Cloud has acknowledged any request for this sequence; a repeat keeps it.
+    pub(super) acknowledged: bool,
 }
 
 impl RenewalRequest {
@@ -37,6 +39,7 @@ impl RenewalRequest {
             *self = Self {
                 observation_id,
                 enqueued_at: now,
+                acknowledged: self.acknowledged,
             };
         }
     }
@@ -110,6 +113,7 @@ impl CausalLease {
             RenewalRequest {
                 observation_id,
                 enqueued_at: now,
+                acknowledged: false,
             },
         );
         Ok(())
@@ -150,9 +154,81 @@ impl CausalLease {
         Ok(())
     }
 
+    /// Records that Cloud acknowledged a request for lease `current_sequence + 1`. Outbox ids
+    /// only grow, so the acknowledged request is the last one or one it repeated: a repeat
+    /// may replace the last request between Cloud's acknowledgement and this call.
+    pub(super) fn acknowledge_renewal(&self, current_sequence: u64, observation_id: u64) {
+        if let Some(next_sequence) = current_sequence.checked_add(1)
+            && let Some(request) = self.lock().renewal_requests.get_mut(&next_sequence)
+            && observation_id <= request.observation_id
+        {
+            request.acknowledged = true;
+        }
+    }
+
+    pub(in crate::service) fn deadline_reason(&self, current_sequence: u64) -> LeaseLossReason {
+        let state = self.lock();
+        let request = current_sequence
+            .checked_add(1)
+            .and_then(|next| state.renewal_requests.get(&next));
+        if request.is_some_and(|request| request.acknowledged) {
+            LeaseLossReason::RenewalLate
+        } else {
+            LeaseLossReason::RenewalUnreachable
+        }
+    }
+
     pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, CausalLeaseState> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // REQ-RUNNERENROLL-156
+    #[tokio::test]
+    async fn deadline_counts_gateway_acknowledgement_and_ignores_outbox_fencing() {
+        let (_temporary, mut manager, offer, _) =
+            super::super::tests::cancellable_running_fixture().await;
+        let lease = manager
+            .running(&offer.assignment_id)
+            .unwrap()
+            .causal_lease
+            .clone();
+        for (sequence, fence, expected) in [
+            (1, true, LeaseLossReason::RenewalUnreachable),
+            (2, false, LeaseLossReason::RenewalLate),
+        ] {
+            lease
+                .request_renewal(
+                    sequence,
+                    MINIMUM_RENEWAL_HEADROOM,
+                    &offer.assignment_id,
+                    &offer.attempt_id,
+                    &manager.lease_clock,
+                    &manager.outbox,
+                )
+                .unwrap();
+            let request = manager
+                .pending_observations(&BTreeSet::new(), 100)
+                .into_iter()
+                .find(|entry| {
+                    matches!(&entry.observation,
+                        AssignmentObservation::LeaseRenewalRequested { current_lease_sequence, .. }
+                            if *current_lease_sequence == sequence
+                    )
+                })
+                .unwrap();
+            if fence {
+                manager.outbox.fence_assignment(&offer.assignment_id);
+                assert!(!manager.outbox.contains(request.id));
+            }
+            manager.acknowledge_observation(request.id);
+            assert_eq!(lease.deadline_reason(sequence), expected);
+        }
     }
 }

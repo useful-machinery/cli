@@ -6,40 +6,47 @@ use std::process::{Output, Stdio};
 use serde_json::{Value, json};
 
 use super::poll_until;
-use super::workflow_continue::{
-    chained, completed, decide, decide_each, loop_tree, read_json, resume,
-};
+use super::run_command::{ORGANIZATION, PROJECT_ID, RUN_ID, prepared_run};
+use super::workflow_continue::{chained, completed, decide, decide_each, loop_tree, read_json};
 use super::workflow_definition::Home;
 use super::workflow_run::{isolated_command, run_record};
-use super::workflow_run_control::{LiveRun, OPERATOR, PublishedWaitTree, refused, run_control};
+use super::workflow_run_control::{LiveRun, OPERATOR, PublishedWaitTree, run_control};
+use super::workflow_status::signed_out;
+use super::{
+    deployment_environment, http_response_with_headers, private_credential_directory, run_with_env,
+};
 
 /// `useful workflow run list ARGS` as `OPERATOR` against `home`.
 fn list(home: &Home, args: &[&str]) -> Output {
     list_at(Path::new(home.path()), args)
 }
 
-/// `useful workflow run list ARGS` as `OPERATOR` against the home at `home`, as that path spells it.
+/// `useful workflow run list ARGS` as `OPERATOR` against the home at `home`, as that path spells
+/// it, with nobody signed in.
 fn list_at(home: &Path, args: &[&str]) -> Output {
-    isolated_command(
+    let mut command = isolated_command(
         &["workflow", "run", "list"]
             .into_iter()
             .chain(args.iter().copied())
             .map(str::to_owned)
             .collect::<Vec<_>>(),
-    )
-    .env("USEFUL_HOME", home)
-    .env("USER", OPERATOR)
-    .output()
-    .unwrap()
+    );
+    command.env("USEFUL_HOME", home).env("USER", OPERATOR);
+    signed_out(command)
 }
 
-/// The `useful workflow run list ARGS --json` document, checked.
+/// The `useful workflow run list ARGS --json` document, checked: with nobody signed in each row
+/// is a local run and Cloud was not asked (REQ-RUN-127).
 fn document(home: &Home, args: &[&str]) -> Value {
     let output = list(home, &[args, &["--json"]].concat());
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["schemaVersion"], 1, "{document}");
     assert_eq!(document["command"], "useful workflow run list");
+    assert_eq!(document["cloud"]["asked"], false, "{document}");
+    for run in document["runs"].as_array().unwrap() {
+        assert_eq!(run["on"], "local", "{run}");
+    }
     document
 }
 
@@ -93,13 +100,11 @@ fn list_shows_the_live_runs_or_with_all_every_run() {
 
     let (landed, landed_id, terminal) = published.run("planned");
     assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
-    let approved = run_control(home, "approve", &landed_id, &[]);
-    assert_eq!(approved.status.code(), Some(0), "{approved:?}");
-    completed(&resume(&landed));
+    completed(&run_control(home, "approve", &landed_id, &[]));
     assert_eq!(run_record(&landed)["outcome"], "landed");
 
     let (withdrawn, withdrawn_id, _) = published.run("blocked");
-    let output = run_control(home, "withdraw", &withdrawn_id, &[]);
+    let output = run_control(home, "cancel", &withdrawn_id, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
     // A run whose `design` holds its step reads `running` while its process lives.
@@ -237,7 +242,7 @@ fn list_shows_the_live_runs_or_with_all_every_run() {
     let lines = output.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 4, "{output}");
     for (line, id) in lines.iter().zip(&live_ids) {
-        assert!(line.starts_with(id.as_str()), "{output}");
+        assert!(line.starts_with(&format!("local · {id}")), "{output}");
     }
     assert_eq!(
         lines[2..],
@@ -248,7 +253,7 @@ fn list_shows_the_live_runs_or_with_all_every_run() {
     let lines = output.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 4, "{output}");
     for (line, id) in lines.iter().zip(&every) {
-        assert!(line.starts_with(id.as_str()), "{output}");
+        assert!(line.starts_with(&format!("local · {id}")), "{output}");
     }
 
     // An entry under `runs/` without a run record is named on stderr and omitted.
@@ -277,7 +282,7 @@ fn list_shows_the_live_runs_or_with_all_every_run() {
         || live.process.try_wait().unwrap(),
         Option::is_some,
     );
-    let output = run_control(Some(home), "withdraw", &waiting_id, &[]);
+    let output = run_control(Some(home), "cancel", &waiting_id, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(selected(home, &[]), (vec![], 4));
     assert_eq!(
@@ -301,7 +306,7 @@ fn list_shows_the_subject_and_the_drifted_runs() {
     let home = &published.home;
     let (_, behind) = published.waiting_for(&published.definition, "AUTO-1");
     let (_, exited) = published.waiting_for(&published.definition, "AUTO-2");
-    let output = run_control(Some(home), "withdraw", &exited, &[]);
+    let output = run_control(Some(home), "cancel", &exited, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
     let runs = listed(home, &[]);
@@ -313,11 +318,11 @@ fn list_shows_the_subject_and_the_drifted_runs() {
     let plain = String::from_utf8(plain.stdout).unwrap();
     let line = plain
         .lines()
-        .find(|line| line.starts_with(&behind))
+        .find(|line| line.starts_with(&format!("local · {behind}")))
         .unwrap_or_else(|| panic!("{plain}"));
     assert!(
         line.starts_with(&format!(
-            "{behind} · {}@1 · AUTO-1 · waiting",
+            "local · {behind} · {}@1 · AUTO-1 · waiting",
             published.definition
         )),
         "{plain}"
@@ -346,7 +351,10 @@ fn list_shows_the_subject_and_the_drifted_runs() {
     let plain = String::from_utf8(plain.stdout).unwrap();
     let lines = plain.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 1, "{plain}");
-    assert!(lines[0].starts_with(&behind), "{plain}");
+    assert!(
+        lines[0].starts_with(&format!("local · {behind}")),
+        "{plain}"
+    );
     assert!(lines[0].ends_with(" · current 2"), "{plain}");
 
     // A definition whose record cannot be read is named on stderr and its runs omitted.
@@ -415,7 +423,7 @@ fn show_prints_a_run_with_its_children_and_controls() {
     let home = Some(&published.home);
     let stop = run_control(
         home,
-        "stop",
+        "pause",
         &id,
         &["--before", "review", "--reason", "hold"],
     );
@@ -481,9 +489,14 @@ fn show_prints_a_run_with_its_children_and_controls() {
     // The run's directory names the same run.
     assert_eq!(shown(&published, &run), document);
 
-    let unknown = run_control(home, "show", "run_7zzzzzzzzzzzzzzzzzzzzzzzzz", &[]);
-    let refusal = refused(&unknown, "show", "run_not_found");
-    assert!(refusal.get("runDirectory").is_none(), "{refusal}");
+    let unknown = super::workflow_status::signed_out(super::workflow_run_control::control_command(
+        home,
+        "show",
+        "run_7zzzzzzzzzzzzzzzzzzzzzzzzz",
+        &[],
+    ));
+    let error = super::workflow_status::show_error(&unknown, "run_not_found");
+    assert!(error.get("runDirectory").is_none(), "{error}");
 }
 
 /// `useful workflow run show RUN` without `--json`, which exits 0.
@@ -550,4 +563,276 @@ fn show_prints_the_edges_a_run_took() {
     let published = PublishedWaitTree::new();
     let (waiting, _, _) = published.run("blocked");
     assert!(shown_plain(&waiting).lines().any(|line| line == "edges: -"));
+}
+
+/// `useful workflow run list ARGS --allow-insecure-http` as `OPERATOR` against `home` and a
+/// deployment that answers `responses`, signed in or not, with the requests it was sent.
+fn cloud_list(
+    home: &Home,
+    args: &[&str],
+    signed_in: bool,
+    environment: &[(&str, &str)],
+    responses: Vec<Vec<u8>>,
+) -> (Output, Vec<String>) {
+    let (server, _directory, credential_path) = prepared_run(responses);
+    let missing = private_credential_directory();
+    let missing = missing.path().join("credentials.json");
+    let credential_path = if signed_in {
+        credential_path
+    } else {
+        missing.to_str().unwrap().to_owned()
+    };
+    let environment = deployment_environment(&server.api_url, &credential_path)
+        .into_iter()
+        .chain([("USEFUL_HOME", home.path()), ("USER", OPERATOR)])
+        .chain(environment.iter().copied())
+        .collect::<Vec<_>>();
+    let arguments = [
+        &["workflow", "run", "list"][..],
+        args,
+        &["--allow-insecure-http"],
+    ]
+    .concat();
+    let output = run_with_env(&arguments, &environment);
+    (output, server.finish())
+}
+
+/// The page of Cloud runs a deployment answers: one waiting run with an owner and one running
+/// run with none, and `nextCursor` `next-page`.
+pub(super) fn cloud_list_item(id: &str, owner: Value, state: &str) -> Value {
+    json!({
+        "id": id, "displayName": "Release checks", "projectId": PROJECT_ID,
+        "workflowPath": "workflows/build.yaml", "state": "running",
+        "createdAt": "2025-01-03T00:00:00Z", "updatedAt": "2025-01-03T01:00:00Z",
+        "integrationContext": {}, "placement": null, "owner": owner,
+        "workflowState": state, "workflowWait": null,
+    })
+}
+
+fn cloud_page() -> Value {
+    json!({
+        "items": [
+            cloud_list_item(RUN_ID, json!("prn_01k0z6r1w8f4jy2m7q9v3x5abc"), "waiting"),
+            cloud_list_item("run_01k0z6r1w8f4jy2m7q9v3x5abd", Value::Null, "running"),
+        ],
+        "nextCursor": "next-page",
+    })
+}
+
+pub(super) fn page_response(page: &Value) -> Vec<u8> {
+    http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[("Cache-Control", "private, no-store")],
+        &serde_json::to_vec(page).unwrap(),
+    )
+}
+
+fn parsed(output: &Output) -> Value {
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// `item` as the listing prints a Cloud row: the item as Cloud returned it with `on`.
+fn placed(item: &Value, on: &str) -> Value {
+    let mut row = item.clone();
+    row["on"] = json!(on);
+    row
+}
+
+// REQ-RUN-127, REQ-RUN-66: `list` prints the runs under the home and then one page of the Cloud
+// runs of the organization in effect, each saying where it executes, asks for the live ones
+// unless `--all`, keeps the waiting ones under `--waiting`, sends the project in effect, prints
+// no local row after the first page, and asks no Cloud under a filter only a local record holds.
+#[test]
+fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
+    let published = PublishedWaitTree::new();
+    let (_, local_id, _) = published.run("blocked");
+    let home = &published.home;
+    let page = cloud_page();
+    let items = page["items"].as_array().unwrap();
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--org", ORGANIZATION, "--json"],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    let document = parsed(&output);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        requests[0].contains(&format!("/v1/organizations/{ORGANIZATION}/runs?"))
+            && requests[0].contains("stateGroup=active")
+            && !requests[0].contains("projectId="),
+        "{requests:?}"
+    );
+    let runs = document["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3, "{document}");
+    assert_eq!(runs[0]["on"], "local", "{document}");
+    assert_eq!(runs[0]["id"], local_id.as_str(), "{document}");
+    assert_eq!(runs[1], placed(&items[0], "personal"), "{document}");
+    assert_eq!(runs[2], placed(&items[1], "project"), "{document}");
+    assert_eq!(
+        document["cloud"],
+        json!({"asked": true, "organizationRef": ORGANIZATION, "nextCursor": "next-page"}),
+        "{document}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+
+    // The report leads each row with its place and ends with the next cursor.
+    let (output, _) = cloud_list(
+        home,
+        &["--org", ORGANIZATION],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = String::from_utf8(output.stdout).unwrap();
+    let leads = report
+        .lines()
+        .filter(|line| !line.starts_with(' '))
+        .map(|line| line.split(' ').next().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(leads, ["local", "personal", "project", "next"], "{report}");
+    assert_eq!(report.lines().last(), Some("next cursor: next-page"));
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--org", ORGANIZATION, "--all", "--json"],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    assert_eq!(parsed(&output)["runs"].as_array().unwrap().len(), 3);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(!requests[0].contains("stateGroup"), "{requests:?}");
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--org", ORGANIZATION, "--waiting", "--json"],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    let document = parsed(&output);
+    assert!(requests[0].contains("stateGroup=active"), "{requests:?}");
+    let runs = document["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{document}");
+    assert_eq!(runs[0]["id"], local_id.as_str(), "{document}");
+    assert_eq!(runs[1], placed(&items[0], "personal"), "{document}");
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--org", ORGANIZATION, "--cursor", "prior-page", "--json"],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    let document = parsed(&output);
+    assert!(requests[0].contains("cursor=prior-page"), "{requests:?}");
+    assert!(
+        document["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|run| run["on"] != "local"),
+        "{document}"
+    );
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--org", ORGANIZATION, "--project", PROJECT_ID, "--json"],
+        true,
+        &[],
+        vec![page_response(&page)],
+    );
+    let document = parsed(&output);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        requests[0].contains(&format!("projectId={PROJECT_ID}")),
+        "{requests:?}"
+    );
+    assert_eq!(document["cloud"]["projectId"], PROJECT_ID, "{document}");
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--owner", "me", "--org", ORGANIZATION, "--json"],
+        true,
+        &[],
+        vec![],
+    );
+    let document = parsed(&output);
+    assert!(requests.is_empty(), "{requests:?}");
+    assert_eq!(
+        document["cloud"],
+        json!({"asked": false, "reason": "local_only"}),
+        "{document}"
+    );
+    assert_eq!(
+        ids(document["runs"].as_array().unwrap()),
+        [local_id.as_str()]
+    );
+}
+
+// REQ-RUN-127: with nobody signed in `list` prints the home's runs, says on standard error that
+// Cloud was not asked and exits 0, `--on local` asks no Cloud and says nothing of it, a Cloud
+// place fails as a Cloud read does, and options of another place are usage errors.
+#[test]
+fn list_without_cloud_prints_the_home_and_says_why() {
+    let published = PublishedWaitTree::new();
+    let (_, local_id, _) = published.run("blocked");
+    let home = &published.home;
+
+    let (output, requests) = cloud_list(home, &["--json"], false, &[], vec![]);
+    let document = parsed(&output);
+    assert!(requests.is_empty(), "{requests:?}");
+    assert_eq!(
+        ids(document["runs"].as_array().unwrap()),
+        [local_id.as_str()]
+    );
+    assert_eq!(document["runs"][0]["on"], "local", "{document}");
+    assert_eq!(document["runs"][0]["state"], "waiting", "{document}");
+    assert_eq!(
+        document["cloud"],
+        json!({"asked": false, "reason": "signed_out"}),
+        "{document}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("useful account login"),
+        "{output:?}"
+    );
+
+    let (output, requests) = cloud_list(
+        home,
+        &["--on", "local", "--json"],
+        true,
+        &[("USEFUL_ORG", ORGANIZATION)],
+        vec![],
+    );
+    let document = parsed(&output);
+    assert!(requests.is_empty(), "{requests:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        document["cloud"],
+        json!({"asked": false, "reason": "local_only"}),
+        "{document}"
+    );
+
+    let (output, requests) = cloud_list(home, &["--on", "project", "--json"], false, &[], vec![]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(requests.is_empty(), "{requests:?}");
+
+    for args in [
+        &["--on", "personal", "--drift"][..],
+        &["--on", "local", "--cursor", "prior-page"],
+        &["--on", "local", "--org", ORGANIZATION],
+        &["--state-group", "active", "--all"],
+    ] {
+        let (output, requests) = cloud_list(home, args, true, &[], vec![]);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(requests.is_empty(), "{args:?}: {requests:?}");
+    }
 }

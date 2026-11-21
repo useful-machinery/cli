@@ -7,7 +7,6 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use clap::{ArgGroup, Args, Subcommand, builder::NonEmptyStringValueParser};
 use zeroize::Zeroizing;
 
 use crate::exit_code::ExitCode;
@@ -21,52 +20,20 @@ use useful_api::{
 use useful_human_auth::Deployment;
 use useful_human_auth::SecretToken;
 
-use super::{OrganizationArg, PaginationArgs};
+use super::context::{self, OrgArgs};
+use super::{CommandResult, PaginationArgs};
 
-pub(super) const ABOUT: &str = "Manage Useful Machinery invitations";
-const NAME: &str = "invitation";
-const ERROR_CONTEXT: &str = "configure Useful Machinery invitation access";
 const MAX_CAPABILITY_BYTES: u64 = 128;
 
-#[derive(Debug, Args)]
-pub(super) struct Command {
-    #[command(subcommand)]
-    command: Option<InvitationCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-enum InvitationCommand {
-    #[command(about = "Accept an invitation")]
-    Accept(AccessCommand),
-    #[command(about = "Decline an invitation")]
-    Decline(DeclineCommand),
-    #[command(about = "List your invitation inbox")]
-    List(InboxCommand),
-    #[command(about = "Preview an invitation")]
-    Preview(AccessCommand),
-}
-
-#[derive(Debug, Args)]
-pub(super) struct OrganizationCommand {
-    #[command(subcommand)]
-    command: Option<OrganizationInvitationCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-enum OrganizationInvitationCommand {
-    #[command(about = "Issue an organization invitation")]
-    Issue(IssueCommand),
-    #[command(about = "List organization invitation history")]
-    List(OrganizationListCommand),
-    #[command(about = "Revoke an organization invitation")]
-    Revoke(RevokeCommand),
-}
-
-type InvitationOptions =
+pub(super) type InvitationOptions =
     super::CommonArgs<super::InvitationJson, super::PrincipalAuthenticationArgs>;
 
 // Invitation leaves keep operation-local execution and error context rather than exposing
-// organization-profile terminology through a shared operation abstraction.
+// organization-profile terminology through a shared operation abstraction. The leaves parse
+// where the tree puts them: the organization's (`useful org invitation`) in `org`, which run
+// through `issue`, `list_for_organization` and `revoke` here, and the invited person's
+// (`useful account invitation`) in `account`, which run through `list_inbox` and `Access`
+// here, beside the renderer both sides share.
 
 impl InvitationOptions {
     fn execute<O>(
@@ -126,180 +93,38 @@ impl InvitationOptions {
     }
 }
 
-#[derive(Debug, Args)]
-struct InboxCommand {
-    #[command(flatten)]
-    pagination: PaginationArgs,
-
-    #[command(flatten)]
+pub(super) fn list_inbox(
     options: InvitationOptions,
-}
-
-#[derive(Debug, Args)]
-struct InvitationAccess {
-    #[arg(
-        value_name = "INVITATION",
-        value_parser = parse_invitation_id,
-        help = "Invitation ID"
-    )]
-    invitation_id: String,
-
-    #[arg(
-        long,
-        value_name = "PATH|-",
-        help = "Read an email invitation capability from a protected file or explicit stdin"
-    )]
-    capability_file: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-struct AccessCommand {
-    #[command(flatten)]
-    access: InvitationAccess,
-
-    #[command(flatten)]
-    options: InvitationOptions,
-}
-
-#[derive(Debug, Args)]
-struct DeclineCommand {
-    #[command(flatten)]
-    access: InvitationAccess,
-
-    #[command(flatten)]
-    confirmation: super::ConfirmationArgs,
-
-    #[command(flatten)]
-    options: InvitationOptions,
-}
-
-#[derive(Debug, Args)]
-#[command(group(
-    ArgGroup::new("target")
-        .required(true)
-        .multiple(false)
-        .args(["principal_id", "email"])
-))]
-struct IssueCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(
-        long,
-        value_name = "PRINCIPAL",
-        value_parser = parse_principal_id,
-        help = "Invite an exact active principal ID"
-    )]
-    principal_id: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "EMAIL",
-        value_parser = NonEmptyStringValueParser::new(),
-        help = "Invite one email address"
-    )]
-    email: Option<String>,
-
-    #[command(flatten)]
-    options: InvitationOptions,
-}
-
-// This page belongs to owner-visible invitation history; keeping its arguments local prevents
-// runner-list semantics from becoming a shared abstraction merely because both are paginated.
-#[derive(Debug, Args)]
-struct OrganizationListCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[command(flatten)]
-    pagination: PaginationArgs,
-
-    #[command(flatten)]
-    options: InvitationOptions,
-}
-
-#[derive(Debug, Args)]
-struct RevokeCommand {
-    #[arg(value_name = OrganizationArg::VALUE_NAME, help = OrganizationArg::HELP)]
-    organization: OrganizationArg,
-
-    #[arg(
-        value_name = "INVITATION",
-        value_parser = parse_invitation_id,
-        help = "Invitation ID"
-    )]
-    invitation_id: String,
-
-    #[command(flatten)]
-    confirmation: super::ConfirmationArgs,
-
-    #[command(flatten)]
-    options: InvitationOptions,
-}
-
-impl Command {
-    pub(super) fn execute(self) -> super::CommandResult {
-        super::execute_deployment_command(
-            self.command,
-            &[NAME],
-            ERROR_CONTEXT,
-            |command, deployment| match command {
-                InvitationCommand::List(command) => command.execute(deployment).map_err(Into::into),
-                InvitationCommand::Preview(command) => {
-                    command.preview(deployment).map_err(Into::into)
-                }
-                InvitationCommand::Accept(command) => {
-                    command.accept(deployment).map_err(Into::into)
-                }
-                InvitationCommand::Decline(command) => {
-                    command.execute(deployment).map_err(Into::into)
-                }
-            },
-        )
-    }
-}
-
-impl OrganizationCommand {
-    pub(super) fn execute(self) -> super::CommandResult {
-        super::execute_deployment_command(
-            self.command,
-            &["organization", "invitation"],
-            ERROR_CONTEXT,
-            |command, deployment| match command {
-                OrganizationInvitationCommand::Issue(command) => {
-                    command.execute(deployment).map_err(Into::into)
-                }
-                OrganizationInvitationCommand::List(command) => {
-                    command.execute(deployment).map_err(Into::into)
-                }
-                OrganizationInvitationCommand::Revoke(command) => {
-                    command.execute(deployment).map_err(Into::into)
-                }
-            },
-        )
-    }
-}
-
-impl InboxCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        self.options.execute(
+    deployment: &Deployment,
+    pagination: &PaginationArgs,
+) -> CommandResult {
+    options
+        .execute(
             deployment,
             |client, api_url, access_token| {
                 list_invitation_inbox(
                     client,
                     api_url,
                     access_token,
-                    self.pagination.limit,
-                    self.pagination.cursor.as_deref(),
+                    pagination.limit,
+                    pagination.cursor.as_deref(),
                 )
             },
             output::write_inbox,
         )
-    }
+        .map_err(Into::into)
 }
 
-impl AccessCommand {
-    fn preview(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+/// The invited person's access to one invitation: its ID, the optional source of an email
+/// invitation's capability, and the leaf's options.
+pub(super) struct Access {
+    pub(super) invitation_id: String,
+    pub(super) capability_file: Option<PathBuf>,
+    pub(super) options: InvitationOptions,
+}
+
+impl Access {
+    pub(super) fn show(self, deployment: &Deployment) -> CommandResult {
         self.execute(
             deployment,
             preview_invitation,
@@ -307,9 +132,10 @@ impl AccessCommand {
                 output::write_preview(deployment, outcome, authentication, json)
             },
         )
+        .map_err(Into::into)
     }
 
-    fn accept(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    pub(super) fn accept(self, deployment: &Deployment) -> CommandResult {
         self.execute_mutation(
             deployment,
             accept_invitation,
@@ -317,6 +143,25 @@ impl AccessCommand {
                 output::write_accept(deployment, outcome, authentication, json)
             },
         )
+        .map_err(Into::into)
+    }
+
+    pub(super) fn decline(self, deployment: &Deployment) -> CommandResult {
+        self.execute_mutation(
+            deployment,
+            decline_invitation,
+            |deployment, invitation_id, outcome, authentication, json| {
+                output::write_termination(
+                    deployment,
+                    invitation_id,
+                    outcome,
+                    output::TerminationAction::Decline,
+                    authentication,
+                    json,
+                )
+            },
+        )
+        .map_err(Into::into)
     }
 
     // Read access and mutation access intentionally keep different capability and request-
@@ -411,14 +256,14 @@ impl AccessCommand {
         execute: impl FnOnce(InvitationOptions, String, Option<SecretToken>) -> anyhow::Result<ExitCode>,
     ) -> anyhow::Result<ExitCode> {
         if self.options.authentication.uses_stdin()
-            && self.access.capability_file.as_deref() == Some(Path::new("-"))
+            && self.capability_file.as_deref() == Some(Path::new("-"))
         {
             return Err(anyhow::anyhow!(
                 "standard input cannot supply both a service API key and an invitation capability"
             ));
         }
-        match self.access.read_capability() {
-            Ok(capability) => execute(self.options, self.access.invitation_id, capability),
+        match self.read_capability() {
+            Ok(capability) => execute(self.options, self.invitation_id, capability),
             Err(error) => output::write_capability_error(
                 deployment.fingerprint().api_url(),
                 &error,
@@ -426,111 +271,7 @@ impl AccessCommand {
             ),
         }
     }
-}
 
-impl DeclineCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        AccessCommand {
-            access: self.access,
-            options: self.options,
-        }
-        .execute_mutation(
-            deployment,
-            decline_invitation,
-            |deployment, invitation_id, outcome, authentication, json| {
-                output::write_termination(
-                    deployment,
-                    invitation_id,
-                    outcome,
-                    output::TerminationAction::Decline,
-                    authentication,
-                    json,
-                )
-            },
-        )
-    }
-}
-
-impl IssueCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let target = match (self.principal_id.as_deref(), self.email.as_deref()) {
-            (Some(principal_id), None) => InvitationTarget::Principal(principal_id),
-            (None, Some(email)) => InvitationTarget::Email(email),
-            (None, None) | (Some(_), Some(_)) => {
-                return Err(anyhow::anyhow!(
-                    "invitation target is unavailable after command parsing"
-                ));
-            }
-        };
-        self.options.execute_mutation(
-            deployment,
-            |client, api_url, access_token, idempotency_key| {
-                issue_invitation(
-                    client,
-                    api_url,
-                    access_token,
-                    &self.organization,
-                    idempotency_key,
-                    target,
-                )
-            },
-            output::write_issue,
-        )
-    }
-}
-
-impl OrganizationListCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        self.options.execute(
-            deployment,
-            |client, api_url, access_token| {
-                list_organization_invitations(
-                    client,
-                    api_url,
-                    access_token,
-                    &self.organization,
-                    self.pagination.limit,
-                    self.pagination.cursor.as_deref(),
-                )
-            },
-            output::write_organization_list,
-        )
-    }
-}
-
-impl RevokeCommand {
-    fn execute(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
-        let organization = self.organization;
-        let invitation_id = self.invitation_id;
-        self.options.execute_mutation(
-            deployment,
-            |client, api_url, access_token, idempotency_key| {
-                revoke_invitation(
-                    client,
-                    api_url,
-                    access_token,
-                    &organization,
-                    &invitation_id,
-                    idempotency_key,
-                )
-            },
-            |deployment, outcome, authentication, json| {
-                output::write_termination(
-                    deployment,
-                    &invitation_id,
-                    outcome,
-                    output::TerminationAction::Revoke {
-                        organization: &organization,
-                    },
-                    authentication,
-                    json,
-                )
-            },
-        )
-    }
-}
-
-impl InvitationAccess {
     fn read_capability(&self) -> Result<Option<SecretToken>, CapabilityError> {
         self.capability_file
             .as_deref()
@@ -539,11 +280,102 @@ impl InvitationAccess {
     }
 }
 
-fn parse_invitation_id(value: &str) -> Result<String, String> {
+/// Runs `run` in the organization in effect (REQ-ORG-87), for the organization's own leaves.
+fn execute_in(
+    options: InvitationOptions,
+    deployment: &Deployment,
+    org: OrgArgs,
+    run: impl FnOnce(InvitationOptions, &str) -> anyhow::Result<ExitCode>,
+) -> CommandResult {
+    context::execute_in(org, options, deployment, output::write_common, run)
+}
+
+pub(super) fn issue(
+    options: InvitationOptions,
+    deployment: &Deployment,
+    org: OrgArgs,
+    target: InvitationTarget<'_>,
+) -> CommandResult {
+    execute_in(options, deployment, org, |options, organization| {
+        options.execute_mutation(
+            deployment,
+            |client, api_url, access_token, idempotency_key| {
+                issue_invitation(
+                    client,
+                    api_url,
+                    access_token,
+                    organization,
+                    idempotency_key,
+                    target,
+                )
+            },
+            output::write_issue,
+        )
+    })
+}
+
+pub(super) fn list_for_organization(
+    options: InvitationOptions,
+    deployment: &Deployment,
+    org: OrgArgs,
+    pagination: &PaginationArgs,
+) -> CommandResult {
+    execute_in(options, deployment, org, |options, organization| {
+        options.execute(
+            deployment,
+            |client, api_url, access_token| {
+                list_organization_invitations(
+                    client,
+                    api_url,
+                    access_token,
+                    organization,
+                    pagination.limit,
+                    pagination.cursor.as_deref(),
+                )
+            },
+            output::write_organization_list,
+        )
+    })
+}
+
+pub(super) fn revoke(
+    options: InvitationOptions,
+    deployment: &Deployment,
+    org: OrgArgs,
+    invitation_id: &str,
+) -> CommandResult {
+    execute_in(options, deployment, org, |options, organization| {
+        options.execute_mutation(
+            deployment,
+            |client, api_url, access_token, idempotency_key| {
+                revoke_invitation(
+                    client,
+                    api_url,
+                    access_token,
+                    organization,
+                    invitation_id,
+                    idempotency_key,
+                )
+            },
+            |deployment, outcome, authentication, json| {
+                output::write_termination(
+                    deployment,
+                    invitation_id,
+                    outcome,
+                    output::TerminationAction::Revoke { organization },
+                    authentication,
+                    json,
+                )
+            },
+        )
+    })
+}
+
+pub(super) fn parse_invitation_id(value: &str) -> Result<String, String> {
     parse_typed_id(value, "inv_", "invitation")
 }
 
-fn parse_principal_id(value: &str) -> Result<String, String> {
+pub(super) fn parse_principal_id(value: &str) -> Result<String, String> {
     parse_typed_id(value, "prn_", "principal")
 }
 

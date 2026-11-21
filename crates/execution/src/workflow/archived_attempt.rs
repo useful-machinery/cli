@@ -178,6 +178,9 @@ pub(crate) struct ArchivedStep {
     /// The failed child of a `succeeded` `workflow` step (REQ-LOCALRUN-219); `None` for
     /// any other step.
     pub(crate) failed_child: Option<FailedChild>,
+    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79); `None` for any
+    /// other step.
+    pub(crate) failure_class: Option<super::evidence::FailureClass>,
     /// The source each `firstOf` of a step that started took (REQ-EVIDENCE-28).
     pub(crate) input_sources: Vec<super::evidence::InputSource>,
     /// The count of outputs the step committed, as the attempt recorded them; `None` for an
@@ -939,6 +942,7 @@ fn project_steps(
                 || !step_state_matches(step.state, durable.state)
                 || durable.detail != step.detail
                 || durable.failed_child != step.failed_child
+                || durable.failure_class != step.failure_class
                 || durable.input_sources != step.input_sources
                 || !durable_recovery_matches_wire(root, attempt, durable, step)
             {
@@ -1434,6 +1438,12 @@ fn project_step(
     {
         return Err(());
     }
+    // Only a `failed` ordinary step records its failure's class (REQ-WFEXEC-79).
+    if step.failure_class.is_some()
+        && (step.state != WorkflowStepStateV1::Failed || role != WorkflowNodeRole::Step)
+    {
+        return Err(());
+    }
     // Each recorded source names a `firstOf` of the step's body and a reference its list
     // holds (REQ-EVIDENCE-28).
     let first_of = definition.first_of_bindings();
@@ -1557,6 +1567,7 @@ fn project_step(
         recovery: step.recovery.clone(),
         invocations: step.invocations.clone(),
         failed_child: step.failed_child.clone(),
+        failure_class: step.failure_class,
         input_sources: step.input_sources.clone(),
         committed_outputs,
     })
@@ -2125,6 +2136,7 @@ mod tests {
             recovery: None,
             invocations: Vec::new(),
             failed_child: None,
+            failure_class: None,
             input_sources: Vec::new(),
             committed_outputs: None,
         }

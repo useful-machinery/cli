@@ -1,6 +1,6 @@
 //! The root workflow's `mirror` block (REQ-WFFORMAT-101): what Linear sees of a run of the
 //! root. Decoding keeps the authored strings; the template and guard grammars here parse
-//! them, which `useful workflow definition validate` does with a location for each failure.
+//! them, which `useful workflow validate` of a tree does with a location for each failure.
 //! The `Mirror` driver performs a run's hooks through a `MirrorTarget` the CLI implements
 //! and appends each write's record under the run's `mirror/` (REQ-LOCALRUN-193).
 

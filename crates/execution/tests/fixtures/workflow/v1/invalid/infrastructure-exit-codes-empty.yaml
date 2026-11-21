@@ -1,0 +1,6 @@
+schemaVersion: 1
+steps:
+  work:
+    kind: cmd
+    infrastructureExitCodes: []
+    command: {argv: ["true"]}
