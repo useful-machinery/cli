@@ -5984,7 +5984,8 @@ fn a_signal_before_a_continuation_begins_starts_no_attempt() {
     assert_eq!(attempt_count(&run), 2);
 }
 
-// SC-CONTINUE-12, REQ-WFEXEC-72, REQ-WFEXEC-40, REQ-LOCALRUN-178, REQ-CONTINUE-81: SIGINT or
+// SC-CONTINUE-12, REQ-WFEXEC-72, REQ-WFEXEC-129, REQ-WFEXEC-40, REQ-LOCALRUN-178,
+// REQ-CONTINUE-81: SIGINT or
 // SIGTERM to a `retry` whose attempt has begun but has not yet prepared its stage's child keeps
 // the repair wait it continued from: the command exits 130 or 143, the run still waits on the
 // same record, written again as attempt 2's copy, `build` is `not_run` `not_reached`, and the
