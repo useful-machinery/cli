@@ -525,7 +525,7 @@ pub(super) fn validate_continuation_record(record: &ContinuationRecordV1) -> boo
         ) => valid_digest(manifest_digest) && manifest_digest == prior_manifest_digest,
         // The first own attempt of a successor names no replacement but runs under the
         // successor's own definition, which differs from the prior attempt's, whatever
-        // resolved it: a restart (REQ-CONTINUE-79) or the carried wait of an upgrade
+        // resolved it: a restart (REQ-CONTINUE-98) or the carried wait of an upgrade
         // (REQ-CONTINUE-80).
         (
             ContinuationRequestedDefinitionV1::Inherited(_),
@@ -858,7 +858,7 @@ fn primary_node_detail(primary: &super::evidence::PrimaryIssue) -> NodeDetail {
     }
 }
 
-// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-58).
+// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-83).
 fn step_succeeds_workflow(step: &WorkflowStepV1) -> bool {
     matches!(
         step.state,
@@ -1471,7 +1471,7 @@ fn validate_step_recovery(
     Ok(())
 }
 
-// An interrupted step is the primary issue whatever its failure policy (REQ-WFEXEC-69).
+// An interrupted step is the primary issue whatever its failure policy (REQ-WFEXEC-136).
 fn interrupted(detail: &NodeDetail) -> bool {
     matches!(detail, NodeDetail::Failed(detail) if detail.is_interrupted())
 }
@@ -2007,7 +2007,7 @@ pub(super) fn unavailable_export_source_matches(
             Some(super::evidence::InheritedPriorState::Succeeded) | None => false,
         };
     // A `workflow` step commits only the child exports that were available, so an export of
-    // one it left out is `source_failed` though the step succeeded (REQ-WFEXEC-58,
+    // one it left out is `source_failed` though the step succeeded (REQ-WFEXEC-60,
     // REQ-EXPORTS-3); an inherited one still carries the `outcome` it routed from.
     let child_export_left_out =
         source_is_workflow_step

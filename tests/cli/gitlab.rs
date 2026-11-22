@@ -1222,7 +1222,7 @@ fn help_links_public_setup_and_requires_explicit_activation_flags() {
     );
 }
 
-// REQ-CONNECTION-77, REQ-CONNECTION-104
+// REQ-CONNECTION-77, REQ-CONNECTION-123, REQ-CONNECTION-104
 #[test]
 fn authentication_and_candidate_conflicts_have_distinct_exits() {
     let problem = |status, code, kind| {

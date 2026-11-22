@@ -1,5 +1,5 @@
 //! The roots that bound the files of `useful workflow doctor` and `useful account integration connect
-//! --workflow` (REQ-CREDREADY-1, REQ-GRANT-76): a directory named in place of a file stands for
+//! --workflow` (REQ-CREDREADY-1, REQ-GRANT-184): a directory named in place of a file stands for
 //! its tree's `workflow.yaml` and bounds it; otherwise `--source-root`, or the root of the Git
 //! repository that holds each file, with each root's derivation merged into one. `useful
 //! workflow validate FILE` finds a file's root the same way (REQ-WFFORMAT-12).

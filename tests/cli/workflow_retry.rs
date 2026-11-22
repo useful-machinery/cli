@@ -1048,7 +1048,7 @@ fn resumed(destination: &Path) -> serde_json::Value {
     terminal
 }
 
-// REQ-CONTINUE-76: resuming a parent killed while its child ran starts a new attempt of
+// REQ-CONTINUE-112: resuming a parent killed while its child ran starts a new attempt of
 // that child in place and routes on its outcome.
 #[test]
 fn resuming_an_abandoned_parent_retries_its_running_child_in_place() {
@@ -1069,7 +1069,7 @@ fn resuming_an_abandoned_parent_retries_its_running_child_in_place() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-CONTINUE-76: a child that exited after its parent was killed is adopted: the step
+// REQ-CONTINUE-112: a child that exited after its parent was killed is adopted: the step
 // settles from the child's recorded outcome and exports without another child attempt.
 #[test]
 fn resuming_an_abandoned_parent_adopts_its_exited_child() {
@@ -1093,7 +1093,7 @@ fn resuming_an_abandoned_parent_adopts_its_exited_child() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-WFEXEC-77, REQ-CONTINUE-76: an adopted child whose published result is `failed` is
+// REQ-WFEXEC-113, REQ-CONTINUE-112: an adopted child whose published result is `failed` is
 // recorded as its step's failed child from that result, without another child attempt.
 #[test]
 fn resuming_an_abandoned_parent_records_its_adopted_childs_failure() {
@@ -1124,7 +1124,7 @@ fn resuming_an_abandoned_parent_records_its_adopted_childs_failure() {
         "{terminal}"
     );
     assert_eq!(run_record(&destination)["outcome"], "failed");
-    // REQ-LOCALRUN-221: the view reads the adopted child's record the resumed attempt wrote.
+    // REQ-LOCALRUN-293: the view reads the adopted child's record the resumed attempt wrote.
     let view = super::workflow_run_control::plain_view(&destination);
     let row = super::workflow_run_control::view_row(&view, "design");
     assert!(row.iter().any(|field| field == "state failed"), "{row:?}");
@@ -1169,10 +1169,11 @@ fn assert_state_commit_failure(stderr: &[u8], state_file: &Path, run_directory: 
     assert!(lines[remedy].starts_with(char::is_whitespace), "{stderr}");
 }
 
-// REQ-LOCALRUN-143, REQ-LOCALRUN-206, REQ-CONTINUE-2, REQ-CONTINUE-76: a root whose state
-// commit fails names the failure's class, leaves its attempt unsettled and its record
-// `running`, and once the state is back the run is abandoned and resumes at the step that
-// was running, adopting the child that exited.
+// REQ-LOCALRUN-143, REQ-LOCALRUN-292, REQ-LOCALRUN-206, INV-ENGINE-55, INV-ENGINE-56, REQ-CONTINUE-2,
+// REQ-CONTINUE-76, REQ-CONTINUE-112:
+// a root whose state commit fails names the failure's class, leaves its attempt
+// unsettled and its record `running`, and once the state is back the run is abandoned and resumes
+// at the step that was running, adopting the child that exited.
 #[test]
 fn a_failed_state_commit_leaves_the_run_running_and_resumable() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -1228,10 +1229,10 @@ fn a_failed_state_commit_leaves_the_run_running_and_resumable() {
     assert!(!destination.join("children/design/000002").exists());
 }
 
-// REQ-LOCALRUN-205, REQ-LOCALRUN-207, REQ-CONTINUE-76: a child whose state commit fails ends
-// its parent unsettled too: the parent's step is not settled from the child, the parent
-// records the child's failure, which its status carries, and stays `running`, and resuming
-// it retries the child in place.
+// REQ-LOCALRUN-205, REQ-LOCALRUN-207, INV-ENGINE-57, REQ-CONTINUE-76, REQ-CONTINUE-112: a child whose state commit
+// fails ends its parent unsettled too: the parent's step is not settled from the child, the parent
+// records the child's failure, which its status carries, and stays `running`, and resuming it
+// retries the child in place.
 #[test]
 fn a_childs_failed_state_commit_leaves_its_parent_running_and_resumable() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -1303,7 +1304,7 @@ fn a_childs_failed_state_commit_leaves_its_parent_running_and_resumable() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-CONTINUE-76: a parent whose process is alive is refused `run_locked`.
+// REQ-CONTINUE-113: a parent whose process is alive is refused `run_locked`.
 #[test]
 fn resuming_a_live_parent_is_refused_run_locked() {
     let (_bundle, destination, mut parent) = spawn_held_child_tree("live-parent");
@@ -1318,7 +1319,7 @@ fn resuming_a_live_parent_is_refused_run_locked() {
     assert!(!destination.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-180: an id no run under the home has, with nobody signed in to ask Cloud, is
+// REQ-LOCALRUN-227: an id no run under the home has, with nobody signed in to ask Cloud, is
 // `run_not_found` in the `refused` document of retry and resume, as of every leaf that looks
 // everywhere.
 #[test]

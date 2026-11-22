@@ -1988,7 +1988,7 @@ fn retry_args(run: &Path) -> Vec<String> {
     ]
 }
 
-// REQ-LOCALRUN-184, REQ-CONTINUE-81: `retry RUN` of an exited run whose latest attempt failed
+// REQ-LOCALRUN-236, REQ-CONTINUE-81: `retry RUN` of an exited run whose latest attempt failed
 // continues it, reexecuting the steps the attempt left other than `succeeded`, `skipped` or
 // `inherited` and inheriting the rest, its documents naming `retry`; a run that names no step
 // to continue from, whose failure was a finalizer's alone, is refused
@@ -2060,7 +2060,7 @@ fn retry_of_an_ended_run_continues_from_the_steps_its_attempt_left() {
     );
 }
 
-// REQ-LOCALRUN-184: `retry RUN` of a `running` run whose process is gone is refused
+// REQ-LOCALRUN-311, REQ-LOCALRUN-236: `retry RUN` of a `running` run whose process is gone is refused
 // `run_not_live`, naming `resume`; once the run ended, an edge-scheduled run continues from
 // the stage its latest attempt started last, which its record's `position` named.
 #[test]
@@ -2313,9 +2313,9 @@ fn a_continuation_sees_the_source_revision_the_run_was_created_with() {
 
 /// A root whose `design` waits for answers when blocked and for a repair when it fails,
 /// each continuing at `design` itself with the answers given so far, whose `review` waits
-/// for an approval or a hand-back to `fix` (SC-CONTINUE-7, REQ-WFFORMAT-92), and whose
+/// for an approval or a hand-back to `fix` (SC-CONTINUE-7, REQ-WFFORMAT-118), and whose
 /// `merge`, once admitted to the queue, waits for the pull request `design` exported to
-/// leave it (REQ-WFFORMAT-97, REQ-WFEXEC-65).
+/// leave it (REQ-WFFORMAT-97, REQ-WFEXEC-124).
 pub(super) const WAIT_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -2635,8 +2635,8 @@ pub(super) fn waiting_run(
     (fs::canonicalize(&destination).unwrap(), terminal)
 }
 
-// SC-CONTINUE-7, REQ-WFEXEC-61, REQ-WFEXEC-63, REQ-CONTINUE-74, REQ-CONTINUE-75,
-// REQ-CONTINUE-77, REQ-LOCALRUN-127, REQ-LOCALRUN-178, REQ-CONTINUE-29
+// SC-CONTINUE-7, REQ-WFEXEC-61, REQ-WFEXEC-63, REQ-CONTINUE-74, REQ-CONTINUE-102,
+// REQ-CONTINUE-75, REQ-CONTINUE-77, REQ-LOCALRUN-127, REQ-LOCALRUN-178, REQ-CONTINUE-29
 #[test]
 fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     let bundle = wait_tree();
@@ -2667,7 +2667,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
         assert_eq!(step["detail"]["code"], "not_reached", "{terminal}");
     }
 
-    // REQ-CONTINUE-74: a held wait changes nothing and answers quickly.
+    // REQ-CONTINUE-102: a held wait changes nothing and answers quickly.
     let before = fs::read(run.join("run.json")).unwrap();
     let started = crate::monotonic_now();
     let held = completed(&resume(&run));
@@ -2681,7 +2681,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     assert_eq!(attempt_count(&run), 1);
     assert_eq!(fs::read(run.join("run.json")).unwrap(), before);
 
-    // REQ-CONTINUE-75, REQ-WFEXEC-63, REQ-WFFORMAT-92: the answer continues from `design`
+    // REQ-CONTINUE-75, REQ-WFEXEC-63, REQ-WFFORMAT-119: the answer continues from `design`
     // itself, whose second child receives the answers as JSON, and `review` enters an
     // approval wait.
     append_control(
@@ -2728,7 +2728,8 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     assert!(run.join("attempts/000001/wait.json").is_file());
     assert_eq!(read_json(&run.join("wait.json")), *approval);
 
-    // REQ-CONTINUE-75, REQ-WFFORMAT-95: a hand-back continues from `fix` with the notes.
+    // REQ-CONTINUE-75, REQ-CONTINUE-104, REQ-WFFORMAT-95: a hand-back continues from `fix` with
+    // the notes.
     append_control(
         &run,
         &control(
@@ -2929,8 +2930,8 @@ pub(super) fn fan_out_tree() -> TreeBundle {
     bundle
 }
 
-// REQ-WFEXEC-66, REQ-WFEXEC-68, REQ-CONTINUE-75, REQ-LOCALRUN-177, REQ-WFDEF-4: a fan-out
-// waits at the element whose child blocked, and the answered run resumes at that element,
+// REQ-WFEXEC-66, REQ-WFEXEC-68, REQ-WFEXEC-96, REQ-CONTINUE-106, REQ-LOCALRUN-177, REQ-WFDEF-48:
+// a fan-out waits at the element whose child blocked, and the answered run resumes at that element,
 // reruns only it with the answers and continues with the rest to landing.
 #[test]
 fn a_fan_out_waits_at_its_element_and_resumes_the_same_element() {
@@ -3008,7 +3009,8 @@ fn a_fan_out_waits_at_its_element_and_resumes_the_same_element() {
     );
 }
 
-// REQ-CONTINUE-75, REQ-CONTINUE-81, REQ-WFEXEC-68, REQ-LOCALRUN-184: a repair retry consumes
+// REQ-CONTINUE-107, REQ-CONTINUE-108, REQ-CONTINUE-81, REQ-CONTINUE-115, REQ-WFEXEC-96,
+// REQ-LOCALRUN-184: a repair retry consumes
 // a child completed independently after the wait, preserving earlier elements and continuing
 // the remaining fan-out, and, when the child's repair attempt failed again, continues that
 // child with a new attempt rather than adopting it.
@@ -3262,9 +3264,9 @@ pub(super) fn ordinals_of(directory: &Path) -> Vec<String> {
     names
 }
 
-// REQ-CONTINUE-75, REQ-CONTINUE-77: a `control.retry` continues a repair wait with reason
-// `retry` and resolves `then`'s child with its agent-profile replacement; a
-// `control.withdraw` ends a run without another attempt.
+// REQ-CONTINUE-75, REQ-CONTINUE-105, REQ-CONTINUE-109, REQ-CONTINUE-77: a `control.retry`
+// continues a repair wait with reason `retry` and resolves `then`'s child with its agent-profile
+// replacement; a `control.withdraw` ends a run without another attempt.
 #[test]
 fn a_repair_wait_is_retried_with_replaced_profiles_or_withdrawn() {
     let bundle = wait_tree();
@@ -3402,7 +3404,7 @@ fn a_stop_before_a_step_waits_until_it_is_lifted() {
 
 /// A root whose `review` hands back to `fix` under a limit of one, after which it waits for a
 /// repair at `review`, and whose `fix` builds back to `review` (REQ-WFEXEC-64,
-/// REQ-WFFORMAT-92, REQ-WFFORMAT-96). `fix` reads the review's `findings`.
+/// REQ-WFFORMAT-119, REQ-WFFORMAT-96). `fix` reads the review's `findings`.
 pub(super) const LOOP_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -3792,6 +3794,10 @@ fn a_resolved_host_wait_adopts_its_independently_completed_child() {
 // `continued` and the same command continues from `fix` with the edge counted; `fix`'s backward
 // edge continues at `review` uncounted; the review proceeds and the run lands, and `--json`
 // writes one document per chained attempt.
+// REQ-WFEXEC-132, REQ-WFEXEC-133, REQ-CONTINUE-77, REQ-LOCALRUN-126: a limited hand-back ends the
+// attempt `continued` and the same command continues from `fix` with the edge counted; `fix`'s
+// backward edge continues at `review` uncounted; the review proceeds and the run lands, and
+// `--json` writes one document per chained attempt.
 #[test]
 fn a_limited_hand_back_and_a_backward_edge_chain_attempts_to_landing() {
     let bundle = loop_tree();
@@ -3878,7 +3884,7 @@ fn exhausted_loop(bundle: &TreeBundle, name: &str) -> (std::path::PathBuf, serde
     (run, wait)
 }
 
-// REQ-WFEXEC-64, REQ-CONTINUE-75: once the limit is reached the hand-back takes its `else`,
+// REQ-WFEXEC-133, REQ-CONTINUE-75: once the limit is reached the hand-back takes its `else`,
 // a repair wait at `review` that a `control.retry` continues from `review`.
 #[test]
 fn an_exhausted_limit_waits_for_a_repair_that_a_retry_continues() {
@@ -3906,7 +3912,7 @@ fn an_exhausted_limit_waits_for_a_repair_that_a_retry_continues() {
     assert_eq!(record["edges"], serde_json::json!({"review.hand_back": 1}));
 }
 
-// REQ-WFEXEC-57, REQ-WFEXEC-58, REQ-WFEXEC-64: once the limit is reached the hand-back takes its
+// REQ-WFEXEC-57, REQ-WFEXEC-83, REQ-WFEXEC-133: once the limit is reached the hand-back takes its
 // `else`, here an exit, and the run records that exit's outcome.
 #[test]
 fn an_exhausted_limit_whose_else_is_an_exit_records_that_exit() {
@@ -4067,7 +4073,7 @@ fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
     assert!(record["attempts"].as_u64().unwrap() >= 3, "{record}");
 }
 
-// REQ-LOCALRUN-214, INV-ENGINE-39, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal that arrives
+// REQ-LOCALRUN-214, INV-ENGINE-60, REQ-LOCALRUN-240, REQ-WFEXEC-73: a withdrawal that arrives
 // after the process released the run for one chained attempt and before it took the run for the
 // next waits for the process, which keeps the run's controls lock across that gap; it then finds
 // the run held, appends `control.withdraw` naming no wait and answers `recorded`, and the chained
@@ -4159,7 +4165,7 @@ pub(super) enum QueueAnswer {
 }
 
 /// A loopback stand-in for the GitHub and Mergify APIs the `github` /
-/// `pull_request.queue_settled` condition reads (REQ-WFEXEC-65): it serves
+/// `pull_request.queue_settled` condition reads (REQ-WFEXEC-125): it serves
 /// `GET /repos/useful-machinery/platform/pulls/3958` and
 /// `GET /v1/repos/useful-machinery/platform/merge-queue/pull/3958` as its answer says and
 /// records each request's head. `command` points a `useful` invocation at it with the GitHub token
@@ -4280,7 +4286,8 @@ impl QueueStub {
     }
 }
 
-// REQ-WFEXEC-65, REQ-CONTINUE-74, REQ-CONTINUE-75: `merge` admitted to the queue waits for
+// REQ-WFEXEC-65, REQ-WFEXEC-125, REQ-CONTINUE-74, REQ-CONTINUE-102, REQ-CONTINUE-103,
+// REQ-CONTINUE-111: `merge` admitted to the queue waits for
 // the pull request `design` exported; `resume` holds while it is queued, reading Mergify with
 // `MERGIFY_TOKEN` when it is set and else with the GitHub token, refuses a condition it cannot
 // read, and continues at `merge` once the pull request is merged.
@@ -4319,7 +4326,7 @@ fn an_external_wait_holds_while_queued_and_continues_once_merged() {
     };
     assert_eq!(stub.bearers(), sent("test", "test"));
 
-    // REQ-WFEXEC-65: with `MERGIFY_TOKEN` in the CLI's environment, Mergify is read with it.
+    // REQ-WFEXEC-127: with `MERGIFY_TOKEN` in the CLI's environment, Mergify is read with it.
     let mut command = stub.command(&continue_args(&run, &[]));
     command.env("MERGIFY_TOKEN", "mergify-key");
     let held = completed(&command.output().unwrap());
@@ -4377,7 +4384,7 @@ fn admitted_to_the_queue(stub: &QueueStub) -> (TreeBundle, std::path::PathBuf) {
     (bundle, run)
 }
 
-// REQ-WFEXEC-65: the queue is read with the first GitHub token the CLI's environment offers:
+// REQ-WFEXEC-126: the queue is read with the first GitHub token the CLI's environment offers:
 // the trimmed token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`, else `GITHUB_TOKEN`,
 // else `gh auth token`, which runs only when no variable answers; with no `MERGIFY_TOKEN`,
 // Mergify is read with that same token.
@@ -4765,7 +4772,7 @@ mod cloud {
 
     // Cloud answers each refusal under a problem type of its own with no
     // violation list; the CLI still names it by the code of the same name.
-    // REQ-CONTINUE-85, REQ-CONTINUE-59, REQ-CONTINUE-84, REQ-COMPAT-20
+    // REQ-CONTINUE-85, REQ-CONTINUE-59, REQ-CONTINUE-84, REQ-COMPAT-43
     #[test]
     fn an_admission_refusal_names_its_violation() {
         for (slug, code) in [

@@ -3233,7 +3233,7 @@ fn codex_native_failure_is_attributed_without_value_publication_or_fallback() {
     );
 }
 
-// REQ-AGENT-46, REQ-WFEXEC-69: an interrupted Codex step quiesces before the result
+// REQ-AGENT-46, REQ-WFEXEC-134: an interrupted Codex step quiesces before the result
 // publishes, failed `interrupted`.
 #[test]
 fn codex_cancellation_quiesces_before_atomic_publication() {
@@ -4073,7 +4073,7 @@ fn running_agent_process_group_is_durably_guarded() {
     ));
 }
 
-// REQ-WFEXEC-69, REQ-LOCALRUN-135, REQ-LOCALRUN-137: a signal interrupts the agent step and
+// REQ-WFEXEC-134, REQ-LOCALRUN-135, REQ-LOCALRUN-137: a signal interrupts the agent step and
 // an output failure cancels it; either way the Pi group quiesces before publication.
 #[test]
 fn agent_signal_and_output_failure_cancel_and_quiesce_the_pi_group() {
@@ -4463,7 +4463,7 @@ fn local_run_forwards_only_declared_host_environment() {
     }
 }
 
-// REQ-WFEXEC-78, SC-WFEXEC-8, REQ-WFEXEC-71
+// REQ-WFEXEC-78, REQ-WFEXEC-86, SC-WFEXEC-8, REQ-WFEXEC-71
 #[test]
 fn local_run_delivers_a_declared_integrations_names_to_every_step() {
     let observe = |name: &str, declaration: &str| {
@@ -5081,7 +5081,7 @@ fn resolution_rejection_diagnostic(bundle: &RunBundle, name: &str) -> serde_json
     rejection["diagnostics"][0].clone()
 }
 
-// REQ-LOCALRUN-128, REQ-WFFORMAT-103
+// REQ-LOCALRUN-128, REQ-WFFORMAT-126
 #[test]
 fn a_structural_rejection_names_the_field_and_the_rule() {
     let structural = RunBundle::new(
@@ -7169,7 +7169,7 @@ fn agent_profile_replacement_pins_the_replacement_harness_and_records_provenance
     );
 }
 
-// REQ-AGENT-54, REQ-AGENT-55, REQ-WFFORMAT-103
+// REQ-AGENT-54, REQ-AGENT-55, REQ-WFFORMAT-52
 #[test]
 fn agent_profile_replacement_rejections_are_typed_before_any_step_starts() {
     let bundle = RunBundle::new(response_agent_source());
@@ -7723,7 +7723,7 @@ fn a_path_argv_under_a_tree_root_is_rejected_at_phase_tree() {
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-128, REQ-LOCALRUN-169, REQ-WFFORMAT-103
+// REQ-LOCALRUN-128, REQ-LOCALRUN-169, REQ-WFFORMAT-126
 #[test]
 fn a_tree_rejection_names_a_structural_failures_field_and_rule_in_its_workflow_location() {
     let bundle = TreeBundle::new(
@@ -7840,7 +7840,7 @@ pub(super) fn assert_usage_error(args: &[String]) {
     assert!(output.stdout.is_empty(), "{args:?}");
 }
 
-// REQ-LOCALRUN-172, REQ-LOCALRUN-80, REQ-LOCALRUN-181, REQ-LOCALRUN-188, REQ-LOCALRUN-189
+// REQ-LOCALRUN-172, REQ-LOCALRUN-224, REQ-LOCALRUN-226, REQ-LOCALRUN-80
 #[test]
 fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
     let bundle = RunBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -7886,7 +7886,7 @@ fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
         String::from_utf8_lossy(&group.stderr)
     );
     let help = String::from_utf8(group.stdout).unwrap();
-    // REQ-LOCALRUN-181: the control commands are leaves of the group.
+    // REQ-LOCALRUN-224: the control commands are leaves of the group.
     let expected = [
         "answer",
         "approve",
@@ -8026,7 +8026,7 @@ fn an_outcome_value_outside_the_declared_outcomes_fails_the_run() {
     assert_eq!(terminal["result"]["outcome"], "succeeded");
 }
 
-// REQ-LOCALRUN-175, REQ-WFEXEC-57
+// REQ-LOCALRUN-279, REQ-WFEXEC-57
 #[test]
 fn the_run_record_carries_the_attempts_chosen_outcome_once_exited() {
     let exited = |destination: &Path| {
@@ -8302,7 +8302,7 @@ fn a_path_without_a_root_workflow_runs_the_closure_form() {
     assert!(!destination.join("run.json").exists());
 }
 
-// REQ-LOCALRUN-174, REQ-LOCALRUN-180, REQ-LOCALRUN-188
+// REQ-LOCALRUN-174, REQ-LOCALRUN-76, REQ-LOCALRUN-180, REQ-LOCALRUN-188
 #[test]
 fn a_tree_run_without_a_run_directory_is_recorded_under_the_home() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8381,7 +8381,7 @@ fn a_tree_run_without_a_run_directory_is_recorded_under_the_home() {
     assert_eq!(fs::read_dir(home.join("runs")).unwrap().count(), before);
 }
 
-// REQ-LOCALRUN-80, REQ-LOCALRUN-174
+// REQ-LOCALRUN-80, REQ-LOCALRUN-173, REQ-LOCALRUN-174, REQ-LOCALRUN-76
 #[test]
 fn run_create_argument_conflicts_are_usage_errors() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8572,7 +8572,7 @@ fn carrier_names(run_directory: &Path, step: &str) -> Vec<String> {
     names
 }
 
-// REQ-WFEXEC-58, REQ-WFEXEC-59, REQ-WFEXEC-60, REQ-LOCALRUN-177
+// REQ-WFEXEC-82, REQ-WFEXEC-59, REQ-WFEXEC-60, REQ-LOCALRUN-177
 #[test]
 fn workflow_steps_run_child_runs_and_route_on_their_outcomes() {
     let (bundle, destination, output) = run_child_tree("planned");
@@ -8713,7 +8713,7 @@ steps:
     }
 }
 
-// REQ-WFEXEC-77: a child whose run succeeded and chose the outcome `failed` is no failed
+// REQ-WFEXEC-112: a child whose run succeeded and chose the outcome `failed` is no failed
 // child; the step's entries in `result.json` and `state.json` record none.
 #[test]
 fn a_child_that_chose_the_outcome_failed_records_no_failed_child() {
@@ -8775,7 +8775,7 @@ pub(super) fn progress_position(records: &[ProgressRecord], scope: &str, token: 
         })
 }
 
-// REQ-LOCALRUN-200: while each child runs, the parent's progress stream carries its step's
+// REQ-LOCALRUN-200, REQ-LOCALRUN-286: while each child runs, the parent's progress stream carries its step's
 // state records scoped `<step>.<child step>`, between the parent step's own `start` and
 // `done`, and none of the child's output records.
 #[test]
@@ -8862,7 +8862,7 @@ pub(super) fn spawn_held_child_tree(name: &str) -> (TreeBundle, PathBuf, std::pr
     (bundle, destination, child)
 }
 
-// REQ-WFEXEC-59, REQ-LOCALRUN-186: a cancellation of the parent, `useful workflow run cancel`'s
+// REQ-WFEXEC-90, REQ-LOCALRUN-244: a cancellation of the parent, `useful workflow run cancel`'s
 // recorded cancel, reaches the child, which records `canceled`, and the step ends `cancelled`.
 #[test]
 fn cancelling_the_parent_cancels_its_running_child() {
@@ -8892,7 +8892,7 @@ fn cancelling_the_parent_cancels_its_running_child() {
     assert_eq!(run_record(&destination)["outcome"], "canceled");
 }
 
-// REQ-WFEXEC-70, REQ-WFEXEC-69, REQ-LOCALRUN-135: SIGINT interrupts the parent and its child;
+// REQ-WFEXEC-99, REQ-WFEXEC-69, REQ-LOCALRUN-135: SIGINT interrupts the parent and its child;
 // the child's failure edge is an exit, not a `repair` wait, so the parent takes no edge: its
 // step fails `interrupted` and the run fails, exiting 130.
 #[test]
@@ -8925,7 +8925,7 @@ fn interrupting_the_parent_fails_a_stage_without_a_repair_route() {
     assert_ne!(record["outcome"], "canceled");
 }
 
-// REQ-LOCALRUN-189, REQ-LOCALRUN-201: `show` reports a running child's current attempt, its
+// REQ-LOCALRUN-299, REQ-LOCALRUN-302, REQ-LOCALRUN-201: `show` reports a running child's current attempt, its
 // recovery status and its in-flight steps with their start times, read from the child's
 // records without changing the run directory; a child that is no longer running has none.
 #[test]
@@ -9038,7 +9038,7 @@ fn show_reports_a_running_childs_attempt_and_in_flight_steps() {
     assert_eq!(exited["progress"], serde_json::Value::Null, "{exited}");
 }
 
-// REQ-LOCALRUN-189: `show` reads a child whose record is `running` from the child's own
+// REQ-LOCALRUN-303, REQ-LOCALRUN-299: `show` reads a child whose record is `running` from the child's own
 // records: one whose attempt has settled has no in-flight step, and one whose state cannot
 // be read refuses the run `run_directory_invalid`, naming the child.
 #[test]
@@ -9136,7 +9136,7 @@ fn a_child_that_cannot_be_admitted_fails_the_step_at_start() {
     assert!(!destination.join("children/design").exists());
 }
 
-// REQ-WFEXEC-59, REQ-WFEXEC-61, REQ-WFEXEC-40, REQ-LOCALRUN-182: admission admits an
+// REQ-WFEXEC-92, REQ-WFEXEC-61, REQ-WFEXEC-40, REQ-LOCALRUN-182: admission admits an
 // `answer` wait target, which the run enters and ends `waiting` with exit 0; the answer
 // continues the run under its own command.
 #[test]
@@ -9185,7 +9185,7 @@ fn admission_admits_an_answer_wait_target() {
     );
 }
 
-// REQ-WFEXEC-59, REQ-WFEXEC-65: admission admits an `external` wait on a condition the CLI
+// REQ-WFEXEC-93, REQ-WFEXEC-125: admission admits an `external` wait on a condition the CLI
 // evaluates, whose record resolves the rule's input operand to its value, and refuses one
 // on any other pair with `wait_condition_unsupported`.
 #[test]
@@ -9227,8 +9227,8 @@ fn admission_admits_an_external_wait_only_on_a_supported_condition() {
     assert!(!destination.exists());
 }
 
-// REQ-WFEXEC-59: admission refuses a wait target that continues at an exit, and a workflow
-// step run without a tree.
+// REQ-WFEXEC-91, REQ-WFEXEC-92: admission refuses a wait target that continues at an exit, and a
+// workflow step run without a tree.
 #[test]
 fn admission_refuses_wait_targets_and_workflow_steps_outside_a_tree() {
     let bundle = child_tree(CHILD_TREE_DECIDE);

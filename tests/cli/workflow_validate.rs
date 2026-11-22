@@ -446,7 +446,7 @@ fn edge_diagnostics_name_the_step_and_the_outcome() {
     assert_eq!(location["outcome"], "planned");
 }
 
-// REQ-WFFORMAT-89: a child may carry a `requires` override without `tools`, whatever its
+// REQ-WFFORMAT-115: a child may carry a `requires` override without `tools`, whatever its
 // parent declares, and still no `requires` holding `tools`.
 #[test]
 fn a_child_may_carry_a_requires_override_without_tools() {
@@ -485,7 +485,7 @@ fn a_child_may_carry_a_requires_override_without_tools() {
     assert_eq!(location["step"], "design");
 }
 
-// REQ-WFFORMAT-69, REQ-WFFORMAT-72, REQ-WFFORMAT-103
+// REQ-WFFORMAT-69, REQ-WFFORMAT-72, REQ-WFFORMAT-103, REQ-WFFORMAT-123, REQ-WFFORMAT-124, REQ-WFFORMAT-125
 #[test]
 fn structural_diagnostics_name_the_field_and_the_rule_without_the_value() {
     let bundle = WorkflowBundle::valid();
@@ -531,7 +531,7 @@ fn structural_diagnostics_name_the_field_and_the_rule_without_the_value() {
     }
 }
 
-// REQ-WFDEF-34, REQ-WFFORMAT-82
+// REQ-WFDEF-34, REQ-WFDEF-47, REQ-WFFORMAT-82
 #[test]
 fn a_requires_integrations_declaration_validates_and_reports_nothing_more() {
     const BLOCK: &str = "requires:\n  as: member\n  integrations:\n    linear:\n      as: org\n      bindings:\n        team: {kind: team}\n    github: {}\n    claude_code: {}\n";
@@ -587,7 +587,7 @@ fn a_requires_integrations_declaration_validates_and_reports_nothing_more() {
     assert!(remedy.contains("requires.integrations.jira"), "{remedy}");
 }
 
-// REQ-WFDEF-34
+// REQ-WFDEF-45
 #[test]
 fn an_integration_binding_takes_a_kind_its_provider_lists_and_an_optional_default() {
     let block = |binding: &str| {

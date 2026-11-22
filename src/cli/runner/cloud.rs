@@ -80,7 +80,7 @@ pub(super) fn write_pool_create(
 }
 
 /// A pool's waiting runs, runner counts and held runs as `useful runner pool show` reports
-/// them (REQ-RUNNERPOOL-89). useful-api does not name its pool-status model, so the JSON
+/// them (REQ-RUNNERPOOL-92). useful-api does not name its pool-status model, so the JSON
 /// document borrows it generically and the report takes its counts.
 pub(super) struct PoolStatus<'a, S> {
     pub(super) document: &'a S,

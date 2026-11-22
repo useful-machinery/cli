@@ -13,7 +13,7 @@ pub(in crate::service) enum ExecutionReport {
         diagnostic: Option<Value>,
     },
     /// A tree run's root progress between and during its engine attempts, numbered by
-    /// the assignment's own progress sequence from 1 (REQ-RUNNERENROLL-99). `steps_only`
+    /// the assignment's own progress sequence from 1 (REQ-RUNNERENROLL-181). `steps_only`
     /// marks a report that restates the root to carry step observations alone, which is
     /// owed to no run (REQ-RUNNERENROLL-88).
     TreeProgress {
@@ -25,7 +25,7 @@ pub(in crate::service) enum ExecutionReport {
     TriggerDeliveryApplied {
         application: useful_runner_protocol::TriggerDeliveryApplication,
     },
-    /// A tree run's application of one authorized Cloud control (REQ-RUNNERENROLL-90).
+    /// A tree run's application of one authorized Cloud control (REQ-RUNNERENROLL-206).
     RunControlApplied {
         application: useful_runner_protocol::RunControlApplication,
     },
@@ -37,7 +37,7 @@ pub(in crate::service) enum ExecutionReport {
     },
     /// A tree run's finish, carrying the root's exit beside its transport outcome
     /// (REQ-RUNNERENROLL-99) and the safe facts of a failure the runner classified
-    /// itself (REQ-RUNNERENROLL-89).
+    /// itself (REQ-RUNNERENROLL-221).
     TreeFinished {
         final_execution_event_sequence: u64,
         outcome: Value,
@@ -532,7 +532,7 @@ pub(in crate::service) struct AssignmentRunControl {
 impl AssignmentManager {
     /// Hands a delivery for an assignment this manager holds to its tree run, which applies
     /// it with `useful workflow run event` and reports the application (REQ-TRIGGER-136). It
-    /// is queued for that assignment alone (INV-RUNNER-40).
+    /// is queued for that assignment alone (INV-RUNNER-62).
     pub(in crate::service) fn handle_trigger_delivery(
         &mut self,
         delivery: AssignmentTriggerDelivery,
@@ -550,8 +550,8 @@ impl AssignmentManager {
 
     /// Hands a control for an assignment this manager holds to its tree run, which applies
     /// it to the run's current wait with the `useful workflow run` control command it names and
-    /// reports the application (REQ-RUNNERENROLL-90). It is queued for that assignment alone
-    /// (INV-RUNNER-40).
+    /// reports the application (REQ-RUNNERENROLL-208). It is queued for that assignment alone
+    /// (INV-RUNNER-62).
     pub(in crate::service) fn handle_run_control(
         &mut self,
         control: AssignmentRunControl,

@@ -50,7 +50,7 @@ pub struct RootBlocks {
 impl RootBlocks {
     /// The blocks a workflow file other than a tree's root may not carry: all of these but
     /// a `requires` that holds neither `tools` nor `check`, the override of REQ-WFDEF-35
-    /// (REQ-WFFORMAT-89, REQ-WFDEF-42).
+    /// (REQ-WFFORMAT-115, REQ-WFDEF-42).
     pub(crate) fn without_override(&self) -> Self {
         let mut blocks = self.clone();
         if blocks
@@ -67,7 +67,7 @@ impl RootBlocks {
 /// The `requires` block: the tools admission probes, the check the host condition runs,
 /// and the integrations the workflow declares with whose credentials act for them, kept as
 /// declared (REQ-WFDEF-34, REQ-WFDEF-42). Admission probes `tools` alone and keeps the
-/// environment names of each declared integration's id for every step (REQ-WFEXEC-78); the
+/// environment names of each declared integration's id for every step (REQ-WFEXEC-87); the
 /// engine reads no `as` or `bindings`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootRequires {
@@ -116,7 +116,7 @@ impl IntegrationProvider {
     }
 
     /// The environment names a run delivers to every step for a declared integration
-    /// (REQ-WFEXEC-78, INV-ENGINE-43): the token and its file a runner offers an OAuth
+    /// (REQ-WFEXEC-85, INV-ENGINE-43): the token and its file a runner offers an OAuth
     /// provider's grant token under (REQ-GRANT-87), the variable a runner offers a coding
     /// agent's login as (REQ-GRANT-44, REQ-GRANT-37), and the token and its file a runner
     /// offers a token service's token under (REQ-INTEGRATION-12), the names Cloud lists for

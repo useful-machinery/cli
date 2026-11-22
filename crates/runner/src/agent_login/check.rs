@@ -21,7 +21,7 @@ use super::readiness::{Installation, UseOutcome};
 use super::{ServiceEnvironment, claude_code, codex};
 use crate::control_protocol::{AgentLoginCheckCause, AgentLoginProvider};
 
-/// How long a check waits for the program to end its turn (REQ-GRANT-90).
+/// How long a check waits for the program to end its turn (REQ-GRANT-144).
 pub(crate) const CHECK_BOUND: Duration = Duration::from_secs(60);
 
 /// The longest a check takes: its bound, and the grace a program stopped at
@@ -129,7 +129,7 @@ impl<Clock: CoordinatorClock> LoginCheck for ProgramLoginCheck<Clock> {
                 ))
             }
             // The runner's Codex home itself, so a login Codex refreshes
-            // during the check is kept (REQ-GRANT-36).
+            // during the check is kept (REQ-GRANT-116).
             AgentLoginProvider::Codex => {
                 let Some(installation) = &self.codex else {
                     return LoginCheckOutcome::NoAnswer(AgentLoginCheckCause::ProgramUnavailable);

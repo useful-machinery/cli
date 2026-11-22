@@ -3780,7 +3780,7 @@ fn open_help_ignores_every_key_but_escape_ctrl_c_and_q() {
     assert_eq!(interaction.selected, 1);
 }
 
-// REQ-LOCALRUN-221, REQ-LOCALRUN-14, REQ-LOCALRUN-26: a stage that succeeded on a failed
+// REQ-LOCALRUN-294, REQ-LOCALRUN-14, REQ-LOCALRUN-26: a stage that succeeded on a failed
 // child is drawn with the failed state's symbol, label and tone, counted failed, and gives
 // the failing node's path as its detail and the inspector's failure; it is not an advisory
 // issue. Without the record the stage reads succeeded.

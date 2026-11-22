@@ -4,7 +4,7 @@
 //! that follows a named file's declared integrations in their place (REQ-CREDREADY-27), with
 //! where those integrations and the inference disagree (REQ-CREDREADY-28). Nothing here
 //! runs a node, starts a harness or reads the process environment; the one process started is
-//! the bounded `git remote get-url origin` (INV-HARNESS-17). The derivation gives every requirement
+//! the bounded `git remote get-url origin` (INV-CLI-24). The derivation gives every requirement
 //! its offline code; the command, which alone may ask Cloud, replaces a provider's code with
 //! what the organization's connections show (REQ-CREDREADY-13), and the state, the `cloud`
 //! value and the next action follow from the code.
@@ -620,7 +620,7 @@ impl Named {
 }
 
 /// The source root's repository provider, asked once per derivation and given to each reading
-/// (INV-HARNESS-17); `name` is `origin` or `project`.
+/// (INV-CLI-24); `name` is `origin` or `project`.
 struct Repository {
     kind: Option<CredentialKind>,
     name: &'static str,
@@ -1267,7 +1267,7 @@ steps:
         }
     }
 
-    // REQ-CREDREADY-12, INV-HARNESS-17
+    // REQ-CREDREADY-12, INV-CLI-24
     #[test]
     fn the_origin_remote_names_the_repository_provider_by_host_alone() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1473,7 +1473,7 @@ steps:
             .collect()
     }
 
-    // REQ-CREDREADY-27
+    // REQ-CREDREADY-27, REQ-CREDREADY-36
     #[test]
     fn a_declaring_workflow_is_reported_by_its_integrations_beside_the_inference() {
         let declaring = declaring();
@@ -1518,7 +1518,7 @@ steps:
         assert_eq!(derived.inferred, undeclared.reported);
     }
 
-    // REQ-CREDREADY-27
+    // REQ-CREDREADY-37
     #[test]
     fn a_workflow_without_the_block_keeps_its_inferred_origins_and_unknown_entries() {
         let derived = derive_files(
@@ -1597,7 +1597,7 @@ steps:
         );
     }
 
-    // REQ-CREDREADY-27
+    // REQ-CREDREADY-38
     #[test]
     fn the_override_of_a_file_a_workflow_step_names_is_not_read() {
         let parent = parent("LINEAR_API_KEY");
@@ -1677,7 +1677,7 @@ steps:
         );
     }
 
-    // REQ-CREDREADY-28
+    // REQ-CREDREADY-40
     #[test]
     fn a_declaration_that_agrees_differs_in_nothing_and_no_declaration_is_not_compared() {
         let agreeing = declaring_tools(&["linear", "github"]);
@@ -1704,7 +1704,7 @@ steps:
         assert_eq!(beside.differences, Some(Vec::new()));
     }
 
-    // REQ-CREDREADY-29
+    // REQ-CREDREADY-29, REQ-CREDREADY-42
     #[test]
     fn a_declared_token_service_is_an_unverified_requirement_nothing_infers() {
         let declaring = PLAIN.replacen(

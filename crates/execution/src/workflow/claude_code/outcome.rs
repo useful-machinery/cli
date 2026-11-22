@@ -175,7 +175,8 @@ mod tests {
         ))
     }
 
-    // REQ-AGENT-86, REQ-AGENT-26, REQ-AGENT-27, REQ-AGENT-28, REQ-AGENT-70, REQ-AGENT-88,
+    // REQ-AGENT-86, REQ-AGENT-96, REQ-AGENT-97, REQ-AGENT-98, REQ-AGENT-99, REQ-AGENT-26,
+    // REQ-AGENT-27, REQ-AGENT-28, REQ-AGENT-70, REQ-AGENT-88,
     // INV-HARNESS-5
     #[test]
     fn the_rule_decides_every_combination() {

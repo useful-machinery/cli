@@ -111,7 +111,7 @@ const CHILDREN_DIRECTORY: &str = "children";
 /// The wait record of a waiting run (REQ-LOCALRUN-178), at the root and under the attempt.
 const WAIT_RECORD_FILE: &str = "wait.json";
 const WAIT_RECORD_TEMPORARY_FILE: &str = "wait.json.tmp";
-/// The run record's outcome for a run that a withdrawal ended at its wait (REQ-CONTINUE-75).
+/// The run record's outcome for a run that a withdrawal ended at its wait (REQ-CONTINUE-109).
 pub const WITHDRAWN_OUTCOME: &str = "withdrawn";
 /// The run record's outcome for a run canceled while it waits (REQ-CONTINUE-75).
 pub const CANCELED_OUTCOME: &str = "canceled";
@@ -256,13 +256,13 @@ pub enum LocalRunDirectoryError {
     /// No run under the `useful` home has the id (REQ-LOCALRUN-180): `run_not_found`.
     RunNotFound,
     /// A parent's commit refused because one of its child runs failed to commit its own
-    /// state (REQ-LOCALRUN-207, INV-ENGINE-33); it classifies as the child's failure and
+    /// state (REQ-LOCALRUN-207, INV-ENGINE-57); it classifies as the child's failure and
     /// reads as the child's own error.
     ChildCommitFailed(ChildCommitFailure),
 }
 
 /// A child run's failed state commit as its parent's [`LocalRunCommitPort`] latches it
-/// (REQ-LOCALRUN-207, INV-ENGINE-33): the classified failure and, beside it, the text of
+/// (REQ-LOCALRUN-207, INV-ENGINE-57): the classified failure and, beside it, the text of
 /// the child's own error, which names the child's file, for the root command to print.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildCommitFailure {
@@ -1773,7 +1773,7 @@ pub enum LocalContinuationOpen {
     Rejected(LocalRetryRejection),
 }
 
-/// The definition a continuation's attempt runs under (REQ-CONTINUE-11, REQ-CONTINUE-79).
+/// The definition a continuation's attempt runs under (REQ-CONTINUE-11, REQ-CONTINUE-97).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContinuationDefinitionMode {
     /// The definition that governed the prior attempt, which the attempt points at.
@@ -1923,7 +1923,7 @@ impl PendingLocalContinuation {
         self.end_waiting(WITHDRAWN_OUTCOME)
     }
 
-    /// Ends a waiting run without another attempt (REQ-CONTINUE-75): the run record reads
+    /// Ends a waiting run without another attempt (REQ-CONTINUE-109): the run record reads
     /// `exited` with `outcome` (`withdrawn` or `canceled`) and its attempt count unchanged,
     /// the root wait record is removed, and the run lock is released. Under the controls lock,
     /// before the record changes, the withdrawals later than the waiting attempt's `settledAt`
@@ -1935,7 +1935,7 @@ impl PendingLocalContinuation {
         let Some(wait) = read_optional_wait_record(&self.root)? else {
             return Err(LocalRunDirectoryError::StateConflict);
         };
-        // REQ-CONTINUE-92: a wait the root carries from a nested run ends that nested run's
+        // REQ-CONTINUE-124: a wait the root carries from a nested run ends that nested run's
         // wait first, under the root's lock and then the nested run's; a carried `stop` names
         // no child, so its nested run is the one at the wait's element (REQ-WFEXEC-76). A
         // successor that imported the wait holds no nested run: the record's `payload.child`
@@ -2450,7 +2450,7 @@ impl PendingLocalContinuation {
 
     /// The mapped inputs this run's continuation, admitted as `admitted`, would give the
     /// child of its `workflow` step `step` for element `item` under `controls`, read before
-    /// the continuation begins (REQ-CONTINUE-82): the same mapper the step runs, with every
+    /// the continuation begins (REQ-CONTINUE-117): the same mapper the step runs, with every
     /// referenced output read from the prior attempt's retained carrier as the continuation
     /// would inherit it. `None` when the step forms no request for that element.
     pub fn child_request_inputs(
@@ -2597,7 +2597,7 @@ impl PendingLocalContinuation {
     }
 
     /// The steps the prior attempt left neither succeeded nor inherited, which an
-    /// edge-scheduled continuation re-executes (REQ-CONTINUE-3).
+    /// edge-scheduled continuation re-executes (REQ-CONTINUE-96).
     fn unfinished_steps(&self) -> BTreeSet<String> {
         self.state
             .attempts
@@ -2723,7 +2723,7 @@ impl PendingLocalContinuation {
     /// `mode` names the attempt's definition: `Inherited` requires `admitted` to be the prior
     /// attempt's, `Replaced` retains `admitted` under the new attempt's directory, and `Run`
     /// requires `admitted` to be the run's own and records `definitionSource` `replaced` when
-    /// it differs from the prior attempt's (REQ-CONTINUE-79).
+    /// it differs from the prior attempt's (REQ-CONTINUE-97).
     pub fn begin(
         self,
         admitted: &AdmittedWorkflow,
@@ -2845,7 +2845,7 @@ impl PendingLocalContinuation {
                 }
             }
             // A restart continuation runs under the run's own definition, already retained
-            // as its `workflow/` (REQ-CONTINUE-79).
+            // as its `workflow/` (REQ-CONTINUE-97).
             ContinuationDefinitionMode::Run => attempt_definition_for_run(&self.run),
         };
         let abandoned = !prior.state.is_terminal();
@@ -2918,7 +2918,7 @@ impl PendingLocalContinuation {
         };
         // A run-definition continuation that resolves no root wait is a restart's first own
         // attempt whichever command begins it: `upgrade --from`, or `retry --from` after an
-        // `upgrade --from` interrupted before that attempt (REQ-CONTINUE-79). The continuation of an upgrade's
+        // `upgrade --from` interrupted before that attempt (REQ-CONTINUE-98). The continuation of an upgrade's
         // carried wait keeps the reason its control gave it (REQ-CONTINUE-80).
         let reason = if mode == ContinuationDefinitionMode::Run
             && read_optional_wait_record(&self.root)?.is_none()
@@ -3304,7 +3304,7 @@ impl LocalAttemptOwner {
     }
 
     /// Creates `requested` as a successor of the waiting run `predecessor` holds
-    /// (REQ-LOCALRUN-195, INV-ENGINE-26) and returns its directory, its lock released: as
+    /// (REQ-LOCALRUN-195, INV-ENGINE-50) and returns its directory, its lock released: as
     /// `create_with_record`, with `admitted`'s `workflow/` and `record` as its `run.json`, but
     /// carrying the predecessor's Git baseline and importing its attempts and controls rather
     /// than staging a first attempt. The successor's first own attempt is a continuation of
@@ -3369,7 +3369,7 @@ impl LocalAttemptOwner {
     /// `.private/wait.json.tmp` and a rename, the identical `wait.json` at the run root, both
     /// owner-only and read-only. The caller writes it before the run record reads `waiting`.
     /// A wait the root carries from a nested run (`WaitRecord::is_carried`) first moves the run
-    /// record's `position` to the wait's `step`, the same path (REQ-WFEXEC-68, REQ-WFEXEC-75).
+    /// record's `position` to the wait's `step`, the same path (REQ-WFEXEC-98, REQ-WFEXEC-109).
     pub fn record_wait(&self, record: &WaitRecord) -> Result<(), LocalRunDirectoryError> {
         if !record.is_valid() {
             return Err(LocalRunDirectoryError::WaitRecordInvalid);
@@ -3397,7 +3397,7 @@ impl LocalAttemptOwner {
 
     /// The record of the wait this attempt continues from, as `begin` removed it, when the
     /// continuation kept it (`PendingLocalContinuation::keep_resolved_wait`). An attempt that
-    /// ends on that wait kept (`EnteredWait::kept`, REQ-WFEXEC-72) writes this record back
+    /// ends on that wait kept (`EnteredWait::kept`, REQ-WFEXEC-129) writes this record back
     /// unchanged with `record_wait` (REQ-LOCALRUN-178).
     pub fn resumed_wait_record(&self) -> Option<&WaitRecord> {
         self.resumed_wait.as_ref()
@@ -3661,7 +3661,7 @@ impl LocalAttemptOwner {
     }
 
     /// Appends the `state_persistence_failure` diagnostic of `failure` for the current
-    /// attempt and settles nothing (REQ-LOCALRUN-205, INV-ENGINE-33): the attempt stays the
+    /// attempt and settles nothing (REQ-LOCALRUN-205, INV-ENGINE-56): the attempt stays the
     /// abandoned attempt the next retry or continuation settles.
     pub async fn record_state_persistence_failure_async(
         &self,
@@ -3809,16 +3809,16 @@ pub struct LocalRunCommitPort {
     accounting: InvocationAccountingLog,
     artifacts: ArtifactStaging,
     /// Set by a child run whose own state commit failed; once set, every commit is refused
-    /// with it and writes nothing (REQ-LOCALRUN-207, INV-ENGINE-33).
+    /// with it and writes nothing (REQ-LOCALRUN-207, INV-ENGINE-57).
     child_failure: Arc<OnceLock<ChildCommitFailure>>,
     /// The text of the error the first failed commit returned: its write, path and OS
-    /// message, which the classified failure never holds (REQ-LOCALRUN-143, INV-ENGINE-33).
+    /// message, which the classified failure never holds (REQ-LOCALRUN-143, INV-ENGINE-55).
     failure_text: Arc<OnceLock<String>>,
 }
 
 impl LocalRunCommitPort {
     /// The latch a child run's failed state commit sets, after which this port refuses
-    /// every commit with that failure (REQ-LOCALRUN-207, INV-ENGINE-33).
+    /// every commit with that failure (REQ-LOCALRUN-207, INV-ENGINE-57).
     pub fn child_failure_latch(&self) -> Arc<OnceLock<ChildCommitFailure>> {
         Arc::clone(&self.child_failure)
     }
@@ -4334,7 +4334,7 @@ fn publish_run_directory<Kept>(
 }
 
 /// Stages a successor's import of the waiting run `predecessor` holds (REQ-LOCALRUN-195,
-/// INV-ENGINE-26): its `attempts/` copied entire, its root `workflow/` copied under the first
+/// INV-ENGINE-50): its `attempts/` copied entire, its root `workflow/` copied under the first
 /// attempt that ran under it, its `controls/` copied when it has them, its root `wait.json`
 /// copied when `wait` carries it (REQ-LOCALRUN-197), and the state of its attempts
 /// re-located and marked imported from `predecessor_id` under a fresh state identity.
@@ -4543,7 +4543,7 @@ impl ChildRunParent {
 
     /// Rewrites this run's `run.json` `position` to `position`, under the run lock its
     /// attempt holds: a root's to the full path of the stage its nested run is about to
-    /// create, `[<step>, <nested>]` or `[<step>, {"item": n}, <nested>]` (REQ-WFEXEC-68). A
+    /// create, `[<step>, <nested>]` or `[<step>, {"item": n}, <nested>]` (REQ-WFEXEC-98). A
     /// position that is not a step path is `StateInvalid` and changes nothing.
     pub fn rewrite_position(&self, position: Vec<Value>) -> Result<(), LocalRunDirectoryError> {
         let valid = position
@@ -6792,7 +6792,7 @@ fn read_optional_state(root: &OwnedFd) -> Result<Option<LocalRunStateV1>, LocalR
 
 /// Sets the run record's `state`, `attempts` and `outcome` through `.private/run.json.tmp`
 /// and a rename over `run.json`, so an interrupted rewrite leaves no entry in the run root,
-/// and clears its `position` once the run is `exited` (REQ-WFDEF-4). The caller holds the
+/// and clears its `position` once the run is `exited` (REQ-WFDEF-48). The caller holds the
 /// run lock. A run without `run.json` is left as it is.
 fn update_run_record(
     root: &OwnedFd,
@@ -6947,7 +6947,7 @@ pub enum WaitInspection {
     /// The wait's rule is outside the matcher's grammar (`wait_rule_invalid`).
     RuleInvalid { wait: WaitRecord, error: RuleError },
     /// The condition source could not read the condition an `external` wait's rule names
-    /// (`wait_condition_unavailable`, REQ-CONTINUE-74); the wait neither holds nor resolves.
+    /// (`wait_condition_unavailable`, REQ-CONTINUE-103); the wait neither holds nor resolves.
     ConditionUnavailable {
         wait: WaitRecord,
         error: super::wait::ConditionError,
@@ -7038,7 +7038,7 @@ pub(crate) fn host_condition_run(
 
 /// The first control under `run_directory`'s `controls/`, in ordinal order, that the rule
 /// `wait`'s controls are read by (`controls_rule`) matches for the run `run_id`
-/// (REQ-CONTINUE-74), `Ok(None)` when none does and `Ok(None)` without reading the controls
+/// (REQ-CONTINUE-101), `Ok(None)` when none does and `Ok(None)` without reading the controls
 /// for a wait no control resolves (REQ-WFEXEC-65); a rule outside the grammar is
 /// `Err(RuleError)`.
 fn control_resolution(
@@ -7386,7 +7386,7 @@ fn read_withdrawal_pending(
 }
 
 /// The control values an attempt of the run at `requested` starts with (REQ-WFEXEC-63,
-/// REQ-CONTINUE-75), read from the wait copies of the attempts before `attempt_number` and
+/// REQ-CONTINUE-104), read from the wait copies of the attempts before `attempt_number` and
 /// the run's controls. An imported attempt's copy (REQ-LOCALRUN-195) is resolved by a control
 /// naming any run of the lineage: the run it was recorded under, copied with it, a successor
 /// that carried the wait (REQ-LOCALRUN-197) and recorded the control, or this run. A `host`
@@ -7423,7 +7423,7 @@ pub fn attempt_controls(
 
 impl AttemptControls {
     /// The control values attempt `attempt_number` of the nested run at `nested` starts with
-    /// (REQ-WFEXEC-75, INV-ENGINE-40). Controls are recorded on the root at `root` alone, the
+    /// (REQ-WFEXEC-110, INV-ENGINE-61). Controls are recorded on the root at `root` alone, the
     /// nested run being at the root's path `prefix` (`[<step>]` or `[<step>, {"item": n}]`):
     /// the wait copies of the nested run's earlier attempts are matched, by `kind@since` and
     /// the full path, with the root's wait copies that carried them and read against the
@@ -7516,7 +7516,7 @@ impl AttemptControls {
             self.replacement = Some((target.clone(), profiles.clone()));
         }
         // Only the attempt that continues the wait reads its control's fields (REQ-WFEXEC-63)
-        // and resumes its fan-out at the recorded element (REQ-WFEXEC-68); one reaching the
+        // and resumes its fan-out at the recorded element (REQ-WFEXEC-96); one reaching the
         // step after a later attempt ended without a wait (a backward or limited edge, an
         // abandoned attempt) has no `wait.<field>` and starts at the first element.
         if number + 1 != attempt_number {
@@ -8194,7 +8194,7 @@ pub fn read_durable_record(
 /// link, but of at most `maximum_bytes`: a larger file is refused from its size before any
 /// of it is read. The runner reads an exported text's carrier, which a step can make as
 /// large as a set admits, through this reader with the bound the runner protocol puts on a
-/// carried text (REQ-RUNNERENROLL-131).
+/// carried text (REQ-RUNNERENROLL-272).
 pub fn read_run_file_bounded(
     requested: &Path,
     name: &str,
@@ -8556,7 +8556,7 @@ pub fn acquire_local_continuation(
 }
 
 /// `acquire_local_continuation` for a process that chains attempts (REQ-WFEXEC-64,
-/// REQ-LOCALRUN-214, INV-ENGINE-39): `bridge` is the run's controls lock the attempt that ended
+/// REQ-LOCALRUN-214, INV-ENGINE-60): `bridge` is the run's controls lock the attempt that ended
 /// `continued` took before it released the run lock, so a withdrawal that arrives in between
 /// waits for this acquisition. It is dropped as soon as the one non-blocking try of the run
 /// lock answered, taken or contended, before anything else here runs: the error path settles
@@ -9133,7 +9133,7 @@ fn load_execution_seed(
         Some(record) => seed.with_edge_counts(record.edges),
         None => seed,
     };
-    // An edge-scheduled continuation starts the one step it names (REQ-CONTINUE-3).
+    // An edge-scheduled continuation starts the one step it names (REQ-CONTINUE-96).
     Ok(
         match attempt
             .continuation
@@ -9148,7 +9148,7 @@ fn load_execution_seed(
 
 /// The wait `record` names as the engine holds it: its kind, its waiting step, `then`,
 /// `onHandBack` and the `payload.outcome` it was entered on when that is a string. The record
-/// itself, not this, is what a kept wait writes back (REQ-WFEXEC-72).
+/// itself, not this, is what a kept wait writes back (REQ-WFEXEC-129).
 fn resumed_entered_wait(record: &WaitRecord) -> Result<EnteredWait, LocalRunDirectoryError> {
     let step = record
         .step

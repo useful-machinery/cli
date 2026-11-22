@@ -31,7 +31,7 @@ use crate::exit_code::OutcomeClass;
 const PROGRAM: &str = "claude";
 const ARGUMENT: &str = "setup-token";
 // A token of the usual length fits on one line, so the sign-in does not wrap it; one that does
-// not is joined across the wrap (INV-CLI-14).
+// not is joined across the wrap (INV-CLI-22).
 const MIN_COLUMNS: u16 = 256;
 const DEFAULT_ROWS: u16 = 24;
 const ESC: u8 = 0x1b;
@@ -105,7 +105,7 @@ impl fmt::Display for Failure {
 }
 
 /// The failure a sign-in ends in before anything is run, read or sent when the member could
-/// not answer it: standard input is not a terminal (REQ-GRANT-71). `useful account integration connect
+/// not answer it: standard input is not a terminal (REQ-GRANT-177). `useful account integration connect
 /// claude_code` asks this before its first request, and [`sign_in`] before anything else.
 pub(in crate::cli) fn unanswerable() -> Option<Failure> {
     (!io::stdin().is_terminal()).then_some(Failure::NoTerminal)
@@ -457,9 +457,9 @@ impl Drop for RawInput {
 }
 
 /// Relays a sign-in's output byte for byte except a Claude Code token, which it takes instead
-/// (INV-CLI-14). Terminal control sequences are relayed unchanged and skipped while matching
-/// [`MARKER`]; only a suffix that could begin it is held back, so a prompt without a line ending
-/// is relayed at once. Once the marker is seen, the run that follows is withheld up to a space, a
+/// (INV-CLI-14, INV-CLI-22). Terminal control sequences are relayed unchanged and skipped
+/// while matching [`MARKER`]; only a suffix that could begin it is held back, so a prompt
+/// without a line ending is relayed at once. Once the marker is seen, the run that follows is withheld up to a space, a
 /// tab, a line break that ends a line narrower than the terminal, or the end of the output. The
 /// run's bytes in `A-Z`, `a-z`, `0-9`, `_` and `-` are joined into the token across the control
 /// sequences and the line breaks of full lines in it, which are relayed when it ends, since the
@@ -720,7 +720,7 @@ mod tests {
         (relay, token)
     }
 
-    // INV-CLI-14
+    // INV-CLI-22
     #[test]
     fn a_token_interrupted_by_a_control_sequence_or_a_wrapped_line_is_withheld_and_joined() {
         // The first line of each fills a terminal of this width, so its line break is a wrap.
@@ -760,7 +760,7 @@ mod tests {
         assert_eq!(relay, b"\r\n\r\nnext\r\n");
     }
 
-    // INV-CLI-14
+    // INV-CLI-22
     #[test]
     fn a_run_interrupted_by_another_character_is_withheld_and_yields_none() {
         for (output, expected) in [
@@ -779,7 +779,7 @@ mod tests {
         }
     }
 
-    // INV-CLI-14
+    // INV-CLI-22
     #[test]
     fn an_aborted_control_string_does_not_stop_the_token_being_withheld() {
         for (output, expected) in [
@@ -839,7 +839,7 @@ mod tests {
         }
     }
 
-    // INV-CLI-14
+    // INV-CLI-22
     #[test]
     fn a_second_distinct_token_or_output_without_one_yields_none() {
         let second = "sk-ant-oat01-the-second";

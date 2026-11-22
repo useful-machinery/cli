@@ -558,7 +558,7 @@ async fn pinned_real_claude_code_02_production_driver_returns_one_normalized_res
 }
 
 // SC-AGENT-3
-// REQ-AGENT-84
+// REQ-AGENT-93
 // INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
@@ -618,7 +618,7 @@ async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one
 }
 
 // SC-AGENT-7
-// REQ-AGENT-35
+// REQ-AGENT-92
 // REQ-AGENT-64
 // REQ-AGENT-85
 // INV-HARNESS-25
@@ -681,7 +681,7 @@ async fn pinned_real_claude_code_03b_the_last_submission_after_a_backgrounded_su
 }
 
 // REQ-AGENT-32
-// REQ-AGENT-84
+// REQ-AGENT-94
 // INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
@@ -721,7 +721,7 @@ async fn pinned_real_claude_code_03c_a_string_and_a_null_come_back_as_written() 
     .await;
 }
 
-// REQ-AGENT-35
+// REQ-AGENT-92
 // INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
@@ -902,8 +902,8 @@ async fn pinned_real_claude_code_03e_a_subagents_own_background_command_is_waite
 }
 
 // REQ-AGENT-31
-// REQ-AGENT-84
-// REQ-AGENT-86
+// REQ-AGENT-95
+// REQ-AGENT-98
 // INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
@@ -1260,7 +1260,8 @@ async fn pinned_real_claude_code_06b_headless_term_and_cont_quiesce_owned_work()
     .await;
 }
 
-// REQ-AGENT-86
+// REQ-AGENT-96
+// REQ-AGENT-97
 // INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]

@@ -847,7 +847,7 @@ where
     }
 
     /// A `useful workflow run resume` without `--from` refused at the run's latest attempt
-    /// (REQ-CONTINUE-29, REQ-CONTINUE-74, REQ-CONTINUE-76): phase `continuation` and one
+    /// (REQ-CONTINUE-29, REQ-CONTINUE-103, REQ-CONTINUE-113): phase `continuation` and one
     /// diagnostic with `code`, `message` and the attempt.
     pub fn render_continuation_refusal(
         mut self,

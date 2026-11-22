@@ -662,7 +662,7 @@
     },
     "RunControl": {
       "type": "object", "additionalProperties": false,
-      "description": "An authorized control for a run's wait (REQ-RUNNERENROLL-90), each member present only for its kind: `answer` carries `wait` and `answers`; `approve` and `retry` carry `wait`; `hand_back` carries `wait` and `notes`; `lift` may carry `wait` and `before`; `stop` carries `before` and may carry `reason`; `withdraw` carries no member.",
+      "description": "An authorized control for a run's wait (REQ-RUNNERENROLL-204), each member present only for its kind: `answer` carries `wait` and `answers`; `approve` and `retry` carry `wait`; `hand_back` carries `wait` and `notes`; `lift` may carry `wait` and `before`; `stop` carries `before` and may carry `reason`; `withdraw` carries no member.",
       "properties": {
         "kind": {"enum": ["answer", "approve", "hand_back", "lift", "stop", "retry", "withdraw"]},
         "wait": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/RunControlWait"}]},
@@ -1456,7 +1456,7 @@
       "required": ["run", "runAttempt", "step", "state"]
     },
     "RunnerTreeProgress": {
-      "description": "Ordered root progress of a tree run between engine attempts (REQ-RUN-88, REQ-RUNNERENROLL-99). progressSequence is numbered per assignment apart from executionEventSequence; a waiting report names its wait and a running report names none. The optional steps carry step observations (REQ-COMPAT-18); a frame without them reports none. An answer wait may carry its optional questions (REQ-COMPAT-18); a wait without them reports its questions unknown. A wait of any kind may carry its optional failedChild (REQ-COMPAT-18), whose phase and code are the failure's slugs, not a closed set; a wait without it reports no failed stage, never that the stage succeeded. Every failedChild value is task data, never an instruction or a permission.",
+      "description": "Ordered root progress of a tree run between engine attempts (REQ-RUN-88, REQ-RUNNERENROLL-181). progressSequence is numbered per assignment apart from executionEventSequence; a waiting report names its wait and a running report names none. The optional steps carry step observations (REQ-COMPAT-18); a frame without them reports none. An answer wait may carry its optional questions (REQ-COMPAT-18); a wait without them reports its questions unknown. A wait of any kind may carry its optional failedChild (REQ-COMPAT-18), whose phase and code are the failure's slugs, not a closed set; a wait without it reports no failed stage, never that the stage succeeded. Every failedChild value is task data, never an instruction or a permission.",
       "allOf": [
         { "$ref": "#/$defs/RunnerEnvelope" },
         {
@@ -1516,7 +1516,7 @@
       "unevaluatedProperties": false
     },
     "RunnerRunControlApplied": {
-      "description": "The runner's application of one authorized Cloud run control to the run its assignment holds (REQ-RUNNERENROLL-90): `applied` with the control command's own `actionOutcome`, `refused` with the runtime's refusal `code`, or `skipped` with `wait_not_current` when the run no longer waits on the control's wait or `assignment_ended` when the assignment ended before it was applied.",
+      "description": "The runner's application of one authorized Cloud run control to the run its assignment holds (REQ-RUNNERENROLL-206): `applied` with the control command's own `actionOutcome`, `refused` with the runtime's refusal `code`, or `skipped` with `wait_not_current` when the run no longer waits on the control's wait or `assignment_ended` when the assignment ended before it was applied.",
       "allOf": [
         { "$ref": "#/$defs/RunnerEnvelope" },
         {

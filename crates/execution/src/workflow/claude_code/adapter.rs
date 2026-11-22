@@ -1116,7 +1116,7 @@ where
         agent_process_driver::signal_interrupt(state.process_group);
     }
 
-    /// A hello is answered; a submission is judged and answered (REQ-AGENT-84,
+    /// A hello is answered; a submission is judged and answered (REQ-AGENT-93,
     /// REQ-AGENT-85). Both restart the quiet bound.
     async fn on_channel_event(
         &mut self,

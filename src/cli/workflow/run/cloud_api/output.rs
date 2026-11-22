@@ -613,7 +613,9 @@ pub(crate) fn write_rejection(out: &mut impl Write, run: &Run) -> io::Result<()>
         return Ok(());
     };
     writeln!(out, "rejection:")?;
-    writeln!(out, "  reason: {}", visible_text(&rejection.reason))?;
+    let reason = useful_support::wire_name(rejection.reason)
+        .ok_or_else(|| io::Error::other("Cloud run rejection reason is not a contracted string"))?;
+    writeln!(out, "  reason: {}", visible_text(&reason))?;
     if let Some(diagnostic) = rejection.diagnostic.as_deref() {
         for (label, fact) in [
             ("validation code", &diagnostic.validation_code),

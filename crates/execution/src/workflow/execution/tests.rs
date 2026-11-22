@@ -717,7 +717,7 @@ fn describe_transition(event: &TransitionEvent<TestInstant>) -> String {
     }
 }
 
-// INV-TESTING-18
+// INV-TESTING-34
 #[tokio::test]
 async fn watchdog_expiry_names_the_last_observed_transition() {
     let (observer, _entries, _observed) = RecordingObserver::new();
@@ -949,7 +949,7 @@ fn edge_child(outcomes: &str) -> String {
     )
 }
 
-// REQ-WFEXEC-57, REQ-WFEXEC-58
+// REQ-WFEXEC-57, REQ-WFEXEC-83
 #[tokio::test]
 async fn chosen_outcome_of_an_edge_scheduled_run_is_its_exit_outcome() {
     with_watchdog(async {

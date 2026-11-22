@@ -136,7 +136,7 @@ impl DoctorCheck for AgentLoginsCheck {
 /// the first agent login Cloud authorized that is not ready to use, never for
 /// one in `foreign_login`, where the service's own login is in use
 /// (REQ-GRANT-51), and never for an OAuth provider's entry, which records one
-/// assignment's outcome (REQ-GRANT-88).
+/// assignment's outcome (REQ-GRANT-159).
 fn readiness_outcome(readiness: &AgentLoginReadiness) -> Outcome {
     let mut details = BTreeMap::new();
     for entry in &readiness.providers {
@@ -155,7 +155,7 @@ fn readiness_outcome(readiness: &AgentLoginReadiness) -> Outcome {
             status.next_action.as_str().to_owned(),
         );
         // An OAuth provider's entry of an ended assignment names its run and
-        // that end where it records them (REQ-GRANT-88).
+        // that end where it records them (REQ-GRANT-158).
         for (suffix, value) in [("run_id", &entry.run_id), ("ended_at", &entry.ended_at)] {
             if let Some(value) = value {
                 details.insert(format!("{provider}_{suffix}"), value.clone());
@@ -240,7 +240,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-88, REQ-RUNNERENROLL-86
+    // REQ-GRANT-159, REQ-RUNNERENROLL-86
     #[test]
     fn the_check_passes_with_an_oauth_entry_cloud_did_not_answer() {
         let readiness = AgentLoginReadiness {
@@ -303,7 +303,7 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-88, REQ-RUNNERENROLL-86
+    // REQ-GRANT-158, REQ-GRANT-159, REQ-RUNNERENROLL-309
     #[test]
     fn the_check_names_an_ended_oauth_entrys_run_and_end_and_still_passes() {
         let run_id = "run_01k0z6r1w8f4jy2m7q9v3x5abc";

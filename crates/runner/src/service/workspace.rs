@@ -4280,6 +4280,7 @@ mod tests {
         }
     }
 
+    // REQ-COMPAT-51
     #[test]
     fn unsafe_or_mixed_legacy_evidence_remains_unknown_and_untouched() {
         #[derive(Clone, Copy, Debug)]
@@ -4534,7 +4535,7 @@ mod tests {
         assert_eq!(failed_remover.calls.load(Ordering::Relaxed), 6);
     }
 
-    // REQ-RUNNERENROLL-69, REQ-WORKSPACE-43
+    // REQ-RUNNERENROLL-69, REQ-WORKSPACE-43, REQ-COMPAT-51
     #[test]
     fn retained_attempt_survives_restart_with_identity_and_original_bytes() {
         for legacy in [false, true] {

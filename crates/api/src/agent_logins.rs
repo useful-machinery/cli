@@ -24,7 +24,7 @@ impl AgentLoginRemovalState {
 }
 
 impl AgentLoginReportLastUse {
-    /// The last use's wire name (REQ-GRANT-27).
+    /// The last use's wire name (REQ-GRANT-113).
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentLoginReportLastUseAccepted => "accepted",
@@ -49,7 +49,7 @@ pub(crate) fn valid_ended_authorization(value: &AgentLoginEndedAuthorization) ->
 }
 
 // A stop names the run asked to stop and the cancellation request made of it
-// (REQ-GRANT-48).
+// (REQ-GRANT-132).
 fn valid_stop(value: &AgentLoginStop) -> bool {
     useful_support::valid_typed_id(&value.run_id, "run_")
         && useful_support::valid_typed_id(&value.cancellation_request_id, "cmd_")
@@ -74,7 +74,7 @@ pub(crate) fn valid_authorization_record(
         && report.is_none_or(|report| {
             report.generation.is_none_or(|generation| generation >= 1)
                 && !report.reported_at.is_empty()
-                // The time of a last use comes only with it (REQ-GRANT-27).
+                // The time of a last use comes only with it (REQ-GRANT-114).
                 && report
                     .last_use_at
                     .as_deref()
@@ -158,7 +158,7 @@ mod tests {
     }
 
     // REQ-GRANT-13
-    // REQ-GRANT-48
+    // REQ-GRANT-132
     #[test]
     fn an_ended_authorizations_stop_names_a_run_and_a_cancellation_request() {
         const RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";

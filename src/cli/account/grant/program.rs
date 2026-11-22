@@ -37,7 +37,7 @@ pub(super) enum End {
 }
 
 /// A signal that asked for a sign-in to stop, which stops several sign-ins with its status
-/// (REQ-GRANT-75): an interrupt, or a request to terminate.
+/// (REQ-GRANT-183): an interrupt, or a request to terminate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::cli) enum Stop {
     Interrupt,

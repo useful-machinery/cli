@@ -273,7 +273,7 @@ fn sync_json_prints_the_readiness_as_a_document() {
     assert_eq!(document["agentLogins"], expected);
 }
 
-// REQ-GRANT-41, REQ-GRANT-53, REQ-GRANT-38
+// REQ-GRANT-128, REQ-GRANT-129, REQ-GRANT-53, REQ-GRANT-38
 #[test]
 fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_last_use() {
     let used = |last_use: &str| {
@@ -287,7 +287,7 @@ fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_las
         (used("accepted"), 0, "available", "none"),
         (READY_CODEX.to_owned(), 0, "unverified", "none"),
         // An earlier serving process may still say the provider was
-        // selected, which changes nothing (REQ-GRANT-38).
+        // selected, which changes nothing (REQ-GRANT-118).
         (
             r#"{"provider":"codex","state":"not_authorized","agentLoginId":"agl_01k0z6r1w8f4jy2m7q9v3x5abc","checkedAt":"2026-11-12T01:00:00Z","selected":true}"#.to_owned(),
             0,
@@ -323,7 +323,7 @@ fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_las
     }
 }
 
-// REQ-GRANT-41
+// REQ-GRANT-129
 #[test]
 fn sync_prints_a_logins_last_use_with_its_time_where_the_runner_states_one() {
     const LAST_USE_AT: &str = "2026-11-12T00:58:00Z";
@@ -363,7 +363,7 @@ fn sync_prints_a_logins_last_use_with_its_time_where_the_runner_states_one() {
     assert!(!line.contains("2026-"), "{line}");
 }
 
-// REQ-GRANT-41
+// REQ-GRANT-130
 #[test]
 fn sync_names_each_login_whose_check_gave_no_answer_without_changing_its_exit_status() {
     let unanswered = |codex: &str| {
@@ -425,7 +425,7 @@ fn sync_names_each_login_whose_check_gave_no_answer_without_changing_its_exit_st
     assert!(document.get("unansweredChecks").is_none(), "{document}");
 }
 
-// REQ-GRANT-41, REQ-GRANT-51
+// REQ-GRANT-128, REQ-GRANT-51
 #[test]
 fn sync_exits_1_only_when_an_authorized_provider_is_not_ready() {
     for (codex, code) in [
@@ -455,7 +455,7 @@ fn sync_exits_1_only_when_an_authorized_provider_is_not_ready() {
     }
 }
 
-// REQ-GRANT-41
+// REQ-GRANT-128
 #[test]
 fn sync_exits_4_when_no_runner_is_live_or_a_run_it_holds_is_working() {
     let directory = private_credential_directory();
@@ -656,7 +656,7 @@ impl ServedRunner {
     }
 }
 
-// REQ-RUNNERENROLL-86, REQ-GRANT-41, REQ-GRANT-38
+// REQ-RUNNERENROLL-86, REQ-GRANT-128, REQ-GRANT-119
 #[test]
 fn a_runner_with_nothing_authorized_passes_against_a_cloud_without_the_routes() {
     let ServedRunner {
@@ -1047,7 +1047,7 @@ impl EndedGrantAssignment {
     }
 }
 
-// REQ-GRANT-86, REQ-GRANT-88, INV-RUNNER-28
+// REQ-GRANT-149, REQ-GRANT-151, REQ-GRANT-88, INV-RUNNER-28
 #[test]
 fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowhere() {
     let served = EndedGrantAssignment::served(
@@ -1117,7 +1117,7 @@ fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowher
     }
 }
 
-// REQ-GRANT-86, INV-RUNNER-28
+// REQ-GRANT-149, REQ-GRANT-151, INV-RUNNER-28
 #[test]
 fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
     let served = EndedGrantAssignment::served(
@@ -1174,7 +1174,7 @@ fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
     }
 }
 
-// REQ-GRANT-88, REQ-GRANT-41, REQ-GRANT-53
+// REQ-GRANT-158, REQ-GRANT-129, REQ-GRANT-53
 #[test]
 fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current() {
     let served = EndedGrantAssignment::served(
@@ -1182,7 +1182,7 @@ fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current(
         &grant_token_file(GITHUB_TOKEN_FILE),
     );
     let config = served.fixture.config.clone();
-    // The runner answers a sync only once it is idle (REQ-GRANT-41).
+    // The runner answers a sync only once it is idle (REQ-GRANT-128).
     let sync = poll_until(
         "sync once the runner is idle",
         || run(&["runner", "sync", "--config", &config]),
@@ -1191,7 +1191,7 @@ fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current(
     let json = run(&["runner", "sync", "--json", "--config", &config]);
     let serve_stderr = served.stop();
 
-    // An OAuth entry never fails the sync, ended or not (REQ-GRANT-88).
+    // An OAuth entry never fails the sync, ended or not (REQ-GRANT-159).
     assert_eq!(
         sync.status.code(),
         Some(0),

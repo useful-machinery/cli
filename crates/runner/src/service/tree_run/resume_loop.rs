@@ -1,4 +1,4 @@
-//! The tree run's resume loop (REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99): one assignment,
+//! The tree run's resume loop (REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-181): one assignment,
 //! lease and claim carry the run through every engine attempt. After `useful workflow run
 //! create` and each later `useful` process exits, the loop reads `run.json`: `exited` ends
 //! the loop; `waiting` reads `wait.json` and, for a wait only a control resolves (rule
@@ -17,7 +17,7 @@
 //! the loop has ended on an exited record, after the last `useful` process and so after the
 //! outcome hook, it reads the run's `mirror/` writes onto that record for the terminal
 //! report, the number the run's `mirror/` held when the runner took it marking the leading
-//! writes as earlier attempts', which request no release (REQ-RUNNERENROLL-99): none for a
+//! writes as earlier attempts', which request no release (REQ-RUNNERENROLL-179): none for a
 //! created run, and for an adopted run the count read before its offer's deliveries are
 //! applied and before its first command. When the last document carries no settled engine
 //! result, it also reads the result the run's current attempt recorded in `state.json`. For
@@ -51,13 +51,13 @@
 //! the runner's.
 //!
 //! Each Cloud control for the assignment is applied once and its application reported
-//! (REQ-RUNNERENROLL-90). One that names a wait (`answer`, `approve`, `hand_back`, `retry`, and
+//! (REQ-RUNNERENROLL-208). One that names a wait (`answer`, `approve`, `hand_back`, `retry`, and
 //! `lift` when it names one) is applied while the run waits and no process holds it, only when
 //! the run's current wait is that wait, and is otherwise skipped `wait_not_current` with
 //! nothing run; an applied one is followed by `resume`, except `retry`, which continues the run
 //! itself under the loop's supervision. One that names none (`stop`, `withdraw`, and `lift`
 //! without a wait) is applied as soon as it arrives, beside a running process as a delivery
-//! is. An applied `withdraw` is followed by no `resume` (REQ-RUNNERENROLL-123): the loop reads
+//! is. An applied `withdraw` is followed by no `resume` (REQ-RUNNERENROLL-318): the loop reads
 //! the record, which ends it on an `exited` record the command left; a withdrawal recorded for
 //! a process that then left the run waiting, as an evaluation of a held wait does, is finished
 //! with one more `useful workflow run cancel --control=withdraw`, reported no further.
@@ -181,7 +181,7 @@ impl TreeEnd {
     /// and the class of the first that could not be listed; and, for such an end whose
     /// document carries no settled result, the engine's result its current attempt
     /// recorded. Only a write past the earlier ones can request release
-    /// (REQ-RUNNERENROLL-99): when their count could not be read every write is marked
+    /// (REQ-RUNNERENROLL-179): when their count could not be read every write is marked
     /// earlier, and a `mirror/` that cannot be read now reports no writes, so the report
     /// requests no release on an outcome it cannot confirm as the attempt's own. The end
     /// keeps the class of either mirror failure for the run event, the later read's when
@@ -257,7 +257,7 @@ pub(in crate::service) type ReportSink<'a> = &'a (dyn Fn(ExecutionReport) -> boo
 
 /// What the last `resume` of a still-waiting run said about its wait.
 enum Answer {
-    /// `outcome` `waiting`: the wait holds (REQ-CONTINUE-74).
+    /// `outcome` `waiting`: the wait holds (REQ-CONTINUE-102).
     Held,
     /// Refused with `wait_condition_unavailable`: the condition could not be read.
     Unavailable,
@@ -440,7 +440,7 @@ struct Driver<'a> {
     progress: Progress<'a>,
     directory: Option<PathBuf>,
     /// How many writes the run's `mirror/` held when the runner took the run, which are
-    /// earlier attempts' (REQ-RUNNERENROLL-99): none for a run `create` made, and for an
+    /// earlier attempts' (REQ-RUNNERENROLL-179): none for a run `create` made, and for an
     /// adopted run the count read before anything is applied to it, or the class of the
     /// failure to read it.
     earlier_writes: Result<usize, &'static str>,
@@ -451,7 +451,7 @@ struct Driver<'a> {
     /// The controls taken and not yet applied, in arrival order.
     controls: VecDeque<RunControl>,
     /// Whether a withdrawal was applied `recorded`, left for the process holding the run to
-    /// honor, and the record has not been seen waiting since (REQ-RUNNERENROLL-123).
+    /// honor, and the record has not been seen waiting since (REQ-RUNNERENROLL-319).
     withdrawal_recorded: bool,
 }
 
@@ -661,7 +661,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
             RecordState::Waiting => {
                 // A withdrawal recorded for a process that ended without honoring it, as an
                 // evaluation of a held wait does (REQ-LOCALRUN-212), is finished on the waiting
-                // run, unreported, and the record read again (REQ-RUNNERENROLL-123).
+                // run, unreported, and the record read again (REQ-RUNNERENROLL-319).
                 if std::mem::take(&mut driver.withdrawal_recorded) {
                     command::finish_withdrawal(&run.useful, &directory, run.cancellation.source())
                         .await;
@@ -982,11 +982,11 @@ impl Driver<'_> {
     }
 
     /// Applies `control` to the run at `directory`, which no process holds, and reports its
-    /// application (REQ-RUNNERENROLL-90). A control naming a wait the run does not currently
+    /// application (REQ-RUNNERENROLL-210). A control naming a wait the run does not currently
     /// wait on is skipped `wait_not_current` and runs nothing. A `retry` runs as the loop's
     /// next command, `Ran` with its exit once it applied or was cancelled; a `withdraw` that
     /// applied is `Changed`, for the loop to read the record it left, and is followed by no
-    /// `resume` (REQ-RUNNERENROLL-123); any other control that applied is `Due`, for `resume`
+    /// `resume` (REQ-RUNNERENROLL-318); any other control that applied is `Due`, for `resume`
     /// to act on it; and one that did not, or that the assignment's cancellation abandoned
     /// unreported, leaves the run waiting as it was, `None`.
     async fn apply_control(

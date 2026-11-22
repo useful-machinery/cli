@@ -246,7 +246,7 @@ pub struct DefinitionRecord {
     /// Newest first.
     pub revisions: Vec<RevisionRecord>,
     /// Required on read and kept as read; a new record writes `null`, and no command sets a
-    /// value (REQ-WFDEF-7), so one an earlier release recorded stays as it was.
+    /// value (REQ-WFDEF-79), so one an earlier release recorded stays as it was.
     #[serde(deserialize_with = "Option::deserialize")]
     pub cloud_id: Option<String>,
 }

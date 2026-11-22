@@ -3,7 +3,7 @@
 //! REQ-LOCALRUN-210, REQ-LOCALRUN-218): a control carried to its runner (REQ-RUN-91,
 //! REQ-RUN-110), a continuation or a retry requested (REQ-CONTINUE-55, REQ-CONTINUE-85,
 //! REQ-RETRY-30), a cancellation requested (REQ-CANCEL-38), or the run's subject claim released
-//! by an owner (REQ-CLOUDDEF-19), through the public API under the CLI's session handling. A
+//! by an owner (REQ-CLOUDDEF-97), through the public API under the CLI's session handling. A
 //! verb refused for the run's state names it and the verbs that apply (REQ-LOCALRUN-223).
 //! Nothing under the `useful` home is read or written. `useful workflow run show` reads a Cloud
 //! run in `show`.
@@ -1134,7 +1134,7 @@ mod tests {
     use crate::cli::workflow::run::cloud_api::failure_code;
     use crate::exit_code::ExitCode;
 
-    // REQ-COMPAT-20, REQ-LOCALRUN-187, REQ-LOCALRUN-210: a refusal Cloud answers `409`
+    // REQ-COMPAT-42, REQ-LOCALRUN-187, REQ-LOCALRUN-210: a refusal Cloud answers `409`
     // under a type this release does not name is reported as a conflict, exit 1.
     #[test]
     fn an_unnamed_conflict_is_reported_as_a_conflict() {
@@ -1179,10 +1179,6 @@ mod tests {
             RunFailure::ContinuationAcceptanceUnknown,
             RunFailure::ContinuationAdmissionInvalid(vec![ContinuationAdmissionViolation {
                 code: "node_unknown",
-                node: None,
-                producer: None,
-                reference: None,
-                prior_state: None,
             }]),
             RunFailure::PathRunRetired,
             RunFailure::Gone,

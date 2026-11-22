@@ -21,7 +21,7 @@ pub(crate) struct Partition {
 /// An edge-scheduled continuation names exactly one step and also re-executes every step in
 /// `unfinished`, those the prior attempt left neither succeeded nor inherited, so the walk
 /// restarts from the named step and reaches or leaves each of them `not_reached`
-/// (REQ-CONTINUE-3); a dataflow caller passes an empty set.
+/// (REQ-CONTINUE-96); a dataflow caller passes an empty set.
 pub(crate) fn partition(
     workflow: &ValidatedWorkflow,
     from: &[String],
@@ -54,9 +54,9 @@ pub(crate) fn partition(
         }
         // An edge-scheduled step has no prerequisites; the later steps its edges can start,
         // a wait's hand-back step among them, are its dependents, so a resume re-executes
-        // the walk from it (REQ-WFEXEC-58, REQ-WFFORMAT-92). An edge naming the step itself
+        // the walk from it (REQ-WFEXEC-58, REQ-WFFORMAT-119). An edge naming the step itself
         // or an earlier step adds none, so the producer a continued step reads stays
-        // inherited (REQ-CONTINUE-3, REQ-WFEXEC-64).
+        // inherited (REQ-CONTINUE-96, REQ-WFEXEC-64).
         if let ValidatedStep::Workflow(step) = step {
             let mut targets = Vec::new();
             for target in step.edges.values() {
@@ -400,7 +400,7 @@ fn visit_body_references(step: &ValidatedStep, visit: &mut impl FnMut(&[Resolved
 }
 
 /// The `outputs.<step>.<output>` operands of an `external` wait's rule, which the wait record
-/// resolves to literals when the step enters it (REQ-WFEXEC-65), so an inherited producer's
+/// resolves to literals when the step enters it (REQ-WFEXEC-124), so an inherited producer's
 /// value is loaded for the attempt.
 fn add_rule_references(
     target: &ValidatedEdgeTarget,
@@ -577,7 +577,7 @@ mod tests {
         );
     }
 
-    // REQ-WFEXEC-58, REQ-WFFORMAT-92
+    // REQ-WFEXEC-58, REQ-WFFORMAT-119
     #[test]
     fn an_edge_scheduled_resume_reexecutes_the_steps_its_edges_reach() {
         let document = super::super::decode(
@@ -604,7 +604,7 @@ mod tests {
         let workflow =
             super::super::validation::validate_with_children(document, None, &children).unwrap();
 
-        // A wait's `then` and its `onHandBack` are both dependents (REQ-WFFORMAT-92).
+        // A wait's `then` and its `onHandBack` are both dependents (REQ-WFFORMAT-119).
         let selected = partition(&workflow, &["build".to_owned()], &BTreeSet::new()).unwrap();
         assert_eq!(selected.reexecuted, ["build", "review", "fix"]);
         assert_eq!(selected.inherited, ["design"]);
@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(selected.inherited, ["design", "build", "fix"]);
     }
 
-    // REQ-CONTINUE-3: an edge-scheduled continuation names one step and also re-executes
+    // REQ-CONTINUE-96: an edge-scheduled continuation names one step and also re-executes
     // every step the prior attempt left unfinished, so the walk restarts from the named step.
     #[test]
     fn an_edge_scheduled_continuation_reexecutes_the_unfinished_steps() {
@@ -659,7 +659,7 @@ mod tests {
         );
     }
 
-    // REQ-CONTINUE-3, REQ-WFEXEC-64: a backward edge adds no dependent, so the producer a
+    // REQ-CONTINUE-96, REQ-WFEXEC-132: a backward edge adds no dependent, so the producer a
     // continued step reads through an output reference stays inherited, while a limited
     // edge's forward `then` is one.
     #[test]
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(selected.inherited, ["design"]);
     }
 
-    // REQ-WFEXEC-58, REQ-CONTINUE-3: a step or export that reads an inherited `workflow`
+    // REQ-WFEXEC-58, REQ-CONTINUE-96: a step or export that reads an inherited `workflow`
     // step's child export or `outcome` keeps its contract, so the step stays inherited.
     #[test]
     fn an_inherited_workflow_steps_child_exports_and_outcome_keep_their_contract() {

@@ -266,7 +266,7 @@ async fn command_and_each_harness_assignment_invoke_only_declared_snapshots() {
     }
 }
 
-// REQ-WORKSPACE-16
+// REQ-WORKSPACE-16, REQ-WORKSPACE-49
 #[tokio::test]
 async fn cloud_commands_agents_and_finalizers_receive_exact_source_revision() {
     let repository_argv = serde_json::to_string(&[

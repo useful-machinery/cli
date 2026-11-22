@@ -424,7 +424,7 @@ fn plain_view_shows_the_source_a_first_of_took_and_refuses_one_the_state_does_no
     );
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-166: `view` looks under the home alone, so an ID the home
+// REQ-LOCALRUN-227, REQ-LOCALRUN-306, REQ-LOCALRUN-166: `view` looks under the home alone, so an ID the home
 // lacks is `run_not_found` naming `useful workflow run show`, which reads a Cloud run, and
 // nothing is sent to the deployment in effect.
 #[test]

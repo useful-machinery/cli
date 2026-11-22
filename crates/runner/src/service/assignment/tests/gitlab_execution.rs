@@ -31,7 +31,7 @@ fn gitlab_assignment_fixture(
     (temporary, manager, offered, broker)
 }
 
-// REQ-WORKSPACE-32, REQ-WORKSPACE-34: preparation renews, executes, and
+// REQ-WORKSPACE-51, REQ-WORKSPACE-34: preparation renews, executes, and
 // removes its relay wiring before terminal settlement.
 #[tokio::test]
 async fn gitlab_assignment_fetches_executes_and_restores_the_relay_origin() {

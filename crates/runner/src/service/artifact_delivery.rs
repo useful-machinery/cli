@@ -1649,8 +1649,7 @@ mod tests {
     }
 
     // The streamed body reaches the provider whole across several chunks, so an
-    // upload larger than one chunk still stores the bytes the set is sealed to
-    // (REQ-ARTIFACT-1).
+    // upload larger than one chunk still stores the bytes the set is sealed to.
     #[test]
     fn upload_streams_a_body_longer_than_one_chunk() {
         use std::io::Write as _;

@@ -85,7 +85,7 @@ fn two_questions() -> Value {
     ])
 }
 
-// REQ-LOCALRUN-188, REQ-LOCALRUN-203: `list` lists the live runs under the home in id order
+// REQ-LOCALRUN-188, REQ-LOCALRUN-296, REQ-LOCALRUN-297, REQ-LOCALRUN-203: `list` lists the live runs under the home in id order
 // with their record and wait and counts the exited runs it left out, `--all` lists every run,
 // the filters select in memory, and an unreadable entry is named on stderr.
 #[test]
@@ -406,7 +406,7 @@ fn shown(home: &PublishedWaitTree, run: impl AsRef<std::ffi::OsStr>) -> Value {
     document
 }
 
-// REQ-LOCALRUN-189: `show` prints one run's record, position, wait, attempts, children and
+// REQ-LOCALRUN-189, REQ-LOCALRUN-298, REQ-LOCALRUN-301: `show` prints one run's record, position, wait, attempts, children and
 // controls without taking its lock or changing its directory.
 #[test]
 fn show_prints_a_run_with_its_children_and_controls() {
@@ -436,7 +436,7 @@ fn show_prints_a_run_with_its_children_and_controls() {
     assert_eq!(snapshot(&run), before);
     assert_eq!(document["runDirectory"], run.to_str().unwrap());
     assert_eq!(document["record"], run_record(&run));
-    // REQ-WFDEF-4: the record's position names the step whose child last started.
+    // REQ-WFDEF-48: the record's position names the step whose child last started.
     assert_eq!(document["record"]["position"], json!(["design"]));
     assert_eq!(document["position"], "design");
     assert_eq!(document["wait"], wait);

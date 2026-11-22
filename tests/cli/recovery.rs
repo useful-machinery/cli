@@ -744,9 +744,9 @@ fn active_status_reports_handler_kind_and_recheck_decision() {
     );
 }
 
-// REQ-WFRECOVERY-36, REQ-WFRECOVERY-48, REQ-WFRECOVERY-49, REQ-WFEXEC-69: SIGINT interrupts
-// the step while its handler runs; the handler is cancelled and quiesces, no recheck runs, and
-// the step fails `interrupted`.
+// REQ-WFRECOVERY-36, REQ-WFRECOVERY-48, REQ-WFRECOVERY-49, REQ-WFRECOVERY-67, REQ-WFEXEC-134:
+// SIGINT interrupts the step while its handler runs; the handler is cancelled and quiesces, no
+// recheck runs, and the step fails `interrupted`.
 #[test]
 fn cancellation_quiesces_the_ready_handler_and_publishes_no_recheck() {
     let bundle = RunBundle::new(&fixture_source("recovery-cancellation.yaml"));

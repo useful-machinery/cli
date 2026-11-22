@@ -184,10 +184,10 @@ pub(super) fn nested_run(run: &Path, item: u64) -> std::path::PathBuf {
     run.join(format!("children/outer/{item:06}/000001"))
 }
 
-// REQ-WFEXEC-74, INV-ENGINE-40: each element's nested run runs its stages under its own
-// directory, loops its limited edge in new attempts of the same run with its own count, and
-// exits with the outcome the root routes on; the nested workflow's environment list narrows
-// its stages'.
+// REQ-WFEXEC-74, REQ-WFEXEC-105, REQ-WFEXEC-106, INV-ENGINE-40: each element's nested run runs its
+// stages under its own directory, loops its limited edge in new attempts of the same run with its
+// own count, and exits with the outcome the root routes on; the nested workflow's environment list
+// narrows its stages'.
 #[test]
 fn a_nested_workflow_runs_its_stages_and_loops_its_edges_inside_the_parents_step() {
     let bundle = nested_tree();
@@ -333,8 +333,8 @@ steps:
     bundle
 }
 
-// REQ-WFEXEC-78, REQ-WFEXEC-59: a stage two child runs below a root that declares `github`
-// sees its names although neither child file lists them, and none of the root's own list.
+// REQ-WFEXEC-78, REQ-WFEXEC-89, INV-ENGINE-63: a stage two child runs below a root that declares
+// `github` sees its names although neither child file lists them, and none of the root's own list.
 #[test]
 fn a_stage_of_a_tree_receives_the_names_of_the_roots_declared_integrations() {
     for (requires, expected) in [
@@ -503,7 +503,7 @@ pub(super) fn asking_tree() -> TreeBundle {
     bundle
 }
 
-/// The rule an `answer` wait derives (REQ-WFEXEC-61).
+/// The rule an `answer` wait derives (REQ-WFEXEC-118).
 fn answer_rule() -> serde_json::Value {
     serde_json::json!({
         "source": "um",
@@ -531,10 +531,10 @@ fn carried_waits(run: &Path, item: u64) -> (serde_json::Value, serde_json::Value
     (wait, nested)
 }
 
-// REQ-WFEXEC-75, REQ-WFEXEC-68, REQ-WFDEF-4, REQ-WFDEF-5: a nested run's `answer` wait is
-// entered in its own directory and carried by the root, whose record waits at the full
-// path with the nested wait's kind, since and payload, `then` its own step and the rule the
-// kind derives for it; the root's step ends `not_reached` and takes no edge.
+// REQ-WFEXEC-75, INV-ENGINE-62, REQ-WFEXEC-109, REQ-WFEXEC-98, REQ-WFDEF-48, REQ-WFDEF-5: a nested run's `answer`
+// wait is entered in its own directory and carried by the root, whose record waits at the full path
+// with the nested wait's kind, since and payload, `then` its own step and the rule the kind derives
+// for it; the root's step ends `not_reached` and takes no edge.
 #[test]
 fn a_nested_runs_wait_is_carried_by_the_root_at_its_full_path() {
     let bundle = asking_tree();
@@ -743,7 +743,7 @@ fn shown_stages(nested: &Path, stages: &[(&str, u64, &str, &str)]) -> serde_json
         .collect()
 }
 
-// REQ-LOCALRUN-189: `show` lists each nested run's `edges` counts and its stages under it,
+// REQ-LOCALRUN-300, REQ-LOCALRUN-302, REQ-LOCALRUN-189: `show` lists each nested run's `edges` counts and its stages under it,
 // and `show` and `status` print the position and the carried wait's step at full depth.
 #[test]
 fn show_lists_a_nested_runs_stages_and_edges_and_prints_full_paths() {
@@ -850,9 +850,9 @@ fn show_lists_a_nested_runs_stages_and_edges_and_prints_full_paths() {
     );
 }
 
-// REQ-WFEXEC-75, REQ-WFEXEC-70, REQ-WFEXEC-68: `interrupt` while a nested stage runs fails
-// the stage `interrupted`, the nested run enters the `repair` wait its failed edge names,
-// and the root carries it with the interruption in its payload.
+// REQ-WFEXEC-75, REQ-WFEXEC-109, REQ-WFEXEC-107, REQ-WFEXEC-98: `interrupt` while a nested stage
+// runs fails the stage `interrupted`, the nested run enters the `repair` wait its failed edge
+// names, and the root carries it with the interruption in its payload.
 #[test]
 fn an_interrupted_nested_stage_leaves_the_root_in_the_carried_repair_wait() {
     let bundle = asking_tree();
@@ -918,7 +918,7 @@ fn an_interrupted_nested_stage_leaves_the_root_in_the_carried_repair_wait() {
     assert!(!run.join("children/outer/000002").exists());
 }
 
-// REQ-WFEXEC-75, REQ-WFEXEC-77: a nested stage whose child failed enters the nested run's
+// REQ-WFEXEC-109, REQ-WFEXEC-117: a nested stage whose child failed enters the nested run's
 // `repair` wait with the child's failure in its payload, and the root carries that payload,
 // so the root's wait names the failed stage's failing step.
 #[test]
@@ -948,7 +948,7 @@ fn a_carried_repair_wait_names_the_nested_stages_failed_child() {
     assert_eq!(&nested["payload"]["failedChild"], record, "{nested}");
 }
 
-// REQ-LOCALRUN-220, REQ-LOCALRUN-221, REQ-WFEXEC-75: the root's wait line, in the summary and
+// REQ-LOCALRUN-287, REQ-LOCALRUN-221, REQ-WFEXEC-75: the root's wait line, in the summary and
 // in the plain status, names a nested run's failed stage and its failing step from the
 // carried wait's payload; the nested stage has no row and no record of its own in the root's
 // stream, and the root's `outer` row is as before.
@@ -1015,7 +1015,7 @@ fn answered_nested_run(bundle: &TreeBundle, name: &str) -> std::path::PathBuf {
     run
 }
 
-// REQ-WFEXEC-68, REQ-WFEXEC-75, REQ-CONTINUE-92: a nested workflow under a root step that
+// REQ-WFEXEC-98, REQ-WFEXEC-75, REQ-CONTINUE-92: a nested workflow under a root step that
 // fans nothing out waits at `[<step>, <nested>]`, its nested run the step's own child, and
 // the answered wait continues that nested run in place with the answers.
 #[test]
@@ -1074,11 +1074,11 @@ fn a_plain_steps_nested_run_waits_at_its_two_element_path_and_continues_in_place
     );
 }
 
-// SC-WFEXEC-6, REQ-CONTINUE-92, REQ-WFEXEC-75, REQ-WFEXEC-68, REQ-CONTINUE-81: the answered
-// carried wait continues the same nested run in a new attempt from `ask`, which receives the
-// answers, with element 1 and nothing before `ask` run again; `work` then fails into a
-// carried repair wait, and the retry continues that failed stage in place, its succeeded
-// `prep` inherited, until the root exits with its outcome.
+// SC-WFEXEC-6, REQ-CONTINUE-92, REQ-WFEXEC-111, REQ-WFEXEC-96, REQ-CONTINUE-81, REQ-CONTINUE-121:
+// the answered carried wait continues the same nested run in a new attempt from `ask`, which
+// receives the answers, with element 1 and nothing before `ask` run again; `work` then fails into
+// a carried repair wait, and the retry continues that failed stage in place, its succeeded `prep`
+// inherited, until the root exits with its outcome.
 #[test]
 fn a_carried_wait_continues_its_nested_run_in_place() {
     let bundle = asking_tree();
@@ -1174,7 +1174,7 @@ fn a_carried_wait_continues_its_nested_run_in_place() {
     );
 }
 
-// REQ-CONTINUE-92, REQ-CONTINUE-93: the root's carried host wait, resolved by the host
+// REQ-CONTINUE-122, REQ-CONTINUE-93: the root's carried host wait, resolved by the host
 // condition, continues the nested run in place from its waiting stage, and the nested run
 // continues that stage's failed child in place, each attempt with reason `host`.
 #[test]
@@ -1217,7 +1217,7 @@ fn a_carried_host_wait_continues_its_nested_run_and_failed_stage_in_place() {
     assert_eq!(run_record(&stage)["outcome"], "planned");
 }
 
-// REQ-CONTINUE-92, REQ-CONTINUE-82: a carried wait whose `payload.child` lies under another
+// REQ-CONTINUE-122, REQ-CONTINUE-120: a carried wait whose `payload.child` lies under another
 // run than the waiting element's nested run is refused before the root's wait is consumed:
 // no attempt begins, no stage runs and both runs keep waiting.
 #[test]
@@ -1255,7 +1255,7 @@ fn a_carried_wait_naming_another_run_is_refused() {
     );
 }
 
-// REQ-CONTINUE-92, REQ-CONTINUE-75: withdrawing a root that carries a nested run's wait ends
+// REQ-CONTINUE-124, REQ-CONTINUE-109: withdrawing a root that carries a nested run's wait ends
 // both runs `withdrawn` and removes both wait records, with no attempt begun.
 #[test]
 fn withdrawing_a_carried_wait_ends_the_nested_run_with_the_root() {
@@ -1300,7 +1300,7 @@ fn a_stop_holds_a_nested_step_until_it_is_lifted() {
     let path = serde_json::json!(["outer", {"item": 1}, "check"]);
     let record = run_record(&run);
     assert_eq!(record["state"], "waiting", "{record}");
-    // REQ-WFEXEC-68: the root's position is the carried wait's path, not the last stage's.
+    // REQ-WFEXEC-98: the root's position is the carried wait's path, not the last stage's.
     assert_eq!(record["position"], path, "{record}");
     let (wait, nested) = carried_waits(&run, 1);
     assert_eq!(terminal["wait"], wait, "{terminal}");
@@ -1397,7 +1397,7 @@ fn assert_withdrawn_with_its_nested_run(run: &Path, item: u64) {
     assert_eq!(attempt_count(&nested), attempts);
 }
 
-// REQ-WFEXEC-76, REQ-CONTINUE-75: withdrawing a root that carries a nested run's `stop` wait,
+// REQ-WFEXEC-76, REQ-CONTINUE-124: withdrawing a root that carries a nested run's `stop` wait,
 // whose payload names no child, ends the nested run at that element with the root.
 #[test]
 fn withdrawing_a_carried_stop_ends_the_nested_run_with_the_root() {
@@ -1425,8 +1425,8 @@ mirror:
         .replacen("inputs:\n", "inputs:\n  ticket:\n    kind: text\n", 1)
 }
 
-// REQ-WFEXEC-76, REQ-WFEXEC-73, REQ-LOCALRUN-186, REQ-LOCALRUN-191: a `withdraw` recorded
-// while element 1's `ask` stage runs is honored once that stage has finished, before the
+// REQ-WFEXEC-76, INV-ENGINE-61, REQ-WFEXEC-73, REQ-LOCALRUN-240, REQ-LOCALRUN-271: a `withdraw`
+// recorded while element 1's `ask` stage runs is honored once that stage has finished, before the
 // nested step `work` starts: the nested run's attempt ends as a cancellation and the run
 // `withdrawn`, the root's step ends `cancelled` with reason `user_request`, the root ends
 // `withdrawn`, and the mirrored tree writes `onOutcome.withdrawn` once.
@@ -1583,7 +1583,8 @@ fn resumed_once_abandoned(run: &Path) -> std::process::Output {
     )
 }
 
-// REQ-CONTINUE-91, REQ-CONTINUE-76, REQ-WFEXEC-68: resuming a root killed while element 1's
+// REQ-CONTINUE-91, REQ-CONTINUE-76, REQ-CONTINUE-112, REQ-WFEXEC-96:
+// resuming a root killed while element 1's
 // nested stage `work` ran continues the same nested run in a new attempt from `work`, whose
 // stage takes a new attempt in place; `ask` and element 1's nested run are not started again,
 // and the root goes on to element 2 and exits with its outcome.
@@ -1751,7 +1752,7 @@ fn published_run_waiting_in_a_carried_answer() -> (
     (bundle, home, predecessor)
 }
 
-// REQ-CONTINUE-91, REQ-CONTINUE-80, REQ-CONTINUE-92, REQ-WFEXEC-75: `upgrade` of a root
+// REQ-CONTINUE-125, REQ-CONTINUE-80, REQ-CONTINUE-123, REQ-WFEXEC-75: `upgrade` of a root
 // waiting in a carried `answer` wait is refused while the current revision's nested workflow
 // no longer defines the waiting nested step; once it does, the successor waits with the same
 // `step` path, and answered, it starts a fresh nested run at that element whose `ask` receives
@@ -1828,7 +1829,7 @@ fn an_upgrade_carries_a_nested_wait_and_starts_its_nested_run_afresh() {
     assert_eq!(attempt_count(&nested_run(&predecessor, 2)), 1);
 }
 
-// REQ-CONTINUE-92, REQ-CONTINUE-80, REQ-CONTINUE-77: `upgrade` of a root waiting in a carried
+// REQ-CONTINUE-124, REQ-CONTINUE-80, REQ-CONTINUE-77: `upgrade` of a root waiting in a carried
 // host wait carries the wait and its position, and the predecessor's nested run keeps its
 // count; the successor's `resume` resolves the wait through the host condition with reason
 // `host` and starts a fresh nested run at the step.
@@ -1896,7 +1897,7 @@ fn an_upgrade_carries_a_nested_host_wait_and_starts_its_nested_run_afresh() {
     assert_eq!(run_record(&predecessor_nested)["edges"], counted);
 }
 
-// REQ-CONTINUE-92, REQ-CONTINUE-80, REQ-CONTINUE-75: a successor waiting in a carried wait it
+// REQ-CONTINUE-124, REQ-CONTINUE-80, REQ-CONTINUE-109: a successor waiting in a carried wait it
 // imported holds no nested run, its predecessor's `payload.child` naming a directory it never
 // had; withdrawing it ends it `withdrawn` and removes its wait record all the same.
 #[test]

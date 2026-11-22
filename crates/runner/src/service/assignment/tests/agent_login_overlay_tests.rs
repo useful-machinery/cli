@@ -475,7 +475,7 @@ fn auth_json_in(codex_home: &OsStr) -> Option<Vec<u8>> {
     fs::read(Path::new(codex_home).join("auth.json")).ok()
 }
 
-// REQ-GRANT-49, INV-RUNNER-15
+// REQ-GRANT-49, INV-RUNNER-57
 #[tokio::test]
 async fn an_admission_after_a_replacement_is_offered_the_new_generation() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -904,7 +904,7 @@ fn refused(refusal: GrantTokenRefusal) -> FakeGrantToken {
     FakeGrantToken::Fail(GrantTokenFailure::Refused(refusal))
 }
 
-// REQ-GRANT-87, REQ-WFEXEC-71
+// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn an_issued_token_and_its_file_reach_only_the_steps_that_pass_them() {
     for (provider, variable, file_variable) in GRANT_NAMES {
@@ -921,7 +921,7 @@ async fn an_issued_token_and_its_file_reach_only_the_steps_that_pass_them() {
     }
 }
 
-// REQ-GRANT-87, REQ-WFEXEC-71
+// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_passes_no_grant_name_receives_no_token() {
     let fixture = SettingUp::running(
@@ -970,7 +970,7 @@ steps:
     )
 }
 
-// REQ-GRANT-87, REQ-WFEXEC-78
+// REQ-GRANT-154, REQ-WFEXEC-85, REQ-WFEXEC-87
 #[tokio::test]
 async fn a_declared_providers_token_and_its_file_reach_every_step() {
     for (provider, variable, file_variable) in GRANT_NAMES {
@@ -1038,7 +1038,7 @@ fn cloud_issuing_mergify() -> Arc<FakeAgentLoginCloud> {
     cloud
 }
 
-// REQ-WFEXEC-78, REQ-INTEGRATION-12
+// REQ-WFEXEC-85, REQ-WFEXEC-87, REQ-INTEGRATION-12
 #[tokio::test]
 async fn a_declared_token_services_token_and_its_file_reach_every_step() {
     let token = fake_grant_token(mergify(), 1);
@@ -1076,7 +1076,7 @@ async fn a_declared_token_services_token_and_its_file_reach_every_step() {
     );
 }
 
-// REQ-WFEXEC-78, REQ-INTEGRATION-12
+// REQ-WFEXEC-88, REQ-INTEGRATION-12
 #[tokio::test]
 async fn a_workflow_that_declares_no_token_service_receives_none_of_its_names() {
     let fixture = SettingUp::running(
@@ -1087,7 +1087,7 @@ async fn a_workflow_that_declares_no_token_service_receives_none_of_its_names() 
     assert_succeeded(&fixture.run(&offer("bg")).await);
 }
 
-// REQ-GRANT-44, REQ-WFEXEC-78
+// REQ-GRANT-44, REQ-WFEXEC-85
 #[tokio::test]
 async fn a_kept_token_reaches_every_step_of_a_workflow_that_declares_claude_code() {
     let (_temporary, mut manager) = manager_without_agent_logins(&workflow_declaring(
@@ -1103,7 +1103,7 @@ async fn a_kept_token_reaches_every_step_of_a_workflow_that_declares_claude_code
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-37, REQ-WFEXEC-78
+// REQ-GRANT-37, REQ-WFEXEC-85
 #[tokio::test]
 async fn a_kept_codex_login_reaches_every_step_of_a_workflow_that_declares_codex() {
     let (_temporary, mut manager) = manager_without_agent_logins(&workflow_declaring(
@@ -1141,7 +1141,7 @@ fn example() -> GrantProvider {
     GrantProvider::listed("example").unwrap()
 }
 
-// REQ-GRANT-87, REQ-WFEXEC-71
+// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_configured_providers_token_and_its_file_reach_only_the_steps_that_pass_them() {
     let token = fake_grant_token(example(), 2);
@@ -1162,7 +1162,7 @@ async fn a_configured_providers_token_and_its_file_reach_only_the_steps_that_pas
     );
 }
 
-// REQ-GRANT-87, REQ-WFEXEC-71
+// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_passes_no_configured_providers_name_receives_nothing() {
     let fixture = SettingUp::running(
@@ -1192,7 +1192,7 @@ fn asked_for(cloud: &FakeAgentLoginCloud) -> Vec<AgentLoginProvider> {
         .collect()
 }
 
-// REQ-GRANT-87, REQ-GRANT-86, REQ-WORKSPACE-18
+// REQ-GRANT-153, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its_absence() {
     let issuing_every_grant = || {
@@ -1255,7 +1255,7 @@ async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its
     );
 }
 
-// REQ-GRANT-87, REQ-GRANT-86, REQ-WORKSPACE-18
+// REQ-GRANT-153, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn every_provider_the_host_provides_keeps_the_services_names_whatever_cloud_holds() {
     let check = SERVICE_GRANT_VALUES
@@ -1285,7 +1285,7 @@ async fn every_provider_the_host_provides_keeps_the_services_names_whatever_clou
     }
 }
 
-// REQ-GRANT-87, REQ-GRANT-86, REQ-WORKSPACE-18
+// REQ-GRANT-156, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn a_provider_an_earlier_release_recorded_as_selected_with_no_token_leaves_its_names_unset() {
     let fixture = SettingUp::running(
@@ -1327,7 +1327,7 @@ async fn a_provider_an_earlier_release_recorded_as_selected_with_no_token_leaves
     );
 }
 
-// REQ-GRANT-87, REQ-GRANT-51
+// REQ-GRANT-156, REQ-GRANT-51
 #[tokio::test]
 async fn an_agent_step_starts_with_a_grant_name_unset() {
     // The names the Codex fixture reads, and the GitLab grant's.
@@ -1650,7 +1650,7 @@ fn mergify() -> GrantProvider {
 /// Buildkite's token and not Mergify's.
 const SERVICE_BUILDKITE: [(&str, &str); 1] = [("BUILDKITE_API_TOKEN", "service-buildkite-token")];
 
-// REQ-INTEGRATION-12, REQ-GRANT-93
+// REQ-INTEGRATION-49, REQ-GRANT-93
 #[tokio::test]
 async fn an_admissions_one_report_names_each_listed_token_service_with_a_source_after_the_five() {
     // Cloud lists both token services and issues Mergify's token from an
@@ -1683,7 +1683,7 @@ async fn an_admissions_one_report_names_each_listed_token_service_with_a_source_
     );
 }
 
-// REQ-INTEGRATION-12, REQ-COMPAT-17
+// REQ-INTEGRATION-49, REQ-COMPAT-17
 #[tokio::test]
 async fn a_report_names_no_token_service_cloud_did_not_list_or_the_runner_has_no_source_of() {
     // A Cloud without the token-service list: the report is today's,

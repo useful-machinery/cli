@@ -188,7 +188,8 @@ async fn execute(fixture: &mut Fixture) -> Vec<ExecutionReport> {
     finished_reports(&mut fixture.manager).await
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99
+// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-186, REQ-RUNNERENROLL-187, REQ-RUNNERENROLL-191,
+// REQ-RUNNERENROLL-194, REQ-RUNNERENROLL-170
 #[tokio::test]
 async fn published_tree_runs_once_and_reports_the_chosen_outcome() {
     let mut fixture = fixture(TREE_DIGEST, "exited", "\"planned\"");
@@ -359,7 +360,7 @@ fn schema_3_offer(fixture: &mut Fixture, workspace_branch: Option<&str>) {
     });
 }
 
-// REQ-RUNNERENROLL-120, REQ-WORKSPACE-16: the runtime's `create` names the pinned source as
+// REQ-RUNNERENROLL-120, REQ-WORKSPACE-16, REQ-WORKSPACE-50: the runtime's `create` names the pinned source as
 // the engine path sets it, each name and value one argument after the option.
 #[tokio::test]
 async fn create_names_the_pinned_source_of_each_spec_schema() {
@@ -413,7 +414,7 @@ async fn create_names_the_pinned_source_of_each_spec_schema() {
     );
 }
 
-// REQ-RUNNERENROLL-99: a run that succeeded and chose an outcome its workflow names
+// REQ-RUNNERENROLL-172: a run that succeeded and chose an outcome its workflow names
 // `failed` finishes `succeeded`, that outcome its chosen one.
 #[tokio::test]
 async fn succeeded_run_choosing_an_outcome_named_failed_finishes_succeeded() {
@@ -432,7 +433,7 @@ async fn succeeded_run_choosing_an_outcome_named_failed_finishes_succeeded() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("failed"));
 }
 
-// REQ-RUNNERENROLL-99: a run that failed and chose its `onFailure` outcome `blocked`
+// REQ-RUNNERENROLL-172: a run that failed and chose its `onFailure` outcome `blocked`
 // finishes `failed` with its result's primary issue, `blocked` its chosen outcome.
 #[tokio::test]
 async fn failed_run_choosing_its_on_failure_outcome_finishes_failed() {
@@ -475,7 +476,7 @@ async fn a_failed_tree_run_is_listed_as_recent_with_its_failure_code() {
     assert_eq!(entry.chosen_outcome.as_deref(), Some("blocked"));
 }
 
-// REQ-RUNNERENROLL-99: a created run whose last command's document carries no settled
+// REQ-RUNNERENROLL-173: a created run whose last command's document carries no settled
 // result finishes by the result its current attempt recorded published, as an adopted
 // record does.
 #[tokio::test]
@@ -719,7 +720,7 @@ fn gitlab_tree_fixture() -> (Fixture, Arc<GitLabGrantBroker>) {
     (fixture, gitlab.unwrap())
 }
 
-// REQ-WORKSPACE-42, REQ-WORKSPACE-32, REQ-WORKSPACE-34: a definition-backed GitLab
+// REQ-WORKSPACE-42, REQ-WORKSPACE-32, REQ-WORKSPACE-51, REQ-WORKSPACE-34: a definition-backed GitLab
 // run fetches its commit over the relay with preparation grants alone, revokes them,
 // and runs its tree against the credential-free canonical origin, which its retained
 // workspace keeps.
@@ -798,7 +799,7 @@ fn keep_claude_code_token(fixture: &mut Fixture) -> (tempfile::TempDir, PathBuf)
     (state, token)
 }
 
-// REQ-RUNNERENROLL-91, REQ-GRANT-44
+// REQ-RUNNERENROLL-194, REQ-GRANT-44
 #[tokio::test]
 async fn kept_agent_login_reaches_the_runtime_that_creates_the_run() {
     let mut fixture = fixture_with(TREE_DIGEST, "exited", "\"planned\"", &[]);
@@ -831,7 +832,7 @@ async fn answer_after(fixture: &mut Fixture, change: impl FnOnce()) {
     assert_eq!(resumes(&fixture.log), 1);
 }
 
-// REQ-GRANT-49: the `resume` that continues a run from a wait is offered the Claude Code
+// REQ-GRANT-136: the `resume` that continues a run from a wait is offered the Claude Code
 // login the runner holds when it starts, not the one the run was admitted with.
 #[tokio::test]
 async fn a_run_that_waited_through_a_replaced_login_resumes_with_the_new_one() {
@@ -850,7 +851,7 @@ async fn a_run_that_waited_through_a_replaced_login_resumes_with_the_new_one() {
     assert!(!resumed.contains(&format!("CLAUDE_CODE_OAUTH_TOKEN={KEPT_CLAUDE_CODE_TOKEN}")));
 }
 
-// REQ-GRANT-49: a run that waited through the removal of the Claude Code login resumes
+// REQ-GRANT-136: a run that waited through the removal of the Claude Code login resumes
 // offered none.
 #[tokio::test]
 async fn a_run_that_waited_through_a_removed_login_resumes_with_none() {
@@ -870,7 +871,7 @@ async fn a_run_that_waited_through_a_removed_login_resumes_with_none() {
     );
 }
 
-// REQ-RUNNERENROLL-91, REQ-GRANT-87, REQ-GRANT-86: the runtime that creates the run is
+// REQ-RUNNERENROLL-194, REQ-GRANT-154, REQ-GRANT-86: the runtime that creates the run is
 // offered the admission's issued GitHub token and its file, and the service's own GitLab token,
 // for which Cloud is asked for none.
 #[tokio::test]
@@ -907,7 +908,7 @@ async fn issued_grant_token_reaches_the_runtime_that_creates_the_run() {
     );
 }
 
-// REQ-GRANT-87, REQ-GRANT-49: a command started after the run waited is offered the agent
+// REQ-GRANT-155, REQ-GRANT-136: a command started after the run waited is offered the agent
 // logins as the runner holds them then, but the grant token variable keeps the admission's
 // value while its file variable names the same, current file.
 #[tokio::test]
@@ -960,8 +961,9 @@ async fn poll_reports(
     .expect("the reports were not queued");
 }
 
-// REQ-GRANT-41, INV-RUNNER-15: `sync` sets agent logins up while the one run the runner holds
-// waits, and answers busy, asking Cloud nothing, once a control has continued it.
+// REQ-GRANT-128, REQ-GRANT-125, INV-RUNNER-15: `sync` sets agent logins up while the one run
+// the runner holds waits, and answers busy, asking Cloud nothing, once a control has continued
+// it.
 #[tokio::test]
 async fn sync_sets_up_agent_logins_while_the_held_run_waits_and_not_once_it_continues() {
     use crate::agent_login::directory::LoginDirectory;
@@ -1053,7 +1055,7 @@ fn one_waiting_run() -> (Arc<super::RunActivity>, super::HeldRuns) {
     (activity, held)
 }
 
-// INV-RUNNER-15, INV-RUNNER-29, REQ-GRANT-90: while a command of a waiting run is in flight,
+// INV-RUNNER-55, INV-RUNNER-29, REQ-GRANT-145: while a command of a waiting run is in flight,
 // an install or removal does not run, while a login check may start; once it has ended the
 // install runs.
 #[test]
@@ -1071,7 +1073,7 @@ fn a_command_in_flight_holds_off_an_install_but_not_a_check() {
     assert!(installed);
 }
 
-// INV-RUNNER-15: a command of a waiting run that asks to start while an install runs starts
+// INV-RUNNER-55: a command of a waiting run that asks to start while an install runs starts
 // only once the install is done.
 #[tokio::test]
 async fn a_command_asked_for_during_an_install_starts_after_it() {
@@ -1173,7 +1175,7 @@ fn files_named(root: &Path, name: &str) -> Vec<PathBuf> {
     found
 }
 
-// INV-RUNNER-15, REQ-GRANT-40: the evaluation of a held wait is a command of the run in
+// INV-RUNNER-55, REQ-GRANT-127: the evaluation of a held wait is a command of the run in
 // flight, so while it runs the manager still reads the run as waiting and a login check may
 // start, but an install or removal does not run.
 #[tokio::test]
@@ -1412,7 +1414,7 @@ async fn a_running_tree_run_publishes_its_log_and_then_its_run_directory() {
     );
 }
 
-// REQ-WORKSPACE-18, REQ-GRANT-87, REQ-GRANT-86: a tree run's runtime admits its steps
+// REQ-WORKSPACE-18, REQ-GRANT-153, REQ-GRANT-86: a tree run's runtime admits its steps
 // itself, so it receives the daemon's own values of the grant token names, which a step that
 // declares one then receives.
 #[tokio::test]
@@ -1439,7 +1441,7 @@ async fn runtime_receives_the_daemon_grant_token_names() {
     }
 }
 
-// REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-188
 #[tokio::test]
 async fn published_digest_other_than_the_spec_declines_the_assignment() {
     let other = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -1483,7 +1485,7 @@ fn validated_digest(useful: &Path, files: &[TreeFile]) -> String {
     format!("sha256:{}", report["digest"]["value"].as_str().unwrap())
 }
 
-// REQ-CLOUDDEF-16, REQ-WFDEF-40: a run's offer carries no `definition` binding, and the
+// REQ-CLOUDDEF-117, REQ-WFDEF-40: a run's offer carries no `definition` binding, and the
 // runner's own `useful` publishes a tree whose root declares one, required, without it.
 #[tokio::test]
 async fn a_tree_whose_definition_binding_the_offer_omits_is_published_by_the_built_useful() {
@@ -1568,7 +1570,8 @@ fn nested_child_report() -> String {
     )
 }
 
-// REQ-RUNNERENROLL-91, REQ-DIAG-42
+// REQ-RUNNERENROLL-189, REQ-DIAG-42, REQ-COMPAT-26: a tree whose nesting the runner's `useful`
+// refuses is declined with the code it reports.
 #[tokio::test]
 async fn refused_publication_declines_with_the_reported_validation_facts() {
     assert_eq!(
@@ -1582,8 +1585,9 @@ async fn refused_publication_declines_with_the_reported_validation_facts() {
     );
 }
 
-// REQ-TELEMETRY-47, REQ-TELEMETRY-13: the run a refused tree ends `rejected` names the
-// decline the runner sent and the validation code, never the path or the step.
+// REQ-TELEMETRY-47, REQ-TELEMETRY-79, REQ-TELEMETRY-13: the run a refused tree ends
+// `rejected` names the decline the runner sent and the validation code, never the path or
+// the step.
 #[tokio::test]
 async fn refused_publication_names_the_decline_on_the_run_event() {
     let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
@@ -1626,9 +1630,9 @@ async fn refused_publication_names_the_decline_on_the_run_event() {
     }
 }
 
-// REQ-RUNNERENROLL-91, REQ-DIAG-42: a fact the report does not hold, or that is not the
-// offered tree's path or a step id, is left out; a report the runner cannot read, of
-// another outcome or listing no failure declines the same way without any.
+// REQ-RUNNERENROLL-189, REQ-DIAG-46, REQ-DIAG-48: a fact the report does not hold, or that
+// is not the offered tree's path or a step id, is left out; a report the runner cannot
+// read, of another outcome or listing no failure declines the same way without any.
 #[tokio::test]
 async fn refused_publication_sends_only_the_facts_it_can_read() {
     let failure = |location: Value, workflow_location: Option<Value>| {
@@ -1759,7 +1763,7 @@ fn mirror_result(mut write: Value) -> Value {
     write
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99, REQ-WFDEF-32
+// REQ-RUNNERENROLL-190, REQ-RUNNERENROLL-177, REQ-RUNNERENROLL-178, REQ-WFDEF-32
 #[tokio::test]
 async fn resolution_is_written_before_create_and_the_finish_reports_the_mirror() {
     let mirror = tempfile::tempdir().unwrap();
@@ -1837,7 +1841,7 @@ fn integration_record() -> Value {
     })
 }
 
-// REQ-WFDEF-32, REQ-RUNNERENROLL-91: the record takes each flat `linear.team` and
+// REQ-WFDEF-32, REQ-RUNNERENROLL-190: the record takes each flat `linear.team` and
 // `linear.state` key resolved to an id and, under the member `linear`, each `team` and
 // `state` binding of the `linear` integration resolved to one; an integration's account,
 // a binding without an id and every other integration's entry are left out.
@@ -1889,9 +1893,9 @@ fn resolution_record_takes_the_linear_integrations_resolved_bindings() {
     }
 }
 
-// REQ-WFDEF-20, REQ-WFDEF-32, REQ-RUNNERENROLL-91: the publish is given the block's
-// bindings as they came, each integration's group under its id, and `run create` finds the
-// record of the flat key and the `linear` integration's bindings.
+// REQ-WFDEF-69, REQ-WFDEF-70, REQ-WFDEF-32, REQ-RUNNERENROLL-187, REQ-RUNNERENROLL-190: the publish is
+// given the block's bindings as they came, each integration's group under its id, and `run
+// create` finds the record of the flat key and the `linear` integration's bindings.
 #[tokio::test]
 async fn integration_bindings_are_published_as_offered_and_their_ids_recorded() {
     let mut fixture = fixture(TREE_DIGEST, "exited", "\"landed\"");
@@ -1916,9 +1920,10 @@ const INTEGRATION_TREE_FILES: &[TreeFile] = &[TreeFile {
     executable: false,
 }];
 
-// REQ-WFDEF-20, REQ-WFDEF-32, REQ-RUNNERENROLL-91: the release's own publish takes a block
-// holding the `linear` integration's bindings as the revision's bindings file, and the
-// store's readers answer the record the runner writes beside it by `linear.<name>`.
+// REQ-WFDEF-69, REQ-WFDEF-70, REQ-WFDEF-32, REQ-RUNNERENROLL-187, REQ-RUNNERENROLL-190: the release's own
+// publish takes a block holding the `linear` integration's bindings as the revision's
+// bindings file, and the store's readers answer the record the runner writes beside it by
+// `linear.<name>`.
 #[tokio::test]
 async fn the_built_publish_takes_integration_bindings_and_the_store_reads_their_ids() {
     let scratch = tempfile::tempdir().unwrap();
@@ -2023,7 +2028,8 @@ fn exited_with(writes: &[Value], earlier_writes: usize) -> super::records::TreeR
     }
 }
 
-/// `exit` on a tree run's finish, as the runner encodes it for Cloud.
+/// `exit` on a tree run's finish, as the runner encodes it for Cloud, beside the artifact
+/// delivery every tree run's finish carries (REQ-RUNNERENROLL-176).
 fn encode_finish(exit: TreeExit) -> Result<Vec<u8>, useful_runner_protocol::EncodeError> {
     encode_runner_frame(&RunnerFrame::ExecutionFinished {
         envelope: RunnerEnvelope {
@@ -2047,9 +2053,9 @@ fn encode_finish(exit: TreeExit) -> Result<Vec<u8>, useful_runner_protocol::Enco
     })
 }
 
-// REQ-RUNNERENROLL-99: the runner asks for its claim's release only after its own confirmed
-// departure, a written state move or a guard that held because the issue already left;
-// a failed or uncertain write, or no outcome write, asks for none.
+// REQ-RUNNERENROLL-178, REQ-RUNNERENROLL-180: the runner asks for its claim's release only
+// after its own confirmed departure, a written state move or a guard that held because the
+// issue already left; a failed or uncertain write, or no outcome write, asks for none.
 #[test]
 fn claim_release_is_requested_only_after_a_confirmed_departure() {
     let failed = |code: &str| {
@@ -2111,7 +2117,7 @@ fn claim_release_is_requested_only_after_a_confirmed_departure() {
     encode_finish(exit).unwrap();
 }
 
-// REQ-RUNNERENROLL-99: a start comment skipped `start_announced` travels `skipped` with no
+// REQ-RUNNERENROLL-171: a start comment skipped `start_announced` travels `skipped` with no
 // `reason`, a value the protocol's `MirrorResult` does not name, and confirms no departure.
 #[test]
 fn a_start_announced_skip_travels_without_its_reason() {
@@ -2156,7 +2162,7 @@ fn a_start_announced_skip_travels_without_its_reason() {
     assert!(!exit.claim_release);
 }
 
-// REQ-RUNNERENROLL-99: only a departure the attempt's own outcome write confirmed requests
+// REQ-RUNNERENROLL-179: only a departure the attempt's own outcome write confirmed requests
 // release; an earlier attempt's write is still reported but confirms nothing for it.
 #[test]
 fn claim_release_counts_only_the_attempt_own_outcome_write() {
@@ -2252,7 +2258,7 @@ async fn start(fixture: &mut Fixture) {
     start_offered(&mut fixture.manager, &fixture.offer).spawn();
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99
+// REQ-RUNNERENROLL-197, REQ-RUNNERENROLL-199, REQ-RUNNERENROLL-170, REQ-RUNNERENROLL-181
 #[tokio::test]
 async fn external_wait_is_evaluated_at_once_and_each_interval_until_it_continues() {
     let mut fixture = fixture_with(
@@ -2578,8 +2584,8 @@ async fn start_other(
     None
 }
 
-// REQ-RUNNERENROLL-132, INV-RUNNER-40: the runner takes an offer while the run it holds
-// waits, and neither run's lease or end waits on the other.
+// REQ-RUNNERENROLL-313, REQ-RUNNERENROLL-314, INV-RUNNER-40: the runner takes an offer while
+// the run it holds waits, and neither run's lease or end waits on the other.
 #[tokio::test]
 async fn an_offer_is_taken_while_the_held_run_waits_and_each_run_ends_alone() {
     let mut fixture = fixture_with(
@@ -2751,7 +2757,7 @@ async fn the_overview_gives_the_wait_and_the_running_step_each_runs_loop_read() 
     finished_assignment_reports(&mut fixture.manager, &second.assignment_id).await;
 }
 
-// REQ-RUNNERENROLL-64, REQ-RUNNERENROLL-132: an offer that reaches the runner while the run
+// REQ-RUNNERENROLL-312, REQ-RUNNERENROLL-313: an offer that reaches the runner while the run
 // it holds works is declined `capacity_unavailable`, and the held run goes on to its end.
 #[tokio::test]
 async fn an_offer_is_declined_while_the_held_run_works() {
@@ -2784,7 +2790,7 @@ async fn an_offer_is_declined_while_the_held_run_works() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// INV-RUNNER-40: a run that reported a wait and then ended is not settled by a successor's
+// INV-RUNNER-63: a run that reported a wait and then ended is not settled by a successor's
 // offer, which Cloud may have made while the run waited, so its terminal report stays queued
 // beside the successor.
 #[tokio::test]
@@ -2909,7 +2915,7 @@ async fn replaced_beside_a_wait() -> ReplacedBesideAWait {
     }
 }
 
-// REQ-GRANT-49, INV-RUNNER-15: an admission made while a run the runner holds waits with a
+// REQ-GRANT-135, INV-RUNNER-56: an admission made while a run the runner holds waits with a
 // command in flight is accepted on the login the runner holds, installing nothing; with no
 // command in flight its own setup asks for the replaced generation and installs it before its
 // run starts.
@@ -2961,7 +2967,7 @@ async fn two_control_waits(fixture: &mut Fixture) -> (AssignmentOffer, PathBuf, 
     (second, logs.0, logs.1)
 }
 
-// INV-RUNNER-40, REQ-RUNNERENROLL-90: each run the runner holds takes its own controls and
+// INV-RUNNER-62, REQ-RUNNERENROLL-208: each run the runner holds takes its own controls and
 // trigger deliveries; one for one run neither drops nor takes the place of another's.
 #[tokio::test]
 async fn each_held_run_applies_its_own_controls_and_deliveries() {
@@ -3016,7 +3022,7 @@ async fn each_held_run_applies_its_own_controls_and_deliveries() {
     assert_eq!(chosen_outcome(&second_reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-90
+// REQ-RUNNERENROLL-196, REQ-RUNNERENROLL-208, REQ-RUNNERENROLL-210, REQ-RUNNERENROLL-214
 #[tokio::test]
 async fn control_for_the_current_wait_is_applied_once_and_the_run_resumes() {
     let mut fixture = control_wait_fixture("answer", &[]);
@@ -3068,7 +3074,7 @@ async fn control_for_the_current_wait_is_applied_once_and_the_run_resumes() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-90
+// REQ-RUNNERENROLL-210
 #[tokio::test]
 async fn control_naming_another_wait_is_skipped_and_runs_nothing() {
     let mut fixture = control_wait_fixture("approval", &[]);
@@ -3098,7 +3104,7 @@ async fn control_naming_another_wait_is_skipped_and_runs_nothing() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-RUNNERENROLL-90: a hand-back's notes are one argument with their option, so notes
+// REQ-RUNNERENROLL-209: a hand-back's notes are one argument with their option, so notes
 // that open with a list hyphen reach `hand-back` as its notes.
 #[tokio::test]
 async fn hand_back_control_carries_notes_that_begin_with_a_hyphen() {
@@ -3125,7 +3131,7 @@ async fn hand_back_control_carries_notes_that_begin_with_a_hyphen() {
     );
 }
 
-// REQ-RUNNERENROLL-90
+// REQ-RUNNERENROLL-212, REQ-RUNNERENROLL-214
 #[tokio::test]
 async fn refused_control_reports_the_runtime_code_and_the_run_keeps_waiting() {
     let mut fixture = control_wait_fixture("answer", &[("TREE_TEST_CONTROL", "refuse")]);
@@ -3189,9 +3195,9 @@ fn failure_lines(log: &str, code: &str) -> Vec<String> {
         .collect()
 }
 
-// REQ-RUNNERENROLL-90: a control command that recorded its control for the run's current
-// wait and then outlived its bound is reported by the control it recorded, `applied`
-// `recorded`, and the run resumes as after any applied control.
+// REQ-RUNNERENROLL-213, REQ-RUNNERENROLL-214: a control command that recorded its control
+// for the run's current wait and then outlived its bound is reported by the control it
+// recorded, `applied` `recorded`, and the run resumes as after any applied control.
 #[tokio::test]
 async fn control_that_recorded_and_then_outlived_its_bound_is_applied_and_the_run_resumes() {
     let mut fixture = control_wait_fixture_bounded(
@@ -3214,9 +3220,9 @@ async fn control_that_recorded_and_then_outlived_its_bound_is_applied_and_the_ru
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-90: a control command that outlived its bound without recording its
-// control is refused `control_command_failed`, the run's log naming the class `timeout`,
-// and the run keeps waiting.
+// REQ-RUNNERENROLL-212, REQ-RUNNERENROLL-213: a control command that outlived its bound
+// without recording its control is refused `control_command_failed`, the run's log naming
+// the class `timeout`, and the run keeps waiting.
 #[tokio::test]
 async fn control_that_outlived_its_bound_unrecorded_is_refused_and_its_class_logged() {
     let mut fixture = control_wait_fixture_bounded(
@@ -3256,7 +3262,7 @@ async fn control_that_outlived_its_bound_unrecorded_is_refused_and_its_class_log
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-RUNNERENROLL-90: when the run's controls cannot be read to tell whether a control
+// REQ-RUNNERENROLL-213: when the run's controls cannot be read to tell whether a control
 // command that outlived its bound or printed no outcome recorded its control, the control
 // is refused `control_command_failed` and left unapplied, and the run's log names the
 // failed read's class beside the command's.
@@ -3339,7 +3345,7 @@ async fn control_whose_controls_cannot_be_read_is_refused_and_the_read_class_log
     }
 }
 
-// REQ-RUNNERENROLL-90
+// REQ-RUNNERENROLL-214
 #[tokio::test]
 async fn retry_control_continues_the_run_itself() {
     let mut fixture = control_wait_fixture("repair", &[]);
@@ -3362,7 +3368,7 @@ async fn retry_control_continues_the_run_itself() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-90: a Cloud `retry` naming a held `host` wait is
+// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-211: a Cloud `retry` naming a held `host` wait is
 // applied with `workflow run retry`, which continues the run itself; no `resume` follows it.
 #[tokio::test]
 async fn retry_control_continues_a_run_waiting_for_its_host() {
@@ -3403,7 +3409,7 @@ async fn retry_control_continues_a_run_waiting_for_its_host() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-90
+// REQ-RUNNERENROLL-211
 #[tokio::test]
 async fn stop_control_while_a_process_runs_is_applied_beside_it() {
     let mut fixture = fixture(TREE_DIGEST, "cancellable", "null");
@@ -3474,7 +3480,8 @@ fn refused(id: &str, code: &str) -> RunControlApplication {
     }
 }
 
-// REQ-RUNNERENROLL-123, REQ-RUNNERENROLL-99: a withdrawal on a run waiting on a wait only a
+// REQ-RUNNERENROLL-123, REQ-RUNNERENROLL-99, REQ-RUNNERENROLL-318, REQ-RUNNERENROLL-320: a
+// withdrawal on a run waiting on a wait only a
 // control resolves runs `useful workflow run cancel --control=withdraw` under the run's
 // environment, which
 // ends the run; no resume follows, and the exit reports the withdrawal with the command's
@@ -3531,9 +3538,9 @@ async fn withdraw_control_on_a_waiting_run_ends_it_withdrawn_without_a_resume() 
     );
 }
 
-// REQ-RUNNERENROLL-123: beside a running process a withdrawal is recorded for it, `applied`
-// `recorded`; nothing cancels the process, and the loop ends on the exit of the process that
-// honored the withdrawal.
+// REQ-RUNNERENROLL-123, REQ-RUNNERENROLL-316: beside a running process a withdrawal is
+// recorded for it, `applied` `recorded`; nothing cancels the process, and the loop ends on the
+// exit of the process that honored the withdrawal.
 #[tokio::test]
 async fn withdraw_control_while_a_process_runs_is_recorded_and_ends_with_its_exit() {
     let mut fixture = fixture_with(
@@ -3564,7 +3571,7 @@ async fn withdraw_control_while_a_process_runs_is_recorded_and_ends_with_its_exi
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("withdrawn"));
 }
 
-// REQ-RUNNERENROLL-123, REQ-LOCALRUN-212: a withdrawal recorded beside a `resume` that only
+// REQ-RUNNERENROLL-319, REQ-LOCALRUN-212: a withdrawal recorded beside a `resume` that only
 // evaluated a held `external` wait is left pending by it; the runner runs the withdrawal once
 // more on the waiting run, which ends it, reports nothing further and resumes nothing.
 #[tokio::test]
@@ -3608,7 +3615,7 @@ async fn withdrawal_a_held_wait_evaluation_left_pending_is_finished_without_a_re
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("withdrawn"));
 }
 
-// REQ-RUNNERENROLL-123: a refused withdrawal reports the command's refusal code, and the run
+// REQ-RUNNERENROLL-316: a refused withdrawal reports the command's refusal code, and the run
 // keeps waiting with no evaluation run.
 #[tokio::test]
 async fn refused_withdrawal_reports_its_code_and_the_run_keeps_waiting() {
@@ -3633,7 +3640,7 @@ async fn refused_withdrawal_reports_its_code_and_the_run_keeps_waiting() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-RUNNERENROLL-123: a withdrawal whose command outlived its bound is read from the run's
+// REQ-RUNNERENROLL-317: a withdrawal whose command outlived its bound is read from the run's
 // record, not its controls: `applied` `withdrawn` once the record reads `exited` `withdrawn`,
 // and otherwise `refused` `control_command_failed`, the run's log naming the class
 // `timeout`, and the run keeps waiting.
@@ -3683,7 +3690,7 @@ async fn withdrawal_that_outlived_its_bound_is_read_from_the_run_record() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-198
 #[tokio::test]
 async fn record_left_running_without_its_process_is_resumed_once() {
     let mut fixture = fixture_with(
@@ -3704,7 +3711,7 @@ async fn record_left_running_without_its_process_is_resumed_once() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-197
 #[tokio::test]
 async fn unavailable_condition_leaves_the_wait_and_is_evaluated_again() {
     let mut fixture = fixture_with(
@@ -3729,7 +3736,7 @@ async fn unavailable_condition_leaves_the_wait_and_is_evaluated_again() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99
+// REQ-RUNNERENROLL-200, REQ-RUNNERENROLL-172
 #[tokio::test]
 async fn cancellation_during_a_wait_cancels_the_run() {
     let mut fixture = fixture_with(
@@ -3800,7 +3807,7 @@ async fn release_for_lease_loss(fixture: &mut Fixture) {
         .unwrap();
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99
+// REQ-RUNNERENROLL-201, REQ-RUNNERENROLL-170
 #[tokio::test]
 async fn lease_loss_kills_the_process_and_reports_no_outcome() {
     let mut fixture = fixture(TREE_DIGEST, "cancellable", "null");
@@ -3962,7 +3969,7 @@ async fn shut_down_at(mut fixture: Fixture, state: &str) {
     );
 }
 
-// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-201
 #[tokio::test]
 async fn runner_shutdown_kills_the_running_stage_and_leaves_the_run_unexited() {
     // The `cancellable` process runs until `cancel` would end it, so a record still
@@ -3970,7 +3977,7 @@ async fn runner_shutdown_kills_the_running_stage_and_leaves_the_run_unexited() {
     shut_down_at(fixture(TREE_DIGEST, "cancellable", "null"), "running").await;
 }
 
-// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-201
 #[tokio::test]
 async fn runner_shutdown_during_a_wait_leaves_the_run_waiting() {
     shut_down_at(
@@ -4074,7 +4081,7 @@ async fn runner_shutdown_interrupts_every_held_run() {
     assert_eq!(local_record(&second_log)["state"], "running");
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-99
+// REQ-RUNNERENROLL-200, REQ-RUNNERENROLL-172
 #[tokio::test]
 async fn assignment_cancellation_cancels_the_local_run() {
     let mut fixture = fixture(TREE_DIGEST, "cancellable", "null");
@@ -4341,7 +4348,7 @@ async fn refused_application_reports_its_code_and_the_run_keeps_waiting() {
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-TRIGGER-136, REQ-LOCALRUN-208, REQ-LOCALRUN-186: an applied `withdraw` is reported
+// REQ-TRIGGER-136, REQ-LOCALRUN-269, REQ-LOCALRUN-240: an applied `withdraw` is reported
 // from the event command's `actionOutcome`, `recorded` for a live run's withdrawal its process
 // ends `withdrawn`; one whose `actionOutcome` names no withdrawal is `event_command_failed`.
 #[tokio::test]
@@ -4509,7 +4516,7 @@ async fn pending_deliveries_apply_before_the_first_step_and_a_surviving_run_is_l
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-TRIGGER-136, REQ-TRIGGER-137, REQ-RUNNERENROLL-91: on a root the runtime holds before
+// REQ-TRIGGER-136, REQ-TRIGGER-137, REQ-RUNNERENROLL-193: on a root the runtime holds before
 // nowhere, the runner adds no stop of its own; the offer's pending deliveries are applied
 // and reported once `create` returns, with no `stop`, `lift` or `resume` for them.
 #[tokio::test]
@@ -4544,9 +4551,9 @@ async fn pending_deliveries_on_a_root_the_runtime_cannot_hold_apply_without_a_st
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("planned"));
 }
 
-// REQ-RUNNERENROLL-91, REQ-TRIGGER-128: the start's stop reaches `create` as named on a root
-// the runtime holds before nowhere, pending deliveries or not, and the runtime's refusal of
-// it ends the attempt before anything of the runner's runs.
+// REQ-RUNNERENROLL-192, REQ-RUNNERENROLL-193, REQ-TRIGGER-128: the start's stop reaches
+// `create` as named on a root the runtime holds before nowhere, pending deliveries or not,
+// and the runtime's refusal of it ends the attempt before anything of the runner's runs.
 #[tokio::test]
 async fn a_start_stop_the_runtime_cannot_hold_reaches_create_and_its_refusal_ends_the_run() {
     let mut fixture = with_pending(
@@ -4638,7 +4645,7 @@ fn gates(transitions: &[Value]) -> Vec<(Value, Value)> {
         .collect()
 }
 
-// REQ-RUNNERENROLL-99: an exited run is reported by the engine's result, never by the name
+// REQ-RUNNERENROLL-172: an exited run is reported by the engine's result, never by the name
 // of the outcome its workflow chose, which travels as the chosen outcome; the engine's own
 // `canceled` and `withdrawn` are a cancellation whatever the result reads.
 #[test]
@@ -4823,9 +4830,9 @@ fn exited_records_conclude_from_the_engine_result_not_the_chosen_outcome() {
     }
 }
 
-// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-91: a shutdown or lease loss that stops the run
-// before `create` wrote its record is an interruption like any other, with no outcome; with
-// no record and any other end there is no truthful result.
+// REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-201, REQ-RUNNERENROLL-202: a shutdown or lease loss
+// that stops the run before `create` wrote its record is an interruption like any other,
+// with no outcome; with no record and any other end there is no truthful result.
 #[test]
 fn interruption_before_the_run_record_exists_is_reported_interrupted() {
     for reason in [
@@ -4847,7 +4854,7 @@ fn interruption_before_the_run_record_exists_is_reported_interrupted() {
     }
 }
 
-// REQ-RUNNERENROLL-91
+// REQ-RUNNERENROLL-191
 #[test]
 fn each_materialized_input_is_one_input_argument() {
     let temporary = tempfile::tempdir().unwrap();
@@ -5181,8 +5188,9 @@ fn answering(id: &str) -> Value {
     })
 }
 
-// REQ-RUNNERENROLL-119: an `answer` wait's report carries the questions its payload asks,
-// whole or not at all, and the run goes on either way; another kind's carries none.
+// REQ-RUNNERENROLL-119, REQ-RUNNERENROLL-323, REQ-RUNNERENROLL-324: an `answer` wait's report
+// carries the questions its payload asks, whole or not at all, and the run goes on either way;
+// another kind's carries none.
 #[tokio::test]
 async fn waiting_report_carries_the_questions_of_an_answer_wait_whole_or_not_at_all() {
     let many = (1..=65)
@@ -5268,8 +5276,9 @@ fn reported_failed_child() -> Value {
     })
 }
 
-// REQ-RUNNERENROLL-125: a wait's report carries the failed child its payload records,
-// reduced and whole or not at all, on a wait of any kind, and the run goes on either way.
+// REQ-RUNNERENROLL-125, REQ-RUNNERENROLL-327, REQ-RUNNERENROLL-328: a wait's report carries
+// the failed child its payload records, reduced and whole or not at all, on a wait of any
+// kind, and the run goes on either way.
 #[tokio::test]
 async fn waiting_report_carries_the_failed_child_of_a_wait_whole_or_not_at_all() {
     let with = |change: &dyn Fn(&mut Value)| {
@@ -5366,7 +5375,7 @@ async fn waiting_report_carries_the_failed_child_of_a_wait_whole_or_not_at_all()
     }
 }
 
-// REQ-RUNNERENROLL-119, REQ-RUNNERENROLL-125: a report sent for steps alone restates the
+// REQ-RUNNERENROLL-325, REQ-RUNNERENROLL-329: a report sent for steps alone restates the
 // wait's questions and failed child with the root it restates.
 #[tokio::test]
 async fn report_for_steps_alone_restates_the_questions_of_the_wait() {
@@ -5570,11 +5579,11 @@ async fn entry_without_a_run_record_is_a_fan_out_element_as_the_engine_reads_it(
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("planned"));
 }
 
-// INV-ENGINE-41, REQ-RUNNERENROLL-88, REQ-RUNNERENROLL-90, REQ-RUNNERENROLL-119,
-// REQ-WFEXEC-75, REQ-CONTINUE-92: a runner reports SC-WFEXEC-6's nested run with the frames
-// it has. The root's records carry the nested stage's position and its carried wait, the
-// step reader finds the stage under its nested run, and a control naming the wait by kind
-// and since resolves it; every frame encodes under the closed protocol schema.
+// INV-ENGINE-41, REQ-RUNNERENROLL-88, REQ-RUNNERENROLL-204, REQ-RUNNERENROLL-119,
+// REQ-WFEXEC-75, REQ-WFEXEC-109, REQ-WFEXEC-110, REQ-CONTINUE-92: a runner reports SC-WFEXEC-6's
+// nested run with the frames it has. The root's records carry the nested stage's position and its
+// carried wait, the step reader finds the stage under its nested run, and a control naming the wait
+// by kind and since resolves it; every frame encodes under the closed protocol schema.
 #[tokio::test]
 async fn nested_run_is_reported_and_answered_with_the_frames_it_has() {
     let path = json!(["outer", { "item": 2 }, "ask"]);
@@ -5716,7 +5725,7 @@ async fn nested_run_is_reported_and_answered_with_the_frames_it_has() {
             )
         })
         .collect::<Vec<_>>();
-    // An empty payload asks one question, which any id answers (REQ-RUNNERENROLL-119).
+    // An empty payload asks one question, which any id answers (REQ-RUNNERENROLL-321).
     let waiting = json!({
         "kind": "answer",
         "since": WAIT_SINCE,
@@ -5842,7 +5851,7 @@ async fn step_report_the_outbox_refuses_leaves_the_result_and_is_recorded_on_the
     assert_eq!(run.get("um.executor_fault.reason"), None);
 }
 
-// REQ-RUNNERENROLL-99: a `mirror/` the runner cannot read, here beside a valid write, reports
+// REQ-RUNNERENROLL-180: a `mirror/` the runner cannot read, here beside a valid write, reports
 // no writes and requests no release, and the run event records the read failure's class.
 #[tokio::test]
 async fn unreadable_mirror_reports_no_writes_and_is_recorded_on_the_run_event() {
@@ -5923,7 +5932,7 @@ async fn assert_record_unreadable(
     );
 }
 
-// REQ-RUNNERENROLL-99: the record is read as the engine reads it, a regular file of bounded
+// REQ-RUNNERENROLL-202: the record is read as the engine reads it, a regular file of bounded
 // size. A `run.json` replaced by a symbolic link to a record outside the run directory is
 // not followed: the run has no truthful result.
 #[tokio::test]
@@ -5941,7 +5950,7 @@ async fn run_record_behind_a_symbolic_link_is_unreadable() {
     assert_eq!(followed["state"], "exited");
 }
 
-// REQ-RUNNERENROLL-99: a `run.json` larger than the engine's bound on a durable record is not
+// REQ-RUNNERENROLL-202: a `run.json` larger than the engine's bound on a durable record is not
 // read whole, though it parses as an exited record.
 #[tokio::test]
 async fn run_record_larger_than_the_bound_is_unreadable() {
@@ -6251,7 +6260,7 @@ fn succeeded_with(end: &super::TreeEnd, outcome: &str) {
     assert_eq!(exit.chosen_outcome.as_deref(), Some(outcome));
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-217, REQ-RUNNERENROLL-218, REQ-RUNNERENROLL-203
 #[tokio::test]
 async fn adopted_waiting_run_resumes_on_the_wait_without_creating_a_run() {
     let adopted = adopted(
@@ -6282,7 +6291,7 @@ async fn adopted_waiting_run_resumes_on_the_wait_without_creating_a_run() {
     succeeded_with(&end, "landed");
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-218
 #[tokio::test]
 async fn adopted_running_run_without_its_process_is_resumed_once() {
     let adopted = adopted(record("running", None, 2, json!(["build"])), None);
@@ -6357,7 +6366,7 @@ fn with_policy(mut step: Value, policy: &str) -> Value {
     step
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-218
 #[tokio::test]
 async fn adopted_exited_run_is_reported_as_it_reads_without_a_command() {
     let adopted = adopted(record("exited", Some("landed"), 1, json!([])), None);
@@ -6412,7 +6421,7 @@ async fn an_adopted_run_publishes_the_earlier_homes_run_directory_and_its_own_lo
     );
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-218
 #[tokio::test]
 async fn adopted_failed_record_reports_the_failure_its_attempt_recorded() {
     let adopted = adopted(record("exited", Some("failed"), 1, json!([])), None);
@@ -6441,7 +6450,7 @@ async fn adopted_failed_record_reports_the_failure_its_attempt_recorded() {
     assert!(!exit.claim_release);
 }
 
-// REQ-RUNNERENROLL-89: an adopted record that already reads `exited` is concluded, with no
+// REQ-RUNNERENROLL-218: an adopted record that already reads `exited` is concluded, with no
 // command run, by the result its current attempt recorded published, never by the name of
 // the outcome it chose; with no such result it has none to report.
 #[tokio::test]
@@ -6493,13 +6502,13 @@ async fn adopted_exited_record_concludes_from_its_current_attempt_result() {
     }
 }
 
-// REQ-RUNNERENROLL-99: a failure read from the run directory reports the primary issue of
-// the result its current attempt published, never a step the runner picks from the
-// attempt's progress: not an advisory step that failed first, and a required step that
-// ended `blocked` when the result names it. With no published issue to read, here no
-// result directory, a result with no primary issue, a result directory replaced by a
-// symbolic link that leaves the run directory, or a recorded result directory that names
-// a parent directory, it has none to report.
+// REQ-RUNNERENROLL-174, REQ-RUNNERENROLL-175: a failure read from the run directory reports
+// the primary issue of the result its current attempt published, never a step the runner
+// picks from the attempt's progress: not an advisory step that failed first, and a required
+// step that ended `blocked` when the result names it. With no published issue to read, here
+// no result directory, a result with no primary issue, a result directory replaced by a
+// symbolic link that leaves the run directory, or a recorded result directory that names a
+// parent directory, it has none to report.
 #[tokio::test]
 async fn recorded_failure_reports_the_primary_issue_its_attempt_published() {
     let (build_step, build_issue) = build_failure();
@@ -6598,7 +6607,7 @@ async fn concluded_result(adopted: &Adopted) -> TransportResult {
     result
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-217, REQ-RUNNERENROLL-219
 #[tokio::test]
 async fn adopted_run_resumes_from_the_named_steps_in_the_adopting_environment() {
     let adopted = adopted(record("exited", Some("failed"), 1, json!([])), None);
@@ -6633,7 +6642,7 @@ async fn adopted_run_resumes_from_the_named_steps_in_the_adopting_environment() 
     );
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-221
 #[tokio::test]
 async fn refused_first_resume_ends_the_attempt_failed_with_the_refusal_code() {
     let adopted = adopted(record("exited", Some("failed"), 1, json!([])), None);
@@ -6672,9 +6681,10 @@ async fn refused_first_resume_ends_the_attempt_failed_with_the_refusal_code() {
     assert_eq!(exit, unreported_exit());
 }
 
-// REQ-RUNNERENROLL-91: a `create` the runtime refuses, here with its rejection of a root whose
-// `requires.tools` names a missing tool, fails the attempt with the runtime's code rather
-// than aborting it; an owner whose name begins with `-` reaches `create` as its value.
+// REQ-RUNNERENROLL-191, REQ-RUNNERENROLL-192: a `create` the runtime refuses, here with its
+// rejection of a root whose `requires.tools` names a missing tool, fails the attempt with
+// the runtime's code rather than aborting it; an owner whose name begins with `-` reaches
+// `create` as its value.
 #[tokio::test]
 async fn refused_create_ends_the_attempt_failed_with_the_refusal_code() {
     let mut fixture = fixture(TREE_DIGEST, "refused", "null");
@@ -7025,7 +7035,7 @@ async fn refused_first_resume_reports_the_adopted_steps_before_its_result() {
     );
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-89: a first resume from named steps that is not
+// REQ-RUNNERENROLL-202, REQ-RUNNERENROLL-219: a first resume from named steps that is not
 // refused and starts no engine attempt leaves the record as the earlier attempt wrote it;
 // the adopting attempt is not reported as that record reads.
 #[tokio::test]
@@ -7062,7 +7072,8 @@ async fn cancel_unstarted_resume(adopted: &Adopted, reason: CancellationReason) 
     end.unwrap()
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-89: a cancellation that reaches an adopted run's
+// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-89, REQ-RUNNERENROLL-222: a cancellation that reaches
+// an adopted run's
 // first `retry --from` before it starts an engine attempt ends the adopting attempt
 // cancelled or interrupted by its own reason. The record still reads as the earlier attempt
 // left it, so its outcome, mirror writes and release request are not this attempt's, and
@@ -7117,7 +7128,8 @@ fn unreported_exit() -> TreeExit {
     }
 }
 
-// REQ-RUNNERENROLL-89: a cancellation the runner holds when it begins to drive an adopted run
+// REQ-RUNNERENROLL-89, REQ-RUNNERENROLL-224: a cancellation the runner holds when it begins to
+// drive an adopted run
 // applies none of the offer's deliveries and launches no first `retry --from`. Over an
 // `exited` record the attempt ends cancelled or interrupted with no command run, the record
 // and its attempt count as the earlier attempt left them; a run that still stands is
@@ -7230,7 +7242,7 @@ async fn adopted_run_cancelled_before_its_drive_applies_no_delivery_and_resumes_
     assert_eq!(files(&left.run), retained);
 }
 
-// REQ-RUNNERENROLL-89: a cancellation that arrives while the offer's pending delivery is being
+// REQ-RUNNERENROLL-223: a cancellation that arrives while the offer's pending delivery is being
 // applied abandons it, reported as nothing, and launches no first `retry --from`; the
 // adopted `exited` record is left as the earlier attempt left it.
 #[tokio::test]
@@ -7331,7 +7343,7 @@ fn adopted_failure(writes: &[Value]) -> Adopted {
     adopted
 }
 
-// REQ-RUNNERENROLL-89, REQ-RUNNERENROLL-99: an adopted run's exit, the one concluded from a
+// REQ-RUNNERENROLL-225, REQ-RUNNERENROLL-179: an adopted run's exit, the one concluded from a
 // record that already read `exited` included, reports every attempt's mirror writes but
 // requests release only on a departure its own write confirmed, so a record it adopted
 // already `exited` requests none; a refused first resume changed nothing and requests none.
@@ -7369,7 +7381,7 @@ fn stage_mirror_write(log: &Path, stage: &str, name: &str, write: &Value) {
     fs::write(mirror.join(name), serde_json::to_vec(write).unwrap()).unwrap();
 }
 
-// REQ-RUNNERENROLL-99, REQ-RUNNERENROLL-89: a continuation requests release only on a
+// REQ-RUNNERENROLL-179, REQ-RUNNERENROLL-225: a continuation requests release only on a
 // departure its own outcome write confirmed: not when that write failed or it made none,
 // whatever the earlier attempt's write confirmed, and every attempt's writes are reported.
 #[tokio::test]
@@ -7411,10 +7423,10 @@ async fn adopted_continuation_requests_release_only_on_its_own_outcome_write() {
     }
 }
 
-// REQ-RUNNERENROLL-99, REQ-RUNNERENROLL-89: a `mirror/` the runner cannot read when it adopts
-// the run leaves every write the exit finds an earlier attempt's, so the continuation
-// reports them, requests no release even on a `written` outcome write, and keeps the read
-// failure's class for the run event.
+// REQ-RUNNERENROLL-179, REQ-RUNNERENROLL-180, REQ-RUNNERENROLL-225: a `mirror/` the runner
+// cannot read when it adopts the run leaves every write the exit finds an earlier
+// attempt's, so the continuation reports them, requests no release even on a `written`
+// outcome write, and keeps the read failure's class for the run event.
 #[tokio::test]
 async fn adopted_run_whose_earlier_writes_cannot_be_counted_requests_no_release() {
     let written = state_write("written", json!({}));
@@ -7466,7 +7478,7 @@ async fn drive_adopted_with(
     (end, reports.into_inner().unwrap())
 }
 
-// REQ-RUNNERENROLL-89, REQ-TRIGGER-136: the deliveries a continuation offer carries are
+// REQ-RUNNERENROLL-226, REQ-TRIGGER-136: the deliveries a continuation offer carries are
 // applied to the adopted run before its first command; one that ends the standing run
 // leaves its named steps unresumed, and a refused one lets the run resume from them.
 #[tokio::test]
@@ -7516,7 +7528,7 @@ async fn adopted_run_applies_its_offer_pending_deliveries_before_its_first_comma
     succeeded_with(&end, "landed");
 }
 
-// REQ-RUNNERENROLL-99, REQ-RUNNERENROLL-89: the writes an adopted run's `mirror/` held are
+// REQ-RUNNERENROLL-179, REQ-RUNNERENROLL-225: the writes an adopted run's `mirror/` held are
 // counted before the offer's deliveries are applied, so a delivery that ends the run
 // requests release only on an outcome write its application made.
 #[tokio::test]
@@ -7575,7 +7587,7 @@ async fn adopted_run_counts_its_earlier_writes_before_applying_its_offer_deliver
     }
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-217, REQ-RUNNERENROLL-220
 #[test]
 fn home_without_exactly_one_run_refuses_adoption() {
     let unavailable = AssignmentDecline::RunnerUnable(
@@ -7769,7 +7781,7 @@ async fn an_accepted_continuation_logs_run_continued_and_a_first_attempt_none() 
     );
 }
 
-// REQ-RUNNERENROLL-89, REQ-CONTINUE-83
+// REQ-RUNNERENROLL-217, REQ-RUNNERENROLL-219, REQ-RUNNERENROLL-203, REQ-CONTINUE-83
 #[tokio::test]
 async fn continuation_offer_adopts_the_retained_run_and_resumes_it_from_the_named_steps() {
     let mut fixture = failed_fixture(&[]);
@@ -7910,7 +7922,7 @@ async fn continuation_of_a_tree_run_without_an_origin_record_resumes_it_without_
     assert_eq!(github.issued_workflow_git.load(Ordering::SeqCst), 1);
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-217
 #[tokio::test]
 async fn continuation_offer_for_another_boot_is_declined_as_any_continuation() {
     let mut fixture = failed_fixture(&[]);
@@ -7940,7 +7952,7 @@ async fn continuation_offer_for_another_boot_is_declined_as_any_continuation() {
     assert!(!fixture.log.join("resume.args").exists());
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-220
 #[tokio::test]
 async fn retained_chain_without_a_tree_home_is_declined_retained_workspace_unavailable() {
     let mut fixture = failed_fixture(&[]);
@@ -7968,7 +7980,7 @@ async fn retained_chain_without_a_tree_home_is_declined_retained_workspace_unava
     assert!(!fixture.log.join("resume.args").exists());
 }
 
-// REQ-RUNNERENROLL-89, REQ-CONTINUE-48
+// REQ-RUNNERENROLL-217, REQ-CONTINUE-48
 #[tokio::test]
 async fn continuation_of_a_removed_assignment_directory_is_declined_retained_workspace_unavailable()
 {
@@ -7997,7 +8009,7 @@ async fn continuation_of_a_removed_assignment_directory_is_declined_retained_wor
     assert!(!fixture.log.join("resume.args").exists());
 }
 
-// REQ-RUNNERENROLL-89
+// REQ-RUNNERENROLL-217
 #[tokio::test]
 async fn unproven_retained_workspace_is_declined_ownership_unproven() {
     let mut fixture = failed_fixture(&[]);
@@ -8022,7 +8034,7 @@ async fn unproven_retained_workspace_is_declined_ownership_unproven() {
     assert!(workspace.join("README").is_file());
 }
 
-// REQ-RUNNERENROLL-89, REQ-CONTINUE-83
+// REQ-RUNNERENROLL-221, REQ-CONTINUE-83
 #[tokio::test]
 async fn refused_first_resume_fails_the_attempt_and_leaves_the_run_continuable() {
     let mut fixture = failed_fixture(&[]);
@@ -8084,7 +8096,7 @@ async fn refused_first_resume_fails_the_attempt_and_leaves_the_run_continuable()
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
 }
 
-// REQ-RUNNERENROLL-89, REQ-CONTINUE-83
+// REQ-RUNNERENROLL-218, REQ-CONTINUE-83
 #[tokio::test]
 async fn lease_lost_while_waiting_reports_the_retained_workspace_and_continues_at_the_wait() {
     let mut fixture = fixture_with(
@@ -8217,7 +8229,7 @@ fn hanging_event_fixture() -> Fixture {
     )
 }
 
-// REQ-RUNNERENROLL-91: an `event` still running when the assignment is cancelled is
+// REQ-RUNNERENROLL-200: an `event` still running when the assignment is cancelled is
 // abandoned, its process group killed, and reported as nothing; the run is then cancelled.
 #[tokio::test]
 async fn hanging_event_is_abandoned_with_its_group_when_the_assignment_is_cancelled() {
@@ -8242,7 +8254,7 @@ async fn hanging_event_is_abandoned_with_its_group_when_the_assignment_is_cancel
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
 }
 
-// REQ-RUNNERENROLL-91: lease loss abandons a hanging `event` at once, so the attempt is
+// REQ-RUNNERENROLL-201: lease loss abandons a hanging `event` at once, so the attempt is
 // reported interrupted rather than held to its containment deadline.
 #[tokio::test]
 async fn hanging_event_does_not_delay_lease_loss() {
@@ -8295,7 +8307,7 @@ fn adopted_external_wait() -> Adopted {
     waiting
 }
 
-// REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-90: an `event` that outlives the short-command bound
+// REQ-RUNNERENROLL-195, REQ-RUNNERENROLL-212: an `event` that outlives the short-command bound
 // is abandoned, its process group killed, and reported `refused` `event_command_failed`, the
 // run's log naming the class `timeout`; the run goes on.
 #[tokio::test]
@@ -8342,7 +8354,7 @@ async fn hanging_event_is_abandoned_with_its_group_once_its_bound_passes() {
     succeeded_with(&end, "landed");
 }
 
-// REQ-RUNNERENROLL-90, REQ-TRIGGER-136: a command that cannot be launched is refused, the
+// REQ-RUNNERENROLL-212, REQ-TRIGGER-136: a command that cannot be launched is refused, the
 // run's log naming the class `launch_error` and the I/O error's kind; the start's own stop
 // or the runner's lift that cannot be launched leaves the pending stop unlifted, the log
 // naming the same.
@@ -8386,7 +8398,7 @@ async fn commands_that_cannot_be_launched_log_their_class_and_error_kind() {
     }
 }
 
-// REQ-RUNNERENROLL-91: the run's log keeps at most its cap of command output and then ends
+// REQ-RUNNERENROLL-191: the run's log keeps at most its cap of command output and then ends
 // with one truncation line, however much later commands write.
 #[tokio::test]
 async fn run_log_stops_growing_at_its_cap_with_one_truncation_line() {
@@ -8567,11 +8579,11 @@ fn sized(name: &str, size: u64) -> TreeExport {
     TreeExport::by_size(name, size).unwrap()
 }
 
-// REQ-RUNNERENROLL-131: a run that exits with a workflow outcome reports the text exports its
-// current attempt's result lists available, in the result's order: one past the one-text
-// bound by its recorded size, unread, and the others with their text, an empty one included.
-// An unavailable export and one of another kind are not listed, and nothing else of the
-// finish changes.
+// REQ-RUNNERENROLL-131, REQ-RUNNERENROLL-272: a run that exits with a workflow outcome reports
+// the text exports its current attempt's result lists available, in the result's order: one
+// past the one-text bound by its recorded size, unread, and the others with their text, an
+// empty one included. An unavailable export and one of another kind are not listed, and
+// nothing else of the finish changes.
 #[tokio::test]
 async fn exited_run_reports_the_available_text_exports_its_result_lists() {
     let (unstaged, _, offer) = executed_recorded("\"broken\"", &[], |_| {}).await;
@@ -8638,7 +8650,7 @@ async fn exited_run_with_text_exports_encodes_the_finish_the_gateway_admits() {
     assert_eq!(frame, serde_json::from_slice::<Value>(&fixture).unwrap());
 }
 
-// REQ-RUNNERENROLL-131: a result that lists no available text export carries no `exports`
+// REQ-RUNNERENROLL-276: a result that lists no available text export carries no `exports`
 // member, and the finish is the one of the same run with nothing staged.
 #[tokio::test]
 async fn result_without_an_available_text_export_finishes_without_the_member() {
@@ -8667,10 +8679,11 @@ async fn result_without_an_available_text_export_finishes_without_the_member() {
     assert_eq!(run.get("um.run.export_read_failure"), None);
 }
 
-// REQ-RUNNERENROLL-131: texts are carried while each is within the one-text bound and all
-// carried within the total; one past it is listed by size, a later one of no bytes still
-// carried; only the first 64 exports are listed, the 65th recorded `export_list_truncated`;
-// and a finish whose texts escape to more than an ordinary frame still encodes.
+// REQ-RUNNERENROLL-131, REQ-RUNNERENROLL-272: texts are carried while each is within the
+// one-text bound and all carried within the total; one past it is listed by size, a later one
+// of no bytes still carried; only the first 64 exports are listed, the 65th recorded
+// `export_list_truncated`; and a finish whose texts escape to more than an ordinary frame
+// still encodes.
 #[tokio::test]
 async fn exports_past_a_bound_are_listed_by_size_or_not_at_all() {
     let full = vec![b'a'; 65_536];
@@ -8746,11 +8759,11 @@ async fn exports_past_a_bound_are_listed_by_size_or_not_at_all() {
     );
 }
 
-// REQ-RUNNERENROLL-131: an export the runner cannot read is left out of a finish that is
-// otherwise the run's, never aborted, and the run event records the fault's class: beside a
-// readable `repairRequest`, a carrier that is absent or a symbolic link, one shorter than
-// its recorded size or not UTF-8, and an entry whose path or size is not the engine's; and,
-// with nothing listed, a result that cannot be found or read.
+// REQ-RUNNERENROLL-273, REQ-RUNNERENROLL-275: an export the runner cannot read is left out of
+// a finish that is otherwise the run's, never aborted, and the run event records the fault's
+// class: beside a readable `repairRequest`, a carrier that is absent or a symbolic link, one
+// shorter than its recorded size or not UTF-8, and an entry whose path or size is not the
+// engine's; and, with nothing listed, a result that cannot be found or read.
 #[tokio::test]
 async fn export_that_cannot_be_read_is_left_out_and_its_class_recorded() {
     let (unstaged, _, offer) = executed_recorded("\"broken\"", &[], |_| {}).await;
@@ -8884,7 +8897,7 @@ async fn export_that_cannot_be_read_is_left_out_and_its_class_recorded() {
     }
 }
 
-// REQ-RUNNERENROLL-131: a text that holds a NUL is carried as its file holds it.
+// REQ-RUNNERENROLL-274: a text that holds a NUL is carried as its file holds it.
 #[tokio::test]
 async fn text_holding_a_nul_is_carried_as_its_file_holds_it() {
     let (reports, run, _) = executed_recorded("\"broken\"", &[], |log| {
@@ -8937,7 +8950,7 @@ async fn failed_run_choosing_its_on_failure_outcome_reports_its_available_text_e
     assert_eq!(run.get("um.run.export_read_failure"), None);
 }
 
-// REQ-RUNNERENROLL-131: a continuation reports the exports of the attempt that exited the run,
+// REQ-RUNNERENROLL-277: a continuation reports the exports of the attempt that exited the run,
 // the current attempt `state.json` names, not an earlier attempt's.
 #[tokio::test]
 async fn continuation_reports_the_exports_of_the_attempt_that_exited() {
@@ -8983,7 +8996,7 @@ async fn continuation_reports_the_exports_of_the_attempt_that_exited() {
     assert_eq!(end.export_failure, None);
 }
 
-// REQ-RUNNERENROLL-131: an exit that is not the run's own workflow outcome reports no export
+// REQ-RUNNERENROLL-278: an exit that is not the run's own workflow outcome reports no export
 // and records no class: a run that ended `canceled`, and a cancellation that reached an
 // adopted run's first resume before any attempt started.
 #[tokio::test]

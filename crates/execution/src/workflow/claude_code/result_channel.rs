@@ -205,7 +205,7 @@ impl ResultSubmissions {
 
     /// Judges one request. A submission's `submission.result` goes to the validator as
     /// received; accepted, it replaces the value held, and rejected, the value held stands
-    /// (REQ-AGENT-84, REQ-AGENT-85).
+    /// (REQ-AGENT-94, REQ-AGENT-85).
     pub(super) async fn judge<Clock, Worker>(
         &mut self,
         request: &ResultChannelRequest,
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(submissions.accepted().unwrap().value(), &json!(5));
     }
 
-    // REQ-AGENT-84, REQ-AGENT-32
+    // REQ-AGENT-94, REQ-AGENT-32
     #[tokio::test]
     async fn a_string_and_null_are_judged_and_held_as_written() {
         let cancellation = CancellationSource::new();
@@ -402,7 +402,7 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-84, REQ-AGENT-29
+    // REQ-AGENT-93, REQ-AGENT-29
     #[tokio::test]
     async fn arguments_without_submission_result_are_rejected_before_the_validator() {
         // A validator reached would answer Fatal: this worker cannot start.

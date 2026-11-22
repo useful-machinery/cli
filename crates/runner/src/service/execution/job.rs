@@ -1105,7 +1105,7 @@ impl ExecutionJob {
     }
 }
 
-// How the teardown phase ended (REQ-TELEMETRY-39): `Succeeded` once process
+// How the teardown phase ended (REQ-TELEMETRY-68): `Succeeded` once process
 // quiescence is proven and the workspace is released or retained as asked,
 // `Cancelled` when a shutdown preempted a proven release, and `Failed` when
 // quiescence was not proven or the cleanup quarantined the workspace.

@@ -3709,7 +3709,7 @@ mod tests {
         }
     }
 
-    // INV-CLI-21
+    // INV-CLI-21, REQ-LOCALRUN-225
     #[test]
     fn the_earlier_run_paths_and_options_are_unknown() {
         use clap::error::ErrorKind::{

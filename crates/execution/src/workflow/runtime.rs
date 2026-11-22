@@ -78,7 +78,7 @@ impl ProvisionalStepResources for String {
     }
 }
 
-/// The interruption that failed a `workflow` step's child (REQ-WFEXEC-70): its reason and
+/// The interruption that failed a `workflow` step's child (REQ-WFEXEC-99): its reason and
 /// the child's interrupted step, the primary issue of the child's result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildInterruption {
@@ -454,7 +454,7 @@ pub struct TakenEdgeRecord {
     pub counted: bool,
 }
 
-/// `<step>.<outcome>`, the key an edge is counted under (REQ-WFDEF-4).
+/// `<step>.<outcome>`, the key an edge is counted under (REQ-WFDEF-50).
 pub(crate) fn edge_key(step: &str, outcome: &str) -> String {
     format!("{step}.{outcome}")
 }
@@ -463,7 +463,7 @@ pub(crate) fn edge_key(step: &str, outcome: &str) -> String {
 /// recorded child outcome whose edge was the wait (`None` for a `stop` wait, which no edge
 /// enters), its kind, the target the run continues at once it resolves, for an approval the
 /// step a hand-back continues at and, for an `external` wait, its authored rule as the
-/// format spells it (REQ-WFFORMAT-97), which the wait record resolves (REQ-WFEXEC-65).
+/// format spells it (REQ-WFFORMAT-97), which the wait record resolves (REQ-WFEXEC-124).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnteredWait {
     pub(crate) step: String,
@@ -593,7 +593,7 @@ pub(crate) struct InheritedStepSeed<Output> {
 pub struct ExecutionSeed<Output> {
     steps: BTreeMap<String, InheritedStepSeed<Output>>,
     /// The step a continuation of an edge-scheduled workflow starts at instead of the
-    /// definition's entry (REQ-CONTINUE-3, REQ-WFEXEC-58).
+    /// definition's entry (REQ-CONTINUE-96, REQ-WFEXEC-58).
     entry: Option<String>,
     /// The run's limited-edge counts by `<step>.<outcome>` (REQ-WFEXEC-64, INV-ENGINE-22).
     edge_counts: BTreeMap<String, u64>,
@@ -1292,15 +1292,15 @@ pub(crate) struct RuntimeState<Cause, Output, Deadline = ()> {
     /// with `interrupted` instead of `cancelled` (REQ-WFEXEC-69).
     pub(crate) interrupted: bool,
     /// The `workflow` steps whose child had not started when the interruption was accepted:
-    /// stopped, they fail at `start` (REQ-WFEXEC-70).
+    /// stopped, they fail at `start` (REQ-WFEXEC-103).
     unstarted_children: BTreeSet<String>,
     /// The `workflow` step whose child's completion arrived under the interruption and is
-    /// routed on its edge, with the interruption that failed the child (REQ-WFEXEC-70,
+    /// routed on its edge, with the interruption that failed the child (REQ-WFEXEC-99,
     /// INV-ENGINE-29): the walk may then end while the gate is `Cancelling`.
     routed_child: Option<(String, Option<ChildInterruption>)>,
     pub(crate) last_transition_sequence: TransitionSequence,
     transition_capacity_exceeded: bool,
-    /// The exit an edge-scheduled walk took (REQ-WFEXEC-58); `None` until then, and after
+    /// The exit an edge-scheduled walk took (REQ-WFEXEC-83); `None` until then, and after
     /// a walk that ended without one.
     pub(crate) exit_outcome: Option<String>,
     /// The wait the walk entered (REQ-WFEXEC-61, REQ-WFEXEC-62); once set no step is
@@ -1665,7 +1665,7 @@ where
     Deadline: Clone,
 {
     // A continuation of an edge-scheduled workflow starts the step it names, so that step
-    // is the walk's entry for this attempt (REQ-CONTINUE-3, INV-ENGINE-18).
+    // is the walk's entry for this attempt (REQ-CONTINUE-96, INV-ENGINE-18).
     if let (RuntimeScheduling::Edges { entry }, Some(named)) =
         (&mut start.definition.scheduling, &seed.entry)
         && start.definition.ordinary_ids.contains(named)
@@ -2328,7 +2328,7 @@ fn settle_unstarted_on_wait<Provisional, Cause, Output, Deadline>(
 }
 
 /// The step an edge-scheduled walk starts at (REQ-WFEXEC-58), a continuation's included
-/// (REQ-CONTINUE-3); `None` for a dataflow workflow.
+/// (REQ-CONTINUE-96); `None` for a dataflow workflow.
 fn entry_step<Cause, Output, Deadline>(
     state: &RuntimeState<Cause, Output, Deadline>,
 ) -> Option<&str> {
@@ -4726,7 +4726,7 @@ fn under_limit(definition: &RuntimeDefinition, producer: &str, outcome: &str, li
 /// another.
 /// Whether `target` is a step later than `producer` in `order`, the document order: the
 /// comparison that makes a `Step` edge start its target in the attempt rather than continue
-/// (REQ-WFEXEC-58) and a fan-out go on to its next element (REQ-WFEXEC-66).
+/// (REQ-WFEXEC-82) and a fan-out go on to its next element (REQ-WFEXEC-94).
 pub(crate) fn later_step(order: &[String], producer: &str, target: &str) -> bool {
     let position = |id: &str| order.iter().position(|step| step == id);
     matches!(
@@ -4758,7 +4758,7 @@ fn ordinary_edge<'a>(
 
 // A taken edge that is not a `Step` ends the walk, and every step that has not started
 // becomes `not_run` `not_reached`: an `Exit` records the exit outcome and ends the ordinary
-// phase as a success (REQ-WFEXEC-58), a `Wait` records the wait the attempt ends on
+// phase as a success (REQ-WFEXEC-83), a `Wait` records the wait the attempt ends on
 // (REQ-WFEXEC-61), and a `Continue` records the edge the attempt ends `continued` on
 // (REQ-WFEXEC-64, INV-ENGINE-22). Validation leaves no outcome without an edge, so the remaining case is
 // logged and ends the walk with no exit outcome, which the run record reports as `failed`.
@@ -4770,7 +4770,7 @@ fn end_edge_walk<Provisional, Cause, Output, Deadline>(
     Deadline: Clone,
 {
     // Under an interruption only the routed `workflow` step's edge ends the walk, and an
-    // edge that would start a step ends the attempt `continued` instead (REQ-WFEXEC-70).
+    // edge that would start a step ends the attempt `continued` instead (REQ-WFEXEC-101).
     let routed = match &reduction.state.workflow {
         WorkflowState::Executing {
             gate: SchedulingGate::Open,
@@ -5496,7 +5496,7 @@ fn step_declares_outputs<Cause, Output, Deadline>(
 }
 
 // A `workflow` step commits the subset of its derived outputs its child made available, which
-// always includes the text `outcome` its edges route on (REQ-WFEXEC-58); every other step
+// always includes the text `outcome` its edges route on (REQ-WFEXEC-82); every other step
 // commits exactly its declared outputs.
 fn outputs_match_declaration<Cause, Output, Deadline>(
     state: &RuntimeState<Cause, Output, Deadline>,

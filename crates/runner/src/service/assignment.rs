@@ -79,7 +79,7 @@ use root_preparation::*;
 use spec_validation::*;
 const MAXIMUM_RETAINED_DECISIONS: usize = 256;
 /// The most assignments the runner holds at once; an offer past it is declined
-/// `capacity_unavailable` (REQ-RUNNERENROLL-132). Half the retained decisions, so each held
+/// `capacity_unavailable` (REQ-RUNNERENROLL-315). Half the retained decisions, so each held
 /// assignment's decision is kept with room for as many settled ones.
 pub(super) const MAXIMUM_HELD_ASSIGNMENTS: usize = MAXIMUM_RETAINED_DECISIONS / 2;
 pub(super) const MAXIMUM_SERVICE_OBSERVATIONS: usize = 1_344;
@@ -288,7 +288,7 @@ struct RunEventState {
 }
 
 // The phases of a run, each recorded as a child of `runner.run`
-// (REQ-TELEMETRY-39).
+// (REQ-TELEMETRY-67).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunPhase {
     Checkout,
@@ -310,7 +310,7 @@ impl RunPhase {
     }
 }
 
-// How a run phase ended, as its record states it (REQ-TELEMETRY-39).
+// How a run phase ended, as its record states it (REQ-TELEMETRY-68).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PhaseEnd {
     Succeeded,
@@ -495,7 +495,7 @@ impl RunEvent {
 
     // Names the decline the runner sends for this run: its type and reason, a
     // diagnosed decline's stage and cause, and a refused tree's validation code
-    // and location kind, never its path or step (REQ-TELEMETRY-47).
+    // and location kind, never its path or step (REQ-TELEMETRY-47, REQ-TELEMETRY-79).
     fn decline(&self, decline: &AssignmentDecline) {
         use crate::telemetry::attribute;
         let (decline_type, reason) = decline.protocol_type_and_reason();
@@ -631,7 +631,7 @@ struct RunningAssignment {
 }
 
 impl RunningAssignment {
-    /// Whether the run reported a wait, which its end carries on (INV-RUNNER-40); never for
+    /// Whether the run reported a wait, which its end carries on (INV-RUNNER-63); never for
     /// a run on the embedded engine.
     fn reported_wait(&self) -> bool {
         self.activity
@@ -715,7 +715,7 @@ struct FinishingAssignment {
     final_observation_id: u64,
     root: Option<AssignmentRoot>,
     workspace_disposition: WorkspaceDisposition,
-    /// Whether the assignment's run reported a wait before it ended (INV-RUNNER-40).
+    /// Whether the assignment's run reported a wait before it ended (INV-RUNNER-63).
     reported_wait: bool,
 }
 
@@ -723,7 +723,7 @@ struct FinishingAssignment {
 struct ReportingAssignment {
     identity: AssignmentIdentity,
     /// Whether the assignment's run reported a wait before it ended, so that a successor's
-    /// offer does not prove Cloud has settled it (INV-RUNNER-40).
+    /// offer does not prove Cloud has settled it (INV-RUNNER-63).
     reported_wait: bool,
 }
 
@@ -748,7 +748,7 @@ struct ReleasingAssignment {
 }
 
 /// An assignment the runner holds, in the state it has reached; the manager keys each by
-/// its assignment ID (INV-RUNNER-40).
+/// its assignment ID (INV-RUNNER-62).
 enum HeldAssignment {
     Preparing(Box<PreparingAssignment>),
     Accepted(Box<AcceptedAssignment>),
@@ -888,7 +888,7 @@ struct AdmissionRuntime {
     codex_installation: Option<ValidatedCodexInstallation>,
     environment: EnvironmentSnapshot,
     /// What each `useful` command of the admission's tree run builds its environment from
-    /// when it starts (REQ-GRANT-49): the process environment until the admission's offer
+    /// when it starts (REQ-GRANT-136): the process environment until the admission's offer
     /// replaces it.
     command_environment: crate::agent_login::CommandEnvironment,
     /// What notes how the provider answered each use of a login the
@@ -1257,7 +1257,7 @@ pub(super) struct AssignmentManager {
     /// lists once they are held no longer (REQ-RUNNERENROLL-137, INV-RUNNER-46).
     recent_assignments: Ring<OverviewRecentAssignment>,
     lease_policy: Option<ExecutionLeasePolicy>,
-    /// The assignments the runner holds, by assignment ID (INV-RUNNER-40).
+    /// The assignments the runner holds, by assignment ID (INV-RUNNER-62).
     held: BTreeMap<String, HeldAssignment>,
     /// The assignments that have ended and whose last report Cloud has yet to acknowledge,
     /// by assignment ID; an assignment is held or reporting, never both.
@@ -1297,7 +1297,7 @@ struct GrantTokenRefreshing {
 
 impl GrantTokenRefreshing {
     /// Publishes in the live status each readiness `tokens` records, its
-    /// end's included whether or not it holds a token (REQ-GRANT-88), and
+    /// end's included whether or not it holds a token (REQ-GRANT-157), and
     /// starts keeping the token files it holds current (REQ-GRANT-89).
     fn start(&self, tokens: &mut AssignmentGrantTokens) {
         let status = Arc::clone(&self.status);
@@ -1603,7 +1603,7 @@ pub(super) mod test_support {
 
     /// Installs `offer` as a running assignment beside the one `beside` installed, on the
     /// same controlled lease clock and with the same lease timing, so a test can hold two
-    /// running assignments on one manager (INV-RUNNER-40).
+    /// running assignments on one manager (INV-RUNNER-62).
     pub(in crate::service) fn install_running_renewal_fixture_beside(
         manager: &mut AssignmentManager,
         offer: AssignmentOffer,

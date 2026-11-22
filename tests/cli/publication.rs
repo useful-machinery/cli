@@ -707,7 +707,7 @@ fn publication_create_sends_the_closed_request_and_renders_plain_and_json_receip
     }
 }
 
-// REQ-PUBLISH-54, REQ-LOCALRUN-180: `--run` naming a subject is the run the runs listing names
+// REQ-PUBLISH-54, REQ-LOCALRUN-309: `--run` naming a subject is the run the runs listing names
 // for it, in the organization in effect, and the publication is created for that run.
 #[test]
 fn publication_create_of_a_subject_finds_the_run_in_the_runs_listing() {

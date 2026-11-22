@@ -135,7 +135,7 @@ enum Aim {
     /// `--new`: a create that asks for no identical definition.
     New,
     /// The project's one active definition of the root's name, or else a create that asks for
-    /// the project's identical definition (REQ-CLOUDDEF-14, REQ-CLOUDDEF-22).
+    /// the project's identical definition (REQ-CLOUDDEF-89, REQ-CLOUDDEF-22).
     Named(String),
 }
 
@@ -550,7 +550,8 @@ impl CloudSteps<'_> {
             executable_paths: Some(self.executable_paths),
         };
         // The create or publication is sent again once, under the same key, when Cloud
-        // does not answer it or answers with a transient problem (REQ-CLOUDDEF-25).
+        // does not answer it or answers with a transient problem (REQ-CLOUDDEF-82,
+        // REQ-CLOUDDEF-174).
         let (publication, created, reused) = match self.addressed {
             Addressed::Existing(id) => {
                 let current = api.definition(organization, project, id)?.current_revision;
@@ -601,9 +602,9 @@ pub(super) const fn cloud_failure(failure: &WorkflowDefinitionFailure) -> (&'sta
     }
 }
 
-/// Where an invalid response was detected (REQ-CLOUDDEF-28): the JSON `diagnostic` of the
-/// failure, or none for every other failure. It holds the slugs and the status alone, never
-/// the error the failure retains.
+/// Where an invalid response was detected (REQ-CLOUDDEF-28, REQ-CLOUDDEF-76, REQ-CLOUDDEF-78):
+/// the JSON `diagnostic` of the failure, or none for every other failure. It holds the slugs
+/// and the status alone, never the error the failure retains.
 pub(super) fn invalid_response_diagnostic(
     failure: &WorkflowDefinitionFailure,
 ) -> Option<InvalidResponseDiagnostic> {

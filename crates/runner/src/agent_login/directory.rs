@@ -4,7 +4,7 @@
 //! and, in `assignments/<assignment id>/`, mode `0700`, the grant tokens of
 //! each assignment the runner holds, `github.token`, `gitlab.token` and
 //! `linear.token`, and, for any other provider Cloud lists,
-//! `grant-tokens/<provider id>.token` (REQ-GRANT-86). An earlier release kept
+//! `grant-tokens/<provider id>.token` (REQ-GRANT-149). An earlier release kept
 //! the grant tokens of its one assignment at those names in the directory
 //! itself, where they are only ever removed. Nothing but the runner writes
 //! there, so whatever is at one of its locations is the runner's to replace
@@ -82,7 +82,7 @@ impl LoginDirectory {
     }
 
     /// The directory of the grant tokens of the assignment `assignment_id`
-    /// (REQ-GRANT-86); `None` for anything but an assignment ID, which is a
+    /// (REQ-GRANT-149); `None` for anything but an assignment ID, which is a
     /// file name as it stands and is never joined otherwise.
     pub(crate) fn assignment(&self, assignment_id: &str) -> Option<PathBuf> {
         useful_runner_protocol::valid_assignment_id(assignment_id)
@@ -90,7 +90,7 @@ impl LoginDirectory {
     }
 
     /// The file the runner keeps an OAuth provider's grant token in for the
-    /// assignment `assignment_id` (REQ-GRANT-86), and the prefix of the
+    /// assignment `assignment_id` (REQ-GRANT-149), and the prefix of the
     /// temporary files it is written through; `None` for an installable
     /// provider, and for anything but an assignment ID.
     pub(crate) fn grant_token(
@@ -117,7 +117,7 @@ impl LoginDirectory {
 
     /// The file the runner keeps the grant token of the provider Cloud lists
     /// as `provider_id`, other than its three, in for the assignment
-    /// `assignment_id` (REQ-GRANT-86), and the prefix of the temporary files
+    /// `assignment_id` (REQ-GRANT-149), and the prefix of the temporary files
     /// it is written through; `None` for anything but an assignment ID. A
     /// provider id starts with a letter and holds only lowercase letters,
     /// digits, `.` and `-`, so it is a file name as it stands.

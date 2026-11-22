@@ -54,7 +54,7 @@ pub struct WorkflowRunRecord {
     #[serde(deserialize_with = "Option::deserialize")]
     pub successor: Option<String>,
     pub external: BTreeMap<String, String>,
-    /// The continuations each limited edge started, by `<step>.<outcome>` (REQ-WFDEF-4,
+    /// The continuations each limited edge started, by `<step>.<outcome>` (REQ-WFDEF-50,
     /// REQ-WFEXEC-64); empty for a run that took none. A record written before the field
     /// existed reads as empty.
     #[serde(default)]
@@ -174,7 +174,7 @@ impl WorkflowRunRecord {
     }
 }
 
-/// A position element (REQ-WFDEF-4): a step identifier, or `{"item": n}` naming the
+/// A position element (REQ-WFDEF-48): a step identifier, or `{"item": n}` naming the
 /// one-based element of a fan-out.
 pub(crate) fn is_position_element(element: &Value) -> bool {
     match element {

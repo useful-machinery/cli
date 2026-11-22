@@ -851,7 +851,7 @@ impl EnvironmentSnapshot {
 
     /// Keeps the fixed inherited names, the root's `environmentPassthrough` and the names
     /// of the run's declared integrations (REQ-WFFORMAT-33, REQ-WFEXEC-78), after dropping
-    /// every runner-private name (INV-ENGINE-43).
+    /// every runner-private name (INV-ENGINE-63).
     pub(crate) fn for_workflow_children(
         &self,
         passthrough: &BTreeSet<String>,
@@ -868,7 +868,7 @@ impl EnvironmentSnapshot {
 
     /// Removes the root-declared names a node's effective `environmentPassthrough` omits
     /// (INV-ENGINE-31). A fixed inherited name stays even when the root lists it, a name of
-    /// the run's declared integrations stays whatever the node lists (INV-ENGINE-43), and an
+    /// the run's declared integrations stays whatever the node lists (INV-ENGINE-63), and an
     /// engine variable cannot be a passthrough name, so none of them is ever removed.
     fn narrowed_for_node(
         &self,
@@ -1291,7 +1291,7 @@ impl ExecutionContext {
     }
 
     /// The `(source, event)` pairs the caller's condition sources evaluate, against which
-    /// admission checks each `external` wait's rule (REQ-WFEXEC-59, REQ-WFEXEC-65); none
+    /// admission checks each `external` wait's rule (REQ-WFEXEC-93, REQ-WFEXEC-125); none
     /// unless given.
     pub fn with_conditions<'a>(
         mut self,
@@ -1465,7 +1465,7 @@ pub struct AdmittedExecutionContext {
     limits: ExecutionLimits,
     environment: EnvironmentSnapshot,
     /// The environment names of the run's declared integrations, which no node's own
-    /// `environmentPassthrough` removes (REQ-WFEXEC-78, INV-ENGINE-43).
+    /// `environmentPassthrough` removes (REQ-WFEXEC-86, INV-ENGINE-63).
     integration_environment_names: BTreeSet<&'static str>,
     harness_login_observer: Option<SharedHarnessLoginObserver>,
     cancellation: CancellationPolicy,
@@ -1941,7 +1941,7 @@ pub enum AdmissionFailureKind {
     /// release does not run.
     WaitTargetUnsupported,
     /// An edge of a `workflow` step targets an `external` wait whose rule names a `source`
-    /// and `event` pair no condition source of the caller evaluates (REQ-WFEXEC-65).
+    /// and `event` pair no condition source of the caller evaluates (REQ-WFEXEC-93).
     WaitConditionUnsupported,
     /// A workflow with `workflow` steps was not admitted from a tree.
     WorkflowStepRequiresTree,
@@ -2029,7 +2029,7 @@ impl fmt::Display for AdmissionFailure {
 
 impl std::error::Error for AdmissionFailure {}
 
-/// Admits a local run (REQ-WFEXEC-59): a workflow with `workflow` steps runs only from a
+/// Admits a local run (REQ-WFEXEC-91): a workflow with `workflow` steps runs only from a
 /// tree, since its children read the run's tree copy.
 pub fn admit_local_workflow(
     workflow: ResolvedWorkflow,
@@ -2063,7 +2063,7 @@ fn first_workflow_step(workflow: &ResolvedWorkflow) -> Option<&str> {
         .map(String::as_str)
 }
 
-/// The refusals every admission applies to `workflow` steps (REQ-WFEXEC-59): Cloud runs
+/// The refusals every admission applies to `workflow` steps (REQ-WFEXEC-91): Cloud runs
 /// none, and no admission runs an edge whose target is a wait whose `then` is an exit, or
 /// an `external` wait whose rule names a `source` and `event` pair
 /// outside `conditions` (REQ-WFEXEC-65), at any depth of a wait's `then` or a limited
@@ -2147,7 +2147,7 @@ pub fn local_continuation_input_failures(
 
 /// Whether `supplied`, a child's mapped inputs, are the inputs its run retained, once
 /// admission completes each omitted optional or defaulted input of `workflow` as it did for
-/// the retained ones (REQ-WFFORMAT-84, REQ-CONTINUE-82): the same names, the same text and the
+/// the retained ones (REQ-WFFORMAT-84, REQ-CONTINUE-117): the same names, the same text and the
 /// same canonical JSON.
 pub fn completed_inputs_match(
     workflow: &ResolvedWorkflow,

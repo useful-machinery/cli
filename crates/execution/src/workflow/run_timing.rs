@@ -226,7 +226,7 @@ mod tests {
         }))
     }
 
-    // REQ-WFEXEC-69, REQ-WFEXEC-40: a step an interruption fails before it starts is timed
+    // REQ-WFEXEC-135, REQ-WFEXEC-40: a step an interruption fails before it starts is timed
     // at that instant, while a `condition` failure, which never ran, stays untimed.
     #[test]
     fn a_failure_without_a_start_is_timed_unless_its_phase_is_condition() {

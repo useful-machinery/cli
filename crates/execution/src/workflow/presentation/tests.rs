@@ -1425,7 +1425,7 @@ async fn failed_and_cancelled_summaries_use_authoritative_terminal_facts() {
     );
 }
 
-// SC-LOCALRUN-6, REQ-LOCALRUN-123, REQ-LOCALRUN-136, REQ-WFEXEC-69: the summary of a failed
+// SC-LOCALRUN-6, REQ-LOCALRUN-123, REQ-LOCALRUN-136, REQ-WFEXEC-136: the summary of a failed
 // result an interruption ended names the interrupted step as its primary issue and ends in its
 // `cancellation:` line.
 #[tokio::test]
@@ -1919,7 +1919,7 @@ steps:
     assert!(!output.contains("message.md"));
 }
 
-// REQ-LOCALRUN-200, INV-ENGINE-28: a child scope writes the child's step state records into
+// REQ-LOCALRUN-200, REQ-LOCALRUN-286, INV-ENGINE-28: a child scope writes the child's step state records into
 // the parent's stream under `<step>[n].<child step>`, after the parent's own, and drops the
 // child's output, committed-output and workflow records.
 #[tokio::test]
@@ -2210,7 +2210,7 @@ steps:
     assert!(presentation.failure().is_none());
 }
 
-// REQ-LOCALRUN-200, INV-ENGINE-28: a destination that fails on a child's record is the
+// REQ-LOCALRUN-286, INV-ENGINE-28: a destination that fails on a child's record is the
 // parent's presentation failure, the one its failure watcher cancels the run on
 // (REQ-LOCALRUN-137).
 #[tokio::test]
@@ -2331,7 +2331,7 @@ async fn a_stage_whose_child_failed_completes_with_a_failed_record() {
     }
 }
 
-// REQ-LOCALRUN-220, REQ-WFEXEC-41, REQ-OUTPUTS-17: the summary's row of a stage that waits on
+// REQ-LOCALRUN-287, REQ-WFEXEC-41, REQ-OUTPUTS-17: the summary's row of a stage that waits on
 // its failed child reads `failed`, the outcome line counts it failed and not succeeded, and
 // the wait line names the failing node from the step's own record when publication failed;
 // without the record the stage's summary is what an agent's success renders.

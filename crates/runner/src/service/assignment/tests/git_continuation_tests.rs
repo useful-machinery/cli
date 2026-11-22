@@ -77,7 +77,7 @@ async fn continuation_of_a_removed_kept_workspace_is_declined_retained_workspace
     );
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-68
 #[tokio::test]
 async fn execution_lost_before_the_engine_starts_ends_the_execution_phase_failed() {
     let (_temporary, mut manager, initial, workspace, _baseline) =

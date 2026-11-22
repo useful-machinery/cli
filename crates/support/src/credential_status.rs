@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Whether a credential can be used now (REQ-GRANT-53).
+/// Whether a credential can be used now (REQ-GRANT-140 to REQ-GRANT-142).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Availability {
@@ -28,7 +28,7 @@ pub enum Availability {
 }
 
 impl Availability {
-    /// Every availability, in the order REQ-GRANT-53 states them.
+    /// Every availability, in the order REQ-GRANT-140 to REQ-GRANT-142 states them.
     pub const ALL: [Self; 7] = [
         Self::Available,
         Self::Unverified,
@@ -67,7 +67,7 @@ impl Availability {
     }
 }
 
-/// What to do about a credential's availability (REQ-GRANT-53).
+/// What to do about a credential's availability (REQ-GRANT-143).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NextAction {
@@ -91,7 +91,7 @@ pub enum NextAction {
 }
 
 impl NextAction {
-    /// Every next action, in the order REQ-GRANT-53 states them.
+    /// Every next action, in the order REQ-GRANT-143 states them.
     pub const ALL: [Self; 8] = [
         Self::None,
         Self::Reconnect,

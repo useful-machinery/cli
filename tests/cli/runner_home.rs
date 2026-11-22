@@ -513,7 +513,7 @@ fn serve_without_a_configuration_joins_and_writes_the_homes_state() {
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-127
+// REQ-RUNNERENROLL-243
 #[test]
 fn serve_without_a_configuration_rejoins_a_key_joined_home_whose_credential_is_refused() {
     let rejecting = ConnectionWitness::rejecting();
@@ -972,7 +972,7 @@ fn only_check(output: &Output) -> serde_json::Value {
     check
 }
 
-// REQ-RUNNERENROLL-86
+// REQ-RUNNERENROLL-310
 #[test]
 fn doctor_agent_logins_on_an_empty_home_is_readiness_unknown_and_creates_nothing() {
     let home = ServeHome::new();
@@ -1014,7 +1014,7 @@ fn doctor_agent_logins_reads_the_readiness_beside_the_state_the_homes_configurat
     );
 }
 
-// REQ-RUNNERENROLL-86
+// REQ-RUNNERENROLL-310
 #[test]
 fn doctor_agent_logins_without_a_useful_home_or_configuration_is_config_required() {
     let output = doctor_with_homes(&AGENT_LOGINS, None, None);

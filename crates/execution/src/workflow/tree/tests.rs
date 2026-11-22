@@ -431,7 +431,7 @@ fn single_trigger_rejection(from: &str, to: &str) -> (&'static str, Option<&'sta
     (code, *key)
 }
 
-// REQ-WFDEF-10, REQ-WFDEF-14, REQ-WFDEF-30, REQ-WFDEF-31: a boolean operand, `stopBefore`, a
+// REQ-WFDEF-51, REQ-WFDEF-54, REQ-WFDEF-55, REQ-WFDEF-56, REQ-WFDEF-14, REQ-WFDEF-30, REQ-WFDEF-31: a boolean operand, `stopBefore`, a
 // filtered `owner` and a schedule trigger validate, and the tree keeps them, each rule's
 // `where` and each start trigger's `subject` and `inputs` as written for the report.
 #[test]
@@ -498,7 +498,7 @@ fn start_trigger_declarations_and_a_schedule_trigger_validate() {
     );
 }
 
-// REQ-WFDEF-10: `true` and `false` are operands; a quoted literal is still refused.
+// REQ-WFDEF-51: `true` and `false` are operands; a quoted literal is still refused.
 #[test]
 fn a_boolean_operand_passes_and_a_quoted_literal_does_not() {
     let (code, key) = single_trigger_rejection(
@@ -519,7 +519,7 @@ const CONTROL_TRIGGER: &str = r#"  release:
       action: {when: "event.to == $linearTeam", then: cancel, else: withdraw}
 "#;
 
-// REQ-WFDEF-10: a start `where` and a control `on.where` outside the grammar Cloud evaluates
+// REQ-WFDEF-52, REQ-WFDEF-51: a start `where` and a control `on.where` outside the grammar Cloud evaluates
 // them with, and a control `when` the wait's evaluator cannot parse, are
 // `trigger_rule_invalid`; a quoted literal and an undeclared `$key` keep their own codes.
 #[test]
@@ -604,7 +604,7 @@ fn a_trigger_rule_outside_its_grammar_is_refused() {
     assert_eq!((code, key), ("literal_where_binding_expected", None));
 }
 
-// REQ-WFDEF-10: the validator accepts exactly the `where` rules the shared corpus accepts,
+// REQ-WFDEF-52: the validator accepts exactly the `where` rules the shared corpus accepts,
 // which the Gateway's `workflowtrigger.ParseRule` test reads too, so the two cannot drift.
 #[test]
 fn the_where_grammar_accepts_exactly_the_shared_corpus() {
@@ -631,7 +631,7 @@ fn the_where_grammar_accepts_exactly_the_shared_corpus() {
     }
 }
 
-// REQ-WFDEF-10, REQ-WFDEF-30: `owner` names a `member` binding, and its filters `members`
+// REQ-WFDEF-54, REQ-WFDEF-30: `owner` names a `member` binding, and its filters `members`
 // bindings beside an event owner only.
 #[test]
 fn owner_bindings_and_filters_are_checked() {
@@ -690,7 +690,7 @@ fn owner_bindings_and_filters_are_checked() {
     );
 }
 
-// REQ-WFDEF-10, REQ-WFDEF-30
+// REQ-WFDEF-55, REQ-WFDEF-30
 #[test]
 fn stop_before_labels_must_be_an_event_path() {
     let (code, key) = single_trigger_rejection("labels: event.issue.labels", "labels: \"x\"");
@@ -700,7 +700,7 @@ fn stop_before_labels_must_be_an_event_path() {
     );
 }
 
-// REQ-WFDEF-10, REQ-WFDEF-14, REQ-WFDEF-31: a schedule trigger reads no event, and its
+// REQ-WFDEF-56, REQ-WFDEF-57, REQ-WFDEF-14, REQ-WFDEF-31: a schedule trigger reads no event, and its
 // timetable has the cron and zone shape.
 #[test]
 fn a_schedule_trigger_reads_no_event_and_has_a_timetable_of_the_right_shape() {
@@ -834,7 +834,7 @@ fn located(
     )
 }
 
-// REQ-WFDEF-10, REQ-WFDEF-39: a definition trigger names a declared `definition` binding,
+// REQ-WFDEF-58, REQ-WFDEF-39: a definition trigger names a declared `definition` binding,
 // and its subject, inputs and owner read only what a finished run's event holds: the run's
 // members and `event.exports.<name>`, an export name. It declares no `stopBefore`.
 #[test]
@@ -953,7 +953,7 @@ fn a_definition_trigger_names_a_definition_binding_and_reads_only_a_runs_event()
     );
 }
 
-// REQ-WFDEF-33, REQ-WFDEF-10: a definition trigger is a start trigger: `queueLatest` needs
+// REQ-WFDEF-33, REQ-WFDEF-53: a definition trigger is a start trigger: `queueLatest` needs
 // the root's subject slot, and it binds every required root input.
 #[test]
 fn a_definition_trigger_queues_on_the_subject_slot_and_binds_required_inputs() {
@@ -1134,7 +1134,7 @@ fn integration_bindings_and_an_integration_source_validate() {
         Some("linear")
     );
     assert!(validated.bindings.is_empty());
-    // REQ-WFDEF-14: each integration keeps its bindings as declared for what reads the tree.
+    // REQ-WFDEF-61: each integration keeps its bindings as declared for what reads the tree.
     assert_eq!(
         validated.required_integrations[&IntegrationProvider::Linear].bindings["ownedState"],
         IntegrationBinding {
@@ -1153,7 +1153,7 @@ fn integration_bindings_and_an_integration_source_validate() {
     );
 }
 
-// REQ-WFDEF-37, REQ-WFDEF-38, REQ-WFDEF-10: an integration reference that names no declared
+// REQ-WFDEF-63, REQ-WFDEF-38, REQ-WFDEF-10: an integration reference that names no declared
 // binding, of a kind the place does not take, or a source naming an undeclared integration
 // is refused, located with the integration and the binding as written.
 #[test]
@@ -1243,7 +1243,7 @@ fn integration_references_and_sources_are_checked() {
     );
 }
 
-// REQ-WFDEF-37: a flat key that is also a name an integration declares, or the id of an
+// REQ-WFDEF-64: a flat key that is also a name an integration declares, or the id of an
 // integration that declares bindings, is declared twice; the id of one that declares none is
 // not.
 #[test]
@@ -1285,7 +1285,7 @@ fn a_binding_declared_twice_is_refused() {
         .unwrap_or_else(|diagnostics| panic!("tree should be valid: {diagnostics:?}"));
 }
 
-// REQ-WFDEF-37: a control's `when` takes a `$<id>.<name>` operand, the integration before
+// REQ-WFDEF-37, REQ-WFDEF-63: a control's `when` takes a `$<id>.<name>` operand, the integration before
 // the last `.`, and refuses one with no integration or no identifier after it.
 #[test]
 fn a_control_when_takes_an_integration_reference() {

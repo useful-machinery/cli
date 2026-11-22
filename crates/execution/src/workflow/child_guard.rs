@@ -97,7 +97,7 @@ fn with_staging_socket<T>(
 
 // Binds or connects `<alias>/e/<name>`, where `<alias>` is a fresh private
 // directory under `alias_root` holding the one link `e` to `root`. The alias
-// exists only for this one operation (INV-ENGINE-34).
+// exists only for this one operation (INV-ENGINE-58).
 #[cfg(any(not(target_os = "linux"), test))]
 fn with_staging_socket_alias<T>(
     alias_root: &Path,
@@ -1307,7 +1307,7 @@ mod tests {
         assert!(status.success());
     }
 
-    // INV-ENGINE-34
+    // INV-ENGINE-58
     #[test]
     fn a_socket_alias_lasts_only_for_its_operation() {
         use std::os::unix::fs::FileTypeExt as _;

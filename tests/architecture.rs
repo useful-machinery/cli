@@ -777,7 +777,7 @@ fn external_crates_stay_inside_their_owning_packages() {
     );
 }
 
-// INV-TESTING-26
+// INV-TESTING-42
 #[test]
 fn runner_test_waits_hold_no_literal_real_time_bound() {
     const LITERAL_BOUNDS: [&str; 2] = [
@@ -825,7 +825,7 @@ fn runner_test_waits_hold_no_literal_real_time_bound() {
     );
 }
 
-// INV-TESTING-26
+// INV-TESTING-41
 #[test]
 fn runner_watchdog_call_sites_print_the_expiry() {
     let root = cli_root();
@@ -858,7 +858,7 @@ fn runner_watchdog_call_sites_print_the_expiry() {
     );
 }
 
-// INV-TESTING-26
+// INV-TESTING-41
 #[test]
 fn runner_watchdog_scan_rejects_each_discarding_form() {
     let discards = |source: &str| {

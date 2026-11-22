@@ -1,4 +1,4 @@
-//! `github` / `pull_request.queue_settled` (REQ-WFEXEC-65): whether the pull request an
+//! `github` / `pull_request.queue_settled` (REQ-WFEXEC-125): whether the pull request an
 //! `external` wait's rule names has left the merge queue. The pull request is read from the
 //! GitHub REST API with the first GitHub token the environment offers (`GH_TOKEN_FILE`'s file,
 //! `GH_TOKEN`, `GITHUB_TOKEN`, else `gh auth token`) and its queue entry from Mergify's, the
@@ -166,7 +166,7 @@ pub(super) fn observe_queue_settled(
     )
 }
 
-/// The first GitHub token the environment offers (REQ-WFEXEC-65): the trimmed token in the
+/// The first GitHub token the environment offers (REQ-WFEXEC-126): the trimmed token in the
 /// file `GH_TOKEN_FILE` names, else `GH_TOKEN`, as `mirror::offered_token` takes the pair,
 /// else `GITHUB_TOKEN` when set and non-empty, else the trimmed output of `gh auth token`.
 /// Read at each observation, so a token file the runner replaced is read anew.
@@ -444,7 +444,7 @@ mod tests {
             .collect()
     }
 
-    // REQ-CONTINUE-74, REQ-WFEXEC-65
+    // REQ-CONTINUE-74, REQ-WFEXEC-125
     #[test]
     fn a_merged_pull_request_settles_without_asking_the_queue() {
         let (result, requested) = settled(&[pull(true)]);
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(requested, [PULL]);
     }
 
-    // REQ-CONTINUE-74, REQ-WFEXEC-65
+    // REQ-CONTINUE-74, REQ-WFEXEC-125, REQ-WFEXEC-127
     #[test]
     fn an_open_pull_request_is_queued_or_dequeued_as_mergify_answers() {
         let (result, requested) = settled(&[pull(false), (QUEUE, 200, json!({"number": 3958}))]);
@@ -480,7 +480,7 @@ mod tests {
         );
     }
 
-    // REQ-CONTINUE-74: an answer the condition cannot read is an error, never a held wait.
+    // REQ-CONTINUE-103: an answer the condition cannot read is an error, never a held wait.
     #[test]
     fn an_unreadable_answer_is_unavailable() {
         for (answers, cause) in [
@@ -508,7 +508,7 @@ mod tests {
         assert!(error.message.contains("connection refused"), "{error}");
     }
 
-    // REQ-WFEXEC-65: GitHub is read with the GitHub token and Mergify with `MERGIFY_TOKEN`
+    // REQ-WFEXEC-127: GitHub is read with the GitHub token and Mergify with `MERGIFY_TOKEN`
     // when the CLI holds one, else with the GitHub token.
     #[test]
     fn mergify_is_read_with_its_own_token_when_one_is_held() {
@@ -526,7 +526,7 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-65, REQ-CONTINUE-74: Mergify refusing the credential is unavailable, never an
+    // REQ-WFEXEC-127, REQ-CONTINUE-103: Mergify refusing the credential is unavailable, never an
     // event, and the error names which credential was sent without its value.
     #[test]
     fn a_refused_mergify_credential_is_unavailable_and_named() {
@@ -546,7 +546,7 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-65: an unset or blank `MERGIFY_TOKEN` falls back to the GitHub token; one with
+    // REQ-WFEXEC-127: an unset or blank `MERGIFY_TOKEN` falls back to the GitHub token; one with
     // whitespace inside is refused rather than replaced.
     #[test]
     fn the_mergify_token_is_a_held_non_empty_value() {
@@ -567,7 +567,7 @@ mod tests {
         assert!(!error.message.contains("mergify key"), "{error}");
     }
 
-    // REQ-WFEXEC-65: the pull request comes from the rule's `event.pullRequest` conjunct.
+    // REQ-WFEXEC-125: the pull request comes from the rule's `event.pullRequest` conjunct.
     #[test]
     fn the_pull_request_is_the_rule_s_quoted_github_url() {
         assert_eq!(

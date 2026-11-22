@@ -608,7 +608,7 @@ impl BlockedDetail {
 pub(crate) enum NonExecutionCode {
     FailureStop,
     FinalizerTriggerNotSelected,
-    /// An edge-scheduled walk exited before reaching the step (REQ-WFEXEC-58).
+    /// An edge-scheduled walk exited before reaching the step (REQ-WFEXEC-83).
     NotReached,
 }
 
@@ -1505,7 +1505,7 @@ mod tests {
     use super::super::agent::{AgentHarnessFailureDetail, HarnessFailureDiagnostic};
     use super::*;
 
-    // REQ-WFEXEC-58
+    // REQ-WFEXEC-83
     #[test]
     fn a_step_an_edge_walk_never_reached_validates_in_a_succeeded_result() {
         let result = |code: &str| {

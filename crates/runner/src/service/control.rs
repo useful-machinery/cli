@@ -112,7 +112,7 @@ pub(super) struct ControlContext {
 /// after it had recorded an install or removal: answers that readiness with
 /// each login whose check gave no answer, `runner_busy` when a run the
 /// runner holds is working, or has a command in flight where the setup had
-/// a login to install or remove (REQ-GRANT-40), or once a rejoined service
+/// a login to install or remove (REQ-GRANT-126), or once a rejoined service
 /// has ended the setup (INV-RUNNER-41), and `state_update_failed`
 /// when the readiness could not be recorded. The live status carries no
 /// check's answer.
@@ -198,7 +198,7 @@ impl AdmissionAgentLogins {
 
     /// Makes the admission's pass, when the readiness names a login, under
     /// `beside`, the gate over the other runs the runner held when the
-    /// preparation began (INV-RUNNER-15), then asks Cloud for the grant
+    /// preparation began (INV-RUNNER-56), then asks Cloud for the grant
     /// tokens of the assignment `assignment_id` of the run `run_id` and this
     /// boot (REQ-GRANT-86), whatever the gate answers, and publishes what
     /// each recorded. It
@@ -1848,7 +1848,7 @@ mod tests {
             panic!("sync request did not return readiness");
         };
         // The setup checked the login it left `ready`, and the fake check,
-        // like a runner without the program, gave no answer (REQ-GRANT-90).
+        // like a runner without the program, gave no answer (REQ-GRANT-144).
         assert_eq!(
             synced.unanswered_checks,
             [UnansweredCheck {
@@ -1920,7 +1920,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-41, REQ-RUNNERENROLL-82, REQ-RUNNERENROLL-138: the pass a sync made while a
+    // REQ-GRANT-128, REQ-GRANT-125, REQ-RUNNERENROLL-82, REQ-RUNNERENROLL-138: the pass a sync made while a
     // held run works is logged as one it caused that found the runner busy.
     #[tokio::test]
     async fn sync_while_a_held_run_is_working_answers_runner_busy_without_asking() {
@@ -1953,7 +1953,7 @@ mod tests {
         assert_eq!(status.agent_logins, None);
     }
 
-    // REQ-GRANT-41, REQ-RUNNERENROLL-42
+    // REQ-GRANT-128, REQ-RUNNERENROLL-42
     #[tokio::test]
     async fn a_sync_a_working_run_interrupts_answers_runner_busy_and_status_shows_what_it_recorded()
     {
@@ -2000,7 +2000,7 @@ mod tests {
         assert_eq!(codex.state, AgentLoginState::Ready);
     }
 
-    // REQ-GRANT-41, REQ-GRANT-49
+    // REQ-GRANT-128, REQ-GRANT-49
     #[tokio::test]
     async fn sync_while_an_admitted_assignment_is_held_answers_runner_busy() {
         let root = tempfile::tempdir().unwrap();

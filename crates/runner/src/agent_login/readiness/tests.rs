@@ -201,7 +201,7 @@ fn the_last_use_of_an_install_round_trips_beside_it_and_only_there() {
         assert_eq!(value["providers"][0]["lastUseAt"], "2026-11-12T00:58:00Z");
         assert_eq!(ReadinessDocument::load(&path), Ok(Some(document.clone())));
         // The control socket reports the last use with its time, but not
-        // where the install is (REQ-GRANT-41, REQ-GRANT-53,
+        // where the install is (REQ-GRANT-129, REQ-GRANT-53,
         // REQ-RUNNERENROLL-63).
         let reported = serde_json::to_value(document.reported().unwrap()).unwrap();
         let entry = &reported["providers"][0];
@@ -268,7 +268,7 @@ fn the_last_use_of_an_install_round_trips_beside_it_and_only_there() {
     }
 }
 
-// REQ-GRANT-38
+// REQ-GRANT-120
 #[test]
 fn an_entry_for_a_provider_this_build_does_not_know_survives_a_rewrite_verbatim() {
     let state = state_directory();
@@ -328,7 +328,7 @@ fn an_entry_for_a_provider_this_build_does_not_know_survives_a_rewrite_verbatim(
     assert_eq!(reported.providers.len(), entries.len() - 1);
 }
 
-// REQ-GRANT-38, REQ-GRANT-51
+// REQ-GRANT-118, REQ-GRANT-51
 #[test]
 fn an_agent_login_entry_an_earlier_release_wrote_as_selected_loads_and_is_written_without_it() {
     let state = state_directory();
@@ -380,7 +380,7 @@ fn an_agent_login_entry_an_earlier_release_wrote_as_selected_loads_and_is_writte
     }
 }
 
-// REQ-GRANT-38
+// REQ-GRANT-121
 #[test]
 fn only_a_document_that_is_not_the_runners_record_is_replaced() {
     use std::io::ErrorKind;
@@ -603,7 +603,7 @@ fn ended_github() -> GrantReadiness {
     }
 }
 
-// REQ-GRANT-88
+// REQ-GRANT-157
 #[test]
 fn an_oauth_entry_with_its_run_and_end_survives_a_write_and_a_load_unchanged() {
     let state = state_directory();
@@ -788,7 +788,7 @@ fn each_state_of_an_oauth_entry_round_trips() {
     let path = readiness_path(&state.path().join("state.json"));
     let validator = validator();
     // A provider the host provides is recorded `not_delivered` for the run
-    // (REQ-GRANT-87).
+    // (REQ-GRANT-153).
     for state in [
         AgentLoginState::NotDelivered,
         AgentLoginState::NotAuthorized,

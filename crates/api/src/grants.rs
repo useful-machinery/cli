@@ -345,7 +345,7 @@ mod tests {
         )
     }
 
-    // REQ-GRANT-1, REQ-API-7
+    // REQ-GRANT-102, REQ-API-7
     #[test]
     fn a_pending_consent_conflict_is_not_a_reused_key() {
         for (slug, want) in [
@@ -372,7 +372,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-1
+    // REQ-GRANT-101
     // REQ-GRANT-96
     #[test]
     fn session_polling_keeps_retry_after_and_admits_only_a_pending_https_consent_url() {

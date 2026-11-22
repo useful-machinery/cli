@@ -715,7 +715,7 @@ fn create_and_supersede(
             Creation::Failed(anyhow::Error::new(error)),
         ));
     }
-    // REQ-WFDEF-28: the claim names the predecessor, so it may take the slot the predecessor
+    // REQ-WFDEF-75: the claim names the predecessor, so it may take the slot the predecessor
     // holds; the index lock is held, and the slot still names the predecessor, until the
     // successor's directory exists.
     let claim = match &record.subject {
@@ -812,7 +812,7 @@ pub(super) enum Lineage {
 }
 
 /// Completes or undoes a move to the successor at `run_directory` that the command performing
-/// it did not finish (REQ-LOCALRUN-196, INV-ENGINE-26): the sequence names the slot after the
+/// it did not finish (REQ-LOCALRUN-196, INV-ENGINE-49): the sequence names the slot after the
 /// successor exists and supersedes the predecessor after that, so a death between leaves a
 /// predecessor that still waits and a successor it does not name. Reads the records without a
 /// lock first, so a run that is no successor, or one its predecessor names, costs two reads;

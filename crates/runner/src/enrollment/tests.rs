@@ -1342,7 +1342,7 @@ fn assert_schema_rejects(format: &str, schema_source: &str, document: &serde_jso
     );
 }
 
-// REQ-RUNNERENROLL-97
+// REQ-RUNNERENROLL-236, REQ-RUNNERENROLL-241
 #[test]
 fn an_interrupted_join_keeps_a_token_free_journal_and_resumes_the_same_request() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![
@@ -1407,7 +1407,7 @@ fn an_interrupted_join_keeps_a_token_free_journal_and_resumes_the_same_request()
     }
 }
 
-// REQ-RUNNERENROLL-97, REQ-RUNNERENROLL-24
+// REQ-RUNNERENROLL-236, REQ-RUNNERENROLL-238, REQ-RUNNERENROLL-24
 #[test]
 fn a_staged_join_names_its_journal_and_key_to_a_start_with_another_key_or_an_enrollment() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![empty_response("400 Bad Request")]);
@@ -1466,7 +1466,7 @@ fn a_staged_join_names_its_journal_and_key_to_a_start_with_another_key_or_an_enr
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-RUNNERENROLL-97
+// REQ-RUNNERENROLL-237, REQ-RUNNERENROLL-238
 #[test]
 fn a_resent_join_answered_unauthorized_keeps_and_names_its_journal() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![
@@ -1516,7 +1516,7 @@ fn a_resent_join_answered_unauthorized_keeps_and_names_its_journal() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUNNERENROLL-97, REQ-RUNNERENROLL-113
+// REQ-RUNNERENROLL-238, REQ-RUNNERENROLL-113
 #[test]
 fn a_join_refused_unauthorized_after_an_ambiguous_answer_in_the_same_start_keeps_its_journal() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![
@@ -1570,7 +1570,7 @@ fn a_join_refused_unauthorized_after_an_ambiguous_answer_in_the_same_start_keeps
     assert_eq!(request_body(&requests[0]), request_body(&requests[1]));
 }
 
-// REQ-RUNNERENROLL-97
+// REQ-RUNNERENROLL-237, REQ-RUNNERENROLL-239
 #[test]
 fn a_join_refused_gone_clears_its_journal_and_says_whether_it_was_resent() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![
@@ -1614,7 +1614,7 @@ fn a_join_refused_gone_clears_its_journal_and_says_whether_it_was_resent() {
     assert_eq!(server.finish().len(), 3);
 }
 
-// REQ-RUNNERENROLL-97
+// REQ-RUNNERENROLL-238
 #[test]
 fn a_staged_join_refused_unauthorized_names_its_journal_without_the_resend_remedy() {
     let journal = PathBuf::from("/var/lib/useful/runner-state.join.json");
@@ -1642,7 +1642,7 @@ fn a_staged_join_refused_unauthorized_names_its_journal_without_the_resend_remed
     assert!(!unauthorized.contains(&resend));
 }
 
-// REQ-RUNNERENROLL-97
+// REQ-RUNNERENROLL-104
 #[test]
 fn an_enrolled_host_removes_a_join_journal_its_state_already_holds() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -1920,7 +1920,7 @@ fn assert_rejoined(fixture: &EnrollmentFixture, response: &EnrollmentResponse, r
     );
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-244
 #[test]
 fn a_rejoin_names_the_host_runner_and_replaces_the_state_with_its_answer() {
     let server = ScriptedHttpServer::respond(rejoin_response());
@@ -1934,7 +1934,7 @@ fn a_rejoin_names_the_host_runner_and_replaces_the_state_with_its_answer() {
     assert_rejoined(&fixture, &response, &server.finish_one());
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-245
 #[test]
 fn an_unanswered_rejoin_keeps_its_journal_and_resends_the_same_request() {
     for (unanswered_response, expected) in [
@@ -1980,7 +1980,7 @@ fn an_unanswered_rejoin_keeps_its_journal_and_resends_the_same_request() {
     }
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-246
 #[test]
 fn a_definite_refusal_of_a_rejoin_keeps_the_state_and_settles_the_journal() {
     for (response, expected, code) in [
@@ -2063,7 +2063,7 @@ fn a_definite_refusal_of_a_rejoin_keeps_the_state_and_settles_the_journal() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-245, REQ-RUNNERENROLL-246
 #[test]
 fn a_rejoin_sends_nothing_over_a_journal_staged_for_anything_else() {
     // The journal on disk: a join staged for a key and naming a runner, or an
@@ -2119,7 +2119,7 @@ fn a_rejoin_sends_nothing_over_a_journal_staged_for_anything_else() {
     }
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-248
 #[test]
 fn a_host_whose_credential_came_from_an_activation_does_not_rejoin() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -2141,7 +2141,7 @@ fn a_host_whose_credential_came_from_an_activation_does_not_rejoin() {
     assert!(server.finish().is_empty());
 }
 
-// INV-RUNNER-36, REQ-RUNNERENROLL-127
+// INV-RUNNER-36, REQ-RUNNERENROLL-247
 #[test]
 fn an_expired_key_is_held_only_for_the_unanswered_rejoin_staged_with_it() {
     let server = ScriptedHttpServer::respond_in_sequence(vec![
@@ -2459,7 +2459,7 @@ fn staged_at_days_ago(days: i64) -> String {
         .expect("format staging time")
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-117, REQ-RUNNERENROLL-249
 // INV-RUNNER-26
 #[test]
 fn a_registration_records_its_key_before_registering_and_completes_the_record_with_the_state() {
@@ -2535,7 +2535,7 @@ fn a_registration_records_its_key_before_registering_and_completes_the_record_wi
     );
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-250, REQ-RUNNERENROLL-251, REQ-RUNNERENROLL-253, REQ-RUNNERENROLL-255
 #[test]
 fn an_ambiguous_registration_keeps_its_record_and_is_resent_with_the_same_key_and_request() {
     let server = ScriptedHttpServer::respond(enrollment_response());
@@ -2590,7 +2590,7 @@ fn an_ambiguous_registration_keeps_its_record_and_is_resent_with_the_same_key_an
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-250, REQ-RUNNERENROLL-251, REQ-RUNNERENROLL-256
 #[test]
 fn a_failure_after_the_registration_was_answered_issues_for_the_recorded_runner_without_registering()
  {
@@ -2632,7 +2632,7 @@ fn a_failure_after_the_registration_was_answered_issues_for_the_recorded_runner_
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-252
 #[test]
 fn a_staged_activation_for_the_recorded_runner_is_resent_before_any_issuance() {
     // The first start's enrollment is answered 400, which leaves its journal
@@ -2707,7 +2707,7 @@ fn a_staged_activation_for_the_recorded_runner_is_resent_before_any_issuance() {
     }
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-257
 #[test]
 fn a_record_whose_replay_cannot_be_trusted_is_not_resent_and_is_left_unchanged() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -2739,7 +2739,7 @@ fn a_record_whose_replay_cannot_be_trusted_is_not_resent_and_is_left_unchanged()
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-256
 #[test]
 fn a_definite_refusal_of_the_registration_removes_the_record() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -2765,7 +2765,7 @@ fn a_definite_refusal_of_the_registration_removes_the_record() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-258
 #[test]
 fn a_record_that_does_not_read_fails_naming_it_and_is_left_as_it_was() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -2850,7 +2850,7 @@ fn complete_record(target: serde_json::Value, runner_id: &str) -> serde_json::Va
     record
 }
 
-// REQ-RUNNERENROLL-117: the second of two starts takes the lock after the
+// REQ-RUNNERENROLL-254: the second of two starts takes the lock after the
 // first wrote the state, so it serves that state and asks Cloud nothing.
 #[test]
 fn a_registration_that_finds_state_under_the_lock_asks_the_authority_nothing() {
@@ -2888,7 +2888,7 @@ fn a_registration_that_finds_state_under_the_lock_asks_the_authority_nothing() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-261
 #[test]
 fn an_enrolled_host_accepts_only_the_recorded_organization_and_pool_or_their_ids() {
     let server = ScriptedHttpServer::respond_in_sequence(Vec::new());
@@ -3054,7 +3054,7 @@ fn a_private_document_replaced_after_its_open_reads_as_the_whole_earlier_version
     assert_eq!(current, Some(second));
 }
 
-// INV-RUNNER-44
+// INV-RUNNER-67
 #[test]
 fn an_opened_private_file_given_a_second_name_or_another_mode_is_refused() {
     let directory = tempfile::TempDir::new().expect("create directory");

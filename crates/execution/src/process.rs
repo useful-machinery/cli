@@ -412,7 +412,7 @@ mod tests {
         }
     }
 
-    // INV-TESTING-20
+    // INV-TESTING-20, INV-TESTING-36
     #[test]
     fn an_unsupplied_test_harness_takes_the_worker_example_and_never_itself() {
         let layout = worker_layout(true);
@@ -438,7 +438,7 @@ mod tests {
         );
     }
 
-    // INV-TESTING-20
+    // INV-TESTING-20, INV-TESTING-36
     #[test]
     fn a_supplied_worker_file_wins_and_a_supplied_non_file_is_refused() {
         let layout = worker_layout(true);

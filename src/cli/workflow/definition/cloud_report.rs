@@ -180,7 +180,7 @@ pub(super) fn shown(scope: &Scope<'_>, shown: &Shown) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Each integration's resolution in id order (REQ-CLOUDDEF-15): its account under its id, then
+/// Each integration's resolution in id order (REQ-CLOUDDEF-58): its account under its id, then
 /// each binding as `<id>.<name>` in the line form of a flat one; nothing for a revision that
 /// holds none.
 fn write_integration_resolution(

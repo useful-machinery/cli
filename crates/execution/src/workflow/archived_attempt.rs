@@ -290,7 +290,7 @@ pub fn load_local_archived_attempt(
 }
 
 /// How the finished child run at `child` ended, for a parent that recovers from abandonment
-/// without running it again (REQ-CONTINUE-76): `Cancelled` for a child whose run record
+/// without running it again (REQ-CONTINUE-112): `Cancelled` for a child whose run record
 /// reads `canceled` or whose published result is cancelled, `Exited` with the recorded
 /// outcome, the published result's available `text` and `json` exports and the primary issue
 /// of a `failed` result, and
@@ -1826,7 +1826,7 @@ fn validate_exports(
             WorkflowNodeRole::Finalizer => AttemptNodeRoleV1::Finalizer,
         };
         // A `workflow` step commits only the child exports that were available, so an
-        // export of one it left out is unavailable with `source_failed` (REQ-WFEXEC-58).
+        // export of one it left out is unavailable with `source_failed` (REQ-WFEXEC-60).
         let left_out = archived_step_data_available(source_step)
             && attempt.definition.is_some()
             && source.node.role == WorkflowNodeRole::Step
@@ -2089,7 +2089,7 @@ fn prerequisite_satisfied(
         && (!prerequisite.first_of || first_of_satisfied)
 }
 
-// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-58).
+// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-83).
 fn step_succeeds_workflow(step: &ArchivedStep) -> bool {
     matches!(
         step.state,
@@ -2156,7 +2156,7 @@ mod tests {
         );
     }
 
-    // REQ-WFEXEC-58
+    // REQ-WFEXEC-83
     #[test]
     fn a_step_an_edge_walk_never_reached_reads_back_with_an_unrun_export_source() {
         let workflow = super::super::validation::validate(
@@ -2290,7 +2290,7 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-58
+    // REQ-WFEXEC-60
     #[test]
     fn a_child_export_a_succeeded_workflow_step_left_out_is_source_failed() {
         let source: super::super::publication::ExportSourceV1 =

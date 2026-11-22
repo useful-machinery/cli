@@ -316,7 +316,7 @@ fn the_useful_binary_of_a_test_build_is_its_own_worker_when_none_is_supplied() {
     );
 }
 
-// REQ-LOCALRUN-173, REQ-CLOUDDEF-42
+// REQ-LOCALRUN-173, REQ-LOCALRUN-229, REQ-CLOUDDEF-42
 #[test]
 fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     let published = Published::engineering();
@@ -403,7 +403,7 @@ fn a_definition_run_completes_omitted_inputs_from_the_published_tree() {
     );
 }
 
-// REQ-LOCALRUN-173, REQ-LOCALRUN-175, REQ-LOCALRUN-187, REQ-WFDEF-28, SC-LOCALRUN-11
+// REQ-LOCALRUN-173, REQ-LOCALRUN-230, REQ-LOCALRUN-175, REQ-LOCALRUN-187, REQ-WFDEF-28, SC-LOCALRUN-11
 #[test]
 fn a_definition_run_holds_its_subjects_slot_until_released() {
     let published = Published::engineering();
@@ -492,7 +492,7 @@ fn a_definition_run_holds_its_subjects_slot_until_released() {
 const CLOSURE_WORKFLOW: &str =
     "schemaVersion: 1\nsteps:\n  work:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
 
-// REQ-LOCALRUN-209, REQ-LOCALRUN-175, REQ-LOCALRUN-80, REQ-WFDEF-4
+// REQ-LOCALRUN-209, REQ-LOCALRUN-175, REQ-LOCALRUN-280, REQ-LOCALRUN-80, REQ-WFDEF-4
 #[test]
 fn a_created_run_records_the_owner_and_external_references_it_is_given() {
     let published = Published::engineering();
@@ -573,7 +573,7 @@ fn a_created_run_records_the_owner_and_external_references_it_is_given() {
     }
 }
 
-// REQ-LOCALRUN-217, REQ-LOCALRUN-80
+// REQ-LOCALRUN-231, REQ-LOCALRUN-80
 #[test]
 fn a_malformed_source_revision_is_a_usage_error_that_creates_no_run() {
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -961,7 +961,7 @@ mod cloud {
         assert!(cloud.finish().is_empty());
     }
 
-    // REQ-RUN-94, REQ-LOCALRUN-80, REQ-LOCALRUN-217
+    // REQ-RUN-94, REQ-LOCALRUN-80, REQ-LOCALRUN-231
     #[test]
     fn a_local_option_beside_a_cloud_place_or_a_cloud_option_without_one_is_a_usage_error() {
         let scratch = tempfile::tempdir().unwrap();
@@ -2873,7 +2873,7 @@ mod cloud_acceptance {
         )
     }
 
-    // REQ-RUN-80, REQ-PROJECT-71
+    // REQ-RUN-80, REQ-RUN-163, REQ-RUN-164, REQ-PROJECT-71
     #[test]
     fn project_not_ready_is_a_definite_admission_rejection_with_its_blockers() {
         const PROJECT_NOT_READY: &str =
@@ -2936,7 +2936,7 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUN-80
+    // REQ-RUN-80, REQ-RUN-165
     #[test]
     fn unsupported_workspace_selection_is_a_definite_admission_rejection() {
         for json in [false, true] {

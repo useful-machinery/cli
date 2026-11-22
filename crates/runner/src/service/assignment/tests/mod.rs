@@ -3629,7 +3629,7 @@ async fn run_event_ends_once_at_terminal_ack_or_fence() {
     assert_eq!(runs[0]["um.run.result"], "fenced");
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn run_phases_are_recorded_as_children_of_the_run() {
     let workflow =
@@ -3801,7 +3801,7 @@ async fn wait_until_not_preparing(manager: &mut AssignmentManager) {
     .expect("blocked source preparation did not finish");
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-68
 #[tokio::test]
 async fn a_preparation_deadline_times_out_the_phase_and_a_cancellation_cancels_it() {
     let (sleeper, mut sleep_requests) = controlled_sleeper();
@@ -4026,7 +4026,7 @@ async fn terminal_grace_wait_failure_classifies_the_retained_run() {
     assert_eq!(event["um.diagnostic.stage"], "terminal_acknowledgement");
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-39, REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn authorized_execution_reports_one_run_after_acknowledgement() {
     for (command, expected) in [("true", "succeeded"), ("false", "failed")] {
@@ -4671,7 +4671,7 @@ steps:
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-WORKSPACE-18, REQ-GRANT-87, REQ-GRANT-86: a step that declares a grant token name the
+// REQ-WORKSPACE-18, REQ-GRANT-153, REQ-GRANT-86: a step that declares a grant token name the
 // runner's service environment sets receives the service's value of it.
 #[tokio::test]
 async fn declared_grant_token_names_carry_the_runner_service_values() {
@@ -5384,7 +5384,7 @@ async fn renewal_asked_a_third_into_the_window_outlasts_the_incident_outage() {
     assert_eq!(job.authority_updates.borrow().sequence, 2);
 }
 
-// INV-RUNNER-40
+// INV-RUNNER-62
 #[tokio::test]
 async fn each_held_assignment_is_renewed_cancelled_released_and_finished_by_its_own_id() {
     fn renewal(offered: &AssignmentOffer, suffix: &str) -> AssignmentRenewal {
@@ -5475,7 +5475,7 @@ async fn each_held_assignment_is_renewed_cancelled_released_and_finished_by_its_
     assert!(!second_timing.cancellation_started());
 }
 
-// INV-RUNNER-40: an ended assignment that reported a wait may have been settled by Cloud
+// INV-RUNNER-63: an ended assignment that reported a wait may have been settled by Cloud
 // only after it offered a successor, so the successor's offer leaves its unacknowledged
 // terminal report queued, whether it is still finishing or only reporting, and the
 // successor is prepared beside it.
@@ -5531,7 +5531,7 @@ async fn successor_keeps_the_terminal_report_of_an_assignment_that_waited() {
     }
 }
 
-// REQ-RUNNERENROLL-132: with `MAXIMUM_HELD_ASSIGNMENTS` waiting assignments held, one more
+// REQ-RUNNERENROLL-315: with `MAXIMUM_HELD_ASSIGNMENTS` waiting assignments held, one more
 // offer is declined `capacity_unavailable`, and each held assignment still renews.
 #[tokio::test]
 async fn an_offer_past_the_held_assignment_bound_is_declined_and_each_held_one_renews() {
@@ -8032,7 +8032,7 @@ async fn finish_with_stubborn_guard(
     (temporary, manager, control, reports, offered, capture)
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn post_success_guard_containment_releases_workspace_and_slot() {
     let (_temporary, mut manager, control, reports, offered, capture) =
@@ -8043,7 +8043,7 @@ async fn post_success_guard_containment_releases_workspace_and_slot() {
     assert_run_phase(&capture, &offered, "runner.run.teardown", "success", None);
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn last_containment_wait_observes_departed_guard_before_fencing() {
     let (_temporary, mut manager, control, reports, offered, capture) =
@@ -8054,7 +8054,7 @@ async fn last_containment_wait_observes_departed_guard_before_fencing() {
 }
 
 // REQ-RUNNERENROLL-71
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-68
 #[tokio::test]
 async fn uncontainable_guard_is_named_in_terminal_report_and_fences_offers() {
     let (_temporary, mut manager, control, reports, offered, capture) =

@@ -218,7 +218,7 @@ pub(crate) struct UnsupportedNestedShape {
     pub(crate) shape: NestedShape,
 }
 
-/// The shapes a nested workflow may not hold (REQ-WFFORMAT-104).
+/// The shapes a nested workflow may not hold (REQ-WFFORMAT-121).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NestedShape {
     /// The step declares `forEach`.
@@ -287,7 +287,7 @@ impl ChildWorkflowSummary {
 
 /// A child with `workflow` steps is a nested workflow; its first step in source order
 /// that declares `forEach`, or whose edges reach a wait that is not an `answer`, `repair` or
-/// `host` wait continuing at the step, is the shape its parent refuses (REQ-WFFORMAT-104).
+/// `host` wait continuing at the step, is the shape its parent refuses (REQ-WFFORMAT-121).
 fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
     let mut workflow_steps = child
         .source_order
@@ -892,7 +892,7 @@ fn step_index(document: &WorkflowDocument, step: &str) -> Option<usize> {
 /// (later, the step itself or earlier), a parent outcome, a limited edge whose `then` is a
 /// step and whose `else` is an unlimited target (REQ-WFFORMAT-96), a wait whose `then`
 /// is a step or an exit, whose `onHandBack`, present exactly for `approval`, is a step,
-/// and whose `rule`, present exactly for `external`, is checked (REQ-WFFORMAT-92,
+/// and whose `rule`, present exactly for `external`, is checked (REQ-WFFORMAT-118,
 /// REQ-WFFORMAT-97), or a host wait whose `then` is `step_name` and which has a `limit` and
 /// an unlimited `else` (REQ-WFFORMAT-111).
 fn validate_edges(
@@ -1027,7 +1027,7 @@ fn validate_edge_target(
 }
 
 /// A step target names any step of the workflow: a later one starts in the attempt, the
-/// step itself or an earlier one continues the run (REQ-WFFORMAT-92).
+/// step itself or an earlier one continues the run (REQ-WFFORMAT-119).
 fn validate_step_target(
     step: &str,
     document: &WorkflowDocument,
@@ -1085,7 +1085,7 @@ fn validate_wait_rule(
 /// In an edge-scheduled workflow every step but the entry is the step target of some
 /// other step's edge, through a wait's `then` or `onHandBack`, a limited edge's `then` or
 /// `else` or a host wait's `else` as well; an edge naming its own step reaches nothing new
-/// (REQ-WFFORMAT-92, REQ-WFFORMAT-93, REQ-WFFORMAT-96, REQ-WFFORMAT-111).
+/// (REQ-WFFORMAT-119, REQ-WFFORMAT-93, REQ-WFFORMAT-96, REQ-WFFORMAT-111).
 fn validate_reachability(
     document: &WorkflowDocument,
     scheduling: &Scheduling,

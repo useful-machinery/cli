@@ -87,8 +87,6 @@ pub enum Status {
     Active,
     #[serde(rename = "disconnected")]
     Disconnected,
-    #[serde(rename = "revoked")]
-    Revoked,
     #[serde(rename = "recovery_required")]
     RecoveryRequired,
     #[serde(rename = "deleted")]

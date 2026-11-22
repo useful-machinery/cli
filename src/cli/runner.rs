@@ -233,7 +233,7 @@ fn configured_control_socket_path(config: Option<&Path>) -> anyhow::Result<PathB
 /// Where `doctor`'s check that needs the operator configuration finds it when
 /// it runs: the file `--config` names, which touches no runner home, or else
 /// the runner home's; `None` when there is no `--config` and the `useful` home
-/// cannot be located (REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-86). Reads and
+/// cannot be located (REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-310). Reads and
 /// creates nothing.
 fn doctor_operator_config(
     config: Option<&Path>,

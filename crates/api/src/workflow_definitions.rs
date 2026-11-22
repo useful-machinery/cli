@@ -7,10 +7,11 @@
 //! mutation must echo its `Idempotency-Key` and a refusal keeps its problem type's slug and
 //! the `workflow` safe facts for the caller to report. A definition, revision, evaluation or
 //! publication answer is decoded into its generated model, which ignores a member this
-//! release does not know, and then checked against the request (REQ-CLOUDDEF-23); the tree
-//! upload and seal answers are decoded closed. An answer, or a value the request must carry,
-//! that fails a check is an invalid response naming the exchange and the check that failed and
-//! retaining the error received, which is never formatted (INV-CLI-18, REQ-CLOUDDEF-23).
+//! release does not know, and then checked against the request (REQ-CLOUDDEF-23,
+//! REQ-CLOUDDEF-171); the tree upload and seal answers are decoded closed. An answer, or a
+//! value the request must carry, that fails a check is an invalid response naming the
+//! exchange and the check that failed and retaining the error received, which is never
+//! formatted (INV-CLI-18, REQ-CLOUDDEF-171).
 use std::collections::HashMap;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -53,8 +54,8 @@ const EVALUATION_VOCABULARY: &str = "4";
 /// adds `observations.project`, 3 `observations.blockerWait` and 4 `observations.diagnostic`
 /// (REQ-TRIGGER-165). An older Cloud answers it as its own latest, so there is no fallback.
 const EVALUATION_REPRESENTATION: (&str, &str) = ("representation", "4");
-/// The binding vocabulary this release decodes (REQ-CLOUDDEF-8): its revision models hold the
-/// kinds `connection`, `linear.team`, `linear.state`, `github.repository`, `member` and
+/// The binding vocabulary this release decodes (REQ-CLOUDDEF-147): its revision models hold
+/// the kinds `connection`, `linear.team`, `linear.state`, `github.repository`, `member` and
 /// `members` and the kind `definition`. A request that named none would be answered without a
 /// binding of a kind outside the first six.
 const BINDING_VOCABULARY: &str = "2";
@@ -136,7 +137,7 @@ pub enum WorkflowDefinitionFailure {
     RateLimited {
         retry_after: Option<u64>,
     },
-    /// An answer, or a value the request must carry, that fails a check (REQ-CLOUDDEF-23).
+    /// An answer, or a value the request must carry, that fails a check (REQ-CLOUDDEF-171).
     InvalidResponse(Box<WorkflowInvalidResponse>),
 }
 
@@ -160,7 +161,7 @@ impl From<WorkflowInvalidResponse> for WorkflowDefinitionFailure {
 }
 
 /// The exchange with Cloud or signed storage whose boundary an invalid response failed: the
-/// public method's request, or for a tree upload the part of it (REQ-CLOUDDEF-28).
+/// public method's request, or for a tree upload the part of it (REQ-CLOUDDEF-71).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkflowDefinitionStage {
     /// The manifest and the upload answer, up to and including the capability lookup.
@@ -200,7 +201,7 @@ impl WorkflowDefinitionStage {
     }
 }
 
-/// What failed at an invalid response's stage (REQ-CLOUDDEF-28).
+/// What failed at an invalid response's stage (REQ-CLOUDDEF-72 to REQ-CLOUDDEF-74).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkflowDefinitionCheck {
     /// A value the request must carry cannot be sent: a file's size or the next revision.
@@ -426,11 +427,11 @@ impl<'a> WorkflowDefinitionApi<'a> {
         })
     }
 
-    /// Uploads and seals the tree `digest` (`sha256:<hex>`) of `files` (REQ-CLOUDDEF-3):
-    /// posts the manifest, puts each file the organization does not retain to its signed
-    /// capability, and seals the tree under `key` unless the Gateway answered it sealed. The
-    /// sealed tree, with whether the Gateway already held it sealed, so that nothing was
-    /// uploaded or sealed (REQ-CLOUDDEF-22).
+    /// Uploads and seals the tree `digest` (`sha256:<hex>`) of `files` (REQ-CLOUDDEF-3,
+    /// REQ-CLOUDDEF-125): posts the manifest, puts each file the organization does not retain to
+    /// its signed capability, and seals the tree under `key` unless the Gateway answered it sealed.
+    /// The sealed tree, with whether the Gateway already held it sealed, so that nothing was
+    /// uploaded or sealed (REQ-CLOUDDEF-168).
     pub fn upload_tree(
         &self,
         organization: &str,
@@ -486,7 +487,7 @@ impl<'a> WorkflowDefinitionApi<'a> {
         Ok((sealed, false))
     }
 
-    /// The definition `id` of `project` (REQ-CLOUDDEF-8).
+    /// The definition `id` of `project` (REQ-CLOUDDEF-143).
     pub fn definition(
         &self,
         organization: &str,
@@ -525,7 +526,7 @@ impl<'a> WorkflowDefinitionApi<'a> {
     }
 
     /// One page of definition `id`'s revisions, newest first, with the next page's cursor
-    /// (REQ-CLOUDDEF-8), asked for in `BINDING_VOCABULARY`.
+    /// (REQ-CLOUDDEF-8, REQ-CLOUDDEF-145), asked for in `BINDING_VOCABULARY`.
     pub fn revisions(
         &self,
         organization: &str,
@@ -549,7 +550,7 @@ impl<'a> WorkflowDefinitionApi<'a> {
         Ok((list.items, list.next_cursor))
     }
 
-    /// Revision `number` of definition `id` (REQ-CLOUDDEF-8), asked for in
+    /// Revision `number` of definition `id` (REQ-CLOUDDEF-8, REQ-CLOUDDEF-145), asked for in
     /// `BINDING_VOCABULARY`.
     pub fn revision(
         &self,
@@ -751,11 +752,11 @@ impl<'a> WorkflowDefinitionApi<'a> {
         Ok(definition)
     }
 
-    /// Creates a definition of `project` with revision 1 of the sealed tree (REQ-CLOUDDEF-4)
-    /// or, when `reuse_identical`, answers the project's definition whose current revision
-    /// is identical to the publication (REQ-CLOUDDEF-21): the publication, with whether it is
-    /// such a reused definition. A create that did not ask for reuse never sends the member,
-    /// and a reuse answered to it is an invalid response.
+    /// Creates a definition of `project` with revision 1 of the sealed tree (REQ-CLOUDDEF-4) or,
+    /// when `reuse_identical`, answers the project's definition whose current revision is identical
+    /// to the publication (REQ-CLOUDDEF-21, REQ-CLOUDDEF-161): the publication, with whether it is
+    /// such a reused definition. A create that did not ask for reuse never sends the member, and a
+    /// reuse answered to it is an invalid response.
     pub fn create_definition(
         &self,
         organization: &str,
@@ -972,7 +973,7 @@ fn receive<T: serde::de::DeserializeOwned>(
 /// confirmed when `key` is given; any other status is classified. The body is decoded
 /// straight into the generated model, which refuses a required member that is missing, a
 /// mistyped one or a value outside its vocabulary and ignores a member this release does not
-/// know (REQ-CLOUDDEF-23).
+/// know (REQ-CLOUDDEF-23, REQ-CLOUDDEF-171).
 fn receive_one_of<T: serde::de::DeserializeOwned>(
     request: reqwest::blocking::RequestBuilder,
     accepted: &[StatusCode],
@@ -1093,7 +1094,7 @@ fn classify(response: &RawResponse, stage: Stage) -> WorkflowDefinitionFailure {
         };
     }
     // A transient problem under its declared status is Cloud being unable to serve the
-    // request, as a 5xx that is no problem response is (REQ-CLOUDDEF-25).
+    // request, as a 5xx that is no problem response is (REQ-CLOUDDEF-173).
     if matches!(
         (status, decoded.r#type.as_str()),
         (
@@ -1317,7 +1318,8 @@ mod tests {
         invalid
     }
 
-    // REQ-CLOUDDEF-14: a refusal keeps its problem slug for the command to report.
+    // REQ-CLOUDDEF-88, REQ-CLOUDDEF-62: a refusal keeps its problem slug for the command to
+    // report.
     // INV-CLI-18: an answer under a status the request does not accept that is no problem
     // response, or whose type is no refusal, names the check and keeps the status, and a 401
     // keeps rejecting the session.
@@ -1369,9 +1371,9 @@ mod tests {
         }
     }
 
-    // REQ-CLOUDDEF-25: the three transient problems, each under its declared status, are
-    // Cloud being unreachable; a 503 that names its own cause and a transient type under
-    // another status stay refusals with their slug, and a rate limit stays a rate limit.
+    // REQ-CLOUDDEF-25, REQ-CLOUDDEF-175: the three transient problems, each under its declared
+    // status, are Cloud being unreachable; a 503 that names its own cause and a transient type
+    // under another status stay refusals with their slug, and a rate limit stays a rate limit.
     #[test]
     fn a_transient_problem_is_unreachable_and_a_named_cause_stays_a_refusal() {
         for (status, kind) in [
@@ -1445,8 +1447,9 @@ mod tests {
         assert_eq!(workflow.integration.as_deref(), Some("linear"));
     }
 
-    // REQ-CLOUDDEF-22: a 200 answering a create is the project's identical definition, reused,
-    // only when the create asked for reuse; to any other create it is an invalid response.
+    // REQ-CLOUDDEF-22, REQ-CLOUDDEF-161: a 200 answering a create is the project's identical
+    // definition, reused, only when the create asked for reuse; to any other create it is an
+    // invalid response.
     #[test]
     fn a_reused_definition_is_accepted_only_when_the_create_asked_for_reuse() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1867,7 +1870,7 @@ mod tests {
         }
     }
 
-    // REQ-CLOUDDEF-23, REQ-COMPAT-20: a member a later Cloud release adds to a definition,
+    // REQ-CLOUDDEF-23, REQ-COMPAT-48: a member a later Cloud release adds to a definition,
     // revision, evaluation or publication answer, at any depth, is ignored and the members
     // this release knows are read as sent.
     #[test]
@@ -1903,7 +1906,7 @@ mod tests {
         Body(&'static [u8]),
     }
 
-    // REQ-CLOUDDEF-23: what this release knows of an answer is still checked: its shape, its
+    // REQ-CLOUDDEF-171: what this release knows of an answer is still checked: its shape, its
     // identity against the request, its media type and a keyed change's key echo.
     // INV-CLI-18: each failed check names the read's stage and the check, a body that is not
     // JSON or does not fit the model retains its decoding error, and none prints the answer.
@@ -2156,7 +2159,7 @@ mod tests {
         uploaded
     }
 
-    // REQ-CLOUDDEF-23: the tree upload and seal answers stay closed, since the CLI sends the
+    // REQ-CLOUDDEF-172: the tree upload and seal answers stay closed, since the CLI sends the
     // upload answer's signed capabilities' required headers exactly.
     // INV-CLI-18: a refused upload or seal answer names its stage.
     #[test]
@@ -2200,9 +2203,10 @@ mod tests {
         );
     }
 
-    // INV-CLI-18, REQ-CLOUDDEF-23: a tree upload whose answer, signed upload capability or
-    // seal answer fails a check names the stage and the check, retains the error a capability
-    // value was refused with, and prints nothing of the capability's URL or of the answer.
+    // INV-CLI-18, REQ-CLOUDDEF-172, REQ-CLOUDDEF-74: a tree upload whose answer, signed upload
+    // capability or seal answer fails a check names the stage and the check, retains the error a
+    // capability value was refused with, and prints nothing of the capability's URL or of the
+    // answer.
     #[test]
     fn a_signed_tree_upload_failing_a_check_names_its_stage_and_check() {
         let _ = rustls::crypto::ring::default_provider().install_default();

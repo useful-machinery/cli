@@ -1,13 +1,14 @@
 //! Whether a held tree run is working, as agent-login setup reads it (INV-RUNNER-15).
 //!
-//! A run is working unless its loop last reported a wait (REQ-GRANT-40): its `RunActivity`
+//! A run is working unless its loop last reported a wait (REQ-GRANT-125): its `RunActivity`
 //! starts working, reads waiting once the loop's report of a wait is queued, and working
 //! again at the next report without one and when the loop ends. It also counts the run's
 //! `useful` commands in flight, and a setup that installs or removes a login holds it, so
 //! no command starts until the login is written. The assignment manager reads it too, to
 //! take an offer only while every run it holds waits and to fence the reports of an ended
-//! run only when it never reported a wait (INV-RUNNER-40), and an admission's own setup
-//! reads the activities of the other runs held when its preparation began.
+//! run only when it never reported a wait (INV-RUNNER-40, INV-RUNNER-63), and an
+//! admission's own setup reads the activities of the other runs held when its preparation
+//! began.
 //!
 //! Beside that it keeps the loop's last read of the run directory (REQ-RUNNERENROLL-134),
 //! which the assignment manager's overview copies, and where the run's directory and its log
@@ -127,7 +128,7 @@ impl RunActivity {
     }
 
     /// Whether the loop ever reported a wait, which Cloud may have answered by offering the
-    /// runner another run before the end of this one is settled (INV-RUNNER-40).
+    /// runner another run before the end of this one is settled (INV-RUNNER-63).
     pub(in crate::service) fn has_reported_wait(&self) -> bool {
         self.state().reported_wait
     }
@@ -198,7 +199,7 @@ impl Drop for ActivityHold {
 /// the gate of a setup's pass over it (INV-RUNNER-15). The pass an admission makes for itself
 /// reads the other tree runs the manager held when the preparation began, without its lock,
 /// as `Waiting` of their activities, which answers at once when there is none
-/// (REQ-GRANT-49).
+/// (REQ-GRANT-135).
 pub(in crate::service) enum HeldRuns {
     /// No assignment in any state.
     Nothing,

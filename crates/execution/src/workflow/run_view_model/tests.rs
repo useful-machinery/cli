@@ -1263,7 +1263,7 @@ fn failed_child_record() -> crate::workflow::evidence::FailedChild {
     }
 }
 
-// REQ-LOCALRUN-221, INV-ENGINE-42: a stage that succeeded on a failed child keeps the record
+// REQ-LOCALRUN-294, INV-ENGINE-42: a stage that succeeded on a failed child keeps the record
 // its commit carried beside the state `succeeded` and is presented failed; a later
 // transition drops the record, and a stage observed without one snapshots as before.
 #[tokio::test]
@@ -1314,7 +1314,7 @@ async fn an_observed_stage_whose_child_failed_keeps_its_record_and_presents_fail
     assert_eq!(design.presented_state(), StepStateKind::Running);
 }
 
-// REQ-LOCALRUN-221, INV-ENGINE-42: the terminal result's record on a succeeded stage is kept
+// REQ-LOCALRUN-294, INV-ENGINE-42: the terminal result's record on a succeeded stage is kept
 // beside the state `succeeded`, and the stage is presented failed.
 #[test]
 fn terminal_reconciliation_keeps_a_stages_failed_child() {

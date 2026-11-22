@@ -140,7 +140,7 @@ pub(crate) mod attribute {
     pub(crate) const PROTOCOL_CLOSE_INITIATOR: &str = "um.protocol.close_initiator";
     /// A `runner.run` that ends `rejected` names the cause of a diagnosed
     /// decline and, for a refused workflow tree, the validation code and the
-    /// location's kind, never the path or the step (REQ-TELEMETRY-47).
+    /// location's kind, never the path or the step (REQ-TELEMETRY-47, REQ-TELEMETRY-79).
     pub(crate) const PROTOCOL_DECLINE_CAUSE: &str = "um.protocol.decline_cause";
     pub(crate) const WORKFLOW_VALIDATION_CODE: &str = "um.workflow.validation_code";
     pub(crate) const WORKFLOW_VALIDATION_LOCATION: &str = "um.workflow.validation_location";

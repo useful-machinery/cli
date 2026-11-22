@@ -1001,10 +1001,10 @@ fn join_failure(join_key_id: &str, error: EnrollmentError) -> anyhow::Error {
     }
 }
 
-/// The join key mode of an enrolled host's start (REQ-RUNNERENROLL-127). A key
-/// given by file or variable is read only when the host's credential came from
-/// a join key, which is asked under the state lock; the prompt is never asked
-/// for. A key in the variable is then handed unjudged to a new image on a pipe,
+/// The join key mode of an enrolled host's start (REQ-RUNNERENROLL-127,
+/// REQ-RUNNERENROLL-247, REQ-RUNNERENROLL-248). A key given by file or variable
+/// is read only when the host's credential came from a join key, which is asked
+/// under the state lock; the prompt is never asked for. A key in the variable is then handed unjudged to a new image on a pipe,
 /// a key in a file is read and held, and a key that does not read, does not
 /// parse, or has expired with no rejoin staged for it is unusable: it never
 /// stops the start. A failure to read the state fails the start through
@@ -1070,8 +1070,9 @@ fn unusable_join_key(path: &Path, error: &EnrollmentError) -> JoinKeyMode {
 }
 
 /// The rejoin of a host whose credential came from a join key, once Cloud has
-/// refused that credential (REQ-RUNNERENROLL-127). Each attempt and retry is
-/// reported on standard error, which never carries the key's token.
+/// refused that credential (REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-245). Each
+/// attempt and retry is reported on standard error, which never carries the
+/// key's token.
 struct HostRejoin {
     key: HeldJoinKey,
     join_key_id: String,
@@ -1459,7 +1460,7 @@ mod tests {
         assert!(output.contains("40ms"), "{output}");
     }
 
-    // REQ-RUNNERENROLL-97
+    // REQ-RUNNERENROLL-237
     // REQ-RUNNERENROLL-127
     #[test]
     fn a_rejoin_that_meets_another_staged_enrollment_names_what_resolves_it() {
@@ -1537,7 +1538,7 @@ mod tests {
         assert!(!failure.contains(NO_RUNNER_REGISTERED), "{failure}");
     }
 
-    // REQ-RUNNERENROLL-116: a refused registration says that no runner was
+    // REQ-RUNNERENROLL-307: a refused registration says that no runner was
     // registered; a start that stopped before it read the host's
     // registration record cannot know that of an earlier start.
     #[test]
@@ -1567,7 +1568,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-97
+    // REQ-RUNNERENROLL-234
     #[test]
     fn a_join_key_variable_is_handed_to_a_new_image_without_it_on_standard_input() {
         let (reader, _writer) = io::pipe().unwrap();
@@ -1602,7 +1603,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-97, REQ-RUNNERENROLL-127: a host whose credential came
+    // REQ-RUNNERENROLL-234, REQ-RUNNERENROLL-248: a host whose credential came
     // from an activation restarts without the variable and hands on no key.
     #[test]
     fn an_enrolled_host_restarts_without_the_join_key_variable_and_hands_on_no_key() {

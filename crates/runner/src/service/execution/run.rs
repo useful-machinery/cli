@@ -875,11 +875,11 @@ impl ExecutionJob {
     }
 
     /// A tree run (REQ-RUNNERENROLL-91): `useful workflow run create`, or the adopted run of a
-    /// continuation (REQ-RUNNERENROLL-89), and the resume loop under the assignment's
+    /// continuation (REQ-RUNNERENROLL-217), and the resume loop under the assignment's
     /// lease, its root progress and step observations queued as they change
     /// (REQ-RUNNERENROLL-88), then the record's exit as the attempt's one terminal report,
     /// after the gate transitions that reach it and with no step transition
-    /// (REQ-RUNNERENROLL-99).
+    /// (REQ-RUNNERENROLL-170).
     pub(super) async fn run_tree(
         &mut self,
         tree: &TreeRun,
@@ -1008,7 +1008,7 @@ impl ExecutionJob {
             }
         };
         // A `mirror/` the runner could not read reports no writes and no release
-        // (REQ-RUNNERENROLL-99); the run event keeps why.
+        // (REQ-RUNNERENROLL-180); the run event keeps why.
         if let Some(failure) = end.mirror_failure {
             self.run_event.set(KeyValue::new(
                 telemetry::attribute::MIRROR_READ_FAILURE,
@@ -1016,7 +1016,7 @@ impl ExecutionJob {
             ));
         }
         // An export the runner could not list is left out of the finish
-        // (REQ-RUNNERENROLL-131); the run event keeps the class of the first.
+        // (REQ-RUNNERENROLL-275); the run event keeps the class of the first.
         if let Some(failure) = end.export_failure {
             self.run_event.set(KeyValue::new(
                 telemetry::attribute::EXPORT_READ_FAILURE,
@@ -1077,7 +1077,7 @@ impl ExecutionJob {
             }
             last_sequence = sequence;
         }
-        // A tree run delivers no result set (REQ-RUNNERENROLL-99): the required field reads
+        // A tree run delivers no result set (REQ-RUNNERENROLL-176): the required field reads
         // `failed` at `preparation` for every finish, a succeeded one included, and means only
         // that no set was delivered. The run-scoped home is removed on success.
         let artifact_delivery = json!({

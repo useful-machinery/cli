@@ -776,8 +776,8 @@ fn update_and_membership_list_classify_only_their_contracted_failures() {
     }
 }
 
-// REQ-AUDIT-44, REQ-AUDIT-48, REQ-CLOUDDEF-12
-// REQ-AUDIT-44, REQ-AUDIT-48, REQ-CLOUDDEF-12: the listing asks for vocabulary 6, and a page
+// REQ-AUDIT-65, REQ-AUDIT-48, REQ-CLOUDDEF-12
+// REQ-AUDIT-65, REQ-AUDIT-48, REQ-CLOUDDEF-12: the listing asks for vocabulary 6, and a page
 // in it decodes whose records name a connection authorization, with the connection it
 // authorizes, and a workflow definition's deletion, with its state and version.
 #[test]

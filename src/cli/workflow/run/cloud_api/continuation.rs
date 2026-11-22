@@ -496,22 +496,7 @@ fn render(
                     .as_str()
                     .unwrap_or("invalid")
                     .to_owned();
-                write!(stderr, "  {code}")?;
-                for (label, value) in [
-                    ("node", &violation.node),
-                    ("producer", &violation.producer),
-                    ("reference", &violation.reference),
-                    ("prior state", &violation.prior_state),
-                ] {
-                    if let Some(value) = value {
-                        write!(
-                            stderr,
-                            " {label}: {}",
-                            useful_execution::visible_text(value)
-                        )?;
-                    }
-                }
-                writeln!(stderr)?;
+                writeln!(stderr, "  {code}")?;
             }
         }
         writeln!(

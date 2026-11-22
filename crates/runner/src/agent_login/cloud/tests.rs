@@ -218,7 +218,7 @@ fn status_names_claude_code_with_the_record_schema_versions_this_build_installs(
     );
 }
 
-// REQ-GRANT-25, REQ-GRANT-52
+// REQ-GRANT-108, REQ-GRANT-109, REQ-GRANT-52
 #[test]
 fn status_states_the_last_use_and_its_time_only_of_a_ready_install() {
     let installed = || {
@@ -301,7 +301,7 @@ fn status_states_the_last_use_and_its_time_only_of_a_ready_install() {
     }
 }
 
-// REQ-GRANT-25
+// REQ-GRANT-107
 #[test]
 fn status_drops_a_provider_this_build_does_not_know_and_reads_each_refusal_state() {
     let answer = format!(
@@ -583,7 +583,7 @@ fn a_grant_token_refusal_yields_exactly_the_reason_cloud_names() {
     );
 }
 
-// REQ-GRANT-86
+// REQ-GRANT-148
 #[test]
 fn a_cloud_without_the_grant_token_route_authorizes_nothing_and_a_failing_one_is_unavailable() {
     assert_eq!(
@@ -977,7 +977,7 @@ fn a_token_service_list_request_posts_the_pinned_body_and_reads_each_token_servi
     );
 }
 
-// REQ-INTEGRATION-12
+// REQ-INTEGRATION-48
 #[test]
 fn a_token_service_list_is_no_route_assignment_not_current_or_invalid_as_cloud_answers_it() {
     assert_eq!(
@@ -1025,7 +1025,7 @@ fn a_token_service_list_is_no_route_assignment_not_current_or_invalid_as_cloud_a
     }
 }
 
-// REQ-INTEGRATION-12
+// REQ-INTEGRATION-46
 #[test]
 fn a_token_request_for_a_token_service_reads_only_an_integration_tokens_answer() {
     let mergify = GrantTokenRequest {
@@ -1199,7 +1199,7 @@ fn a_credential_source_report_posts_the_closed_body_and_a_204_records_it() {
     );
 }
 
-// REQ-INTEGRATION-12, REQ-GRANT-93
+// REQ-INTEGRATION-49, REQ-GRANT-93
 #[test]
 fn a_credential_source_report_names_each_token_service_after_the_providers_by_its_listed_id() {
     let (endpoint, request, server) =
@@ -1276,7 +1276,7 @@ fn a_cloud_without_the_credential_source_route_is_no_route_and_any_other_answer_
     );
 }
 
-// REQ-GRANT-86
+// REQ-GRANT-151
 #[test]
 fn a_grant_access_token_never_appears_in_debug() {
     let issued = grant_token_fixture("issued.json");
@@ -1328,7 +1328,7 @@ fn delivery_refuses_an_answer_for_another_generation_or_with_unusable_material()
 
 // REQ-GRANT-25
 // REQ-GRANT-26
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-69
 #[test]
 fn a_cloud_without_the_routes_or_failing_is_unavailable_with_its_status() {
     for (status, code, headers) in [
@@ -1375,7 +1375,7 @@ fn a_cloud_without_the_routes_or_failing_is_unavailable_with_its_status() {
 
 // REQ-GRANT-25
 // REQ-GRANT-26
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-69
 #[test]
 fn a_request_cloud_does_not_answer_in_time_fails_in_transport() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

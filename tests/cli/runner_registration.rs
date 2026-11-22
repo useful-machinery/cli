@@ -215,7 +215,7 @@ fn assert_enrolled_and_connected(host: &JoinHost, connection: &str, stderr: &str
     assert!(record.get("enrolledAt").is_some(), "{record}");
 }
 
-// REQ-RUNNERENROLL-116, REQ-RUNNERENROLL-115: `--org` names the organization the
+// REQ-RUNNERENROLL-116, REQ-RUNNERENROLL-305, REQ-RUNNERENROLL-115: `--org` names the organization the
 // registration is sent under, with no request before the registration's own.
 #[test]
 fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
@@ -337,7 +337,7 @@ fn a_registration_with_several_memberships_and_no_organization_exits_2_writing_n
     );
 }
 
-// REQ-RUNNERENROLL-116
+// REQ-RUNNERENROLL-306
 #[test]
 fn a_start_with_no_sign_in_exits_3_having_registered_and_written_nothing() {
     let cloud = SilentCloud::new();
@@ -372,7 +372,7 @@ fn a_start_with_no_sign_in_exits_3_having_registered_and_written_nothing() {
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-116: without --allow-insecure-http the registration's
+// REQ-RUNNERENROLL-308: without --allow-insecure-http the registration's
 // requests refuse a plain-HTTP API address, so the sign-in is sent nowhere.
 #[test]
 fn a_plain_http_api_address_is_refused_without_allow_insecure_http() {
@@ -389,7 +389,7 @@ fn a_plain_http_api_address_is_refused_without_allow_insecure_http() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-115
+// REQ-RUNNERENROLL-303
 #[test]
 fn conflicting_or_incomplete_registration_modes_are_usage_errors_that_send_nothing() {
     let cloud = SilentCloud::new();
@@ -439,7 +439,7 @@ fn conflicting_or_incomplete_registration_modes_are_usage_errors_that_send_nothi
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-116
+// REQ-RUNNERENROLL-304
 #[test]
 fn a_host_without_a_work_root_fails_with_its_configuration_before_registering() {
     let cloud = SilentCloud::new();
@@ -469,7 +469,7 @@ fn a_host_without_a_work_root_fails_with_its_configuration_before_registering() 
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-117
+// REQ-RUNNERENROLL-251, REQ-RUNNERENROLL-253
 #[test]
 fn an_ambiguous_registration_is_resent_with_the_same_key_and_completes() {
     let cloud = SignedInCloud::new(vec![
@@ -515,7 +515,7 @@ fn an_ambiguous_registration_is_resent_with_the_same_key_and_completes() {
     assert_activation_and_enrollment(&requests[4], &enrollment);
 }
 
-// REQ-RUNNERENROLL-116
+// REQ-RUNNERENROLL-307
 #[test]
 fn a_refused_registration_exits_with_forbidden_and_leaves_nothing() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -663,7 +663,7 @@ fn a_registered_host_starts_again_with_its_options_and_no_sign_in_as_the_same_ru
     assert_eq!(requests.len(), 3, "{requests:?}");
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-260, REQ-RUNNERENROLL-261
 #[test]
 fn a_registered_host_started_with_another_target_fails_and_sends_nothing() {
     let witness = ConnectionWitness::new();
@@ -697,7 +697,7 @@ fn a_registered_host_started_with_another_target_fails_and_sends_nothing() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118: a start that names no organization compares the mode and
+// REQ-RUNNERENROLL-261: a start that names no organization compares the mode and
 // the pool alone, so it resolves none, reads no sign-in and sends the API nothing.
 #[test]
 fn a_registered_host_started_with_its_mode_and_no_organization_serves_as_the_same_runner() {
@@ -722,7 +722,7 @@ fn a_registered_host_started_with_its_mode_and_no_organization_serves_as_the_sam
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-261
 #[test]
 fn a_host_enrolled_with_an_activation_refuses_a_signed_in_mode() {
     let witness = ConnectionWitness::new();
@@ -739,7 +739,7 @@ fn a_host_enrolled_with_an_activation_refuses_a_signed_in_mode() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-259
 #[test]
 fn a_registered_host_whose_credential_is_rejected_registers_nothing() {
     let witness = ConnectionWitness::rejecting();
@@ -756,7 +756,7 @@ fn a_registered_host_whose_credential_is_rejected_registers_nothing() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-262
 #[test]
 fn a_signed_in_start_beside_a_staged_join_and_a_join_beside_a_record_are_unresolved() {
     let join = SilentCloud::new();
@@ -794,7 +794,7 @@ fn a_signed_in_start_beside_a_staged_join_and_a_join_beside_a_record_are_unresol
     join.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118
+// REQ-RUNNERENROLL-263
 #[test]
 fn a_complete_record_without_state_fails_and_sends_nothing() {
     let host = registration_host();

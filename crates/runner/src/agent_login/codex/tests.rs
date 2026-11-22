@@ -94,7 +94,7 @@ fn installs_the_exact_delivered_bytes_privately_in_the_runners_codex_home() {
     assert_eq!(entries(state.path()), [".runner-agent-login"]);
 }
 
-// REQ-GRANT-36
+// REQ-GRANT-116
 #[test]
 fn refuses_an_older_generation_than_it_installed() {
     let (_state, directory) = state();
@@ -241,7 +241,7 @@ fn service_at(home: &Path) -> ServiceEnvironment {
     ServiceEnvironment::from_variables([("HOME", home)])
 }
 
-// REQ-GRANT-51, REQ-GRANT-37
+// REQ-GRANT-137, REQ-GRANT-37
 #[test]
 fn a_codex_login_in_the_default_home_under_the_services_home_is_its_own() {
     let (state, directory) = state();

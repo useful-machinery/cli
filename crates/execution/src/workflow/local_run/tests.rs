@@ -289,7 +289,7 @@ fn retry_ineligibility_uses_the_closed_precedence_order() {
             LocalRetryEligibility::Eligible
         );
     }
-    // REQ-LOCALRUN-129, REQ-LOCALRUN-196: a superseded record yields to the lock and to
+    // REQ-LOCALRUN-129, REQ-LOCALRUN-285: a superseded record yields to the lock and to
     // unproven ownership, and refuses a last attempt `waiting` that a record without
     // `successor` admits.
     assert_eq!(
@@ -1076,7 +1076,7 @@ fn manifest_tree(run_path: &Path) -> Value {
         .clone()
 }
 
-// REQ-LOCALRUN-177, REQ-LOCALRUN-98, REQ-LOCALRUN-101, REQ-WFDEF-4
+// REQ-LOCALRUN-177, REQ-LOCALRUN-281, REQ-LOCALRUN-98, REQ-LOCALRUN-101, REQ-WFDEF-4
 // INV-ENGINE-19
 #[test]
 fn a_child_run_nests_under_its_parent_with_the_next_ordinal_and_the_parents_tree() {
@@ -1197,7 +1197,7 @@ fn a_child_run_nests_under_its_parent_with_the_next_ordinal_and_the_parents_tree
     );
 }
 
-// REQ-LOCALRUN-177
+// REQ-LOCALRUN-281
 #[test]
 fn a_child_run_whose_record_does_not_descend_from_the_parent_is_refused() {
     let fixture = AdmittedFixture::from_tree(
@@ -1239,7 +1239,7 @@ fn a_child_run_whose_record_does_not_descend_from_the_parent_is_refused() {
     assert!(!parent_path.join("children/design/000001").exists());
 }
 
-// REQ-LOCALRUN-177, REQ-WFDEF-4, REQ-WFEXEC-66, REQ-WFEXEC-68
+// REQ-LOCALRUN-177, REQ-WFDEF-48, REQ-WFEXEC-66, REQ-WFEXEC-68
 // INV-ENGINE-19, INV-ENGINE-23
 #[test]
 fn a_fan_out_child_nests_under_its_element_and_the_parent_position_names_it() {
@@ -1555,9 +1555,9 @@ fn queue_settled(state: &str) -> crate::workflow::wait::ExternalEvent {
     }
 }
 
-// REQ-CONTINUE-74, REQ-WFEXEC-65: a waiting run's `external` wait is resolved by the events
-// its condition source observes, never by the controls; a condition the source cannot read
-// is reported as such, and a local wait never asks the source.
+// REQ-CONTINUE-74, REQ-CONTINUE-103, REQ-WFEXEC-65: a waiting run's `external` wait is resolved
+// by the events its condition source observes, never by the controls; a condition the source
+// cannot read is reported as such, and a local wait never asks the source.
 #[tokio::test]
 async fn inspect_wait_asks_the_condition_source_for_an_external_wait_alone() {
     let fixture = edge_tree_fixture();
@@ -1786,9 +1786,9 @@ async fn a_pending_continuation_reads_the_control_that_resolves_its_wait_under_t
     pending.settle_abandoned().unwrap();
 }
 
-// REQ-WFDEF-4, REQ-LOCALRUN-175, REQ-CONTINUE-77, REQ-WFEXEC-64: an `edge` continuation
-// records the edge it took, and a counted one increments its count in `run.json` in the write
-// that bumps `attempts`.
+// REQ-WFDEF-50, REQ-LOCALRUN-280, REQ-CONTINUE-77, REQ-WFEXEC-132, REQ-WFEXEC-133: an `edge`
+// continuation records the edge it took, and a counted one increments its count in `run.json` in
+// the write that bumps `attempts`.
 #[tokio::test]
 async fn an_edge_continuation_records_the_edge_and_counts_a_counted_one() {
     let fixture = edge_tree_fixture();
@@ -1841,7 +1841,7 @@ async fn an_edge_continuation_records_the_edge_and_counts_a_counted_one() {
     }
 }
 
-// REQ-LOCALRUN-178, REQ-LOCALRUN-175, REQ-CONTINUE-75
+// REQ-LOCALRUN-178, REQ-LOCALRUN-175, REQ-CONTINUE-109
 #[tokio::test]
 async fn ending_a_waiting_run_exits_it_without_another_attempt() {
     type End = fn(PendingLocalContinuation) -> Result<(), LocalRunDirectoryError>;
@@ -1979,7 +1979,7 @@ fn withdrawal_at(at: &str) -> crate::workflow::wait::ControlEvent {
     }
 }
 
-// REQ-LOCALRUN-212, REQ-LOCALRUN-186, REQ-WFEXEC-73: a reader that does not own the latest
+// REQ-LOCALRUN-212, REQ-LOCALRUN-240, REQ-WFEXEC-73: a reader that does not own the latest
 // attempt answers as its owner while that attempt's span is open (unsettled, or `continued`
 // while the record does not read `exited`), counting a withdrawal recorded since the attempt
 // before it settled, and otherwise counts only one later than the latest attempt's `settledAt`.
@@ -2039,7 +2039,7 @@ fn assert_ended(run_path: &Path, running: &Value, outcome: &str) {
     assert_eq!(run_record_document(run_path), ended, "{outcome}");
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-CONTINUE-2: ending a `running` run whose process is
+// REQ-LOCALRUN-245, REQ-LOCALRUN-239, REQ-CONTINUE-2: ending a `running` run whose process is
 // gone marks the record `exited` with the outcome and settles its unsettled attempt as
 // interrupted, which spends the withdrawal recorded before; the run lock is released.
 #[test]
@@ -2072,7 +2072,7 @@ fn ending_a_running_run_settles_its_unsettled_attempt_interrupted() {
     ));
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-WFEXEC-73: ending a `running` run whose latest attempt
+// REQ-LOCALRUN-245, REQ-LOCALRUN-211, REQ-WFEXEC-73: ending a `running` run whose latest attempt
 // is terminal (as one that ended `continued` before its process was gone) marks the record
 // `exited` with the outcome and takes the attempt's `settledAt` again only when a withdrawal
 // naming no wait is later than it, so a retry's attempt reads none pending; otherwise the state
@@ -2130,7 +2130,7 @@ fn ending_a_running_run_spends_the_withdrawals_later_than_its_terminal_attempt()
     }
 }
 
-// REQ-LOCALRUN-213, REQ-LOCALRUN-186, REQ-WFEXEC-73: a command refused before its attempt begins
+// REQ-LOCALRUN-247, REQ-LOCALRUN-213, REQ-WFEXEC-73: a command refused before its attempt begins
 // settles the abandoned attempt only when no withdrawal is unhonored over it. With one recorded,
 // `settle_abandoned` leaves the state byte for byte, so the same run's next continuation still
 // finds the withdrawal unhonored; without one it settles the attempt as interrupted.
@@ -2351,7 +2351,7 @@ fn file_contents(directory: &Path) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
-// REQ-LOCALRUN-195, INV-ENGINE-26
+// REQ-LOCALRUN-195, INV-ENGINE-50
 #[test]
 fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions() {
     let fixture = tree_fixture();
@@ -2490,7 +2490,7 @@ fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions
     assert_eq!(acquired(&predecessor_path).imported_prior(), None);
 }
 
-// REQ-WFEXEC-63, REQ-LOCALRUN-195: the control recorded on the predecessor that resolved an
+// REQ-WFEXEC-121, REQ-LOCALRUN-282: the control recorded on the predecessor that resolved an
 // imported attempt's wait still resolves its copy on the successor, so the successor's
 // `controls.answers` carries the predecessor's answers; a second import keeps the mark
 // naming the run the attempt was recorded under, so a chain of successors keeps finding them.
@@ -2572,7 +2572,7 @@ fn host_wait_at_the_second_element() -> WaitRecord {
     .unwrap()
 }
 
-// REQ-WFEXEC-63, REQ-CONTINUE-93: a `host` wait copy that no control resolved, followed by an
+// REQ-WFEXEC-121, REQ-WFEXEC-138, REQ-CONTINUE-93: a `host` wait copy that no control resolved, followed by an
 // attempt with reason `host`, was resolved by the host condition: the attempt after it starts
 // with the `wait.<field>` values the attempt that entered the wait had at the step, here an
 // answer's, and at the element it waited at. That holds for a recorded next attempt and for
@@ -2675,7 +2675,7 @@ fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_r
     }
 }
 
-// REQ-WFEXEC-63, REQ-LOCALRUN-195, REQ-LOCALRUN-197: a wait carried by `upgrade` is resolved
+// REQ-WFEXEC-121, REQ-LOCALRUN-282, REQ-LOCALRUN-197: a wait carried by `upgrade` is resolved
 // by a control naming the successor that carried it, not the run the attempt was recorded
 // under; the next successor along the chain imports that control and the attempt's copy
 // together and still carries the answers.
@@ -2754,7 +2754,7 @@ fn a_chains_successor_carries_the_answer_recorded_on_the_run_that_carried_the_wa
     assert_eq!(carried(&successor_path), expected);
 }
 
-// REQ-CONTINUE-79, REQ-CONTINUE-77, INV-ENGINE-26
+// REQ-CONTINUE-79, REQ-CONTINUE-97, REQ-CONTINUE-98, INV-ENGINE-50
 #[test]
 fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_deleted() {
     let fixture = tree_fixture();
@@ -2803,7 +2803,7 @@ fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_del
     );
     assert!(!predecessor_path.join(MIRROR_DIRECTORY).exists());
     // A superseded run is refused every continuation, naming its successor, so it is never
-    // superseded again (REQ-CONTINUE-29, REQ-LOCALRUN-196).
+    // superseded again (REQ-CONTINUE-29, REQ-LOCALRUN-285).
     match acquire_local_continuation(&predecessor_path).unwrap() {
         LocalContinuationOpen::Rejected(rejection) => {
             assert_eq!(rejection.reason(), RetryIneligibilityReason::RunSuperseded);
@@ -2870,7 +2870,7 @@ fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_del
     drop(owned);
 }
 
-// REQ-CONTINUE-79
+// REQ-CONTINUE-98
 #[test]
 fn a_successor_begun_by_resume_records_reason_restart() {
     let fixture = tree_fixture();
@@ -2911,7 +2911,7 @@ fn a_successor_begun_by_resume_records_reason_restart() {
     assert_eq!(document["definitionSource"]["kind"], json!("replaced"));
 }
 
-// REQ-CONTINUE-79, REQ-LOCALRUN-195
+// REQ-CONTINUE-97, REQ-LOCALRUN-195
 #[test]
 fn a_run_definition_continuation_refuses_another_definition_and_a_replaced_attempt_keeps_its_own() {
     let fixture = tree_fixture();
@@ -3098,7 +3098,7 @@ fn waiting_predecessor_with_position_and_edges(
     (run_path, record, writable)
 }
 
-// REQ-LOCALRUN-195, REQ-CONTINUE-80, INV-ENGINE-26
+// REQ-LOCALRUN-283, REQ-CONTINUE-80, REQ-CONTINUE-100, INV-ENGINE-51
 #[test]
 fn an_upgraded_successor_carries_the_wait_position_and_edges() {
     let fixture = tree_fixture();
@@ -3393,7 +3393,7 @@ fn waiting_fan_out_predecessor(
     (run_path, writable)
 }
 
-// REQ-LOCALRUN-197
+// REQ-LOCALRUN-265
 #[test]
 fn the_resolve_check_lists_every_miss() {
     let fixture = carry_tree_fixture(CARRY_ROOT_WORKFLOW);
@@ -3433,7 +3433,7 @@ fn the_resolve_check_lists_every_miss() {
     );
 }
 
-// REQ-LOCALRUN-197
+// REQ-LOCALRUN-265
 #[test]
 fn the_carried_readers_answer_retained_child_outcomes_and_fan_out_lengths() {
     let fixture = carry_tree_fixture(CARRY_ROOT_WORKFLOW);
@@ -4401,7 +4401,7 @@ fn read_run_file_tail_reads_only_the_end_of_a_file_beneath_the_directory() {
     }
 }
 
-// REQ-LOCALRUN-175
+// REQ-LOCALRUN-279
 #[test]
 fn update_run_record_rewrites_state_attempts_and_outcome_and_nothing_else() {
     let fixture = tree_fixture();
@@ -10198,7 +10198,7 @@ async fn cloud_checkpoint_accepts_carrier_free_git_and_rejects_unpublished_recor
     ));
 }
 
-// REQ-RUNNERENROLL-131: the bounded reader of a run directory's file returns a file of
+// REQ-RUNNERENROLL-272: the bounded reader of a run directory's file returns a file of
 // exactly its bound and refuses one a byte larger from its size, with nothing read into the
 // answer.
 #[test]

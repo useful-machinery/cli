@@ -1509,7 +1509,7 @@ fn assert_interrupted(state: &StepState<CapturedValue>, phase: runtime::FailureP
     );
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-134
 #[tokio::test]
 async fn a_command_that_exits_zero_after_an_interruption_fails_interrupted_without_outputs() {
     with_watchdog(async {
@@ -1617,7 +1617,7 @@ exports:
     .await;
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-134
 #[tokio::test]
 async fn an_agent_cancelled_under_an_interruption_fails_interrupted() {
     with_watchdog(async {
@@ -5460,9 +5460,9 @@ async fn an_exited_child_commits_its_outcome_and_available_exports() {
     .await;
 }
 
-// REQ-WFEXEC-77, INV-ENGINE-42: a child that exits with a failure settles its step `succeeded` on its
-// outcome's edge with the failure recorded as the step's failed child; one that exits with
-// the outcome `failed` and no failure records none.
+// REQ-WFEXEC-77, REQ-WFEXEC-112, REQ-WFEXEC-114, INV-ENGINE-42: a child that exits with a failure
+// settles its step `succeeded` on its outcome's edge with the failure recorded as the step's failed
+// child; one that exits with the outcome `failed` and no failure records none.
 #[tokio::test]
 async fn an_exited_childs_failure_is_recorded_as_its_steps_failed_child() {
     with_watchdog(async {
@@ -5747,8 +5747,8 @@ fn parts_abc() -> serde_json::Value {
     serde_json::json!([{"name": "a"}, {"name": "b"}, {"name": "c"}])
 }
 
-// REQ-WFEXEC-66, REQ-WFEXEC-67: a fan-out runs one child per element in order with `item`
-// bound per element and every other input the same, goes on past an element whose outcome
+// REQ-WFEXEC-66, REQ-WFEXEC-94, REQ-WFEXEC-67: a fan-out runs one child per element in order with
+// `item` bound per element and every other input the same, goes on past an element whose outcome
 // routes to a later step, and commits the last element's outcome once.
 #[tokio::test]
 async fn a_fan_out_runs_one_child_per_element_and_commits_the_last_outcome() {
@@ -5794,7 +5794,7 @@ async fn a_fan_out_runs_one_child_per_element_and_commits_the_last_outcome() {
     .await;
 }
 
-// REQ-WFEXEC-66: an element whose outcome routes to a wait or an exit ends the step there;
+// REQ-WFEXEC-94: an element whose outcome routes to a wait or an exit ends the step there;
 // the elements after it do not run.
 #[tokio::test]
 async fn a_fan_out_ends_at_an_element_that_waits_or_exits() {
@@ -5845,7 +5845,7 @@ async fn a_fan_out_ends_at_an_element_that_waits_or_exits() {
     .await;
 }
 
-// REQ-WFEXEC-68: a continuation at the waiting step starts the fan-out at the element the
+// REQ-WFEXEC-96: a continuation at the waiting step starts the fan-out at the element the
 // wait recorded.
 #[tokio::test]
 async fn a_fan_out_resumes_at_the_element_its_wait_recorded() {
@@ -5876,7 +5876,7 @@ async fn a_fan_out_resumes_at_the_element_its_wait_recorded() {
     .await;
 }
 
-// REQ-WFEXEC-66: an empty list fails the step at `start` unless `empty` names its outcome,
+// REQ-WFEXEC-95: an empty list fails the step at `start` unless `empty` names its outcome,
 // which the step commits without running a child.
 #[tokio::test]
 async fn an_empty_fan_out_fails_at_start_or_commits_its_empty_outcome() {
@@ -6045,7 +6045,7 @@ async fn disabled_child_runs_fail_a_workflow_step_at_start() {
     .await;
 }
 
-// REQ-WFEXEC-59: a cancellation of the parent reaches the child, and the step ends
+// REQ-WFEXEC-90: a cancellation of the parent reaches the child, and the step ends
 // `cancelled`.
 #[tokio::test]
 async fn parent_cancellation_reaches_the_child_and_cancels_the_step() {
@@ -6308,8 +6308,8 @@ fn not_reached_step(
     )
 }
 
-// REQ-WFEXEC-70: an interruption reaches the running child as an interruption, never forced
-// at the parent's deadline, and the child it failed routes the step to its `repair` wait,
+// REQ-WFEXEC-70, REQ-WFEXEC-99: an interruption reaches the running child as an interruption, never
+// forced at the parent's deadline, and the child it failed routes the step to its `repair` wait,
 // whose payload names the interruption.
 #[tokio::test]
 async fn an_interrupted_child_routes_its_step_to_the_repair_wait() {
@@ -6380,7 +6380,7 @@ async fn an_interrupted_child_routes_its_step_to_the_repair_wait() {
     .await;
 }
 
-// REQ-WFEXEC-70: an interrupted child whose failure edge is a step, an exit, a limited edge
+// REQ-WFEXEC-99: an interrupted child whose failure edge is a step, an exit, a limited edge
 // or an `answer` wait takes no edge: its step fails `interrupted` and the run fails.
 #[tokio::test]
 async fn an_interrupted_child_takes_no_edge_but_a_repair_wait() {
@@ -6429,7 +6429,7 @@ async fn an_interrupted_child_takes_no_edge_but_a_repair_wait() {
     .await;
 }
 
-// REQ-WFEXEC-70, REQ-WFEXEC-64: a child that exits on its own under an interruption settles
+// REQ-WFEXEC-101, REQ-WFEXEC-64: a child that exits on its own under an interruption settles
 // its step; an edge that would start a step ends the attempt `continued`, uncounted, with
 // nothing started, and a wait or an exit edge is taken as without the interruption.
 #[tokio::test]
@@ -6478,7 +6478,7 @@ async fn a_child_exiting_on_its_own_under_an_interruption_starts_no_step() {
     .await;
 }
 
-// REQ-WFEXEC-70: a child that ends cancelled or without a result under an interruption
+// REQ-WFEXEC-102: a child that ends cancelled or without a result under an interruption
 // fails its step `interrupted` at `execution`, and a step whose child had not started fails
 // at `start`.
 #[tokio::test]
@@ -6514,9 +6514,9 @@ async fn a_child_ending_without_an_outcome_under_an_interruption_fails_its_step(
     .await;
 }
 
-// REQ-WFEXEC-72, REQ-WFEXEC-70: a continuation of a wait whose entry `workflow` step the
-// interruption reaches before its child started keeps that wait, with the step `not_run` and
-// no step failed.
+// REQ-WFEXEC-72, REQ-WFEXEC-128, REQ-WFEXEC-103: a continuation of a wait whose entry `workflow`
+// step the interruption reaches before its child started keeps that wait, with the step `not_run`
+// and no step failed.
 #[tokio::test]
 async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
     with_watchdog(async {
@@ -6560,7 +6560,7 @@ async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
     .await;
 }
 
-// REQ-WFEXEC-70, REQ-WFEXEC-66, REQ-WFEXEC-68: a fan-out interrupted at element 2 ends there
+// REQ-WFEXEC-104, REQ-WFEXEC-66, REQ-WFEXEC-116: a fan-out interrupted at element 2 ends there
 // on its `repair` wait and runs no element 3.
 #[tokio::test]
 async fn an_interrupted_fan_out_element_ends_the_step_on_its_repair_wait() {
@@ -6714,7 +6714,7 @@ fn design_cancellation(sequence: u64, force: bool) -> TestRequestedAction {
     }
 }
 
-// REQ-WFEXEC-59: a force abort of the parent's step that follows its cancellation reaches
+// REQ-WFEXEC-90: a force abort of the parent's step that follows its cancellation reaches
 // the running child, and the driver settles the step's cancellation.
 #[tokio::test]
 async fn a_force_abort_after_cancellation_reaches_the_running_child() {
@@ -6812,7 +6812,7 @@ async fn control_values_reach_only_the_step_they_name() {
     .await;
 }
 
-// REQ-WFEXEC-59: quiescing the driver for a runner shutdown revokes the running child with
+// REQ-WFEXEC-90: quiescing the driver for a runner shutdown revokes the running child with
 // the shutdown reason.
 #[tokio::test]
 async fn runner_shutdown_revocation_reaches_the_running_child() {

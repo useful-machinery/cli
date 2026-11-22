@@ -386,7 +386,7 @@ fn first_publish_mints_an_id_and_a_second_publish_of_the_name_adds_to_it() {
     );
 }
 
-// REQ-WFDEF-19
+// REQ-WFDEF-19, REQ-WFDEF-66
 #[test]
 fn new_beside_a_name_mints_a_second_and_resolution_then_refuses_naming_both() {
     let home = Home::new();
@@ -415,7 +415,7 @@ fn new_beside_a_name_mints_a_second_and_resolution_then_refuses_naming_both() {
     assert_eq!(to.revision.n, 2);
 }
 
-// REQ-WFDEF-19
+// REQ-WFDEF-66
 #[test]
 fn to_an_unknown_id_is_not_found_and_to_a_differently_named_record_renames_it() {
     let home = Home::new();
@@ -479,7 +479,7 @@ fn a_root_without_a_name_is_refused() {
     assert!(!home.path("workflows").exists());
 }
 
-// REQ-WFDEF-20
+// REQ-WFDEF-68
 #[test]
 fn bindings_file_fills_defaults_into_a_snapshot_of_every_declared_binding() {
     let home = Home::new();
@@ -680,7 +680,7 @@ fn a_first_publish_with_a_required_binding_needs_a_file_and_a_root_without_one_d
     assert_records_match_schemas(&home, &published.record.id, 1);
 }
 
-// REQ-WFDEF-40, REQ-WFDEF-3, REQ-WFDEF-20
+// REQ-WFDEF-40, REQ-WFDEF-3, REQ-WFDEF-68
 #[test]
 fn a_definition_binding_given_no_value_has_no_entry_and_a_given_one_is_recorded_as_written() {
     let tree = Tree::with(DEFINITION_ROOT).validated();
@@ -1108,7 +1108,7 @@ fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{}", lowercase_hex(digest(&SHA256, bytes).as_ref()))
 }
 
-// REQ-WFDEF-3, REQ-WFDEF-20, REQ-WFDEF-22
+// REQ-WFDEF-3, REQ-WFDEF-70, REQ-WFDEF-22
 #[test]
 fn integration_bindings_publish_under_their_integration_in_a_canonical_snapshot() {
     let home = Home::new();
@@ -1163,7 +1163,7 @@ fn integration_bindings_publish_under_their_integration_in_a_canonical_snapshot(
     assert_eq!(again.revision.bindings, published.revision.bindings);
 }
 
-// REQ-WFDEF-20
+// REQ-WFDEF-69
 #[test]
 fn integration_binding_members_are_checked_against_their_integration_s_declarations() {
     let tree = Tree::with(NESTED_ROOT).validated();
@@ -1346,7 +1346,7 @@ fn binding_options_are_judged_against_the_root_as_file_members_are() {
     );
 }
 
-// REQ-WFDEF-20
+// REQ-WFDEF-70
 #[test]
 fn a_half_migrated_root_takes_flat_members_and_an_integration_s_from_one_file() {
     let half_migrated = ROOT_WORKFLOW.replacen(
@@ -1527,7 +1527,7 @@ fn each_publish_records_a_new_first_revision_with_digests_of_tree_and_snapshot()
     assert_records_match_schemas(&home, &record.id, 2);
 }
 
-// REQ-WFDEF-22
+// REQ-WFDEF-71
 #[test]
 fn republishing_the_same_or_an_older_tree_is_a_new_ordinal_with_its_digest() {
     let home = Home::new();
@@ -1586,7 +1586,7 @@ fn republishing_the_same_or_an_older_tree_is_a_new_ordinal_with_its_digest() {
     assert_eq!(copies, 2);
 }
 
-// REQ-WFDEF-22
+// REQ-WFDEF-73
 #[test]
 fn a_revision_directory_a_crashed_publish_left_is_skipped_by_the_next_ordinal() {
     let home = Home::new();
@@ -1628,7 +1628,7 @@ fn a_revision_directory_a_crashed_publish_left_is_skipped_by_the_next_ordinal() 
     );
 }
 
-// REQ-WFDEF-22, REQ-WFDEF-25
+// REQ-WFDEF-73, REQ-WFDEF-65, REQ-WFDEF-25
 #[test]
 fn a_first_publish_that_stopped_before_its_record_blocks_neither_listing_nor_a_later_publish() {
     let home = Home::new();
@@ -1689,7 +1689,7 @@ fn a_first_publish_that_stopped_before_its_record_blocks_neither_listing_nor_a_l
     );
 }
 
-// REQ-WFDEF-22
+// REQ-WFDEF-72
 #[test]
 fn a_publish_while_another_holds_the_definition_lock_is_a_publish_conflict_and_changes_nothing() {
     let home = Home::new();
@@ -1753,7 +1753,7 @@ fn a_publish_while_another_holds_the_definition_lock_is_a_publish_conflict_and_c
     );
 }
 
-// REQ-WFDEF-22
+// REQ-WFDEF-72
 #[test]
 fn a_revision_directory_taken_by_a_writer_without_the_lock_is_a_publish_conflict() {
     let home = Home::new();
@@ -1815,7 +1815,7 @@ fn an_unreadable_record_stops_resolution_and_listing_naming_its_path() {
     assert_eq!(error.code(), "definition_record_invalid");
 }
 
-// REQ-WFDEF-3, REQ-WFDEF-22
+// REQ-WFDEF-3, REQ-WFDEF-71
 #[test]
 fn a_revision_s_snapshot_reads_back_after_a_later_publish_changed_the_bindings() {
     let home = Home::new();
@@ -1864,7 +1864,7 @@ fn a_revision_s_snapshot_reads_back_after_a_later_publish_changed_the_bindings()
     assert_eq!(error.path(), Some(snapshot.as_path()));
 }
 
-// REQ-WFDEF-32, REQ-WFDEF-7: publish never writes a revision's resolution record, so a
+// REQ-WFDEF-32, REQ-WFDEF-79: publish never writes a revision's resolution record, so a
 // revision without one reads none; one beside `bindings.json` reads back as the resolved id
 // by binding key, and one not of the record's shape is `definition_record_invalid` at its
 // path.

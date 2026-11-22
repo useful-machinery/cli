@@ -159,7 +159,7 @@ impl JoinKeyMode {
 
 impl Config {
     /// The runner the host's enrolled state names, the one a rejoin replaces
-    /// (REQ-RUNNERENROLL-127).
+    /// (REQ-RUNNERENROLL-243).
     pub fn runner_id(&self) -> &str {
         self.credential().runner_id()
     }
@@ -353,12 +353,13 @@ struct ReloadDependencies {
 }
 
 /// The assignment manager as the periodic and `sync` agent-login passes and login checks
-/// see it (INV-RUNNER-15, INV-RUNNER-29): every assignment it holds, read under its lock.
+/// see it (INV-RUNNER-15, INV-RUNNER-55, INV-RUNNER-29): every assignment it holds, read
+/// under its lock.
 /// Asking Cloud and checking a login need only that no held run is working; an install or
 /// removal also that none has a command in flight, and runs under the manager's lock
 /// holding each waiting run's activity, so no assignment is admitted and no held run starts
 /// a command during it. An admission's own pass does not consult it: it is gated on the
-/// other runs held when its preparation began, never under the manager's lock (REQ-GRANT-49).
+/// other runs held when its preparation began, never under the manager's lock (REQ-GRANT-135).
 struct HeldRunGate {
     assignment_manager: Arc<Mutex<AssignmentManager>>,
     // Setup runs on a thread of its own, and reading the manager's state may
@@ -397,7 +398,7 @@ impl AssignmentGate for HeldRunGate {
 
 /// The serving process's repeating agent-login setup: a setup at once, then
 /// one every `AGENT_LOGIN_SETUP_INTERVAL` on the service's sleeper, each
-/// checking a login it installed (REQ-GRANT-90) and publishing the
+/// checking a login it installed (REQ-GRANT-145) and publishing the
 /// readiness it recorded in the live status. A setup that finds a held run
 /// working is skipped, not queued. Dropping the schedule stops it.
 struct AgentLoginSchedule {
@@ -3480,7 +3481,7 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-243
     #[tokio::test]
     async fn a_held_key_rejoins_at_the_first_refusal_and_ends_the_service() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3503,7 +3504,7 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-246
     #[tokio::test]
     async fn a_refused_rejoin_parks_the_runner_and_is_not_sent_again() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3528,7 +3529,7 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-245
     #[tokio::test]
     async fn an_unanswered_rejoin_is_sent_again_after_the_reconnect_delay() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3557,7 +3558,7 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-245
     #[tokio::test]
     async fn a_stop_between_rejoin_attempts_ends_the_service_without_another() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3644,7 +3645,7 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-243
     #[tokio::test]
     async fn a_promoted_pending_credential_is_not_answered_with_a_rejoin() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3688,7 +3689,7 @@ mod tests {
         with_watchdog(server).await.unwrap().unwrap();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127
+    // INV-RUNNER-35, REQ-RUNNERENROLL-247
     #[tokio::test]
     async fn an_unusable_key_is_reported_once_and_the_runner_parks() {
         let (listener, endpoint) = fixture_listener().await;
@@ -4418,7 +4419,7 @@ mod tests {
         service.end().await;
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-127, REQ-RUNNERENROLL-128
+    // INV-RUNNER-35, REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-128
     #[test]
     fn a_refused_credential_is_answered_only_once_no_assignment_is_held() {
         let held = AssignmentCounts {
@@ -4492,7 +4493,7 @@ mod tests {
                 panic!("pending connection omitted hello");
             };
             let pending_hello: serde_json::Value = serde_json::from_str(&pending_hello).unwrap();
-            // INV-RUNNER-42: the credential-promotion hello advertises no recovery.
+            // INV-RUNNER-66: the credential-promotion hello advertises no recovery.
             assert_hello_advertises_no_recovery(&pending_hello);
             sequences_sent
                 .send((
@@ -5396,7 +5397,7 @@ mod tests {
         assert!(!payload.contains_key("workspaceRecoveryRoot"));
     }
 
-    // INV-RUNNER-42
+    // INV-RUNNER-66
     #[tokio::test]
     async fn a_start_over_a_work_root_advertises_and_reports_no_recovery() {
         let (listener, endpoint) = fixture_listener().await;
@@ -6771,7 +6772,7 @@ mod tests {
             );
             service.pass_ended().await;
             // Nothing was authorized, so an unanswered Cloud changes nothing
-            // (REQ-GRANT-38).
+            // (REQ-GRANT-119).
             assert_eq!(service.recorded_codex(), None);
             assert!(service.setup_records().is_empty());
 
@@ -6817,7 +6818,7 @@ mod tests {
             service.stop().await;
         }
 
-        // REQ-GRANT-40, INV-RUNNER-15, REQ-TELEMETRY-45
+        // REQ-GRANT-40, INV-RUNNER-58, REQ-TELEMETRY-45
         #[tokio::test]
         async fn an_ended_login_is_removed_and_an_unrecorded_one_is_the_runners_own() {
             let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
@@ -6862,7 +6863,7 @@ mod tests {
             // own: replaced by a delivery, and removed when the login ends.
             cloud.answer(Ok(Vec::new()));
             service.next_pass().await;
-            // The ending removed the whole Codex home (REQ-GRANT-40).
+            // The ending removed the whole Codex home (REQ-GRANT-122).
             fs::create_dir_all(service.auth_path().parent().unwrap()).unwrap();
             fs::write(service.auth_path(), b"{\"unrecorded\":true}").unwrap();
             cloud.answer(fake_codex_authorized(5));
@@ -6881,7 +6882,7 @@ mod tests {
             service.stop().await;
         }
 
-        // REQ-GRANT-40, INV-RUNNER-15
+        // REQ-GRANT-126, INV-RUNNER-15
         #[tokio::test]
         async fn a_setup_due_during_an_assignment_waits_for_its_release() {
             let (listener, endpoint) = fixture_listener().await;
@@ -6999,7 +7000,7 @@ mod tests {
             }
         }
 
-        // INV-RUNNER-41, REQ-RUNNERENROLL-127
+        // INV-RUNNER-41, REQ-RUNNERENROLL-244
         #[tokio::test]
         async fn a_rejoined_service_ends_only_once_its_setup_thread_has_let_the_work_root_go() {
             let HeldRejoin {

@@ -673,7 +673,7 @@ fn subject_names_a_declared_text_input() {
     let validated = validate_yaml(&workflow("ticket")).unwrap();
     assert_eq!(validated.subject.as_deref(), Some("ticket"));
     // Like `name`, `subject` keeps a file from being a `workflow` step's child
-    // (REQ-WFFORMAT-89).
+    // (REQ-WFFORMAT-115).
     assert!(ChildWorkflowSummary::of(&validated, &[], BTreeSet::new()).has_root_blocks);
     let at_subject = ValidationLocation::Workflow { key: "subject" };
     assert_failure(
@@ -2314,7 +2314,7 @@ fn workflow_step_edges_route_every_child_outcome_to_one_target() {
     );
 }
 
-// REQ-WFFORMAT-92
+// REQ-WFFORMAT-118
 #[test]
 fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
     for (source, kind, location) in [
@@ -2388,7 +2388,7 @@ fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
     );
 }
 
-// REQ-WFFORMAT-92
+// REQ-WFFORMAT-119
 #[test]
 fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
     let repair_self = edge_workflow(
@@ -3084,7 +3084,7 @@ fn a_workflow_with_workflow_steps_is_scheduled_by_its_edges() {
     );
 }
 
-// REQ-WFFORMAT-89
+// REQ-WFFORMAT-89, REQ-WFFORMAT-115
 #[test]
 fn a_child_workflow_is_a_readable_stage_without_root_blocks() {
     let design = || ValidationLocation::StepWorkflow {
@@ -3119,7 +3119,7 @@ fn with_design_nesting(nesting: ChildNesting) -> BTreeMap<String, ChildWorkflowS
     children
 }
 
-// REQ-WFFORMAT-104
+// REQ-WFFORMAT-104, REQ-WFFORMAT-121
 #[test]
 fn a_nested_child_is_accepted_within_the_bound_unless_it_holds_a_refused_shape() {
     let design = || ValidationLocation::StepWorkflow {
@@ -3148,7 +3148,7 @@ fn a_nested_child_is_accepted_within_the_bound_unless_it_holds_a_refused_shape()
     assert_eq!(failure.unsupported_shape(), Some(&shape));
 }
 
-// REQ-WFFORMAT-104
+// REQ-WFFORMAT-121
 #[test]
 fn a_nested_workflows_first_refused_shape_is_its_summary() {
     let nesting = |source: &str, children: &BTreeMap<String, ChildWorkflowSummary>| {

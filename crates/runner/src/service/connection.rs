@@ -2957,9 +2957,9 @@ pub(crate) fn opening_hello(
         tree_continuation: true,
         // It applies a `withdraw` control to the run it executes (REQ-RUNNERENROLL-123).
         tree_withdraw: true,
-        // It reads integration bindings and accounts in a tree block (REQ-RUNNERENROLL-91).
+        // It reads integration bindings and accounts in a tree block (REQ-RUNNERENROLL-185).
         tree_integration_bindings: true,
-        // It takes another run while every run it holds waits (REQ-RUNNERENROLL-132).
+        // It takes another run while every run it holds waits (REQ-RUNNERENROLL-313).
         holds_waiting_runs: true,
     })
     .map_err(|_| {
@@ -3990,7 +3990,7 @@ mod tests {
         .await;
     }
 
-    // REQ-RUNNERENROLL-90
+    // REQ-RUNNERENROLL-215
     #[tokio::test]
     async fn run_control_is_acknowledged_as_an_effect_and_dropped_when_unheld() {
         unheld_effect_is_acknowledged_and_dropped(
@@ -5038,7 +5038,7 @@ mod tests {
             assert_eq!(hello["payload"]["treeContinuation"], 1);
             // REQ-RUNNERENROLL-123
             assert_eq!(hello["payload"]["treeWithdraw"], 1);
-            // REQ-RUNNERENROLL-91, REQ-COMPAT-18
+            // REQ-RUNNERENROLL-185, REQ-COMPAT-34
             assert_eq!(hello["payload"]["treeIntegrationBindings"], 1);
             // REQ-RUNNERENROLL-132
             assert_eq!(hello["payload"]["holdsWaitingRuns"], 1);

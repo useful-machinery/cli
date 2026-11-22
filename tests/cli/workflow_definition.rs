@@ -324,7 +324,7 @@ fn integrations_lines(directory: &str) -> Vec<String> {
         .collect()
 }
 
-// REQ-WFDEF-14, REQ-WFDEF-34: a root that declares integrations reports each with the `as`
+// REQ-WFDEF-60, REQ-WFDEF-47: a root that declares integrations reports each with the `as`
 // that applies to it, and otherwise validates and publishes as it does without them, the
 // digest apart; a root that declares none reports no `requiresIntegrations` and no line.
 #[test]
@@ -410,7 +410,7 @@ fn a_root_declaring_a_host_check_reports_as_without_it() {
     assert_eq!(location["key"], "requires");
 }
 
-// REQ-WFDEF-14, REQ-WFDEF-34: without `requires.as` an entry's own `as` is reported and an
+// REQ-WFDEF-60, REQ-WFDEF-44: without `requires.as` an entry's own `as` is reported and an
 // entry without one has none; a stage file's override (REQ-WFDEF-35) is not reported.
 #[test]
 fn validate_reports_the_roots_own_as_for_each_integration() {
@@ -433,9 +433,9 @@ fn validate_reports_the_roots_own_as_for_each_integration() {
     );
 }
 
-// REQ-WFDEF-14, REQ-WFDEF-34: a root that declares the token services `mergify` and
-// `buildkite` reports each with the `as` that applies to it, and otherwise validates and
-// publishes as the plain tree does, the digest apart.
+// REQ-WFDEF-60, REQ-WFDEF-34, REQ-WFDEF-47, REQ-PROVIDER-57: a root that declares the token services
+// `mergify` and `buildkite` reports each with the `as` that applies to it, and otherwise
+// validates and publishes as the plain tree does, the digest apart.
 #[test]
 fn a_root_declaring_token_services_reports_them_and_publishes() {
     let declared = Tree::with(
@@ -526,7 +526,7 @@ fn root_only_block_in_a_stage_file_is_rejected() {
     assert_eq!(location["key"], "bindings");
 }
 
-// REQ-WFDEF-35, REQ-WFDEF-9: a stage file may override integrations the root declares and
+// REQ-WFDEF-35, REQ-WFDEF-59, REQ-WFDEF-9: a stage file may override integrations the root declares and
 // no others; `Tree::with`'s root names `design.yaml` in no `workflow` step, so the check
 // covers a file no step reaches.
 #[test]
@@ -610,7 +610,7 @@ fn mirror_in_a_stage_file_is_rejected() {
     assert_eq!(location["key"], "mirror");
 }
 
-// REQ-WFDEF-15, REQ-WFFORMAT-103
+// REQ-WFDEF-15, REQ-WFFORMAT-126
 #[test]
 fn a_structural_failure_names_the_field_and_the_rule_in_validate_and_publish() {
     assert!(ROOT_WORKFLOW.contains("\nname: engineering\n"));
@@ -687,7 +687,7 @@ fn assert_outcome_location(location: &Value, key: &str, outcome: &str) {
     assert_eq!(location["outcome"], outcome, "{location}");
 }
 
-// REQ-WFFORMAT-82, REQ-WFFORMAT-101, REQ-WFDEF-10
+// REQ-WFFORMAT-82, REQ-WFFORMAT-113, REQ-WFDEF-10
 #[test]
 fn mirror_states_must_be_declared_linear_state_bindings() {
     let (code, location) = mirror_rejection("{state: $done}", "{state: Done}");
@@ -717,7 +717,7 @@ fn nested_rejection(from: &str, to: &str) -> (String, Value) {
     single_rejection(&NESTED_ROOT.replacen(from, to, 1), DESIGN_WORKFLOW)
 }
 
-// REQ-WFDEF-14, REQ-WFDEF-37, REQ-WFDEF-38: each integration's bindings are reported with it,
+// REQ-WFDEF-61, REQ-WFDEF-14, REQ-WFDEF-38: each integration's bindings are reported with it,
 // `{kind, default?, required}` as a flat binding is, and a trigger's source as written.
 #[test]
 fn validate_reports_each_integrations_bindings_and_its_source() {
@@ -767,7 +767,7 @@ fn validate_reports_each_integrations_bindings_and_its_source() {
     }
 }
 
-// REQ-WFDEF-37, REQ-WFFORMAT-101, REQ-WFDEF-15: a mirror state or guard names an integration
+// REQ-WFDEF-63, REQ-WFDEF-64, REQ-WFFORMAT-113, REQ-WFDEF-15: a mirror state or guard names an integration
 // binding as `$<id>.<name>`, of kind `state` under `linear`; a failure names the integration
 // and the binding, and a flat key declared under an integration too is declared twice.
 #[test]
@@ -812,7 +812,7 @@ fn mirror_states_and_guards_take_linear_state_integration_bindings() {
     );
 }
 
-// REQ-WFFORMAT-101, REQ-WFDEF-10
+// REQ-WFFORMAT-113, REQ-WFDEF-10
 #[test]
 fn mirror_guards_follow_the_guard_grammar() {
     const GUARD: &str = "unless: issue.state != $ownedState}";
@@ -830,7 +830,7 @@ fn mirror_guards_follow_the_guard_grammar() {
     assert_eq!(location["binding"], "linearTeam");
 }
 
-// REQ-WFFORMAT-101, REQ-WFDEF-10
+// REQ-WFFORMAT-114, REQ-WFDEF-10
 #[test]
 fn mirror_outcomes_must_be_outcomes_the_root_exits_with_other_than_superseded() {
     for outcome in ["superseded", "shipped"] {
@@ -843,7 +843,7 @@ fn mirror_outcomes_must_be_outcomes_the_root_exits_with_other_than_superseded() 
     }
 }
 
-// REQ-WFFORMAT-101, REQ-WFDEF-10
+// REQ-WFFORMAT-112, REQ-WFDEF-10
 #[test]
 fn mirror_templates_name_only_their_hooks_variables() {
     const START: &str = "Engineering started by {{operator}}. Run: {{run.url}}";
@@ -857,7 +857,7 @@ fn mirror_templates_name_only_their_hooks_variables() {
     assert_mirror_location(&location, "onWait.comment");
 }
 
-// REQ-WFFORMAT-101, REQ-WFDEF-10: `operator`, `run.id`, `run.url` and `run.reference` are
+// REQ-WFFORMAT-112, REQ-WFDEF-10: `operator`, `run.id`, `run.url` and `run.reference` are
 // every hook's.
 #[test]
 fn mirror_templates_name_the_operator_and_the_run_in_every_hook() {
@@ -914,7 +914,7 @@ fn a_command_program_named_by_path_is_rejected_with_its_file_and_step() {
     assert_eq!(location["key"], "command.argv");
 }
 
-// REQ-WFDEF-10
+// REQ-WFDEF-10, REQ-WFDEF-51
 #[test]
 fn trigger_rules_must_name_declared_bindings_of_the_right_kind() {
     let literal = ROOT_WORKFLOW.replacen(
@@ -940,7 +940,7 @@ fn trigger_rules_must_name_declared_bindings_of_the_right_kind() {
     assert_eq!(location["binding"], "nobody");
 }
 
-// REQ-WFDEF-10: a definition trigger's input reads only what a finished run's event holds,
+// REQ-WFDEF-58: a definition trigger's input reads only what a finished run's event holds,
 // and the event's attempt is not among it.
 #[test]
 fn a_definition_trigger_input_must_read_what_a_runs_event_holds() {
@@ -955,7 +955,7 @@ fn a_definition_trigger_input_must_read_what_a_runs_event_holds() {
     assert_eq!(location["input"], "ticket");
 }
 
-// REQ-WFDEF-10: a trigger rule outside the grammar that evaluates it is refused, the start
+// REQ-WFDEF-52: a trigger rule outside the grammar that evaluates it is refused, the start
 // `where` against Cloud's and the control `when` against the wait's.
 #[test]
 fn trigger_rules_outside_their_grammar_are_refused() {
@@ -981,7 +981,7 @@ fn trigger_rules_outside_their_grammar_are_refused() {
     assert_eq!(location["key"], "control.action.when");
 }
 
-// REQ-WFDEF-10
+// REQ-WFDEF-53
 #[test]
 fn start_trigger_inputs_must_match_the_root_inputs() {
     let missing = ROOT_WORKFLOW.replacen("      ticket:     event.issue.identifier\n", "", 1);
@@ -1036,7 +1036,63 @@ fn tree_entries_must_be_regular_and_the_root_must_exist() {
     assert_eq!(codes[0].0, "tree_root_missing");
 }
 
-// REQ-WFDEF-15, SC-WFDEF-1
+// REQ-WFDEF-13
+// Linux only: other platforms' file systems refuse to create a name that is not UTF-8.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_utf8_path_and_a_tree_over_64_mib_are_refused() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let tree = Tree::engineering();
+    fs::write(
+        tree.root
+            .join("scripts")
+            .join(std::ffi::OsStr::from_bytes(b"\xffnotes.txt")),
+        "notes\n",
+    )
+    .expect("non-UTF-8 file should be written");
+    let codes = rejection_codes(tree.path());
+    assert_eq!(codes.len(), 1, "{codes:?}");
+    assert_eq!(codes[0].0, "invalid_canonical_path");
+
+    let tree = Tree::engineering();
+    fs::File::create(tree.root.join("policy/large.bin"))
+        .and_then(|file| file.set_len(64 * 1024 * 1024 + 1))
+        .expect("sparse large file should be created");
+    let codes = rejection_codes(tree.path());
+    assert_eq!(codes.len(), 1, "{codes:?}");
+    assert_eq!(codes[0].0, "tree_too_large");
+    assert_eq!(codes[0].1["kind"], "tree");
+}
+
+// REQ-WFDEF-43, REQ-WFFORMAT-115, SC-WFDEF-1: a root-only block in a stage file the root runs
+// through a `workflow` step fails the root at that step, and the root's failure is listed alone,
+// without the start trigger's own failure.
+#[test]
+fn a_root_only_block_in_a_reached_stage_file_fails_the_root_alone() {
+    let steps = ROOT_WORKFLOW
+        .find("steps:\n")
+        .expect("the root fixture declares steps");
+    let root = format!(
+        "{}steps:\n  design:\n    kind: workflow\n    workflow: design.yaml\n    inputs:\n      ticket: {{ref: inputs.ticket}}\n    on:\n      succeeded: exit.landed\n      failed: exit.failed\noutcomes: [landed, failed]\n",
+        &ROOT_WORKFLOW[..steps]
+    )
+    .replacen(
+        &format!("\"{START_WHERE}\""),
+        "'event.team == $linearTeam and event.state == \"Engineering\"'",
+        1,
+    );
+    let design = format!("{DESIGN_WORKFLOW}bindings:\n  team: {{kind: linear.team}}\n");
+    let tree = Tree::with(&root, &design);
+    let codes = rejection_codes(tree.path());
+    assert_eq!(codes.len(), 1, "{codes:?}");
+    assert_eq!(codes[0].0, "child_workflow_root_blocks");
+    assert_eq!(codes[0].1["kind"], "workflow");
+    assert_eq!(codes[0].1["path"], "workflow.yaml");
+}
+
+// REQ-WFDEF-15: `Tree::with`'s root names `design.yaml` in no `workflow` step, so the
+// stage file's own failure is listed beside the root's.
 #[test]
 fn every_failure_in_a_tree_is_listed() {
     let root = ROOT_WORKFLOW.replacen(
@@ -1142,7 +1198,7 @@ impl Home {
         }
     }
 
-    /// No command here creates a run under the home or a definition (REQ-WFDEF-7).
+    /// No command here creates a run under the home or a definition (REQ-WFDEF-78).
     pub(super) fn assert_no_runs(&self) {
         assert!(!self.root.join("runs").exists());
         for id in self.workflow_entries() {
@@ -1229,7 +1285,7 @@ pub(super) fn read_json(path: &Path) -> Value {
         .expect("record should be JSON")
 }
 
-// REQ-WFDEF-17, REQ-WFDEF-18, REQ-WFDEF-22, REQ-WFDEF-23, REQ-WFDEF-7
+// REQ-WFDEF-17, REQ-WFDEF-18, REQ-WFDEF-22, REQ-WFDEF-23, REQ-WFDEF-79
 #[test]
 fn publish_records_a_revision_with_its_tree_copy_and_carries_bindings_forward() {
     let home = Home::new();
@@ -1312,7 +1368,7 @@ fn publish_records_a_revision_with_its_tree_copy_and_carries_bindings_forward() 
     home.assert_no_runs();
 }
 
-// REQ-WFDEF-19, REQ-WFDEF-27, REQ-WFDEF-7
+// REQ-WFDEF-19, REQ-WFDEF-66, REQ-WFDEF-27, REQ-WFDEF-78
 #[test]
 fn publish_resolves_the_definition_by_name_or_refuses() {
     let home = Home::new();
@@ -1367,7 +1423,7 @@ fn publish_resolves_the_definition_by_name_or_refuses() {
     home.assert_no_runs();
 }
 
-// REQ-WFDEF-18, REQ-WFDEF-7
+// REQ-WFDEF-18, REQ-WFDEF-78
 #[test]
 fn publish_of_an_invalid_tree_reports_it_and_writes_nothing() {
     let home = Home::new();
@@ -1393,7 +1449,7 @@ fn publish_of_an_invalid_tree_reports_it_and_writes_nothing() {
     home.assert_no_runs();
 }
 
-// REQ-WFDEF-20, REQ-WFDEF-21, REQ-WFDEF-27, REQ-WFDEF-7
+// REQ-WFDEF-20, REQ-WFDEF-68, REQ-WFDEF-21, REQ-WFDEF-27, REQ-WFDEF-78
 #[test]
 fn publish_refuses_missing_or_unusable_bindings() {
     let home = Home::new();
@@ -1458,7 +1514,7 @@ fn a_later_publish_with_a_partial_bindings_file_changes_only_what_it_names() {
     home.assert_no_runs();
 }
 
-// REQ-WFDEF-20, REQ-WFDEF-26, REQ-WFDEF-27: integration bindings nested under their id are
+// REQ-WFDEF-69, REQ-WFDEF-70, REQ-WFDEF-26, REQ-WFDEF-27: integration bindings nested under their id are
 // published, shown as `<id>.<name>`, and a refusal about one names the integration.
 #[test]
 fn integration_bindings_are_published_shown_and_refused_by_integration() {
@@ -1858,7 +1914,7 @@ fn definition_trigger_root(on: &str) -> String {
         })
 }
 
-// REQ-WFDEF-1, REQ-WFDEF-14, REQ-WFDEF-39: a start trigger on another definition's run is
+// REQ-WFDEF-1, REQ-WFDEF-62, REQ-WFDEF-39: a start trigger on another definition's run is
 // reported as a start trigger with its `definition` reference and `outcomes` as written, a
 // `definition` binding as any binding, and the other triggers gain no member; an engine
 // outcome or a `where` beside `definition` is structurally invalid.
@@ -3079,9 +3135,10 @@ fn respond(state: &mut GatewayState, request: &GatewayRequest, address: &str) ->
         let body = request.json();
         return state.publication(&key, keyed, |state| {
             let published = state.declarations.merge(&body, None)?;
-            // `reuseIdentical` answers the active definition whose current revision published
-            // the same tree, snapshot and executable files, and refuses when several did
-            // (REQ-CLOUDDEF-21).
+            // `reuseIdentical` answers the active definition whose current revision published the
+            // same tree, snapshot and executable files, and refuses when several did
+            // (REQ-CLOUDDEF-21, REQ-CLOUDDEF-161,
+            // REQ-CLOUDDEF-162).
             if body["reuseIdentical"] == true {
                 let identical = state
                     .definitions
@@ -3581,7 +3638,7 @@ fn held_publication(gateway: &FakeGateway, id: &str) -> Value {
         .clone()
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-20, REQ-CLOUDDEF-41: a create and a publication send only the
+// REQ-CLOUDDEF-80, REQ-CLOUDDEF-20, REQ-CLOUDDEF-41: a create and a publication send only the
 // bindings the invocation names, `null` for a default, so a home that holds none of them
 // publishes to an existing definition, and Cloud keeps every binding not named.
 #[test]
@@ -3713,7 +3770,7 @@ fn publish_on_project_sends_only_the_bindings_it_names() {
     assert_home_untouched(&home);
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-41: whether the bindings a create names are complete is
+// REQ-CLOUDDEF-88, REQ-CLOUDDEF-41: whether the bindings a create names are complete is
 // Cloud's to judge. One that names none, of a root whose bindings lack defaults, is sent and
 // refused `binding-missing` naming the binding, and creates nothing.
 #[test]
@@ -3738,7 +3795,8 @@ fn publish_on_project_leaves_a_create_that_names_no_binding_to_cloud() {
     assert_home_untouched(&home);
 }
 
-// REQ-CLOUDDEF-14: `--on project` publishes to Cloud alone. With no definition of the tree's
+// REQ-CLOUDDEF-14, REQ-CLOUDDEF-82, REQ-CLOUDDEF-83, REQ-CLOUDDEF-84, REQ-CLOUDDEF-87,
+// REQ-CLOUDDEF-167: `--on project` publishes to Cloud alone. With no definition of the tree's
 // name it creates one, asking for the project's identical one; with one it publishes the next
 // revision to it, sending no bindings without `--bindings`; with several it stops before any
 // upload; `--new` reads no list.
@@ -3979,7 +4037,7 @@ fn publish_on_project_creates_then_publishes_to_the_definition_of_the_tree_s_nam
     assert_home_untouched(&home);
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-33: the create and the publication of a root that declares
+// REQ-CLOUDDEF-80, REQ-CLOUDDEF-33: the create and the publication of a root that declares
 // bindings under its integrations send each integration's bindings the file names, by name
 // under its id, and no flat block.
 #[test]
@@ -4022,7 +4080,7 @@ fn publish_cloud_sends_each_integrations_binding_values() {
     assert!(published.get("bindings").is_none(), "{published}");
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-34: a refusal about an integration binding names the
+// REQ-CLOUDDEF-88, REQ-CLOUDDEF-34: a refusal about an integration binding names the
 // integration and the binding, and one about the integration itself names it alone, in the
 // human report and in `--json`'s `workflow` facts.
 #[test]
@@ -4090,7 +4148,7 @@ fn publish_cloud_reports_the_integration_a_refusal_names() {
     assert_eq!(report(&output)["cloud"]["workflow"], alone);
 }
 
-// REQ-CLOUDDEF-14
+// REQ-CLOUDDEF-81, REQ-CLOUDDEF-82
 #[test]
 fn publish_on_project_resends_a_lost_publication_once_and_publishes_executable_bits() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -4153,7 +4211,8 @@ fn publish_on_project_resends_a_lost_publication_once_and_publishes_executable_b
     assert_eq!(published["executablePaths"], json!([]));
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-25, REQ-CLOUDDEF-28: a create or publication answered with a
+// REQ-CLOUDDEF-14, REQ-CLOUDDEF-25, REQ-CLOUDDEF-28, REQ-CLOUDDEF-76, REQ-CLOUDDEF-82,
+// REQ-CLOUDDEF-173, REQ-CLOUDDEF-174, REQ-CLOUDDEF-175: a create or publication answered with a
 // transient problem is sent once more under its key; a second such answer is reported as Cloud
 // being unavailable, and a 503 naming its own cause is refused, neither with a diagnostic.
 #[test]
@@ -4233,9 +4292,11 @@ fn publish_on_project_resends_a_create_or_publication_answered_with_a_transient_
     assert_home_untouched(&home);
 }
 
-// REQ-CLOUDDEF-28, REQ-CLOUDDEF-23: an answer failing a check at the tree upload, the seal or
-// the create is an invalid response reported with the stage and check that failed (and the
-// status of a status check), and nothing of the signed URL, the session or the body.
+// REQ-CLOUDDEF-28, REQ-CLOUDDEF-71, REQ-CLOUDDEF-72, REQ-CLOUDDEF-74, REQ-CLOUDDEF-75,
+// REQ-CLOUDDEF-76, REQ-CLOUDDEF-77, REQ-CLOUDDEF-78, REQ-CLOUDDEF-79, REQ-CLOUDDEF-171: an answer
+// failing a check at the tree upload, the seal or the create is an invalid response reported with
+// the stage and check that failed (and the status of a status check), and nothing of the signed
+// URL, the session or the body.
 #[test]
 fn publish_on_project_reports_the_stage_and_check_of_an_invalid_response() {
     let home = Home::new();
@@ -4304,7 +4365,8 @@ fn publish_on_project_reports_the_stage_and_check_of_an_invalid_response() {
     assert_home_untouched(&home);
 }
 
-// REQ-CLOUDDEF-14, REQ-WFDEF-18: what a publication cannot send is refused before it is sent:
+// REQ-CLOUDDEF-14, REQ-WFDEF-18, REQ-CLOUDDEF-90, REQ-CLOUDDEF-123: what a publication cannot
+// send is refused before it is sent:
 // `--to` with `--new`, `--org` or `--project` with a publication that stays under the home and
 // the retired Cloud options are usage errors, and a root with no `name` and a named binding
 // the root does not declare (REQ-WFDEF-41) are refused. Whether the bindings named are
@@ -4396,7 +4458,8 @@ fn assert_no_definition_created(requests: &[GatewayRequest]) {
     );
 }
 
-// REQ-CLOUDDEF-20: `--to` names the Cloud definition of the project in effect a revision goes
+// REQ-CLOUDDEF-20, REQ-CLOUDDEF-86, REQ-CLOUDDEF-119, REQ-WFDEF-67: `--to` names the Cloud
+// definition of the project in effect a revision goes
 // to, by name or by ID with `--on project`, or by an ID the home does not hold with no `--on`;
 // the publication never creates one, from a home that has never published.
 #[test]
@@ -4493,7 +4556,8 @@ fn publish_to_publishes_to_the_named_cloud_definition_and_never_creates_one() {
     assert_eq!(gateway_definitions(&gateway), vec![(alpha, 6)]);
 }
 
-// REQ-CLOUDDEF-20, REQ-CLOUDDEF-14, REQ-CLOUDDEF-42: a target Cloud refuses, of another project
+// REQ-CLOUDDEF-20, REQ-CLOUDDEF-14, REQ-CLOUDDEF-42, REQ-CLOUDDEF-122: a target Cloud refuses,
+// of another project
 // included, is reported naming it and creates nothing; a name the project does not hold is
 // `definition_not_found` before anything is uploaded.
 #[test]
@@ -4588,7 +4652,7 @@ fn publish_to_refusals_create_nothing() {
     assert_eq!(gateway_definitions(&gateway), vec![(cloud_id, 3)]);
 }
 
-// REQ-CLOUDDEF-14, REQ-CLOUDDEF-20: a publication to a Cloud definition that is no longer
+// REQ-CLOUDDEF-88, REQ-CLOUDDEF-20: a publication to a Cloud definition that is no longer
 // found, as after a delete, is refused without a create and says to publish again with `--new`
 // or with `--to` naming another; a publication that names none then creates another definition.
 #[test]
@@ -4744,7 +4808,8 @@ fn publish_from_a_fresh_home(
     report(&output)
 }
 
-// REQ-CLOUDDEF-22, REQ-CLOUDDEF-14: a first publication whose list shows no definition of the
+// REQ-CLOUDDEF-22, REQ-CLOUDDEF-14, REQ-CLOUDDEF-83, REQ-CLOUDDEF-167, REQ-CLOUDDEF-169: a first
+// publication whose list shows no definition of the
 // tree's name, because another owner's first publication of the same tree, bindings and bits
 // lands in between, reaches that owner's definition; the next one finds it by its name.
 #[test]
@@ -4823,7 +4888,7 @@ fn publish_on_project_reuses_the_identical_definition_a_concurrent_publication_c
     assert_eq!(gateway_definitions(&gateway), vec![(cloud_id, 2)]);
 }
 
-// REQ-CLOUDDEF-22: a create that shares only the tree reuses the tree, never a definition.
+// REQ-CLOUDDEF-168: a create that shares only the tree reuses the tree, never a definition.
 #[test]
 fn publish_on_project_with_other_binding_values_reuses_the_tree_and_creates_a_definition() {
     let tree = Tree::engineering();
@@ -4857,7 +4922,7 @@ fn publish_on_project_with_other_binding_values_reuses_the_tree_and_creates_a_de
     );
 }
 
-// REQ-CLOUDDEF-14: `--new` reads no list and never asks for reuse, so it creates another
+// REQ-CLOUDDEF-85: `--new` reads no list and never asks for reuse, so it creates another
 // definition although the project holds an identical one of the name.
 #[test]
 fn publish_on_project_new_creates_another_definition_although_an_identical_one_exists() {
@@ -4904,7 +4969,7 @@ fn publish_on_project_new_creates_another_definition_although_an_identical_one_e
     );
 }
 
-// REQ-CLOUDDEF-22: with several identical definitions held, a create that asks for reuse is
+// REQ-CLOUDDEF-170: with several identical definitions held, a create that asks for reuse is
 // refused and names them all and both ways out.
 #[test]
 fn publish_on_project_refuses_an_ambiguous_reuse() {
@@ -4954,9 +5019,9 @@ fn publish_on_project_refuses_an_ambiguous_reuse() {
     assert_eq!(gateway_definitions(&gateway), held);
 }
 
-// REQ-CLOUDDEF-35, REQ-CLOUDDEF-7: each `binding-unresolved` refusal Cloud answers a
-// publication with names the binding, and one that would close a loop of definitions reports
-// the loop in start order; every refusal records nothing locally and leaves Cloud unchanged.
+// REQ-CLOUDDEF-194, REQ-CLOUDDEF-88, REQ-CLOUDDEF-7: each `binding-unresolved` refusal Cloud
+// answers a publication with names the binding, and one that would close a loop of definitions
+// reports the loop in start order; every refusal records nothing locally and leaves Cloud unchanged.
 #[test]
 fn publish_cloud_prints_the_loop_a_publication_would_close() {
     let tree = Tree::engineering();
@@ -5059,7 +5124,7 @@ fn publish_cloud_prints_the_loop_a_publication_would_close() {
     }
 }
 
-// REQ-CLOUDDEF-22, REQ-CLOUDDEF-14: a reuse whose reply is lost is sent once more under the
+// REQ-CLOUDDEF-22, REQ-CLOUDDEF-82: a reuse whose reply is lost is sent once more under the
 // same key and reported as the reuse Cloud recorded.
 #[test]
 fn publish_on_project_resends_a_reuse_whose_reply_is_lost_and_reports_the_reuse() {
@@ -5100,7 +5165,8 @@ fn publish_on_project_resends_a_reuse_whose_reply_is_lost_and_reports_the_reuse(
     assert_eq!(gateway_definitions(&gateway), vec![(cloud_id, 1)]);
 }
 
-// REQ-WFDEF-19: with no `--on` a publish stays under the home. The form the runner runs writes
+// REQ-WFDEF-19, REQ-CLOUDDEF-89, REQ-WFDEF-67: with no `--on` a publish stays under the home.
+// The form the runner runs writes
 // the record and the revision, prints today's document and sends nothing, and `--to NAME`
 // publishes to the home's one record of that name, never looked for in the project.
 #[test]
@@ -5204,7 +5270,7 @@ fn publish_with_no_on_publishes_under_the_home_and_sends_nothing() {
     assert_eq!(home.workflow_entries(), vec![id]);
 }
 
-// REQ-WFDEF-7: no command writes `cloudId`. A new record holds null, and a record an earlier
+// REQ-WFDEF-79: no command writes `cloudId`. A new record holds null, and a record an earlier
 // release wrote with one is published to and shown with the value unchanged.
 #[test]
 fn a_record_keeps_the_cloud_id_an_earlier_release_wrote() {
@@ -5310,7 +5376,7 @@ fn gateway_integrations() -> (Value, Value) {
     )
 }
 
-/// Whether `request`'s query names vocabulary 2, as a revision read may (REQ-CLOUDDEF-8).
+/// Whether `request`'s query names vocabulary 2, as a revision read may (REQ-CLOUDDEF-147).
 fn asks_for_vocabulary_2(request: &GatewayRequest) -> bool {
     request
         .path
@@ -5336,7 +5402,7 @@ const CLOUD_BOUND_DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abe";
 const CLOUD_BOUND_DEFINITION_NAME: &str = "verify-change";
 
 /// The `verify` binding of kind `definition` and its resolution, which Cloud shows only under
-/// binding vocabulary 2 (REQ-CLOUDDEF-8).
+/// binding vocabulary 2 (REQ-CLOUDDEF-147).
 fn gateway_definition_binding() -> (Value, Value) {
     (
         json!({"kind": "definition", "value": CLOUD_BOUND_DEFINITION}),
@@ -5708,7 +5774,8 @@ fn show_finds_a_definition_by_id_or_name_under_the_home_and_then_in_the_project(
     );
 }
 
-// REQ-CLOUDDEF-15
+// REQ-CLOUDDEF-15, REQ-CLOUDDEF-58, REQ-CLOUDDEF-59, REQ-CLOUDDEF-60, REQ-CLOUDDEF-61,
+// REQ-CLOUDDEF-62
 #[test]
 fn definition_leaves_list_show_and_change_cloud_definitions() {
     let home = Home::new();
@@ -6008,7 +6075,7 @@ fn delete_deletes_an_archived_cloud_definition_under_one_key() {
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-15, REQ-CLOUDDEF-8: `show` of a revision holding integration bindings prints,
+// REQ-CLOUDDEF-58, REQ-CLOUDDEF-144: `show` of a revision holding integration bindings prints,
 // after the flat resolution, each integration's account with its id and each of its bindings
 // as `<id>.<name>` with its value, kind and resolved id; `--json` carries both members as
 // Cloud returned them.
@@ -6091,8 +6158,9 @@ const TRANSIENT_PROBLEMS: [(&str, u16, &str); 3] = [
     ("500 Internal Server Error", 500, "internal-server-error"),
 ];
 
-// REQ-CLOUDDEF-25: a change answered with a transient problem is sent once more under its key
-// and a second such answer is Cloud being unavailable; a 503 naming its own cause is refused.
+// REQ-CLOUDDEF-60, REQ-CLOUDDEF-173, REQ-CLOUDDEF-174, REQ-CLOUDDEF-175: a change answered with a
+// transient problem is sent once more under its key and a second such answer is Cloud being
+// unavailable; a 503 naming its own cause is refused.
 #[test]
 fn a_definition_change_answered_with_a_transient_problem_is_resent_once() {
     let home = Home::new();
@@ -6173,7 +6241,8 @@ fn a_definition_change_answered_with_a_transient_problem_is_resent_once() {
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-28, REQ-CLOUDDEF-23, REQ-CLOUDDEF-40: a definition leaf whose answer from Cloud
+// REQ-CLOUDDEF-28, REQ-CLOUDDEF-71, REQ-CLOUDDEF-72, REQ-CLOUDDEF-73, REQ-CLOUDDEF-76,
+// REQ-CLOUDDEF-77, REQ-CLOUDDEF-171, REQ-CLOUDDEF-40: a definition leaf whose answer from Cloud
 // fails a check reports `invalid_response` with the stage and the check that failed.
 #[test]
 fn definition_leaves_report_the_stage_and_check_of_an_invalid_response() {
@@ -6286,10 +6355,10 @@ fn definition_leaves_report_the_stage_and_check_of_an_invalid_response() {
     );
 }
 
-// REQ-CLOUDDEF-15: `evaluation list` sends its filters and page as typed and `evaluation
-// show` reads one evaluation, both asking for representation 4; both report each
-// evaluation's state, stored reason and blocking run, `-` when it has none, and the
-// readiness blockers of an evaluation whose project was not ready.
+// REQ-CLOUDDEF-63, REQ-CLOUDDEF-64, REQ-CLOUDDEF-65, REQ-CLOUDDEF-69: `evaluation list` sends its
+// filters and page as typed and `evaluation show` reads one evaluation, both asking for
+// representation 4; both report each evaluation's state, stored reason and blocking run, `-` when
+// it has none, and the readiness blockers of an evaluation whose project was not ready.
 #[test]
 fn definition_evaluations_are_listed_with_their_filters_and_shown_with_their_reason() {
     let home = Home::new();
@@ -6475,9 +6544,10 @@ fn definition_evaluations_are_listed_with_their_filters_and_shown_with_their_rea
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-15, REQ-TRIGGER-166: `evaluation list` and `evaluation show` ask for an
-// evaluation vocabulary that holds the push event, so a push evaluation is listed and read,
-// printed as Cloud sent it under `--json` and with its branch and commit in human output.
+// REQ-CLOUDDEF-64, REQ-CLOUDDEF-68, REQ-CLOUDDEF-69, REQ-TRIGGER-234: `evaluation list` and
+// `evaluation show` ask for an evaluation vocabulary that holds the push event, so a push
+// evaluation is listed and read, printed as Cloud sent it under `--json` and with its branch and
+// commit in human output.
 #[test]
 fn definition_evaluations_list_and_show_a_push_with_its_branch_and_commit() {
     let home = Home::new();
@@ -6899,7 +6969,8 @@ fn evaluation_command<'a>(leaf: &'a str, definition: &'a str, extra: &[&'a str])
     all
 }
 
-// REQ-CLOUDDEF-15, REQ-TRIGGER-166: `evaluation list` and `evaluation show` ask for evaluation
+// REQ-CLOUDDEF-15, REQ-CLOUDDEF-64, REQ-CLOUDDEF-68, REQ-CLOUDDEF-69, REQ-TRIGGER-166:
+// `evaluation list` and `evaluation show` ask for evaluation
 // vocabulary 4, so a `run.ended` evaluation is listed and read, printed as Cloud sent it under
 // `--json` and with the ended run, its attempt and its outcome in human output.
 #[test]
@@ -6957,7 +7028,7 @@ fn definition_evaluations_ask_for_vocabulary_4_and_show_a_run_end_with_its_run_a
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-15, REQ-CLOUDDEF-8: `show` asks for binding vocabulary 2 on the revision read and
+// REQ-CLOUDDEF-70, REQ-CLOUDDEF-147: `show` asks for binding vocabulary 2 on the revision read and
 // the revision listing, so a `definition` binding is printed as Cloud sent it under `--json` and
 // with the bound definition's id and name in human output.
 #[test]
@@ -7038,11 +7109,12 @@ fn definition_show_asks_for_binding_vocabulary_2_and_prints_a_definition_binding
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-15, REQ-TRIGGER-165, REQ-TRIGGER-166, REQ-TRIGGER-181: `evaluation list` and
-// `evaluation show` ask for representation 4 and an evaluation vocabulary that holds
-// `issue.unblocked_in_state`, so such an evaluation is listed and read, printed as Cloud sent
-// it under `--json` and in human output with its issue and its blocker wait: when the wait
-// began and the blockers still open, each by its identifier or else its Linear id.
+// REQ-CLOUDDEF-64, REQ-CLOUDDEF-66, REQ-CLOUDDEF-68, REQ-CLOUDDEF-69, REQ-TRIGGER-165,
+// REQ-TRIGGER-233, REQ-TRIGGER-181: `evaluation list` and `evaluation show` ask for representation
+// 4 and an evaluation vocabulary that holds `issue.unblocked_in_state`, so such an evaluation is
+// listed and read, printed as Cloud sent it under `--json` and in human output with its issue and
+// its blocker wait: when the wait began and the blockers still open, each by its identifier or else
+// its Linear id.
 #[test]
 fn definition_evaluations_ask_for_representation_4_and_show_an_evaluation_with_its_blocker_wait() {
     let home = Home::new();
@@ -7168,11 +7240,11 @@ fn definition_evaluations_ask_for_representation_4_and_show_an_evaluation_with_i
     assert!(home.workflow_entries().is_empty());
 }
 
-// REQ-CLOUDDEF-15, REQ-TRIGGER-190: `evaluation list` and `evaluation show` ask for
-// representation 4, so the diagnostic of an evaluation that could not read its issue is
-// printed as Cloud sent it under `--json` and in human output as its labelled facts, absent
-// members left out, at the end of the listed line and on a `diagnostic:` line after `blocker
-// wait:`, which reads `-` for an evaluation with none.
+// REQ-CLOUDDEF-64, REQ-CLOUDDEF-67, REQ-TRIGGER-190: `evaluation list` and `evaluation show` ask
+// for representation 4, so the diagnostic of an evaluation that could not read its issue is printed
+// as Cloud sent it under `--json` and in human output as its labelled facts, absent members left
+// out, at the end of the listed line and on a `diagnostic:` line after `blocker wait:`, which reads
+// `-` for an evaluation with none.
 #[test]
 fn definition_evaluations_ask_for_representation_4_and_show_an_evaluation_with_its_diagnostic() {
     let home = Home::new();

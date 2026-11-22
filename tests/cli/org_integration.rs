@@ -203,6 +203,7 @@ fn token_authorized(runner_id: &str) -> Vec<u8> {
 // REQ-INTEGRATION-16
 // REQ-INTEGRATION-17
 // REQ-INTEGRATION-18
+// REQ-INTEGRATION-60
 #[test]
 fn connect_stores_the_organizations_token_and_reconnect_stores_its_next_version() {
     let directory = tempfile::tempdir().unwrap();
@@ -365,6 +366,9 @@ fn connect_stores_the_organizations_token_and_reconnect_stores_its_next_version(
 
 // REQ-INTEGRATION-17
 // REQ-INTEGRATION-20
+// REQ-INTEGRATION-56
+// REQ-INTEGRATION-57
+// REQ-INTEGRATION-58
 #[test]
 fn each_leaf_acts_on_the_organizations_token_through_its_routes() {
     let held = || tokens(&[acme_mergify(1)]);
@@ -545,6 +549,7 @@ fn each_leaf_acts_on_the_organizations_token_through_its_routes() {
 
 // REQ-INTEGRATION-17
 // REQ-INTEGRATION-20
+// REQ-INTEGRATION-81
 #[test]
 fn a_refusal_ends_the_leaf_and_a_token_the_organization_lacks_is_not_found() {
     let forbidden = || problem("403 Forbidden", 403, "forbidden");
@@ -711,6 +716,10 @@ fn in_project(leaf: &str, server: &ScriptedServer, credential: &Path, args: &[&s
 // REQ-INTEGRATION-22
 // REQ-INTEGRATION-34
 // REQ-INTEGRATION-32
+// REQ-INTEGRATION-54
+// REQ-INTEGRATION-55
+// REQ-INTEGRATION-78
+// REQ-INTEGRATION-79
 #[test]
 fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens() {
     let answers = || {
@@ -809,6 +818,8 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
 
 // REQ-INTEGRATION-19
 // REQ-INTEGRATION-34
+// REQ-INTEGRATION-54
+// REQ-INTEGRATION-65
 #[test]
 fn show_shows_the_organizations_token_or_a_connection_with_its_authorizations() {
     let (server, _directory, credential) = prepared(vec![
@@ -987,6 +998,7 @@ fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_c
 }
 
 // REQ-INTEGRATION-33
+// REQ-INTEGRATION-71
 #[test]
 fn authorize_with_a_project_takes_the_one_active_connection_or_the_one_named() {
     let (server, _directory, credential) = prepared(vec![
@@ -1075,6 +1087,7 @@ fn authorize_with_a_project_takes_the_one_active_connection_or_the_one_named() {
 
 // REQ-INTEGRATION-33
 // REQ-GRANT-81
+// REQ-INTEGRATION-72
 #[test]
 fn authorize_with_a_project_given_no_runner_names_those_without_an_authorization_there() {
     // Charlie holds the project's authorization, so bravo and alpha are named.
@@ -1111,6 +1124,8 @@ fn authorize_with_a_project_given_no_runner_names_those_without_an_authorization
 
 // REQ-INTEGRATION-33
 // REQ-INTEGRATION-27
+// REQ-INTEGRATION-73
+// REQ-INTEGRATION-77
 #[test]
 fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome() {
     let refusals = [
@@ -1206,6 +1221,7 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
 }
 
 // REQ-INTEGRATION-33
+// REQ-INTEGRATION-76
 #[test]
 fn project_is_required_for_a_connection_and_refused_for_a_token_before_any_request() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -1320,6 +1336,7 @@ fn project_is_named_by_its_exact_name_among_the_organizations_projects() {
 
 // REQ-INTEGRATION-33
 // REQ-INTEGRATION-29
+// REQ-INTEGRATION-74
 #[test]
 fn deauthorize_with_a_project_ends_the_runners_authorization_found_in_the_organizations_list() {
     let (server, _directory, credential) = prepared(vec![
@@ -1387,6 +1404,7 @@ fn deauthorize_with_a_project_ends_the_runners_authorization_found_in_the_organi
 
 // REQ-INTEGRATION-33
 // REQ-GRANT-81
+// REQ-INTEGRATION-75
 #[test]
 fn deauthorize_with_a_project_given_no_runner_names_those_that_hold_an_authorization_there() {
     let mut unregistered = connection_authorization(ENDED_RUNNER_ID, "github", INSTALLATION_ID);

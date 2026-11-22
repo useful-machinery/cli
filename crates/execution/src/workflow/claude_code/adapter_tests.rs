@@ -1618,7 +1618,7 @@ async fn cancellation_during_initial_input_quiesces_the_process_group() {
     .await;
 }
 
-// REQ-AGENT-29, REQ-AGENT-35, REQ-AGENT-84, REQ-AGENT-85
+// REQ-AGENT-29, REQ-AGENT-35, REQ-AGENT-93, REQ-AGENT-85
 // INV-HARNESS-7, INV-HARNESS-23, INV-HARNESS-24
 #[tokio::test]
 async fn a_rejected_result_is_corrected_through_the_tool_and_the_last_accepted_one_is_the_value() {
@@ -1982,7 +1982,7 @@ async fn the_result_an_interrupt_at_the_quiet_bound_draws_decides_nothing() {
     .await;
 }
 
-// REQ-AGENT-32, REQ-AGENT-84
+// REQ-AGENT-32, REQ-AGENT-94
 #[tokio::test]
 async fn every_authoritatively_valid_json_root_is_returned_as_submitted() {
     let cases = [

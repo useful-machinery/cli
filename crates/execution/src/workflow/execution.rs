@@ -48,7 +48,7 @@ pub struct WorkflowExecutionResult<Deadline = ()> {
     /// The attempt ended `cancelled` on a withdrawal honored at a `workflow` step boundary
     /// (REQ-WFEXEC-73), which `chosen_outcome` records as `withdrawn`.
     pub withdrawn: bool,
-    /// The exit an edge-scheduled walk took (REQ-WFEXEC-58), a limited edge's `else` included;
+    /// The exit an edge-scheduled walk took (REQ-WFEXEC-83), a limited edge's `else` included;
     /// `None` for a dataflow run and for an attempt that took no exit.
     pub exit_outcome: Option<String>,
     /// The failed child each `succeeded` `workflow` step recorded, by step (REQ-WFEXEC-77).

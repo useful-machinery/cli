@@ -841,7 +841,7 @@ fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     );
     // An OAuth entry is one assignment's outcome: its line names the
     // generation issued, and no runner command helps one Cloud did not
-    // answer, since the next assignment asks again (REQ-GRANT-88).
+    // answer, since the next assignment asks again (REQ-GRANT-159).
     let line = |provider: &str| {
         stdout
             .lines()
@@ -889,7 +889,7 @@ fn runner_status_prints_each_recorded_source_beside_its_provider() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-42, REQ-GRANT-88, REQ-GRANT-53
+// REQ-RUNNERENROLL-42, REQ-GRANT-158, REQ-GRANT-53
 #[test]
 fn runner_status_prints_an_ended_oauth_entry_as_of_its_run_and_not_as_current() {
     let output = run_status_with_response(

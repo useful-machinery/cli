@@ -59,7 +59,7 @@ fn audit_success(next_cursor: Option<&str>) -> Vec<u8> {
     json_http_response("200 OK", audit_page(next_cursor))
 }
 
-// REQ-AUDIT-7, REQ-AUDIT-8, REQ-AUDIT-21, REQ-AUDIT-22, REQ-AUDIT-44
+// REQ-AUDIT-7, REQ-AUDIT-8, REQ-AUDIT-21, REQ-AUDIT-22, REQ-AUDIT-65
 #[test]
 fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
     let cursor = "next page /+=";
@@ -370,7 +370,7 @@ fn gitlab_audit_page() -> serde_json::Value {
     })
 }
 
-// REQ-AUDIT-10, REQ-AUDIT-22, REQ-AUDIT-23, REQ-AUDIT-44
+// REQ-AUDIT-10, REQ-AUDIT-22, REQ-AUDIT-23, REQ-AUDIT-65
 #[test]
 fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
     let page = gitlab_audit_page();

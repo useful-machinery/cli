@@ -209,7 +209,7 @@ async fn prepare_stage(
                 ),
         )
     };
-    // A successor's carried wait keeps its fresh-stage path (REQ-CONTINUE-80).
+    // A successor's carried wait keeps its fresh-stage path (REQ-CONTINUE-116).
     if parent.imported_prior().is_some() {
         return Ok(None);
     }
@@ -281,7 +281,7 @@ async fn prepare_stage(
         workflow,
         mode,
     } = verified;
-    // REQ-CONTINUE-82: the inputs the step will map for the child, from the run's admitted
+    // REQ-CONTINUE-117: the inputs the step will map for the child, from the run's admitted
     // inputs, the outputs it inherits and the attempt's `wait.<field>` values
     // (REQ-WFEXEC-63), must be the child's retained ones before the wait is consumed.
     let mapped = Mapped {
@@ -293,7 +293,7 @@ async fn prepare_stage(
     };
     check_mapped_inputs(mapped, &pending, &mut controls, output, UNOWNED)?;
     // The partition, retained inputs and inherited outputs are admitted as for any
-    // continuation, launched from the parent's admitted environment (REQ-WFEXEC-59).
+    // continuation, launched from the parent's admitted environment (REQ-WFEXEC-89).
     let candidate = ContinuationCandidate {
         inputs: pending.candidate_inputs(&workflow),
         workflow: &workflow,
@@ -363,7 +363,7 @@ struct VerifiedNested {
 }
 
 /// The continuation of the nested run that entered the root's carried `wait` (REQ-CONTINUE-92),
-/// or `None` for a fresh nested run: a successor's imported wait (REQ-CONTINUE-80), a target
+/// or `None` for a fresh nested run: a successor's imported wait (REQ-CONTINUE-123), a target
 /// that is not the waiting step's `workflow` step, or an explicitly different execution root.
 /// Before the root's wait is consumed, under the root's lock and then the nested run's, the
 /// wait's `payload.child` must lie under the waiting element's nested run, which must name the
@@ -520,7 +520,7 @@ async fn prepare_nested(
     if let Err(error) = pending.validate_execution_root(&nested_admitted) {
         return Err(Unprepared::Diagnosed(error));
     }
-    // REQ-CONTINUE-92, REQ-CONTINUE-93: a repair retry, or a host wait's resolution, treats
+    // REQ-CONTINUE-121, REQ-CONTINUE-93: a repair retry, or a host wait's resolution, treats
     // the nested step's stage as the run's own would, with the nested run as the parent and
     // the control, if any, recorded on the root.
     let stage = if continues_in_place(nested_wait.kind, reason) {
@@ -756,7 +756,7 @@ fn open_abandoned_nested(directory: &std::path::Path) -> Result<AbandonedChild, 
             _ => return Err(Box::new(Refusal::Unowned(NESTED_ABANDONED))),
         },
     };
-    // REQ-CONTINUE-76 one level down: the running step's latest stage, from the nested run's
+    // REQ-CONTINUE-112 one level down: the running step's latest stage, from the nested run's
     // own `position`, is adopted when it exited and retried in place when it did not; none
     // runs afresh.
     let stage = match (&edge, from.as_slice()) {
@@ -1123,7 +1123,7 @@ fn retained_request(
 /// Begins the next attempt of the child `continuation` holds for the step's dispatched
 /// `request`, with its reason, `retry` or `host` for a failed stage (REQ-CONTINUE-93) and
 /// `retry`, `host` or `resume` for a nested run (REQ-CONTINUE-92), and its continuation
-/// context bound (INV-ENGINE-27). The
+/// context bound (INV-ENGINE-53). The
 /// request must be for the child's own workflow with the mapped inputs its run retained
 /// (REQ-CONTINUE-82); otherwise nothing is written and the refusal is the child's rejection
 /// code. The attempt observes the step's `cancellation`.

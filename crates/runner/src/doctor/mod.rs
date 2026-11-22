@@ -758,7 +758,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-86, REQ-GRANT-38
+    // REQ-RUNNERENROLL-86, REQ-GRANT-118
     #[test]
     fn agent_logins_check_passes_for_a_provider_an_earlier_release_recorded_as_selected() {
         let host = AgentLoginHost::new();
@@ -800,7 +800,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-86, REQ-GRANT-53
+    // REQ-RUNNERENROLL-309, REQ-GRANT-53
     #[test]
     fn agent_logins_check_names_every_providers_availability_and_next_action() {
         for (record, availability, next_action) in [
@@ -844,7 +844,7 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-92, REQ-RUNNERENROLL-86
+    // REQ-GRANT-92, REQ-RUNNERENROLL-309
     #[test]
     fn agent_logins_check_names_each_recorded_source() {
         for (source, state) in [("host", "foreign_login"), ("grant", "ready")] {
@@ -886,7 +886,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-86
+    // REQ-RUNNERENROLL-310
     #[test]
     fn agent_logins_check_fails_without_recorded_readiness_or_configuration() {
         let host = AgentLoginHost::new();

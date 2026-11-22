@@ -451,7 +451,7 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-22
+    // INV-TESTING-37
     #[test]
     fn an_echo_response_rejects_a_keyless_request_by_its_request_line() {
         let response =
@@ -472,7 +472,7 @@ mod tests {
         );
     }
 
-    // INV-TESTING-25
+    // INV-TESTING-39, INV-TESTING-40
     #[test]
     fn a_request_declaring_a_body_past_the_bound_is_an_error_not_a_panic() -> std::io::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -527,7 +527,7 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-25
+    // INV-TESTING-39
     #[test]
     fn a_request_past_the_bound_its_caller_names_is_an_error() -> std::io::Result<()> {
         let head = b"PUT /upload HTTP/1.1\r\nContent-Length: 64\r\n\r\n";

@@ -1130,7 +1130,7 @@ fn workflow_doctor_reads_every_page_of_linear_connections() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
     let deployment = Deployment::signed_in(with_no_grants(vec![
         connection_page(
-            &[linear_connection("revoked", &["read"])],
+            &[linear_connection("disconnected", &["read"])],
             Some("opaque-second-page"),
         ),
         connection_page(&[linear_connection("active", &["read"])], None),
@@ -1253,7 +1253,7 @@ fn workflow_doctor_ends_without_a_report_when_cloud_cannot_be_reached() {
     assert!(signed_in.server.finish().is_empty());
 }
 
-// REQ-CREDREADY-13
+// REQ-CREDREADY-13, REQ-CREDREADY-32
 #[test]
 fn workflow_doctor_with_a_service_key_reads_the_connections_alone() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2037,7 +2037,7 @@ fn workflow_doctor_shows_the_members_grants_beside_each_requirement() {
     assert_grants_tree_requests(deployment, 2);
 }
 
-// REQ-CREDREADY-22
+// REQ-CREDREADY-31
 #[test]
 fn workflow_doctor_keeps_the_coding_agent_grants_of_the_organization_in_effect() {
     let tree = grants_tree();
@@ -2316,7 +2316,7 @@ fn workflow_doctor_on_a_runner_fails_a_grant_not_authorized_for_it() {
     assert_only_reads(deployment);
 }
 
-// REQ-CREDREADY-26, REQ-CREDREADY-17
+// REQ-CREDREADY-34, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_on_a_runner_fails_a_coding_agent_no_grant_serves() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2426,7 +2426,7 @@ fn workflow_doctor_on_a_runner_meets_a_need_with_a_grant_it_can_use() {
     }
 }
 
-// REQ-CREDREADY-26, REQ-CREDREADY-17
+// REQ-CREDREADY-35, REQ-CREDREADY-26, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_on_a_runner_keeps_a_failing_connection_code() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2526,7 +2526,7 @@ fn declaring(workflow: &str, integrations: &[&str]) -> String {
     declared
 }
 
-// REQ-CREDREADY-27, REQ-CREDREADY-6, REQ-CREDREADY-8
+// REQ-CREDREADY-27, REQ-CREDREADY-36, REQ-CREDREADY-6, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reports_a_declaring_workflow_by_its_integrations() {
     let tree = single_file_tree(&declaring(LINEAR_WORKFLOW, &["linear", "gitlab.com"]));
@@ -2602,7 +2602,7 @@ fn github_tree_declaring_linear() -> WorkflowTree {
     ))
 }
 
-// REQ-CREDREADY-28, REQ-CREDREADY-8
+// REQ-CREDREADY-28, REQ-CREDREADY-40, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reports_where_the_declaration_and_the_inference_differ() {
     let tree = github_tree_declaring_linear();
@@ -2673,7 +2673,7 @@ fn workflow_doctor_reports_where_the_declaration_and_the_inference_differ() {
     assert_eq!(summary.lines().last(), Some("differences: 3"), "{stdout}");
 }
 
-// REQ-CREDREADY-28, REQ-CREDREADY-15
+// REQ-CREDREADY-39, REQ-CREDREADY-15
 #[test]
 fn workflow_doctor_asks_nothing_about_a_kind_only_the_inference_finds() {
     let tree = github_tree_declaring_linear();
@@ -2690,7 +2690,7 @@ fn workflow_doctor_asks_nothing_about_a_kind_only_the_inference_finds() {
     assert_eq!(deployment.linear_list_requests().len(), 1);
 }
 
-// REQ-CREDREADY-28, REQ-CREDREADY-8
+// REQ-CREDREADY-40, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_without_the_block_reports_no_differences() {
     let tree = github_tree();
@@ -2707,7 +2707,7 @@ fn workflow_doctor_without_the_block_reports_no_differences() {
     assert!(!stdout.contains("differences:"), "{stdout}");
 }
 
-// REQ-CREDREADY-28
+// REQ-CREDREADY-28, REQ-CREDREADY-40
 #[test]
 fn workflow_doctor_names_the_provider_id_to_declare_for_an_undeclared_kind() {
     // The tool `glab` calls for the kind `gitlab`, which is declared as `gitlab.com`.
@@ -2744,7 +2744,7 @@ fn command_tree_declaring(integrations: &[&str]) -> WorkflowTree {
     single_file_tree(&declaring(COMMAND_WORKFLOW, integrations))
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-3, REQ-CREDREADY-8, REQ-CREDREADY-28
+// REQ-CREDREADY-29, REQ-CREDREADY-3, REQ-CREDREADY-8, REQ-CREDREADY-42
 #[test]
 fn workflow_doctor_reports_a_declared_token_service_as_unverified() {
     let tree = command_tree_declaring(&["mergify"]);
@@ -2782,7 +2782,7 @@ fn workflow_doctor_reports_a_declared_token_service_as_unverified() {
     );
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-22, REQ-CREDREADY-23
+// REQ-CREDREADY-41, REQ-CREDREADY-22, REQ-CREDREADY-23
 #[test]
 fn workflow_doctor_asks_nothing_when_only_a_token_service_is_declared() {
     let tree = command_tree_declaring(&["mergify"]);
@@ -2846,7 +2846,7 @@ fn workflow_doctor_reads_the_project_beside_a_token_service_when_the_repository_
     assert!(requests[1].starts_with(GITHUB_LIST), "{}", requests[1]);
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-22
+// REQ-CREDREADY-41, REQ-CREDREADY-22
 #[test]
 fn workflow_doctor_shows_no_grant_beside_a_token_service() {
     let tree = command_tree_declaring(&["github", "mergify"]);
@@ -2907,7 +2907,7 @@ fn workflow_doctor_never_fails_a_token_service_on_a_named_runner() {
     assert_eq!(deployment.requests().len(), 3);
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-13, REQ-CREDREADY-15
+// REQ-CREDREADY-41, REQ-CREDREADY-13, REQ-CREDREADY-15
 #[test]
 fn workflow_doctor_asks_nothing_about_a_token_service() {
     let tree = command_tree_declaring(&["linear", "buildkite"]);

@@ -198,7 +198,7 @@ pub(super) mod continuation_command_tests {
                     }
                     let violation_code = step.strip_prefix("violation:");
                     let response = if step == "admission-version"
-                        || step == "admission-node"
+                        || step == "admission-workspace"
                         || violation_code.is_some()
                     {
                         let violation = if let Some(code) = violation_code {
@@ -206,7 +206,7 @@ pub(super) mod continuation_command_tests {
                         } else if step == "admission-version" {
                             serde_json::json!({"code":"expected_run_version_conflict"})
                         } else {
-                            serde_json::json!({"code":"continuation_references_unsatisfied", "node":"test", "producer":"source", "reference":"steps.source.outputs.file", "priorState":"failed"})
+                            serde_json::json!({"code":"retained_workspace_unavailable"})
                         };
                         http_response_with_headers("409 Conflict", Some("application/problem+json"), &[],
                             &serde_json::to_vec(&serde_json::json!({"type":"https://api.usefulmachinery.com/problems/continuation-admission-invalid", "title":"Continuation admission invalid", "status":409, "continuationViolations":[violation]})).unwrap())
@@ -605,10 +605,10 @@ pub(super) mod continuation_command_tests {
 
     // REQ-CONTINUE-59
     #[test]
-    fn admission_violations_retain_stale_version_and_reference_details() {
+    fn admission_violations_are_reported_by_code() {
         for (step, code) in [
             ("admission-version", "expected_run_version_conflict"),
-            ("admission-node", "continuation_references_unsatisfied"),
+            ("admission-workspace", "retained_workspace_unavailable"),
         ] {
             let (output, requests) = execute(&[step], &args());
             assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -616,27 +616,15 @@ pub(super) mod continuation_command_tests {
             let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(result["outcome"], "error");
             assert_eq!(result["code"], "continuation_admission_invalid");
-            assert_eq!(result["diagnostic"][0]["code"], code);
-            if step == "admission-node" {
-                assert_eq!(result["diagnostic"][0]["node"], "test");
-                assert_eq!(result["diagnostic"][0]["producer"], "source");
-                assert_eq!(
-                    result["diagnostic"][0]["reference"],
-                    "steps.source.outputs.file"
-                );
-                assert_eq!(result["diagnostic"][0]["priorState"], "failed");
-            }
+            assert_eq!(result["diagnostic"], serde_json::json!([{"code": code}]));
         }
         let mut human_args = args();
         human_args.retain(|arg| *arg != "--json");
-        let (output, requests) = execute(&["admission-node"], &human_args);
+        let (output, requests) = execute(&["admission-workspace"], &human_args);
         assert_eq!(requests.len(), 1);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains("continuation_references_unsatisfied"));
-        assert!(stderr.contains(
-            "node: test producer: source reference: steps.source.outputs.file prior state: failed"
-        ));
+        assert!(stderr.contains("retained_workspace_unavailable"));
     }
 
     // REQ-CONTINUE-57
@@ -1564,7 +1552,7 @@ fn list_runs_filters_and_renders_text_and_json() {
     }
 }
 
-// REQ-RUN-66, REQ-RUN-117
+// REQ-RUN-66, REQ-RUN-117, REQ-RUN-167
 #[test]
 fn list_runs_accepts_full_pages_with_large_valid_contexts() {
     let context = (0..15)
@@ -4531,7 +4519,7 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     assert_eq!(request_body(&requests[0])["inputSetId"], INPUT_SET_ID);
 }
 
-// REQ-RUNINPUT-61, REQ-RUNINPUT-64
+// REQ-RUNINPUT-61, REQ-RUNINPUT-64, REQ-RUNINPUT-80
 #[test]
 fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let input_bytes = b"selected single-use input\n";
@@ -5507,7 +5495,7 @@ fn retained_input_integrity_failure_leaves_no_destination() {
     storage.finish();
 }
 
-// REQ-RUNINPUT-66
+// REQ-RUNINPUT-66, REQ-RUNINPUT-79
 #[cfg(target_os = "linux")]
 #[test]
 fn interrupted_retained_input_download_removes_verified_private_staging() {
@@ -5931,7 +5919,7 @@ fn lifecycle_identity_lines(indent: &str) -> Vec<String> {
     ]
 }
 
-// REQ-TRIGGER-145
+// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     let view = linear_lifecycle_body("skipped", Some("team_unmapped"));
@@ -5964,7 +5952,7 @@ fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     server.finish();
 }
 
-// REQ-TRIGGER-145
+// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
     let mut view = linear_lifecycle_body("awaiting_event", None);
@@ -6038,7 +6026,7 @@ fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
     server.finish();
 }
 
-// REQ-TRIGGER-145
+// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_reports_absence_and_refuses_a_wrong_pair() {
     let (output, server) = linear_lifecycle_show(None, true);
@@ -6118,7 +6106,7 @@ fn lifecycle_problem(status: &str, problem: &str) -> Vec<u8> {
     )
 }
 
-// REQ-TRIGGER-145
+// REQ-TRIGGER-145, REQ-TRIGGER-267
 #[test]
 fn linear_lifecycle_list_writes_the_page_unchanged_and_each_update_as_show_does() {
     let page = lifecycle_list_page();
@@ -6212,7 +6200,7 @@ fn linear_lifecycle_list_writes_the_page_unchanged_and_each_update_as_show_does(
     server.finish();
 }
 
-// REQ-TRIGGER-145
+// REQ-TRIGGER-145, REQ-TRIGGER-267
 #[test]
 fn linear_lifecycle_list_reports_absence_and_refuses_invalid_updates() {
     let (output, server) = linear_lifecycle_command(
@@ -6824,7 +6812,7 @@ fn show_wait_preserves_fatal_response_classifications() {
         "--wait",
         "--json",
     ]);
-    // Nobody is signed in, so Cloud is not asked and the run is not found (REQ-LOCALRUN-180).
+    // Nobody is signed in, so Cloud is not asked and the run is not found (REQ-LOCALRUN-227).
     assert_eq!(unauthenticated.status.code(), Some(1));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&unauthenticated.stdout).unwrap()["error"]["code"],
@@ -7532,7 +7520,7 @@ fn signalled_input_set_seal_reports_one_unknown_receipt() {
 }
 
 /// `useful workflow run show RUN` finding `RUN` in Cloud when the home holds no such run
-/// (REQ-LOCALRUN-180) and reading it there (REQ-LOCALRUN-189).
+/// (REQ-LOCALRUN-228) and reading it there (REQ-LOCALRUN-189).
 pub(crate) mod workflow_run_show {
     use super::workflow_run_cloud::{
         controls_response, definition_run, deliveries_response, document, route, show_in_cloud,
@@ -7576,7 +7564,7 @@ pub(crate) mod workflow_run_show {
         requests.iter().map(|request| route(request)).collect()
     }
 
-    // REQ-LOCALRUN-180: an ID the home lacks, with nobody signed in, is `run_not_found` naming
+    // REQ-LOCALRUN-227: an ID the home lacks, with nobody signed in, is `run_not_found` naming
     // the home and saying Cloud was not asked because nobody is signed in; nothing is sent.
     #[test]
     fn show_of_an_id_signed_out_names_the_home_and_sends_nothing() {
@@ -7610,7 +7598,7 @@ pub(crate) mod workflow_run_show {
         assert!(server.finish().is_empty());
     }
 
-    // REQ-LOCALRUN-180, REQ-LOCALRUN-189: a subject no run under the home holds is the one
+    // REQ-LOCALRUN-228, REQ-LOCALRUN-189: a subject no run under the home holds is the one
     // live Cloud run whose claim names it, found in the `active` page of the runs listing and
     // then read; `on` is `personal` for a run with an owner.
     #[test]
@@ -7649,7 +7637,7 @@ pub(crate) mod workflow_run_show {
         assert_eq!(shown["on"], "personal", "{shown}");
     }
 
-    // REQ-LOCALRUN-180: with no live run of the subject, the `terminal` page is read and the
+    // REQ-LOCALRUN-228: with no live run of the subject, the `terminal` page is read and the
     // newest of the subject's runs is the run.
     #[test]
     fn show_of_a_subject_with_no_live_run_reads_its_newest_ended_run() {
@@ -7684,7 +7672,7 @@ pub(crate) mod workflow_run_show {
         assert_eq!(document(&output)["runId"], RUN_ID);
     }
 
-    // REQ-LOCALRUN-180: runs of two definitions whose claims name the subject are refused
+    // REQ-LOCALRUN-228: runs of two definitions whose claims name the subject are refused
     // `subject_ambiguous` with both IDs, and neither is read.
     #[test]
     fn show_of_a_subject_two_definitions_claim_is_ambiguous() {
@@ -7712,7 +7700,7 @@ pub(crate) mod workflow_run_show {
         );
     }
 
-    // REQ-LOCALRUN-180: a state group read to its bound, five pages, with no run of the subject
+    // REQ-LOCALRUN-227, REQ-LOCALRUN-228: a state group read to its bound, five pages, with no run of the subject
     // is `run_not_found`, saying the bound was reached and that the run's ID finds an older
     // run. Live runs read to the bound end the lookup: an ended run is not the answer while a
     // live one may lie past the bound, so the ended runs are not read.
@@ -7758,7 +7746,7 @@ pub(crate) mod workflow_run_show {
         }
     }
 
-    // REQ-LOCALRUN-189: `--attempt` reads a run under the home, so a Cloud run refuses it
+    // REQ-LOCALRUN-189, REQ-LOCALRUN-308: `--attempt` reads a run under the home, so a Cloud run refuses it
     // with exit 2 once it is found, before any read.
     #[test]
     fn show_of_a_cloud_run_refuses_attempt() {
@@ -7809,7 +7797,7 @@ mod workflow_run_input {
         (output, server.finish())
     }
 
-    // REQ-RUNINPUT-65, REQ-LOCALRUN-180: an ID is the Cloud run of that ID even when the home
+    // REQ-RUNINPUT-65, REQ-LOCALRUN-309: an ID is the Cloud run of that ID even when the home
     // holds a run of it, which is neither read nor changed; the inventory read is the first
     // request, and the document is the inventory document the earlier spelling printed.
     #[test]
@@ -7840,7 +7828,7 @@ mod workflow_run_input {
         assert_eq!(std::fs::read(directory.join("run.json")).unwrap(), before);
     }
 
-    // REQ-RUNINPUT-65, REQ-LOCALRUN-180: a subject is the run the runs listing names for it,
+    // REQ-RUNINPUT-65, REQ-LOCALRUN-309: a subject is the run the runs listing names for it,
     // whose inventory is then read.
     #[test]
     fn input_show_of_a_subject_finds_the_run_in_the_runs_listing() {
@@ -8017,7 +8005,7 @@ mod workflow_run_cloud {
     }
 
     /// `useful workflow run LEAF RUN --org ORGANIZATION ARGS --allow-insecure-http`, the leaf
-    /// finding `RUN` under the home and then in Cloud (REQ-LOCALRUN-180), against a Gateway
+    /// finding `RUN` under the home and then in Cloud (REQ-LOCALRUN-228), against a Gateway
     /// answering `responses` in order, with `USEFUL_HOME` at `home`: the output and the
     /// requests served. `--org` costs no request, so the Gateway sees the leaf's own.
     fn in_cloud(
@@ -8050,7 +8038,7 @@ mod workflow_run_cloud {
             .trim_end_matches(" HTTP/1.1")
     }
 
-    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-LOCALRUN-189, REQ-LOCALRUN-180: `show` of an ID
+    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-LOCALRUN-189, REQ-LOCALRUN-228: `show` of an ID
     // the home lacks reads the Cloud run first, then the newest page of its deliveries and of
     // its controls, and reports where it executes, the deployment, the definition identity,
     // claim, workflow state and outcome, progress, exits and deliveries.
@@ -8216,7 +8204,8 @@ mod workflow_run_cloud {
         Some((value, questions))
     }
 
-    // REQ-RUN-104: Cloud show prints an answer wait's questions in order, each by its id and
+    // REQ-RUN-104, REQ-RUN-140:
+    // Cloud show prints an answer wait's questions in order, each by its id and
     // text, a question without text by its id alone, every one on its own line with control
     // characters escaped; it says when the questions are unknown or none, prints none for a
     // wait of another kind, and passes them through under --json as received.
@@ -8298,7 +8287,8 @@ mod workflow_run_cloud {
             .collect()
     }
 
-    // REQ-RUN-112: Cloud show prints a waiting run's failed stage on one line, the stage's
+    // REQ-RUN-112, REQ-RUN-140:
+    // Cloud show prints a waiting run's failed stage on one line, the stage's
     // path, the outcome and the failing node by its path with its state, phase and code
     // when each is reported; a null or absent failed child prints no such line; every value
     // is escaped so the line stays one line; an answer wait's questions still print whole;
@@ -8423,7 +8413,7 @@ mod workflow_run_cloud {
         );
     }
 
-    // REQ-RUN-96: Cloud show of an exited run whose claim is still held names the subject,
+    // REQ-RUN-153: Cloud show of an exited run whose claim is still held names the subject,
     // the `subject-settled` refusal a start for it reads, and the release command with the
     // run's ID, which finds the run itself; a released claim or a live run adds no release
     // command.
@@ -8611,7 +8601,8 @@ mod workflow_run_cloud {
         server.finish();
     }
 
-    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-RUN-110: a run by `workflowPath` reads no
+    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-RUN-136, REQ-RUN-110: a run by `workflowPath`
+    // reads no
     // deliveries and no controls, and the observations its read leaves out are null, not
     // absent.
     #[test]
@@ -8679,7 +8670,8 @@ mod workflow_run_cloud {
         )
     }
 
-    // REQ-RUN-110, REQ-RUN-92, REQ-COMPAT-20, REQ-LOCALRUN-189: Cloud show of a
+    // REQ-RUN-110, REQ-RUN-141, REQ-RUN-142, REQ-RUN-92, REQ-COMPAT-20, REQ-LOCALRUN-304, REQ-LOCALRUN-305:
+    // Cloud show of a
     // definition-backed run reads the newest 100 of its controls after its deliveries and
     // passes them through under --json as Cloud sent them, a kind and state this release does
     // not name included, saying when older ones remain; it prints each control's id, kind,
@@ -8844,7 +8836,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-180: an ID the home lacks is read in Cloud, and a run Cloud does not find
+    // REQ-LOCALRUN-227, REQ-LOCALRUN-307: an ID the home lacks is read in Cloud, and a run Cloud does not find
     // is `run_not_found`, naming the home and the organization, with no local run read.
     #[test]
     fn show_of_an_id_cloud_does_not_find_names_where_it_looked() {
@@ -8876,9 +8868,9 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187: Cloud release asks Cloud to release the run's
-    // current claim under one fresh key, sent again when the response is lost, and reports
-    // the released claim.
+    // REQ-CLOUDDEF-97, REQ-CLOUDDEF-98, REQ-LOCALRUN-248: Cloud release asks Cloud to release
+    // the run's current claim under one fresh key, sent again when the response is lost, and
+    // reports the released claim.
     #[test]
     fn cloud_release_sends_one_keyed_claim_release_and_reports_the_claim() {
         let home = tempfile::tempdir().unwrap();
@@ -8919,7 +8911,8 @@ mod workflow_run_cloud {
         assert!(text.contains(CLAIM_ID) && text.contains("owner"), "{text}");
     }
 
-    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187: a live run's claim, a changed claim, a reused key and
+    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187, REQ-LOCALRUN-249: a live run's claim, a changed claim,
+    // a reused key and
     // a member's release are refused with exit 1, and release without a session exits 3.
     #[test]
     fn cloud_release_refusals_name_their_cause() {
@@ -9030,7 +9023,7 @@ mod workflow_run_cloud {
         format!("POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/controls")
     }
 
-    // REQ-LOCALRUN-210, REQ-RUN-91: answer of a run the home lacks reads the Cloud run, sends
+    // REQ-LOCALRUN-210, REQ-LOCALRUN-250, REQ-LOCALRUN-251, REQ-LOCALRUN-228, REQ-RUN-91: answer of a run the home lacks reads the Cloud run, sends
     // one control naming the run's current wait under one fresh key, sent again when the
     // response is lost, and reports the accepted control; nothing under the `useful` home is
     // read or written.
@@ -9103,7 +9096,7 @@ mod workflow_run_cloud {
         run
     }
 
-    // REQ-LOCALRUN-210: answer with no `--question` takes the one question the run read's wait
+    // REQ-LOCALRUN-210, REQ-LOCALRUN-308: answer with no `--question` takes the one question the run read's wait
     // lists, and sends `1` when it lists none; with several listed it is refused
     // `question_ambiguous` and sends nothing, and `--record-only` is a usage error once the run
     // is read.
@@ -9174,7 +9167,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-218, REQ-RUN-91: `cancel` of a Cloud run whose read carries a wait sends
+    // REQ-LOCALRUN-218, REQ-LOCALRUN-228, REQ-RUN-91: `cancel` of a Cloud run whose read carries a wait sends
     // one `withdraw` control naming no wait under one fresh key, sent again when the response
     // is lost, and reports the accepted control; with `--wait` it then reads the run until it
     // is final and reports it under `run`. Nothing under the `useful` home is read or written.
@@ -9255,7 +9248,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-218, REQ-RUN-91: approve, hand-back, retry (of a repair
+    // REQ-LOCALRUN-250, REQ-LOCALRUN-313, REQ-LOCALRUN-218, REQ-RUN-91: approve, hand-back, retry (of a repair
     // or a host wait) and an `unpause` name the run's current wait with their kinds, `pause`
     // and `unpause` sending the kinds `stop` and `lift`; an `unpause` of a run that does not
     // wait on a stop, a `pause` and the withdrawal `cancel` sends a waiting run name none, and
@@ -9338,7 +9331,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-210, REQ-RUN-91: Cloud's refusals exit 1 with their slugs, a run that does
+    // REQ-LOCALRUN-251, REQ-LOCALRUN-250, REQ-RUN-91: Cloud's refusals exit 1 with their slugs, a run that does
     // not wait on the leaf's kind is refused before any control is sent, and an `approve`
     // nobody is signed in to send finds no run.
     #[test]
@@ -9371,7 +9364,7 @@ mod workflow_run_cloud {
             assert_eq!(refused["exitStatus"], 1);
             assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
         }
-        // REQ-LOCALRUN-218, REQ-CANCEL-38: a withdrawal Cloud refuses because no runner
+        // REQ-LOCALRUN-252, REQ-CANCEL-38: a withdrawal Cloud refuses because no runner
         // executes the run or its runner's `useful` does not apply one is followed by the
         // graceful cancellation request under the same key, reported as that request is.
         let echo = api_test_support::REQUEST_IDEMPOTENCY_KEY_ECHO;
@@ -9461,7 +9454,7 @@ mod workflow_run_cloud {
                 .contains("wait_kind_mismatch")
         );
         // With nobody signed in, Cloud is not asked and the run is not found
-        // (REQ-LOCALRUN-180), for a leaf that reads the run and for `pause`, which sends its
+        // (REQ-LOCALRUN-307), for a leaf that reads the run and for `pause`, which sends its
         // control unread.
         for (leaf, args) in [
             ("approve", &[][..]),
@@ -9505,7 +9498,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-218, REQ-CANCEL-38, REQ-CANCEL-1, REQ-CANCEL-5: `cancel` of a Cloud run
+    // REQ-LOCALRUN-253, REQ-LOCALRUN-307, REQ-CANCEL-38, REQ-CANCEL-1, REQ-CANCEL-5: `cancel` of a Cloud run
     // whose read carries no wait sends one graceful cancellation request and prints the
     // document of the cancellation; an accepted request and one Cloud resolved
     // `already_terminal` are each reported with the receipt, a run Cloud does not have is the
@@ -9674,7 +9667,7 @@ mod workflow_run_cloud {
         }
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-80: `retry` with neither `--from` nor `--all` of a Cloud
+    // REQ-LOCALRUN-210, REQ-LOCALRUN-312, REQ-LOCALRUN-80: `retry` with neither `--from` nor `--all` of a Cloud
     // run reads it and, ended other than `succeeded`, sends the continuation from the step its
     // reported position names; a run that names none is refused `continuation_step_required`,
     // a succeeded run `latest_attempt_succeeded` and a running one `run_not_waiting`, each
@@ -9789,7 +9782,7 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-180, REQ-LOCALRUN-181, REQ-LOCALRUN-187, REQ-LOCALRUN-189: `show` and
+    // REQ-LOCALRUN-180, REQ-LOCALRUN-248, REQ-LOCALRUN-304, REQ-LOCALRUN-187, REQ-LOCALRUN-189: `show` and
     // `release` of an ID the home holds read and change the local run and send nothing, with
     // `--org` given and a session stored: `release` refuses the waiting run `run_live`, naming
     // the verbs its state takes (REQ-LOCALRUN-223), and records `control.release` once the

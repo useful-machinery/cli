@@ -1617,7 +1617,7 @@ fn advisory_issue_is_valid_on_success_but_cannot_be_primary() {
     assert_eq!(decode(&encode(&advisory)), Err(ResultMetadataError));
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-136
 #[test]
 fn an_interrupted_step_is_the_primary_issue_whatever_its_failure_policy() {
     for phase in ["start", "execution"] {
@@ -1638,7 +1638,7 @@ fn an_interrupted_step_is_the_primary_issue_whatever_its_failure_policy() {
     assert_eq!(decode(&encode(&at_capture)), Err(ResultMetadataError));
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-134
 #[test]
 fn a_recovery_round_an_interruption_stopped_ends_failed_and_cancelled() {
     let interrupted = |code: &str| {

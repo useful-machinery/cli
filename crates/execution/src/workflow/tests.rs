@@ -770,7 +770,7 @@ fn root_workflow_decodes_name_version_root_blocks_and_input_completion() {
     }
 }
 
-// REQ-WFDEF-34, REQ-WFFORMAT-82
+// REQ-WFDEF-34, REQ-WFDEF-44, REQ-WFFORMAT-82
 #[test]
 fn root_requires_decodes_as_and_integrations_as_declared() {
     let workflow =
@@ -841,7 +841,7 @@ fn a_definition_trigger_decodes_its_binding_and_outcomes_as_written() {
     );
 }
 
-// REQ-WFDEF-34, REQ-WFFORMAT-82
+// REQ-WFDEF-45, REQ-WFFORMAT-82
 #[test]
 fn root_integration_bindings_decode_with_kinds_defaults_and_integration_references() {
     let workflow =
@@ -1179,7 +1179,7 @@ fn workflow_steps_decode_backward_limited_and_external_edges() {
     );
 }
 
-// REQ-WFFORMAT-2, REQ-WFFORMAT-8, REQ-WFFORMAT-11, REQ-WFFORMAT-34, REQ-WFFORMAT-36, REQ-WFFORMAT-37, REQ-WFFORMAT-41, REQ-WFFORMAT-42, REQ-WFFORMAT-45, REQ-WFFORMAT-46, REQ-WFFORMAT-53, REQ-WFFORMAT-54, REQ-WFFORMAT-61, REQ-WFRECOVERY-56, REQ-WFRECOVERY-57, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-89, REQ-WFFORMAT-92, REQ-WFFORMAT-95, REQ-WFFORMAT-96, REQ-WFFORMAT-102, REQ-WFFORMAT-105, REQ-WFFORMAT-109
+// REQ-WFFORMAT-2, REQ-WFFORMAT-8, REQ-WFFORMAT-11, REQ-WFFORMAT-34, REQ-WFFORMAT-36, REQ-WFFORMAT-37, REQ-WFFORMAT-41, REQ-WFFORMAT-42, REQ-WFFORMAT-45, REQ-WFFORMAT-46, REQ-WFFORMAT-53, REQ-WFFORMAT-54, REQ-WFFORMAT-61, REQ-WFRECOVERY-56, REQ-WFRECOVERY-57, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-89, REQ-WFFORMAT-92, REQ-WFFORMAT-95, REQ-WFFORMAT-96, REQ-WFFORMAT-102, REQ-WFFORMAT-105, REQ-COMPAT-26, REQ-WFFORMAT-109
 #[test]
 fn every_canonical_invalid_fixture_is_a_structural_failure() {
     let invalid_root = fixture_root().join("invalid");
@@ -1217,7 +1217,7 @@ fn structural_violation(source: &[u8]) -> (Option<String>, String, Option<serde_
     )
 }
 
-// REQ-WFFORMAT-103, REQ-WFDEF-34
+// REQ-WFFORMAT-103, REQ-WFDEF-46
 #[test]
 fn a_structural_failure_names_the_field_and_the_rule() {
     let mut hyphenated = canonical_valid_fixture();
@@ -1335,7 +1335,7 @@ fn a_structural_failure_names_the_field_and_the_rule() {
             None,
         ),
         // An integration binding's kind is one its provider lists, a provider that lists
-        // none holds no bindings, and a default is text (REQ-WFDEF-34).
+        // none holds no bindings, and a default is text (REQ-WFDEF-45).
         (
             "root-integration-binding-unknown-kind.yaml",
             "requires.integrations.linear.bindings.team.kind",

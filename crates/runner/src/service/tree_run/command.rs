@@ -4,10 +4,10 @@
 //! the assignment is cancelled, and `useful workflow run event` for each trigger delivery, with
 //! `useful workflow run pause` and `unpause` once the offer's deliveries are applied
 //! (REQ-TRIGGER-136), and the `useful workflow run` control command each Cloud control names
-//! (REQ-RUNNERENROLL-90).
+//! (REQ-RUNNERENROLL-208).
 //! Each runs with the daemon's environment whole, with the agent logins the runner holds when
-//! the command starts (REQ-GRANT-37, REQ-GRANT-44, REQ-GRANT-49) and the grant token variables
-//! of the assignment's admission (REQ-GRANT-87), and `USEFUL_HOME` set to the run-scoped
+//! the command starts (REQ-GRANT-37, REQ-GRANT-44, REQ-GRANT-136) and the grant token variables
+//! of the assignment's admission (REQ-GRANT-155), and `USEFUL_HOME` set to the run-scoped
 //! home; the runtime's own admission applies the root's passthrough to each step
 //! (REQ-WFEXEC-22), so no step sees a runner-private name.
 //!
@@ -87,7 +87,7 @@ pub(in crate::service) const PENDING_STOP_UNLIFTED: &str = "tree_run_pending_sto
 /// answers.
 pub(in crate::service) const RECORDED: &str = "recorded";
 /// The code the run's log names when the runner's second withdrawal of a run left waiting
-/// did not end it (REQ-RUNNERENROLL-123).
+/// did not end it (REQ-RUNNERENROLL-319).
 const WITHDRAWAL_UNFINISHED: &str = "tree_run_withdrawal_unfinished";
 /// The most of a control command's stdout read back for its last document.
 const CONTROL_OUTPUT_LIMIT: u64 = 1024 * 1024;
@@ -105,7 +105,7 @@ pub(in crate::service) struct UsefulCommand {
     /// What each command's environment is built from when it starts.
     pub(in crate::service) environment: CommandEnvironment,
     /// The run's activity, which counts each command in flight and which a setup's install
-    /// or removal holds, so no command starts during one (INV-RUNNER-15).
+    /// or removal holds, so no command starts during one (INV-RUNNER-55, INV-RUNNER-56).
     pub(in crate::service) activity: Arc<RunActivity>,
     /// The runner's command fence, which each command enters once its run's activity lets it
     /// start, so none starts while a holder holds it (INV-RUNNER-53).
@@ -372,7 +372,7 @@ pub(in crate::service) enum PublishFailure {
 
 /// What a refused publish's report says of the first failure it lists, each value read
 /// raw as the report printed it: none when the report cannot be read, has an `outcome`
-/// other than `invalid` or lists no failure with a string `code` (REQ-RUNNERENROLL-91).
+/// other than `invalid` or lists no failure with a string `code` (REQ-RUNNERENROLL-189).
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(in crate::service) struct RefusalReport {
     /// The failure's `code`.
@@ -531,7 +531,7 @@ impl Drop for SupervisedChild {
 }
 
 /// `useful workflow run resume RUN --json`: continues a resolved wait, an abandoned attempt
-/// or an unchained `continued` edge, and reports a held wait unchanged (REQ-CONTINUE-74
+/// or an unchained `continued` edge, and reports a held wait unchanged (REQ-CONTINUE-102
 /// to REQ-CONTINUE-78).
 pub(in crate::service) fn resume_arguments(run_directory: &Path) -> Vec<OsString> {
     resume_from_arguments(run_directory, &[])
@@ -561,7 +561,7 @@ pub(in crate::service) fn resume_from_arguments(
 
 /// Whether the runner stops a run for `reason` without ending its record: its shutdown
 /// and lease loss interrupt the attempt and leave the record as it stands, for a later
-/// attempt to continue (REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-89), while a cancellation
+/// attempt to continue (REQ-RUNNERENROLL-73, REQ-RUNNERENROLL-217), while a cancellation
 /// of the assignment ends the run with `useful workflow run cancel`.
 pub(in crate::service) const fn leaves_record(reason: CancellationReason) -> bool {
     matches!(
@@ -1056,7 +1056,7 @@ async fn start_control(
 }
 
 /// Applies a Cloud control's `action` to the run at `run_directory` with the `useful workflow
-/// run` command it names (REQ-RUNNERENROLL-90): `answer --question ID --text TEXT`, once
+/// run` command it names (REQ-RUNNERENROLL-208): `answer --question ID --text TEXT`, once
 /// per answer in order and ending at the first that is not applied, `approve`, `hand-back
 /// --notes TEXT`, each of these three with `--record-only` so that the command records the
 /// control and the loop resumes the run itself, `unpause [--before STEP]` for a `lift`,
@@ -1092,7 +1092,7 @@ pub(in crate::service) async fn apply_control(
 /// `useful workflow run cancel RUN --control=withdraw --json` once more on the run at
 /// `run_directory`, for a
 /// withdrawal applied `recorded` that the process holding the run ended without honoring,
-/// leaving the run waiting (REQ-RUNNERENROLL-123). It reports no application: one that did
+/// leaving the run waiting (REQ-RUNNERENROLL-319). It reports no application: one that did
 /// not end the run has the run's log name `WITHDRAWAL_UNFINISHED` with the application it
 /// would have reported, and the run waits on.
 pub(in crate::service) async fn finish_withdrawal(
@@ -1246,7 +1246,7 @@ impl Recorded {
 }
 
 /// Why the run's controls could not be read to tell whether a control command recorded its
-/// control (REQ-RUNNERENROLL-90).
+/// control (REQ-RUNNERENROLL-213).
 #[derive(Debug)]
 enum ControlsUnread {
     /// The engine's reader refused the run directory or its `controls/`.
@@ -1416,13 +1416,14 @@ fn reported(document: &Value) -> Option<RunControlOutcome> {
 }
 
 /// The application of a control command that ended with `document` on the run at
-/// `run_directory` (REQ-RUNNERENROLL-90): as `reported` reads a document it printed; for a
-/// command that printed no `outcome` or outlived its bound, as its `evidence` reads the run:
-/// `applied` `recorded` once the run's controls hold `recorded`, the control a launched
-/// command records for the wait it names, or `applied` `withdrawn` once the run's record
-/// reads `exited` `withdrawn` after a `withdraw` (REQ-RUNNERENROLL-123); and otherwise
-/// `refused` `control_command_failed`, the run's log naming the failure's class and, when
-/// the run's controls could not be read to tell, the failed read's class beside it.
+/// `run_directory` (REQ-RUNNERENROLL-212, REQ-RUNNERENROLL-213): as `reported` reads a
+/// document it printed; for a command that printed no `outcome` or outlived its bound, as
+/// its `evidence` reads the run: `applied` `recorded` once the run's controls hold
+/// `recorded`, the control a launched command records for the wait it names, or `applied`
+/// `withdrawn` once the run's record reads `exited` `withdrawn` after a `withdraw`
+/// (REQ-RUNNERENROLL-317); and otherwise `refused` `control_command_failed`, the run's log
+/// naming the failure's class and, when the run's controls could not be read to tell, the
+/// failed read's class beside it.
 async fn control_outcome(
     log: &RunLog,
     document: Result<Value, Unanswered>,

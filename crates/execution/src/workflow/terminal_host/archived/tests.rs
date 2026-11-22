@@ -77,7 +77,7 @@ fn frozen_archive_renders_context_dag_inspector_and_declarations() {
     );
 }
 
-// REQ-LOCALRUN-221: the archived interface draws a stage whose child failed with the failed
+// REQ-LOCALRUN-294: the archived interface draws a stage whose child failed with the failed
 // state's symbol, names the child's failing node in its graph detail and gives its failure
 // in the inspector, while its recorded state stays `succeeded`.
 #[test]

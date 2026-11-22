@@ -120,7 +120,7 @@ fn org_connection<'a>(args: &[&'a str]) -> Vec<&'a str> {
         .collect()
 }
 
-// REQ-CONNECTION-16, REQ-CONNECTION-17, REQ-INTEGRATION-21
+// REQ-CONNECTION-16, REQ-CONNECTION-17, REQ-INTEGRATION-21, REQ-INTEGRATION-59
 #[test]
 fn create_github_prints_the_page_and_then_completes_for_the_installation_alone() {
     let setup_url = setup_url();

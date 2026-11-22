@@ -625,7 +625,6 @@ pub(in crate::cli) fn status(s: &useful_api::linear_connection::Status) -> &'sta
     match s {
         Active => "active",
         Disconnected => "disconnected",
-        Revoked => "revoked",
         RecoveryRequired => "recovery_required",
         Deleted => "deleted",
     }

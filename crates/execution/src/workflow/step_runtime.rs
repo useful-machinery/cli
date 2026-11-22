@@ -666,7 +666,7 @@ impl ChildRunControl {
 pub enum ChildRunOutcome {
     /// The child published a result recording `outcome`; `exports` holds its available
     /// `text` and `json` exports, `interruption` the interruption that failed it, when
-    /// its primary issue is a step that failed `interrupted` (REQ-WFEXEC-70), and `failure`
+    /// its primary issue is a step that failed `interrupted` (REQ-WFEXEC-99), and `failure`
     /// the primary issue of a result that is `failed`, read from the result and never from
     /// the outcome's name (REQ-WFEXEC-77).
     Exited {
@@ -737,7 +737,7 @@ pub struct ControlContext {
     pub wait: Option<(String, BTreeMap<String, String>)>,
     pub answers: BTreeMap<String, Arc<serde_json::Value>>,
     /// The step and one-based element a continuation at the waiting step resumes a fan-out
-    /// at (REQ-WFEXEC-68): the element the resolved wait recorded in its `step`.
+    /// at (REQ-WFEXEC-96): the element the resolved wait recorded in its `step`.
     pub resume_item: Option<(String, u64)>,
 }
 
@@ -2212,7 +2212,7 @@ where
     /// through the capture path (REQ-WFEXEC-60). A fan-out runs its elements' children one at
     /// a time under the step's one launch, start report and cancellation source, goes on past
     /// an element only while its outcome routes to a later step, and settles the element it
-    /// ends at as a plain step settles its child (REQ-WFEXEC-66).
+    /// ends at as a plain step settles its child (REQ-WFEXEC-94).
     async fn execute_prepared_child(
         &self,
         step: String,
@@ -2312,7 +2312,7 @@ where
             },
         };
         // The last element's outcome ends the step whatever its edge, and an element an
-        // interruption failed ends it with that element's outcome (REQ-WFEXEC-70).
+        // interruption failed ends it with that element's outcome (REQ-WFEXEC-104).
         while self.continues_fan_out(&step, &outcome) {
             let Some(request) = requests.next() else {
                 break;
@@ -2404,7 +2404,7 @@ where
 
     /// Whether a fan-out goes on past an element that ended with `outcome`: the child
     /// exited with an outcome whose edge is a step later in document order than `step`
-    /// (REQ-WFEXEC-66), the same comparison an ordinary edge makes (REQ-WFEXEC-58).
+    /// (REQ-WFEXEC-94), the same comparison an ordinary edge makes (REQ-WFEXEC-82).
     fn continues_fan_out(&self, step: &str, outcome: &ChildRunOutcome) -> bool {
         let ChildRunOutcome::Exited {
             outcome,
@@ -4825,7 +4825,7 @@ fn resolve_child_inputs(
 
 /// The mapped inputs `admitted`'s `workflow` step `step` would give its child for element
 /// `item` when a continuation starts it with `controls`, read before the step runs
-/// (REQ-CONTINUE-82): the step's input sources are made available as the engine makes them
+/// (REQ-CONTINUE-117): the step's input sources are made available as the engine makes them
 /// (`resolved_action_inputs`), each output reference from `output`, and mapped by
 /// `child_run_requests`, the mapper the step itself runs. `None` when the step forms no
 /// request for that element; an error of `output` is returned as it is.

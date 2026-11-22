@@ -2972,7 +2972,7 @@ pub enum EnrollmentError {
     /// this start; its terminal receipt is written.
     ActivationGone,
     /// A join met a signed-in registration the host holds without enrolled
-    /// state (REQ-RUNNERENROLL-118).
+    /// state (REQ-RUNNERENROLL-262).
     RegistrationConflict(Box<RegistrationConflict>),
     /// A rejoin found enrolled state whose credential did not come from a
     /// join key, so it sent nothing.

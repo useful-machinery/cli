@@ -373,7 +373,7 @@ struct GrantResult<'a> {
     grant: GrantView<'a>,
 }
 
-/// Writes one grant in detail (REQ-GRANT-64), with the tokens issued from it, newest first,
+/// Writes one grant in detail (REQ-GRANT-171, REQ-GRANT-172), with the tokens issued from it, newest first,
 /// when it is an OAuth grant.
 pub(super) fn write_grant(
     deployment: &str,
@@ -490,7 +490,7 @@ struct RunnerRequiredResult<'a> {
 }
 
 /// Refuses a command that names no one runner as a missing argument is refused: given no
-/// `--runner` (REQ-GRANT-81), or a name several runners have (REQ-GRANT-65). Exit 2, naming
+/// `--runner` (REQ-GRANT-176), or a name several runners have (REQ-GRANT-65). Exit 2, naming
 /// each runner by its name and ID, with `organization` its organization's too, under
 /// `diagnostic`, then the command line `example` that names one; under `--json`, one document
 /// with outcome `runner_required`.
@@ -615,7 +615,7 @@ pub(super) fn runner_report(deployment: &str, failure: &RunnerFailure) -> ApiFai
     }
 }
 
-/// Reports that a command given no `--runner` has no runner to name (REQ-GRANT-81) for
+/// Reports that a command given no `--runner` has no runner to name (REQ-GRANT-175) for
 /// `holder`, a grant where none is named, with exit 1 and a remedy.
 pub(super) fn write_nothing_offered(
     deployment: &str,
@@ -756,7 +756,7 @@ struct AuthorizeAllResult<'a> {
     tokens: &'a [AuthorizedTokenView<'a>],
 }
 
-/// Reports what `authorize --all` did with each grant (REQ-GRANT-66) and each token
+/// Reports what `authorize --all` did with each grant (REQ-GRANT-173) and each token
 /// (REQ-INTEGRATION-20), and each refusal with its remedy. It exits 1 when any was refused for
 /// a reason other than serving another organization or being authorized for the runner already,
 /// a Codex grant authorized for another runner among them, or when a failure `ended` the
@@ -895,7 +895,7 @@ pub(in crate::cli) fn write_authorize_all(
     Ok(exit)
 }
 
-/// `authorize --all`'s refusal of a Codex grant that serves another runner (REQ-GRANT-66),
+/// `authorize --all`'s refusal of a Codex grant that serves another runner (REQ-GRANT-173),
 /// which Cloud answers as it answers a grant authorized for this runner already.
 fn authorized_elsewhere() -> ApiFailureReport {
     ApiFailureReport::new(
@@ -1150,7 +1150,7 @@ pub(super) fn write_import_refusal(
 }
 
 /// The outcome of a coding agent `useful account integration connect` without `PROVIDER` passes over
-/// because no organization was resolved for its grant (REQ-GRANT-75).
+/// because no organization was resolved for its grant (REQ-GRANT-180).
 pub(super) const ORGANIZATION_REQUIRED: &str = "organization_required";
 
 /// The outcome of a provider `useful account integration connect --workflow` passes over because every
@@ -1159,7 +1159,7 @@ pub(super) const RECONNECT_REQUIRED: &str = "reconnect_required";
 
 /// Reports a coding agent passed over for want of an organization: as its `import_result`
 /// event, or on standard error with the `refusal` that says why and names how to name one
-/// (REQ-GRANT-75).
+/// (REQ-GRANT-180).
 pub(super) fn write_organization_required(
     deployment: &str,
     refusal: &str,
@@ -1285,10 +1285,10 @@ fn native_remedy(provider: &str) -> Option<&'static str> {
 
 /// Prints one outcome per provider `useful account integration connect` signed in to or passed over, after
 /// their own output, as the last JSON event or a report on standard output; `code` is the command's
-/// exit status (REQ-GRANT-75). The report's verdict claims each grant made only when every provider
+/// exit status (REQ-GRANT-183). The report's verdict claims each grant made only when every provider
 /// ended with one, and its remedies name what each other outcome present leaves to do: `useful
 /// account integration reconnect INTEGRATION` for each grant of `reconnect`, the grants of the providers passed
-/// over as `reconnect_required` (REQ-GRANT-79).
+/// over as `reconnect_required` (REQ-GRANT-185).
 pub(super) fn write_create_summary(
     deployment: &str,
     outcomes: &[(&str, &'static str)],

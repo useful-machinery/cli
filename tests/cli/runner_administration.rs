@@ -2512,7 +2512,7 @@ fn personal_pool_refusal_response() -> Vec<u8> {
     )
 }
 
-// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-84
+// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-96, REQ-RUNNERPOOL-98
 #[test]
 fn personal_pool_rename_refusal_exits_with_pool_personal() {
     for json in [true, false] {
@@ -2555,7 +2555,7 @@ fn personal_pool_rename_refusal_exits_with_pool_personal() {
     }
 }
 
-// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-84
+// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-96, REQ-RUNNERPOOL-98
 #[test]
 fn personal_pool_deletion_refusal_exits_with_pool_personal() {
     for json in [true, false] {
@@ -2682,7 +2682,7 @@ fn assert_pool_then_status_requests(requests: &[String]) {
     )));
 }
 
-// REQ-RUNNERPOOL-89, REQ-RUNNERPOOL-47
+// REQ-RUNNERPOOL-92, REQ-RUNNERPOOL-47
 #[test]
 fn pool_show_reads_the_pool_then_its_status_and_reports_its_load() {
     for json in [false, true] {
@@ -2722,7 +2722,7 @@ fn pool_show_reads_the_pool_then_its_status_and_reports_its_load() {
     }
 }
 
-// REQ-RUNNERPOOL-89
+// REQ-RUNNERPOOL-92, REQ-RUNNERPOOL-93
 #[test]
 fn pool_show_prints_the_runs_its_runners_hold_after_the_runner_counts() {
     let mut held_status = pool_status_body();
@@ -2770,7 +2770,7 @@ fn pool_show_prints_the_runs_its_runners_hold_after_the_runner_counts() {
     }
 }
 
-// REQ-RUNNERPOOL-89
+// REQ-RUNNERPOOL-93
 #[test]
 fn pool_show_against_a_cloud_without_pool_status_prints_the_pool_alone() {
     for json in [false, true] {
@@ -3151,7 +3151,7 @@ fn assert_join_key_issuance_request(request: &str, pool_id: &str, expires: u64, 
     );
 }
 
-// REQ-RUNNERENROLL-93
+// REQ-RUNNERENROLL-93, REQ-RUNNERENROLL-228, REQ-RUNNERENROLL-229, REQ-RUNNERENROLL-230
 #[test]
 fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3238,7 +3238,7 @@ fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact(
     );
 }
 
-// REQ-RUNNERENROLL-93
+// REQ-RUNNERENROLL-93, REQ-RUNNERENROLL-229
 #[test]
 fn join_key_issue_without_a_pool_uses_the_callers_personal_pool_and_writes_only_the_artifact() {
     let mut other_personal = personal_pool_body();
@@ -3294,7 +3294,7 @@ fn join_key_issue_without_a_pool_uses_the_callers_personal_pool_and_writes_only_
     assert_join_key_issuance_request(&requests[2], POOL_ID, 1_800, 300);
 }
 
-// REQ-RUNNERENROLL-93
+// REQ-RUNNERENROLL-229, REQ-RUNNERENROLL-231
 #[test]
 fn join_key_issue_without_a_file_writes_only_the_artifact_to_stdout() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3364,7 +3364,7 @@ fn join_key_issue_without_a_file_writes_only_the_artifact_to_stdout() {
     );
 }
 
-// REQ-RUNNERENROLL-93
+// REQ-RUNNERENROLL-232
 #[test]
 fn join_key_issue_without_a_personal_pool_sends_no_issuance() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3405,7 +3405,7 @@ fn join_key_issue_without_a_personal_pool_sends_no_issuance() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUNNERENROLL-93
+// REQ-RUNNERENROLL-231
 #[test]
 fn join_key_issue_json_reports_the_key_without_its_token() {
     let (server, _credentials, credential_path) = prepared_runner(vec![

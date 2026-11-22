@@ -459,7 +459,7 @@ impl Command {
                     ExitCode::UsageError,
                 ));
             }
-            // REQ-LOCALRUN-185, REQ-RUNNERENROLL-91: a step the engine does not hold before is
+            // REQ-LOCALRUN-185, REQ-RUNNERENROLL-192: a step the engine does not hold before is
             // refused with a rejection document rather than a usage error, so a runner that
             // created the run names the refusal.
             if !holdable.contains(step) {
@@ -1169,7 +1169,7 @@ struct AttemptTeardown {
     controls: Option<ControlsLock>,
     /// The run's controls lock an attempt that ended `continued` and chains took before it
     /// released the run lock, which the attempt loop carries until the next attempt's
-    /// acquisition tried the run lock (REQ-LOCALRUN-214, INV-ENGINE-39).
+    /// acquisition tried the run lock (REQ-LOCALRUN-214, INV-ENGINE-60).
     bridge: Option<ControlsLock>,
     /// The outcome the run record takes when the attempt ends without a published result
     /// (REQ-WFEXEC-57).
@@ -1358,14 +1358,14 @@ struct AttemptSettings<Hooks> {
     /// progress stream (REQ-LOCALRUN-200): no presentation and no child runs of its own.
     child: Option<ChildPresentation>,
     /// The child run an abandoned parent's continuation adopts or retries in place
-    /// (REQ-CONTINUE-76), or the child an independent repair completed that a repair retry
-    /// adopts (REQ-CONTINUE-75).
+    /// (REQ-CONTINUE-112), or the child an independent repair completed that a repair retry
+    /// adopts (REQ-CONTINUE-107).
     child_recovery: Option<ChildRecovery>,
     /// The control journals the command's signal observer reads, which the attempt's run
     /// directory and its children's join while they run (REQ-LOCALRUN-135).
     journals: ControlJournals,
     /// For a child attempt, the root run its run belongs to and the path from the root to it
-    /// (INV-ENGINE-40), which a nested run's dispatcher carries (REQ-WFEXEC-74); `None` for a
+    /// (INV-ENGINE-61), which a nested run's dispatcher carries (REQ-WFEXEC-74); `None` for a
     /// root's own attempt, which is its own root.
     root: Option<RunRoot>,
 }
@@ -1431,8 +1431,8 @@ pub(super) async fn execute_owned_attempt(
 }
 
 /// `execute_owned_attempt` for a continuation whose `child_recovery` names the child run
-/// the abandoned attempt left behind (REQ-CONTINUE-76) or the child an independent repair
-/// completed, which a repair retry adopts (REQ-CONTINUE-75).
+/// the abandoned attempt left behind (REQ-CONTINUE-112) or the child an independent repair
+/// completed, which a repair retry adopts (REQ-CONTINUE-107).
 pub(super) async fn execute_recovering_attempt(
     workflow: ResolvedWorkflow,
     admitted: AdmittedWorkflow,
@@ -1535,7 +1535,7 @@ async fn execute_owned_attempt_with(
     }
 }
 
-/// REQ-LOCALRUN-143, INV-ENGINE-33: a failed state commit as the command reports it. Its
+/// REQ-LOCALRUN-143, INV-ENGINE-55: a failed state commit as the command reports it. Its
 /// diagnostic line reads the commit port's own error, which names the write, the file and
 /// the operating system's message, or, when the port kept none, the failure's write and
 /// error number; the class follows as a field and the remedy that resumes the run is last.
@@ -1829,8 +1829,8 @@ async fn execute_attempt_phases(
     let dispatcher = if !has_workflow_steps(workflow) {
         None
     } else {
-        // REQ-WFEXEC-63, REQ-CONTINUE-75: the values the resolved waits leave this attempt; a
-        // nested run has no controls of its own and reads the root's (REQ-WFEXEC-75,
+        // REQ-WFEXEC-63, REQ-CONTINUE-104: the values the resolved waits leave this attempt; a
+        // nested run has no controls of its own and reads the root's (REQ-WFEXEC-111,
         // INV-ENGINE-40).
         let run_directory = attempt.run()?.run_directory().to_owned();
         // The attempt's own continuation reason; `state.json` already records it, and a
@@ -1863,8 +1863,8 @@ async fn execute_attempt_phases(
         })
         .context("read the run's controls")?;
         let (mut context, replacement) = (controls.controls, controls.replacement);
-        // REQ-WFEXEC-68: an abandoned fan-out resumes at the element of the child it left,
-        // and a repair retry at the element of the repaired child it adopts (REQ-CONTINUE-75).
+        // REQ-WFEXEC-96: an abandoned fan-out resumes at the element of the child it left,
+        // and a repair retry at the element of the repaired child it adopts (REQ-CONTINUE-107).
         if let Some((step, Some(item))) = child_recovery.as_ref().map(ChildRecovery::target) {
             context.resume_item = Some((step.to_owned(), item));
         }
@@ -1969,7 +1969,7 @@ async fn execute_attempt_phases(
     let wait_record = match &execution.outcome {
         RunOutcome::Waiting { .. } if withdrawn => None,
         RunOutcome::Waiting { wait } => {
-            // REQ-WFEXEC-72: an attempt that kept the wait it continued from writes back the
+            // REQ-WFEXEC-129: an attempt that kept the wait it continued from writes back the
             // record `begin` removed, unchanged, and performs no `onWait` (REQ-LOCALRUN-191).
             let kept = wait.kept().is_some();
             let record = if kept {
@@ -2154,7 +2154,7 @@ async fn execute_attempt_phases(
             // REQ-LOCALRUN-211: under that lock it spends every withdrawal recorded before it,
             // honored or not: its `settledAt` is taken again when one is later, so a retry of
             // the run is not withdrawn by it. A `canceled` attempt keeps its outcome.
-            // REQ-LOCALRUN-214, INV-ENGINE-39: an attempt that ended `continued` and chains, one
+            // REQ-LOCALRUN-214, INV-ENGINE-60: an attempt that ended `continued` and chains, one
             // no interruption holds back, takes the same lock before it releases the run and
             // hands it to the next attempt's acquisition, so a withdrawal arriving between the
             // attempts waits for that acquisition and finds the run held.
@@ -2512,7 +2512,7 @@ pub(super) fn execution_context_for_workflow(
 
 /// The admission context of a continuation, every missing harness collected: the launching
 /// environment is the host's, or for a child's repair continuation `environment`, its
-/// parent's admitted environment (REQ-WFEXEC-59).
+/// parent's admitted environment (REQ-WFEXEC-89).
 pub(super) fn continuation_execution_context(
     workflow: &ResolvedWorkflow,
     root: PathBuf,
@@ -2538,7 +2538,7 @@ fn execution_context_with_profile_failures(
     collect_all: bool,
     environment: EnvironmentSnapshot,
 ) -> (ExecutionContext, Vec<AgentHarnessInstallationFailure>) {
-    // REQ-WFEXEC-59, REQ-WFEXEC-65: an `external` wait admits on a condition this CLI
+    // REQ-WFEXEC-93, REQ-WFEXEC-125: an `external` wait admits on a condition this CLI
     // evaluates.
     let mut context = ExecutionContext::new(
         root,
@@ -2641,17 +2641,17 @@ fn child_run_outcome(
 }
 
 /// The child run a parent's continuation takes over rather than starting another: from an
-/// abandoned attempt (REQ-CONTINUE-76) one that exited is adopted, one left running gets a
+/// abandoned attempt (REQ-CONTINUE-112) one that exited is adopted, one left running gets a
 /// new attempt in place, and an element whose child was never created runs afresh; a repair
 /// retry adopts the child an independent repair completed after its wait began
-/// (REQ-CONTINUE-75), and otherwise, for a repair wait's retry (REQ-CONTINUE-81), the failed
+/// (REQ-CONTINUE-107), and otherwise, for a repair wait's retry (REQ-CONTINUE-81), the failed
 /// child the wait names continues with the partition its preflight admitted. A wait the root
 /// carries from a nested run continues that nested run in place from the nested step that
 /// waited, with the stage recovery its repair names (REQ-CONTINUE-92). An abandoned root's
 /// nested run that reads `running` continues in place the same way, from its running step or
 /// recorded edge, and one that reads `waiting` is carried as the wait it recorded without
 /// starting anything (REQ-CONTINUE-91). `item` is the fan-out element, at which the
-/// continuation resumes the step (REQ-WFEXEC-68).
+/// continuation resumes the step (REQ-WFEXEC-96).
 pub(super) enum ChildRecovery {
     Fresh {
         step: String,
@@ -2713,7 +2713,7 @@ fn entered_wait_record(
     run_directory: &Path,
     dispatcher: Option<&LocalChildRunDispatcher>,
 ) -> anyhow::Result<WaitRecord> {
-    // REQ-WFEXEC-75: the wait a step's nested run entered is the root's, built from the
+    // REQ-WFEXEC-109: the wait a step's nested run entered is the root's, built from the
     // nested record when the step's child returned it.
     if let Some(carried) = dispatcher.and_then(|dispatcher| dispatcher.carried_wait(wait.step())) {
         return Ok(carried);
@@ -2835,10 +2835,10 @@ struct LocalChildRunParent {
     /// drops the parent's `USEFUL_` names (REQ-LOCALRUN-217).
     source_revision: Option<SourceRevisionProvenance>,
     /// The step a `control.retry` continues at and the agent-profile replacement its child
-    /// resolves with (REQ-CONTINUE-75).
+    /// resolves with (REQ-CONTINUE-105).
     replacement: Option<(String, AgentProfileReplacementDocument)>,
     /// Taken by the first child run of its step and element: an abandoned parent's child
-    /// (REQ-CONTINUE-76) or the repaired child a repair retry adopts (REQ-CONTINUE-75).
+    /// (REQ-CONTINUE-112) or the repaired child a repair retry adopts (REQ-CONTINUE-107).
     recovery: std::sync::Mutex<Option<ChildRecovery>>,
     /// The latest child run directory each step started and the fan-out element it ran
     /// for, for a wait's payload and step (REQ-WFEXEC-61).
@@ -2853,7 +2853,7 @@ struct LocalChildRunParent {
     /// (REQ-LOCALRUN-200); none when the root presents through the terminal interface.
     presentation: Option<ParentPresentation>,
     /// The parent's commit-port latch, set by a child whose own state commit failed so the
-    /// parent commits nothing after it (REQ-LOCALRUN-207, INV-ENGINE-33).
+    /// parent commits nothing after it (REQ-LOCALRUN-207, INV-ENGINE-57).
     child_failure: Arc<OnceLock<ChildCommitFailure>>,
 }
 
@@ -3021,7 +3021,7 @@ async fn run_local_child(
     }
     let recovery = parent.take_recovery(&request.step, request.item);
     if let Some(ChildRecovery::Adopt { directory, .. }) = recovery {
-        // REQ-CONTINUE-76: a child that exited settles the step from its record and
+        // REQ-CONTINUE-112: a child that exited settles the step from its record and
         // published exports without running again.
         let adopted = directory.clone();
         let outcome = blocking_operation(move || {
@@ -3046,14 +3046,14 @@ async fn run_local_child(
         };
         return carried_outcome(&parent, &request.step, &directory, &root, waiting);
     }
-    // REQ-WFEXEC-70, REQ-WFEXEC-72: a child whose preparation an interruption precedes is not
+    // REQ-WFEXEC-103, REQ-WFEXEC-128: a child whose preparation an interruption precedes is not
     // created and gets no attempt; the driver settles the step as an unstarted child, and the
     // dropped recovery releases what it held. An exited child is adopted above as before, and a
     // cancellation prepares the child as before.
     if cancellation.interruption_requested() {
         return ChildRunOutcome::Interrupted;
     }
-    // REQ-WFEXEC-68: a nested run's stage moves the root's position to the stage's full path
+    // REQ-WFEXEC-98: a nested run's stage moves the root's position to the stage's full path
     // under the root's run lock before the stage is created; the nested run's own record
     // names the stage alone.
     if !parent.root.path.is_empty() {
@@ -3070,7 +3070,7 @@ async fn run_local_child(
     let preparation_parent = Arc::clone(&parent);
     let preparation_request = request.clone();
     let preparation_cancellation = cancellation.clone();
-    // REQ-CONTINUE-81, INV-ENGINE-27: the failed child the repair wait named, whose
+    // REQ-CONTINUE-81, INV-ENGINE-53: the failed child the repair wait named, whose
     // continuation its preflight admitted and still holds locked; REQ-CONTINUE-92: likewise
     // the nested run the root's carried wait named, whose first attempt takes over the
     // recovery of its stage.
@@ -3138,7 +3138,7 @@ async fn run_local_child(
     let directory = prepared.2.run_directory().to_owned();
     parent.record_started(&request, &directory, &mut control);
     let root = parent.root.descend(&request.step, request.item);
-    // REQ-WFEXEC-74, REQ-WFEXEC-64: the step drives its child, so a nested run's attempt that
+    // REQ-WFEXEC-105, REQ-WFEXEC-64: the step drives its child, so a nested run's attempt that
     // ends `continued` is chained here, its next attempt begun in the same run directory, until
     // the nested run ends; no other child ends `continued`.
     let outcome = loop {
@@ -3179,7 +3179,7 @@ async fn run_local_child(
         )
         .await;
         if let Err(error) = result {
-            // REQ-LOCALRUN-207, INV-ENGINE-33: a child whose state commit failed latches the
+            // REQ-LOCALRUN-207, INV-ENGINE-57: a child whose state commit failed latches the
             // failure and its text on the parent's commit port before the parent's step can
             // settle from it.
             if let Some(StateCommitFailed { failure, text, .. }) =
@@ -3296,7 +3296,7 @@ fn carried_wait_record(
 }
 
 /// The next attempt of the nested run at `directory`, whose latest attempt ended `continued`
-/// on `edge` (REQ-WFEXEC-74): begun in the same run directory from the edge's target as
+/// on `edge` (REQ-WFEXEC-105): begun in the same run directory from the edge's target as
 /// `useful workflow run resume` begins a root's (REQ-WFEXEC-64, REQ-CONTINUE-78), with reason
 /// `edge`, its own definition and retained inputs and its unchanged tree copy, admitted under
 /// the parent's execution root, limits and environment. A limited edge is counted in the
@@ -3468,7 +3468,7 @@ pub(super) fn child_request_inputs(request: &ChildRunRequest) -> Result<Resolved
 }
 
 /// A new attempt of the child run at `directory` the parent's abandoned attempt left
-/// running (REQ-CONTINUE-76), as `useful workflow run retry` on it would start: its own retry
+/// running (REQ-CONTINUE-112), as `useful workflow run retry` on it would start: its own retry
 /// settles the abandoned attempt, and it runs its retained definition and inputs from its
 /// unchanged tree copy under the parent's execution root, limits and environment.
 fn prepare_child_retry(
@@ -5560,7 +5560,7 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-69, REQ-WFEXEC-40, REQ-LOCALRUN-136
+    // REQ-WFEXEC-135, REQ-WFEXEC-40, REQ-LOCALRUN-136
     #[tokio::test]
     async fn an_interruption_before_any_step_starts_publishes_the_failed_step_with_timing() {
         let temporary = tempfile::tempdir().unwrap();
@@ -5655,10 +5655,10 @@ mod tests {
         assert_eq!(step("second")["state"], "cancelled");
     }
 
-    // REQ-LOCALRUN-205, REQ-LOCALRUN-206: a failed state commit is named in the command's
-    // error and recorded as a `state_persistence_failure` diagnostic with its class and OS
-    // error number, and the attempt it leaves unsettled leaves the run record `running`.
-    // Any other execution failure leaves the record `running` and records nothing.
+    // REQ-LOCALRUN-205, REQ-LOCALRUN-206, INV-ENGINE-56: a failed state commit is named in the
+    // command's error and recorded as a `state_persistence_failure` diagnostic with its class and
+    // OS error number, and the attempt it leaves unsettled leaves the run record `running`. Any
+    // other execution failure leaves the record `running` and records nothing.
     #[tokio::test]
     async fn an_execution_failure_over_an_unsettled_attempt_leaves_the_run_running() {
         let commit_failure = useful_execution::CommitFailure {

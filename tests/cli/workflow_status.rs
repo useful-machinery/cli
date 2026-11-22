@@ -1068,7 +1068,7 @@ fn plain_status_and_run_diagnostics_escape_host_run_directory_names() {
     );
 }
 
-// REQ-LOCALRUN-177, REQ-WFEXEC-50: a parent with `workflow` steps and each child read on
+// REQ-LOCALRUN-281, REQ-WFEXEC-50: a parent with `workflow` steps and each child read on
 // their own, the steps reported as kind `workflow`.
 #[test]
 fn status_and_view_read_a_parent_and_its_child_runs() {
@@ -1108,7 +1108,7 @@ fn status_and_view_read_a_parent_and_its_child_runs() {
     assert_eq!(run_record(&child)["state"], "exited");
 }
 
-// REQ-LOCALRUN-177, REQ-LOCALRUN-147: a parent killed while its child runs leaves the
+// REQ-LOCALRUN-281, REQ-LOCALRUN-147: a parent killed while its child runs leaves the
 // child `running` with an abandoned attempt.
 #[test]
 fn a_child_whose_parent_was_killed_reports_an_abandoned_attempt() {
@@ -1234,7 +1234,7 @@ fn run_under_home(home: &Home, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-172
+// REQ-LOCALRUN-180, REQ-LOCALRUN-227, REQ-LOCALRUN-224
 #[test]
 fn show_addresses_a_run_under_the_home_by_its_id() {
     let tree = Tree::engineering();

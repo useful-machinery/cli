@@ -81,7 +81,7 @@ enum Selection {
         target: String,
         reason: ContinuationReasonV1,
     },
-    /// A wait a `control.withdraw` resolved (REQ-CONTINUE-75).
+    /// A wait a `control.withdraw` resolved (REQ-CONTINUE-109).
     Withdraw { wait: String },
     /// A backward or limited edge the prior attempt took (REQ-WFEXEC-64, REQ-CONTINUE-78):
     /// continue at its target once the run's latest attempt still ended `continued` on it.
@@ -93,7 +93,7 @@ enum Selection {
     Ended,
 }
 
-/// The documents of a resume that creates no attempt (REQ-CONTINUE-74, REQ-CONTINUE-75).
+/// The documents of a resume that creates no attempt (REQ-CONTINUE-102, REQ-CONTINUE-109).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UnattemptedDocument<'a> {
@@ -219,7 +219,7 @@ impl Command {
 /// attempt that just ended `continued` took, which the attempt loop continues from without
 /// probing the run (REQ-WFEXEC-64), and `bridge` the run's controls lock that attempt took
 /// before it released the run lock, held until this continuation tried the run lock again
-/// (REQ-LOCALRUN-214, INV-ENGINE-39); a command's own continuation carries none.
+/// (REQ-LOCALRUN-214, INV-ENGINE-60); a command's own continuation carries none.
 pub(super) struct Continuation {
     pub(super) run_directory: PathBuf,
     pub(super) from_steps: Vec<String>,
@@ -354,7 +354,7 @@ pub(super) async fn continue_run(
     // The probe ran without the lock: the wait it evaluated must still be the run's. The reason
     // is the command's intent; `begin` records `restart` for any run-definition continuation,
     // including a `retry --from` that finishes an interrupted `upgrade --from`
-    // (REQ-CONTINUE-79).
+    // (REQ-CONTINUE-98).
     let (from, reason) = match &selection {
         Selection::Explicit(from) if leaf == ExecutionLeaf::Restart => {
             (from.clone(), ContinuationReasonV1::Restart)
@@ -423,16 +423,16 @@ pub(super) async fn continue_run(
             (steps, ContinuationReasonV1::Resume)
         }
     };
-    // REQ-CONTINUE-76, REQ-WFEXEC-68: the child run the abandoned step left, for a fan-out
+    // REQ-CONTINUE-112, REQ-WFEXEC-96: the child run the abandoned step left, for a fan-out
     // that of the element the run's `position` names, is adopted or retried, a nested run's
     // retry settled by its record once the run is admitted (REQ-CONTINUE-91); a repair retry,
     // or a host wait's resolution, adopts the child an independent repair completed
-    // (REQ-CONTINUE-75, REQ-CONTINUE-93).
+    // (REQ-CONTINUE-107, REQ-CONTINUE-93).
     let child_recovery = match (&selection, from.as_slice()) {
         (Selection::Abandoned, [step]) => {
             let run_directory = pending.run_directory().to_owned();
             let step = step.clone();
-            // An element whose child was never created runs afresh (REQ-WFEXEC-68).
+            // An element whose child was never created runs afresh (REQ-WFEXEC-96).
             let latest = tokio::task::spawn_blocking(move || {
                 let latest = latest_child_run(&run_directory, &step)?;
                 let fresh = match latest {
@@ -517,7 +517,7 @@ pub(super) async fn continue_run(
     };
     let tree_copy = pending.tree_copy().map(|(copy_root, _)| copy_root);
     let original_root = pending.previous_definition().source.source_root.clone();
-    // REQ-CONTINUE-79: a successor's first own attempt runs under the successor's own
+    // REQ-CONTINUE-97: a successor's first own attempt runs under the successor's own
     // definition, the run's, rather than the imported prior attempt's.
     let run_definition = replacement_workflow.is_none() && pending.imported_prior().is_some();
     let workflow = if let Some(path) = &replacement_workflow {
@@ -596,12 +596,11 @@ pub(super) async fn continue_run(
     if let Err(error) = pending.validate_execution_root(&admitted) {
         return diagnose_after_settlement(pending, &signal_task, error).await;
     }
-    // REQ-CONTINUE-81, REQ-CONTINUE-82, INV-ENGINE-27: a repair wait's retry at the waiting
-    // step continues the failed child the wait names, and a wait carried from a nested run
-    // continues that nested run (REQ-CONTINUE-92), verified and admitted here, under both
-    // locks, before `begin` consumes the parent's wait. REQ-CONTINUE-91: an abandoned step's
-    // nested run is settled by its record, under both locks, before `begin` settles the
-    // abandoned attempt.
+    // REQ-CONTINUE-81, REQ-CONTINUE-82, INV-ENGINE-27, INV-ENGINE-52: a repair wait's retry at the
+    // waiting step continues the failed child the wait names, and a wait carried from a nested run
+    // continues that nested run (REQ-CONTINUE-92), verified and admitted here, under both locks,
+    // before `begin` consumes the parent's wait. REQ-CONTINUE-91: an abandoned step's nested run is
+    // settled by its record, under both locks, before `begin` settles the abandoned attempt.
     let prepared = match (child_recovery, &selection_edge) {
         (Some(recovery @ ChildRecovery::Retry { .. }), Selection::Abandoned) => {
             super::child_recovery::prepare_abandoned(
@@ -803,7 +802,7 @@ async fn probe(
         } if control.event == CONTROL_WITHDRAW => {
             Ok(Probed::Continue(Selection::Withdraw { wait: wait.id() }))
         }
-        // REQ-CONTINUE-75, REQ-CONTINUE-77: an observed external event continues at the
+        // REQ-CONTINUE-111, REQ-CONTINUE-77: an observed external event continues at the
         // wait's `then`, with reason `host` when the host condition observed it.
         WaitInspection::Satisfied {
             wait,
@@ -842,7 +841,7 @@ async fn probe(
             useful_execution::RuleError::CODE,
             "The wait's rule is not a conjunction of supported equalities; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
-        // REQ-CONTINUE-74: a condition that cannot be read is refused, never reported held.
+        // REQ-CONTINUE-103: a condition that cannot be read is refused, never reported held.
         WaitInspection::ConditionUnavailable { error, .. } => refuse(error.code, &error.message),
         WaitInspection::NoWait {
             state: Some(RunState::Running),
@@ -896,7 +895,7 @@ async fn probe(
 }
 
 /// Whether the run's latest attempt, under the continuation's lock, still ended `continued`
-/// on `edge` (REQ-CONTINUE-78), for a root or a nested run (REQ-WFEXEC-74).
+/// on `edge` (REQ-CONTINUE-78), for a root or a nested run (REQ-WFEXEC-105).
 pub(super) fn still_continues(
     pending: &PendingLocalContinuation,
     edge: &ContinuationEdgeV1,
@@ -911,7 +910,7 @@ fn still_waits(pending: &PendingLocalContinuation, wait: &str) -> bool {
     matches!(pending.wait(), Ok(Some(current)) if current.id() == wait)
 }
 
-/// REQ-CONTINUE-75: consume an independently completed repair only for the exact child
+/// REQ-CONTINUE-107: consume an independently completed repair only for the exact child
 /// named by this wait. A normal retry or requested profile replacement still runs afresh.
 /// The host condition that resolved a host wait recorded no control (REQ-CONTINUE-93).
 fn repaired_child(
@@ -1006,8 +1005,8 @@ fn refusal(
     )
 }
 
-/// Reports a resume that created no attempt and exits 0: a held wait (REQ-CONTINUE-74),
-/// with `--json` the waiting document, or a withdrawn run (REQ-CONTINUE-75).
+/// Reports a resume that created no attempt and exits 0: a held wait (REQ-CONTINUE-102),
+/// with `--json` the waiting document, or a withdrawn run (REQ-CONTINUE-109).
 fn write_unattempted(
     config: &useful_execution::PresentationConfig,
     command: &'static str,
@@ -1086,7 +1085,7 @@ pub(super) async fn admit_continuation(
 }
 
 /// `admit_continuation` launched from `environment` rather than the host's: a child's repair
-/// continuation keeps its parent's admitted environment (REQ-WFEXEC-59, INV-ENGINE-27).
+/// continuation keeps its parent's admitted environment (REQ-WFEXEC-89, INV-ENGINE-27).
 pub(super) async fn admit_continuation_in(
     pending: &PendingLocalContinuation,
     candidate: ContinuationCandidate<'_>,

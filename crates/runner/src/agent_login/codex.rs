@@ -1,7 +1,7 @@
 //! Keeping a delivered Codex login as `auth.json` in a Codex home of the
 //! runner's own (REQ-GRANT-36) and offering that home to each
 //! assignment as `CODEX_HOME`, while standing back when the service has a
-//! Codex login of its own (REQ-GRANT-37, REQ-GRANT-51). The service's own
+//! Codex login of its own (REQ-GRANT-37, REQ-GRANT-137). The service's own
 //! Codex home is never written.
 
 use std::ffi::OsString;

@@ -1724,7 +1724,7 @@ mod tests {
         assert_eq!(assistant_texts(&observations), ["subagent"]);
     }
 
-    // REQ-AGENT-45, REQ-AGENT-70, REQ-AGENT-86
+    // REQ-AGENT-45, REQ-AGENT-70, REQ-AGENT-96
     #[test]
     fn structured_claude_terminal_reason_is_classified_without_result_text() {
         for (reason, expected, status) in [

@@ -2,7 +2,7 @@
 //! the run `RUN` names wherever it executes, found under the `useful` home and then in Cloud
 //! (REQ-LOCALRUN-180). `cancel` ends it, a Cloud run through the API (REQ-LOCALRUN-218), and
 //! `release` records the release of an ended run under the home or releases a Cloud run's
-//! subject claim (REQ-CLOUDDEF-19).
+//! subject claim (REQ-CLOUDDEF-97).
 
 use std::path::Path;
 use std::time::Duration;
@@ -340,7 +340,7 @@ fn acquire(run_directory: &Path) -> Result<PendingLocalContinuation, ControlFail
     }
 }
 
-/// Ends a waiting run with `outcome` (REQ-CONTINUE-75): under the run lock, once the run
+/// Ends a waiting run with `outcome` (REQ-CONTINUE-109): under the run lock, once the run
 /// still waits on `wait` and the mirror's write has its credentials (REQ-LOCALRUN-204),
 /// appends `event` naming the wait and marks the record `exited`.
 fn end_waiting(

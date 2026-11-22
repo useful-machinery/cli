@@ -725,7 +725,7 @@ fn check_triggers(
 /// A provider rule: its `source` names a `connection` binding or a declared integration
 /// (REQ-WFDEF-38), every `$key` in its `where` or a control's `when` is declared, neither holds
 /// a quoted literal, and each is in the grammar that evaluates it, a `where` Cloud's and a
-/// `when` the wait's (REQ-WFDEF-10).
+/// `when` the wait's (REQ-WFDEF-52).
 fn check_rule(
     name: &str,
     rule: &TriggerRule,
@@ -815,7 +815,7 @@ fn check_rule(
 }
 
 /// A trigger's `where` in the grammar Cloud evaluates it with, `workflowtrigger.ParseRule`
-/// (REQ-WFDEF-10): conjuncts joined by ` and `, each exactly one ` == ` between two operands,
+/// (REQ-WFDEF-52): conjuncts joined by ` and `, each exactly one ` == ` between two operands,
 /// an operand `true`, `false`, a `$key` (non-empty, no space or `"`) or an `event.<path>`.
 /// `contracts/fixtures/workflow/v1/trigger-rule-grammar.json` pins both implementations.
 fn is_trigger_where(rule: &str) -> bool {
@@ -830,7 +830,7 @@ fn is_trigger_where(rule: &str) -> bool {
     })
 }
 
-/// A start trigger's `owner` (REQ-WFDEF-10, REQ-WFDEF-30): a `$binding` owner is of kind
+/// A start trigger's `owner` (REQ-WFDEF-54, REQ-WFDEF-30): a `$binding` owner is of kind
 /// `member` and takes no filter; each filter is a binding of kind `members`.
 fn check_owner(
     name: &str,
@@ -879,7 +879,7 @@ struct EventReads {
     each_input: bool,
 }
 
-/// A schedule trigger reads no event (REQ-WFDEF-10, REQ-WFDEF-31).
+/// A schedule trigger reads no event (REQ-WFDEF-56, REQ-WFDEF-31).
 const SCHEDULE_READS: EventReads = EventReads {
     code: "schedule_trigger_invalid",
     holds: |_| false,
@@ -887,7 +887,7 @@ const SCHEDULE_READS: EventReads = EventReads {
 };
 
 /// A definition trigger reads the members of the run that ended and its exports by name
-/// (REQ-WFDEF-10, REQ-WFDEF-39). The check is of shape: whether the bound definition
+/// (REQ-WFDEF-58, REQ-WFDEF-39). The check is of shape: whether the bound definition
 /// exports the name is known only when one of its runs ends. The event holds the attempt,
 /// but no trigger reads it.
 const DEFINITION_READS: EventReads = EventReads {
@@ -908,7 +908,7 @@ const DEFINITION_READS: EventReads = EventReads {
     each_input: true,
 };
 
-/// A start trigger on a schedule or another definition's run (REQ-WFDEF-10): each `subject`
+/// A start trigger on a schedule or another definition's run (REQ-WFDEF-56, REQ-WFDEF-58): each `subject`
 /// or `inputs` value that begins `event.` is one its event holds, any other value being a
 /// literal, its owner is a `$binding` or absent, and it declares no `stopBefore`.
 fn check_event_reads(
@@ -948,7 +948,7 @@ fn check_event_reads(
 }
 
 /// A binding reference in a trigger or the mirror names a declared binding of `kind`: a flat
-/// one of that kind, or for `linear.state` a `state` binding under `linear` (REQ-WFDEF-37).
+/// one of that kind, or for `linear.state` a `state` binding under `linear` (REQ-WFDEF-63).
 fn check_binding(
     blocks: &RootBlocks,
     key: &str,
@@ -1019,7 +1019,7 @@ fn declared_integration<'a>(
 
 /// A flat key that is also a name an integration declares, or the id of an integration that
 /// declares bindings, is `binding_declared_twice`, once for each such integration
-/// (REQ-WFDEF-37): flat keys in bytewise order, integrations in id order.
+/// (REQ-WFDEF-64): flat keys in bytewise order, integrations in id order.
 fn check_bindings_declared_once(blocks: &RootBlocks, diagnostics: &mut Vec<TreeDiagnostic>) {
     let Some(requires) = &blocks.requires else {
         return;
@@ -1070,7 +1070,7 @@ fn is_cron_shape(cron: &str) -> bool {
 
 /// The shape of a zone name: one or more `/`-separated segments, each a letter followed by
 /// letters, digits, `_`, `+` or `-`, and not `Local`. The check is lexical; Cloud resolves
-/// the name when it checks that the definition can start (REQ-CLOUDDEF-9).
+/// the name when it checks that the definition can start (REQ-CLOUDDEF-150).
 fn is_zone_shape(timezone: &str) -> bool {
     timezone != "Local"
         && timezone.split('/').all(|segment| {
@@ -1158,7 +1158,7 @@ fn check_mirror(
 }
 
 /// The outcomes besides the root's own that a mirror may map: `failed` and the engine
-/// outcomes a local run reaches. `superseded` is never mirrored (REQ-WFFORMAT-101).
+/// outcomes a local run reaches. `superseded` is never mirrored (REQ-WFFORMAT-114).
 const MIRRORED_ENGINE_OUTCOMES: [&str; 3] = ["failed", "withdrawn", "canceled"];
 
 /// The outcomes a run of the root can exit with: its declared outcomes, the exits its edges

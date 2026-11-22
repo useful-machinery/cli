@@ -322,7 +322,7 @@ impl Fixture {
     }
 }
 
-// REQ-GRANT-51, REQ-GRANT-37, REQ-GRANT-40
+// REQ-GRANT-137, REQ-GRANT-37, REQ-GRANT-40
 #[tokio::test]
 async fn a_codex_login_in_the_default_home_under_the_service_home_is_the_services_own() {
     // With no Codex login of the service's own, the runner's is installed
@@ -576,7 +576,7 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-69
 #[tokio::test]
 async fn a_failed_install_or_removal_records_its_stage_and_cause() {
     // Creating the runner's directory: a file occupies it.
@@ -655,7 +655,7 @@ fn earlier(provider: AgentLoginProvider, state: AgentLoginState, named: bool) ->
     }
 }
 
-// REQ-GRANT-38, REQ-GRANT-41
+// REQ-GRANT-119, REQ-GRANT-128
 #[tokio::test]
 async fn a_failed_status_request_keeps_a_provider_cloud_did_not_authorize() {
     for state in [
@@ -684,7 +684,7 @@ async fn a_failed_status_request_keeps_a_provider_cloud_did_not_authorize() {
     assert!(fixture.pass().await.logins.is_empty());
 }
 
-// REQ-GRANT-38
+// REQ-GRANT-119
 #[tokio::test]
 async fn a_failed_status_request_marks_a_provider_cloud_authorized_cloud_unavailable() {
     // An install is kept as it was, and marked `cloud_unavailable`.
@@ -737,7 +737,7 @@ async fn a_failed_status_request_marks_a_provider_cloud_authorized_cloud_unavail
     }
 }
 
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-69
 #[tokio::test]
 async fn a_failed_cloud_request_records_its_stage_and_cause() {
     for (failure, cause, status) in [
@@ -777,7 +777,7 @@ async fn a_failed_cloud_request_records_its_stage_and_cause() {
     }
 }
 
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-70
 #[tokio::test]
 async fn a_pass_that_cannot_read_or_replace_its_record_or_start_records_why() {
     // Loading the readiness document: a directory the runner cannot remove
@@ -860,7 +860,7 @@ async fn an_ended_setup_stops_its_pass_and_is_waited_for_until_its_thread_lets_i
     assert!(!spawned);
 }
 
-// REQ-GRANT-38, REQ-GRANT-40, REQ-TELEMETRY-45
+// REQ-GRANT-121, REQ-GRANT-40, REQ-TELEMETRY-70
 #[tokio::test]
 async fn a_pass_over_a_record_it_cannot_load_proceeds_as_if_nothing_were_recorded() {
     let revoked = || {
@@ -925,7 +925,7 @@ async fn a_pass_over_a_record_it_cannot_load_proceeds_as_if_nothing_were_recorde
     }
 }
 
-// REQ-GRANT-38
+// REQ-GRANT-120
 #[tokio::test]
 async fn a_pass_keeps_the_entry_of_a_provider_this_build_does_not_know() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -963,7 +963,7 @@ async fn a_pass_keeps_the_entry_of_a_provider_this_build_does_not_know() {
     );
 }
 
-// REQ-GRANT-36
+// REQ-GRANT-117
 #[tokio::test]
 async fn an_install_whose_file_is_gone_is_installed_again() {
     let fixture = Fixture::new(Ok(vec![
@@ -1156,7 +1156,7 @@ impl Fixture {
     }
 }
 
-// REQ-GRANT-40, INV-RUNNER-15
+// REQ-GRANT-123, INV-RUNNER-59
 #[tokio::test]
 async fn cloud_naming_another_agent_login_ends_the_earlier_install_before_it_asks() {
     for (failure, state) in [
@@ -1216,7 +1216,7 @@ async fn cloud_naming_another_agent_login_ends_the_earlier_install_before_it_ask
     }
 }
 
-// REQ-GRANT-40, REQ-GRANT-36
+// REQ-GRANT-124, REQ-GRANT-36
 #[tokio::test]
 async fn an_install_recorded_elsewhere_is_ended_before_the_login_is_installed_again() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -1266,7 +1266,7 @@ async fn an_install_recorded_elsewhere_is_ended_before_the_login_is_installed_ag
     }
 }
 
-// REQ-GRANT-42, INV-RUNNER-15
+// REQ-GRANT-42, INV-RUNNER-60
 #[tokio::test]
 async fn a_pass_first_removes_the_temporary_files_its_killed_writes_left() {
     let fixture = Fixture::new(Ok(vec![
@@ -1371,7 +1371,7 @@ fn assert_reported(
     );
 }
 
-// REQ-GRANT-27, SC-GRANT-2
+// REQ-GRANT-110, SC-GRANT-2
 #[tokio::test]
 async fn a_pass_reports_the_readiness_it_changed_before_it_ends() {
     let fixture = Fixture::new(naming(FAKE_AGENT_LOGIN_ID, 1));
@@ -1390,7 +1390,7 @@ async fn a_pass_reports_the_readiness_it_changed_before_it_ends() {
     assert_eq!(cloud.reports(), [reports[1].clone()]);
 }
 
-// REQ-GRANT-27, REQ-GRANT-38
+// REQ-GRANT-110, REQ-GRANT-119
 #[tokio::test]
 async fn the_first_pass_to_reach_cloud_after_an_outage_reports_the_state_it_reaches() {
     let fixture = Fixture::new(naming(FAKE_AGENT_LOGIN_ID, 1));
@@ -1416,7 +1416,7 @@ async fn the_first_pass_to_reach_cloud_after_an_outage_reports_the_state_it_reac
     assert_reported(&reports[1], Some(AgentLoginState::Ready), Some(1));
 }
 
-// REQ-GRANT-27, REQ-TELEMETRY-45
+// REQ-GRANT-110, REQ-TELEMETRY-45
 #[tokio::test]
 async fn a_report_cloud_does_not_take_changes_nothing_the_pass_recorded() {
     for (failure, cause, status) in [
@@ -1439,7 +1439,7 @@ async fn a_report_cloud_does_not_take_changes_nothing_the_pass_recorded() {
     }
 }
 
-// REQ-GRANT-36, REQ-GRANT-44
+// REQ-GRANT-117, REQ-GRANT-44
 #[tokio::test]
 async fn a_token_file_the_runner_would_not_offer_is_installed_again() {
     let fixture = Fixture::new(Ok(vec![authorized(AgentLoginProvider::ClaudeCode, 1)]));
@@ -1472,7 +1472,7 @@ async fn a_token_file_the_runner_would_not_offer_is_installed_again() {
     assert!(claude_code::offered_token(&fixture.service(), &directory).is_some());
 }
 
-// REQ-GRANT-40, REQ-RUNNERENROLL-86
+// REQ-GRANT-122, REQ-RUNNERENROLL-86
 #[tokio::test]
 async fn a_file_where_the_runners_directory_belongs_holds_no_login_to_end() {
     for answer in [
@@ -1516,7 +1516,7 @@ fn codex_report(report: &StatusRequest) -> &ProviderReport {
         .expect("the Codex report")
 }
 
-// REQ-GRANT-50, REQ-GRANT-27
+// REQ-GRANT-50, REQ-GRANT-110
 #[tokio::test]
 async fn a_login_the_closing_answer_no_longer_authorizes_is_removed_before_the_pass_ends() {
     let codex = |status| ProviderLogin {
@@ -1589,7 +1589,7 @@ async fn a_login_the_closing_answer_no_longer_authorizes_is_removed_before_the_p
     }
 }
 
-// REQ-GRANT-50, REQ-GRANT-27
+// REQ-GRANT-50, REQ-GRANT-110
 #[tokio::test]
 async fn a_closing_answer_that_still_authorizes_the_login_leaves_it_installed() {
     // A newer generation waits for the next pass; the same generation
@@ -1621,7 +1621,7 @@ async fn a_closing_answer_that_still_authorizes_the_login_leaves_it_installed() 
     }
 }
 
-// REQ-GRANT-50, REQ-GRANT-27, INV-RUNNER-15
+// REQ-GRANT-50, REQ-GRANT-110, INV-RUNNER-15
 #[tokio::test]
 async fn a_closing_answer_never_reached_or_never_asked_for_changes_nothing() {
     let revoked = Ok(vec![ProviderLogin {
@@ -1697,7 +1697,7 @@ fn codex_answer(status: LoginStatus) -> Result<Vec<ProviderLogin>, CloudFailure>
     }])
 }
 
-// REQ-GRANT-40, REQ-GRANT-36
+// REQ-GRANT-122, REQ-GRANT-36
 #[tokio::test]
 async fn ending_a_codex_login_removes_everything_in_the_runners_codex_home() {
     for (answer, state) in [
@@ -1754,7 +1754,7 @@ async fn ending_a_codex_login_removes_everything_in_the_runners_codex_home() {
     assert_eq!(installation.agent_login_id, OTHER_AGENT_LOGIN_ID);
 }
 
-// REQ-GRANT-40, REQ-GRANT-36
+// REQ-GRANT-122, REQ-GRANT-36
 #[tokio::test]
 async fn a_newer_generation_replaces_auth_json_alone() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -1784,7 +1784,7 @@ async fn a_newer_generation_replaces_auth_json_alone() {
     );
 }
 
-// REQ-GRANT-40, REQ-GRANT-45
+// REQ-GRANT-122, REQ-GRANT-45
 #[tokio::test]
 async fn ending_a_claude_code_login_removes_its_token_file_alone() {
     let fixture = Fixture::new(Ok(vec![
@@ -1818,7 +1818,7 @@ async fn ending_a_claude_code_login_removes_its_token_file_alone() {
     );
 }
 
-// REQ-GRANT-40, REQ-GRANT-36
+// REQ-GRANT-122, REQ-GRANT-36
 #[tokio::test]
 async fn a_link_in_the_codex_home_is_removed_without_touching_its_target() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -1850,7 +1850,7 @@ async fn a_link_in_the_codex_home_is_removed_without_touching_its_target() {
     );
 }
 
-// REQ-GRANT-40, REQ-TELEMETRY-45
+// REQ-GRANT-40, REQ-TELEMETRY-69
 #[tokio::test]
 async fn a_codex_home_removal_that_fails_is_finished_by_the_next_pass() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -1889,7 +1889,7 @@ async fn a_codex_home_removal_that_fails_is_finished_by_the_next_pass() {
     assert!(!fixture.codex_home().exists());
 }
 
-// REQ-GRANT-49, REQ-GRANT-50, INV-RUNNER-15
+// REQ-GRANT-49, REQ-GRANT-50, INV-RUNNER-56
 #[tokio::test]
 async fn an_admissions_pass_installs_and_ends_without_consulting_the_assignment_gate() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -2014,7 +2014,7 @@ fn used(outcome: UseOutcome) -> Option<LastUse> {
     Some(LastUse { outcome, at: now() })
 }
 
-// REQ-GRANT-52, REQ-GRANT-25, REQ-GRANT-27, REQ-TELEMETRY-45
+// REQ-GRANT-52, REQ-GRANT-108, REQ-GRANT-110, REQ-TELEMETRY-45
 #[tokio::test]
 async fn a_noted_use_is_recorded_beside_its_install_and_stated_to_cloud() {
     let fixture = Fixture::new(fake_codex_authorized(2));
@@ -2135,7 +2135,7 @@ async fn a_use_of_an_earlier_generation_is_dropped_and_an_ending_clears_the_last
     );
 }
 
-// REQ-GRANT-52, REQ-GRANT-25
+// REQ-GRANT-52, REQ-GRANT-108
 #[tokio::test]
 async fn a_use_is_stated_to_cloud_only_beside_a_ready_install() {
     let fixture = Fixture::new(fake_codex_authorized(2));
@@ -2239,7 +2239,7 @@ fn recorded_by(answer: &SetupAnswer) -> &ReadinessDocument {
     }
 }
 
-// REQ-GRANT-90, REQ-GRANT-52, REQ-GRANT-41, REQ-GRANT-25
+// REQ-GRANT-90, REQ-GRANT-52, REQ-GRANT-130, REQ-GRANT-108
 #[tokio::test]
 async fn a_sync_checks_each_ready_login_and_records_an_accepted_check_as_its_last_use() {
     let fixture = Fixture::holding_claude_code().await;
@@ -2307,7 +2307,7 @@ async fn a_refused_check_is_recorded_and_the_login_reads_reconnect_required() {
     assert_eq!(entry.failure_code(), Some("reconnect_required"));
 }
 
-// REQ-GRANT-90, REQ-GRANT-41
+// REQ-GRANT-144, REQ-GRANT-130
 #[tokio::test]
 async fn a_check_with_no_answer_changes_nothing_and_is_named_in_the_setups_answer() {
     let fixture = Fixture::holding_claude_code().await;
@@ -2353,7 +2353,7 @@ async fn a_check_with_no_answer_changes_nothing_and_is_named_in_the_setups_answe
     }
 }
 
-// REQ-GRANT-90
+// REQ-GRANT-145
 #[tokio::test]
 async fn a_scheduled_setup_checks_only_a_login_it_installed() {
     let fixture = Fixture::new(fake_codex_authorized(2));
@@ -2381,7 +2381,7 @@ async fn a_scheduled_setup_checks_only_a_login_it_installed() {
     assert_eq!(fixture.check.checked().len(), 2);
 }
 
-// REQ-GRANT-90, REQ-GRANT-49, INV-RUNNER-29
+// REQ-GRANT-145, REQ-GRANT-49, INV-RUNNER-29
 #[tokio::test]
 async fn an_admissions_pass_checks_nothing_even_when_it_installs() {
     let fixture = Fixture::new(fake_codex_authorized(1));
@@ -2412,7 +2412,7 @@ async fn an_admissions_pass_checks_nothing_even_when_it_installs() {
     assert_eq!(fixture.check.checked().len(), checks);
 }
 
-// REQ-GRANT-90, INV-RUNNER-29
+// REQ-GRANT-145, INV-RUNNER-29
 #[tokio::test]
 async fn no_check_starts_while_the_runner_holds_an_assignment() {
     let fixture = Fixture::holding_claude_code().await;
@@ -2483,7 +2483,7 @@ async fn a_check_noted_for_a_login_the_second_pass_ends_is_dropped() {
     assert_eq!(claude_code_last_use(&document), None);
 }
 
-// REQ-TELEMETRY-45, REQ-GRANT-90
+// REQ-TELEMETRY-71, REQ-GRANT-144
 #[tokio::test]
 async fn a_check_with_no_answer_is_recorded_with_its_stage_and_cause() {
     let fixture = Fixture::holding_claude_code().await;
@@ -2534,7 +2534,7 @@ async fn a_check_with_no_answer_is_recorded_with_its_stage_and_cause() {
     assert_eq!(fixture.setup_records().len(), records);
 }
 
-// REQ-TELEMETRY-45
+// REQ-TELEMETRY-71
 #[tokio::test]
 async fn a_step_that_failed_in_the_setup_is_named_before_its_unanswered_check() {
     // The setup installs the login, its closing status request fails, and the

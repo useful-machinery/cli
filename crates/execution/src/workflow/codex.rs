@@ -866,7 +866,7 @@ impl CodexAppServerV1Parser {
     }
 
     /// Holds a frame of the started turn that overtook the `turn/start` response; the
-    /// held frames together stay within the frame limit (INV-HARNESS-20).
+    /// held frames together stay within the frame limit (INV-HARNESS-30).
     fn hold_turn_frame(&mut self, frame: &[u8]) -> Result<ParserProgress, AgentFailureCause> {
         let Some(held_bytes) = u64::try_from(frame.len())
             .ok()

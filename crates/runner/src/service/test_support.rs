@@ -171,7 +171,7 @@ impl Deref for ConfigFixture {
 /// host's load (INV-TESTING-26). The case is the call site (`file:line`), and an expiry is
 /// returned as an error that every call site prints, through `unwrap` or `expect` or in its
 /// own panic message. A plain function, not an `async fn`, so the body is heap-pinned
-/// before this wrapper's state exists (INV-TESTING-18).
+/// before this wrapper's state exists (chapter 19, "Load-sensitive bounds").
 #[track_caller]
 pub(crate) fn with_watchdog<F: Future>(
     future: F,

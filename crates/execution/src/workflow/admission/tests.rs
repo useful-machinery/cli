@@ -367,7 +367,7 @@ fn cancellation_source_rearms_graceful_cancellation_and_authorizes_one_force_abo
     );
 }
 
-// REQ-WFEXEC-59: a child run's source answers a force abort that follows a graceful
+// REQ-WFEXEC-90: a child run's source answers a force abort that follows a graceful
 // cancellation, which its graceful reason alone cannot show.
 #[tokio::test]
 async fn a_force_abort_after_a_graceful_cancellation_wakes_a_force_abort_waiter() {
@@ -1733,7 +1733,7 @@ fn a_tree_run_rejects_a_missing_required_tool_by_name() {
     );
 }
 
-// REQ-WFDEF-34, REQ-WFEXEC-55
+// REQ-WFDEF-47, REQ-WFEXEC-55
 #[test]
 fn a_tree_run_admits_integrations_without_tools_and_probes_nothing() {
     let fixture = WorkflowFixture::new(
@@ -1963,7 +1963,7 @@ fn workflow_admission_forwards_only_the_declared_grant_token_names() {
     );
 }
 
-// INV-ENGINE-31, INV-ENGINE-43
+// INV-ENGINE-31, INV-ENGINE-63
 #[test]
 fn node_narrowing_drops_only_root_names_the_node_omits() {
     let environment = EnvironmentSnapshot::new([
@@ -2011,7 +2011,7 @@ fn node_narrowing_drops_only_root_names_the_node_omits() {
     );
 }
 
-/// The twelve environment names of the seven declarable integrations (REQ-WFEXEC-78).
+/// The twelve environment names of the seven declarable integrations (REQ-WFEXEC-85).
 const INTEGRATION_ENVIRONMENT: [(&str, &str); 12] = [
     ("GH_TOKEN", "launching-gh-token"),
     ("GH_TOKEN_FILE", "/launching/gh-token"),
@@ -2075,7 +2075,7 @@ fn launching_values(names: &[&'static str]) -> Vec<(&'static str, &'static str)>
     values
 }
 
-// REQ-WFEXEC-78, INV-ENGINE-43
+// REQ-WFEXEC-78, REQ-WFEXEC-85, INV-ENGINE-43, INV-ENGINE-63
 #[test]
 fn admission_keeps_the_environment_names_of_each_declared_integration() {
     for (provider, names) in [
@@ -2143,7 +2143,7 @@ fn admission_keeps_the_environment_names_of_each_declared_integration() {
     );
 }
 
-// REQ-WFEXEC-78, INV-ENGINE-43
+// REQ-WFEXEC-78, INV-ENGINE-63
 #[test]
 fn runner_admission_keeps_the_environment_names_of_a_declared_integration() {
     let fixture = WorkflowFixture::new(&declaring_workflow(
@@ -2161,7 +2161,7 @@ fn runner_admission_keeps_the_environment_names_of_a_declared_integration() {
     );
 }
 
-// REQ-WFEXEC-78, REQ-WFEXEC-71, REQ-WFRECOVERY-64, INV-ENGINE-31, INV-ENGINE-43
+// REQ-WFEXEC-86, REQ-WFEXEC-71, REQ-WFRECOVERY-64, INV-ENGINE-31, INV-ENGINE-63
 #[test]
 fn no_node_list_removes_the_names_of_a_declared_integration() {
     let fixture = WorkflowFixture::new(
@@ -2360,7 +2360,7 @@ fn design_step() -> AdmissionLocation {
     }
 }
 
-// REQ-WFEXEC-59, REQ-WFFORMAT-94: a local run of a workflow with `workflow` steps comes from
+// REQ-WFEXEC-91, REQ-WFFORMAT-94: a local run of a workflow with `workflow` steps comes from
 // a tree, and a runner refuses one outside a tree.
 #[test]
 fn workflow_steps_need_a_tree_locally_and_are_refused_by_runner_admission() {
@@ -2387,7 +2387,7 @@ fn workflow_steps_need_a_tree_locally_and_are_refused_by_runner_admission() {
     );
 }
 
-// REQ-WFEXEC-59, REQ-WFFORMAT-92: an edge whose target is a wait is refused at admission.
+// REQ-WFEXEC-92, REQ-WFFORMAT-120: an edge whose target is a wait is refused at admission.
 #[test]
 fn an_edge_to_a_wait_is_refused_at_admission() {
     let fixture = child_step_fixture(WAITING_CHILD_STEP_WORKFLOW);
@@ -2403,9 +2403,9 @@ fn an_edge_to_a_wait_is_refused_at_admission() {
     );
 }
 
-// REQ-WFEXEC-59: a local wait continues at a step, so an `answer`, `approval`, `repair` or
+// REQ-WFEXEC-92: a local wait continues at a step, so an `answer`, `approval`, `repair` or
 // `stop` wait whose `then` is an exit is refused; the same wait continuing at its own step
-// admits (REQ-WFFORMAT-92).
+// admits (REQ-WFFORMAT-120).
 #[test]
 fn a_wait_that_continues_at_an_exit_is_refused_at_admission() {
     let admit = |then: &str| {
@@ -2432,7 +2432,7 @@ fn a_wait_that_continues_at_an_exit_is_refused_at_admission() {
     assert!(admit("design").is_ok());
 }
 
-// REQ-WFEXEC-59, REQ-WFEXEC-65: an `external` wait admits when the caller's condition
+// REQ-WFEXEC-93, REQ-WFEXEC-125: an `external` wait admits when the caller's condition
 // sources evaluate its rule's `source` and `event`, and is refused at the step otherwise.
 #[test]
 fn an_external_wait_admits_only_on_a_supported_condition() {

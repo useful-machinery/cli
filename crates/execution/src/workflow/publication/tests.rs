@@ -2732,7 +2732,7 @@ fn make_interrupted(run: &mut WorkflowRunResult, reason: CancellationReason) {
 }
 
 /// A `repair` wait at `build`, entered for a child the interruption `interrupted` failed when
-/// it carries one (REQ-WFEXEC-70), or kept by the interruption `kept` (REQ-WFEXEC-72).
+/// it carries one (REQ-WFEXEC-100), or kept by the interruption `kept` (REQ-WFEXEC-72).
 fn repair_wait(
     interrupted: Option<CancellationReason>,
     kept: Option<CancellationReason>,
@@ -2823,7 +2823,7 @@ fn an_interrupted_attempt_exits_by_the_interruptions_reason() {
     );
 }
 
-// REQ-WFEXEC-40, REQ-LOCALRUN-135: a `continued` attempt whose next attempt the interruption
+// REQ-WFEXEC-40, REQ-LOCALRUN-291: a `continued` attempt whose next attempt the interruption
 // held back exits by the interruption's reason; one that continues exits 0.
 #[test]
 fn a_continued_attempt_held_back_by_an_interruption_exits_by_its_reason() {

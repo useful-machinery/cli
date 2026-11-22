@@ -2747,7 +2747,7 @@ fn inconsistent_project_readiness_is_an_invalid_response() {
     server.finish();
 }
 
-// REQ-PROJECT-82, REQ-PROJECT-90
+// REQ-PROJECT-82, REQ-PROJECT-107
 #[test]
 fn a_pool_set_that_disagrees_with_the_single_pool_is_an_invalid_response() {
     let repository = Some(repository_body("acme/widget", "main"));
@@ -2789,7 +2789,7 @@ fn a_pool_set_that_disagrees_with_the_single_pool_is_an_invalid_response() {
     }
 }
 
-// REQ-PROJECT-82, REQ-PROJECT-90
+// REQ-PROJECT-107
 #[test]
 fn a_project_without_a_pool_set_is_read_as_its_single_pool() {
     let project = project_body("widget", true, Some(repository_body("acme/widget", "main")));

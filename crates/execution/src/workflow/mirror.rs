@@ -82,7 +82,7 @@ impl MirrorHook {
     }
 }
 
-/// The variables a hook's template may name (REQ-WFFORMAT-101).
+/// The variables a hook's template may name (REQ-WFFORMAT-112).
 pub fn hook_variables(hook: MirrorHook) -> &'static [&'static str] {
     match hook {
         MirrorHook::Start | MirrorHook::Outcome => {
@@ -1475,7 +1475,7 @@ mod tests {
         );
     }
 
-    // REQ-WFFORMAT-101
+    // REQ-WFFORMAT-112
     #[test]
     fn templates_parse_exactly_lowercase_dotted_placeholders() {
         let template = Template::parse("Engineering started by {{operator}}. Run: {{run.url}}")
@@ -1507,7 +1507,7 @@ mod tests {
         }
     }
 
-    // REQ-WFFORMAT-101
+    // REQ-WFFORMAT-113
     #[test]
     fn guards_parse_to_the_operator_and_binding_key() {
         assert_eq!(
@@ -1544,7 +1544,7 @@ mod tests {
         }
     }
 
-    // REQ-WFDEF-37: a guard takes a `$<id>.<name>` binding, the integration before the last
+    // REQ-WFDEF-37, REQ-WFDEF-63: a guard takes a `$<id>.<name>` binding, the integration before the last
     // `.`, and passes its key on as written.
     #[test]
     fn guards_take_an_integration_binding_as_written() {

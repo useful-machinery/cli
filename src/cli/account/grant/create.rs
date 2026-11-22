@@ -515,7 +515,7 @@ enum Outcome {
     Unavailable,
     /// A coding agent passed over because no organization was resolved for its grant.
     OrganizationRequired,
-    /// A provider passed over because its grants need reconnecting (REQ-GRANT-79).
+    /// A provider passed over because its grants need reconnecting (REQ-GRANT-185).
     ReconnectRequired,
     Failed,
     /// A signal ended the command with this status.
@@ -621,9 +621,9 @@ pub(super) fn first_given<const N: usize>(
         .find_map(|(given, option)| given.then_some(option))
 }
 
-/// The exit status of several sign-ins (REQ-GRANT-75): a signal's when one stopped them, 1 when
+/// The exit status of several sign-ins (REQ-GRANT-183): a signal's when one stopped them, 1 when
 /// any failed or when every one was passed over, as unavailable, for want of an organization or
-/// as needing reconnecting (REQ-GRANT-79), and otherwise 0, as when there were none.
+/// as needing reconnecting (REQ-GRANT-185), and otherwise 0, as when there were none.
 fn summary_code(outcomes: impl Iterator<Item = Outcome> + Clone) -> ExitCode {
     if let Some(code) = outcomes.clone().find_map(|outcome| match outcome {
         Outcome::Stopped(code) => Some(code),
@@ -747,7 +747,7 @@ impl Command {
     /// The sign-in the provider and options name; a file or stream is read here, so that an
     /// insecurely held or malformed one is refused with exit 2 before any network use, as is an
     /// option that does not suit the provider: a source of another provider, or for a coding
-    /// agent, whose sign-in has no consent, `--no-wait` or `--timeout` (REQ-GRANT-71).
+    /// agent, whose sign-in has no consent, `--no-wait` or `--timeout` (REQ-GRANT-178).
     fn sign_in(&self, provider: ProviderArg) -> Result<SignIn, CommandFailure> {
         let name = provider.grant().as_str();
         let unsuited = |option: &str, remedy: &str| unsuited(option, name, remedy);
@@ -1027,7 +1027,7 @@ impl Flow<'_> {
 
     /// Selects, among `wanted` and in [`order`], the providers the member lacks: those it holds no
     /// grant of that is `active` or `reconnect_required`, for a native provider in the organization
-    /// a new grant would be for (REQ-GRANT-75). The member's grants of both kinds are read once.
+    /// a new grant would be for (REQ-GRANT-180). The member's grants of both kinds are read once.
     /// With every provider wanted, the providers the deployment serves are read next, every time,
     /// and each other OAuth provider among them is wanted after the built-in ones; with only some
     /// of the five wanted, they are read next only where a coding agent might be signed in to
@@ -1068,7 +1068,7 @@ impl Flow<'_> {
         let read = self.with_api(deployment, |api| {
             let grants = super::every_grant(api)?;
             // With every provider wanted, what the deployment serves names the other OAuth
-            // providers too, so it is read every time, right after the grants (REQ-GRANT-75).
+            // providers too, so it is read every time, right after the grants (REQ-GRANT-181).
             let every = match wanted {
                 Wanted::Every => Some(api.served_providers()?),
                 Wanted::Only(_) => None,
@@ -1201,7 +1201,7 @@ impl Flow<'_> {
     /// error before its prompts, then prints one outcome per provider (REQ-GRANT-75). A held
     /// provider is never selected, and one whose grants need reconnecting is passed over as
     /// `reconnect_required`, the summary naming `useful account integration reconnect` with each of
-    /// those grants' IDs (REQ-GRANT-79). A sign-in that fails
+    /// those grants' IDs (REQ-GRANT-185). A sign-in that fails
     /// does not stop the ones after it; a signal does, whether `useful` received it or it ended a
     /// coding agent's sign-in on its own terminal. A coding agent the deployment does not serve,
     /// or one no organization was resolved for, is reported and passed over without a sign-in.
@@ -1308,7 +1308,7 @@ impl Flow<'_> {
 
     /// Runs the consent once the member's grants of the provider are read in the member's
     /// session and none is held: `create` never replaces one, and refuses, naming `useful
-    /// account integration reconnect` for each (REQ-GRANT-73).
+    /// account integration reconnect` for each (REQ-GRANT-73, REQ-GRANT-179).
     fn consent_unheld(
         &self,
         deployment: &Deployment,

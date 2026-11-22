@@ -47,29 +47,17 @@ pub type RunArtifactDelivery = models::RunArtifactDelivery;
 /// A violation a refused continuation names, as `useful` reports it: a code of the
 /// contract's `ContinuationAdmissionViolation` list, or a definition-backed run's
 /// refusal, which Cloud answers under a problem type of its own and `useful` reports by
-/// the code of the same name (REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-20).
+/// the code of the same name (REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-43).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinuationAdmissionViolation {
     pub code: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub node: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reference: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prior_state: Option<String>,
 }
 
 impl From<models::ContinuationAdmissionViolation> for ContinuationAdmissionViolation {
     fn from(violation: models::ContinuationAdmissionViolation) -> Self {
         Self {
             code: listed_violation_code(violation.code),
-            node: violation.node,
-            producer: violation.producer,
-            reference: violation.reference,
-            prior_state: violation.prior_state,
         }
     }
 }
@@ -81,10 +69,6 @@ fn listed_violation_code(code: models::continuation_admission_violation::Code) -
         Code::ExpectedRunVersionConflict => "expected_run_version_conflict",
         Code::ContinuationAttemptUnavailable => "continuation_attempt_unavailable",
         Code::RetainedWorkspaceUnavailable => "retained_workspace_unavailable",
-        Code::OwnershipUnproven => "ownership_unproven",
-        Code::ContinuationInputsUnsatisfied => "continuation_inputs_unsatisfied",
-        Code::ContinuationNodesUnsatisfied => "continuation_nodes_unsatisfied",
-        Code::ContinuationReferencesUnsatisfied => "continuation_references_unsatisfied",
     }
 }
 
@@ -133,8 +117,9 @@ pub type RunControlKind = models::RunControlKind;
 pub type RunControlWait = models::RunControlWait;
 pub type RunControlAnswer = models::RunControlAnswer;
 
-/// What an owner's release of a run's subject claim answered (REQ-CLOUDDEF-19): the claim
-/// released, or the conflict that refused the release and changed nothing.
+/// What an owner's release of a run's subject claim answered (REQ-CLOUDDEF-91,
+/// REQ-CLOUDDEF-92): the claim released, or the conflict that refused the release and changed
+/// nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunClaimRelease {
     Released(Box<RunSubjectClaim>),
@@ -749,8 +734,8 @@ impl<'a> RunApi<'a> {
     }
 
     /// Releases the subject claim the definition-backed run `run_id` currently holds, as an
-    /// owner, under `key` (REQ-CLOUDDEF-19); the request is sent again under the same key
-    /// when its response is lost.
+    /// owner, under `key` (REQ-CLOUDDEF-91, REQ-CLOUDDEF-98); the request is sent again under
+    /// the same key when its response is lost.
     pub fn release_claim(
         &self,
         organization: &str,
@@ -788,7 +773,7 @@ impl<'a> RunApi<'a> {
                 "https://api.usefulmachinery.com/problems/idempotency-conflict" => {
                     Ok(RunClaimRelease::IdempotencyConflict)
                 }
-                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-20).
+                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-42).
                 _ => Err(RunFailure::Conflict),
             };
         }
@@ -863,7 +848,7 @@ impl<'a> RunApi<'a> {
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "https://api.usefulmachinery.com/problems/control-too-large",
                 ) => Ok(RunControlSubmission::TooLarge),
-                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-20).
+                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-42).
                 (StatusCode::CONFLICT, _) => Err(RunFailure::Conflict),
                 _ => Err(RunFailure::protocol(false)),
             };
@@ -1319,10 +1304,6 @@ fn classify_continuation_failure(response: &ReceivedResponse) -> RunFailure {
                 definition_run_refusal_code(&problem.r#type).map_or(RunFailure::Conflict, |code| {
                     RunFailure::ContinuationAdmissionInvalid(vec![ContinuationAdmissionViolation {
                         code,
-                        node: None,
-                        producer: None,
-                        reference: None,
-                        prior_state: None,
                     }])
                 })
             }
@@ -2557,15 +2538,15 @@ mod run_client_tests {
             .unwrap(),
         };
         assert!(matches!(
-            classify_continuation_failure(&response("continuation_nodes_unsatisfied")),
+            classify_continuation_failure(&response("retained_workspace_unavailable")),
             RunFailure::ContinuationAdmissionInvalid(violations)
-                if violations[0].code == "continuation_nodes_unsatisfied"
+                if violations[0].code == "retained_workspace_unavailable"
         ));
         assert!(matches!(
             classify_continuation_failure(&response("a_code_from_a_later_release")),
             RunFailure::Conflict
         ));
-        let mut malformed = response("continuation_nodes_unsatisfied");
+        let mut malformed = response("retained_workspace_unavailable");
         malformed.body = serde_json::to_vec(&serde_json::json!({
             "type": "https://api.usefulmachinery.com/problems/continuation-admission-invalid",
             "title": "Admission invalid", "status": 409,
@@ -2578,7 +2559,7 @@ mod run_client_tests {
         ));
     }
 
-    // REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-20: Cloud answers a
+    // REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-43: Cloud answers a
     // definition-backed run's refusal under a problem type of its own, which
     // this release reports by the code of the same name.
     #[test]
@@ -2614,7 +2595,6 @@ mod run_client_tests {
                     RunFailure::ContinuationAdmissionInvalid(violations)
                         if violations.len() == 1
                             && violations[0].code == code
-                            && violations[0].node.is_none()
                 ),
                 "{slug}"
             );
@@ -2876,7 +2856,7 @@ mod run_client_tests {
         response
     }
 
-    // REQ-RUN-80, REQ-PROJECT-71
+    // REQ-RUN-80, REQ-RUN-163, REQ-PROJECT-71
     #[test]
     fn project_not_ready_on_create_is_a_definite_rejection_with_its_ordered_blockers() {
         use models::ProjectReadinessBlocker::{RepositoryDetached, RunnerPoolUnassigned};
@@ -3057,7 +3037,7 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RETRY-52, REQ-COMPAT-20: Cloud refuses a retry of a run by workflow
+    // REQ-RETRY-52, REQ-COMPAT-43: Cloud refuses a retry of a run by workflow
     // path as a 409 conflict, which this release names and an earlier one
     // reports as a conflict; a 409 of a type this release does not name stays
     // a conflict.
@@ -3104,7 +3084,7 @@ mod run_client_tests {
         (server, storage)
     }
 
-    // REQ-COMPAT-20: a refusal of a claim release the released vocabulary does not
+    // REQ-COMPAT-42: a refusal of a claim release the released vocabulary does not
     // name is a conflict, not a protocol failure.
     #[test]
     fn release_claim_reports_an_unnamed_conflict_as_a_conflict() {
@@ -3123,7 +3103,7 @@ mod run_client_tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-COMPAT-20: a refusal of a run control the released vocabulary does not
+    // REQ-COMPAT-42: a refusal of a run control the released vocabulary does not
     // name is a conflict, not a protocol failure.
     #[test]
     fn request_control_reports_an_unnamed_conflict_as_a_conflict() {
@@ -3147,7 +3127,7 @@ mod run_client_tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-RUN-91, REQ-LOCALRUN-218: Cloud refuses a control the runner executing the run does
+    // REQ-RUN-157, REQ-LOCALRUN-218: Cloud refuses a control the runner executing the run does
     // not apply as `control-unsupported`, which this release names.
     #[test]
     fn request_control_reports_control_unsupported_as_its_refusal() {
@@ -3305,7 +3285,7 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUN-80, REQ-COMPAT-20
+    // REQ-RUN-80, REQ-COMPAT-42
     #[test]
     fn unlisted_create_conflict_stays_a_conflict() {
         assert_eq!(

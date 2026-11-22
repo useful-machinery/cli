@@ -147,7 +147,7 @@ mod tests {
         );
     }
 
-    // REQ-WFFORMAT-103
+    // REQ-WFFORMAT-52
     #[test]
     fn a_structural_deviation_names_the_field_and_the_rule() {
         let cases = [

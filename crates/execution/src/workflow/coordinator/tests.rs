@@ -663,7 +663,7 @@ async fn failed_commit_prevents_initial_action_release() {
     assert!(timeline.lock().unwrap().is_empty());
 }
 
-// INV-ENGINE-8, INV-ENGINE-33: both commit sites, the reduction's and the coordination
+// INV-ENGINE-8, INV-ENGINE-54: both commit sites, the reduction's and the coordination
 // diagnostic's, carry the port's classified failure and release no action.
 #[tokio::test]
 async fn failed_commit_carries_the_port_failure_from_both_commit_sites() {

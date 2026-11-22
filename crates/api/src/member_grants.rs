@@ -295,7 +295,7 @@ pub(crate) const PROVIDER_VOCABULARY: i32 = 2;
 
 /// Whether `name` has the shape of a provider id: a lowercase letter followed by at most 62
 /// lowercase letters, digits, dots and hyphens, the shape the deployment's table admits
-/// (REQ-PROVIDER-1). Every OAuth provider is named so, and `codex`, but not `claude_code`.
+/// (REQ-PROVIDER-20). Every OAuth provider is named so, and `codex`, but not `claude_code`.
 pub fn valid_provider_id(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|first| first.is_ascii_lowercase())
@@ -391,7 +391,7 @@ impl MemberGrantApi {
     /// (REQ-GRANT-78), or `None` from a deployment that predates the read and answers its route
     /// 404, which says nothing of what it serves. The answer is read as text rather than into the
     /// generated models, so a provider a later deployment serves that this release cannot use is
-    /// passed over (REQ-GRANT-75).
+    /// passed over (REQ-GRANT-182).
     pub fn served_providers(&self) -> Result<Option<Vec<ServedGrantProvider>>, MemberGrantFailure> {
         self.served_answer()?.map(|body| served(&body)).transpose()
     }
@@ -1156,7 +1156,7 @@ mod tests {
     }
 
     // REQ-GRANT-78
-    // REQ-GRANT-75
+    // REQ-GRANT-182
     #[test]
     fn a_served_provider_this_release_cannot_use_is_passed_over() {
         // A later deployment may serve a provider of a kind, or named in a shape, this release was

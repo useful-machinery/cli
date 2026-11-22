@@ -2,7 +2,7 @@
 //! server `useful_workflow_result` that Claude Code starts from the invocation's
 //! `--mcp-config` file. It serves the one tool `submit` and relays each call to the
 //! invocation's result channel, where the adapter judges it (INV-HARNESS-23). It holds no state
-//! of its own, so a Claude Code that starts it again loses nothing.
+//! of its own, so a Claude Code that starts it again loses nothing (INV-HARNESS-31).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::num::NonZeroU64;
@@ -676,7 +676,7 @@ mod tests {
         assert!(response.get("result").is_none());
     }
 
-    // REQ-AGENT-84, INV-HARNESS-23
+    // REQ-AGENT-84, INV-HARNESS-23, INV-HARNESS-31, INV-HARNESS-32, INV-HARNESS-33
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_relay_serves_the_tool_and_relays_each_call_to_the_channel() {
         let mut channel = Channel::prepare();
@@ -783,7 +783,7 @@ mod tests {
         channel.channel.shutdown().await.unwrap();
     }
 
-    // INV-HARNESS-23
+    // INV-HARNESS-23, INV-HARNESS-33
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn without_its_socket_the_relay_fails_initialize_and_every_call() {
         let channel = Channel::prepare();

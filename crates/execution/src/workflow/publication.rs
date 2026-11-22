@@ -153,7 +153,7 @@ pub struct ContinuationRecordV1 {
 /// A continuation's `reason` (REQ-CONTINUE-77): `retry` for a `repair` wait resolved by
 /// `control.retry`, `host` for a `host` wait the host condition resolved (REQ-WFEXEC-81),
 /// `edge` for an attempt a backward or limited edge started, `restart` for the first own
-/// attempt of a successor run (REQ-CONTINUE-79), `resume` for every other local
+/// attempt of a successor run (REQ-CONTINUE-98), `resume` for every other local
 /// continuation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -189,7 +189,7 @@ impl From<TakenEdgeRecord> for ContinuationEdgeV1 {
 }
 
 impl ContinuationEdgeV1 {
-    /// The edge's key in `run.json` `edges` (REQ-WFDEF-4).
+    /// The edge's key in `run.json` `edges` (REQ-WFDEF-50).
     pub fn key(&self) -> String {
         super::runtime::edge_key(&self.step, &self.outcome)
     }

@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(holder.record.id, first);
     }
 
-    // REQ-WFDEF-28, INV-ENGINE-24: busy while the holder is live, settled once it exits,
+    // REQ-WFDEF-74, REQ-WFDEF-76, INV-ENGINE-24: busy while the holder is live, settled once it exits,
     // free after a release, decided from the holder's record and controls alone.
     #[test]
     fn the_slot_follows_the_holders_record_and_controls() {
@@ -500,7 +500,7 @@ mod tests {
         ));
     }
 
-    // REQ-WFDEF-28: a successor takes the slot over from its live predecessor.
+    // REQ-WFDEF-75: a successor takes the slot over from its live predecessor.
     #[test]
     fn a_claimant_naming_the_holder_as_predecessor_takes_the_slot() {
         let fixture = Fixture::new();
@@ -585,7 +585,7 @@ mod tests {
         ));
     }
 
-    // REQ-WFDEF-28: definitions share nothing.
+    // REQ-WFDEF-76: definitions share nothing.
     #[test]
     fn another_definitions_slot_for_the_subject_is_unaffected() {
         let fixture = Fixture::new();

@@ -1333,7 +1333,7 @@ fn step_workflow(step: &str) -> ResolutionLocation {
     })
 }
 
-// REQ-WFFORMAT-89
+// REQ-WFFORMAT-89, REQ-WFFORMAT-116
 #[test]
 fn a_child_workflow_resolves_beside_the_root_and_joins_its_closure() {
     let bundle = ChildBundle::new(PARENT_WORKFLOW);
@@ -1516,7 +1516,7 @@ fn nested_variant(from: &str, to: &str) -> String {
     NESTED_WORKFLOW.replacen(from, to, 1)
 }
 
-// REQ-WFFORMAT-104, REQ-WFFORMAT-24
+// REQ-WFFORMAT-122, REQ-WFFORMAT-24
 #[test]
 fn a_nested_workflow_resolves_its_stages_into_the_closure_of_each_file_reaching_them() {
     let bundle = ChildBundle::nesting(NESTED_WORKFLOW);
@@ -1634,7 +1634,7 @@ fn two_files_that_name_each_other_are_nested_whichever_is_validated() {
     }
 }
 
-// REQ-WFFORMAT-104
+// REQ-WFFORMAT-121
 #[test]
 fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
     let for_each = nested_variant(
@@ -1693,4 +1693,25 @@ fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
     ChildBundle::nesting(&repair)
         .resolve("workflow.yaml")
         .unwrap();
+}
+
+// REQ-WFFORMAT-81: the re-check after opening a source file compares the file the path names
+// with the opened one by identity, so a file replaced under its path is a different file while
+// an in-place edit of the opened file is the same one.
+#[cfg(unix)]
+#[test]
+fn a_replaced_source_file_no_longer_identifies_the_opened_one() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("workflow.yaml");
+    fs::write(&path, "schemaVersion: 1\n").unwrap();
+    let handle = open_source_file(&path).unwrap();
+    let opened = handle.metadata().unwrap();
+
+    fs::write(&path, "schemaVersion: 1\n# edited in place\n").unwrap();
+    assert!(path_identifies_file(&path, &opened).unwrap());
+
+    let replacement = directory.path().join("replacement.yaml");
+    fs::write(&replacement, "schemaVersion: 1\n").unwrap();
+    fs::rename(&replacement, &path).unwrap();
+    assert!(!path_identifies_file(&path, &opened).unwrap());
 }

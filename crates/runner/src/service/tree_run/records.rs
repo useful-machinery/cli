@@ -1,5 +1,5 @@
 //! Reading the local run and wait records a tree run leaves (REQ-LOCALRUN-175,
-//! REQ-LOCALRUN-178) and the terminal report they map to (REQ-RUNNERENROLL-99): the
+//! REQ-LOCALRUN-178) and the terminal report they map to (REQ-RUNNERENROLL-172): the
 //! transport result is `cancelled` when the record's outcome is the engine's `canceled` or
 //! `withdrawn`, and otherwise the outcome of the engine's published result (REQ-WFEXEC-15),
 //! read from the last `--json` document or, when that carries none, from the run
@@ -8,10 +8,10 @@
 //! record's outcome, the workflow's choice, travels as `chosenOutcome` and never selects
 //! the result, its run's mirror writes, every attempt's, as `mirror` and the departure the
 //! attempt's own outcome write confirmed as `claimRelease`. An adopted run
-//! (REQ-RUNNERENROLL-89) whose record already read `exited` is concluded by the result its
+//! (REQ-RUNNERENROLL-218) whose record already read `exited` is concluded by the result its
 //! current attempt recorded, and one whose first `retry --from` the runtime refused ends
 //! `failed` with the refusal's code, as does a run whose `create` the runtime refused
-//! (REQ-RUNNERENROLL-91).
+//! (REQ-RUNNERENROLL-192).
 
 use std::path::Path;
 
@@ -61,7 +61,7 @@ pub(in crate::service) struct TreeRecord {
     pub(in crate::service) mirror: Vec<MirrorWrite>,
     /// How many leading writes of `mirror` an earlier attempt of the run made: those
     /// `mirror/` held when the runner took the run, or all of them when that count could
-    /// not be read (REQ-RUNNERENROLL-99). Zero while the loop observes the record.
+    /// not be read (REQ-RUNNERENROLL-179). Zero while the loop observes the record.
     pub(in crate::service) earlier_writes: usize,
     /// The root's text exports the exit lists (REQ-RUNNERENROLL-131), read only for the
     /// record the loop ends on, when it exits with a workflow outcome the runner reports
@@ -163,7 +163,7 @@ pub(in crate::service) fn published_path(path: &[Value]) -> Vec<StepPathPart> {
 }
 
 /// The class of a failure to read a run's `mirror/`, which the run event records beside the
-/// exit that reports no writes for it (REQ-RUNNERENROLL-99): a file there that is not a
+/// exit that reports no writes for it (REQ-RUNNERENROLL-180): a file there that is not a
 /// write, or a repeated ordinal; a `mirror/` or a file in it of the wrong kind or size; a
 /// file operation that failed; or any other refusal of the run directory.
 pub(in crate::service) fn mirror_read_failure(error: &LocalRunDirectoryError) -> &'static str {
@@ -234,7 +234,7 @@ pub(in crate::service) fn read_wait(run_directory: &Path) -> Option<TreeWait> {
 }
 
 /// The questions an `answer` wait's `payload` asks, read as `useful workflow run answer` reads
-/// them (REQ-RUNNERENROLL-119): the listed questions, or the one question with id `1` that a
+/// them (REQ-RUNNERENROLL-321): the listed questions, or the one question with id `1` that a
 /// payload without a list asks; `None` when they break a bound Cloud admits, so the wait is
 /// reported without them and nothing is truncated.
 fn answer_questions(payload: &Map<String, Value>) -> Option<TreeProgressWaitQuestions> {
@@ -255,7 +255,7 @@ fn answer_questions(payload: &Map<String, Value>) -> Option<TreeProgressWaitQues
 }
 
 /// The failed child a wait's `payload` records, read as `useful workflow run show` reads
-/// it (REQ-RUNNERENROLL-125) and reduced to the outcome, the failing node's `id` and role,
+/// it (REQ-RUNNERENROLL-327) and reduced to the outcome, the failing node's `id` and role,
 /// its state and, for a failed node, its phase and code; `None` when the payload records
 /// none or the reduction breaks a bound Cloud admits, so the wait is reported without it
 /// and nothing is truncated.
@@ -565,7 +565,7 @@ fn mirror_results(writes: &[MirrorWrite]) -> Vec<Value> {
 }
 
 /// Whether the runner protocol's `MirrorResult` names `reason`, so that it travels with its
-/// write (REQ-RUNNERENROLL-99): a reason the protocol does not name would have Cloud refuse
+/// write (REQ-RUNNERENROLL-171): a reason the protocol does not name would have Cloud refuse
 /// the frame, so its write travels `skipped` with no `reason`.
 const fn travels(reason: MirrorSkipReason) -> bool {
     match reason {
@@ -574,7 +574,7 @@ const fn travels(reason: MirrorSkipReason) -> bool {
     }
 }
 
-/// Whether `write` confirms a departure (REQ-RUNNERENROLL-99): the outcome hook's state
+/// Whether `write` confirms a departure (REQ-RUNNERENROLL-178): the outcome hook's state
 /// write landed, or was skipped because its guard held, the issue already being elsewhere.
 /// A failed write, whose effect is unknown, confirms nothing, and only a write the attempt
 /// itself made confirms the runner's own departure (`recorded_exit`).
@@ -589,8 +589,8 @@ fn confirms_departure(write: &MirrorWrite) -> bool {
 }
 
 /// How a run ended when the runner classifies the end itself rather than concluding the
-/// record and the engine's result: an adopted run's (REQ-RUNNERENROLL-89), or a created
-/// run's whose `create` the runtime refused (REQ-RUNNERENROLL-91).
+/// record and the engine's result: an adopted run's (REQ-RUNNERENROLL-221), or a created
+/// run's whose `create` the runtime refused (REQ-RUNNERENROLL-192).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) enum ClassifiedEnd {
     /// The runtime refused `command`, the run's first, with its first diagnostic's `code`,

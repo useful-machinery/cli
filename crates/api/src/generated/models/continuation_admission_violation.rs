@@ -19,25 +19,11 @@ use serde::{Deserialize, Serialize};
 pub struct ContinuationAdmissionViolation {
     #[serde(rename = "code")]
     pub code: Code,
-    #[serde(rename = "node", skip_serializing_if = "Option::is_none")]
-    pub node: Option<String>,
-    #[serde(rename = "producer", skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    #[serde(rename = "reference", skip_serializing_if = "Option::is_none")]
-    pub reference: Option<String>,
-    #[serde(rename = "priorState", skip_serializing_if = "Option::is_none")]
-    pub prior_state: Option<String>,
 }
 
 impl ContinuationAdmissionViolation {
     pub fn new(code: Code) -> ContinuationAdmissionViolation {
-        ContinuationAdmissionViolation {
-            code,
-            node: None,
-            producer: None,
-            reference: None,
-            prior_state: None,
-        }
+        ContinuationAdmissionViolation { code }
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -48,14 +34,6 @@ pub enum Code {
     ContinuationAttemptUnavailable,
     #[serde(rename = "retained_workspace_unavailable")]
     RetainedWorkspaceUnavailable,
-    #[serde(rename = "ownership_unproven")]
-    OwnershipUnproven,
-    #[serde(rename = "continuation_inputs_unsatisfied")]
-    ContinuationInputsUnsatisfied,
-    #[serde(rename = "continuation_nodes_unsatisfied")]
-    ContinuationNodesUnsatisfied,
-    #[serde(rename = "continuation_references_unsatisfied")]
-    ContinuationReferencesUnsatisfied,
 }
 
 impl Default for Code {

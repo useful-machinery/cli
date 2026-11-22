@@ -278,7 +278,7 @@ impl AgentLoginState {
     }
 
     /// Whether an agent login's provider in the state fails readiness
-    /// (REQ-GRANT-41, REQ-RUNNERENROLL-86): it is authorized and not ready,
+    /// (REQ-GRANT-128, REQ-RUNNERENROLL-86): it is authorized and not ready,
     /// and not in `foreign_login`, where the host's own login is in use
     /// (REQ-GRANT-51).
     pub const fn fails_readiness(self) -> bool {
@@ -354,7 +354,7 @@ pub enum AgentLoginUse {
 /// document's entry without the path of the install (REQ-RUNNERENROLL-63).
 /// An OAuth provider's entry carries, while `ready`, the grant, generation
 /// and expiry of the token issued, and the run of its assignment and when
-/// that ended where the document records them (REQ-GRANT-88), never the
+/// that ended where the document records them (REQ-GRANT-158), never the
 /// token.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -376,7 +376,7 @@ pub struct ProviderReadiness {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
     /// Whether an earlier release recorded the provider as selected
-    /// (REQ-GRANT-38): accepted from a serving process of that release, and
+    /// (REQ-GRANT-118): accepted from a serving process of that release, and
     /// never written.
     #[serde(default, rename = "selected", skip_serializing)]
     pub(crate) earlier_selection: EarlierSelection,
@@ -384,16 +384,16 @@ pub struct ProviderReadiness {
     /// (REQ-GRANT-52); only ever beside an install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_use: Option<AgentLoginUse>,
-    /// When that last use was (REQ-GRANT-41); only ever beside a last use,
+    /// When that last use was (REQ-GRANT-129); only ever beside a last use,
     /// and absent where a serving process that predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_use_at: Option<String>,
     /// The run of the assignment an OAuth provider's entry was recorded for
-    /// (REQ-GRANT-88); only beside a check time, and absent where a serving
+    /// (REQ-GRANT-158); only beside a check time, and absent where a serving
     /// process that predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
-    /// When that assignment ended on the runner (REQ-GRANT-88); only beside
+    /// When that assignment ended on the runner (REQ-GRANT-158); only beside
     /// a check time, absent while it runs and where a serving process that
     /// predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -408,7 +408,7 @@ pub struct ProviderReadiness {
 }
 
 /// The `selected` member an earlier release wrote on a provider's entry
-/// (REQ-GRANT-38): read as a boolean so what that release wrote still
+/// (REQ-GRANT-118): read as a boolean so what that release wrote still
 /// parses, and holding nothing of it, since no provider is selected
 /// (REQ-GRANT-51). Nothing writes it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -422,7 +422,7 @@ impl<'de> Deserialize<'de> for EarlierSelection {
 
 impl ProviderReadiness {
     /// The provider's availability and next action on the runner
-    /// (REQ-GRANT-53). An OAuth provider's `ready` is `available` while its
+    /// (REQ-GRANT-140). An OAuth provider's `ready` is `available` while its
     /// assignment runs, since no use of a grant token is recorded, and
     /// `unverified` once that has ended, which says nothing of the next one
     /// (REQ-GRANT-88); any other state of its entry is projected as an agent
@@ -468,13 +468,13 @@ impl ProviderReadiness {
     }
 
     /// The failure code of a provider Cloud authorized for the runner whose
-    /// login is not ready to use (REQ-GRANT-41, REQ-RUNNERENROLL-86):
+    /// login is not ready to use (REQ-GRANT-128, REQ-RUNNERENROLL-86):
     /// its state when that fails readiness; `reconnect_required` for a
     /// `ready` login refused at its last use; and `None` otherwise:
     /// `foreign_login`, where the host's own login is in use
     /// (REQ-GRANT-51), `not_authorized` and an OAuth provider's entry
     /// included, which records one assignment's outcome and not the
-    /// runner's (REQ-GRANT-88).
+    /// runner's (REQ-GRANT-159).
     pub const fn failure_code(&self) -> Option<&'static str> {
         if self.provider.is_brokered() {
             None
@@ -503,7 +503,7 @@ pub struct AgentLoginReadiness {
     pub providers: Vec<ProviderReadiness>,
 }
 
-/// Why a check of an installed login gave no answer (REQ-GRANT-90).
+/// Why a check of an installed login gave no answer (REQ-GRANT-144).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginCheckCause {
@@ -531,7 +531,7 @@ impl AgentLoginCheckCause {
 }
 
 /// An installed login whose check in the setup gave no answer, with why
-/// (REQ-GRANT-41, REQ-GRANT-90).
+/// (REQ-GRANT-130, REQ-GRANT-90).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UnansweredCheck {
@@ -2645,7 +2645,7 @@ mod tests {
         assert_eq!(decode_response(&with_path), Err(ProtocolFailure::Invalid));
     }
 
-    // REQ-GRANT-41, REQ-GRANT-90
+    // REQ-GRANT-130, REQ-GRANT-144
     #[test]
     fn a_synced_answer_names_each_unanswered_check_by_provider_and_closed_cause() {
         let response = Response::AgentLoginsSynced(SyncedAgentLogins {
@@ -2740,7 +2740,7 @@ mod tests {
 
     const RUN_ID: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
 
-    // REQ-GRANT-88
+    // REQ-GRANT-158
     #[test]
     fn an_oauth_entry_carries_its_run_and_end_and_only_well_formed() {
         let validator = control_validator();
@@ -2882,7 +2882,7 @@ mod tests {
             last_use: Some(AgentLoginUse::Refused),
             ..last_use_without_install.providers[0].clone()
         };
-        // A time is stated only with the last use it dates (REQ-GRANT-41).
+        // A time is stated only with the last use it dates (REQ-GRANT-129).
         let mut last_use_at_without_last_use = readiness();
         last_use_at_without_last_use.providers[0].last_use_at =
             Some("2026-11-12T00:58:00Z".to_owned());
@@ -2906,7 +2906,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-53, REQ-GRANT-88
+    // REQ-GRANT-140, REQ-GRANT-142, REQ-GRANT-88
     #[test]
     fn an_oauth_entry_projects_like_an_agent_login_and_never_fails_readiness() {
         use AgentLoginState as S;
@@ -2931,7 +2931,7 @@ mod tests {
                 "{state:?}"
             );
             // One assignment's outcome, never the runner's
-            // (REQ-GRANT-88).
+            // (REQ-GRANT-159).
             assert_eq!(entry.failure_code(), None, "{state:?}");
             assert!(!entry.fails_readiness(), "{state:?}");
         }
@@ -2945,7 +2945,7 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-53, REQ-GRANT-88
+    // REQ-GRANT-140, REQ-GRANT-88
     #[test]
     fn an_ended_oauth_entry_that_was_ready_is_unverified_and_no_other_state_changes() {
         use useful_support::{Availability as A, CredentialStatus, NextAction as N};
@@ -2982,7 +2982,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-41, REQ-GRANT-38
+    // REQ-GRANT-128, REQ-GRANT-119
     #[test]
     fn only_an_authorized_provider_that_is_not_ready_fails_readiness() {
         // `foreign_login` is authorized, or may be, and not ready, but the
@@ -3008,7 +3008,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-53
+    // REQ-GRANT-53, REQ-GRANT-140, REQ-GRANT-141, REQ-GRANT-142, REQ-GRANT-143
     #[test]
     fn each_readiness_maps_to_one_availability_and_next_action() {
         use AgentLoginState as S;
@@ -3072,7 +3072,7 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-41, REQ-RUNNERENROLL-86
+    // REQ-GRANT-128, REQ-RUNNERENROLL-86
     #[test]
     fn a_ready_login_refused_at_its_last_use_fails_readiness() {
         let mut entry = readiness().providers[0].clone();
@@ -3089,7 +3089,7 @@ mod tests {
         assert_eq!(entry.failure_code(), Some("install_failed"));
     }
 
-    // REQ-GRANT-41, REQ-GRANT-53, REQ-GRANT-38, REQ-RUNNERENROLL-86
+    // REQ-GRANT-128, REQ-GRANT-53, REQ-GRANT-119, REQ-RUNNERENROLL-86
     #[test]
     fn a_provider_cloud_refuses_or_the_host_logs_in_for_never_fails_readiness() {
         use useful_support::{Availability as A, CredentialStatus, NextAction as N};
@@ -3164,7 +3164,7 @@ mod tests {
         );
 
         // The last use, with its time, travels beside the state where the
-        // document records it (REQ-GRANT-41, REQ-GRANT-53).
+        // document records it (REQ-GRANT-129, REQ-GRANT-53).
         let mut with_last_use = readiness();
         with_last_use.providers[0].last_use = Some(AgentLoginUse::Refused);
         with_last_use.providers[0].last_use_at = Some("2026-11-12T00:58:00Z".to_owned());
@@ -3181,7 +3181,7 @@ mod tests {
 
         // A serving process of an earlier release still says whether the
         // provider was selected: its answer decodes, and the member is
-        // written on none (REQ-GRANT-38).
+        // written on none (REQ-GRANT-118).
         assert!(
             value["agentLogins"]["providers"][0]
                 .get("selected")

@@ -2544,7 +2544,7 @@ fn record_codex_readiness(directory: &Path, state: &str) {
     fs::set_permissions(&path, Permissions::from_mode(0o600)).expect("protect readiness document");
 }
 
-// REQ-RUNNERENROLL-86, REQ-GRANT-53, REQ-GRANT-51
+// REQ-RUNNERENROLL-86, REQ-RUNNERENROLL-309, REQ-GRANT-53, REQ-GRANT-51
 #[test]
 fn runner_doctor_agent_logins_check_reads_the_recorded_readiness() {
     let runner_directory = private_credential_directory();

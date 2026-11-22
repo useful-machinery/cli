@@ -155,7 +155,7 @@ pub(super) fn native_resource_watchdog<Output>(
     host_scaled_watchdog_with_diagnosis("pinned Claude Code conformance", base, diagnosis, future)
 }
 
-/// The result tool as the agent sees it (REQ-AGENT-84).
+/// The result tool as the agent sees it (REQ-AGENT-93).
 pub(super) const RESULT_TOOL: &str = "mcp__useful_workflow_result__submit";
 
 pub(super) fn invocation_identity(run: &str, step: &str) -> AgentInvocationIdentity {
@@ -556,7 +556,7 @@ impl ControlledProviderRequest {
         self.release_blocks(vec![LoopbackBlock::tool_use(name, input)]);
     }
 
-    /// Answers with one call of the result tool submitting `value` (REQ-AGENT-84).
+    /// Answers with one call of the result tool submitting `value` (REQ-AGENT-93).
     pub(super) fn release_submission(self, value: Value) {
         self.release_tool_use(RESULT_TOOL, submission(value));
     }

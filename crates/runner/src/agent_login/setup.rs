@@ -4,13 +4,13 @@
 //! provider's readiness. Between admissions a pass asks Cloud for a delivery
 //! only while no run the runner holds is working, and installs or removes a
 //! login only while, in addition, no command of a held run is in flight
-//! (REQ-GRANT-40, INV-RUNNER-15), and a pass that
+//! (REQ-GRANT-126, REQ-GRANT-127, INV-RUNNER-15, INV-RUNNER-55), and a pass that
 //! changes a provider's readiness, or cannot record it, writes one
-//! `runner.agent_login_setup` record (REQ-TELEMETRY-45). Each admission makes
+//! `runner.agent_login_setup` record (REQ-TELEMETRY-45, REQ-TELEMETRY-70). Each admission makes
 //! a pass of its own before the assignment is offered anything
 //! (REQ-GRANT-49), then asks Cloud for its assignment's grant tokens of the
 //! providers the service's environment does not provide (REQ-GRANT-86,
-//! REQ-GRANT-87), whose files each refresh while it runs replaces or removes
+//! REQ-GRANT-155), whose files each refresh while it runs replaces or removes
 //! under the same lock as a pass (REQ-GRANT-89); the admission then reports
 //! the sources it settled to Cloud, a report Cloud does not take writing one
 //! `runner.credential_sources` record (REQ-GRANT-93, REQ-TELEMETRY-48). How
@@ -22,7 +22,7 @@
 //! holds no assignment marks ended each OAuth entry left without an end; the
 //! end of an assignment marks its admission's entries ended, unless a later
 //! admission has recorded its own, and a refresh records an entry only while
-//! its admission is the last that recorded them (REQ-GRANT-88,
+//! its admission is the last that recorded them (REQ-GRANT-157,
 //! INV-RUNNER-30). A setup the
 //! control socket asks for, or one the schedule makes that installs a login,
 //! then checks logins with their providers outside the pass and the
@@ -110,7 +110,7 @@ impl PassStage {
 }
 
 /// Whether the runs the runner holds let setup act, as the serving process
-/// knows it, at two levels (REQ-GRANT-40, INV-RUNNER-15).
+/// knows it, at two levels (REQ-GRANT-125, REQ-GRANT-127, INV-RUNNER-15, INV-RUNNER-55).
 pub(crate) trait AssignmentGate: Send + Sync {
     /// The read level, which a request for a delivery and a login check
     /// ask: whether no run the runner holds is working.
@@ -609,7 +609,7 @@ impl AgentLoginSetup {
     /// the preparation began, since the assignment has been offered nothing:
     /// it asks Cloud only while each of them waits, and installs or removes
     /// only while none of them also has a command in flight, at once when
-    /// there is none (INV-RUNNER-15). It makes none, and asks Cloud
+    /// there is none (INV-RUNNER-56). It makes none, and asks Cloud
     /// nothing, unless the readiness document names an installable provider's
     /// login as installed or as authorized without being ready. A document
     /// it cannot read names none. Its `agent_logins` is `None` when it made
@@ -638,7 +638,7 @@ impl AgentLoginSetup {
     }
 
     /// Asks Cloud for the assignment's grant tokens of each provider the
-    /// service's environment does not provide (REQ-GRANT-87) and records each
+    /// service's environment does not provide (REQ-GRANT-153) and records each
     /// provider's entry for the run in the readiness document
     /// (REQ-GRANT-88), with each coding agent's source as it stands at this
     /// admission (REQ-GRANT-92); the caller holds the pass lock, whose `recording` it
@@ -716,13 +716,13 @@ impl AgentLoginSetup {
 
     /// Marks ended, at the setup's time, each OAuth entry without an end,
     /// now that the assignment `assignment_id` has ended, under the pass
-    /// lock (REQ-GRANT-88, INV-RUNNER-30): only while that assignment's
+    /// lock (REQ-GRANT-157, INV-RUNNER-30): only while that assignment's
     /// admission is the last that recorded the entries, so the end of an
     /// earlier one never marks a later one's. Answers the document it wrote,
     /// for publishing; `None` when it marked nothing, when the document
     /// cannot be read, which leaves it as it is, or cannot be written. It
     /// changes no state, so it writes no `runner.grant_token` record
-    /// (REQ-TELEMETRY-46); a failed load or write is recorded as a pass's
+    /// (REQ-TELEMETRY-72); a failed load or write is recorded as a pass's
     /// is.
     pub(crate) fn mark_grants_ended(&self, assignment_id: &str) -> Option<ReadinessDocument> {
         let pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
@@ -880,7 +880,7 @@ impl AgentLoginSetup {
         // The entries the pass carries unread: while the runner holds no
         // assignment, each OAuth entry left without an end is one no
         // assignment holds, so it is marked ended now; while it holds one,
-        // none is (REQ-GRANT-88, INV-RUNNER-30). An admission's own pass
+        // none is (REQ-GRANT-157, INV-RUNNER-30). An admission's own pass
         // made while no other is held marks the earlier assignment's, which
         // the admission then replaces.
         let holds_none = !self.grant_files.holds_any();
@@ -924,7 +924,7 @@ impl AgentLoginSetup {
             let entry = recorded(provider);
             // Unable to ask, the runner keeps what it last knew of a provider
             // Cloud did not authorize and the runner holds nothing of, or
-            // that it has never recorded (REQ-GRANT-38).
+            // that it has never recorded (REQ-GRANT-119).
             if answer.is_err() && !entry.is_some_and(authorized_or_installed) {
                 settled.extend(entry.cloned());
                 continue;
@@ -952,7 +952,7 @@ impl AgentLoginSetup {
                         // keeps the provider's login elsewhere: the install
                         // the record names ends, and is recorded as ended,
                         // before anything else is asked for
-                        // (REQ-GRANT-40, INV-RUNNER-15).
+                        // (REQ-GRANT-123, REQ-GRANT-124, INV-RUNNER-59).
                         Some(installation) => match self.end(
                             gate,
                             provider,
@@ -1014,7 +1014,7 @@ impl AgentLoginSetup {
             failures.extend(failure.map(|failure| (provider, failure)));
             // An install or removal is recorded before the pass goes on, so
             // the record vouches for the file whatever stops the pass next
-            // (INV-RUNNER-15).
+            // (INV-RUNNER-59).
             if changed {
                 if !self.write(&document(&settled)) {
                     return (SetupOutcome::Failed, None);
@@ -1037,7 +1037,7 @@ impl AgentLoginSetup {
         self.uses.forget(&noted);
         // The status request carried what the previous pass recorded, so a
         // pass that changed it tells Cloud in the same pass, rather than
-        // the next (REQ-GRANT-27); not once an assignment has started,
+        // the next (REQ-GRANT-110); not once an assignment has started,
         // nor when Cloud did not answer, which leaves nothing new to report.
         // A failure changes nothing recorded: it is named only beside each
         // changed provider's state in the pass's record, unless the
@@ -1438,7 +1438,7 @@ impl AgentLoginSetup {
     /// there it would be offered to every later assignment), and the
     /// recorded install's file when it is elsewhere in that directory, and
     /// records `state`. For Codex that location is the runner's whole Codex
-    /// home, what Codex wrote there included (REQ-GRANT-40); an install
+    /// home, what Codex wrote there included (REQ-GRANT-122); an install
     /// creates it again. A recorded install outside the directory, an older
     /// build's, is forgotten, never removed. What could not be removed is
     /// recorded as `install_failed`, so a later pass removes what is left.

@@ -7,12 +7,12 @@
 //! under the assignment's lease, resumes the run through its waits and attempts
 //! (`resume_loop`), reporting its root progress and the step states of the run and its
 //! child runs (`steps`, REQ-RUNNERENROLL-88), and reports the record's exit once
-//! (REQ-RUNNERENROLL-99), with the root's text exports its current attempt published
+//! (REQ-RUNNERENROLL-170), with the root's text exports its current attempt published
 //! (`exports`, REQ-RUNNERENROLL-131). It applies each trigger delivery for the assignment with `useful
 //! workflow run event`, those the offer carries before the run's first step
 //! (REQ-TRIGGER-136), and each authorized Cloud control with the `useful workflow run` control
-//! command it names (REQ-RUNNERENROLL-90). A continuation attempt adopts the run an earlier
-//! attempt created instead (`adopt`, REQ-RUNNERENROLL-89): it downloads and publishes
+//! command it names (REQ-RUNNERENROLL-208). A continuation attempt adopts the run an earlier
+//! attempt created instead (`adopt`, REQ-RUNNERENROLL-217): it downloads and publishes
 //! nothing, keeps the resolution record the first attempt wrote and drives the run directory
 //! the retained home holds, applying its deliveries and controls in the same loop.
 
@@ -124,7 +124,7 @@ impl TreeRunDependencies {
     }
 
     /// Queues `control` for the tree run of `assignment_id`, which applies it once
-    /// (REQ-RUNNERENROLL-90).
+    /// (REQ-RUNNERENROLL-208).
     pub(super) fn control(&self, assignment_id: &str, control: RunControl) {
         self.controls.push(assignment_id, control);
     }
@@ -191,7 +191,7 @@ impl Inbound for RunControl {
 
 /// The trigger deliveries, or the controls, the connection received for each assignment the
 /// runner holds and its tree run has not yet taken. Each assignment has a queue of its own,
-/// so an item for one neither drops nor wakes another's (INV-RUNNER-40).
+/// so an item for one neither drops nor wakes another's (INV-RUNNER-62).
 #[derive(Clone)]
 struct Inbox<T> {
     queues: Arc<Mutex<BTreeMap<String, Arc<AssignmentInbox<T>>>>>,
@@ -337,7 +337,7 @@ pub(super) fn recorded_origin(private: &Path) -> std::io::Result<Option<Arc<str>
 
 /// How a tree run's first command starts it.
 enum TreeStart {
-    /// `useful workflow run create` with these arguments (REQ-RUNNERENROLL-91), the root
+    /// `useful workflow run create` with these arguments (REQ-RUNNERENROLL-191), the root
     /// workflow's first step, and, when the offer carries pending deliveries, how they meet
     /// the run: before that step, behind a stop of the runner's own, on an edge-scheduled
     /// root, or once `create` returns on any other.
@@ -347,7 +347,7 @@ enum TreeStart {
         pending_stop: Option<PendingStop>,
     },
     /// The home's run, resumed from these steps, or, with none, from where its record
-    /// stands (REQ-RUNNERENROLL-89).
+    /// stands (REQ-RUNNERENROLL-218, REQ-RUNNERENROLL-219).
     Adopt(Vec<String>),
 }
 
@@ -611,7 +611,7 @@ pub(super) fn prepare(
     ))
 }
 
-/// What a tree run's adoption acts for (REQ-RUNNERENROLL-89): the run-scoped home the
+/// What a tree run's adoption acts for (REQ-RUNNERENROLL-217): the run-scoped home the
 /// attempt that created the run left, and the adopting assignment's own id, private
 /// directory, environment, spec, sleeper, named steps and the trigger deliveries its offer
 /// carried.

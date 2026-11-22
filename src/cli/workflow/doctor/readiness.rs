@@ -592,7 +592,7 @@ fn read_linear(session: &Session<'_>) -> anyhow::Result<Result<ReadinessCode, En
 /// The code the organization's Linear connections give the `linear` requirement
 /// (REQ-CREDREADY-15, REQ-CREDREADY-16), by the first that holds: an active connection
 /// granted every scope it requires is held ready; an active one lacks a scope; a
-/// `recovery_required`, `disconnected` or `revoked` one is inactive; otherwise, with none or
+/// `recovery_required` or `disconnected` one is inactive; otherwise, with none or
 /// only deleted ones, none is connected. `stateUpdatesConsented` is retained consent, not
 /// current authority (REQ-CONNECTION-85), and is not read.
 fn linear_code(connections: &[LinearConnection]) -> ReadinessCode {
@@ -610,7 +610,7 @@ fn linear_code(connections: &[LinearConnection]) -> ReadinessCode {
     } else if connections.iter().any(|connection| {
         matches!(
             connection.status,
-            Status::RecoveryRequired | Status::Disconnected | Status::Revoked
+            Status::RecoveryRequired | Status::Disconnected
         )
     }) {
         ReadinessCode::ConnectionInactive
@@ -659,12 +659,8 @@ mod tests {
     fn linear_connections_give_the_code_of_the_best_connection() {
         let ready = || connection(Status::Active, &["read"]);
         let lacking = || connection(Status::Active, &["write"]);
-        let inactive = [
-            Status::RecoveryRequired,
-            Status::Disconnected,
-            Status::Revoked,
-        ]
-        .map(|status| connection(status, &["read"]));
+        let inactive = [Status::RecoveryRequired, Status::Disconnected]
+            .map(|status| connection(status, &["read"]));
         let deleted = || connection(Status::Deleted, &["read"]);
 
         for (connections, expected) in [
@@ -677,7 +673,7 @@ mod tests {
                 ReadinessCode::ScopeMissing,
             ),
             (
-                vec![deleted(), inactive[2].clone()],
+                vec![deleted(), inactive[1].clone()],
                 ReadinessCode::ConnectionInactive,
             ),
             (inactive.to_vec(), ReadinessCode::ConnectionInactive),

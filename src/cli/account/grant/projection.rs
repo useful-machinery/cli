@@ -134,7 +134,7 @@ pub(in crate::cli) const PROVIDERS: [Provider<'static>; 5] = [
 /// (REQ-GRANT-64, REQ-GRANT-75): `github`, `gitlab.com` and `linear`, each other
 /// OAuth provider `served` names, in its order (REQ-GRANT-78), then `claude_code` and `codex`.
 /// The five of [`PROVIDERS`] are named whether or not the deployment serves them, and `served`
-/// is empty for a deployment that predates its read (REQ-GRANT-96).
+/// is empty for a deployment that predates its read (REQ-GRANT-170).
 pub(in crate::cli) fn providers(served: &[ServedGrantProvider]) -> Vec<Provider<'_>> {
     let (oauth, agents): (Vec<_>, Vec<_>) = PROVIDERS
         .into_iter()
@@ -425,7 +425,7 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-53
+    // REQ-GRANT-53, REQ-GRANT-138, REQ-GRANT-141, REQ-GRANT-142
     // REQ-GRANT-64
     #[test]
     fn a_grants_authorization_maps_its_kind_and_state_to_the_owners_column() {

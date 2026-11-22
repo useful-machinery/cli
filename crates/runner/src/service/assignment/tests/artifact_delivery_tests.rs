@@ -108,7 +108,7 @@ async fn unknown_artifact_observation_acknowledgement_does_not_consume_delivery(
     ));
 }
 
-// REQ-TELEMETRY-39
+// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn decoded_v2_assignment_delivers_multiple_carriers_before_the_result() {
     let workflow = r#"schemaVersion: 1

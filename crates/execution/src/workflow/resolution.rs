@@ -141,7 +141,7 @@ impl ResolutionFailure {
     }
 
     /// The field and the rule of an `invalid_workflow_structure` or a structural
-    /// `invalid_replacement_document` failure (REQ-WFFORMAT-103).
+    /// `invalid_replacement_document` failure (REQ-WFFORMAT-52).
     pub(crate) fn structure_violation(&self) -> Option<&StructureViolation> {
         self.violation.as_deref()
     }
@@ -955,7 +955,7 @@ impl SourceResolver {
     /// Add a child's closure to this one; a path both read holds the same bytes. Only the
     /// paths the child's resolution reached are reached here: the rest of its closure is
     /// what this resolver had read before the fork, which a nested workflow's step must not
-    /// count as its child's (REQ-WFFORMAT-104).
+    /// count as its child's (REQ-WFFORMAT-122).
     fn fold(
         &mut self,
         closure: &BTreeMap<String, Arc<[u8]>>,

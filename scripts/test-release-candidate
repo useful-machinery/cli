@@ -749,7 +749,7 @@ def prove_workflow_contract() -> None:
     ):
         if forbidden in workflow:
             fail(f"public workflow retains allocation state: {forbidden}")
-    # INV-TESTING-24
+    # INV-TESTING-38
     prove_named_tests(workflow)
     # INV-RELEASE-43: the release build is the only Cargo invocation before packaging.
     prove_release_order(workflow)

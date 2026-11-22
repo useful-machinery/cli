@@ -54,7 +54,7 @@ repository changes.
 | --- | --- | --- |
 | `schemaVersion` | yes | Integer `1`. |
 | `description` | no | Human metadata with no execution effect. |
-| `name` | no | Lowercase identifier naming a tree's definition; not a run identity. |
+| `name` | no | Identifier naming a tree's definition; not a run identity. |
 | `version` | no | Label for people, 1 to 64 characters. |
 | `subject` | no | Root only: the declared `text` input naming the run's subject. |
 | `inputs` | no | Named Text, JSON, File, or attachments; optional JSON schema or exact File media type; may be `optional` or carry a `default`. |
@@ -507,8 +507,8 @@ A workflow with a `workflow` step is edge-scheduled. Every ordinary step in it m
 and every other step must be the target of some edge (`step_unreachable`); both failures
 are at location `step`. References supply values but add no dependency. `outcomes` may be
 declared alone, because the `exit` edge a run reaches chooses the outcome; an `outcome`
-block is `invalid_outcome_declaration`. Finalizers work as in any workflow. Cloud does
-not run workflows with `workflow` steps.
+block is `invalid_outcome_declaration`. Finalizers work as in any workflow. A
+`workflowPath` run refuses `workflow` steps.
 
 A child that declares `workflow` steps is a nested workflow: an edge-scheduled file
 whose steps run stages. The chain is at most two deep from the file being validated, so

@@ -696,7 +696,7 @@ fn duration_text(seconds: i32) -> String {
 mod tests {
     use super::*;
 
-    // REQ-RUNNERENROLL-93
+    // REQ-RUNNERENROLL-228
     #[test]
     fn join_key_durations_read_minutes_hours_and_days_within_their_bounds() {
         assert_eq!(parse_expiry("1m"), Ok(60));

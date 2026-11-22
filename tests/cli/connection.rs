@@ -65,7 +65,7 @@ fn lines(output: &Output) -> Vec<serde_json::Value> {
         .collect()
 }
 
-// REQ-CONNECTION-40, REQ-CONNECTION-87
+// REQ-CONNECTION-40, REQ-CONNECTION-87, REQ-INTEGRATION-59
 #[test]
 fn create_linear_with_state_updates_connects_and_waits_for_the_session() {
     let mut pending = session("pending");
@@ -1086,6 +1086,7 @@ fn list_connections(server: &ScriptedServer, credential: &str, args: &[&str]) ->
 }
 
 // REQ-CONNECTION-104
+// REQ-INTEGRATION-64
 #[test]
 fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
     let mut second = connection();
@@ -1175,6 +1176,7 @@ fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
 }
 
 // REQ-CONNECTION-104
+// REQ-INTEGRATION-62
 #[test]
 fn org_connection_list_of_one_provider_reads_that_provider_alone() {
     let (server, _dir, credential) = prepared(vec![
@@ -1214,6 +1216,7 @@ fn org_connection_list_takes_no_limit() {
 }
 
 // REQ-CONNECTION-104
+// REQ-INTEGRATION-63
 #[test]
 fn org_connection_list_names_the_providers_it_could_not_list() {
     let (server, _dir, credential) = prepared(vec![
@@ -1297,7 +1300,7 @@ fn linear_list_request(request: &str) -> bool {
     ))
 }
 
-// REQ-CONNECTION-107, REQ-CONNECTION-105
+// REQ-CONNECTION-107, REQ-CONNECTION-105, REQ-INTEGRATION-65
 #[test]
 fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
     let (server, _dir, credential) = prepared(vec![
@@ -1385,7 +1388,7 @@ fn org_connection_show_of_a_provider_with_no_connection_names_create() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-CONNECTION-107, REQ-CONNECTION-105
+// REQ-CONNECTION-107, REQ-CONNECTION-105, REQ-INTEGRATION-65, REQ-INTEGRATION-78
 #[test]
 fn org_connection_show_of_an_id_sends_that_connection_request_alone() {
     let (server, _dir, credential) = prepared(vec![

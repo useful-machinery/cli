@@ -453,7 +453,7 @@ impl std::fmt::Debug for GrantAccessToken {
     }
 }
 
-/// The reason Cloud names when it issues no token (REQ-GRANT-84).
+/// The reason Cloud names when it issues no token (REQ-GRANT-146).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GrantTokenRefusal {

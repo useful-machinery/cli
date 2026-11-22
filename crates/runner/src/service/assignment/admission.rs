@@ -237,7 +237,7 @@ impl AssignmentManager {
         }
         // The offer proves Cloud has settled an ended assignment only when that assignment
         // never reported a wait; one that did reports on beside the successor
-        // (INV-RUNNER-40).
+        // (INV-RUNNER-63).
         let fenced: Vec<String> = self
             .held
             .values()
@@ -514,7 +514,7 @@ impl AssignmentManager {
     }
 
     /// The other tree runs the manager holds, as the agent-login pass of the admission of
-    /// `assignment_id` reads them without the manager's lock (REQ-GRANT-49, INV-RUNNER-15):
+    /// `assignment_id` reads them without the manager's lock (REQ-GRANT-135, INV-RUNNER-56):
     /// the activity of each `Running` tree run but that assignment. The offer rule took the
     /// offer only while each held assignment waited, and none is taken while this one is
     /// prepared, so the set only shrinks; an ended assignment that only reports or releases
@@ -590,11 +590,11 @@ impl AssignmentManager {
             // runs it asks Cloud only while each waits, and installs or
             // removes only while none also has a command in flight, holding
             // their activities and never the manager's lock; otherwise it is
-            // offered what is on disk (REQ-GRANT-49, INV-RUNNER-15). Then it
+            // offered what is on disk (REQ-GRANT-135, INV-RUNNER-56, INV-RUNNER-57). Then it
             // asks Cloud for its assignment's grant tokens, whatever the
             // gate answered, now that Cloud counts the assignment as
             // preparing, as for its source credential, and keeps them
-            // until the assignment ends (REQ-GRANT-86, INV-RUNNER-28),
+            // until the assignment ends (REQ-GRANT-150, INV-RUNNER-28),
             // keeping each file current while it runs (REQ-GRANT-89).
             // Whatever the setup meets, a panic included, the admission goes
             // on with what is on disk. The worker is the hold's only owner
@@ -619,13 +619,13 @@ impl AssignmentManager {
             // The steps draw from the process environment with the agent
             // logins the runner keeps now, looked at for this admission
             // (REQ-GRANT-37, REQ-GRANT-44), and a tree run's `useful` commands
-            // with those it keeps as each starts (REQ-GRANT-49), where the
+            // with those it keeps as each starts (REQ-GRANT-136), where the
             // service has none of its own; where the runner keeps
             // none either, nothing is added or withheld (REQ-GRANT-51,
             // INV-RUNNER-17). The admission's grant tokens and their files
             // are offered too; it holds none of a provider whose names the
             // service carries, which keeps the service's values, and a
-            // provider neither provides has its names unset (REQ-GRANT-87).
+            // provider neither provides has its names unset (REQ-GRANT-156).
             let offered = crate::agent_login::offer_with_grant_tokens(
                 &runtime.environment,
                 agent_login_directory.as_ref(),
@@ -635,7 +635,7 @@ impl AssignmentManager {
             // from to Cloud once, before any step starts, from what the
             // offer settled, each token service Cloud listed that has a
             // source included (REQ-GRANT-93, REQ-INTEGRATION-12,
-            // INV-RUNNER-31). Whatever Cloud
+            // INV-RUNNER-31, INV-RUNNER-61). Whatever Cloud
             // answers, a panic included, the admission goes on with the
             // offer as it is; a report Cloud does not take is the setup's
             // own record (REQ-TELEMETRY-48).
@@ -1304,7 +1304,7 @@ impl AdmissionRuntime {
 /// inputs as for any run, then the published tree in place of the Git definition
 /// checkout and workflow admission and, on a GitHub project, the workspace's Git relay
 /// (REQ-RUNNERENROLL-121); or, for a continuation, the adoption of the run an earlier
-/// attempt created (REQ-RUNNERENROLL-89).
+/// attempt created (REQ-RUNNERENROLL-217).
 struct TreeAdmission<'a> {
     runtime: &'a AdmissionRuntime,
     tree_run: &'a TreeRunDependencies,

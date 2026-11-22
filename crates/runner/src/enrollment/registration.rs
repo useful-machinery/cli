@@ -129,7 +129,9 @@ impl fmt::Display for RegistrationStage {
     }
 }
 
-/// The closed conflicts of a signed-in registration (REQ-RUNNERENROLL-118).
+/// The closed conflicts of a signed-in registration (REQ-RUNNERENROLL-260).
+/// Their codes are REQ-RUNNERENROLL-261, REQ-RUNNERENROLL-262 and
+/// REQ-RUNNERENROLL-263.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistrationConflictKind {
     /// The start names another organization, mode or pool than the record,
@@ -281,7 +283,7 @@ pub fn register_unless_enrolled<A: RegistrationAuthority>(
 }
 
 /// Confirms a signed-in mode against an enrolled host's registration record
-/// under the state lock, sending nothing (REQ-RUNNERENROLL-118): the options
+/// under the state lock, sending nothing (REQ-RUNNERENROLL-261): the options
 /// must name the record's target, and its organization when `organization`,
 /// the one `--org` or `USEFUL_ORG` names, is given; the record must name the
 /// state's runner. A start that names no organization resolves none, so the

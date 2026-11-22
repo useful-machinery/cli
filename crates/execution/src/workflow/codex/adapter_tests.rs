@@ -787,7 +787,7 @@ fn with_scenario_watchdog<Output>(
     )
 }
 
-// INV-TESTING-18
+// INV-TESTING-34
 #[tokio::test]
 async fn fixture_watchdog_expiry_names_the_last_fixture_progress() {
     let expired = tokio::spawn(with_watchdog_limit(

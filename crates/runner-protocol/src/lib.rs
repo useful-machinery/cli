@@ -46,17 +46,17 @@ pub enum RunnerFrame {
         tree_execution: bool,
         /// Advertises `treeContinuation: 1`: this runner adopts a published
         /// tree an earlier attempt left in its retained workspace, so Cloud may
-        /// offer it a definition-backed run's continuation (REQ-COMPAT-18).
+        /// offer it a definition-backed run's continuation (REQ-COMPAT-32).
         tree_continuation: bool,
         /// Advertises `treeWithdraw: 1`: this runner applies a `withdraw` control, so Cloud
         /// may send it one (REQ-RUNNERENROLL-123).
         tree_withdraw: bool,
         /// Advertises `treeIntegrationBindings: 1`: this runner reads integration bindings
         /// and an integration's account in a tree block, so Cloud may offer it a run whose
-        /// revision holds one (REQ-COMPAT-18).
+        /// revision holds one (REQ-COMPAT-34).
         tree_integration_bindings: bool,
         /// Advertises `holdsWaitingRuns: 1`: this runner takes another run while every run it
-        /// holds waits, so Cloud may offer it one (REQ-RUNNERENROLL-64, REQ-COMPAT-22).
+        /// holds waits, so Cloud may offer it one (REQ-RUNNERENROLL-311, REQ-COMPAT-22).
         holds_waiting_runs: bool,
     },
     WorkspaceRetentionReport {
@@ -142,7 +142,7 @@ pub enum RunnerFrame {
         diagnostic: Option<Value>,
     },
     /// A tree run's ordered root progress between engine attempts (REQ-RUN-88,
-    /// REQ-RUNNERENROLL-99). `progress_sequence` numbers the assignment's
+    /// REQ-RUNNERENROLL-181). `progress_sequence` numbers the assignment's
     /// progress reports from 1, apart from `execution_event_sequence`.
     TreeProgress {
         envelope: RunnerEnvelope,
@@ -160,7 +160,7 @@ pub enum RunnerFrame {
         application: TriggerDeliveryApplication,
     },
     /// The runner's application of one authorized Cloud control to the run its assignment
-    /// holds (REQ-RUNNERENROLL-90).
+    /// holds (REQ-RUNNERENROLL-206).
     RunControlApplied {
         envelope: RunnerEnvelope,
         assignment_id: String,
@@ -342,7 +342,7 @@ impl TreeExport {
 /// the pending wait. The frame's state is `waiting` exactly when `wait` is
 /// present, and `running` otherwise. Timestamps are RFC 3339 UTC with `Z`.
 /// `steps` are the report's step observations; the encoder writes the optional
-/// `steps` member only when the list is non-empty (REQ-COMPAT-18), and Cloud
+/// `steps` member only when the list is non-empty (REQ-COMPAT-29), and Cloud
 /// refuses a frame that names one `(run, run_attempt, step)` twice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeRootProgress {
@@ -355,7 +355,7 @@ pub struct TreeRootProgress {
 
 /// The wait a waiting tree run reports: the `{kind, since, step}` of its
 /// `wait.json`, for an answer wait the questions it asks, and the failed child
-/// it reports (REQ-COMPAT-18). `questions` is `None` when the wait reports
+/// it reports (REQ-COMPAT-30, REQ-COMPAT-31). `questions` is `None` when the wait reports
 /// none, and the encoder then writes no `questions` member; `Some` of an empty
 /// list is written as `[]`. The schema admits `questions` only on kind
 /// `answer`, which the encoder does not check. `failed_child` is `None` when
@@ -405,7 +405,7 @@ impl TreeProgressFailedChildState {
 }
 
 /// The failed child one wait reports, within the bounds Cloud admits
-/// (REQ-COMPAT-18): the child run's outcome, the failing node's `id` and role,
+/// (REQ-COMPAT-31): the child run's outcome, the failing node's `id` and role,
 /// its state and, when known, its phase and code. Only
 /// [`TreeProgressFailedChild::new`] makes one, so the encoder is never handed a
 /// value Cloud refuses: a refused value would fail `encode_runner_frame`, and a
@@ -488,7 +488,7 @@ pub struct TreeProgressWaitQuestion {
 }
 
 /// The questions of one answer wait, within the bounds Cloud admits
-/// (REQ-COMPAT-18). Only [`TreeProgressWaitQuestions::new`] makes one, so the
+/// (REQ-COMPAT-30). Only [`TreeProgressWaitQuestions::new`] makes one, so the
 /// encoder is never handed a list Cloud refuses: a refused list would fail
 /// `encode_runner_frame` or exceed the ordinary frame size, and a root report
 /// that cannot be sent ends the run.
@@ -536,7 +536,7 @@ fn tree_progress_wait_questions_value(questions: &TreeProgressWaitQuestions) -> 
         .collect()
 }
 
-/// One step observation of a tree run (REQ-COMPAT-18): the run inside the tree
+/// One step observation of a tree run (REQ-COMPAT-29): the run inside the tree
 /// it belongs to (`run`, empty for the root), that run's engine attempt (from
 /// 1), the step identifier and its latest state.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2110,7 +2110,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
             &frame.direction,
             frame.sent_at,
         ),
-        // The schema keeps these frames for published runners (INV-RUNNER-42); this runner
+        // The schema keeps these frames for published runners (INV-RUNNER-66); this runner
         // neither sends nor accepts them. `validate_closed_shape` refuses their type first,
         // so this arm exists for the exhaustive match.
         generated::RunnerProtocolVersion1::RunnerWorkspaceInventory(_)
@@ -3647,12 +3647,12 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-workflow-tree.json"
         )),
-        // REQ-CLOUDDEF-16
+        // REQ-CLOUDDEF-114
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-workflow-tree-integration-bindings.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-32
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-continuation.json"
@@ -3666,7 +3666,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/execution-finished-chosen-outcome.json"
         )),
-        // REQ-RUN-88, REQ-RUNNERENROLL-99
+        // REQ-RUN-88, REQ-RUNNERENROLL-181
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting.json"
@@ -3675,17 +3675,17 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-running.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-29
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-steps.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-30
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-questions.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-31
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-failed-child.json"
@@ -3707,7 +3707,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-pending-deliveries.json"
         )),
-        // REQ-RUNNERENROLL-90
+        // REQ-RUNNERENROLL-90, REQ-RUNNERENROLL-204
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-control-answer.json"
@@ -3729,7 +3729,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-withdraw.json"
         )),
-        // REQ-RUNNERENROLL-91, REQ-COMPAT-18
+        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-integration-bindings.json"
@@ -3739,7 +3739,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-holds-waiting-runs.json"
         )),
-        // REQ-RUNNERENROLL-90
+        // REQ-RUNNERENROLL-206
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/run-control-applied.json"
@@ -3844,7 +3844,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-execution-wrong-version.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-32
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-continuation-unknown.json"
@@ -3854,12 +3854,12 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/execution-finished-chosen-outcome-empty.json"
         )),
-        // REQ-RUNNERENROLL-99
+        // REQ-RUNNERENROLL-181
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-unknown-state.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-29
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-steps-unknown-state.json"
@@ -3868,7 +3868,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-steps-too-many.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-30
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-questions-other-wait.json"
@@ -3881,7 +3881,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-questions-empty-id.json"
         )),
-        // REQ-COMPAT-18
+        // REQ-COMPAT-31
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-failed-child-unknown-state.json"
@@ -3911,7 +3911,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-assignment-offer-pending-delivery-without-event.json"
         )),
-        // REQ-RUNNERENROLL-90
+        // REQ-RUNNERENROLL-205
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-run-control-answer-without-wait.json"
@@ -3937,7 +3937,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-withdraw-unknown.json"
         )),
-        // REQ-RUNNERENROLL-91, REQ-COMPAT-18
+        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-integration-bindings-unknown.json"
@@ -3947,7 +3947,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-holds-waiting-runs-unknown.json"
         )),
-        // REQ-RUNNERENROLL-90
+        // REQ-RUNNERENROLL-206
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/run-control-applied-with-code.json"
@@ -4175,7 +4175,7 @@ mod tests {
         // REQ-RUNNERENROLL-91
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeExecution"], 1);
-        // REQ-COMPAT-18
+        // REQ-COMPAT-32
         assert!(value["payload"].get("treeContinuation").is_none());
 
         let continuing = RunnerFrame::Hello {
@@ -4207,7 +4207,7 @@ mod tests {
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeWithdraw"], 1);
-        // REQ-RUNNERENROLL-91, REQ-COMPAT-18
+        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         assert!(value["payload"].get("treeIntegrationBindings").is_none());
         // REQ-RUNNERENROLL-132
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
@@ -4242,7 +4242,7 @@ mod tests {
         assert_eq!(value["payload"]["holdsWaitingRuns"], 1);
     }
 
-    // REQ-COMPAT-18
+    // REQ-COMPAT-32
     #[test]
     fn tree_continuation_offer_with_an_empty_partition_decodes() {
         let CloudFrame::AssignmentOffer {
@@ -4263,7 +4263,7 @@ mod tests {
         assert!(continuation.inherited_steps.is_empty());
     }
 
-    // REQ-RUNNERENROLL-99
+    // REQ-RUNNERENROLL-170
     #[test]
     fn tree_finish_always_writes_its_exit_fields() {
         let mut frame = maximal_recovery_terminal_frame();
@@ -4338,7 +4338,7 @@ mod tests {
         frame
     }
 
-    // REQ-RUNNERENROLL-130, REQ-COMPAT-18
+    // REQ-RUNNERENROLL-266, REQ-RUNNERENROLL-276, REQ-COMPAT-18
     #[test]
     fn tree_finish_writes_its_exports_only_when_it_lists_one() {
         let repair = "Repair the build.\nThe café step failed.";
@@ -4429,7 +4429,7 @@ mod tests {
         assert!(encode_runner_frame(&tree_finish_with_exports(most)).is_ok());
     }
 
-    // REQ-RUNNERENROLL-130
+    // REQ-RUNNERENROLL-130, REQ-RUNNERENROLL-268
     #[test]
     fn tree_export_bounds_are_the_published_bounds() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -4513,7 +4513,7 @@ mod tests {
         )
     }
 
-    // REQ-RUN-88, REQ-RUNNERENROLL-99
+    // REQ-RUN-88, REQ-RUNNERENROLL-181
     #[test]
     fn tree_progress_encodes_the_contract_fixtures_and_requires_a_wait_while_waiting() {
         let waiting = fixture_waiting_report("external", None);
@@ -4560,7 +4560,7 @@ mod tests {
         vec![question("a", Some(&"x".repeat(bytes - overhead)))]
     }
 
-    // REQ-COMPAT-18, REQ-RUNNERENROLL-119: the bounds a wait's questions are reported
+    // REQ-COMPAT-30, REQ-RUNNERENROLL-323, REQ-RUN-139: the bounds a wait's questions are reported
     // within, whole or not at all.
     #[test]
     fn tree_progress_wait_writes_only_questions_cloud_admits() {
@@ -4708,7 +4708,7 @@ mod tests {
         .unwrap_or_else(|| panic!("refused {outcome:?} {id:?} {phase:?} {code:?}"))
     }
 
-    // REQ-COMPAT-18: a wait's failed child is reported within the bounds Cloud
+    // REQ-COMPAT-31: a wait's failed child is reported within the bounds Cloud
     // admits, whole or not at all, and only when the wait holds one.
     #[test]
     fn tree_progress_wait_writes_only_a_failed_child_cloud_admits() {
@@ -4876,7 +4876,7 @@ mod tests {
         }
     }
 
-    // REQ-COMPAT-18
+    // REQ-COMPAT-29
     #[test]
     fn tree_progress_writes_steps_only_when_it_has_an_observation() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -4940,7 +4940,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-91
+    // REQ-RUNNERENROLL-186, REQ-RUNNERENROLL-187, REQ-RUNNERENROLL-191
     #[test]
     fn tree_offer_projects_the_files_bindings_and_run_page() {
         let CloudFrame::AssignmentOffer { execution_spec, .. } =
@@ -4982,7 +4982,7 @@ mod tests {
         );
     }
 
-    // REQ-CLOUDDEF-16: the projection carries the block's bindings and resolution as Cloud
+    // REQ-CLOUDDEF-114: the projection carries the block's bindings and resolution as Cloud
     // sent them, an integration's group and account included, and a flat block as before.
     #[test]
     fn tree_offer_projects_integration_bindings_and_their_resolution_as_sent() {
@@ -5087,7 +5087,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-90
+    // REQ-RUNNERENROLL-90, REQ-RUNNERENROLL-204, REQ-RUNNERENROLL-206
     #[test]
     fn run_control_decodes_its_kind_and_the_application_encodes_the_fixtures() {
         let fixture = valid_runner_fixture;
@@ -5359,7 +5359,7 @@ mod tests {
         );
     }
 
-    // REQ-DIAG-42, REQ-DIAG-4: a fact outside the grammar Cloud's read returns is left out,
+    // REQ-DIAG-46, REQ-DIAG-4: a fact outside the grammar Cloud's read returns is left out,
     // never trimmed, and the decline is sent all the same.
     #[test]
     fn validation_facts_keep_only_values_of_their_grammar() {

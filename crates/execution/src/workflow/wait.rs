@@ -64,7 +64,7 @@ pub const CONTROL_STOP: &str = "control.stop";
 pub const CONTROL_LIFT: &str = "control.lift";
 /// The control that interrupts a running run; it resolves no wait (REQ-WFDEF-6).
 pub const CONTROL_INTERRUPT: &str = "control.interrupt";
-/// The control that ends a waiting run instead of continuing it (REQ-CONTINUE-75).
+/// The control that ends a waiting run instead of continuing it (REQ-CONTINUE-109).
 pub const CONTROL_WITHDRAW: &str = "control.withdraw";
 /// The control that cancels a run (REQ-LOCALRUN-186).
 pub const CONTROL_CANCEL: &str = "control.cancel";
@@ -136,7 +136,7 @@ pub struct WaitQuestion {
     pub text: Option<String>,
 }
 
-/// The questions an `answer` wait's payload asks (REQ-LOCALRUN-182, REQ-RUNNERENROLL-119).
+/// The questions an `answer` wait's payload asks (REQ-LOCALRUN-182, REQ-RUNNERENROLL-321).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WaitQuestions {
     /// The payload's `questions` array, in order: an answer names one of these ids, and the
@@ -152,7 +152,7 @@ pub enum WaitQuestions {
 /// a decimal string, and by its text, the element itself when it is a string, else its
 /// string `text`, else its string `question`; otherwise the one question of
 /// `WaitQuestions::Unlisted`. `useful workflow run answer` and the runner's progress report
-/// read a wait's questions through this one function (REQ-RUNNERENROLL-119).
+/// read a wait's questions through this one function (REQ-RUNNERENROLL-321).
 pub fn wait_questions(payload: &Map<String, Value>) -> WaitQuestions {
     let Some(questions) = payload.get("questions").and_then(Value::as_array) else {
         return WaitQuestions::Unlisted {
@@ -187,7 +187,7 @@ pub fn wait_questions(payload: &Map<String, Value>) -> WaitQuestions {
 /// The failed child `payload`, a wait record's payload, records (REQ-WFEXEC-77): its
 /// `failedChild` when that reads as the record, else none. `useful workflow run show`,
 /// the summary's wait line and the runner's progress report read a wait's failed child
-/// through this one function (REQ-LOCALRUN-221, REQ-RUNNERENROLL-125).
+/// through this one function (REQ-LOCALRUN-221, REQ-RUNNERENROLL-327).
 pub fn wait_failed_child(payload: &Map<String, Value>) -> Option<FailedChild> {
     FailedChild::deserialize(payload.get("failedChild")?).ok()
 }
@@ -221,7 +221,7 @@ pub struct ExternalEvent {
     pub payload: Map<String, Value>,
 }
 
-/// What a wait's rule matches (REQ-CONTINUE-74, INV-ENGINE-21): a control on source `um` or
+/// What a wait's rule matches (REQ-CONTINUE-101, INV-ENGINE-21): a control on source `um` or
 /// an event a condition source observed, each read as JSON by `event.<path>`.
 pub trait Event {
     fn source(&self) -> &str;
@@ -265,7 +265,7 @@ impl Event for ExternalEvent {
     }
 }
 
-/// A condition the CLI could not read for an `external` wait (REQ-CONTINUE-74): `code` is
+/// A condition the CLI could not read for an `external` wait (REQ-CONTINUE-103): `code` is
 /// `wait_condition_unavailable`, or `wait_condition_unsupported` for a `source` and `event`
 /// no condition evaluates, and `message` names the cause.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -297,7 +297,7 @@ impl std::error::Error for ConditionError {}
 /// Where an `external` or `host` wait's events come from (REQ-WFEXEC-65, REQ-WFEXEC-81): the
 /// execution crate declares it and the CLI implements it. `supports` answers whether a
 /// `source` and `event` pair is evaluated, which admission asks of an `external` wait before
-/// a run starts (REQ-WFEXEC-59); `observe` reads the condition an `external` wait's rule
+/// a run starts (REQ-WFEXEC-93); `observe` reads the condition an `external` wait's rule
 /// names now and answers the events it saw, which `evaluate` matches against the rule as it
 /// matches controls. `observe_host` evaluates the host condition for the run at
 /// `run_directory` waiting on the `host` wait `wait`; an unreadable run is the run's own
@@ -337,7 +337,7 @@ impl ConditionSource for NoConditions {
 }
 
 /// A rule whose `where` is not a conjunction of the supported equalities; the CLI reports it
-/// as `wait_rule_invalid` (REQ-CONTINUE-74).
+/// as `wait_rule_invalid` (REQ-CONTINUE-101).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuleError {
     clause: String,
@@ -452,7 +452,7 @@ impl WaitRecord {
     }
 
     /// The record of the wait a root carries from its nested run's record `nested`
-    /// (REQ-WFEXEC-75, INV-ENGINE-40): the nested wait's `kind`, `since` and `payload`, its
+    /// (REQ-WFEXEC-109, INV-ENGINE-62): the nested wait's `kind`, `since` and `payload`, its
     /// `child` replaced by `child`, the nested run's child relative to the root's run
     /// directory; `step` the path `prefix` from the root to the nested run, `[<step>]` or
     /// `[<step>, {"item": n}]`, followed by the nested wait's `step`; `then` the root's step
@@ -717,7 +717,7 @@ pub(crate) fn parse_where(clause: &str) -> Result<Vec<(Operand, Operand)>, RuleE
 }
 
 /// `where` with each `inputs.<name>` and `outputs.<step>.<output>` operand replaced by the
-/// quoted literal of its text value (REQ-WFEXEC-65), or `None` when the clause is outside the
+/// quoted literal of its text value (REQ-WFEXEC-124), or `None` when the clause is outside the
 /// grammar, an operand's value is absent or not text, or a value cannot be spelled as a
 /// quoted literal (it holds a `"` or `\`, or would split the clause).
 fn substitute_run_values(
@@ -797,7 +797,7 @@ fn resolve(operand: &Operand, run_id: &str, wait: &WaitRecord, event: &Value) ->
 /// recorded, when it recorded one (REQ-WFEXEC-77); each replaces an export of its name. A
 /// `repair` wait an interrupted child routed to also carries `interrupted`, the
 /// interruption's `reason` and the child's `step`, and a `summary` beginning `interrupted`
-/// in place of any the step committed (REQ-WFEXEC-70).
+/// in place of any the step committed (REQ-WFEXEC-100).
 /// `control` is the stop in force for a `stop` wait and, for an interrupted wait, the
 /// `control.interrupt` that requested the interruption: `interrupted` then also carries it
 /// as `control` and the `summary` names its `payload.reason`.
@@ -867,7 +867,7 @@ fn control_fields(control: &ControlEvent) -> Map<String, Value> {
     fields
 }
 
-/// The first event, in order, that resolves the wait through `rule` (REQ-CONTINUE-74,
+/// The first event, in order, that resolves the wait through `rule` (REQ-CONTINUE-101,
 /// INV-ENGINE-21): a control or an observed external event whose `source` is the rule's,
 /// whose `event` is one the rule names, and for which every equality of `where` holds, with
 /// `event.<path>` read from the event's JSON, `run.id` the run's id, `wait.*` the record's
@@ -976,7 +976,7 @@ impl<'a> ControlTrigger<'a> {
 }
 
 /// Whether a control's `when` is a rule `control_when_holds` can evaluate at the wait, the
-/// grammar `useful workflow validate` of a tree holds it to (REQ-WFDEF-10): parsed by the
+/// grammar `useful workflow validate` of a tree holds it to (REQ-WFDEF-52): parsed by the
 /// evaluator itself over an empty event, so validation and evaluation cannot disagree.
 pub(crate) fn control_when_parses(clause: &str) -> bool {
     control_when_holds(clause, &Value::Null, &|_| None).is_ok()

@@ -2831,7 +2831,7 @@ fn finished_outcome(reduction: &TestReduction) -> Option<&RunOutcome> {
         })
 }
 
-// REQ-WFEXEC-69, REQ-WFEXEC-45, REQ-WFEXEC-47
+// REQ-WFEXEC-69, REQ-WFEXEC-134, REQ-WFEXEC-45, REQ-WFEXEC-47
 #[test]
 fn an_interruption_stops_the_active_step_as_a_cancellation_and_fails_it() {
     let graph = finalizer_definition(
@@ -2942,7 +2942,7 @@ fn an_interruption_stops_the_active_step_as_a_cancellation_and_fails_it() {
     assert_eq!(cloud.workflow, WorkflowState::Cancelled { reason });
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-136
 #[test]
 fn an_interrupted_advisory_step_is_the_primary_issue() {
     let mut graph = definition(&[("lint", &[], &[])], &[], 1);
@@ -2990,7 +2990,7 @@ fn an_interrupted_advisory_step_is_the_primary_issue() {
     );
 }
 
-// REQ-WFEXEC-69, REQ-WFEXEC-17
+// REQ-WFEXEC-136, REQ-WFEXEC-17
 #[test]
 fn a_required_issue_before_an_interruption_stays_the_primary_issue() {
     let initialization = initialize_test(definition(
@@ -3044,7 +3044,7 @@ fn a_required_issue_before_an_interruption_stays_the_primary_issue() {
     );
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-135
 #[test]
 fn an_interruption_with_no_active_step_fails_the_first_pending_step_at_start() {
     let reason = CancellationReason::UserRequest;
@@ -3156,10 +3156,10 @@ fn assert_kept_wait(state: &TestRuntimeState, ending: &TestReduction, reason: Ca
     );
 }
 
-// REQ-WFEXEC-72, REQ-WFEXEC-69, REQ-WFEXEC-70, INV-ENGINE-32: an interruption before any step of
-// a continuation has started, its entry pending or its entry `workflow` step stopped while
-// `starting`, keeps the wait the continuation continues from and fails nothing; a cancellation
-// of the same continuation cancels it as before.
+// REQ-WFEXEC-72, REQ-WFEXEC-128, REQ-WFEXEC-69, REQ-WFEXEC-103, INV-ENGINE-32: an interruption
+// before any step of a continuation has started, its entry pending or its entry `workflow` step
+// stopped while `starting`, keeps the wait the continuation continues from and fails nothing; a
+// cancellation of the same continuation cancels it as before.
 #[test]
 fn an_interruption_before_a_continuation_starts_a_step_keeps_its_wait() {
     let reason = CancellationReason::TerminationRequest;
@@ -3223,7 +3223,7 @@ fn an_interruption_before_a_continuation_starts_a_step_keeps_its_wait() {
     }
 }
 
-// REQ-WFEXEC-69
+// REQ-WFEXEC-134
 #[test]
 fn an_interrupted_step_with_recovery_gets_no_recovery_round() {
     let mut graph = definition(&[("fetch", &[], &["result"])], &[], 1);
@@ -3323,7 +3323,7 @@ fn an_interrupted_step_with_recovery_gets_no_recovery_round() {
     assert!(started_step(&quiesced, "fetch").is_none());
 }
 
-// REQ-WFEXEC-69: a `starting` command or agent step fails at `start` when its quiescing
+// REQ-WFEXEC-137: a `starting` command or agent step fails at `start` when its quiescing
 // reports that nothing was launched, and at `execution` when its start had launched.
 #[test]
 fn an_interrupted_step_that_never_launched_fails_at_start() {
@@ -3366,7 +3366,7 @@ fn an_interrupted_step_that_never_launched_fails_at_start() {
     }
 }
 
-// REQ-WFEXEC-69: a recovery's re-execution withdrawn before it launched leaves the step's
+// REQ-WFEXEC-137: a recovery's re-execution withdrawn before it launched leaves the step's
 // earlier execution, so the step still fails at `execution`.
 #[test]
 fn an_unlaunched_re_execution_after_recovery_fails_in_execution() {
@@ -3412,7 +3412,7 @@ fn an_unlaunched_re_execution_after_recovery_fails_in_execution() {
     );
 }
 
-// REQ-WFEXEC-69, REQ-WFFINALIZE-15
+// REQ-WFEXEC-137, REQ-WFFINALIZE-15
 #[test]
 fn an_interruption_while_finalizing_or_after_a_cancellation_acts_as_that_cancellation() {
     let graph = finalizer_definition(
@@ -7119,7 +7119,7 @@ fn not_reached() -> StepState<String> {
     not_run_state(WorkflowNodeRole::Step, NonExecutionCode::NotReached)
 }
 
-// REQ-WFEXEC-58, INV-ENGINE-18
+// REQ-WFEXEC-58, REQ-WFEXEC-82, INV-ENGINE-18
 #[test]
 fn edge_scheduling_starts_the_entry_alone_and_then_only_the_routed_target() {
     let initialization = initialize_test(design_build_review());
@@ -7139,7 +7139,7 @@ fn edge_scheduling_starts_the_entry_alone_and_then_only_the_routed_target() {
     assert_eq!(state.exit_outcome, None);
 }
 
-// REQ-WFEXEC-58, INV-ENGINE-18
+// REQ-WFEXEC-83, INV-ENGINE-18
 #[test]
 fn an_exit_edge_records_the_exit_outcome_and_leaves_unstarted_steps_not_reached() {
     let mut state = design_capturing();
@@ -7168,7 +7168,7 @@ fn an_exit_edge_records_the_exit_outcome_and_leaves_unstarted_steps_not_reached(
     ));
 }
 
-// REQ-WFEXEC-58
+// REQ-WFEXEC-82
 #[test]
 fn a_workflow_step_capture_without_its_outcome_is_stale() {
     let state = design_capturing();
@@ -7333,7 +7333,7 @@ fn a_stop_entered_before_an_authorized_step_ends_the_attempt_waiting() {
     ));
 }
 
-// REQ-WFEXEC-63, REQ-CONTINUE-3, INV-ENGINE-18
+// REQ-WFEXEC-63, REQ-CONTINUE-96, INV-ENGINE-18
 #[test]
 fn a_continuation_starts_the_step_its_seed_names() {
     let initialization = ReductionBuilder::<String, TestDeadline>::new(design_build_review())
@@ -7427,7 +7427,7 @@ fn an_inherited_workflow_step_routes_nothing() {
     ));
 }
 
-// REQ-WFEXEC-58
+// REQ-WFEXEC-82
 #[test]
 fn an_outcome_without_an_edge_ends_the_walk_without_an_exit_outcome() {
     let mut state = design_capturing();
@@ -7440,7 +7440,7 @@ fn an_outcome_without_an_edge_ends_the_walk_without_an_exit_outcome() {
     assert_eq!(state.exit_outcome, None);
 }
 
-// REQ-WFEXEC-58
+// REQ-WFEXEC-84
 #[test]
 fn a_failed_workflow_step_stops_the_walk_as_a_required_failure() {
     let initialization = initialize_test(design_build_review());
@@ -7645,7 +7645,7 @@ fn design_planned_through(target: &str, count: u64) -> TestRuntimeState {
     )
 }
 
-// REQ-WFEXEC-64, INV-ENGINE-22: a limited edge under its count takes `then` as a counted
+// REQ-WFEXEC-133, INV-ENGINE-22: a limited edge under its count takes `then` as a counted
 // continuation, a later step included; at its count it takes `else` as an ordinary target.
 #[test]
 fn a_limited_edge_continues_under_its_count_and_takes_else_at_it() {
@@ -7823,7 +7823,7 @@ fn capture_child_outcome(
     )
 }
 
-// REQ-WFEXEC-70, INV-ENGINE-29: an interrupted child's completion enters its `repair` wait,
+// REQ-WFEXEC-99, INV-ENGINE-29: an interrupted child's completion enters its `repair` wait,
 // which names the interruption, and any other edge fails the step `interrupted`.
 #[test]
 fn an_interrupted_child_enters_only_a_repair_wait() {
@@ -7890,7 +7890,7 @@ fn an_interrupted_child_enters_only_a_repair_wait() {
     }
 }
 
-// REQ-WFEXEC-70, REQ-WFEXEC-64: a child that completed on its own under an interruption
+// REQ-WFEXEC-101, REQ-WFEXEC-64: a child that completed on its own under an interruption
 // ends the attempt `continued` on an edge that would start a step, counted only as a limited
 // edge's `then`; under a cancellation its completion is stale and the step is cancelled.
 #[test]
@@ -7944,7 +7944,7 @@ fn carried(kind: WaitKind, interrupted: Option<ChildInterruption>) -> EnteredWai
     }
 }
 
-// REQ-WFEXEC-75, INV-ENGINE-40: a `workflow` step whose nested run waits commits nothing and
+// REQ-WFEXEC-75, INV-ENGINE-62: a `workflow` step whose nested run waits commits nothing and
 // takes no edge: it ends `not_reached` with every unstarted step and the attempt ends on the
 // same wait carried at the step, with no finalization; only the running step's completion
 // carries one.
@@ -7988,7 +7988,7 @@ fn a_nested_runs_wait_ends_the_walk_on_the_carried_wait() {
     ));
 }
 
-// REQ-WFEXEC-75, REQ-WFEXEC-70: under an interruption the nested run's `repair` wait, which
+// REQ-WFEXEC-109, REQ-WFEXEC-99: under an interruption the nested run's `repair` wait, which
 // names the interruption that failed its stage, ends the walk as a routed child's edge does
 // and wins over the stop.
 #[test]

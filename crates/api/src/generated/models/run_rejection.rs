@@ -17,17 +17,62 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRejection {
+    /// Why the runner found the run's execution spec invalid: the Coordinator protocol's `ExecutionSpecInvalidReason`.
     #[serde(rename = "reason")]
-    pub reason: String,
+    pub reason: Reason,
     #[serde(rename = "diagnostic", skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<Box<models::RunnerDiagnostic>>,
 }
 
 impl RunRejection {
-    pub fn new(reason: String) -> RunRejection {
+    pub fn new(reason: Reason) -> RunRejection {
         RunRejection {
             reason,
             diagnostic: None,
         }
+    }
+}
+/// Why the runner found the run's execution spec invalid: the Coordinator protocol's `ExecutionSpecInvalidReason`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Reason {
+    #[serde(rename = "unsupported_schema_version")]
+    RunRejectionReasonUnsupportedSchemaVersion,
+    #[serde(rename = "invalid_execution_limits")]
+    RunRejectionReasonInvalidExecutionLimits,
+    #[serde(rename = "invalid_source_projection")]
+    RunRejectionReasonInvalidSourceProjection,
+    #[serde(rename = "unsupported_source_object_format")]
+    RunRejectionReasonUnsupportedSourceObjectFormat,
+    #[serde(rename = "source_commit_mismatch")]
+    RunRejectionReasonSourceCommitMismatch,
+    #[serde(rename = "source_commit_unavailable")]
+    RunRejectionReasonSourceCommitUnavailable,
+    #[serde(rename = "source_checkout_dirty")]
+    RunRejectionReasonSourceCheckoutDirty,
+    #[serde(rename = "workflow_source_digest_mismatch")]
+    RunRejectionReasonWorkflowSourceDigestMismatch,
+    #[serde(rename = "workflow_source_invalid")]
+    RunRejectionReasonWorkflowSourceInvalid,
+    #[serde(rename = "workflow_contract_invalid")]
+    RunRejectionReasonWorkflowContractInvalid,
+    #[serde(rename = "workflow_admission_invalid")]
+    RunRejectionReasonWorkflowAdmissionInvalid,
+    #[serde(rename = "invalid_input_projection")]
+    RunRejectionReasonInvalidInputProjection,
+    #[serde(rename = "input_manifest_mismatch")]
+    RunRejectionReasonInputManifestMismatch,
+    #[serde(rename = "input_content_unavailable")]
+    RunRejectionReasonInputContentUnavailable,
+    #[serde(rename = "input_content_mismatch")]
+    RunRejectionReasonInputContentMismatch,
+    #[serde(rename = "input_text_invalid")]
+    RunRejectionReasonInputTextInvalid,
+    #[serde(rename = "input_json_invalid")]
+    RunRejectionReasonInputJSONInvalid,
+}
+
+impl Default for Reason {
+    fn default() -> Reason {
+        Self::RunRejectionReasonUnsupportedSchemaVersion
     }
 }

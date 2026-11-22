@@ -7,7 +7,7 @@
 //! login it holds with its provider (REQ-GRANT-90). Each admission also
 //! asks Cloud for the grant tokens of its own assignment and keeps them, in
 //! a directory of that assignment's own, until the assignment ends
-//! (REQ-GRANT-86, INV-RUNNER-28). Where each provider's
+//! (REQ-GRANT-150, INV-RUNNER-28). Where each provider's
 //! credential comes from, the host or a grant, is settled by one rule,
 //! `credential_source`, which the readiness document, the offer and what
 //! the runner reports all take (REQ-GRANT-92, INV-RUNNER-31).
@@ -54,7 +54,7 @@ pub(crate) fn valid_token(bytes: &[u8]) -> bool {
 /// process has. It keeps the name of every variable the service carries,
 /// never a value, so that whether the host provides an OAuth provider can be
 /// answered for any name, one first seen in Cloud's list of an assignment's
-/// providers included (REQ-GRANT-87); whether the service carries
+/// providers included (REQ-GRANT-153); whether the service carries
 /// `CLAUDE_CODE_OAUTH_TOKEN` or `CODEX_HOME`; and where its `HOME` and
 /// `CLAUDE_CONFIG_DIR` are, so that a login file under them can be looked
 /// for.
@@ -112,7 +112,7 @@ impl ServiceEnvironment {
     /// Whether the host provides the OAuth provider: the service carries
     /// either of its two names, so the runner asks for and offers no grant
     /// token of it, and both names stay as the service has them
-    /// (REQ-GRANT-87).
+    /// (REQ-GRANT-153).
     pub(crate) fn provides(&self, provider: AgentLoginProvider) -> bool {
         grant_token::OFFERED_VARIABLES
             .iter()
@@ -134,7 +134,7 @@ impl ServiceEnvironment {
 
 /// Whether a file of the service's own login is present at `path`. It is
 /// only looked at, never opened or followed, and one the runner cannot tell
-/// is absent counts as present (REQ-GRANT-45, REQ-GRANT-51).
+/// is absent counts as present (REQ-GRANT-45, REQ-GRANT-137).
 fn login_file_present(path: &Path) -> bool {
     match fs::symlink_metadata(path) {
         Ok(_) => true,
@@ -178,7 +178,7 @@ impl InstallRefusal {
 }
 
 /// A step of agent-login setup for one provider that failed, as the
-/// `runner.agent_login_setup` record names it (REQ-TELEMETRY-45): closed
+/// `runner.agent_login_setup` record names it (REQ-TELEMETRY-69): closed
 /// values only, never a path, a message or material.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StepFailure {
@@ -201,7 +201,7 @@ pub(crate) enum FailureStage {
     /// Removing the provider's file from it.
     Remove,
     /// Checking the provider's installed login with its provider, which
-    /// gave no answer (REQ-GRANT-90).
+    /// gave no answer (REQ-GRANT-144).
     Check,
 }
 
@@ -250,7 +250,7 @@ impl FailureCause {
 
 /// Where `provider`'s credential comes from for an assignment the runner
 /// admits now (REQ-GRANT-92, INV-RUNNER-31): `host` for an OAuth provider
-/// the service environment `service` provides (REQ-GRANT-87) and for a
+/// the service environment `service` provides (REQ-GRANT-153) and for a
 /// coding agent the service has a login of its own of (REQ-GRANT-51),
 /// whatever Cloud answered; `grant` for an OAuth provider whose token
 /// `grant_tokens` holds and can read back, and for a coding agent whose
@@ -314,23 +314,23 @@ pub(crate) struct Offer {
     /// Each token service Cloud listed for the assignment that has a
     /// source, in the list's order, as `grant_token::token_service_sources`
     /// settles it from the environment and the grant tokens the offer is
-    /// built from (REQ-INTEGRATION-12, INV-RUNNER-31); none where Cloud did
+    /// built from (REQ-INTEGRATION-12, INV-RUNNER-61); none where Cloud did
     /// not answer the list.
     pub(crate) token_services: Vec<cloud::ReportedTokenService>,
     /// What each command a tree run of the admission starts is offered,
-    /// built when it starts (REQ-GRANT-49): from the same process
+    /// built when it starts (REQ-GRANT-136): from the same process
     /// environment and directory as `environment`, with the grant token
     /// variables `environment` added.
     pub(crate) commands: CommandEnvironment,
 }
 
 /// What each `useful` command of a tree run is offered, built when the
-/// command starts (REQ-GRANT-49): the process environment, with each agent
+/// command starts (REQ-GRANT-136): the process environment, with each agent
 /// login the runner keeps in `directory` then added as `with_agent_logins`
 /// adds it, and with the grant token variables of the assignment's admission
 /// as that admission offered them (`grant_token::offer`). A token variable
 /// keeps the admission's value while the file its file variable names is
-/// kept current (REQ-GRANT-87), so a build reads no grant token file and no
+/// kept current (REQ-GRANT-155), so a build reads no grant token file and no
 /// readiness document; only the agent logins are looked at again. The
 /// admission's own environment, its credential sources and its observer
 /// stay as the admission settled them (INV-RUNNER-31).
@@ -410,7 +410,7 @@ pub(crate) fn offer(process: &EnvironmentSnapshot, directory: Option<&LoginDirec
 
 /// What an assignment's admission is offered: `offer`'s, with the grant
 /// tokens it holds, `grant_tokens`, and their files offered as well
-/// (`grant_token::offer`, REQ-GRANT-87), and each provider's source settled
+/// (`grant_token::offer`, REQ-GRANT-154), and each provider's source settled
 /// with them (REQ-GRANT-92, INV-RUNNER-31), each token service Cloud
 /// listed for the assignment included (REQ-INTEGRATION-12). The admission
 /// holds no token of a provider the host provides, whose names stay as the
@@ -453,7 +453,7 @@ pub(crate) fn offer_with_grant_tokens(
 /// variable whose login the readiness document records as installed. Where
 /// the runner keeps none either, nothing is added and nothing withheld: the
 /// variable is as the process environment has it. A variable the process
-/// environment carries, a grant token name included (REQ-GRANT-87,
+/// environment carries, a grant token name included (REQ-GRANT-153,
 /// REQ-WORKSPACE-18), is never replaced or removed, and the process
 /// environment itself is never changed. A missing or unreadable readiness
 /// document records no install of what is added. Which steps receive a

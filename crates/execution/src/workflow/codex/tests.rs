@@ -754,7 +754,7 @@ fn held_feed(parser: &mut CodexAppServerV1Parser, frame: Value) {
     assert!(!parser.start_acknowledged());
 }
 
-// INV-HARNESS-20
+// INV-HARNESS-20, INV-HARNESS-29, INV-HARNESS-30
 #[test]
 fn turn_frames_that_overtake_the_turn_start_response_are_parsed_after_it() {
     let mut overtaken = parser(AgentValueKind::None, 1024, None);

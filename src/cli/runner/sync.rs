@@ -35,7 +35,7 @@ struct SyncOutput<'a, Check: Serialize> {
     outcome: &'static str,
     agent_logins: ReadinessView<'a>,
     /// Each login whose check in the setup gave no answer, with why, as
-    /// the control socket names them (REQ-GRANT-41); absent when there is
+    /// the control socket names them (REQ-GRANT-130); absent when there is
     /// none.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     unanswered_checks: &'a [Check],
@@ -76,7 +76,7 @@ impl<'a> ReadinessView<'a> {
 }
 
 impl Command {
-    // REQ-GRANT-41: the live runner runs the setup, checks included; this
+    // REQ-GRANT-130: the live runner runs the setup, checks included; this
     // command contacts no Cloud deployment itself.
     pub(super) fn execute(self) -> CommandResult {
         let socket_path = super::configured_control_socket_path(self.config.as_deref())?;
@@ -163,11 +163,11 @@ fn control_failure(error: ControlError) -> CommandFailure {
 
 /// Writes one line per provider: its readiness state, for an OAuth
 /// provider's entry of an ended assignment the run and the check time it is
-/// as of, the run left out where the entry names none (REQ-GRANT-88), for a
+/// as of, the run left out where the entry names none (REQ-GRANT-158), for a
 /// login the runner installed or a token it was issued the generation, its
 /// availability with the next action and the step it names (REQ-GRANT-53,
-/// REQ-GRANT-88), for a login with one, its last use and when, the time
-/// left out where the serving process states none (REQ-GRANT-41), and,
+/// REQ-GRANT-158), for a login with one, its last use and when, the time
+/// left out where the serving process states none (REQ-GRANT-129), and,
 /// where the entry records one, where the provider's credential comes from,
 /// `host` or `grant` (REQ-GRANT-92).
 pub(super) fn write_readiness(
@@ -216,7 +216,7 @@ pub(super) fn write_readiness(
 }
 
 /// What an OAuth provider's entry of an ended assignment is as of: its run,
-/// where the entry names one, and the time of its check (REQ-GRANT-88). An
+/// where the entry names one, and the time of its check (REQ-GRANT-158). An
 /// entry without an end is current and is as of nothing.
 fn as_of(entry: &ProviderReadiness) -> String {
     if !entry.provider.is_brokered() || entry.ended_at.is_none() {
@@ -231,7 +231,7 @@ fn as_of(entry: &ProviderReadiness) -> String {
 }
 
 /// Writes, after the readiness lines, one line per login whose check gave
-/// no answer, naming its provider and the cause (REQ-GRANT-41). A check
+/// no answer, naming its provider and the cause (REQ-GRANT-130). A check
 /// with no answer says nothing of the login, so it changes no exit status.
 fn write_unanswered_checks<Provider: Serialize, Cause: Serialize>(
     output: &mut impl Write,

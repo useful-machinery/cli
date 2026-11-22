@@ -9,7 +9,7 @@
 //! assignment the runner admitted was issued, the run of that assignment and,
 //! once it has ended, when (REQ-GRANT-88): never the token or the path of its
 //! file. One the runner has asked for no token of, the host's own provider's
-//! included (REQ-GRANT-87), is written as `not_delivered`, which is how a
+//! included (REQ-GRANT-153), is written as `not_delivered`, which is how a
 //! document written before these entries lists all three. Whether a provider
 //! was selected, which an earlier `useful` wrote on its entry, is read and
 //! dropped: no provider is selected (REQ-GRANT-51), and no entry this build
@@ -85,7 +85,7 @@ pub(crate) enum KeptEntry {
 pub(crate) struct UnknownEntry(WireEntry);
 
 /// What the last assignment the runner admitted was issued for an OAuth
-/// provider (REQ-GRANT-88). The entry outlives the assignment, and is marked
+/// provider (REQ-GRANT-157). The entry outlives the assignment, and is marked
 /// ended when it ends; the token and its file do not, and neither is
 /// recorded here.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -298,7 +298,7 @@ pub(crate) enum ReadinessError {
 impl ReadinessError {
     /// Whether a load failed because what is at the path is not the runner's
     /// document (not its private file, over its bound, or not a valid
-    /// document), which a setup replaces (REQ-GRANT-38). Any other I/O
+    /// document), which a setup replaces (REQ-GRANT-121). Any other I/O
     /// failure says nothing about the document, which stays.
     pub(crate) const fn replaceable(self) -> bool {
         matches!(
@@ -334,7 +334,7 @@ impl ReadinessDocument {
     }
 
     /// Marks ended at `at` each OAuth provider's entry that has a check time
-    /// and no end, changing nothing else of it (REQ-GRANT-88,
+    /// and no end, changing nothing else of it (REQ-GRANT-157,
     /// INV-RUNNER-30); answers whether it marked one.
     pub(crate) fn end_grants(&mut self, at: OffsetDateTime) -> bool {
         self.unknown

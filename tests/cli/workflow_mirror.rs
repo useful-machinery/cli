@@ -495,7 +495,7 @@ fn comments(stub: &LinearStub) -> Vec<String> {
         .collect()
 }
 
-// REQ-LOCALRUN-191, REQ-LOCALRUN-192, REQ-LOCALRUN-216: a definition run of a mirrored root
+// REQ-LOCALRUN-270, REQ-LOCALRUN-271, REQ-LOCALRUN-275, REQ-LOCALRUN-278: a definition run of a mirrored root
 // comments when it starts and when its stage exits, each comment keyed by the issue's id it
 // read first, moves the issue to the bound `Done` on `landed`, and records each write under
 // `mirror/`; without an `external.url` its start reads no comments.
@@ -560,7 +560,7 @@ fn a_mirrored_run_comments_at_start_and_stage_and_moves_the_issue_on_its_outcome
     assert_eq!(record["outcome"], "landed");
 }
 
-// REQ-LOCALRUN-191, REQ-LOCALRUN-192: a write Linear refuses, or one without a key, is a
+// REQ-LOCALRUN-191, REQ-LOCALRUN-276: a write Linear refuses, or one without a key, is a
 // failed record and never changes the run's outcome; without a key nothing is sent.
 #[test]
 fn a_failed_mirror_write_is_recorded_and_never_fails_the_run() {
@@ -594,13 +594,13 @@ fn a_failed_mirror_write_is_recorded_and_never_fails_the_run() {
     assert_eq!(stub.bodies(), Vec::<Value>::new());
 }
 
-/// The variable naming the file that holds the run's Linear grant token (REQ-LOCALRUN-192).
+/// The variable naming the file that holds the run's Linear grant token (REQ-LOCALRUN-274).
 const TOKEN_FILE_VARIABLE: &str = "USEFUL_LINEAR_ACCESS_TOKEN_FILE";
 
-/// The variable holding the run's Linear grant token (REQ-LOCALRUN-192).
+/// The variable holding the run's Linear grant token (REQ-LOCALRUN-274).
 const TOKEN_VARIABLE: &str = "USEFUL_LINEAR_ACCESS_TOKEN";
 
-// REQ-LOCALRUN-192: the mirror writes with the first Linear credential the environment
+// REQ-LOCALRUN-274: the mirror writes with the first Linear credential the environment
 // offers, read anew for each hook: the token in the file `USEFUL_LINEAR_ACCESS_TOKEN_FILE` names,
 // sent as `Bearer` before `USEFUL_LINEAR_ACCESS_TOKEN` and `LINEAR_API_KEY`, and sent replaced by
 // a hook after the file is replaced; else `USEFUL_LINEAR_ACCESS_TOKEN` as `Bearer`, a missing
@@ -676,7 +676,7 @@ fn replaced(contents: &str, from: &str, to: &str) -> String {
     contents.replacen(from, to, 1)
 }
 
-// REQ-LOCALRUN-206, REQ-LOCALRUN-143: a mirrored run whose stage fails mirrors the failure
+// REQ-LOCALRUN-206, REQ-LOCALRUN-292: a mirrored run whose stage fails mirrors the failure
 // outcome its record reads, but when the root's state commit fails the attempt is left
 // unsettled, its record `running`, and nothing is written for `onOutcome`.
 #[test]
@@ -750,7 +750,7 @@ fn a_failed_state_commit_writes_no_outcome_to_the_mirror() {
     assert_eq!(record["outcome"], Value::Null, "{record}");
 }
 
-// REQ-LOCALRUN-191: a run started by path and a run of a root without `mirror` write
+// REQ-LOCALRUN-273: a run started by path and a run of a root without `mirror` write
 // nothing and have no `mirror/`.
 #[test]
 fn a_path_run_and_an_unmirrored_root_write_nothing() {
@@ -781,7 +781,7 @@ fn a_path_run_and_an_unmirrored_root_write_nothing() {
     assert!(!run.join("mirror").exists());
     assert_eq!(stub.bodies(), Vec::<Value>::new());
 
-    // REQ-LOCALRUN-189: `show` lists no mirror write for a run without `mirror/`.
+    // REQ-LOCALRUN-298: `show` lists no mirror write for a run without `mirror/`.
     let run = run.to_str().unwrap();
     assert_eq!(
         shown_mirror(&published.command(&["show", run]).output().unwrap()),
@@ -796,7 +796,7 @@ fn a_path_run_and_an_unmirrored_root_write_nothing() {
     assert_eq!(document["mirror"], json!([]), "{document}");
 }
 
-// REQ-WFDEF-32, REQ-LOCALRUN-191, REQ-LOCALRUN-192: once a person renamed the `Done` state,
+// REQ-WFDEF-32, REQ-LOCALRUN-272, REQ-LOCALRUN-277: once a person renamed the `Done` state,
 // a run of a revision without a resolution record finds no team state of the bound name,
 // while one of a revision with the record moves the issue by the id it resolved; `run.url`
 // is the run directory's `file://` URL, or the record's `external.url` when it has one.
@@ -897,7 +897,7 @@ fn a_mirror_state_of_an_integration_binding_moves_the_issue_by_its_value_or_reso
     );
 }
 
-// REQ-LOCALRUN-191, REQ-WFFORMAT-101
+// REQ-LOCALRUN-272, REQ-WFFORMAT-101
 #[test]
 fn run_reference_is_the_external_url_else_the_show_command() {
     let tree = engineering_tree(true);
@@ -939,7 +939,7 @@ fn create_with_run_page(published: &Published, stub: &LinearStub, ticket: &str) 
     })
 }
 
-// REQ-LOCALRUN-216, REQ-LOCALRUN-189: a run whose issue already holds a comment linking its
+// REQ-LOCALRUN-216, REQ-LOCALRUN-298: a run whose issue already holds a comment linking its
 // `external.url` posts no start comment, records the write skipped `start_announced` with
 // the text it would have written, and `show` lists it so.
 #[test]
@@ -993,7 +993,7 @@ fn a_start_comment_is_skipped_when_the_issue_already_links_the_run() {
     );
 }
 
-// REQ-LOCALRUN-216: comments that do not link the run, or comments that cannot be read,
+// REQ-LOCALRUN-278: comments that do not link the run, or comments that cannot be read,
 // leave the start comment to be written, after an issue read of its own when the comments
 // read failed.
 #[test]
@@ -1025,7 +1025,7 @@ fn a_start_comment_is_written_when_no_comment_links_the_run_or_none_can_be_read(
     assert_eq!(start_write.get("diagnostic"), None, "{start_write}");
 }
 
-// REQ-WFDEF-32, REQ-LOCALRUN-192: with a resolution record the guard
+// REQ-WFDEF-32, REQ-LOCALRUN-277: with a resolution record the guard
 // `issue.state != $ownedState` compares state ids: it does not hold for an issue in the
 // owned state a person renamed, and holds for one in another state now bearing the owned
 // state's name; a bound key the record gives no id is `mirror_state_unknown` and sends
@@ -1248,7 +1248,7 @@ impl MirroredWaitTree {
     }
 }
 
-// SC-LOCALRUN-12, REQ-LOCALRUN-191, REQ-LOCALRUN-192, REQ-LOCALRUN-186, REQ-LOCALRUN-189,
+// SC-LOCALRUN-12, REQ-LOCALRUN-270, REQ-LOCALRUN-272, REQ-LOCALRUN-275, REQ-LOCALRUN-271, REQ-LOCALRUN-298,
 // REQ-WFFORMAT-101: a mirrored run comments when it starts, naming the run by its id and the
 // command that shows it, when its stage exits and when it waits; `withdraw`
 // skips the state write when a person already moved the issue out of the owned state,
@@ -1360,7 +1360,7 @@ fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     );
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-191, REQ-LOCALRUN-186: a withdrawal of a live run while its stage runs
+// REQ-WFEXEC-73, REQ-LOCALRUN-271, REQ-LOCALRUN-240: a withdrawal of a live run while its stage runs
 // ends it `withdrawn` once the stage finishes, and its process fires `onOutcome.withdrawn` once,
 // moving the issue still in the owned state to the bound `Backlog`.
 #[test]
@@ -1446,7 +1446,7 @@ fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
     );
 }
 
-// SC-LOCALRUN-15, REQ-LOCALRUN-191, REQ-LOCALRUN-135, REQ-LOCALRUN-186, REQ-LOCALRUN-204:
+// SC-LOCALRUN-15, REQ-LOCALRUN-270, REQ-LOCALRUN-135, REQ-LOCALRUN-244, REQ-LOCALRUN-255:
 // SIGINT to the process of a mirrored run interrupts its stage, whose repair wait's `onWait`
 // comment begins with the interruption, and the run writes no `onOutcome`; a live run ended
 // by `cancel`, even from a shell without the key, still writes `onOutcome.canceled`.
@@ -1511,7 +1511,7 @@ fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
     );
 }
 
-// SC-CONTINUE-12, REQ-LOCALRUN-191, REQ-WFEXEC-72: a `retry` of a mirrored run's repair
+// SC-CONTINUE-12, REQ-LOCALRUN-270, REQ-WFEXEC-72: a `retry` of a mirrored run's repair
 // wait that SIGINT stops before its stage's child is prepared keeps that wait and writes no
 // `onWait`, since the wait's was written when it was entered; nothing else is written either.
 #[cfg_attr(
@@ -1572,7 +1572,7 @@ mirror:
         .replacen("inputs:\n", "inputs:\n  ticket:\n    kind: text\n", 1)
 }
 
-// REQ-LOCALRUN-191, REQ-WFEXEC-74, REQ-WFEXEC-75: each stage of a nested run writes the root's
+// REQ-LOCALRUN-270, REQ-LOCALRUN-272, REQ-WFEXEC-108, REQ-WFEXEC-110: each stage of a nested run writes the root's
 // `onStage` with its path from the root and its `summary` export, else its outcome, before
 // the nested run routes it, and the nested run's own exit writes one for the root's step;
 // the nested run writes no mirror of its own, and a stage that ends `blocked` into an
@@ -1697,7 +1697,7 @@ fn refused_without_key(output: &Output, leaf: &str) {
     }
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-181, REQ-LOCALRUN-186: `cancel`, and
+// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-254, REQ-LOCALRUN-186: `cancel`, and
 // `cancel --control cancel`, of a mirrored waiting run from a shell with no Linear credential,
 // its `LINEAR_API_KEY` unset or empty and no grant token, are refused before anything changes
 // and nothing is sent, and the same `cancel` with the key ends the run `withdrawn` and moves
@@ -1741,7 +1741,7 @@ fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_chan
     );
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-192: the check before `cancel` ends a
+// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-274: the check before `cancel` ends a
 // mirrored waiting run is for any Linear credential: a token file that is missing and an
 // empty `USEFUL_LINEAR_ACCESS_TOKEN` are none, so it still refuses, and from a shell whose only
 // credential is `USEFUL_LINEAR_ACCESS_TOKEN` it proceeds and moves the issue with that token.
@@ -1778,7 +1778,7 @@ fn ending_a_mirrored_waiting_run_with_only_the_linear_access_token_proceeds() {
     assert_eq!(stub.authorizations(), ["Bearer variable-token"; 2]);
 }
 
-// REQ-LOCALRUN-204, REQ-LOCALRUN-186, REQ-CONTINUE-2: `cancel` of a mirrored `running` run
+// REQ-LOCALRUN-254, REQ-LOCALRUN-243, REQ-CONTINUE-2: `cancel` of a mirrored `running` run
 // whose process is gone, from a shell without the key, is refused and leaves the abandoned
 // attempt unsettled, so the same `cancel` with the key ends the run.
 #[test]
@@ -1830,7 +1830,7 @@ fn first_attempt(run: &Path) -> Value {
     read_json(&run.join("state.json"))["attempts"][0].clone()
 }
 
-// REQ-LOCALRUN-204, REQ-LOCALRUN-186: `resume` of a mirrored `running` run whose process is
+// REQ-LOCALRUN-204, REQ-LOCALRUN-254, REQ-LOCALRUN-239: `resume` of a mirrored `running` run whose process is
 // gone after a withdrawal was recorded, from a shell without the key, is refused at phase
 // `continuation` and leaves the abandoned attempt unsettled with the control kept; the same
 // `resume` with the key withdraws the run and writes its `onOutcome.withdrawn` once.
@@ -1941,7 +1941,7 @@ fn a_mirror_that_does_not_map_the_outcome_needs_no_key() {
     assert_eq!(mirror_names(&run), writes);
 }
 
-// REQ-LOCALRUN-191, REQ-LOCALRUN-204: a run whose mirror `issue` input is the empty text, as
+// REQ-LOCALRUN-273, REQ-LOCALRUN-204: a run whose mirror `issue` input is the empty text, as
 // an optional input the run was not given resolves to, has no mirror: it passes `onStart`,
 // `onStage` and `onWait` sending Linear nothing and recording nothing, `show` lists no write,
 // and `withdraw` without the key ends it although `onOutcome` maps `withdrawn`. A run of the
@@ -1997,7 +1997,7 @@ fn a_run_whose_issue_input_is_empty_has_no_mirror() {
     assert_eq!(write["outcome"], "written", "{write}");
 }
 
-// REQ-LOCALRUN-204, REQ-CONTINUE-75: `resume` of a mirrored run whose repair wait a recorded
+// REQ-LOCALRUN-204, REQ-CONTINUE-110: `resume` of a mirrored run whose repair wait a recorded
 // `control.withdraw` resolves, from a shell without the key, is refused at phase
 // `continuation` and keeps waiting with the control recorded; the same `resume` with the key
 // withdraws the run and moves its issue.

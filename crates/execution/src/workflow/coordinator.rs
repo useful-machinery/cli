@@ -985,7 +985,7 @@ pub trait CommitPort<Commit> {
 }
 
 /// A commit port's error names its own cause as a [`CommitFailure`], which
-/// [`CoordinationError::CommitFailed`] carries out of the coordinator (INV-ENGINE-33).
+/// [`CoordinationError::CommitFailed`] carries out of the coordinator (INV-ENGINE-54).
 pub trait ClassifiedCommitError {
     fn commit_failure(&self) -> CommitFailure;
 }

@@ -618,7 +618,7 @@ impl AssignmentManager {
 
     pub(super) fn apply_successor_fences(&mut self, successor_assignment_id: &str) {
         // Only a predecessor that never reported a wait is settled by the successor's offer
-        // (INV-RUNNER-40).
+        // (INV-RUNNER-63).
         let predecessors: Vec<String> = self
             .reporting
             .iter()
