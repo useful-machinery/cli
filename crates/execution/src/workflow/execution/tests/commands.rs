@@ -165,19 +165,31 @@ steps:
                 1,
                 1024,
             );
-            let result = execute_workflow(
+            let diagnostics = StepDiagnosticLog::default();
+            let coordinated = crate::workflow::step_runtime::execute_workflow_observed(
                 fixture.admitted,
                 &fixture.artifacts,
                 &fixture.inputs,
-                &StepDiagnosticLog::default(),
-                AgentExecution::disabled(),
+                &diagnostics,
                 TestClock,
+                NoopCommitPort,
                 NoopExecutionObserver,
+                AgentExecution::disabled(),
+                crate::workflow::process_group::ProcessGuardRegistry::default(),
             )
             .await
             .unwrap();
 
-            assert_eq!(result.outcome, RunOutcome::Succeeded, "{handler_declaration}");
+            let recovery = coordinated.state.steps["repair"].recovery.as_ref().unwrap();
+            assert_eq!(
+                recovery.terminal_disposition,
+                Some(RecoveryTerminalDisposition::Recovered {
+                    execution_number: TargetExecutionNumber::fixture(2),
+                }),
+                "handler declaration {handler_declaration:?}, recovery rounds {:?}",
+                recovery.rounds
+            );
+            assert_eq!(coordinated.state.workflow, WorkflowState::Succeeded, "{handler_declaration}");
             assert_eq!(
                 fs::read_to_string(fixture.execution_root.join("handler.txt")).unwrap(),
                 expected,

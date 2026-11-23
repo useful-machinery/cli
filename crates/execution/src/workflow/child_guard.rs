@@ -10,7 +10,7 @@ use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rustix::io::Errno;
 use rustix::process::{
@@ -551,32 +551,24 @@ fn wait_for_boundary<Output>(
         if let Some(output) = inspect(path)? {
             return Ok(output);
         }
-        check_worker_boundary(child, started, cancellation)?;
+        if cancellation.is_cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "child process guard launch cancelled",
+            ));
+        }
+        if child.try_wait()?.is_some() {
+            return inspect(path)?
+                .ok_or_else(|| io::Error::other("child process guard exited early"));
+        }
+        if worker_boundary_timed_out(useful_support::elapsed(started)) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "child process guard did not respond",
+            ));
+        }
+        useful_support::sleep(WORKER_POLL_INTERVAL);
     }
-}
-
-fn check_worker_boundary(
-    child: &mut Child,
-    started: Instant,
-    cancellation: &ChildGuardCancellation,
-) -> io::Result<()> {
-    if cancellation.is_cancelled() {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "child process guard launch cancelled",
-        ));
-    }
-    if child.try_wait()?.is_some() {
-        return Err(io::Error::other("child process guard exited early"));
-    }
-    if worker_boundary_timed_out(useful_support::elapsed(started)) {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "child process guard did not respond",
-        ));
-    }
-    useful_support::sleep(WORKER_POLL_INTERVAL);
-    Ok(())
 }
 
 fn worker_boundary_timed_out(elapsed: Duration) -> bool {
@@ -1381,6 +1373,38 @@ mod tests {
         let _ = child.wait().await;
 
         assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::Interrupted));
+    }
+
+    // INV-ENGINE-66
+    #[tokio::test]
+    async fn a_boundary_written_before_the_guard_exits_is_read_after_its_exit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join(RELEASED_FILE);
+        for boundary_written in [true, false] {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exit 0"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            child.wait().await.unwrap();
+
+            let mut inspections = 0;
+            let result = wait_for_boundary(
+                &mut child,
+                &path,
+                &ChildGuardCancellation::default(),
+                |_| {
+                    inspections += 1;
+                    Ok((boundary_written && inspections == 2).then_some(()))
+                },
+            );
+            if boundary_written {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+            }
+            assert_eq!(inspections, 2);
+        }
     }
 
     // INV-TESTING-20
