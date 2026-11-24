@@ -1,9 +1,9 @@
-//! The reader of Claude Code's stream-json output (REQ-AGENT-87, INV-HARNESS-22). It takes
-//! stdout bytes in chunks of any size and yields the activity it recognizes and the facts a
-//! step is decided by (`outcome`); it has no failing path. It compares no session, model,
-//! working directory or permission mode and keeps no account of turns or tasks: its only
-//! state is the line being read, the facts, and small bounded tables it uses to label and
-//! deduplicate what it shows, where a wrong guess shows a line twice or not at all.
+//! The reader of Claude Code's stream-json output. It takes stdout bytes in chunks of any
+//! size and yields the activity it recognizes and the facts a step is decided by
+//! (`outcome`); it has no failing path. It compares no session, model, working directory or
+//! permission mode and keeps no account of turns or tasks: its only state is the line being
+//! read, the facts, and small bounded tables it uses to label and deduplicate what it
+//! shows, where a wrong guess shows a line twice or not at all.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -55,8 +55,8 @@ pub(super) struct Initialization {
 /// closing a turn that never called the model (`num_turns: 0`) replaces nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum DecidingResult {
-    /// `is_error: true`, or a `terminal_reason` other than `completed`, classified
-    /// (REQ-AGENT-45, REQ-AGENT-70, REQ-AGENT-72).
+    /// `is_error: true`, or a `terminal_reason` other than `completed`,
+    /// classified.
     Failed(AgentHarnessFailureDetail),
     Successful(ResultText),
 }
@@ -69,7 +69,7 @@ pub(super) enum ResultText {
     Text(Arc<str>),
     /// The frame's `result` is not a string.
     Missing,
-    /// The text exceeds the response limit; it was not kept (REQ-AGENT-28).
+    /// The text exceeds the response limit; it was not kept.
     OverLimit,
 }
 
@@ -86,7 +86,7 @@ pub(super) struct StreamReader {
     /// The class and status of the newest main-thread api-error message since the last
     /// `result`.
     api_error: Option<HarnessFailureDiagnostic>,
-    /// The newest `resetsAt` a usage window not `allowed` reported (REQ-AGENT-72).
+    /// The newest `resetsAt` a usage window not `allowed` reported.
     latest_reset: Option<u64>,
     retry_open: bool,
     unrecognized_kinds: Vec<(Box<str>, Option<Box<str>>)>,
@@ -279,7 +279,7 @@ impl StreamReader {
 
     /// A status is text or `null`, which clears it. Only beside `null` does Claude Code
     /// report how a compaction ended: `compact_result` `success`, whose `compact_boundary`
-    /// follows, or `failed`, optionally with a text `compact_error` (REQ-AGENT-79).
+    /// follows, or `failed`, optionally with a text `compact_error`.
     fn read_status(&mut self, object: &Map<String, Value>, value: &Value) {
         let compact_result = object.get("compact_result").map(Value::as_str);
         let compact_error = object.get("compact_error").map(Value::as_str);
@@ -677,7 +677,7 @@ impl StreamReader {
 
     /// Claude Code reports its usage windows on every turn; only a window that is warning
     /// or rejecting is worth an operator's attention, and its reset time is kept for a
-    /// limit failure (REQ-AGENT-72).
+    /// limit failure.
     fn read_rate_limit_event(&mut self, object: &Map<String, Value>) {
         let info = map(object, "rate_limit_info");
         let status = info.and_then(|info| nonempty_string(info, "status"));
@@ -1127,7 +1127,6 @@ mod tests {
         text
     }
 
-    // REQ-AGENT-87, REQ-AGENT-38, INV-HARNESS-22
     #[test]
     fn nothing_claude_code_writes_fails_the_reader() {
         let limit = ClaudeCodeStreamJsonV1ProtocolLimits::profile()
@@ -1344,7 +1343,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-26, REQ-AGENT-37
     #[test]
     fn a_streamed_message_is_shown_once_and_its_envelope_is_not_shown_again() {
         let (observations, reader) = read(RESPONSE_FIXTURE, AgentValueKind::Response);
@@ -1363,7 +1361,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-37
     #[test]
     fn api_retry_warning_names_the_reported_attempt_class_status_and_delay() {
         let (observations, _) = read(
@@ -1424,7 +1421,6 @@ mod tests {
         framed(&frames)
     }
 
-    // REQ-AGENT-37, REQ-AGENT-79
     #[test]
     fn a_compaction_that_completes_mid_turn_is_activity() {
         let (observations, _) = read(COMPACTION_COMPLETION, AgentValueKind::Result);
@@ -1447,7 +1443,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-79, REQ-AGENT-87
     #[test]
     fn a_failed_or_cleared_compaction_status_is_activity_and_any_other_status_is_unrecognized() {
         let marker = "compaction marker: the summary request was refused";
@@ -1496,7 +1491,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-64, REQ-AGENT-73, REQ-AGENT-38
     #[test]
     fn subagents_are_named_at_start_resume_and_settlement_and_other_tasks_are_not_tracked() {
         let started = |fields: Value| {
@@ -1558,7 +1552,6 @@ mod tests {
         assert_eq!(unrecognized_events(&observations), [&workflow_task]);
     }
 
-    // REQ-AGENT-38
     #[test]
     fn reasoning_tools_results_metadata_and_unknown_events_are_normalized() {
         let main = |event: Value| stream_event(None, event);
@@ -1656,7 +1649,6 @@ mod tests {
         assert_eq!(unrecognized_events(&observations).len(), 1);
     }
 
-    // REQ-AGENT-38
     #[test]
     fn tool_result_blocks_other_than_text_are_observed_without_content() {
         let user = |block: Value| {
@@ -1694,7 +1686,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-26
     #[test]
     fn a_subagent_message_names_its_own_model() {
         let subagent = |event: Value| stream_event(Some("tool-spawn-subagent"), event);
@@ -1724,7 +1715,6 @@ mod tests {
         assert_eq!(assistant_texts(&observations), ["subagent"]);
     }
 
-    // REQ-AGENT-45, REQ-AGENT-70, REQ-AGENT-96
     #[test]
     fn structured_claude_terminal_reason_is_classified_without_result_text() {
         for (reason, expected, status) in [
@@ -1760,7 +1750,6 @@ mod tests {
         assert_eq!(failure_diagnostic(&reader).harness_error, Some("other"));
     }
 
-    // REQ-AGENT-40, REQ-AGENT-45, REQ-DIAG-24, REQ-DIAG-36
     #[test]
     fn an_api_error_message_classifies_the_next_failed_result() {
         let api_error_result = |status: Option<u16>| {
@@ -1877,7 +1866,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-72
     #[test]
     fn rate_limit_events_warn_only_when_a_window_is_not_allowed() {
         let (observations, _) = read(
@@ -1901,7 +1889,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-72
     #[test]
     fn rejected_window_reset_time_is_kept_only_for_a_limit_failure() {
         let api_error = |code: &str, status: u16| {

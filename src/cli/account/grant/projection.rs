@@ -1,6 +1,6 @@
-//! The member's view of a credential (REQ-GRANT-53): what Cloud's API returns for a grant and its
-//! authorizations, mapped to one availability and one next action, with the command or step that
-//! next action names. `useful account integration list` prints it; Cloud's API carries the facts only.
+//! The member's view of a credential: what Cloud's API returns for a grant and its authorizations,
+//! mapped to one availability and one next action, with the command or step that next action names.
+//! `useful account integration list` prints it; Cloud's API carries the facts only.
 
 use std::io::{self, Write};
 
@@ -130,11 +130,10 @@ pub(in crate::cli) const PROVIDERS: [Provider<'static>; 5] = [
     Provider::CodingAgent("codex"),
 ];
 
-/// The providers a command names in turn, in the order it prints or signs in to them
-/// (REQ-GRANT-64, REQ-GRANT-75): `github`, `gitlab.com` and `linear`, each other
-/// OAuth provider `served` names, in its order (REQ-GRANT-78), then `claude_code` and `codex`.
-/// The five of [`PROVIDERS`] are named whether or not the deployment serves them, and `served`
-/// is empty for a deployment that predates its read (REQ-GRANT-170).
+/// The providers a command names in turn, in the order it prints or signs in to them:
+/// `github`, `gitlab.com` and `linear`, each other OAuth provider `served` names, in its
+/// order, then `claude_code` and `codex`. The five of [`PROVIDERS`] are named whether or not
+/// the deployment serves them, and `served` is empty for a deployment that predates its read.
 pub(in crate::cli) fn providers(served: &[ServedGrantProvider]) -> Vec<Provider<'_>> {
     let (oauth, agents): (Vec<_>, Vec<_>) = PROVIDERS
         .into_iter()
@@ -160,8 +159,8 @@ pub(in crate::cli) enum Provider<'a> {
 }
 
 impl<'a> Provider<'a> {
-    /// The provider whose grant a kind a workflow calls for names; `gitlab` is GitLab.com
-    /// (REQ-GRANT-76, REQ-CREDREADY-22). A token service has none (REQ-CREDREADY-29).
+    /// The provider whose grant a kind a workflow calls for names; `gitlab` is
+    /// GitLab.com. A token service has none.
     pub(in crate::cli) const fn of_kind(kind: CredentialKind) -> Option<Self> {
         Some(match kind {
             CredentialKind::Github => Self::Grant("github"),
@@ -169,7 +168,9 @@ impl<'a> Provider<'a> {
             CredentialKind::Linear => Self::Grant("linear"),
             CredentialKind::ClaudeCode => Self::CodingAgent("claude_code"),
             CredentialKind::Codex => Self::CodingAgent("codex"),
-            CredentialKind::Mergify | CredentialKind::Buildkite => return None,
+            CredentialKind::Mergify | CredentialKind::Buildkite | CredentialKind::Cloudflare => {
+                return None;
+            }
         })
     }
 
@@ -195,7 +196,7 @@ pub(in crate::cli) enum Subject<'a> {
     /// A provider grant, or a grant provider the member has none for, by its provider.
     Grant { provider: &'a str },
     /// An OAuth grant of the member's, by its ID, which names it whatever else they hold of
-    /// its provider (REQ-GRANT-65), and its provider.
+    /// its provider, and its provider.
     OAuthGrant { id: &'a str, provider: &'a str },
     /// An agent login, a native grant, by its ID and its coding agent.
     AgentLogin { id: &'a str, provider: &'a str },
@@ -203,13 +204,13 @@ pub(in crate::cli) enum Subject<'a> {
     CodingAgent { provider: &'a str },
 }
 
-/// A grant provider's name on the wire: any provider id `GrantApi` admits (REQ-GRANT-96).
+/// A grant provider's name on the wire: any provider id `GrantApi` admits.
 pub(in crate::cli) fn grant_provider(grant: &Grant) -> &str {
     &grant.provider
 }
 
 /// A credential's status with the command or step its next action names, which only the text
-/// form prints (REQ-GRANT-53).
+/// form prints.
 #[derive(Serialize)]
 pub(in crate::cli) struct MemberStatus {
     #[serde(flatten)]
@@ -252,7 +253,7 @@ impl MemberStatus {
 }
 
 /// The command or step a member's next action names, each a `useful account integration` command or
-/// `useful runner sync` (REQ-GRANT-53). Waiting for a runner names none.
+/// `useful runner sync`. Waiting for a runner names none.
 fn member_step(next_action: NextAction, subject: Subject<'_>) -> Option<String> {
     match (next_action, subject) {
         (NextAction::Reconnect, Subject::AgentLogin { provider, .. }) => Some(format!(
@@ -261,12 +262,14 @@ fn member_step(next_action: NextAction, subject: Subject<'_>) -> Option<String> 
         (
             NextAction::Reconnect,
             Subject::Grant { provider } | Subject::OAuthGrant { provider, .. },
-        ) => Some(format!(
-            "consent again with `useful account integration reconnect {provider}`"
+        ) => Some(naming_the_app(
+            provider,
+            format!("consent again with `useful account integration reconnect {provider}`"),
         )),
-        (NextAction::Connect, Subject::Grant { provider }) => {
-            Some(format!("consent with `useful account integration connect {provider}`"))
-        }
+        (NextAction::Connect, Subject::Grant { provider }) => Some(naming_the_app(
+            provider,
+            format!("consent with `useful account integration connect {provider}`"),
+        )),
         (NextAction::Connect, Subject::CodingAgent { provider }) => {
             Some(format!("sign in with `useful account integration connect {provider}`"))
         }
@@ -289,6 +292,15 @@ fn member_step(next_action: NextAction, subject: Subject<'_>) -> Option<String> 
                 .to_owned(),
         ),
         _ => None,
+    }
+}
+
+/// `step`, the member's own sign-in to `provider`, and for `github` the other choice, acting as
+/// the GitHub App, which an owner of the organization takes.
+fn naming_the_app(provider: &str, step: String) -> String {
+    match super::github_app_alternative(provider) {
+        Some(command) => format!("{step}, or have an owner act as the GitHub App with `{command}`"),
+        None => step,
     }
 }
 
@@ -343,7 +355,7 @@ mod tests {
         report
     }
 
-    // REQ-GRANT-53: the owner's view of a native grant's authorization and of the grant.
+    // The owner's view of a native grant's authorization and of the grant.
     #[test]
     fn an_authorization_maps_cloud_facts_to_the_owners_column() {
         use Availability::{
@@ -425,8 +437,6 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-53, REQ-GRANT-138, REQ-GRANT-141, REQ-GRANT-142
-    // REQ-GRANT-64
     #[test]
     fn a_grants_authorization_maps_its_kind_and_state_to_the_owners_column() {
         let authorization = serde_json::json!({

@@ -1,6 +1,5 @@
 use super::*;
 
-// REQ-WFRECOVERY-16
 #[tokio::test]
 async fn omitted_recovery_handler_cwd_inherits_agent_target_cwd() {
     with_watchdog(async {
@@ -76,7 +75,6 @@ async fn omitted_recovery_handler_cwd_inherits_agent_target_cwd() {
     .await;
 }
 
-// REQ-WFRECOVERY-11, REQ-WFRECOVERY-12, REQ-WFRECOVERY-13, REQ-WFRECOVERY-14, REQ-WFRECOVERY-21
 #[tokio::test]
 async fn all_profiles_use_one_fresh_authoritative_recovery_protocol() {
     with_watchdog(async {
@@ -249,7 +247,6 @@ async fn all_profiles_use_one_fresh_authoritative_recovery_protocol() {
     .await;
 }
 
-// REQ-WFRECOVERY-12, REQ-WFRECOVERY-14, REQ-WFRECOVERY-18, REQ-WFRECOVERY-24
 #[tokio::test]
 async fn failed_agent_target_handler_and_recheck_use_three_fresh_accounted_invocations() {
     with_watchdog(async {
@@ -423,7 +420,6 @@ async fn failed_agent_target_handler_and_recheck_use_three_fresh_accounted_invoc
     .await;
 }
 
-// REQ-WFRECOVERY-49
 #[tokio::test]
 async fn cancellation_waits_for_recovery_agent_quiescence_and_rejects_late_decision() {
     with_watchdog(async {
@@ -519,7 +515,6 @@ async fn cancellation_waits_for_recovery_agent_quiescence_and_rejects_late_decis
     .await;
 }
 
-// REQ-WFRECOVERY-12, REQ-WFRECOVERY-64
 #[tokio::test]
 async fn agent_handler_environment_passthrough_narrows_the_recovery_harness() {
     with_watchdog(async {

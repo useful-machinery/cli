@@ -1,8 +1,7 @@
 //! An assignment answer's log as a document of rows, built once per answer: a heading per
 //! named stream and each line of its text made visible, or a step's records one row each,
 //! with each row's place in its file or in its step's output kept beside it, by which a
-//! paused view holds its top line through later answers (REQ-RUNNERENROLL-146,
-//! REQ-LOCALRUN-47, REQ-LOCALRUN-48, REQ-LOCALRUN-66, REQ-LOCALRUN-67).
+//! paused view holds its top line through later answers.
 
 use super::*;
 use crate::workflow::presentation_feed::normalize_retained_prefix;
@@ -66,7 +65,6 @@ impl LogDocument {
                 omitted_bytes,
             } => {
                 let mut facts = vec![format!("OUTPUT {}", visible_text(step))];
-                // REQ-LOCALRUN-40.
                 if *omitted_records != 0 || *omitted_bytes != 0 {
                     facts.push(match omitted_records {
                         1 => "1 older record not shown".to_owned(),
@@ -92,7 +90,7 @@ impl LogDocument {
             width: 0,
         };
         if step_output && log.streams.is_empty() {
-            // Not an empty stream: the step retained none (REQ-LOCALRUN-67).
+            // Not an empty stream: the step retained none.
             document.push(
                 "no output is retained for this step".to_owned(),
                 Tone::Muted,
@@ -100,7 +98,6 @@ impl LogDocument {
                 None,
             );
         } else if step_output {
-            // REQ-LOCALRUN-66.
             document.push(
                 "stdout is shown before stderr; their relative order is not recorded".to_owned(),
                 Tone::Blocked,
@@ -137,10 +134,10 @@ impl LogDocument {
         });
     }
 
-    /// A step's records, one row each under the run interface's label for its source and in
-    /// its tone, a word this release does not know under the word itself (REQ-RUNNERENROLL-135).
-    /// A row's place is its record's ordinal in the step's whole output, the same in every
-    /// later answer. A step with no records says so in one row.
+    /// A step's records, one row each under the run interface's label for its source and in its
+    /// tone, a word this release does not know under the word itself. A row's place is its
+    /// record's ordinal in the step's whole output, the same in every later answer. A step with
+    /// no records says so in one row.
     fn append_records(&mut self, omitted_records: u64, records: &[RunnerWatchLogRecord]) {
         if records.is_empty() {
             self.push(

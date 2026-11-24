@@ -103,7 +103,7 @@ fn resolve_tree(files: &[(&str, &str)]) -> (tempfile::TempDir, ResolvedWorkflow)
 }
 
 /// A tree whose one step `design` runs a child that declares the export `plan`, so the step
-/// declares `outcome` and `plan` (REQ-WFEXEC-60).
+/// declares `outcome` and `plan`.
 fn stage_workflow() -> (tempfile::TempDir, ResolvedWorkflow) {
     resolve_tree(&[
         (
@@ -275,7 +275,6 @@ fn maximum_record(index: usize) -> Arc<[u8]> {
     Arc::from(bytes)
 }
 
-// REQ-LOCALRUN-39
 #[test]
 fn default_log_capacity_partitions_run_budgets_by_step_count() {
     for (step_count, expected_records, expected_bytes) in [
@@ -300,7 +299,6 @@ fn default_log_capacity_partitions_run_budgets_by_step_count() {
     }
 }
 
-// REQ-LOCALRUN-15
 #[test]
 fn execution_duration_excludes_time_spent_opening_the_view() {
     let (_temporary, workflow) = resolved_workflow();
@@ -324,7 +322,6 @@ fn execution_duration_excludes_time_spent_opening_the_view() {
     assert!(!executing.timing.frozen);
 }
 
-// REQ-LOCALRUN-18
 #[tokio::test]
 async fn transitions_project_definition_output_cancellation_and_frozen_timing() {
     let (_temporary, workflow) = resolved_workflow();
@@ -544,7 +541,6 @@ finalizers:
     );
 }
 
-// REQ-LOCALRUN-38
 #[tokio::test]
 async fn each_step_log_evicts_oldest_records_without_affecting_other_steps() {
     let (_temporary, workflow) = resolved_workflow();
@@ -634,7 +630,6 @@ async fn each_step_log_evicts_oldest_records_without_affecting_other_steps() {
     assert_eq!(updated_records[1].display_width, 3);
 }
 
-// REQ-LOCALRUN-38
 #[tokio::test]
 async fn derived_capacity_retains_past_the_old_limit_then_evicts_the_oldest_suffix() {
     const INJECTED_RECORD_CAPACITY: usize = 18;
@@ -730,7 +725,6 @@ async fn derived_capacity_retains_past_the_old_limit_then_evicts_the_oldest_suff
     assert_eq!(&step(&snapshot, "consume").log, &consume_before);
 }
 
-// REQ-WFRECOVERY-44
 #[tokio::test]
 async fn live_view_retains_recovery_role_round_handler_state_and_decision() {
     let (_temporary, workflow) = resolve_workflow(
@@ -827,7 +821,6 @@ fn lifecycle_completion_requires_matching_started_phase() {
     assert!(!snapshot.quit_eligible);
 }
 
-// REQ-LOCALRUN-58
 #[test]
 fn completed_successful_lifecycle_requires_explicit_adapter_completion() {
     let (_temporary, workflow) = resolved_workflow();
@@ -862,7 +855,6 @@ fn completed_successful_lifecycle_requires_explicit_adapter_completion() {
     assert!(view.snapshot().quit_eligible);
 }
 
-// REQ-LOCALRUN-58
 #[tokio::test]
 async fn terminal_result_and_local_lifecycle_do_not_enable_quit() {
     let (_temporary, workflow) = resolved_workflow();
@@ -958,6 +950,39 @@ async fn terminal_result_and_local_lifecycle_do_not_enable_quit() {
     assert!(view.snapshot().quit_eligible);
     view.mark_adapter_lifecycle_completed();
     assert!(view.snapshot().quit_eligible);
+}
+
+#[tokio::test]
+async fn revalidated_step_kept_mid_attempt_shows_its_inheritance_and_committed_output() {
+    let (_temporary, workflow) = resolved_workflow();
+    let clock = ControlledClock::new(point(useful_support::monotonic_now(), 0));
+    let view = model(&workflow, clock);
+    let detail = crate::workflow::evidence::InheritedDetail {
+        prior_attempt_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+        prior_attempt_number: 1,
+        prior_state: crate::workflow::evidence::InheritedPriorState::Succeeded,
+        definition_changed: false,
+    };
+    view.observe(step_transition(
+        "prepare",
+        StepStateKind::Pending,
+        StepStateKind::Inherited,
+        Some(ObservedStepTransition::Inherited {
+            detail: detail.clone(),
+            disposition: InheritedDisposition::Succeeded,
+            outputs: vec!["report".to_owned()],
+        }),
+    ))
+    .await;
+
+    let live = view.snapshot();
+    let prepare = step(&live, "prepare");
+    assert_eq!(prepare.state, StepStateKind::Inherited);
+    assert_eq!(prepare.inherited.as_ref(), Some(&detail));
+    assert_eq!(
+        prepare.outputs["report"],
+        WorkflowRunOutputDisposition::Committed
+    );
 }
 
 #[test]
@@ -1166,9 +1191,9 @@ fn succeeded_run_result(workflow: &ResolvedWorkflow, base: Instant) -> WorkflowR
     }
 }
 
-// REQ-LOCALRUN-28, REQ-WFEXEC-60: a `workflow` step commits the exports its child left
-// available, a subset of the ones it declares; the result is accepted and an output the
-// succeeded step did not commit reads unavailable, not pending.
+// A `workflow` step commits the exports its child left available, a subset of the ones
+// it declares; the result is accepted and an output the succeeded step did not commit
+// reads unavailable, not pending.
 #[test]
 fn terminal_reconciliation_accepts_a_workflow_steps_committed_output_subset() {
     let (_temporary, workflow) = stage_workflow();
@@ -1219,8 +1244,8 @@ fn terminal_reconciliation_accepts_a_workflow_steps_committed_output_subset() {
     );
 }
 
-// REQ-LOCALRUN-28, REQ-WFEXEC-60: an observed success that commits one of a step's two
-// declared outputs leaves the other unavailable, not pending.
+// An observed success that commits one of a step's two declared outputs leaves the
+// other unavailable, not pending.
 #[tokio::test]
 async fn an_observed_success_leaves_an_output_it_did_not_commit_unavailable() {
     let (_temporary, workflow) = stage_workflow();
@@ -1263,9 +1288,9 @@ fn failed_child_record() -> crate::workflow::evidence::FailedChild {
     }
 }
 
-// REQ-LOCALRUN-294, INV-ENGINE-42: a stage that succeeded on a failed child keeps the record
-// its commit carried beside the state `succeeded` and is presented failed; a later
-// transition drops the record, and a stage observed without one snapshots as before.
+// A stage that succeeded on a failed child keeps the record its commit carried beside the
+// state `succeeded` and is presented failed; a later transition drops the record, and a
+// stage observed without one snapshots as before.
 #[tokio::test]
 async fn an_observed_stage_whose_child_failed_keeps_its_record_and_presents_failed() {
     let (_temporary, workflow) = stage_workflow();
@@ -1314,8 +1339,8 @@ async fn an_observed_stage_whose_child_failed_keeps_its_record_and_presents_fail
     assert_eq!(design.presented_state(), StepStateKind::Running);
 }
 
-// REQ-LOCALRUN-294, INV-ENGINE-42: the terminal result's record on a succeeded stage is kept
-// beside the state `succeeded`, and the stage is presented failed.
+// The terminal result's record on a succeeded stage is kept beside the state `succeeded`,
+// and the stage is presented failed.
 #[test]
 fn terminal_reconciliation_keeps_a_stages_failed_child() {
     let (_temporary, workflow) = stage_workflow();
@@ -1446,7 +1471,6 @@ fn record(source: &str, text: &str, continuation: bool) -> RunViewRecord {
     }
 }
 
-// REQ-RUNNERENROLL-147, REQ-LOCALRUN-38, REQ-LOCALRUN-39
 #[tokio::test]
 async fn a_log_budget_bounds_each_step_by_its_share_of_the_run() {
     let (_temporary, workflow) = chained_workflow(&["a", "b", "c", "d"]);
@@ -1541,7 +1565,6 @@ async fn a_log_budget_bounds_each_step_by_its_share_of_the_run() {
     assert!(a.records[0].payload.starts_with("record-001"));
 }
 
-// REQ-RUNNERENROLL-147
 #[tokio::test]
 async fn a_seed_shows_its_inherited_step_with_the_outputs_it_holds_and_no_start() {
     let (_temporary, workflow) = resolve_workflow(
@@ -1625,7 +1648,6 @@ steps:
     );
 }
 
-// REQ-RUNNERENROLL-144
 #[tokio::test]
 async fn a_live_run_view_answers_the_running_workflow_and_its_steps() {
     let (_temporary, workflow) = live_workflow();
@@ -1787,7 +1809,6 @@ async fn a_live_run_view_answers_the_running_workflow_and_its_steps() {
     );
 }
 
-// REQ-RUNNERENROLL-145
 #[tokio::test]
 async fn a_live_run_view_gives_the_named_steps_newest_records_in_order() {
     use crate::workflow::agent::{
@@ -1912,7 +1933,7 @@ async fn a_live_run_view_gives_the_named_steps_newest_records_in_order() {
     }
 }
 
-// REQ-RUNNERENROLL-145: the viewer reads a record's source word back.
+// The viewer reads a record's source word back.
 #[test]
 fn every_log_source_word_reads_back_as_its_source() {
     let sources = [
@@ -1930,7 +1951,6 @@ fn every_log_source_word_reads_back_as_its_source() {
     assert_eq!(WorkflowRunLogSource::from_word("stdin"), None);
 }
 
-// REQ-RUNNERENROLL-134
 #[tokio::test]
 async fn the_steps_in_flight_are_those_started_and_not_settled_in_presentation_order() {
     let ids = ["a", "b", "c", "d", "e", "f", "g", "h"];

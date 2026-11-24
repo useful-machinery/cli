@@ -1,7 +1,6 @@
-//! An organization's connection authorizations (REQ-INTEGRATION-26 to REQ-INTEGRATION-32): the
-//! permission an owner gives one runner to use one of the organization's connections in one
-//! project, listed, made and ended as operations of the member grant client, whose session and
-//! failure the grant commands hold.
+//! An organization's connection authorizations: the permission an owner gives one runner to
+//! use one of the organization's connections in one project, listed, made and ended as
+//! operations of the member grant client, whose session and failure the grant commands hold.
 //!
 //! A record decodes leniently into the generated models where a later Cloud may say more, and a
 //! generated error or a record is never formatted. An authorization holds no credential.
@@ -41,6 +40,8 @@ pub enum ConnectionAuthorizationRefusal {
     ConnectionInactive,
     /// An authorization is in force for the project, the runner and the provider already.
     AlreadyAuthorized,
+    /// The organization's connection's authority was never verified.
+    ConnectionUnverified,
 }
 
 /// The problem row of a refusal only these routes answer.
@@ -57,7 +58,7 @@ const fn row(
 }
 
 /// The problems only the connection authorization routes answer.
-static AUTHORIZATION_PROBLEMS: [ProblemRow<MemberGrantFailure>; 7] = {
+static AUTHORIZATION_PROBLEMS: [ProblemRow<MemberGrantFailure>; 8] = {
     use ConnectionAuthorizationRefusal as R;
     use StatusCode as S;
     [
@@ -96,6 +97,11 @@ static AUTHORIZATION_PROBLEMS: [ProblemRow<MemberGrantFailure>; 7] = {
             "https://api.usefulmachinery.com/problems/connection-authorization-already-authorized",
             R::AlreadyAuthorized,
         ),
+        row(
+            S::CONFLICT,
+            "https://api.usefulmachinery.com/problems/connection-authorization-connection-unverified",
+            R::ConnectionUnverified,
+        ),
     ]
 };
 
@@ -128,14 +134,53 @@ impl ConnectionAuthorizationFilter<'_> {
     }
 }
 
+/// Which runs of its project on its runner a connection authorization covers, fixed when it is
+/// made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionAuthorizationRuns {
+    /// The project's app runs alone.
+    App,
+    /// Every run of the project, whoever its actor is.
+    All,
+}
+
+impl ConnectionAuthorizationRuns {
+    /// The value's wire name: `app` or `all`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::All => "all",
+        }
+    }
+
+    /// The value as an answered authorization carries it.
+    pub const fn of(answered: models::connection_authorization::Runs) -> Self {
+        use models::connection_authorization::Runs as Answered;
+        match answered {
+            Answered::ConnectionAuthorizationRunsApp => Self::App,
+            Answered::ConnectionAuthorizationRunsAll => Self::All,
+        }
+    }
+
+    /// The value as the create request sends it.
+    const fn requested(self) -> models::create_connection_authorization_request::Runs {
+        use models::create_connection_authorization_request::Runs as Requested;
+        match self {
+            Self::App => Requested::CreateConnectionAuthorizationRequestRunsApp,
+            Self::All => Requested::CreateConnectionAuthorizationRequestRunsAll,
+        }
+    }
+}
+
 /// What a connection authorization is made for: one runner, one connection of a provider, in
-/// one project.
+/// one project, and which of the project's runs on the runner it covers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConnectionAuthorizationRequest<'a> {
     pub project_id: &'a str,
     pub runner_id: &'a str,
     pub provider: &'a str,
     pub connection_id: &'a str,
+    pub runs: ConnectionAuthorizationRuns,
 }
 
 impl MemberGrantApi {
@@ -154,7 +199,7 @@ impl MemberGrantApi {
     }
 
     /// One page of the connection authorizations in force of the organization an ID or a slug
-    /// names, oldest first, that `filter` keeps (REQ-INTEGRATION-28).
+    /// names, oldest first, that `filter` keeps.
     pub fn connection_authorizations(
         &self,
         organization: &str,
@@ -181,21 +226,25 @@ impl MemberGrantApi {
         Ok(page)
     }
 
-    /// Authorizes one runner for one of the organization's connections in one project
-    /// (REQ-INTEGRATION-27), answering the authorization with its scope as the provider grants
-    /// it now (REQ-INTEGRATION-32).
+    /// Authorizes one runner for one of the organization's connections in one project for the
+    /// runs `request` names, sent on every request, answering the authorization with its
+    /// scope as the provider grants it now. An answer of other runs than asked is not this
+    /// request's.
     pub fn authorize_connection(
         &self,
         organization: &str,
         request: &ConnectionAuthorizationRequest<'_>,
         key: &str,
     ) -> Result<ConnectionAuthorization, MemberGrantFailure> {
-        let body = serialize_body(&models::CreateConnectionAuthorizationRequest::new(
-            request.project_id.to_owned(),
-            request.runner_id.to_owned(),
-            request.provider.to_owned(),
-            request.connection_id.to_owned(),
-        ))?;
+        let body = serialize_body(&models::CreateConnectionAuthorizationRequest {
+            runs: Some(request.runs.requested()),
+            ..models::CreateConnectionAuthorizationRequest::new(
+                request.project_id.to_owned(),
+                request.runner_id.to_owned(),
+                request.provider.to_owned(),
+                request.connection_id.to_owned(),
+            )
+        })?;
         let authorization: ConnectionAuthorization = self.post(
             &self.connection_authorization_route(organization, None),
             key,
@@ -209,14 +258,17 @@ impl MemberGrantApi {
             provider: Some(request.provider),
             connection_id: Some(request.connection_id),
         };
-        if !asked.keeps(&authorization) || !valid_authorization(&authorization, organization) {
+        if !asked.keeps(&authorization)
+            || ConnectionAuthorizationRuns::of(authorization.runs) != request.runs
+            || !valid_authorization(&authorization, organization)
+        {
             return Err(invalid());
         }
         Ok(authorization)
     }
 
     /// Ends one of the organization's connection authorizations, or answers as it does for one
-    /// already ended (REQ-INTEGRATION-29).
+    /// already ended.
     pub fn end_connection_authorization(
         &self,
         organization: &str,
@@ -343,11 +395,14 @@ mod tests {
             "runnerName": "build-host-1",
             "connectionId": CONNECTION_ID,
             "connectionAccount": "acme-labs",
+            "repository": "acme-labs/website",
+            "runs": "app",
             "authorizedBy": "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
             "createdAt": "2026-11-18T09:00:00Z",
             "scope": {
                 "state": "current",
                 "github": {
+                    "appSlug": "useful-machinery",
                     "repositorySelection": "selected",
                     "permissions": [
                         {"name": "contents", "access": "write"},
@@ -372,6 +427,7 @@ mod tests {
             runner_id: RUNNER_ID,
             provider: "github",
             connection_id: CONNECTION_ID,
+            runs: ConnectionAuthorizationRuns::App,
         }
     }
 
@@ -379,7 +435,6 @@ mod tests {
         credential_rejected: false,
     };
 
-    // REQ-INTEGRATION-28
     #[test]
     fn the_list_sends_each_filter_it_was_given_and_answers_the_page_and_its_next_cursor() {
         let full = ConnectionAuthorizationFilter {
@@ -433,13 +488,12 @@ mod tests {
         assert_eq!(got, Err(INVALID));
     }
 
-    // REQ-INTEGRATION-28
-    // REQ-INTEGRATION-32
     #[test]
     fn a_listed_record_decodes_each_scope_and_is_refused_where_a_member_is_not_of_its_form() {
         for (members, valid) in [
             (serde_json::json!({}), true),
             (serde_json::json!({"scope": {"state": "unavailable"}}), true),
+            (serde_json::json!({"repository": null}), true),
             // A later provider's scope is a member this release does not decode.
             (
                 serde_json::json!({"scope": {"state": "current", "gitlab": {"level": 30}}}),
@@ -476,6 +530,7 @@ mod tests {
             (serde_json::json!({"scope": {"state": "partial"}}), false),
             (
                 serde_json::json!({"scope": {"state": "current", "github": {
+                    "appSlug": "useful-machinery",
                     "repositorySelection": "all",
                     "permissions": [{"name": "contents", "access": ""}]
                 }}}),
@@ -507,7 +562,9 @@ mod tests {
                 false,
                 Some(&page(vec![
                     record(&serde_json::json!({})),
-                    record(&serde_json::json!({"scope": {"state": "unavailable"}})),
+                    record(
+                        &serde_json::json!({"scope": {"state": "unavailable"}, "repository": null}),
+                    ),
                 ])),
             ),
             |api| {
@@ -530,6 +587,12 @@ mod tests {
             github.repository_selection,
             GitHubRepositorySelection::GitHubInstallationScopeRepositorySelectionSelected
         );
+        assert_eq!(github.app_slug, "useful-machinery");
+        assert_eq!(
+            got.items[0].repository.as_deref(),
+            Some("acme-labs/website")
+        );
+        assert_eq!(got.items[1].repository, None);
         assert_eq!(
             github
                 .permissions
@@ -545,31 +608,37 @@ mod tests {
         assert_eq!(got.items[1].scope.github, None);
     }
 
-    // REQ-INTEGRATION-27
     #[test]
-    fn an_authorization_sends_its_key_and_exactly_its_four_members_and_answers_the_record() {
-        let made = record(&serde_json::json!({}));
-        let (got, sent) = exchange(answer("201 Created", true, Some(&made)), |api| {
-            api.authorize_connection("acme", &request(), KEY)
-        });
-        assert_eq!(got, Ok(serde_json::from_value(made).unwrap()));
-        assert!(
-            sent.starts_with(&format!("POST {ROUTE} HTTP/1.1\r\n")),
-            "{sent}"
-        );
-        assert_eq!(sent_key(&sent), Some(KEY));
-        assert_eq!(
-            sent_body(&sent),
-            serde_json::json!({
-                "projectId": PROJECT_ID,
-                "runnerId": RUNNER_ID,
-                "provider": "github",
-                "connectionId": CONNECTION_ID
-            })
-        );
+    fn an_authorization_sends_its_key_and_exactly_its_five_members_and_answers_the_record() {
+        for (runs, wire) in [
+            (ConnectionAuthorizationRuns::App, "app"),
+            (ConnectionAuthorizationRuns::All, "all"),
+        ] {
+            let made = record(&serde_json::json!({"runs": wire}));
+            let asked = ConnectionAuthorizationRequest { runs, ..request() };
+            let (got, sent) = exchange(answer("201 Created", true, Some(&made)), |api| {
+                api.authorize_connection("acme", &asked, KEY)
+            });
+            assert_eq!(got, Ok(serde_json::from_value(made).unwrap()), "{wire}");
+            assert!(
+                sent.starts_with(&format!("POST {ROUTE} HTTP/1.1\r\n")),
+                "{sent}"
+            );
+            assert_eq!(sent_key(&sent), Some(KEY));
+            assert_eq!(
+                sent_body(&sent),
+                serde_json::json!({
+                    "projectId": PROJECT_ID,
+                    "runnerId": RUNNER_ID,
+                    "provider": "github",
+                    "connectionId": CONNECTION_ID,
+                    "runs": wire
+                })
+            );
+        }
 
-        // An answer that does not echo the key, or names another project, runner, provider or
-        // connection than asked, is not this request's answer.
+        // An answer that does not echo the key, or names another project, runner, provider,
+        // connection or runs than asked, is not this request's answer.
         let (got, _) = exchange(
             answer("201 Created", false, Some(&record(&serde_json::json!({})))),
             |api| api.authorize_connection("acme", &request(), KEY),
@@ -580,6 +649,7 @@ mod tests {
             serde_json::json!({"runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5xyz"}),
             serde_json::json!({"provider": "gitlab.com"}),
             serde_json::json!({"connectionId": "ghi_01k0z6r1w8f4jy2m7q9v3x5xyz"}),
+            serde_json::json!({"runs": "all"}),
         ] {
             let (got, _) = exchange(
                 answer("201 Created", true, Some(&record(&members))),
@@ -589,7 +659,6 @@ mod tests {
         }
     }
 
-    // REQ-INTEGRATION-29
     #[test]
     fn an_end_sends_the_authorizations_route_under_its_key_and_answers_on_no_content() {
         let (got, sent) = exchange(answer("204 No Content", true, None), |api| {
@@ -633,9 +702,6 @@ mod tests {
         assert_eq!(got, Ok(false));
     }
 
-    // REQ-INTEGRATION-27
-    // REQ-INTEGRATION-28
-    // REQ-INTEGRATION-29
     #[test]
     fn each_contracted_problem_maps_to_its_own_failure_at_its_status() {
         use ConnectionAuthorizationRefusal as R;
@@ -677,12 +743,22 @@ mod tests {
                 "connection-authorization-already-authorized",
                 refused(R::AlreadyAuthorized),
             ),
+            (
+                409,
+                "connection-authorization-connection-unverified",
+                refused(R::ConnectionUnverified),
+            ),
             (403, "forbidden", F::Forbidden),
             (404, "not-found", F::OrganizationNotFound),
             (409, "idempotency-conflict", F::IdempotencyConflict),
             // A problem at another status than its contract's, or another route's, is outside
             // these routes' contract.
             (409, "connection-authorization-not-found", INVALID),
+            (
+                404,
+                "connection-authorization-connection-unverified",
+                INVALID,
+            ),
             (404, "connection-authorization-already-authorized", INVALID),
             (404, "integration-token-not-found", INVALID),
             (409, "grant-already-authorized", INVALID),

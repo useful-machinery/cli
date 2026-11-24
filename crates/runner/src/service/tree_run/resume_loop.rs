@@ -1,66 +1,61 @@
-//! The tree run's resume loop (REQ-RUNNERENROLL-91, REQ-RUNNERENROLL-181): one assignment,
-//! lease and claim carry the run through every engine attempt. After `useful workflow run
-//! create` and each later `useful` process exits, the loop reads `run.json`: `exited` ends
-//! the loop; `waiting` reads `wait.json` and, for a wait only a control resolves (rule
-//! source `um`), runs `useful workflow run resume` once a Cloud control is applied, and for an
-//! external condition runs it on entry and then at an interval, longer while the condition
-//! is unavailable; `running` with no process left (an abandoned attempt or an unchained
-//! `continued` edge) runs `resume` once. A cancellation of a waiting run is `useful workflow
-//! run cancel`; the runner's shutdown or lease loss ends the loop with the record as it
-//! stands. Between and during the processes the loop reports each new root position as
+//! The tree run's resume loop: one assignment, lease and claim carry the run through every engine
+//! attempt. After `useful workflow run create` and each later `useful` process exits, the loop
+//! reads `run.json`: `exited` ends the loop; `waiting` reads `wait.json` and, for a wait only a
+//! control resolves (rule source `um`), runs `useful workflow run resume` once a Cloud control is
+//! applied, and for an external condition runs it on entry and then at an interval, longer while
+//! the condition is unavailable; `running` with no process left (an abandoned attempt or an
+//! unchained `continued` edge) runs `resume` once. A cancellation of a waiting run is
+//! `useful workflow run cancel`; the runner's shutdown or lease loss ends the loop with the record
+//! as it stands. Between and during the processes the loop reports each new root position as
 //! `tree_progress`, numbered from 1 apart from the attempt's transitions, with the step
-//! observations of the run and its child runs that are new or changed since it last
-//! reported them (REQ-RUNNERENROLL-88), and flushes those before the record's exit ends the loop. A
-//! report that carries a new root position must be queued or the attempt aborts; one for
-//! steps alone that cannot be queued is offered again with the next read and costs the run
-//! nothing. Once
-//! the loop has ended on an exited record, after the last `useful` process and so after the
-//! outcome hook, it reads the run's `mirror/` writes onto that record for the terminal
-//! report, the number the run's `mirror/` held when the runner took it marking the leading
-//! writes as earlier attempts', which request no release (REQ-RUNNERENROLL-179): none for a
-//! created run, and for an adopted run the count read before its offer's deliveries are
-//! applied and before its first command. When the last document carries no settled engine
-//! result, it also reads the result the run's current attempt recorded in `state.json`. For
+//! observations of the run and its child runs that are new or changed since it last reported them,
+//! and flushes those before the record's exit ends the loop. A report that carries a new root
+//! position must be queued or the attempt aborts; one for steps alone that cannot be queued is
+//! offered again with the next read and costs the run nothing. Once the loop has ended on an exited
+//! record, after the last `useful` process and so after the outcome hook, it reads the run's
+//! `mirror/` writes onto that record for the terminal report, the number the run's `mirror/` held
+//! when the runner took it marking the leading writes as earlier attempts', which request no
+//! release: none for a created run, and for an adopted run the count read before its offer's
+//! deliveries are applied and before its first command. When the last document carries no settled
+//! engine result, it also reads the result the run's current attempt recorded in `state.json`. For
 //! an exit with a workflow outcome that the runner reports from the record, it also reads the
-//! root's text exports from the result the current attempt published (`exports`,
-//! REQ-RUNNERENROLL-131), which `records::recorded_exit` carries with the record's outcome.
+//! root's text exports from the result the current attempt published (`exports`), which
+//! `records::recorded_exit` carries with the record's outcome.
 //!
-//! A `create` the runtime refuses made no run: it ends the loop as a
-//! `ClassifiedEnd::Refused` naming the root workflow's first step, never as a missing
-//! record. An adopted run (REQ-RUNNERENROLL-89) creates nothing: with no named step the loop
-//! starts at the record the earlier attempt left, and with named steps its first command
-//! is `useful workflow run retry RUN --from STEP...`, whose refusal ends the loop as a
-//! `ClassifiedEnd::Refused` rather than as a failure. A cancellation that reaches that first
-//! command before it starts an engine attempt, the record still reading `exited` as the
-//! earlier attempt left it, ends the loop as a `ClassifiedEnd::Unstarted`: the attempt is
-//! cancelled or interrupted and reports nothing of that record. The adopted start reads the
-//! assignment's cancellation before it runs anything: one already requested applies none of
-//! the offer's pending deliveries, and one requested by the time they are applied launches no
-//! first command, the loop ending `Unstarted` over an `exited` record and ending a standing
-//! run as one no process holds.
+//! A `create` the runtime refuses made no run: it ends the loop as a `ClassifiedEnd::Refused`
+//! naming the root workflow's first step, never as a missing record. An adopted run creates
+//! nothing: with no named step the loop starts at the record the earlier attempt left, and
+//! with named steps its first command is `useful workflow run retry RUN --from STEP...`,
+//! whose refusal ends the loop as a `ClassifiedEnd::Refused` rather than as a failure. A
+//! cancellation that reaches that first command before it starts an engine attempt, the
+//! record still reading `exited` as the earlier attempt left it, ends the loop as a
+//! `ClassifiedEnd::Unstarted`: the attempt is cancelled or interrupted and reports nothing of
+//! that record. The adopted start reads the assignment's cancellation before it runs
+//! anything: one already requested applies none of the offer's pending deliveries, and one
+//! requested by the time they are applied launches no first command, the loop ending
+//! `Unstarted` over an `exited` record and ending a standing run as one no process holds.
 //!
 //! Each trigger delivery for the assignment is applied once with `useful workflow run event`
-//! and its application reported (REQ-TRIGGER-136): while a process runs, beside it, so a
-//! cancel reaches the live run; while the run waits, at once, the wait staying in place
-//! unless the application ended or moved the run. The offer's pending deliveries are
-//! applied before the run's first step: on an edge-scheduled root after `create`, which
-//! stopped the run before it, a run they leave standing having the start's own stop put
-//! back, the runner's lifted and being resumed; and before an adopted run's first command,
-//! which does not run when they ended the run. On a root that is not edge-scheduled, which
-//! the runtime holds before nowhere, they are applied once `create` returns, with no stop of
-//! the runner's.
+//! and its application reported: while a process runs, beside it, so a cancel reaches the
+//! live run; while the run waits, at once, the wait staying in place unless the application
+//! ended or moved the run. The offer's pending deliveries are applied before the run's first
+//! step: on an edge-scheduled root after `create`, which stopped the run before it, a run
+//! they leave standing having the start's own stop put back, the runner's lifted and being
+//! resumed; and before an adopted run's first command, which does not run when they ended
+//! the run. On a root that is not edge-scheduled, which the runtime holds before nowhere,
+//! they are applied once `create` returns, with no stop of the runner's.
 //!
-//! Each Cloud control for the assignment is applied once and its application reported
-//! (REQ-RUNNERENROLL-208). One that names a wait (`answer`, `approve`, `hand_back`, `retry`, and
-//! `lift` when it names one) is applied while the run waits and no process holds it, only when
-//! the run's current wait is that wait, and is otherwise skipped `wait_not_current` with
-//! nothing run; an applied one is followed by `resume`, except `retry`, which continues the run
-//! itself under the loop's supervision. One that names none (`stop`, `withdraw`, and `lift`
-//! without a wait) is applied as soon as it arrives, beside a running process as a delivery
-//! is. An applied `withdraw` is followed by no `resume` (REQ-RUNNERENROLL-318): the loop reads
-//! the record, which ends it on an `exited` record the command left; a withdrawal recorded for
-//! a process that then left the run waiting, as an evaluation of a held wait does, is finished
-//! with one more `useful workflow run cancel --control=withdraw`, reported no further.
+//! Each Cloud control for the assignment is applied once and its application reported. One that
+//! names a wait (`answer`, `approve`, `hand_back`, `retry`, and `lift` when it names one) is
+//! applied while the run waits and no process holds it, only when the run's current wait is that
+//! wait, and is otherwise skipped `wait_not_current` with nothing run; an applied one is
+//! followed by `resume`, except `retry`, which continues the run itself under the loop's
+//! supervision. One that names none (`stop`, `withdraw`, and `lift` without a wait) is applied
+//! as soon as it arrives, beside a running process as a delivery is. An applied `withdraw` is
+//! followed by no `resume`: the loop reads the record, which ends it on an `exited` record the
+//! command left; a withdrawal recorded for a process that then left the run waiting, as an
+//! evaluation of a held wait does, is finished with one more
+//! `useful workflow run cancel --control=withdraw`, reported no further.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -177,15 +172,14 @@ impl TreeEnd {
     /// The end with what the run at `directory` recorded beside its exited record, read on
     /// one blocking worker: its mirror writes on the record, the first `earlier_writes` of
     /// them marked an earlier attempt's; for an unclassified end whose outcome is not the
-    /// engine's cancellation, the root's text exports on the record (REQ-RUNNERENROLL-131)
-    /// and the class of the first that could not be listed; and, for such an end whose
-    /// document carries no settled result, the engine's result its current attempt
-    /// recorded. Only a write past the earlier ones can request release
-    /// (REQ-RUNNERENROLL-179): when their count could not be read every write is marked
-    /// earlier, and a `mirror/` that cannot be read now reports no writes, so the report
-    /// requests no release on an outcome it cannot confirm as the attempt's own. The end
-    /// keeps the class of either mirror failure for the run event, the later read's when
-    /// both failed, and a worker that did not return loses both reads.
+    /// engine's cancellation, the root's text exports on the record and the class of the
+    /// first that could not be listed; and, for such an end whose document carries no
+    /// settled result, the engine's result its current attempt recorded. Only a write past
+    /// the earlier ones can request release: when their count could not be read every
+    /// write is marked earlier, and a `mirror/` that cannot be read now reports no writes,
+    /// so the report requests no release on an outcome it cannot confirm as the attempt's
+    /// own. The end keeps the class of either mirror failure for the run event, the later
+    /// read's when both failed, and a worker that did not return loses both reads.
     async fn with_exit_records(
         mut self,
         directory: PathBuf,
@@ -257,7 +251,7 @@ pub(in crate::service) type ReportSink<'a> = &'a (dyn Fn(ExecutionReport) -> boo
 
 /// What the last `resume` of a still-waiting run said about its wait.
 enum Answer {
-    /// `outcome` `waiting`: the wait holds (REQ-CONTINUE-102).
+    /// `outcome` `waiting`: the wait holds.
     Held,
     /// Refused with `wait_condition_unavailable`: the condition could not be read.
     Unavailable,
@@ -313,10 +307,51 @@ type RootObservation = (u64, Vec<Value>, Option<TreeProgressWait>);
 /// not sent again, the state each step observation was last reported in, so only a new
 /// or changed one is, and the last sequence.
 struct Progress<'a> {
+    delivery: Option<RecordProgress>,
     sink: ReportSink<'a>,
     sequence: u64,
     last: Option<RootObservation>,
     reported: HashMap<StepKey, TreeStepState>,
+}
+
+struct RecordProgress {
+    signal: tokio::sync::watch::Sender<super::record_delivery::Signal>,
+    directory: Option<PathBuf>,
+    root: Option<(u64, RecordState, Option<String>)>,
+    settled: HashMap<StepKey, TreeStepState>,
+}
+
+impl RecordProgress {
+    fn observe(
+        &mut self,
+        record: &TreeRecord,
+        wait: Option<&TreeWait>,
+        steps: &[TreeStepObservation],
+    ) {
+        let root = (record.attempts, record.state, wait.map(TreeWait::identity));
+        let mut changed = self.root.as_ref() != Some(&root);
+        for step in steps {
+            if matches!(
+                step.state,
+                TreeStepState::Succeeded
+                    | TreeStepState::Inherited
+                    | TreeStepState::Failed
+                    | TreeStepState::Blocked
+                    | TreeStepState::Skipped
+                    | TreeStepState::NotRun
+                    | TreeStepState::Cancelled
+            ) {
+                changed |= self.settled.insert(steps::key(step), step.state) != Some(step.state);
+            }
+        }
+        if changed {
+            self.root = Some(root);
+            self.signal
+                .send_replace(super::record_delivery::Signal::Progress(
+                    self.directory.clone(),
+                ));
+        }
+    }
 }
 
 impl Progress<'_> {
@@ -324,13 +359,12 @@ impl Progress<'_> {
     /// report, and the observations among `steps` that are new or changed, at most 64 a
     /// report. A report for steps alone restates the last root observation, or, before
     /// any, the record's attempt and position with no wait. A waiting record whose wait
-    /// record is not yet written reports nothing, and an exited one reports only steps.
-    /// A report for steps alone that the sink refuses is not a failure
-    /// (REQ-RUNNERENROLL-88): its observations and those after it stay unreported, under
-    /// the same sequence, for the next read to offer again. Once a report that carries the
-    /// root as news is queued, the run's activity reads waiting exactly when it carries a
-    /// wait. Every read, reported or not, is first kept as the run activity's last read
-    /// (REQ-RUNNERENROLL-134), which changes no report.
+    /// record is not yet written reports nothing, and an exited one reports only steps. A
+    /// report for steps alone that the sink refuses is not a failure: its observations and
+    /// those after it stay unreported, under the same sequence, for the next read to offer
+    /// again. Once a report that carries the root as news is queued, the run's activity
+    /// reads waiting exactly when it carries a wait. Every read, reported or not, is first
+    /// kept as the run activity's last read, which changes no report.
     fn observe(
         &mut self,
         run: &TreeRun,
@@ -340,6 +374,9 @@ impl Progress<'_> {
     ) -> Result<(), DriveFailure> {
         run.activity()
             .record_read(published_read(record, wait, &steps));
+        if let Some(delivery) = self.delivery.as_mut() {
+            delivery.observe(record, wait, &steps);
+        }
         let observed = match (record.state, wait) {
             (RecordState::Waiting, None) => return Ok(()),
             (RecordState::Exited, _) => None,
@@ -412,7 +449,7 @@ impl Progress<'_> {
             }
             if !steps_only {
                 // The run's activity follows the report that carries its root as news: a
-                // run is waiting exactly when it was last reported waiting (INV-RUNNER-15).
+                // run is waiting exactly when it was last reported waiting.
                 run.activity().reported(root.2.is_some());
             }
             self.sequence = sequence;
@@ -440,9 +477,8 @@ struct Driver<'a> {
     progress: Progress<'a>,
     directory: Option<PathBuf>,
     /// How many writes the run's `mirror/` held when the runner took the run, which are
-    /// earlier attempts' (REQ-RUNNERENROLL-179): none for a run `create` made, and for an
-    /// adopted run the count read before anything is applied to it, or the class of the
-    /// failure to read it.
+    /// earlier attempts': none for a run `create` made, and for an adopted run the count
+    /// read before anything is applied to it, or the class of the failure to read it.
     earlier_writes: Result<usize, &'static str>,
     steps: Arc<Mutex<StepReader>>,
     /// The deliveries and controls taken for application, by id, so a redelivered one is
@@ -451,7 +487,7 @@ struct Driver<'a> {
     /// The controls taken and not yet applied, in arrival order.
     controls: VecDeque<RunControl>,
     /// Whether a withdrawal was applied `recorded`, left for the process holding the run to
-    /// honor, and the record has not been seen waiting since (REQ-RUNNERENROLL-319).
+    /// honor, and the record has not been seen waiting since.
     withdrawal_recorded: bool,
 }
 
@@ -469,9 +505,19 @@ fn refusal(document: Option<&Value>) -> Option<Option<String>> {
 /// Runs the tree from `create`, or from the adopted record, to its end; see the module
 /// documentation.
 pub(super) async fn drive(run: &TreeRun, sink: ReportSink<'_>) -> Result<TreeEnd, DriveFailure> {
+    let (signal, receiver) =
+        tokio::sync::watch::channel(super::record_delivery::Signal::Progress(None));
+    let (finished, ended) = tokio::sync::oneshot::channel();
+    let record_progress = run.delivery.as_ref().map(|_| RecordProgress {
+        signal,
+        directory: None,
+        root: None,
+        settled: HashMap::new(),
+    });
     let mut driver = Driver {
         run,
         progress: Progress {
+            delivery: record_progress,
             sink,
             sequence: 0,
             last: None,
@@ -484,7 +530,20 @@ pub(super) async fn drive(run: &TreeRun, sink: ReportSink<'_>) -> Result<TreeEnd
         controls: VecDeque::new(),
         withdrawal_recorded: false,
     };
-    let end = drive_to_end(&mut driver).await?;
+    let drive = async {
+        let end = drive_to_end(&mut driver).await;
+        if let Some(progress) = &driver.progress.delivery {
+            progress
+                .signal
+                .send_replace(super::record_delivery::Signal::Final(
+                    driver.directory.clone(),
+                ));
+        }
+        let _ = finished.send(());
+        end
+    };
+    let (end, ()) = tokio::join!(drive, super::record_delivery::deliver(run, receiver, ended));
+    let end = end?;
     Ok(match driver.directory {
         Some(directory) => {
             end.with_exit_records(directory, driver.earlier_writes)
@@ -660,8 +719,8 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
             }
             RecordState::Waiting => {
                 // A withdrawal recorded for a process that ended without honoring it, as an
-                // evaluation of a held wait does (REQ-LOCALRUN-212), is finished on the waiting
-                // run, unreported, and the record read again (REQ-RUNNERENROLL-319).
+                // evaluation of a held wait does, is finished on the waiting run, unreported,
+                // and the record read again.
                 if std::mem::take(&mut driver.withdrawal_recorded) {
                     command::finish_withdrawal(&run.useful, &directory, run.cancellation.source())
                         .await;
@@ -711,9 +770,12 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
 
 impl Driver<'_> {
     /// Keeps `directory` as the run's directory, and publishes it in the run's activity as
-    /// where the run's directory is (REQ-RUNNERENROLL-144), which decides nothing.
+    /// where the run's directory is, which decides nothing.
     fn set_directory(&mut self, directory: Option<PathBuf>) {
         self.run.activity().publish_directory(directory.clone());
+        if let Some(delivery) = self.progress.delivery.as_mut() {
+            delivery.directory.clone_from(&directory);
+        }
         self.directory = directory;
     }
 
@@ -982,13 +1044,13 @@ impl Driver<'_> {
     }
 
     /// Applies `control` to the run at `directory`, which no process holds, and reports its
-    /// application (REQ-RUNNERENROLL-210). A control naming a wait the run does not currently
-    /// wait on is skipped `wait_not_current` and runs nothing. A `retry` runs as the loop's
-    /// next command, `Ran` with its exit once it applied or was cancelled; a `withdraw` that
-    /// applied is `Changed`, for the loop to read the record it left, and is followed by no
-    /// `resume` (REQ-RUNNERENROLL-318); any other control that applied is `Due`, for `resume`
-    /// to act on it; and one that did not, or that the assignment's cancellation abandoned
-    /// unreported, leaves the run waiting as it was, `None`.
+    /// application. A control naming a wait the run does not currently wait on is skipped
+    /// `wait_not_current` and runs nothing. A `retry` runs as the loop's next command, `Ran`
+    /// with its exit once it applied or was cancelled; a `withdraw` that applied is
+    /// `Changed`, for the loop to read the record it left, and is followed by no `resume`;
+    /// any other control that applied is `Due`, for `resume` to act on it; and one that did
+    /// not, or that the assignment's cancellation abandoned unreported, leaves the run
+    /// waiting as it was, `None`.
     async fn apply_control(
         &mut self,
         control: RunControl,
@@ -1080,9 +1142,8 @@ impl Driver<'_> {
     }
 
     /// Ends a run no process holds: the runner's shutdown and lease loss leave the record
-    /// as it stands (`command::leaves_record`), and any other cancellation runs `useful
-    /// workflow run cancel`, which ends a waiting or abandoned record `canceled`
-    /// (REQ-LOCALRUN-186).
+    /// as it stands (`command::leaves_record`), and any other cancellation runs
+    /// `useful workflow run cancel`, which ends a waiting or abandoned record `canceled`.
     async fn cancelled(
         &mut self,
         reason: CancellationReason,
@@ -1209,12 +1270,17 @@ async fn apply_beside(
 }
 
 /// The home's only run directory, once `create` has made it.
-async fn locate(runs: &Path) -> Option<PathBuf> {
+pub(super) async fn locate(runs: &Path) -> Option<PathBuf> {
     let runs = runs.to_owned();
-    tokio::task::spawn_blocking(move || command::only_entry(&runs))
-        .await
-        .ok()
-        .flatten()
+    tokio::task::spawn_blocking(move || {
+        command::only_entry(&runs).filter(|path| {
+            path.file_name()
+                .is_some_and(|name| !name.as_encoded_bytes().starts_with(b".run-"))
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// How many writes the run's `mirror/` at `directory` holds, read on a blocking worker, or

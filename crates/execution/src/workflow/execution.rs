@@ -40,38 +40,36 @@ pub struct WorkflowExecutionResult<Deadline = ()> {
     pub finalization_summary: Option<super::runtime::FinalizationSummary<Deadline>>,
     pub force_abort: Option<super::runtime::ForceAbortEvidence>,
     pub exports: ExportSet<CapturedValue>,
-    /// The source each export resolved to (INV-ENGINE-45): its `ref`, or the source the
-    /// choice of its `firstOf` settled on.
+    /// The source each export resolved to: its `ref`, or the source the choice of its
+    /// `firstOf` settled on.
     pub export_sources: BTreeMap<String, ResolvedOutputSource>,
     pub provenance: WorkflowSourceProvenance,
     pub content_digest: WorkflowContentDigest,
-    /// The attempt ended `cancelled` on a withdrawal honored at a `workflow` step boundary
-    /// (REQ-WFEXEC-73), which `chosen_outcome` records as `withdrawn`.
+    /// The attempt ended `cancelled` on a withdrawal honored at a `workflow` step
+    /// boundary, which `chosen_outcome` records as `withdrawn`.
     pub withdrawn: bool,
-    /// The exit an edge-scheduled walk took (REQ-WFEXEC-83), a limited edge's `else` included;
-    /// `None` for a dataflow run and for an attempt that took no exit.
+    /// The exit an edge-scheduled walk took, a limited edge's `else` included; `None` for a
+    /// dataflow run and for an attempt that took no exit.
     pub exit_outcome: Option<String>,
-    /// The failed child each `succeeded` `workflow` step recorded, by step (REQ-WFEXEC-77).
+    /// The failed child each `succeeded` `workflow` step recorded, by step.
     pub failed_children: BTreeMap<String, FailedChild>,
-    /// The class of each `failed` step's failure that has one, by step (REQ-WFEXEC-79).
+    /// The class of each `failed` step's failure that has one, by step.
     pub failure_classes: BTreeMap<String, FailureClass>,
-    /// The sources each step that started with a `firstOf` took, by step (REQ-EVIDENCE-28).
+    /// The sources each step that started with a `firstOf` took, by step.
     pub input_sources: BTreeMap<String, Vec<InputSource>>,
 }
 
-/// The outcome an attempt records on the run record (REQ-WFEXEC-57): `withdrawn` for a run
-/// whose cancellation was a withdrawal (REQ-WFEXEC-73), `canceled` for any other cancelled
-/// run; for a workflow that declares `outcome`, the text of its `from` output when
-/// the run succeeded, for a `firstOf` that of the first source in written order that
-/// succeeded or was inherited as succeeded, the declared `onInfrastructure` when it failed and
-/// its primary issue is an ordinary step whose failure is classified `infrastructure`
-/// (REQ-WFFORMAT-110, REQ-WFEXEC-79), and `onFailure` when it failed otherwise or every source
-/// of the `firstOf` was skipped; for an edge-scheduled workflow the exit
-/// outcome its walk recorded in `exit_outcome` when it succeeded, or `failed` when it
-/// recorded none, and `failed` when it failed; otherwise
-/// `succeeded` or `failed`. A waiting or continued attempt chooses no outcome and the run
-/// record's stays null (REQ-WFEXEC-57), so callers do not ask for one; the call is logged and
-/// answered with the failure outcome.
+/// The outcome an attempt records on the run record: `withdrawn` for a run whose cancellation
+/// was a withdrawal, `canceled` for any other cancelled run; for a workflow that declares
+/// `outcome`, the text of its `from` output when the run succeeded, for a `firstOf` that of
+/// the first source in written order that succeeded or was inherited as succeeded, the
+/// declared `onInfrastructure` when it failed and its primary issue is an ordinary step whose
+/// failure is classified `infrastructure`, and `onFailure` when it failed otherwise or every
+/// source of the `firstOf` was skipped; for an edge-scheduled workflow the exit outcome its
+/// walk recorded in `exit_outcome` when it succeeded, or `failed` when it recorded none, and
+/// `failed` when it failed; otherwise `succeeded` or `failed`. A waiting or continued attempt
+/// chooses no outcome and the run record's stays null, so callers do not ask for one; the call
+/// is logged and answered with the failure outcome.
 pub fn chosen_outcome<Deadline>(
     workflow: &ValidatedWorkflow,
     result: &WorkflowExecutionResult<Deadline>,
@@ -109,12 +107,12 @@ pub fn chosen_outcome<Deadline>(
         (RunOutcome::Succeeded, None) => return "succeeded".to_owned(),
         (RunOutcome::Succeeded, Some(declared)) => declared,
     };
-    // The shared choice settles a `firstOf` from the steps the run ended with
-    // (INV-ENGINE-45); a single reference is a list of one.
+    // The shared choice settles a `firstOf` from the steps the run ended
+    // with; a single reference is a list of one.
     let ended = |source: &ResolvedOutputSource| step_source_end(result.steps.get(&source.node.id));
     let source = match choose_first_of(declared.source.iter(), ended) {
         FirstOfChoice::Chosen(source) => source,
-        // Every source skipped is a designed result, not a lost value (REQ-WFFORMAT-108).
+        // Every source skipped is a designed result, not a lost value.
         FirstOfChoice::Blocked(sources)
             if sources
                 .iter()
@@ -127,9 +125,9 @@ pub fn chosen_outcome<Deadline>(
     let outputs = result.steps.get(&source.node.id).and_then(step_outputs);
     match outputs.and_then(|outputs| outputs.get(&source.output)) {
         Some(CapturedValue::Text(text)) => text.as_str().to_owned(),
-        // Validation and the capture-time check (INV-ENGINE-17) leave a succeeded run's
-        // chosen source holding a declared text, so this is never reached; the exit still
-        // records a declared name.
+        // Validation and the capture-time check leave a succeeded run's chosen source
+        // holding a declared text, so this is never reached; the exit still records a
+        // declared name.
         _ => {
             tracing::error!(
                 event = "chosen_outcome_source_unavailable",
@@ -140,8 +138,8 @@ pub fn chosen_outcome<Deadline>(
     }
 }
 
-/// The outcome an attempt that fails, or ends without a published result, records
-/// (REQ-WFEXEC-57): the declared `onFailure`, or `failed`.
+/// The outcome an attempt that fails, or ends without a published result,
+/// records: the declared `onFailure`, or `failed`.
 pub fn failure_outcome(workflow: &ValidatedWorkflow) -> &str {
     workflow
         .outcome
@@ -396,6 +394,18 @@ fn observed_step_transition<Deadline>(
                 failed_child: runtime.failed_child.clone(),
             })
         }
+        (
+            StepStateKind::Inherited,
+            StepState::Inherited {
+                detail,
+                disposition,
+                outputs,
+            },
+        ) => Some(ObservedStepTransition::Inherited {
+            detail: detail.clone(),
+            disposition: *disposition,
+            outputs: outputs.keys().cloned().collect(),
+        }),
         (StepStateKind::Failed, StepState::Failed { detail }) => {
             Some(ObservedStepTransition::Failed {
                 detail: detail.clone(),
@@ -426,7 +436,7 @@ fn observed_step_transition<Deadline>(
 }
 
 /// The physical target, finalizer or recovery-handler execution a committed step transition
-/// settles and the one it starts, read from the post-commit step state (REQ-TELEMETRY-41).
+/// settles and the one it starts, read from the post-commit step state.
 fn observed_executions<Deadline>(
     event: &TransitionEvent<Deadline>,
     state: &RuntimeState<StepFailureCause, CapturedValue, Deadline>,
@@ -600,7 +610,7 @@ where
     .await
 }
 
-/// `execute_workflow` running `workflow` steps through `children` (REQ-WFEXEC-59); with
+/// `execute_workflow` running `workflow` steps through `children`; with
 /// `ChildRuns::Disabled` a `workflow` step fails at `start` with `child_admission_rejected`.
 #[expect(
     clippy::too_many_arguments,

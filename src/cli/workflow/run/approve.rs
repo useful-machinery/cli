@@ -1,8 +1,7 @@
-//! `useful workflow run approve` and `useful workflow run hand-back` (REQ-LOCALRUN-183): resolve
-//! the approval of the run `RUN` names, found under the `useful` home and then in Cloud
-//! (REQ-LOCALRUN-180). A run under the home records the control and continues in this
-//! command from the wait's `then` or `onHandBack`; a Cloud run's control is carried to its
-//! runner instead (REQ-LOCALRUN-210).
+//! `useful workflow run approve` and `useful workflow run hand-back`: resolve the approval of
+//! the run `RUN` names, found under the `useful` home and then in Cloud. A run under the home
+//! records the control and continues in this command from the wait's `then` or `onHandBack`; a
+//! Cloud run's control is carried to its runner instead.
 
 use clap::Args;
 use serde_json::{Map, Value};

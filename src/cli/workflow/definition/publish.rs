@@ -1,9 +1,7 @@
-//! `useful workflow definition publish DIR`: a revision of the tree under the `useful` home
-//! (REQ-WFDEF-18 to REQ-WFDEF-22) or, with `--on project`, of a Cloud definition of the project in
-//! effect alone (REQ-CLOUDDEF-14, REQ-CLOUDDEF-20), which writes nothing under the home. With no
-//! `--on` a `--to` ID the home does not hold is looked for in the project and published to there.
-//! Either sets the bindings the invocation names and keeps the rest (REQ-WFDEF-21,
-//! REQ-CLOUDDEF-41).
+//! `useful workflow definition publish DIR`: a revision of the tree under the `useful` home or,
+//! with `--on project`, of a Cloud definition of the project in effect alone, which writes nothing
+//! under the home. With no `--on` a `--to` ID the home does not hold is looked for in the project
+//! and published to there. Either sets the bindings the invocation names and keeps the rest.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -89,7 +87,7 @@ pub(super) struct Command {
     options: Options,
 }
 
-/// REQ-WFDEF-41: `KEY=VALUE`, split at the first `=`.
+/// `KEY=VALUE`, split at the first `=`.
 fn parse_binding(value: &str) -> Result<(String, String), String> {
     let (key, value) = value
         .split_once('=')
@@ -97,8 +95,8 @@ fn parse_binding(value: &str) -> Result<(String, String), String> {
     Ok((key.to_owned(), value.to_owned()))
 }
 
-/// REQ-WFDEF-41: the bindings `--binding` and then `--binding-default` name, in the order
-/// given, each `KEY` named at most once across both.
+/// The bindings `--binding` and then `--binding-default` name, in the order given, each
+/// `KEY` named at most once across both.
 fn binding_options(
     values: Vec<(String, String)>,
     defaults: Vec<String>,
@@ -130,12 +128,12 @@ fn binding_options(
 
 /// What a publication to Cloud is addressed to, as the options name it.
 enum Aim {
-    /// `--to DEFINITION` (REQ-CLOUDDEF-20).
+    /// `--to DEFINITION`.
     To(Named),
     /// `--new`: a create that asks for no identical definition.
     New,
     /// The project's one active definition of the root's name, or else a create that asks for
-    /// the project's identical definition (REQ-CLOUDDEF-89, REQ-CLOUDDEF-22).
+    /// the project's identical definition.
     Named(String),
 }
 
@@ -183,7 +181,7 @@ struct CloudPublished {
 }
 
 /// The tree validated and named, with the bindings the invocation names judged against its
-/// root (REQ-WFDEF-20, REQ-WFDEF-41): what every publication starts from.
+/// root: what every publication starts from.
 struct Ready {
     tree: ValidatedTree,
     name: String,
@@ -291,13 +289,13 @@ impl Command {
     }
 }
 
-/// A refusal before anything is written or sent, exit 1 (REQ-WFDEF-27).
+/// A refusal before anything is written or sent, exit 1.
 fn refuse(error: DefinitionError, json: bool) -> CommandResult {
     super::finish::<()>(COMMAND_NAME, REFUSED, Err(error), json, |_, _| Ok(()))
 }
 
-/// Publishes under the home (REQ-WFDEF-19 to REQ-WFDEF-22): the form the runner runs, which
-/// prints the document it always has and makes no request.
+/// Publishes under the home: the form the runner runs, which prints the document it always
+/// has and makes no request.
 fn in_home(home: &WorkflowHome, ready: &Ready, target: PublishTarget, json: bool) -> CommandResult {
     let published = publish(
         home,
@@ -315,8 +313,8 @@ fn in_home(home: &WorkflowHome, ready: &Ready, target: PublishTarget, json: bool
     })
 }
 
-/// Publishes to Cloud alone, in the project in effect (REQ-CLOUDDEF-14): the target is chosen
-/// before anything is uploaded.
+/// Publishes to Cloud alone, in the project in effect: the target is chosen before anything
+/// is uploaded.
 fn to_project(
     ready: &Ready,
     aim: Aim,
@@ -337,7 +335,7 @@ fn to_project(
 
 /// Where `aim` sends the publication in `project`, or the result that ends the command before
 /// anything is uploaded: a `--to` name is matched among every definition of the project, archived
-/// ones included, and the root's name among the active ones (REQ-CLOUDDEF-42, REQ-CLOUDDEF-14).
+/// ones included, and the root's name among the active ones.
 fn address(
     aim: &Aim,
     deployment: &Deployment,
@@ -405,7 +403,7 @@ fn is_active(definition: &WorkflowDefinition) -> bool {
 }
 
 /// Several active definitions of the project have the root's name: exit 2, listing their IDs and
-/// the two ways to choose (REQ-CLOUDDEF-14).
+/// the two ways to choose.
 fn several_named(name: &str, project: &Project, ids: &[String]) -> CommandFailure {
     let listed = ids
         .iter()
@@ -426,15 +424,14 @@ fn several_named(name: &str, project: &Project, ids: &[String]) -> CommandFailur
 }
 
 /// Uploads and seals the tree, then publishes the next revision of the existing definition
-/// `addressed` names over the current revision it reads first (REQ-CLOUDDEF-14,
-/// REQ-CLOUDDEF-20), or creates one (REQ-CLOUDDEF-22); and reports it. A refused read or
-/// publication of an existing definition never falls through to a create. It sends the
-/// bindings the invocation names and nothing else, `null` for one named for its default, so
-/// Cloud keeps every other binding of the current revision or, for a create, gives it its
-/// default (REQ-CLOUDDEF-41): the flat ones in `bindings`, a `members` value as an array, and
-/// each integration's under its id in `integrationBindings`, each member absent when it would
-/// be empty. It sends the tree's executable files too; one fresh key covers the seal and the
-/// publication for the whole invocation.
+/// `addressed` names over the current revision it reads first, or creates one; and reports
+/// it. A refused read or publication of an existing definition never falls through to a
+/// create. It sends the bindings the invocation names and nothing else, `null` for one named
+/// for its default, so Cloud keeps every other binding of the current revision or, for a
+/// create, gives it its default: the flat ones in `bindings`, a `members` value as an array,
+/// and each integration's under its id in `integrationBindings`, each member absent when it
+/// would be empty. It sends the tree's executable files too; one fresh key covers the seal
+/// and the publication for the whole invocation.
 fn publish_to(
     deployment: &Deployment,
     options: &Options,
@@ -550,8 +547,7 @@ impl CloudSteps<'_> {
             executable_paths: Some(self.executable_paths),
         };
         // The create or publication is sent again once, under the same key, when Cloud
-        // does not answer it or answers with a transient problem (REQ-CLOUDDEF-82,
-        // REQ-CLOUDDEF-174).
+        // does not answer it or answers with a transient problem.
         let (publication, created, reused) = match self.addressed {
             Addressed::Existing(id) => {
                 let current = api.definition(organization, project, id)?.current_revision;
@@ -602,9 +598,9 @@ pub(super) const fn cloud_failure(failure: &WorkflowDefinitionFailure) -> (&'sta
     }
 }
 
-/// Where an invalid response was detected (REQ-CLOUDDEF-28, REQ-CLOUDDEF-76, REQ-CLOUDDEF-78):
-/// the JSON `diagnostic` of the failure, or none for every other failure. It holds the slugs
-/// and the status alone, never the error the failure retains.
+/// Where an invalid response was detected: the JSON `diagnostic` of the failure, or none for
+/// every other failure. It holds the slugs and the status alone, never the error the failure
+/// retains.
 pub(super) fn invalid_response_diagnostic(
     failure: &WorkflowDefinitionFailure,
 ) -> Option<InvalidResponseDiagnostic> {
@@ -761,7 +757,7 @@ fn write_cloud_published(
                     {
                         writeln!(stderr, "binding: {}", display(key))?;
                     }
-                    // The loop the publication would close, in start order (REQ-CLOUDDEF-35).
+                    // The loop the publication would close, in start order.
                     if let Some(ids) = refusal
                         .workflow
                         .as_ref()
@@ -794,7 +790,7 @@ fn write_cloud_published(
                 refusal.is_some_and(|refusal| refusal.problem == DEFINITION_REUSE_AMBIGUOUS);
             // The definition `--to` names is not found in the project, as after a delete: the
             // next attempt at the same target would be refused again, so the owner creates
-            // another or names one (REQ-CLOUDDEF-14).
+            // another or names one.
             let target_not_found = refusal.is_some_and(|refusal| refusal.problem == NOT_FOUND);
             match target {
                 Some(_) if target_not_found => writeln!(
@@ -866,7 +862,7 @@ fn published_report(published: &Published) -> JsonPublished<'_> {
     }
 }
 
-/// A publication under the home: the record and the revision it wrote (REQ-WFDEF-19).
+/// A publication under the home: the record and the revision it wrote.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonPublished<'a> {
@@ -877,7 +873,7 @@ struct JsonPublished<'a> {
     revision: JsonRevision<'a>,
 }
 
-/// A publication to Cloud, which writes no record (REQ-CLOUDDEF-14).
+/// A publication to Cloud, which writes no record.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonCloudPublished<'a> {
@@ -889,8 +885,8 @@ struct JsonCloudPublished<'a> {
 
 /// The Cloud publication: the existing definition it was addressed to, the definition and
 /// revision it reached with whether it was created, reused or published to and whether the tree
-/// was reused (REQ-CLOUDDEF-22), or its failure with a refusal's status, problem slug and
-/// `workflow` safe facts or an invalid response's diagnostic (REQ-CLOUDDEF-28).
+/// was reused, or its failure with a refusal's status, problem slug and `workflow` safe facts
+/// or an invalid response's diagnostic.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonCloud<'a> {

@@ -146,8 +146,7 @@ pub struct Summary {
 }
 
 /// The results of the checks a run selected and, in registry order, the
-/// checks it did not select, which count as neither passed nor failed
-/// (REQ-RUNNERENROLL-47).
+/// checks it did not select, which count as neither passed nor failed.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Report {
     pub results: Vec<CheckResult>,
@@ -245,8 +244,7 @@ impl Registry {
 
 /// The checks compiled into this executable. `config` is where a check that
 /// needs the runner operator configuration finds it when it runs, `None` when
-/// nothing names one; no check reads it unless it is selected
-/// (REQ-RUNNERENROLL-45).
+/// nothing names one; no check reads it unless it is selected.
 pub fn built_in_registry(config: Option<OperatorConfigSource>) -> Result<Registry, RegistryError> {
     let mut registry = Registry::new();
     registry.register(Box::new(GitCheck::system()))?;
@@ -451,7 +449,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-46, REQ-RUNNERENROLL-47
     #[test]
     fn empty_selection_runs_only_default_checks() {
         let default_runs = Arc::new(AtomicUsize::new(0));
@@ -489,7 +486,7 @@ mod tests {
         assert_eq!(default_runs.load(Ordering::SeqCst), 1);
         assert_eq!(non_default_runs.load(Ordering::SeqCst), 0);
         // The report names the checks it did not run, in registry order, and
-        // counts none of them (REQ-RUNNERENROLL-47).
+        // counts none of them.
         assert_eq!(
             report
                 .not_run
@@ -508,7 +505,6 @@ mod tests {
         assert!(!report.has_failures());
     }
 
-    // REQ-RUNNERENROLL-46
     #[test]
     fn explicit_selection_deduplicates_and_uses_registry_order() {
         let first_runs = Arc::new(AtomicUsize::new(0));
@@ -575,7 +571,6 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 
-    // REQ-AGENT-47, REQ-RUNNERENROLL-153
     #[test]
     fn built_in_registry_contains_the_default_git_check() {
         let registry = built_in_registry(None).unwrap();
@@ -671,6 +666,15 @@ mod tests {
         }
 
         fn record_codex_entry(&self, codex: serde_json::Value) {
+            self.record_entries(
+                codex,
+                serde_json::json!({"provider": "github", "state": "not_delivered"}),
+            );
+        }
+
+        /// Records `codex`'s and `github`'s entries, each other OAuth
+        /// provider's `not_delivered`.
+        fn record_entries(&self, codex: serde_json::Value, github: serde_json::Value) {
             use std::os::unix::fs::OpenOptionsExt as _;
 
             let document = serde_json::json!({
@@ -678,7 +682,7 @@ mod tests {
                 "updatedAt": "2026-11-12T01:00:00Z",
                 "providers": [
                     codex,
-                    {"provider": "github", "state": "not_delivered"},
+                    github,
                     {"provider": "gitlab", "state": "not_delivered"},
                     {"provider": "linear", "state": "not_delivered"},
                 ],
@@ -711,7 +715,6 @@ mod tests {
         result.outcome
     }
 
-    // REQ-RUNNERENROLL-86
     #[test]
     fn agent_logins_check_passes_when_every_authorized_provider_is_ready() {
         let host = AgentLoginHost::new();
@@ -726,7 +729,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-86, REQ-GRANT-51
     #[test]
     fn agent_logins_check_passes_while_the_host_logs_in_for_a_provider() {
         let host = AgentLoginHost::new();
@@ -741,7 +743,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-86
     #[test]
     fn agent_logins_check_passes_when_cloud_authorized_no_provider() {
         for state in ["not_authorized", "revoked"] {
@@ -758,7 +759,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-86, REQ-GRANT-118
     #[test]
     fn agent_logins_check_passes_for_a_provider_an_earlier_release_recorded_as_selected() {
         let host = AgentLoginHost::new();
@@ -775,7 +775,6 @@ mod tests {
         assert_eq!((outcome.status, outcome.code), (Status::Pass, "ok"));
     }
 
-    // REQ-RUNNERENROLL-86
     #[test]
     fn agent_logins_check_fails_a_ready_login_refused_at_its_last_use() {
         for (last_use, status, code) in [
@@ -800,7 +799,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-309, REQ-GRANT-53
     #[test]
     fn agent_logins_check_names_every_providers_availability_and_next_action() {
         for (record, availability, next_action) in [
@@ -844,7 +842,6 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-92, REQ-RUNNERENROLL-309
     #[test]
     fn agent_logins_check_names_each_recorded_source() {
         for (source, state) in [("host", "foreign_login"), ("grant", "ready")] {
@@ -886,7 +883,35 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-310
+    #[test]
+    fn agent_logins_check_names_githubs_org_connection_source() {
+        let host = AgentLoginHost::new();
+        host.record_entries(
+            serde_json::json!({"provider": "codex", "state": "not_authorized"}),
+            serde_json::json!({
+                "provider": "github",
+                "state": "ready",
+                "connectionAuthorizationId": "cna_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "generation": 1,
+                "expiresAt": "2026-11-12T02:00:00Z",
+                "checkedAt": "2026-11-12T01:00:00Z",
+                "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "source": "org_connection",
+            }),
+        );
+
+        let outcome = host.run();
+
+        assert_eq!((outcome.status, outcome.code), (Status::Pass, "ok"));
+        let detail = |key: &str| outcome.details.get(key).map(String::as_str);
+        assert_eq!(detail("github"), Some("ready"), "{outcome:?}");
+        assert_eq!(
+            detail("github_source"),
+            Some("org_connection"),
+            "{outcome:?}"
+        );
+    }
+
     #[test]
     fn agent_logins_check_fails_without_recorded_readiness_or_configuration() {
         let host = AgentLoginHost::new();
@@ -928,7 +953,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-45
     #[test]
     fn a_default_run_with_configuration_runs_only_the_git_check() {
         let host = AgentLoginHost::new();

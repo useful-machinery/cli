@@ -18,8 +18,8 @@ use super::{
     write_credential_fixture_for_deployment,
 };
 
-// An edge-scheduled workflow holds only `workflow` steps (REQ-WFFORMAT-93), so the root
-// file's agent and command nodes are finalizers.
+// An edge-scheduled workflow holds only `workflow` steps, so the root file's agent and
+// command nodes are finalizers.
 const MAIN_WORKFLOW: &str = r#"schemaVersion: 1
 environmentPassthrough: [LINEAR_API_KEY, MERGIFY_TOKEN, CARGO_TARGET_DIR, CLAUDE_CONFIG_DIR]
 agentProfiles:
@@ -250,7 +250,7 @@ fn doctor(tree: &WorkflowTree, json: bool) -> Output {
 }
 
 /// Asserts that the doctor said, in one line on standard error, that Cloud was not asked and how
-/// to sign in (REQ-CREDREADY-7).
+/// to sign in.
 fn assert_not_asked(output: &Output) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
@@ -269,8 +269,6 @@ fn recovery_handler(id: &str) -> Value {
     json!({"kind": "recovery_handler", "id": id})
 }
 
-// REQ-CREDREADY-1, REQ-CREDREADY-2, REQ-CREDREADY-3, REQ-CREDREADY-4, REQ-CREDREADY-5,
-// REQ-CREDREADY-6, REQ-CREDREADY-7, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reports_tree_credentials_as_json() {
     let tree = WorkflowTree::new();
@@ -353,7 +351,6 @@ fn workflow_doctor_reports_tree_credentials_as_json() {
     );
 }
 
-// REQ-CREDREADY-7, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_human_report_names_requirements_and_origins() {
     let tree = WorkflowTree::new();
@@ -408,7 +405,6 @@ fn workflow_doctor_human_report_names_requirements_and_origins() {
     }
 }
 
-// REQ-CREDREADY-11, REQ-CREDREADY-3, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reads_root_bindings_mirror_and_tools() {
     let tree = WorkflowTree::with_files(&[("main.yaml", ROOT_WORKFLOW)]);
@@ -495,7 +491,6 @@ fn workflow_doctor_reads_root_bindings_mirror_and_tools() {
     }
 }
 
-// REQ-CREDREADY-2
 #[test]
 fn workflow_doctor_rejects_a_child_that_does_not_resolve() {
     let tree = WorkflowTree::new();
@@ -536,7 +531,6 @@ fn workflow_doctor_rejects_a_child_that_does_not_resolve() {
     }
 }
 
-// REQ-CREDREADY-1
 #[test]
 fn workflow_doctor_bounds_its_files_by_their_git_repository() {
     let tree = WorkflowTree::new();
@@ -581,7 +575,6 @@ fn workflow_doctor_bounds_its_files_by_their_git_repository() {
     );
 }
 
-// REQ-CREDREADY-1
 #[test]
 fn workflow_doctor_of_a_directory_derives_its_tree_from_its_workflow_yaml() {
     let tree = WorkflowTree::with_files(&[
@@ -649,7 +642,7 @@ fn assert_no_origin_address(report: &str) {
     }
 }
 
-// SC-CREDREADY-1, REQ-CREDREADY-12, REQ-CREDREADY-8
+// SC-CREDREADY-1
 #[test]
 fn workflow_doctor_names_the_repository_provider_from_origin() {
     let output = scenario_doctor(true);
@@ -818,7 +811,8 @@ fn github_installation(state: &str) -> Value {
         "providerAccountType": "Organization",
         "state": state,
         "createdAt": "2026-09-05T12:00:00Z",
-        "updatedAt": "2026-09-05T12:01:00Z"
+        "updatedAt": "2026-09-05T12:01:00Z",
+        "authorityVerifiedAt": null
     })
 }
 
@@ -1011,7 +1005,6 @@ fn next_action(requirement: &Value) -> &str {
         .expect("next action should be text")
 }
 
-// REQ-CREDREADY-13, REQ-CREDREADY-16, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_reports_a_ready_linear_connection_as_met() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1046,7 +1039,6 @@ fn workflow_doctor_reports_a_ready_linear_connection_as_met() {
     assert_eq!(deployment.linear_list_requests().len(), 1);
 }
 
-// REQ-CREDREADY-15, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_reports_a_linear_connection_that_is_not_ready() {
     for (connections, state, code) in [
@@ -1090,7 +1082,6 @@ fn workflow_doctor_reports_a_linear_connection_that_is_not_ready() {
     }
 }
 
-// REQ-CREDREADY-15, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_human_report_marks_a_failing_requirement() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1124,7 +1115,6 @@ fn workflow_doctor_human_report_marks_a_failing_requirement() {
     deployment.linear_list_requests();
 }
 
-// REQ-CREDREADY-13, REQ-CREDREADY-16
 #[test]
 fn workflow_doctor_reads_every_page_of_linear_connections() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1152,7 +1142,6 @@ fn workflow_doctor_reads_every_page_of_linear_connections() {
     );
 }
 
-// REQ-CREDREADY-14
 #[test]
 fn workflow_doctor_reports_a_refused_read_as_not_permitted() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1171,7 +1160,6 @@ fn workflow_doctor_reports_a_refused_read_as_not_permitted() {
     assert_eq!(deployment.linear_list_requests().len(), 1);
 }
 
-// REQ-CREDREADY-7, REQ-CREDREADY-14
 #[test]
 fn workflow_doctor_not_signed_in_asks_nothing_and_needs_a_session_for_a_runner() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1224,7 +1212,6 @@ fn workflow_doctor_not_signed_in_asks_nothing_and_needs_a_session_for_a_runner()
     assert!(signed_out.server.finish().is_empty());
 }
 
-// REQ-CREDREADY-14
 #[test]
 fn workflow_doctor_ends_without_a_report_when_cloud_cannot_be_reached() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1253,7 +1240,6 @@ fn workflow_doctor_ends_without_a_report_when_cloud_cannot_be_reached() {
     assert!(signed_in.server.finish().is_empty());
 }
 
-// REQ-CREDREADY-13, REQ-CREDREADY-32
 #[test]
 fn workflow_doctor_with_a_service_key_reads_the_connections_alone() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1334,8 +1320,8 @@ fn rate_limited() -> Vec<u8> {
     )
 }
 
-// REQ-CREDREADY-14. The Linear read alone: the GitLab and GitHub clients of `useful-api` know no
-// rate-limited answer, and the public contract lists none for their lists.
+// The Linear read alone: the GitLab and GitHub clients of `useful-api` know no rate-limited
+// answer, and the public contract lists none for their lists.
 #[test]
 fn workflow_doctor_ends_without_a_report_when_cloud_rate_limits_the_linear_read() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -1368,7 +1354,6 @@ fn assert_fails_on(output: &Output, kind: &str, state: &str, code: &str, remedy:
     );
 }
 
-// REQ-CREDREADY-19, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_reports_a_gitlab_connection_that_is_not_ready() {
     for (connections, state, code, remedy) in [
@@ -1422,7 +1407,6 @@ fn workflow_doctor_reports_a_gitlab_connection_that_is_not_ready() {
     }
 }
 
-// REQ-CREDREADY-19, REQ-CREDREADY-16
 #[test]
 fn workflow_doctor_reports_an_active_gitlab_connection_as_met() {
     let tree = gitlab_tree();
@@ -1452,7 +1436,6 @@ fn workflow_doctor_reports_an_active_gitlab_connection_as_met() {
     );
 }
 
-// REQ-CREDREADY-20, REQ-CREDREADY-16, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_reports_github_installations() {
     for (installations, state, code) in [
@@ -1488,6 +1471,13 @@ fn workflow_doctor_reports_github_installations() {
             assert_eq!(github["state"], state);
             assert_eq!(github["code"], code);
             assert_eq!(github["cloud"], "ready");
+            // A runner uses the connection only through a connection authorization.
+            assert!(
+                next_action(github).contains(
+                    "useful org integration authorize github --runner RUNNER --project PROJECT"
+                ),
+                "{github}"
+            );
         } else {
             assert_fails_on(
                 &output,
@@ -1503,7 +1493,6 @@ fn workflow_doctor_reports_github_installations() {
     }
 }
 
-// REQ-CREDREADY-20, REQ-CREDREADY-14
 #[test]
 fn workflow_doctor_reports_a_refused_github_read_as_not_permitted() {
     let tree = github_tree();
@@ -1523,7 +1512,7 @@ fn workflow_doctor_reports_a_refused_github_read_as_not_permitted() {
     assert!(requests[0].starts_with(GITHUB_LIST), "{}", requests[0]);
 }
 
-// SC-CREDREADY-2, REQ-CREDREADY-13, REQ-CREDREADY-19, REQ-CREDREADY-16, REQ-CREDREADY-17
+// SC-CREDREADY-2
 #[test]
 fn workflow_doctor_finds_an_expired_gitlab_credential_beside_a_ready_linear() {
     let tree = single_file_tree(
@@ -1622,11 +1611,10 @@ fn gitlab_repository(availability: &str, admission_diagnostic: Option<&str>) -> 
 /// The project `PROJECT_ID`, with a runner pool and `repository`.
 fn project(repository: Option<Value>) -> Vec<u8> {
     let blockers = match &repository {
-        None => json!(["repository_detached"]),
         Some(repository) if repository["availability"] == "unavailable" => {
             json!(["repository_unavailable"])
         }
-        Some(_) => json!([]),
+        _ => json!([]),
     };
     json_http_response(
         "200 OK",
@@ -1659,7 +1647,6 @@ impl Deployment {
     }
 }
 
-// REQ-CREDREADY-21, REQ-CREDREADY-12
 #[test]
 fn workflow_doctor_takes_the_repository_provider_from_the_project() {
     let tree = claude_code_tree();
@@ -1724,7 +1711,6 @@ fn workflow_doctor_takes_the_repository_provider_from_the_project() {
     assert!(requests[1].starts_with(GITHUB_LIST), "{}", requests[1]);
 }
 
-// REQ-CREDREADY-21, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_reports_an_unavailable_project_repository() {
     // Whatever the installations say, an unavailable repository needs reconnecting.
@@ -1784,7 +1770,6 @@ fn workflow_doctor_reports_an_unavailable_project_repository() {
     assert!(requests[1].starts_with(GITLAB_LIST), "{}", requests[1]);
 }
 
-// REQ-CREDREADY-21
 #[test]
 fn workflow_doctor_lists_a_project_without_a_repository_as_unknown() {
     let tree = claude_code_tree();
@@ -1818,7 +1803,6 @@ fn workflow_doctor_lists_a_project_without_a_repository_as_unknown() {
     assert!(requests[0].starts_with(PROJECT_READ), "{}", requests[0]);
 }
 
-// REQ-CREDREADY-21
 #[test]
 fn workflow_doctor_ends_as_project_show_does_for_an_unknown_project() {
     let not_found = || {
@@ -1957,7 +1941,6 @@ fn assert_judged(report: &Value, kind: &str, state: &str, code: &str, met_by: Op
     }
 }
 
-// REQ-CREDREADY-22, REQ-CREDREADY-18
 #[test]
 fn workflow_doctor_shows_the_members_grants_beside_each_requirement() {
     let tree = grants_tree();
@@ -1976,9 +1959,8 @@ fn workflow_doctor_shows_the_members_grants_beside_each_requirement() {
     assert_no_secret_output(&output, &[SENTINEL, SESSION_TOKEN]);
     let report = json_report(&output);
     assert_eq!(report["deployment"], deployment.server.api_url.as_str());
-    // Without --runner a grant judges nothing (REQ-CREDREADY-18): GitHub stays as its
-    // connection read left it, though a GitHub grant is available on a runner, and Codex stays
-    // unverified.
+    // Without --runner a grant judges nothing: GitHub stays as its connection read left it,
+    // though a GitHub grant is available on a runner, and Codex stays unverified.
     assert_judged(&report, "github", "missing", "not_connected", None);
     assert_judged(
         &report,
@@ -2037,7 +2019,6 @@ fn workflow_doctor_shows_the_members_grants_beside_each_requirement() {
     assert_grants_tree_requests(deployment, 2);
 }
 
-// REQ-CREDREADY-31
 #[test]
 fn workflow_doctor_keeps_the_coding_agent_grants_of_the_organization_in_effect() {
     let tree = grants_tree();
@@ -2065,7 +2046,6 @@ fn workflow_doctor_keeps_the_coding_agent_grants_of_the_organization_in_effect()
     assert!(requests[2].starts_with(LIST_FIRST_PAGE), "{}", requests[2]);
 }
 
-// REQ-CREDREADY-23, REQ-CREDREADY-26
 #[test]
 fn workflow_doctor_reports_each_grant_on_the_named_runner() {
     let tree = grants_tree();
@@ -2242,7 +2222,6 @@ fn assert_only_reads(deployment: Deployment) {
     }
 }
 
-// REQ-CREDREADY-30, INV-CLI-15
 #[test]
 fn workflow_doctor_on_a_runner_reports_what_meets_each_requirement() {
     // Linear, Claude Code and Codex.
@@ -2289,7 +2268,6 @@ fn workflow_doctor_on_a_runner_reports_what_meets_each_requirement() {
     assert_only_reads(deployment);
 }
 
-// REQ-CREDREADY-26
 #[test]
 fn workflow_doctor_on_a_runner_fails_a_grant_not_authorized_for_it() {
     let tree = WorkflowTree::new();
@@ -2316,7 +2294,6 @@ fn workflow_doctor_on_a_runner_fails_a_grant_not_authorized_for_it() {
     assert_only_reads(deployment);
 }
 
-// REQ-CREDREADY-34, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_on_a_runner_fails_a_coding_agent_no_grant_serves() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2390,7 +2367,6 @@ fn workflow_doctor_on_a_runner_fails_a_coding_agent_no_grant_serves() {
     deployment.linear_list_requests();
 }
 
-// REQ-CREDREADY-26
 #[test]
 fn workflow_doctor_on_a_runner_meets_a_need_with_a_grant_it_can_use() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2426,7 +2402,6 @@ fn workflow_doctor_on_a_runner_meets_a_need_with_a_grant_it_can_use() {
     }
 }
 
-// REQ-CREDREADY-35, REQ-CREDREADY-26, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_on_a_runner_keeps_a_failing_connection_code() {
     let tree = single_file_tree(LINEAR_WORKFLOW);
@@ -2467,7 +2442,6 @@ steps:
       argv: ["./build"]
 "#;
 
-// REQ-CREDREADY-13
 #[test]
 fn workflow_doctor_loads_nothing_when_no_kind_is_needed() {
     let tree = single_file_tree(COMMAND_WORKFLOW);
@@ -2526,7 +2500,6 @@ fn declaring(workflow: &str, integrations: &[&str]) -> String {
     declared
 }
 
-// REQ-CREDREADY-27, REQ-CREDREADY-36, REQ-CREDREADY-6, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reports_a_declaring_workflow_by_its_integrations() {
     let tree = single_file_tree(&declaring(LINEAR_WORKFLOW, &["linear", "gitlab.com"]));
@@ -2571,7 +2544,6 @@ fn workflow_doctor_reports_a_declaring_workflow_by_its_integrations() {
     assert!(lines.contains(&"kind: gitlab"), "{stdout}");
 }
 
-// REQ-CREDREADY-27, REQ-CREDREADY-15, REQ-CREDREADY-17
 #[test]
 fn workflow_doctor_asks_only_about_the_declared_integrations() {
     let tree = single_file_tree(&declaring(
@@ -2602,7 +2574,6 @@ fn github_tree_declaring_linear() -> WorkflowTree {
     ))
 }
 
-// REQ-CREDREADY-28, REQ-CREDREADY-40, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_reports_where_the_declaration_and_the_inference_differ() {
     let tree = github_tree_declaring_linear();
@@ -2673,7 +2644,6 @@ fn workflow_doctor_reports_where_the_declaration_and_the_inference_differ() {
     assert_eq!(summary.lines().last(), Some("differences: 3"), "{stdout}");
 }
 
-// REQ-CREDREADY-39, REQ-CREDREADY-15
 #[test]
 fn workflow_doctor_asks_nothing_about_a_kind_only_the_inference_finds() {
     let tree = github_tree_declaring_linear();
@@ -2690,7 +2660,6 @@ fn workflow_doctor_asks_nothing_about_a_kind_only_the_inference_finds() {
     assert_eq!(deployment.linear_list_requests().len(), 1);
 }
 
-// REQ-CREDREADY-40, REQ-CREDREADY-8
 #[test]
 fn workflow_doctor_without_the_block_reports_no_differences() {
     let tree = github_tree();
@@ -2707,7 +2676,6 @@ fn workflow_doctor_without_the_block_reports_no_differences() {
     assert!(!stdout.contains("differences:"), "{stdout}");
 }
 
-// REQ-CREDREADY-28, REQ-CREDREADY-40
 #[test]
 fn workflow_doctor_names_the_provider_id_to_declare_for_an_undeclared_kind() {
     // The tool `glab` calls for the kind `gitlab`, which is declared as `gitlab.com`.
@@ -2744,7 +2712,6 @@ fn command_tree_declaring(integrations: &[&str]) -> WorkflowTree {
     single_file_tree(&declaring(COMMAND_WORKFLOW, integrations))
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-3, REQ-CREDREADY-8, REQ-CREDREADY-42
 #[test]
 fn workflow_doctor_reports_a_declared_token_service_as_unverified() {
     let tree = command_tree_declaring(&["mergify"]);
@@ -2782,7 +2749,6 @@ fn workflow_doctor_reports_a_declared_token_service_as_unverified() {
     );
 }
 
-// REQ-CREDREADY-41, REQ-CREDREADY-22, REQ-CREDREADY-23
 #[test]
 fn workflow_doctor_asks_nothing_when_only_a_token_service_is_declared() {
     let tree = command_tree_declaring(&["mergify"]);
@@ -2808,7 +2774,6 @@ fn workflow_doctor_asks_nothing_when_only_a_token_service_is_declared() {
     }
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-21
 #[test]
 fn workflow_doctor_reads_the_project_beside_a_token_service_when_the_repository_is_unknown() {
     // `main.yaml` declares a token service alone; `other.yaml` declares nothing, so its
@@ -2846,7 +2811,6 @@ fn workflow_doctor_reads_the_project_beside_a_token_service_when_the_repository_
     assert!(requests[1].starts_with(GITHUB_LIST), "{}", requests[1]);
 }
 
-// REQ-CREDREADY-41, REQ-CREDREADY-22
 #[test]
 fn workflow_doctor_shows_no_grant_beside_a_token_service() {
     let tree = command_tree_declaring(&["github", "mergify"]);
@@ -2877,7 +2841,6 @@ fn workflow_doctor_shows_no_grant_beside_a_token_service() {
     }
 }
 
-// REQ-CREDREADY-29, REQ-CREDREADY-26
 #[test]
 fn workflow_doctor_never_fails_a_token_service_on_a_named_runner() {
     let tree = command_tree_declaring(&["github", "mergify"]);
@@ -2907,7 +2870,6 @@ fn workflow_doctor_never_fails_a_token_service_on_a_named_runner() {
     assert_eq!(deployment.requests().len(), 3);
 }
 
-// REQ-CREDREADY-41, REQ-CREDREADY-13, REQ-CREDREADY-15
 #[test]
 fn workflow_doctor_asks_nothing_about_a_token_service() {
     let tree = command_tree_declaring(&["linear", "buildkite"]);
@@ -2926,4 +2888,228 @@ fn workflow_doctor_asks_nothing_about_a_token_service() {
     assert_eq!(buildkite["code"], "runner_unverified", "{buildkite}");
     assert!(buildkite.get("cloud").is_none(), "{buildkite}");
     assert_eq!(deployment.linear_list_requests().len(), 1);
+}
+
+const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+/// The connection authorization in force for `PROJECT_ID` on `RUNNER_ID` at `github`, covering
+/// `runs`.
+fn github_authorization(runs: &str) -> Value {
+    json!({
+        "id": CONNECTION_AUTHORIZATION_ID,
+        "organizationId": ORGANIZATION_ID,
+        "provider": "github",
+        "projectId": PROJECT_ID,
+        "projectName": "widget",
+        "runnerId": RUNNER_ID,
+        "runnerName": "builder",
+        "connectionId": "ghi_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "connectionAccount": "acme",
+        "repository": "acme/widget",
+        "runs": runs,
+        "authorizedBy": "prn_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "createdAt": "2026-11-19T09:00:00Z",
+        "scope": {"state": "current"}
+    })
+}
+
+/// The reads of one doctor of `claude_code_tree()` in the project `PROJECT_ID` on `RUNNER_ID`:
+/// the project, on an active GitHub repository, the organization's active GitHub App
+/// installation, the connection authorization read answered with `authorizations`, then the
+/// member's Claude Code grant pending on the runner.
+fn authorization_reads(authorizations: Vec<u8>) -> Vec<Vec<u8>> {
+    [
+        vec![
+            project(Some(github_repository("active"))),
+            connection_page(&[github_installation("active")], None),
+            authorizations,
+        ],
+        grants_read(page(&[claude_code_grant(None)], None)).to_vec(),
+    ]
+    .concat()
+}
+
+/// The request line of the organization's connection authorizations read for `PROJECT_ID` on
+/// `RUNNER_ID` at `github`, up to the version.
+fn authorizations_read() -> String {
+    format!(
+        "GET /api/v1/organizations/{ORGANIZATION}/connection-authorizations?limit=200&projectId={PROJECT_ID}&runnerId={RUNNER_ID}&provider=github HTTP/1.1\r\n"
+    )
+}
+
+impl Deployment {
+    /// Runs the doctor of `tree` in the project `PROJECT_ID`, judging each requirement on
+    /// `RUNNER_ID`.
+    fn doctor_for_runner(&self, tree: &WorkflowTree, json: bool) -> Output {
+        self.doctor_with(
+            &self.server.api_url,
+            tree,
+            json,
+            &["--project", PROJECT_ID, "--runner", RUNNER_ID],
+            &[],
+        )
+    }
+}
+
+/// Asserts that the requests of one doctor of `claude_code_tree()` read the project, the GitHub
+/// installations, the connection authorizations and the member's grants, in that order.
+fn assert_authorization_requests(requests: &[String]) {
+    assert_eq!(requests.len(), 5, "{requests:?}");
+    for (request, expected) in requests.iter().zip([
+        PROJECT_READ,
+        GITHUB_LIST,
+        authorizations_read().as_str(),
+        READ_ACME,
+        LIST_FIRST_PAGE,
+    ]) {
+        assert!(request.starts_with(expected), "{request}");
+    }
+}
+
+#[test]
+fn workflow_doctor_on_a_runner_shows_the_github_connection_authorization_in_force() {
+    let tree = claude_code_tree();
+    let deployment = Deployment::signed_in(authorization_reads(connection_page(
+        &[github_authorization("all")],
+        None,
+    )));
+
+    let output = deployment.doctor_for_runner(&tree, true);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report = json_report(&output);
+    let github = requirement(&report, "github");
+    assert_eq!(
+        github["connectionAuthorization"],
+        json!({"id": CONNECTION_AUTHORIZATION_ID, "runs": "all", "repository": "acme/widget"})
+    );
+    // The authorization changes no requirement's state, code or `metBy`.
+    assert_judged(
+        &report,
+        "github",
+        "met",
+        "connection_ready",
+        Some("connection"),
+    );
+    assert!(
+        next_action(github).contains(&format!(
+            "useful org integration authorize github --runner RUNNER --project {PROJECT_ID}"
+        )),
+        "{github}"
+    );
+    assert!(
+        requirement(&report, "claude_code")
+            .get("connectionAuthorization")
+            .is_none(),
+        "{report}"
+    );
+    assert_authorization_requests(&deployment.requests());
+
+    // None in force.
+    let deployment = Deployment::signed_in(authorization_reads(connection_page(&[], None)));
+
+    let output = deployment.doctor_for_runner(&tree, true);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = json_report(&output);
+    assert_eq!(
+        requirement(&report, "github").get("connectionAuthorization"),
+        Some(&Value::Null),
+        "{report}"
+    );
+    assert_authorization_requests(&deployment.requests());
+
+    // The human report shows it beside the requirement, its repository as visible text.
+    let mut authorization = github_authorization("all");
+    authorization["repository"] = json!("acme/widget\nother");
+    let deployment =
+        Deployment::signed_in(authorization_reads(connection_page(&[authorization], None)));
+
+    let output = deployment.doctor_for_runner(&tree, false);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("report should be UTF-8");
+    assert!(
+        stdout.contains(CONNECTION_AUTHORIZATION_ID) && stdout.contains(r"acme/widget\x0aother"),
+        "authorization missing from:\n{stdout}"
+    );
+}
+
+#[test]
+fn workflow_doctor_passes_over_a_refused_authorization_read() {
+    let tree = claude_code_tree();
+    let server_error = || {
+        problem_http_response(
+            "500 Internal Server Error",
+            json!({
+                "type": "https://api.usefulmachinery.com/problems/internal",
+                "title": "Internal Server Error",
+                "status": 500
+            }),
+        )
+    };
+    for refusal in [forbidden(), server_error()] {
+        let deployment = Deployment::signed_in(authorization_reads(refusal));
+
+        let output = deployment.doctor_for_runner(&tree, true);
+
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let report = json_report(&output);
+        let github = requirement(&report, "github");
+        assert!(github.get("connectionAuthorization").is_none(), "{github}");
+        assert_judged(
+            &report,
+            "github",
+            "met",
+            "connection_ready",
+            Some("connection"),
+        );
+        assert_authorization_requests(&deployment.requests());
+    }
+
+    // Any other failure ends the command as any readiness read does.
+    let deployment = Deployment::signed_in(vec![
+        project(Some(github_repository("active"))),
+        connection_page(&[github_installation("active")], None),
+        rate_limited(),
+    ]);
+
+    let output = deployment.doctor_for_runner(&tree, true);
+
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let failure = json_report(&output);
+    assert_eq!(failure["outcome"], "rate_limited", "{failure}");
+    assert!(failure.get("requirements").is_none(), "{failure}");
+    assert_eq!(deployment.requests().len(), 3);
+}
+
+#[test]
+fn workflow_doctor_reads_no_authorization_without_a_github_requirement() {
+    let tree = claude_code_tree();
+    let deployment = Deployment::signed_in(
+        [
+            vec![
+                project(Some(gitlab_repository("active", None))),
+                connection_page(&[gitlab_connection("active", None)], None),
+            ],
+            grants_read(page(&[claude_code_grant(None)], None)).to_vec(),
+        ]
+        .concat(),
+    );
+
+    let output = deployment.doctor_for_runner(&tree, true);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = json_report(&output);
+    assert!(
+        requirement(&report, "gitlab")
+            .get("connectionAuthorization")
+            .is_none(),
+        "{report}"
+    );
+    let requests = deployment.connection_requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert!(requests[1].starts_with(GITLAB_LIST), "{}", requests[1]);
 }

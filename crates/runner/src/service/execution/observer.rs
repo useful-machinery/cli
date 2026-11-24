@@ -293,8 +293,8 @@ impl RunnerExecutionObserver {
     }
 }
 
-// How a settled execution's `runner.step_execution` record ends
-// (REQ-TELEMETRY-43): its outcome and the closed `error.type`, if any.
+// How a settled execution's `runner.step_execution` record ends: its
+// outcome and the closed `error.type`, if any.
 fn step_execution_end(
     settlement: ExecutionSettlement,
 ) -> (telemetry::Outcome, Option<&'static str>) {
@@ -318,8 +318,8 @@ fn step_execution_end(
     }
 }
 
-// The attributes a started execution's record carries beside the run's IDs
-// (REQ-TELEMETRY-42).
+// The attributes a started execution's record carries beside the run's
+// IDs.
 fn step_execution_attributes(
     step: &str,
     node_role: WorkflowNodeRole,
@@ -361,8 +361,8 @@ fn step_execution_attributes(
 }
 
 // Finishes the record of the execution a committed transition settles, then
-// opens one for the execution it starts (REQ-TELEMETRY-41). An execution
-// still open when the run ends is never finished and writes nothing.
+// opens one for the execution it starts. An execution still open when the
+// run ends is never finished and writes nothing.
 fn record_step_executions(
     run_event: &RunEvent,
     open: &mut BTreeMap<u64, telemetry::Event>,

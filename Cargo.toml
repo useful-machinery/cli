@@ -103,7 +103,6 @@ time = { version = "0.3.45", features = ["formatting", "parsing"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 toml_edit = { version = "0.25.13", default-features = false, features = ["parse"] }
-trycmd = "1.2.1"
 ulid = "3.0.0"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
@@ -145,6 +144,5 @@ useful-execution = { workspace = true, features = ["test-fixtures"] }
 useful-runner = { workspace = true, features = ["test-fixtures"] }
 useful-support = { workspace = true, features = ["test-fixtures"] }
 useful-test-support.workspace = true
-trycmd.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true

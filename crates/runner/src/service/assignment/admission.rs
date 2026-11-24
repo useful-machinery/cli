@@ -82,8 +82,8 @@ impl AssignmentManager {
     }
 
     /// Makes each later admission set agent logins up for itself with
-    /// `setup` before it offers them (REQ-GRANT-49). The setup is built
-    /// after the manager, since its gate holds the manager.
+    /// `setup` before it offers them. The setup is built after the
+    /// manager, since its gate holds the manager.
     pub(in crate::service) fn set_up_agent_logins_with(
         &mut self,
         setup: super::super::control::AdmissionAgentLogins,
@@ -93,8 +93,7 @@ impl AssignmentManager {
 
     /// Makes each later admission keep the token files of its grant tokens
     /// current while its assignment runs, waiting on `sleeper` and
-    /// publishing each readiness a refresh records in `status`
-    /// (REQ-GRANT-89).
+    /// publishing each readiness a refresh records in `status`.
     pub(in crate::service) fn refresh_grant_tokens_with(
         &mut self,
         sleeper: Arc<dyn Sleeper>,
@@ -105,9 +104,8 @@ impl AssignmentManager {
 
     /// Accepts a connection's `welcome`: retains its lease policy (`retain_lease_policy`),
     /// then asks Cloud again at once for the next lease of every running assignment whose
-    /// request Cloud acknowledged and has not answered (REQ-RUNNERENROLL-151,
-    /// INV-RUNNER-48). A request still in the outbox is replayed by the outbox, so a second
-    /// welcome on one connection adds nothing.
+    /// request Cloud acknowledged and has not answered. A request still in the outbox is
+    /// replayed by the outbox, so a second welcome on one connection adds nothing.
     pub(in crate::service) fn accept_welcome(
         &mut self,
         policy: &ExecutionLeasePolicy,
@@ -236,8 +234,7 @@ impl AssignmentManager {
             return self.retain_decision(offer, response);
         }
         // The offer proves Cloud has settled an ended assignment only when that assignment
-        // never reported a wait; one that did reports on beside the successor
-        // (INV-RUNNER-63).
+        // never reported a wait; one that did reports on beside the successor.
         let fenced: Vec<String> = self
             .held
             .values()
@@ -285,7 +282,7 @@ impl AssignmentManager {
         self.apply_successor_fences(&offer.assignment_id);
         self.make_decision_room()?;
         // The runner takes an offer only while every assignment it holds waits, and holds
-        // at most `MAXIMUM_HELD_ASSIGNMENTS` (INV-RUNNER-40).
+        // at most `MAXIMUM_HELD_ASSIGNMENTS`.
         if self.held.values().any(HeldAssignment::is_working)
             || self.held.len() >= MAXIMUM_HELD_ASSIGNMENTS
         {
@@ -299,7 +296,7 @@ impl AssignmentManager {
         }
         // Last, while the disk is low, an offer the runner would otherwise hold is declined
         // unless it continues an earlier attempt; no run is opened for it, as for a working
-        // runner's decline (REQ-RUNNERENROLL-154, INV-RUNNER-50).
+        // runner's decline.
         if offer.continuation.is_none()
             && self
                 .disk_reading
@@ -514,11 +511,11 @@ impl AssignmentManager {
     }
 
     /// The other tree runs the manager holds, as the agent-login pass of the admission of
-    /// `assignment_id` reads them without the manager's lock (REQ-GRANT-135, INV-RUNNER-56):
-    /// the activity of each `Running` tree run but that assignment. The offer rule took the
-    /// offer only while each held assignment waited, and none is taken while this one is
-    /// prepared, so the set only shrinks; an ended assignment that only reports or releases
-    /// holds no process and is not in it.
+    /// `assignment_id` reads them without the manager's lock: the activity of each `Running`
+    /// tree run but that assignment. The offer rule took the offer only while each held
+    /// assignment waited, and none is taken while this one is prepared, so the set only
+    /// shrinks; an ended assignment that only reports or releases holds no process and is
+    /// not in it.
     fn runs_beside(&self, assignment_id: &str) -> HeldRuns {
         HeldRuns::Waiting(
             self.held
@@ -539,12 +536,20 @@ impl AssignmentManager {
         prepare_effect_id: String,
         deadline: PreparationDeadline,
     ) -> Result<(), AssignmentManagerFailure> {
-        let source =
-            super::super::source::MaterializationRequest::from_validated(&offer.execution_spec);
-        let Some(broker) = self.source_broker.clone() else {
-            let decline =
-                AssignmentDecline::RunnerUnable(RunnerUnableReason::SourceServiceUnavailable);
-            return self.reject_after_prepare_and_cleanup(offer, root, prepare_effect_id, decline);
+        let broker = if offer.execution_spec.source.is_some() {
+            let Some(broker) = self.source_broker.clone() else {
+                let decline =
+                    AssignmentDecline::RunnerUnable(RunnerUnableReason::SourceServiceUnavailable);
+                return self.reject_after_prepare_and_cleanup(
+                    offer,
+                    root,
+                    prepare_effect_id,
+                    decline,
+                );
+            };
+            Some(broker)
+        } else {
+            None
         };
 
         let cancellation = CaptureCancellation::default();
@@ -583,22 +588,18 @@ impl AssignmentManager {
                 }
             };
             let _preparation_fence = preparation_fence;
-            // The admission sets agent logins up for itself first, a
-            // continuation's included, so it is offered a replaced generation
-            // and nothing of a revoked login; nothing has been offered yet,
-            // and nothing is installed or removed once it has. Beside other
-            // runs it asks Cloud only while each waits, and installs or
-            // removes only while none also has a command in flight, holding
-            // their activities and never the manager's lock; otherwise it is
-            // offered what is on disk (REQ-GRANT-135, INV-RUNNER-56, INV-RUNNER-57). Then it
-            // asks Cloud for its assignment's grant tokens, whatever the
-            // gate answered, now that Cloud counts the assignment as
-            // preparing, as for its source credential, and keeps them
-            // until the assignment ends (REQ-GRANT-150, INV-RUNNER-28),
-            // keeping each file current while it runs (REQ-GRANT-89).
-            // Whatever the setup meets, a panic included, the admission goes
-            // on with what is on disk. The worker is the hold's only owner
-            // until it publishes the admission's outcome, which carries it.
+            // The admission sets agent logins up for itself first, a continuation's
+            // included, so it is offered a replaced generation and nothing of a revoked
+            // login; nothing has been offered yet, and nothing is installed or removed once
+            // it has. Beside other runs it asks Cloud only while each waits, and installs or
+            // removes only while none also has a command in flight, holding their activities
+            // and never the manager's lock; otherwise it is offered what is on disk. Then it
+            // asks Cloud for its assignment's grant tokens, whatever the gate answered, now
+            // that Cloud counts the assignment as preparing, as for its source credential,
+            // and keeps them until the assignment ends, keeping each file current while it
+            // runs. Whatever the setup meets, a panic included, the admission goes on with
+            // what is on disk. The worker is the hold's only owner until it publishes the
+            // admission's outcome, which carries it.
             let grant_tokens = agent_login_setup.as_ref().and_then(|setup| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     setup.set_up(
@@ -617,15 +618,14 @@ impl AssignmentManager {
                 })
             });
             // The steps draw from the process environment with the agent
-            // logins the runner keeps now, looked at for this admission
-            // (REQ-GRANT-37, REQ-GRANT-44), and a tree run's `useful` commands
-            // with those it keeps as each starts (REQ-GRANT-136), where the
-            // service has none of its own; where the runner keeps
-            // none either, nothing is added or withheld (REQ-GRANT-51,
-            // INV-RUNNER-17). The admission's grant tokens and their files
-            // are offered too; it holds none of a provider whose names the
-            // service carries, which keeps the service's values, and a
-            // provider neither provides has its names unset (REQ-GRANT-156).
+            // logins the runner keeps now, looked at for this admission, and a
+            // tree run's `useful` commands with those it keeps as each starts,
+            // where the service has none of its own; where the runner keeps
+            // none either, nothing is added or withheld. The admission's grant
+            // tokens and their files are offered too; it holds none of a
+            // provider whose names the service carries, which keeps the
+            // service's values, and a provider neither provides has its names
+            // unset.
             let offered = crate::agent_login::offer_with_grant_tokens(
                 &runtime.environment,
                 agent_login_directory.as_ref(),
@@ -634,11 +634,9 @@ impl AssignmentManager {
             // The admission reports where each provider's credential comes
             // from to Cloud once, before any step starts, from what the
             // offer settled, each token service Cloud listed that has a
-            // source included (REQ-GRANT-93, REQ-INTEGRATION-12,
-            // INV-RUNNER-31, INV-RUNNER-61). Whatever Cloud
-            // answers, a panic included, the admission goes on with the
-            // offer as it is; a report Cloud does not take is the setup's
-            // own record (REQ-TELEMETRY-48).
+            // source included. Whatever Cloud answers, a panic included,
+            // the admission goes on with the offer as it is; a report
+            // Cloud does not take is the setup's own record.
             if let Some(setup) = &agent_login_setup {
                 let sources = crate::agent_login::reported_sources(&offered, grant_tokens.as_ref());
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -648,11 +646,11 @@ impl AssignmentManager {
             runtime.environment = offered.environment;
             // Each command of a tree run builds its own environment from the same process
             // environment and directory when it starts, keeping the token variables this
-            // offer added (REQ-GRANT-49, REQ-GRANT-87).
+            // offer added.
             runtime.command_environment = offered.commands;
             // How the provider answers each agent step given a login the
             // runner added is noted for the next pass, never for a variable
-            // the service carried (REQ-GRANT-52).
+            // the service carried.
             runtime.harness_login_observer = agent_login_setup
                 .as_ref()
                 .and_then(|setup| setup.observer(offered.offered));
@@ -662,7 +660,7 @@ impl AssignmentManager {
                     let admission = TreeAdmission {
                         runtime: &runtime,
                         tree_run: &tree_run,
-                        broker: Arc::clone(&broker),
+                        broker: broker.as_ref(),
                         input_broker: input_broker.as_deref(),
                         environment: &environment,
                         offer: &worker_offer,
@@ -702,6 +700,21 @@ impl AssignmentManager {
             let mut root = root;
             let workspace_path = root.workspace.path();
             let preparation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let spec = &worker_offer.execution_spec;
+                let (projection, broker) = spec
+                    .source
+                    .as_ref()
+                    .zip(broker.as_ref())
+                    .ok_or_else(invalid_source_projection)?;
+                let source = super::super::source::MaterializationRequest::from_validated(
+                    projection,
+                    spec.schema_version,
+                );
+                let workspace_commit = &projection.primary_workspace_source.commit_oid;
+                let definition_digest = &projection
+                    .workflow_definition_source
+                    .workflow_source_closure_digest
+                    .value;
                 if let Some(continuation) = &worker_offer.continuation {
                     runtime.prove_continuation(
                         &worker_offer,
@@ -728,7 +741,7 @@ impl AssignmentManager {
                     workspace_path.clone()
                 };
                 let checkout = super::super::source::checkout(
-                    Arc::clone(&broker),
+                    Arc::clone(broker),
                     &environment,
                     &worker_offer.assignment_id,
                     &source,
@@ -747,14 +760,9 @@ impl AssignmentManager {
                     materialization_decline(failure)
                 })?;
                 if separate_definition && worker_offer.continuation.is_none() {
-                    let workspace_source = source.for_workspace(
-                        &worker_offer
-                            .execution_spec
-                            .primary_workspace_source
-                            .commit_oid,
-                    );
+                    let workspace_source = source.for_workspace(workspace_commit);
                     super::super::source::checkout(
-                        Arc::clone(&broker),
+                        Arc::clone(broker),
                         &environment,
                         &worker_offer.assignment_id,
                         &workspace_source,
@@ -790,29 +798,16 @@ impl AssignmentManager {
                     materialized.git_capture =
                         materialized.workflow.requires_git_capture().then(|| {
                             CloudGitCaptureProjection::new(
-                                Arc::from(
-                                    worker_offer
-                                        .execution_spec
-                                        .primary_workspace_source
-                                        .commit_oid
-                                        .as_str(),
-                                ),
-                                Arc::from(
-                                    worker_offer
-                                        .execution_spec
-                                        .workflow_definition_source
-                                        .workflow_source_closure_digest
-                                        .value
-                                        .as_str(),
-                                ),
+                                Arc::from(workspace_commit.as_str()),
+                                Arc::from(definition_digest.as_str()),
                                 worker_cancellation.clone(),
                             )
                         });
                 }
-                Ok::<_, AssignmentDecline>((materialized, inputs))
+                Ok::<_, AssignmentDecline>((materialized, inputs, workspace_commit, broker))
             }));
             let admission = match preparation {
-                Ok(Ok((mut materialized, inputs))) => {
+                Ok(Ok((mut materialized, inputs, workspace_commit, broker))) => {
                     if worker_offer.continuation.is_some() {
                         // The fetched effective definition has its own source root;
                         // only execution adopts the retained primary work tree.
@@ -820,13 +815,7 @@ impl AssignmentManager {
                         materialized.git_capture =
                             materialized.workflow.requires_git_capture().then(|| {
                                 CloudGitCaptureProjection::for_continuation(
-                                    Arc::from(
-                                        worker_offer
-                                            .execution_spec
-                                            .primary_workspace_source
-                                            .commit_oid
-                                            .as_str(),
-                                    ),
+                                    Arc::from(workspace_commit.as_str()),
                                     Arc::from(materialized.workflow.content_digest.value.as_str()),
                                     worker_cancellation.clone(),
                                 )
@@ -838,7 +827,7 @@ impl AssignmentManager {
                         .map_err(anyhow::Error::from)
                         .and_then(|helper_executable| {
                             WorkflowGitAuthority::install(WorkflowGitInstall {
-                                broker: Arc::clone(&broker),
+                                broker: Arc::clone(broker),
                                 assignment_id: &worker_offer.assignment_id,
                                 origin: materialized.origin,
                                 canonical_origin: materialized.canonical_origin,
@@ -1174,8 +1163,7 @@ impl AssignmentManager {
 /// hold the worker alone owned until then: handed to the accepted assignment,
 /// or ended with a declined one. Once the outcome is published nothing of the
 /// worker holds the tokens, so the manager letting go of the assignment ends
-/// its refresh and removes its directory whatever the worker still does
-/// (INV-RUNNER-28).
+/// its refresh and removes its directory whatever the worker still does.
 fn handing_over(
     admission: Result<AcceptedAssignment, Box<(AssignmentRoot, AssignmentDecline)>>,
     grant_tokens: Option<AssignmentGrantTokens>,
@@ -1193,10 +1181,10 @@ fn handing_over(
 }
 
 impl AdmissionRuntime {
-    /// Proves the retained workspace a continuation offer names (REQ-CONTINUE-47 to 49),
-    /// on the calling blocking worker: the offer's boot is this one, the retained chain
-    /// is claimed for the new attempt and quiesced, the workspace is snapshotted, and
-    /// `continuation_ready` is sent and acknowledged before preparation goes on.
+    /// Proves the retained workspace a continuation offer names, on the calling blocking
+    /// worker: the offer's boot is this one, the retained chain is claimed for the new
+    /// attempt and quiesced, the workspace is snapshotted, and `continuation_ready` is
+    /// sent and acknowledged before preparation goes on.
     fn prove_continuation(
         &self,
         offer: &AssignmentOffer,
@@ -1300,15 +1288,14 @@ impl AdmissionRuntime {
     }
 }
 
-/// The preparation of a tree run (REQ-RUNNERENROLL-91): the workspace checkout and run
-/// inputs as for any run, then the published tree in place of the Git definition
-/// checkout and workflow admission and, on a GitHub project, the workspace's Git relay
-/// (REQ-RUNNERENROLL-121); or, for a continuation, the adoption of the run an earlier
-/// attempt created (REQ-RUNNERENROLL-217).
+/// The preparation of a tree run: the workspace checkout and run inputs as for any
+/// run, then the published tree in place of the Git definition checkout and workflow
+/// admission and, on a GitHub project, the workspace's Git relay; or, for a
+/// continuation, the adoption of the run an earlier attempt created.
 struct TreeAdmission<'a> {
     runtime: &'a AdmissionRuntime,
     tree_run: &'a TreeRunDependencies,
-    broker: Arc<dyn SourceCredentialBroker>,
+    broker: Option<&'a Arc<dyn SourceCredentialBroker>>,
     input_broker: Option<&'a dyn RunInputBroker>,
     /// The service environment the checkout uses; each of the tree's `useful` commands runs
     /// with the environment `runtime.command_environment` builds when it starts.
@@ -1328,24 +1315,28 @@ impl TreeAdmission<'_> {
         let offer = self.offer;
         let spec = &offer.execution_spec;
         let workspace = root.workspace.path();
-        let source = super::super::source::MaterializationRequest::from_validated(spec)
-            .for_workspace(&spec.primary_workspace_source.commit_oid);
-        let checkout = super::super::source::checkout(
-            Arc::clone(&self.broker),
-            self.environment,
-            &offer.assignment_id,
-            &source,
-            self.cancellation,
-            &workspace,
-            &root.private,
-        )
-        .map_err(materialization_decline)?;
-        // A GitHub checkout's origin is the repository, which the runtime's steps read
-        // through the runner's relay (REQ-RUNNERENROLL-121). Dropping a GitLab checkout
-        // restores the clone's canonical origin, and its steps use the host's own Git
-        // access (REQ-WORKSPACE-42).
-        let relay_origin = checkout.relay_origin();
-        drop(checkout);
+        let relay_origin = if let Some(projection) = &spec.source {
+            let source = super::super::source::MaterializationRequest::from_validated(
+                projection,
+                spec.schema_version,
+            )
+            .for_workspace(&projection.primary_workspace_source.commit_oid);
+            let checkout = super::super::source::checkout(
+                Arc::clone(self.broker.ok_or_else(invalid_source_projection)?),
+                self.environment,
+                &offer.assignment_id,
+                &source,
+                self.cancellation,
+                &workspace,
+                &root.private,
+            )
+            .map_err(materialization_decline)?;
+            // Dropping the GitLab checkout restores its canonical origin.
+            checkout.relay_origin()
+        } else {
+            // The workspace root was created empty.
+            None
+        };
         root.execution.clone_from(&workspace);
         self.runtime.run_event.enter(RunPhase::Preparation);
         self.runtime.progress(offer, 2, "input_download")?;
@@ -1363,6 +1354,7 @@ impl TreeAdmission<'_> {
         let prepared = super::super::tree_run::prepare(
             self.tree_run,
             &super::super::tree_run::TreePreparation {
+                attempt_id: &offer.attempt_id,
                 assignment_id: &offer.assignment_id,
                 execution_spec: spec,
                 tree: self.tree,
@@ -1392,21 +1384,22 @@ impl TreeAdmission<'_> {
         Ok(prepared)
     }
 
-    /// Installs the workspace's Git relay for `origin` in the execution root
-    /// (REQ-RUNNERENROLL-121, REQ-RUNNERENROLL-122), leaving the workspace's remotes as they
-    /// read; `finish_tree` carries it and `run_tree` activates it.
+    /// Installs the workspace's Git relay for `origin` in the execution root, leaving the
+    /// workspace's remotes as they read; `finish_tree` carries it and `run_tree` activates
+    /// it.
     fn install_relay(
         &self,
         root: &mut AssignmentRoot,
         origin: Arc<str>,
     ) -> Result<(), AssignmentDecline> {
+        let broker = self.broker.ok_or_else(invalid_source_projection)?;
         let workflow_git = self
             .tree_run
             .helper_executable()
             .map_err(anyhow::Error::from)
             .and_then(|helper_executable| {
                 WorkflowGitAuthority::install(WorkflowGitInstall {
-                    broker: Arc::clone(&self.broker),
+                    broker: Arc::clone(broker),
                     assignment_id: &self.offer.assignment_id,
                     origin,
                     canonical_origin: None,
@@ -1438,7 +1431,7 @@ impl TreeAdmission<'_> {
     /// attempt that created the run: no checkout, no run input and no tree download. The
     /// run executes in the retained workspace its record names, which the claim proved,
     /// with the workspace's Git relay for the origin that attempt recorded, when it
-    /// recorded one (REQ-RUNNERENROLL-122).
+    /// recorded one.
     fn adopt(
         self,
         root: &mut AssignmentRoot,
@@ -1491,6 +1484,7 @@ impl TreeAdmission<'_> {
         let run = super::super::tree_run::adopt(
             self.tree_run,
             &super::super::tree_run::TreeAdoption {
+                attempt_id: &offer.attempt_id,
                 assignment_id: &offer.assignment_id,
                 home: &super::super::tree_run::tree_home(creator),
                 private: &root.private,

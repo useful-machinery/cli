@@ -293,7 +293,6 @@ fn turn_completed_with_items_view(items: Vec<Value>, status: &str, items_view: &
     completed
 }
 
-// REQ-AGENT-15, REQ-AGENT-16
 #[test]
 fn setup_requests_preserve_native_resources_and_only_fixtures_select_a_provider() {
     let mut production = parser(AgentValueKind::None, 1024, None);
@@ -312,7 +311,6 @@ fn setup_requests_preserve_native_resources_and_only_fixtures_select_a_provider(
     assert_eq!(thread["params"]["modelProvider"], "loopback");
 }
 
-// REQ-AGENT-15
 #[test]
 fn implicit_openai_provider_matches_the_native_thread() {
     let mut parser = parser(AgentValueKind::None, 1024, None);
@@ -498,8 +496,6 @@ fn matching_thread_notification_and_response_may_arrive_in_either_order() {
     );
 }
 
-// REQ-AGENT-17
-// INV-HARNESS-4
 #[test]
 fn thread_start_requires_a_fresh_unassigned_root_and_accepts_nullable_metadata() {
     for notification_first in [false, true] {
@@ -754,7 +750,6 @@ fn held_feed(parser: &mut CodexAppServerV1Parser, frame: Value) {
     assert!(!parser.start_acknowledged());
 }
 
-// INV-HARNESS-20, INV-HARNESS-29, INV-HARNESS-30
 #[test]
 fn turn_frames_that_overtake_the_turn_start_response_are_parsed_after_it() {
     let mut overtaken = parser(AgentValueKind::None, 1024, None);
@@ -872,8 +867,6 @@ fn turn_frames_that_overtake_the_turn_start_response_are_parsed_after_it() {
     }
 }
 
-// REQ-AGENT-90, REQ-AGENT-25, REQ-AGENT-26
-// INV-HARNESS-26
 #[test]
 fn a_thread_other_than_the_leads_decides_nothing_announced_or_not() {
     const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
@@ -947,7 +940,6 @@ fn a_thread_other_than_the_leads_decides_nothing_announced_or_not() {
     }
 }
 
-// REQ-AGENT-90
 #[test]
 fn subagent_activity_and_early_child_status_decide_nothing() {
     const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
@@ -970,7 +962,6 @@ fn subagent_activity_and_early_child_status_decide_nothing() {
     assert!(parser.pending_result_candidate.is_none());
 }
 
-// REQ-AGENT-90, REQ-AGENT-25, REQ-AGENT-26
 #[test]
 fn a_delegated_codex_thread_cannot_settle_the_leads_turn() {
     const CHILD: &str = "018f7f1e-7b5a-7d13-8f19-2b6a4c8d0e13";
@@ -1063,7 +1054,6 @@ fn stale_and_duplicate_responses_fail_even_when_progress_is_ignored() {
     );
 }
 
-// REQ-AGENT-26
 #[test]
 fn completed_final_answer_is_authoritative_and_deltas_are_observations_only() {
     let mut parser = running_parser(AgentValueKind::Response, 5);
@@ -2057,7 +2047,6 @@ fn repeated_result_message_replaces_the_retained_text() {
     assert_eq!(parser.take_result_candidate().as_deref(), Some(&json!(7)));
 }
 
-// REQ-AGENT-27
 #[test]
 fn absent_empty_oversized_delta_only_and_failed_outputs_never_commit() {
     for messages in [
@@ -2133,7 +2122,6 @@ fn absent_empty_oversized_delta_only_and_failed_outputs_never_commit() {
     }
 }
 
-// REQ-AGENT-31
 #[test]
 fn malformed_or_ambiguous_submissions_get_a_correction_but_absent_submissions_end() {
     for text in [
@@ -2191,8 +2179,6 @@ fn malformed_or_ambiguous_submissions_get_a_correction_but_absent_submissions_en
     );
 }
 
-// REQ-AGENT-31
-// INV-HARNESS-7
 #[test]
 fn one_rejection_queues_one_same_thread_correction_then_exhausts() {
     let mut parser = running_parser(AgentValueKind::Result, 1024);
@@ -2629,7 +2615,6 @@ fn completed_terminal_before_start_acknowledgement_fails_closed() {
     );
 }
 
-// INV-HARNESS-5
 #[test]
 fn nonretry_native_error_cannot_be_erased_by_completed_terminal() {
     let mut parser = running_parser(AgentValueKind::Response, 1024);
@@ -2708,7 +2693,6 @@ fn bounded_native_error_prose_does_not_replace_structured_identity() {
     );
 }
 
-// REQ-DIAG-24, REQ-DIAG-36, REQ-AGENT-45, REQ-AGENT-70
 #[test]
 fn structured_codex_failures_project_safe_runner_diagnostics() {
     use crate::workflow::evidence::{FailurePhase, failure_detail};
@@ -2869,8 +2853,6 @@ fn flex_unavailable_preserves_native_failure_and_retry_correlation() {
     );
 }
 
-// REQ-AGENT-25, REQ-AGENT-90
-// INV-HARNESS-6
 #[test]
 fn server_requests_are_answered_whatever_they_name() {
     let mut parser = running_parser(AgentValueKind::None, 1024);
@@ -2975,7 +2957,6 @@ fn mcp_elicitation_with_explicit_null_turn_id_is_declined() {
     );
 }
 
-// REQ-AGENT-38, INV-HARNESS-28
 #[test]
 fn each_method_useful_cannot_show_is_recorded_once() {
     fn records(parser: &mut CodexAppServerV1Parser, frame: Value) -> Vec<Value> {
@@ -3031,7 +3012,6 @@ fn each_method_useful_cannot_show_is_recorded_once() {
     assert_eq!(records(&mut invalid, valid.clone()), [valid]);
 }
 
-// REQ-AGENT-38
 #[test]
 fn unknown_notifications_and_requests_are_observed_without_settling() {
     let mut parser = running_parser(AgentValueKind::None, 1024);
@@ -3256,7 +3236,6 @@ fn contradictory_native_and_terminal_error_identity_fails_closed() {
     );
 }
 
-// REQ-AGENT-91, REQ-AGENT-26, REQ-AGENT-31
 #[test]
 fn the_leads_result_is_the_same_with_or_without_progress_noise() {
     let noise = progress_noise("thread-1", "turn-1");
@@ -3357,7 +3336,6 @@ fn check_noisy_turn(kind: AgentValueKind, noise: &[Value], noisy_summary: bool) 
     }
 }
 
-// REQ-AGENT-91, INV-HARNESS-27
 #[test]
 fn deciding_notifications_on_the_leads_thread_are_read_strictly() {
     let message = item_completed("lead", &result_envelope(json!(7)), json!("final_answer"));
@@ -3413,7 +3391,6 @@ fn deciding_notifications_on_the_leads_thread_are_read_strictly() {
     }
 }
 
-// INV-HARNESS-27, REQ-AGENT-91
 #[test]
 fn a_long_lead_turn_exhausts_no_budget() {
     let mut parser = running_parser(AgentValueKind::Result, 1024);

@@ -61,8 +61,8 @@ enum ProjectCommand {
 
 type Options = super::CommonArgs<super::ProjectJson, super::PrincipalAuthenticationArgs>;
 
-// `create NAME --repository REPOSITORY` in the organization in effect; the connection that
-// reaches the repository is found unless `--integration` names it (REQ-PROJECT-101).
+// `create NAME` in the organization in effect, optionally binding the repository reached
+// through the discovered or named connection.
 #[derive(Debug, Args)]
 struct CreateCommand {
     #[arg(value_name = "NAME", help = "The project's canonical name")]
@@ -73,10 +73,11 @@ struct CreateCommand {
         value_name = RepositoryRef::VALUE_NAME,
         help = RepositoryRef::HELP
     )]
-    repository: RepositoryRef,
+    repository: Option<RepositoryRef>,
 
     #[arg(
         long = "integration",
+        requires = "repository",
         value_name = connection::target::VALUE_NAME,
         value_parser = Target::parse,
         help = connection::reach::HELP
@@ -86,6 +87,7 @@ struct CreateCommand {
     #[arg(
         long,
         value_name = "BRANCH",
+        requires = "repository",
         value_parser = NonEmptyStringValueParser::new(),
         help = "Set the configured default branch (the provider default when omitted)"
     )]
@@ -159,7 +161,7 @@ struct ArchiveCommand {
 
 // `update PROJECT` changes the project its argument names: at most one repository request,
 // then at most one rename, so a project named by name keeps that name until the last request
-// and the command can be run again as typed (REQ-PROJECT-102).
+// and the command can be run again as typed.
 #[derive(Debug, Args)]
 #[command(group(
     ArgGroup::new("change")
@@ -253,8 +255,8 @@ fn execute_command<T>(
 }
 
 /// Runs `run` with `options`, the organization reference to send and the project's ID, in the
-/// organization in effect and on `project` (REQ-PROJECT-75, REQ-PROJECT-100); a refused read
-/// of either is written as this family writes its own failures.
+/// organization in effect and on `project`; a refused read of either is written as this
+/// family writes its own failures.
 fn execute_in_project(
     org: OrgArgs,
     project: ProjectSubject,
@@ -323,7 +325,7 @@ impl CreateCommand {
             |options, organization| {
                 let creation = Creation {
                     name: &name,
-                    repository: &repository,
+                    repository: repository.as_ref(),
                     default_branch: default_branch.as_deref(),
                     pools: &pool,
                 };
@@ -336,15 +338,14 @@ impl CreateCommand {
 /// What `useful project create` sends, once the organization it acts in is known.
 struct Creation<'a> {
     name: &'a str,
-    repository: &'a RepositoryRef,
+    repository: Option<&'a RepositoryRef>,
     default_branch: Option<&'a str>,
     pools: &'a [PoolArg],
 }
 
 impl Creation<'_> {
-    /// Resolves every pool, finds the connection that reaches the repository and creates the
-    /// project with the first pool; with several pools, then assigns them all as one set
-    /// (REQ-PROJECT-76, REQ-PROJECT-101).
+    /// Resolves every pool and, when a repository is given, the connection that reaches it.
+    /// Creates the project with the first pool, then assigns the full set when it names several.
     fn send(
         self,
         deployment: &Deployment,
@@ -378,15 +379,19 @@ impl Creation<'_> {
                 pool_ids.push(pool_id);
             }
         }
-        let reached = match connection::reach::find(
-            deployment,
-            options,
-            organization,
-            self.repository,
-            connection,
-        )? {
-            Ok(reached) => reached,
-            Err(exit) => return Ok(exit),
+        let reached = if let Some(repository) = self.repository {
+            match connection::reach::find(
+                deployment,
+                options,
+                organization,
+                repository,
+                connection,
+            )? {
+                Ok(reached) => Some(reached),
+                Err(exit) => return Ok(exit),
+            }
+        } else {
+            None
         };
         let key = useful_support::generate_idempotency_key()
             .context("generate project creation request identity")?;
@@ -400,9 +405,11 @@ impl Creation<'_> {
                     &key,
                     CreateProjectInput {
                         name: self.name,
-                        repository: reached.selector(),
-                        repository_id: reached.repository_id(),
-                        default_branch: self.default_branch,
+                        repository: reached.as_ref().map(|reached| {
+                            reached
+                                .selector()
+                                .select(reached.repository_id(), self.default_branch)
+                        }),
                         runner_pool_id: pool_ids.first().map(String::as_str),
                     },
                 )
@@ -585,7 +592,7 @@ impl ArchiveCommand {
     }
 }
 
-/// The repository request of `useful project update`, the first it sends (REQ-PROJECT-102).
+/// The repository request of `useful project update`, the first it sends.
 enum RepositoryChange {
     /// `--repository`, bound through the connection that reaches it, with `--default-branch` as
     /// its branch or else the provider's default.
@@ -649,7 +656,7 @@ type UpdateRequest<'a> = Box<dyn Fn(&ProjectApi, &str) -> Result<Project, Projec
 
 /// Sends the repository request, then the rename, each only when asked and each under its own
 /// key; the finder reads before either, so its refusals change nothing. A request that fails
-/// after another succeeded is reported with what was applied (REQ-PROJECT-102).
+/// after another succeeded is reported with what was applied.
 fn update(
     deployment: &Deployment,
     options: &Options,

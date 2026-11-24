@@ -367,8 +367,8 @@ fn cancellation_source_rearms_graceful_cancellation_and_authorizes_one_force_abo
     );
 }
 
-// REQ-WFEXEC-90: a child run's source answers a force abort that follows a graceful
-// cancellation, which its graceful reason alone cannot show.
+// A child run's source answers a force abort that follows a graceful cancellation,
+// which its graceful reason alone cannot show.
 #[tokio::test]
 async fn a_force_abort_after_a_graceful_cancellation_wakes_a_force_abort_waiter() {
     crate::workflow::test_support::host_scaled_watchdog(
@@ -590,7 +590,6 @@ fn admission_rejects_capacity_reused_after_source_closure_changes() {
     );
 }
 
-// REQ-WFRECOVERY-15
 #[test]
 fn admission_rejects_recovery_placement_capacity_and_binding_before_execution() {
     let fixture = WorkflowFixture::new(RECOVERY_AGENT_WORKFLOW);
@@ -687,7 +686,6 @@ fn admission_rejects_recovery_placement_capacity_and_binding_before_execution() 
     );
 }
 
-// REQ-AGENT-14
 #[test]
 fn admission_pins_every_pi_configuration_and_bound_without_native_or_mutable_lookups() {
     let source = all_thinking_levels_workflow();
@@ -865,7 +863,6 @@ fn internal_claude_admission_retains_native_effort_and_profile_limits() {
     );
 }
 
-// REQ-AGENT-14
 #[test]
 fn codex_admission_preserves_the_exact_installation_configuration_and_limits() {
     let fixture = WorkflowFixture::new(AGENT_WORKFLOW);
@@ -1315,7 +1312,6 @@ fn admission_rejects_invalid_execution_limits_and_out_of_bounds_cancellation_pol
     );
 }
 
-// REQ-WFFORMAT-31
 #[test]
 fn admission_rejects_missing_required_input_and_unsupported_agent_steps_at_typed_locations() {
     let missing_inputs = WorkflowFixture::new(COMMAND_WORKFLOW);
@@ -1356,7 +1352,6 @@ fn admission_rejects_missing_required_input_and_unsupported_agent_steps_at_typed
     );
 }
 
-// REQ-WFFORMAT-31
 #[test]
 fn admission_rejects_wrong_and_extra_named_input_bindings() {
     let fixture = WorkflowFixture::new(COMMAND_WORKFLOW);
@@ -1475,7 +1470,6 @@ fn json_input_admission_preserves_null_and_applies_the_retained_schema() {
     );
 }
 
-// REQ-LOCALRUN-167
 #[test]
 fn file_input_admission_preserves_exact_media_type_without_sniffing_for_local_and_runner() {
     let constrained = WorkflowFixture::new(
@@ -1550,7 +1544,6 @@ fn file_input_admission_preserves_exact_media_type_without_sniffing_for_local_an
     );
 }
 
-// REQ-LOCALRUN-167
 #[test]
 fn admission_rejects_invalid_attachment_media_type() {
     let fixture = WorkflowFixture::new(COMMAND_WORKFLOW);
@@ -1598,7 +1591,6 @@ fn managed_runner_environment_removes_git_trace_redaction_overrides() {
     );
 }
 
-// REQ-WFEXEC-22
 #[test]
 fn cloud_source_revision_replaces_inherited_reserved_values_while_local_has_none() {
     let fixture = WorkflowFixture::new(COMMAND_WORKFLOW);
@@ -1691,12 +1683,11 @@ fn environment_variable<'a>(admitted: &'a AdmittedWorkflow, name: &str) -> Optio
         .variable(OsStr::new(name))
 }
 
-// REQ-WFEXEC-55
 #[test]
 fn a_tree_run_rejects_a_missing_required_tool_by_name() {
     let fixture = WorkflowFixture::new(&tree_root_workflow("[bin]"));
     let tool = fixture.source_root.join("bin").join(REQUIRED_TOOL);
-    // Present but not executable: the lookup skips it as REQ-WFEXEC-20 does.
+    // Present but not executable: the lookup skips it as a command's program lookup does.
     write_program(&tool, 0o644);
     let admit = |environment: EnvironmentSnapshot| {
         admit_local_workflow(
@@ -1733,7 +1724,6 @@ fn a_tree_run_rejects_a_missing_required_tool_by_name() {
     );
 }
 
-// REQ-WFDEF-47, REQ-WFEXEC-55
 #[test]
 fn a_tree_run_admits_integrations_without_tools_and_probes_nothing() {
     let fixture = WorkflowFixture::new(
@@ -1757,7 +1747,6 @@ fn a_tree_run_admits_integrations_without_tools_and_probes_nothing() {
     );
 }
 
-// REQ-WFEXEC-53
 #[test]
 fn a_bound_tree_copy_leads_path_and_sets_useful_workflow_root() {
     let fixture = WorkflowFixture::new(&tree_root_workflow("[bin, scripts]"));
@@ -1809,7 +1798,6 @@ fn a_bound_tree_copy_leads_path_and_sets_useful_workflow_root() {
     );
 }
 
-// REQ-WFEXEC-22
 #[test]
 fn a_launching_useful_workflow_root_never_reaches_a_step() {
     let fixture = WorkflowFixture::new(&tree_root_workflow("[bin]"));
@@ -1847,7 +1835,6 @@ fn a_launching_useful_workflow_root_never_reaches_a_step() {
     );
 }
 
-// REQ-WFFORMAT-33
 #[test]
 fn direct_commit_selection_omits_workspace_branch_but_retains_definition_provenance() {
     let fixture = WorkflowFixture::new(COMMAND_WORKFLOW);
@@ -1932,7 +1919,6 @@ fn workflow_admission_only_forwards_base_and_explicit_safe_names() {
     }
 }
 
-// REQ-WFEXEC-22
 #[test]
 fn workflow_admission_forwards_only_the_declared_grant_token_names() {
     let environment = EnvironmentSnapshot::new([
@@ -1963,7 +1949,6 @@ fn workflow_admission_forwards_only_the_declared_grant_token_names() {
     );
 }
 
-// INV-ENGINE-31, INV-ENGINE-63
 #[test]
 fn node_narrowing_drops_only_root_names_the_node_omits() {
     let environment = EnvironmentSnapshot::new([
@@ -2011,7 +1996,7 @@ fn node_narrowing_drops_only_root_names_the_node_omits() {
     );
 }
 
-/// The twelve environment names of the seven declarable integrations (REQ-WFEXEC-85).
+/// The twelve environment names of the seven declarable integrations.
 const INTEGRATION_ENVIRONMENT: [(&str, &str); 12] = [
     ("GH_TOKEN", "launching-gh-token"),
     ("GH_TOKEN_FILE", "/launching/gh-token"),
@@ -2075,7 +2060,6 @@ fn launching_values(names: &[&'static str]) -> Vec<(&'static str, &'static str)>
     values
 }
 
-// REQ-WFEXEC-78, REQ-WFEXEC-85, INV-ENGINE-43, INV-ENGINE-63
 #[test]
 fn admission_keeps_the_environment_names_of_each_declared_integration() {
     for (provider, names) in [
@@ -2143,7 +2127,6 @@ fn admission_keeps_the_environment_names_of_each_declared_integration() {
     );
 }
 
-// REQ-WFEXEC-78, INV-ENGINE-63
 #[test]
 fn runner_admission_keeps_the_environment_names_of_a_declared_integration() {
     let fixture = WorkflowFixture::new(&declaring_workflow(
@@ -2161,7 +2144,6 @@ fn runner_admission_keeps_the_environment_names_of_a_declared_integration() {
     );
 }
 
-// REQ-WFEXEC-86, REQ-WFEXEC-71, REQ-WFRECOVERY-64, INV-ENGINE-31, INV-ENGINE-63
 #[test]
 fn no_node_list_removes_the_names_of_a_declared_integration() {
     let fixture = WorkflowFixture::new(
@@ -2262,7 +2244,6 @@ fn assert_failure(
     assert_eq!(failure.location(), &location);
 }
 
-// REQ-OUTPUTS-13
 #[test]
 fn default_policy_admits_the_capture_and_agent_payload_limits() {
     // The default policy is what `useful workflow run create` and the runner hand to admission.
@@ -2360,8 +2341,8 @@ fn design_step() -> AdmissionLocation {
     }
 }
 
-// REQ-WFEXEC-91, REQ-WFFORMAT-94: a local run of a workflow with `workflow` steps comes from
-// a tree, and a runner refuses one outside a tree.
+// A local run of a workflow with `workflow` steps comes from a tree, and a runner refuses
+// one outside a tree.
 #[test]
 fn workflow_steps_need_a_tree_locally_and_are_refused_by_runner_admission() {
     let fixture = child_step_fixture(CHILD_STEP_WORKFLOW);
@@ -2387,7 +2368,7 @@ fn workflow_steps_need_a_tree_locally_and_are_refused_by_runner_admission() {
     );
 }
 
-// REQ-WFEXEC-92, REQ-WFFORMAT-120: an edge whose target is a wait is refused at admission.
+// An edge whose target is a wait is refused at admission.
 #[test]
 fn an_edge_to_a_wait_is_refused_at_admission() {
     let fixture = child_step_fixture(WAITING_CHILD_STEP_WORKFLOW);
@@ -2403,9 +2384,8 @@ fn an_edge_to_a_wait_is_refused_at_admission() {
     );
 }
 
-// REQ-WFEXEC-92: a local wait continues at a step, so an `answer`, `approval`, `repair` or
-// `stop` wait whose `then` is an exit is refused; the same wait continuing at its own step
-// admits (REQ-WFFORMAT-120).
+// A local wait continues at a step, so an `answer`, `approval`, `repair` or `stop` wait
+// whose `then` is an exit is refused; the same wait continuing at its own step admits.
 #[test]
 fn a_wait_that_continues_at_an_exit_is_refused_at_admission() {
     let admit = |then: &str| {
@@ -2432,8 +2412,8 @@ fn a_wait_that_continues_at_an_exit_is_refused_at_admission() {
     assert!(admit("design").is_ok());
 }
 
-// REQ-WFEXEC-93, REQ-WFEXEC-125: an `external` wait admits when the caller's condition
-// sources evaluate its rule's `source` and `event`, and is refused at the step otherwise.
+// An `external` wait admits when the caller's condition sources evaluate its rule's
+// `source` and `event`, and is refused at the step otherwise.
 #[test]
 fn an_external_wait_admits_only_on_a_supported_condition() {
     let external = WAITING_CHILD_STEP_WORKFLOW.replace("then: exit.failed", "then: design");

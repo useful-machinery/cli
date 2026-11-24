@@ -1,10 +1,10 @@
 # Architecture
 
-> This file is the enforced summary of the `useful` executable's source boundary. The full
-> living descriptions are architecture chapters 12,
-> [CLI executable](../docs/architecture/12-cli-executable.md), 13,
-> [Workflow execution engine](../docs/architecture/13-workflow-execution-engine.md), and 14,
-> [Agent harness adapters and qualification](../docs/architecture/14-harness-adapters.md).
+> This file is the enforced summary of the `useful` executable's source boundary. The
+> architecture chapters [CLI executable](../docs/architecture/12-cli-executable.md),
+> [Workflow execution engine](../docs/architecture/13-workflow-execution-engine.md) and
+> [Agent harness adapters and qualification](../docs/architecture/14-harness-adapters.md)
+> describe the same components for the whole repository.
 
 ## Current state
 
@@ -30,7 +30,7 @@ establishes only the selected closed harness installation, not complete runner r
 
 `useful` provides one installation and command tree. The root binary's thin command
 entrypoint under `src/cli/` dispatches to unpublished workspace crates with distinct
-responsibilities, whose dependency graph chapter 12 pins:
+responsibilities, whose dependency graph `tests/architecture.rs` pins:
 
 - human-facing commands in `src/cli/` perform short-lived public API operations, with
   human sign-in and credential storage in `crates/human-auth`;

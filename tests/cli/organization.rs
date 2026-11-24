@@ -309,7 +309,6 @@ fn organization_has_no_alias_and_create_requires_a_display_name() {
     }
 }
 
-// REQ-ORG-33, REQ-ORG-43, REQ-ORG-44
 #[test]
 fn human_create_has_exact_output_and_request_contract() {
     let (server, _directory, _path, credential_path) =
@@ -367,7 +366,6 @@ fn human_create_has_exact_output_and_request_contract() {
     );
 }
 
-// REQ-AUTH-48, REQ-ORG-46
 #[test]
 fn service_create_sends_explicit_delegator_without_using_human_credentials() {
     const SERVICE_KEY: &str =
@@ -414,7 +412,6 @@ fn service_create_sends_explicit_delegator_without_using_human_credentials() {
     );
 }
 
-// REQ-ORG-38
 #[test]
 fn service_create_name_gate_points_to_the_nominated_human_without_private_fields() {
     const SERVICE_KEY: &str =
@@ -454,7 +451,6 @@ fn service_create_name_gate_points_to_the_nominated_human_without_private_fields
     server.finish();
 }
 
-// REQ-ORG-46
 #[test]
 fn service_create_requires_explicit_human_delegator() {
     const SERVICE_KEY: &str =
@@ -488,7 +484,6 @@ fn service_create_requires_explicit_human_delegator() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-ORG-33, REQ-ORG-44
 #[test]
 fn json_create_reports_schema_one_and_supplied_slug() {
     let (server, _directory, _path, credential_path) =
@@ -538,7 +533,6 @@ fn json_create_reports_schema_one_and_supplied_slug() {
     );
 }
 
-// REQ-ORG-43
 #[test]
 fn create_retries_one_ambiguous_failure_with_the_same_complete_request() {
     let (server, _directory, _path, credential_path) =
@@ -569,7 +563,6 @@ fn create_retries_one_ambiguous_failure_with_the_same_complete_request() {
     );
 }
 
-// REQ-ORG-86, REQ-ORG-38, REQ-ORG-39, REQ-ORG-40, REQ-ORG-41, REQ-ORG-45, REQ-ORG-80
 #[test]
 fn create_expected_outcomes_have_exact_json_and_exit_statuses() {
     let cases = [
@@ -740,7 +733,6 @@ fn create_expected_outcomes_have_exact_json_and_exit_statuses() {
     }
 }
 
-// REQ-ORG-43, REQ-ORG-45
 #[test]
 fn two_ambiguous_create_failures_report_an_unconfirmed_result() {
     let (server, _directory, _path, credential_path) =
@@ -768,7 +760,6 @@ fn two_ambiguous_create_failures_report_an_unconfirmed_result() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-ORG-41
 #[test]
 fn malformed_rate_limit_metadata_is_a_protocol_failure() {
     for retry_after in [None, Some("invalid"), Some("+42"), Some("0")] {
@@ -813,7 +804,6 @@ fn malformed_rate_limit_metadata_is_a_protocol_failure() {
     }
 }
 
-// REQ-AUTH-44, REQ-AUTH-45
 #[test]
 fn unauthorized_removes_only_the_rejected_credential_and_forbidden_retains_it() {
     for (response, expected_status, expect_credential) in [
@@ -875,7 +865,6 @@ fn unauthorized_removes_only_the_rejected_credential_and_forbidden_retains_it() 
     }
 }
 
-// REQ-ORG-53
 #[test]
 fn show_success_preserves_schema_and_the_valid_reference_target() {
     let (server, _directory, _path, credential_path) =
@@ -921,7 +910,6 @@ fn show_success_preserves_schema_and_the_valid_reference_target() {
     assert!(useful_test_support::request_header(&request, "idempotency-key").is_none());
 }
 
-// REQ-AUTH-45
 #[test]
 fn a_rejected_request_does_not_remove_a_concurrently_replaced_credential() {
     let response = organization_problem(
@@ -991,7 +979,6 @@ fn a_rejected_request_does_not_remove_a_concurrently_replaced_credential() {
     );
 }
 
-// REQ-ORG-64
 #[test]
 fn organization_commands_have_closed_transport_and_protocol_failures() {
     let cases = [
@@ -1103,7 +1090,6 @@ fn organization_commands_have_closed_transport_and_protocol_failures() {
     }
 }
 
-// REQ-ORG-51, REQ-ORG-56
 #[test]
 fn organization_commands_reject_invalid_cli_input_before_deployment_loading() {
     for args in [
@@ -1162,7 +1148,6 @@ fn organization_commands_reject_invalid_cli_input_before_deployment_loading() {
     }
 }
 
-// REQ-ORG-56, REQ-ORG-62
 #[test]
 fn update_accepts_each_patch_shape_and_preserves_the_request_contract() {
     let cases = [
@@ -1235,7 +1220,6 @@ fn update_accepts_each_patch_shape_and_preserves_the_request_contract() {
     }
 }
 
-// REQ-ORG-62
 #[test]
 fn human_update_has_exact_success_output() {
     let (server, _directory, _path, credential_path) =
@@ -1273,7 +1257,6 @@ fn human_update_has_exact_success_output() {
     server.finish();
 }
 
-// REQ-ORG-63
 #[test]
 fn update_expected_outcomes_have_exact_json_and_exit_statuses() {
     let cases = [
@@ -1328,7 +1311,6 @@ fn update_expected_outcomes_have_exact_json_and_exit_statuses() {
     }
 }
 
-// REQ-ORG-49, REQ-ORG-50, REQ-ORG-51, REQ-ORG-88
 #[test]
 fn organization_list_emits_one_visibility_preserving_page() {
     let cursor = "next page /+=";
@@ -1398,7 +1380,6 @@ fn organization_list_emits_one_visibility_preserving_page() {
     assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
 }
 
-// REQ-ORG-49
 #[test]
 fn human_organization_list_exposes_identity_and_history_without_synthesizing_profile_data() {
     let (server, _directory, _path, credential_path) = prepared_organization(
@@ -1425,7 +1406,6 @@ fn human_organization_list_exposes_identity_and_history_without_synthesizing_pro
     server.finish();
 }
 
-// REQ-ORG-52
 #[test]
 fn human_organization_list_api_failure_uses_the_diagnostic_stream() {
     let response = organization_problem(
@@ -1447,7 +1427,6 @@ fn human_organization_list_api_failure_uses_the_diagnostic_stream() {
     server.finish();
 }
 
-// REQ-ORG-50
 #[test]
 fn organization_list_rejects_responses_that_violate_profile_visibility() {
     let malformed_pages = [
@@ -1512,7 +1491,6 @@ fn organization_list_rejects_responses_that_violate_profile_visibility() {
     }
 }
 
-// REQ-MEMBER-37
 #[test]
 fn members_list_preserves_omitted_and_opaque_query_values() {
     let cases = [
@@ -1564,7 +1542,6 @@ fn members_list_preserves_omitted_and_opaque_query_values() {
     }
 }
 
-// REQ-MEMBER-34, REQ-MEMBER-36, REQ-MEMBER-37
 #[test]
 fn json_members_list_emits_one_continued_page_exactly() {
     let items = serde_json::json!([
@@ -1646,7 +1623,6 @@ fn json_members_list_emits_one_continued_page_exactly() {
     );
 }
 
-// REQ-MEMBER-38
 #[test]
 fn human_and_empty_members_pages_have_exact_output() {
     let items = serde_json::json!([
@@ -1798,8 +1774,6 @@ fn members_list_rejects_explicit_null_optional_fields() {
     assert!(standard_outputs.iter().all(Vec::is_empty));
 }
 
-// REQ-MEMBER-37, REQ-MEMBER-40, REQ-MEMBER-48, REQ-MEMBER-50
-// REQ-ORG-65
 #[test]
 fn membership_management_workflow_has_stable_json_and_request_contracts() {
     let history_items = membership_history_items();
@@ -1949,8 +1923,6 @@ fn membership_management_workflow_has_stable_json_and_request_contracts() {
     }
 }
 
-// REQ-MEMBER-51, REQ-MEMBER-55
-// REQ-ORG-67
 #[test]
 fn membership_management_preserves_closed_authorization_and_conflict_outcomes() {
     let cases = [
@@ -2044,7 +2016,6 @@ fn membership_management_preserves_closed_authorization_and_conflict_outcomes() 
     }
 }
 
-// REQ-MEMBER-38, REQ-MEMBER-43, REQ-MEMBER-55
 #[test]
 fn membership_management_human_reports_use_the_expected_streams() {
     let (server, _directory, _path, credential_path) = prepared_organization(
@@ -2118,7 +2089,6 @@ fn membership_management_human_reports_use_the_expected_streams() {
     server.finish();
 }
 
-// REQ-MEMBER-50
 #[test]
 fn organization_member_remove_rejects_self_route_alias() {
     let output = run_with_env(
@@ -2140,8 +2110,6 @@ fn organization_member_remove_rejects_self_route_alias() {
     assert!(output.stdout.is_empty());
 }
 
-// REQ-MEMBER-50
-// REQ-ORG-65
 #[test]
 fn terminal_membership_commands_require_explicit_confirmation() {
     for args in [
@@ -2165,7 +2133,6 @@ fn terminal_membership_commands_require_explicit_confirmation() {
     }
 }
 
-// REQ-AUTH-47, REQ-ORG-52, REQ-ORG-63
 #[test]
 fn organization_commands_report_missing_credentials_without_network_requests() {
     for args in [
@@ -2214,8 +2181,6 @@ fn organization_commands_report_missing_credentials_without_network_requests() {
     }
 }
 
-// REQ-MEMBER-39
-// REQ-ORG-53, REQ-ORG-63
 #[test]
 fn organization_commands_keep_private_not_found_outputs_identical() {
     for base_args in [
@@ -2368,7 +2333,6 @@ pub(super) fn run_in_effect(
     (output, server.finish())
 }
 
-// REQ-ORG-87
 #[test]
 fn the_variable_names_the_organization_in_effect_without_another_request() {
     let (output, requests) = in_effect_members_list(
@@ -2384,7 +2348,6 @@ fn the_variable_names_the_organization_in_effect_without_another_request() {
     );
 }
 
-// REQ-ORG-87
 #[test]
 fn the_option_wins_over_the_variable() {
     let (output, requests) = in_effect_members_list(
@@ -2400,7 +2363,6 @@ fn the_option_wins_over_the_variable() {
     );
 }
 
-// REQ-ORG-87
 #[test]
 fn the_only_active_membership_names_the_organization_in_effect_by_its_id() {
     let (output, requests) = in_effect_members_list(
@@ -2422,7 +2384,6 @@ fn the_only_active_membership_names_the_organization_in_effect_by_its_id() {
     );
 }
 
-// REQ-ORG-87
 #[test]
 fn several_memberships_and_no_checkout_name_no_organization_and_change_nothing() {
     let (output, requests) = in_effect_members_list(
@@ -2446,7 +2407,6 @@ fn several_memberships_and_no_checkout_name_no_organization_and_change_nothing()
     );
 }
 
-// REQ-ORG-87
 #[test]
 fn the_checkout_names_the_organization_of_the_one_project_its_remote_names() {
     let git = acme_widgets_checkout();
@@ -2482,7 +2442,6 @@ fn the_checkout_names_the_organization_of_the_one_project_its_remote_names() {
     );
 }
 
-// REQ-ORG-87
 #[test]
 fn commands_that_change_an_organization_take_it_only_as_their_argument() {
     for args in [
@@ -2504,7 +2463,6 @@ fn commands_that_change_an_organization_take_it_only_as_their_argument() {
     }
 }
 
-// REQ-ORG-53, REQ-ORG-87, REQ-ORG-88
 #[test]
 fn show_without_an_argument_shows_the_organization_in_effect() {
     let (server, _directory, _path, credential_path) =
@@ -2578,7 +2536,6 @@ fn listed_row<'a>(stdout: &'a str, membership: &str) -> Vec<&'a str> {
         .collect()
 }
 
-// REQ-ORG-88
 #[test]
 fn org_list_names_the_organization_the_variable_gave_without_another_request() {
     let (output, requests) = org_list(
@@ -2599,7 +2556,6 @@ fn org_list_names_the_organization_the_variable_gave_without_another_request() {
     assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
 }
 
-// REQ-ORG-88
 #[test]
 fn org_list_marks_the_membership_of_the_organization_the_option_names() {
     let page = || {
@@ -2637,7 +2593,6 @@ fn org_list_marks_the_membership_of_the_organization_the_option_names() {
     assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
 }
 
-// REQ-ORG-88
 #[test]
 fn org_list_names_the_only_active_membership_from_the_page_it_shows() {
     let (output, requests) = org_list(
@@ -2653,7 +2608,6 @@ fn org_list_names_the_only_active_membership_from_the_page_it_shows() {
     assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
 }
 
-// REQ-ORG-88
 #[test]
 fn org_list_with_no_organization_in_effect_prints_its_page_and_does_not_fail() {
     let page = || {
@@ -2750,7 +2704,6 @@ fn json_outcome(output: &Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| panic!("{error}: {output:?}"))
 }
 
-// REQ-MEMBER-48
 #[test]
 fn member_update_sends_the_role_change_to_the_one_member_holding_the_address_verified() {
     let first_page = membership_success(
@@ -2797,7 +2750,6 @@ fn member_update_sends_the_role_change_to_the_one_member_holding_the_address_ver
     assert_eq!(header_value(&requests[2], "idempotency-key").len(), 64);
 }
 
-// REQ-MEMBER-50
 #[test]
 fn member_remove_ends_the_membership_of_the_member_holding_the_address_verified() {
     let (output, requests) = run_in_effect(
@@ -2846,7 +2798,6 @@ fn change_by_address(address: &str, directory: impl Fn() -> Vec<u8>) -> Vec<(Out
     .collect()
 }
 
-// REQ-MEMBER-48, REQ-MEMBER-50
 #[test]
 fn an_address_no_member_holds_verified_is_not_found_and_changes_nothing() {
     for address in ["pam@example.test", "nobody@example.test"] {
@@ -2873,7 +2824,6 @@ fn an_address_no_member_holds_verified_is_not_found_and_changes_nothing() {
     }
 }
 
-// REQ-MEMBER-48, REQ-MEMBER-50
 #[test]
 fn a_directory_that_shows_no_addresses_is_forbidden_and_changes_nothing() {
     let directory = || {
@@ -2889,7 +2839,6 @@ fn a_directory_that_shows_no_addresses_is_forbidden_and_changes_nothing() {
     }
 }
 
-// REQ-MEMBER-48, REQ-MEMBER-50
 #[test]
 fn an_address_two_members_hold_verified_is_refused_naming_both() {
     let directory = || {

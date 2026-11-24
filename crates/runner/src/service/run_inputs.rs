@@ -16,7 +16,7 @@ use serde_json::Value;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use url::Url;
 
-use crate::credential::Credential;
+use crate::runner_http::ServingTarget;
 use useful_execution::{
     CaptureCancellation, ResolvedAttachment, ResolvedFile, ResolvedInput, ResolvedInputs,
     ResolvedJsonInput,
@@ -229,9 +229,7 @@ pub(super) trait RunInputBroker: Send + Sync {
 
 #[derive(Clone)]
 pub(super) struct HttpRunInputBroker {
-    manifest_endpoint: Url,
-    capability_endpoint: Url,
-    runner_credential: Credential,
+    target: ServingTarget,
     boot_id: Arc<str>,
 }
 
@@ -295,30 +293,16 @@ async fn consume_broker_chunk(
 }
 
 impl HttpRunInputBroker {
-    pub(super) fn new(
-        endpoint: &Url,
-        runner_credential: &Credential,
-        boot_id: &str,
-    ) -> Result<Self, ()> {
-        let manifest_endpoint = super::source::private_runner_http_endpoint(
-            endpoint,
-            "/v1/runner/run-inputs/manifest",
-        )?;
-        let capability_endpoint = super::source::private_runner_http_endpoint(
-            endpoint,
-            "/v1/runner/run-inputs/download-capabilities",
-        )?;
-        Ok(Self {
-            manifest_endpoint,
-            capability_endpoint,
-            runner_credential: runner_credential.clone(),
+    pub(super) fn new(target: ServingTarget, boot_id: &str) -> Self {
+        Self {
+            target,
             boot_id: Arc::from(boot_id),
-        })
+        }
     }
 
     fn request(
         &self,
-        endpoint: &Url,
+        path: &str,
         body: Value,
         limit: usize,
         cancellation: &CaptureCancellation,
@@ -326,9 +310,10 @@ impl HttpRunInputBroker {
     ) -> Result<Value, BrokerFailure> {
         ensure_current(cancellation, deadline)?;
         let (client, runtime) = broker_operation_runtime(deadline)?;
+        let target = self.target.current();
         let request = client
-            .post(endpoint.clone())
-            .bearer_auth(self.runner_credential.bearer_value())
+            .post(target.url(path))
+            .bearer_auth(target.credential().bearer_value())
             .json(&body);
         runtime.block_on(async {
             let mut response = send_broker_request(request, cancellation).await?;
@@ -378,7 +363,7 @@ impl RunInputBroker for HttpRunInputBroker {
         deadline: PreparationDeadline,
     ) -> Result<ManifestEnvelope, BrokerFailure> {
         let value = self.request(
-            &self.manifest_endpoint,
+            "/v1/runner/run-inputs/manifest",
             serde_json::json!({
                 "schemaVersion": 1,
                 "bootId": self.boot_id.as_ref(),
@@ -401,7 +386,7 @@ impl RunInputBroker for HttpRunInputBroker {
         deadline: PreparationDeadline,
     ) -> Result<CapabilityEnvelope, BrokerFailure> {
         let value = self.request(
-            &self.capability_endpoint,
+            "/v1/runner/run-inputs/download-capabilities",
             serde_json::json!({
                 "schemaVersion": 1,
                 "bootId": self.boot_id.as_ref(),
@@ -1480,7 +1465,6 @@ mod tests {
         assert!(!deadline.contains_expiry(now + time::Duration::minutes(16)));
     }
 
-    // INV-STORAGE-3
     #[test]
     fn canonical_encoder_matches_shared_digest_vectors() {
         let fixture: Value = serde_json::from_str(include_str!(
@@ -1498,7 +1482,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNINPUT-40, REQ-RUNINPUT-71
     #[test]
     fn verifies_manifest_before_download_and_preserves_file_and_collection_order() {
         let empty = Vec::new();
@@ -1626,7 +1609,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNINPUT-41
     #[test]
     fn digest_mismatch_prevents_capabilities_and_downloads_and_null_projection_is_call_free() {
         let manifest = ManifestV1 {
@@ -1663,7 +1645,6 @@ mod tests {
         assert_eq!(*broker.manifest_calls.lock().unwrap(), 1);
     }
 
-    // REQ-RUNINPUT-40
     #[test]
     fn materialization_batches_exact_members_at_boundaries_and_preserves_values() {
         for member_count in [99, 100, 101, MAXIMUM_ATTACHMENTS + 1] {
@@ -1856,7 +1837,6 @@ mod tests {
         assert_private_root_empty(private.path());
     }
 
-    // REQ-RUNINPUT-41
     #[test]
     fn content_failures_are_classified_and_remove_staging() {
         assert_eq!(
@@ -1899,7 +1879,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNINPUT-40
     #[test]
     fn json_download_preserves_original_bytes_and_rejects_duplicates() {
         let source = b"{ \"z\": null, \"n\": 1.2300 }\n".to_vec();
@@ -1983,6 +1962,21 @@ mod tests {
     }
 
     #[test]
+    fn run_input_broker_requests_follow_the_serving_target() {
+        crate::runner_http::test_server::assert_promoted_bearer(
+            |target| HttpRunInputBroker::new(target, "boot"),
+            |broker| {
+                let _ = broker.manifest(
+                    "assignment",
+                    "spec",
+                    &CaptureCancellation::default(),
+                    deadline(),
+                );
+            },
+        );
+    }
+
+    #[test]
     fn http_broker_refuses_redirects_without_contacting_the_target() {
         use std::io::{Read as _, Write as _};
         use std::net::TcpListener;
@@ -2005,11 +1999,12 @@ mod tests {
         });
         let endpoint = Url::parse("ws://127.0.0.1:1/v1/runner/connect").unwrap();
         let broker = HttpRunInputBroker::new(
-            &endpoint,
-            &crate::credential::test_credential(),
+            ServingTarget::new(
+                crate::runner_http::Target::new(&endpoint, &crate::credential::test_credential())
+                    .unwrap(),
+            ),
             "rbt_01k0z6r1w8f4jy2m7q9v3x5abc",
-        )
-        .unwrap();
+        );
         let result = broker.download(
             &redirect_url,
             0,

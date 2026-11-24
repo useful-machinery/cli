@@ -524,7 +524,6 @@ fn read_result(destination: &Path) -> (Vec<u8>, Value) {
     (bytes, value)
 }
 
-// REQ-EXPORTS-10, REQ-EXPORTS-11, REQ-EXPORTS-12, REQ-EXPORTS-13, REQ-EXPORTS-14
 #[test]
 fn sealed_presentation_resolves_fields_and_aliases_independently() {
     use super::super::validated::{ValidatedExportPresentation, ValidatedPresentationField};
@@ -773,7 +772,6 @@ fn prepares_metadata_only_and_carrier_cloud_results() {
     assert_eq!(document["exports"], serde_json::json!({}));
 }
 
-// REQ-EXPORTS-13
 #[test]
 fn cloud_aliases_share_carriers_with_independent_presentation() {
     use super::super::validated::{ValidatedExportPresentation, ValidatedPresentationField};
@@ -1422,7 +1420,6 @@ fn publishes_streams_within_live_tui_run_budget() {
     assert_eq!(failure.invariant(), Some(RunResultInvariant::StepMetadata));
 }
 
-// INV-ENGINE-12
 #[test]
 fn publishes_each_terminal_outcome_as_the_same_self_contained_v1_value() {
     let fixture = PublicationFixture::new();
@@ -2345,21 +2342,52 @@ fn make_harness_failed(run: &mut WorkflowRunResult, http_status: u16) {
     };
 }
 
+const VIEW_SCHEMA: &str =
+    include_str!("../../../../../schemas/workflow-view-result-v1.schema.json");
+const STATUS_SCHEMA: &str =
+    include_str!("../../../../../schemas/workflow-status-result-v1.schema.json");
+
 fn view_schema_definition(definition: &str) -> jsonschema::Validator {
-    crate::workflow::test_support::schema_definition(
-        include_str!("../../../../../schemas/workflow-view-result-v1.schema.json"),
-        definition,
-    )
+    crate::workflow::test_support::schema_definition(VIEW_SCHEMA, definition)
 }
 
 fn status_schema_definition(definition: &str) -> jsonschema::Validator {
-    crate::workflow::test_support::schema_definition(
-        include_str!("../../../../../schemas/workflow-status-result-v1.schema.json"),
-        definition,
-    )
+    crate::workflow::test_support::schema_definition(STATUS_SCHEMA, definition)
 }
 
-// REQ-EVIDENCE-27, REQ-AGENT-72
+#[test]
+fn recovery_handler_kind_enums_match_the_engine() {
+    use crate::workflow::local_run::DurableRecoveryHandlerKindV1;
+
+    for (schema, definition, expected) in [
+        (
+            VIEW_SCHEMA,
+            "StepRecovery",
+            [
+                json!(RecoveryHandlerKindV1::Cmd),
+                json!(RecoveryHandlerKindV1::Agent),
+            ],
+        ),
+        (
+            STATUS_SCHEMA,
+            "DurableRecovery",
+            [
+                json!(DurableRecoveryHandlerKindV1::Cmd),
+                json!(DurableRecoveryHandlerKindV1::Agent),
+            ],
+        ),
+    ] {
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let kinds = schema["$defs"][definition]["properties"]["handlerKind"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(kinds.len(), expected.len(), "{definition}: {kinds:?}");
+        for kind in expected {
+            assert!(kinds.contains(&kind), "{definition} lacks {kind}");
+        }
+    }
+}
+
 #[test]
 fn failed_node_of_a_local_result_carries_its_classified_diagnostic() {
     let fixture = PublicationFixture::new();
@@ -2453,7 +2481,6 @@ fn failed_node_of_a_local_result_carries_its_classified_diagnostic() {
     );
 }
 
-// REQ-EVIDENCE-27
 #[test]
 fn failed_node_diagnostic_omits_an_http_status_outside_the_published_range() {
     let fixture = PublicationFixture::new();
@@ -2484,7 +2511,6 @@ fn failed_node_diagnostic_omits_an_http_status_outside_the_published_range() {
     }
 }
 
-// REQ-EVIDENCE-27
 #[test]
 fn failed_node_diagnostic_decodes_the_input_and_launch_facts_of_the_one_projection() {
     use crate::workflow::agent::AgentInputKind;
@@ -2546,7 +2572,6 @@ fn rejected_pi_agent_failure() -> crate::workflow::agent::AgentFailure {
     failure
 }
 
-// REQ-DIAG-39, REQ-EVIDENCE-12
 #[test]
 fn structured_agent_failure_keeps_protocol_rejection_out_of_node_detail() {
     let failure = rejected_pi_agent_failure();
@@ -2574,7 +2599,6 @@ fn launch_failure_projects_only_contract_supported_recovery_cause() {
     );
 }
 
-// REQ-WFRECOVERY-37, REQ-WFRECOVERY-40 (AUTO-342)
 #[test]
 fn a_recovery_rounds_failure_carries_no_protocol_rejection() {
     let failure = rejected_pi_agent_failure();
@@ -2605,7 +2629,6 @@ fn a_recovery_rounds_failure_carries_no_protocol_rejection() {
     }
 }
 
-// REQ-LOCALRUN-134
 #[test]
 fn incomplete_command_output_selects_local_failure_status_without_changing_outcome() {
     let fixture = PublicationFixture::new();
@@ -2709,7 +2732,7 @@ fn recovered_invocation_with_incomplete_diagnostics_selects_local_failure_status
     );
 }
 
-/// `run` failed by an interruption with `reason` at its `terminal` step (REQ-WFEXEC-69).
+/// `run` failed by an interruption with `reason` at its `terminal` step.
 fn make_interrupted(run: &mut WorkflowRunResult, reason: CancellationReason) {
     let detail = crate::workflow::evidence::FailureDetail::interrupted_in_execution();
     run.steps[1].state = StepState::Failed {
@@ -2732,7 +2755,7 @@ fn make_interrupted(run: &mut WorkflowRunResult, reason: CancellationReason) {
 }
 
 /// A `repair` wait at `build`, entered for a child the interruption `interrupted` failed when
-/// it carries one (REQ-WFEXEC-100), or kept by the interruption `kept` (REQ-WFEXEC-72).
+/// it carries one, or kept by the interruption `kept`.
 fn repair_wait(
     interrupted: Option<CancellationReason>,
     kept: Option<CancellationReason>,
@@ -2755,11 +2778,10 @@ fn repair_wait(
     }
 }
 
-// REQ-WFEXEC-40, REQ-WFEXEC-69, REQ-WFEXEC-70, REQ-WFEXEC-72, SC-WFEXEC-4: an attempt an
-// interruption ended exits by its reason, 130 for `user_request` and 143 for
-// `termination_request`, whether it failed on the interrupted step, waits on the repair an
-// interrupted stage routed to or keeps the wait it continued from; a required failure recorded
-// before the interruption keeps exit 1, and any other wait exits 0.
+// SC-WFEXEC-4: an attempt an interruption ended exits by its reason, 130 for `user_request`
+// and 143 for `termination_request`, whether it failed on the interrupted step, waits on the
+// repair an interrupted stage routed to or keeps the wait it continued from; a required
+// failure recorded before the interruption keeps exit 1, and any other wait exits 0.
 #[test]
 fn an_interrupted_attempt_exits_by_the_interruptions_reason() {
     let fixture = PublicationFixture::new();
@@ -2813,7 +2835,7 @@ fn an_interrupted_attempt_exits_by_the_interruptions_reason() {
         ExecutionOutcome::Succeeded
     );
 
-    // REQ-LOCALRUN-134: an undrained stream still exits 1.
+    // An undrained stream still exits 1.
     let mut undrained = base.clone();
     make_interrupted(&mut undrained, CancellationReason::UserRequest);
     undrained.steps[0].command_output = Some(diagnostic(false));
@@ -2823,8 +2845,8 @@ fn an_interrupted_attempt_exits_by_the_interruptions_reason() {
     );
 }
 
-// REQ-WFEXEC-40, REQ-LOCALRUN-291: a `continued` attempt whose next attempt the interruption
-// held back exits by the interruption's reason; one that continues exits 0.
+// A `continued` attempt whose next attempt the interruption held back exits by the
+// interruption's reason; one that continues exits 0.
 #[test]
 fn a_continued_attempt_held_back_by_an_interruption_exits_by_its_reason() {
     let fixture = PublicationFixture::new();

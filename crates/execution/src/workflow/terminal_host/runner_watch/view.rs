@@ -1,12 +1,12 @@
-//! What the runner viewer draws: plain data its source maps a runner's overview into
-//! (REQ-RUNNERENROLL-140). Every text is drawn as received after it is made visible, and
-//! every word this release does not know keeps the neutral mark.
+//! What the runner viewer draws: plain data its source maps a runner's overview into.
+//! Every text is drawn as received after it is made visible, and every word this release
+//! does not know keeps the neutral mark.
 
 use std::time::Duration;
 
 use time::OffsetDateTime;
 
-/// A mark the viewer draws beside a word, never in place of it (REQ-LOCALRUN-6).
+/// A mark the viewer draws beside a word, never in place of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunnerWatchMark {
     /// Working, or connected: `●`.
@@ -170,7 +170,7 @@ pub struct RunnerWatchRunElement {
 }
 
 /// One run of an assignment as a runner read it: the root, or the child run a path names.
-/// Every word is the engine's as received; the host reads it (REQ-RUNNERENROLL-135).
+/// Every word is the engine's as received; the host reads it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunnerWatchRun {
     /// The child run's path from the root, outermost first; empty for the root.
@@ -259,8 +259,8 @@ pub struct RunnerWatchChildRun {
     pub outcome: Option<String>,
 }
 
-/// What an assignment read asks a runner for (REQ-RUNNERENROLL-144): one assignment, the
-/// child run its path names, the root when it is empty, and the step whose output is wanted.
+/// What an assignment read asks a runner for: one assignment, the child run its path names,
+/// the root when it is empty, and the step whose output is wanted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunnerWatchAssignmentQuery {
     pub assignment_id: String,
@@ -286,8 +286,8 @@ pub struct RunnerWatchHeldAssignment {
     pub log: Option<RunnerWatchLog>,
 }
 
-/// A step's retained output, the end of the assignment's run log, or a step's records
-/// (REQ-RUNNERENROLL-145).
+/// A step's retained output, the end of the assignment's run log, or a step's
+/// records.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunnerWatchLog {
     pub source: RunnerWatchLogSource,
@@ -372,9 +372,8 @@ pub struct RunnerWatchEvent {
     pub mark: RunnerWatchMark,
 }
 
-/// How a runner answered an operation the viewer sent it (REQ-RUNNERENROLL-142): each
-/// variant carries the short facts to show, worded by the source, which the viewer lays out
-/// whole.
+/// How a runner answered an operation the viewer sent it: each variant carries the short
+/// facts to show, worded by the source, which the viewer lays out whole.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunnerWatchOutcome {
     /// The runner did what was asked.

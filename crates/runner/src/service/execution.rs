@@ -190,7 +190,7 @@ pub(super) struct ExecutionAuthority {
     pub(super) infrastructure_interruption:
         tokio::sync::watch::Receiver<Option<InfrastructureInterruption>>,
     /// The runner's command fence, which a single-workflow run's execution enters before
-    /// its engine starts and stays in until the engine's execution ends (INV-RUNNER-53).
+    /// its engine starts and stays in until the engine's execution ends.
     pub(super) command_fence: Arc<CommandFence>,
 }
 
@@ -284,11 +284,11 @@ pub(super) struct ExecutionJob {
     /// The view of a single-workflow run the manager also holds; none for a tree run.
     view: Option<AssignmentRunView>,
     /// The fence a single-workflow run's execution stays in while its engine executes; a tree
-    /// run's commands enter it on their own (INV-RUNNER-53).
+    /// run's commands enter it on their own.
     command_fence: Arc<CommandFence>,
     /// The start gate a single-workflow run's engine consults before each command or agent
-    /// step (REQ-RUNNERENROLL-155): the disk monitor's published reading, or an empty
-    /// reading, which never holds a step, when the service runs no monitor.
+    /// step: the disk monitor's published reading, or an empty reading, which never holds
+    /// a step, when the service runs no monitor.
     start_gate: Arc<dyn StepStartGate>,
 }
 
@@ -451,7 +451,7 @@ fn workflow_step_kind_policy(step: &ValidatedStep) -> (WorkflowRunStepKind, Fail
             (WorkflowRunStepKind::Command, command.common.failure_policy)
         }
         ValidatedStep::Agent(agent) => (WorkflowRunStepKind::Agent, agent.common.failure_policy),
-        // Cloud admission refuses a `workflow` step (REQ-WFFORMAT-94) before one runs.
+        // Cloud admission refuses a `workflow` step before one runs.
         ValidatedStep::Workflow(workflow) => (
             WorkflowRunStepKind::Workflow,
             workflow.common.failure_policy,

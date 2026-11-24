@@ -2953,13 +2953,15 @@ pub(crate) fn opening_hello(
         },
         runner_version: runner_version.to_owned(),
         tree_execution: true,
-        // It adopts a retained tree run on a continuation offer (REQ-RUNNERENROLL-89).
+        // It adopts a retained tree run on a continuation offer.
         tree_continuation: true,
-        // It applies a `withdraw` control to the run it executes (REQ-RUNNERENROLL-123).
+        // It applies a `withdraw` control to the run it executes.
         tree_withdraw: true,
-        // It reads integration bindings and accounts in a tree block (REQ-RUNNERENROLL-185).
+        // It reads integration bindings and accounts in a tree block.
         tree_integration_bindings: true,
-        // It takes another run while every run it holds waits (REQ-RUNNERENROLL-313).
+        // It executes a tree run in an empty workspace without a source.
+        tree_no_source: true,
+        // It takes another run while every run it holds waits.
         holds_waiting_runs: true,
     })
     .map_err(|_| {
@@ -3660,7 +3662,6 @@ mod tests {
         assert_eq!(next_sequence, 5);
     }
 
-    // INV-RUNNER-6
     #[tokio::test]
     async fn fills_exact_observation_window_and_refills_one_fifo_slot() {
         let context = full_observation_window_context();
@@ -3751,7 +3752,6 @@ mod tests {
             .expect("decode renewal effect fixture")
     }
 
-    // INV-RUNNER-6
     #[tokio::test]
     async fn renewal_is_applied_before_a_full_observation_window_drains() {
         let context = EstablishedTestContext::new();
@@ -3977,7 +3977,6 @@ mod tests {
         assert_eq!(next_sequence, 3);
     }
 
-    // REQ-TRIGGER-136
     #[tokio::test]
     async fn trigger_delivery_is_acknowledged_as_an_effect_and_dropped_when_unheld() {
         unheld_effect_is_acknowledged_and_dropped(
@@ -3990,7 +3989,6 @@ mod tests {
         .await;
     }
 
-    // REQ-RUNNERENROLL-215
     #[tokio::test]
     async fn run_control_is_acknowledged_as_an_effect_and_dropped_when_unheld() {
         unheld_effect_is_acknowledged_and_dropped(
@@ -4105,7 +4103,6 @@ mod tests {
         assert!(effect.get("error.type").is_none());
     }
 
-    // INV-RUNNER-6
     #[tokio::test]
     async fn full_window_effect_collision_reconnects_and_both_effects_replay() {
         const OFFER_EFFECT_ID: &str = "eff_01k0z6r1w8f4jy2m7q9v3x5abg";
@@ -4206,7 +4203,6 @@ mod tests {
         );
     }
 
-    // INV-RUNNER-4
     #[tokio::test]
     async fn reconnect_never_replays_an_unacknowledged_effect_receipt() {
         let context = EstablishedTestContext::new();
@@ -4269,7 +4265,6 @@ mod tests {
         assert_eq!(next_sequence, 3, "reconnect replayed the effect receipt");
     }
 
-    // INV-RUNNER-4
     #[tokio::test]
     async fn reconnect_replays_unacknowledged_terminal_with_same_identity() {
         let context = EstablishedTestContext::new();
@@ -4695,7 +4690,6 @@ mod tests {
         received[header_end..header_end + content_length].to_vec()
     }
 
-    // REQ-RUNNERENROLL-67
     #[test]
     fn assignment_rejection_protocol_events_record_bounded_decline_values() {
         let cases = [
@@ -5001,9 +4995,6 @@ mod tests {
         clippy::result_large_err,
         reason = "tungstenite's handshake callback requires its large error type"
     )]
-    // REQ-RUNNERENROLL-31
-    // REQ-RUNNERENROLL-91
-    // REQ-TELEMETRY-12
     #[tokio::test]
     async fn authenticates_and_completes_hello_and_ping_pong() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5034,13 +5025,10 @@ mod tests {
                 serde_json::from_str(&hello).expect("decode opening hello");
             assert_eq!(hello["messageId"], OPENING_MESSAGE_ID);
             assert_eq!(hello["payload"]["treeExecution"], 1);
-            // REQ-RUNNERENROLL-89
             assert_eq!(hello["payload"]["treeContinuation"], 1);
-            // REQ-RUNNERENROLL-123
             assert_eq!(hello["payload"]["treeWithdraw"], 1);
-            // REQ-RUNNERENROLL-185, REQ-COMPAT-34
             assert_eq!(hello["payload"]["treeIntegrationBindings"], 1);
-            // REQ-RUNNERENROLL-132
+            assert_eq!(hello["payload"]["treeNoSource"], 1);
             assert_eq!(hello["payload"]["holdsWaitingRuns"], 1);
             socket.send(welcome()).await.expect("send welcome");
             socket
@@ -5317,8 +5305,8 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0]["um.run.result"], "rejected");
         assert_eq!(runs[0]["um.outcome"], "rejected");
-        // REQ-TELEMETRY-47: the run names the decline the frame carried, and no
-        // validation code for a decline that is not a refused tree.
+        // The run names the decline the frame carried, and no validation code
+        // for a decline that is not a refused tree.
         assert_eq!(runs[0]["um.protocol.decline_type"], decline["type"]);
         assert_eq!(runs[0]["um.protocol.decline_reason"], decline["reason"]);
         assert_eq!(runs[0].get("um.workflow.validation_code"), None);

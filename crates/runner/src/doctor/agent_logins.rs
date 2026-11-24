@@ -8,13 +8,13 @@ use crate::enrollment::{RunnerHome, load_disk_space_settings, load_runner_state_
 use crate::telemetry::io_error_class;
 
 /// Where a doctor check that needs the runner operator configuration finds it
-/// when it runs (REQ-RUNNERENROLL-45). Naming one reads nothing.
+/// when it runs. Naming one reads nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperatorConfigSource {
     /// The file `--config` names.
     File(PathBuf),
     /// The runner home's configuration, the home's default layout when it
-    /// holds none (REQ-RUNNERENROLL-109).
+    /// holds none.
     Home(RunnerHome),
 }
 
@@ -32,9 +32,8 @@ impl OperatorConfigSource {
         }
     }
 
-    /// The work root and the minimum of free space kept on its disk
-    /// (REQ-RUNNERENROLL-152), read without taking the state lock or reading
-    /// the state. Creates nothing.
+    /// The work root and the minimum of free space kept on its disk, read
+    /// without taking the state lock or reading the state. Creates nothing.
     pub(super) fn disk_space_settings(&self) -> Result<(PathBuf, u64), ConfigUnavailable> {
         let path = match self {
             Self::File(path) => path.clone(),
@@ -57,10 +56,10 @@ pub(super) enum ConfigUnavailable {
     Invalid,
 }
 
-/// `credentials.agent-logins` (REQ-RUNNERENROLL-86): reads the readiness the
-/// serving runner recorded beside its state. It takes no lock, contacts
-/// nothing and never reads the state file, so it never sees the runner
-/// credential; the readiness document holds no login material.
+/// `credentials.agent-logins`: reads the readiness the serving runner
+/// recorded beside its state. It takes no lock, contacts nothing and never
+/// reads the state file, so it never sees the runner credential; the
+/// readiness document holds no login material.
 pub(super) struct AgentLoginsCheck {
     config: Option<OperatorConfigSource>,
 }
@@ -134,9 +133,8 @@ impl DoctorCheck for AgentLoginsCheck {
 
 /// The check's outcome for the readiness the runner recorded: it fails for
 /// the first agent login Cloud authorized that is not ready to use, never for
-/// one in `foreign_login`, where the service's own login is in use
-/// (REQ-GRANT-51), and never for an OAuth provider's entry, which records one
-/// assignment's outcome (REQ-GRANT-159).
+/// one in `foreign_login`, where the service's own login is in use, and never
+/// for an OAuth provider's entry, which records one assignment's outcome.
 fn readiness_outcome(readiness: &AgentLoginReadiness) -> Outcome {
     let mut details = BTreeMap::new();
     for entry in &readiness.providers {
@@ -155,14 +153,14 @@ fn readiness_outcome(readiness: &AgentLoginReadiness) -> Outcome {
             status.next_action.as_str().to_owned(),
         );
         // An OAuth provider's entry of an ended assignment names its run and
-        // that end where it records them (REQ-GRANT-158).
+        // that end where it records them.
         for (suffix, value) in [("run_id", &entry.run_id), ("ended_at", &entry.ended_at)] {
             if let Some(value) = value {
                 details.insert(format!("{provider}_{suffix}"), value.clone());
             }
         }
         // Where the provider's credential comes from, where the entry
-        // records it (REQ-GRANT-92).
+        // records it.
         if let Some(source) = entry.source {
             details.insert(format!("{provider}_source"), source.as_str().to_owned());
         }
@@ -230,6 +228,7 @@ mod tests {
             checked_at: Some("2026-11-12T01:00:00Z".to_owned()),
             installed_at: None,
             grant_id: None,
+            connection_authorization_id: None,
             expires_at: None,
             earlier_selection: EarlierSelection,
             last_use: None,
@@ -240,7 +239,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-159, REQ-RUNNERENROLL-86
     #[test]
     fn the_check_passes_with_an_oauth_entry_cloud_did_not_answer() {
         let readiness = AgentLoginReadiness {
@@ -264,7 +262,7 @@ mod tests {
         assert_eq!(outcome.status, Status::Pass, "{outcome:?}");
         assert_eq!(outcome.code, "ok");
         // Each OAuth entry is reported with its state, availability and
-        // next action (REQ-GRANT-53).
+        // next action.
         for (provider, state, availability, next_action) in [
             (
                 "github",
@@ -303,7 +301,6 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-158, REQ-GRANT-159, REQ-RUNNERENROLL-309
     #[test]
     fn the_check_names_an_ended_oauth_entrys_run_and_end_and_still_passes() {
         let run_id = "run_01k0z6r1w8f4jy2m7q9v3x5abc";

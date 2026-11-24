@@ -93,8 +93,8 @@ pub(super) fn provider_repository_id(value: &str) -> bool {
         && matches!(value.parse::<i64>(), Ok(1..=i64::MAX))
 }
 
-/// A repository as `useful project create` and `update` name it, parsed with no request
-/// (REQ-PROJECT-101).
+/// A repository as `useful project create` and `update` name it, parsed with no
+/// request.
 #[derive(Clone, Debug)]
 pub(super) enum RepositoryRef {
     /// The provider's repository ID.

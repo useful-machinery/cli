@@ -1,8 +1,7 @@
 //! Keeping a delivered Claude Code login, the token `claude setup-token`
 //! printed, in a private file in the runner's agent-login directory and
-//! offering it to each assignment as `CLAUDE_CODE_OAUTH_TOKEN`
-//! (REQ-GRANT-44), while standing back when the service has a Claude
-//! Code login of its own (REQ-GRANT-45).
+//! offering it to each assignment as `CLAUDE_CODE_OAUTH_TOKEN`, while
+//! standing back when the service has a Claude Code login of its own.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
@@ -25,12 +24,12 @@ const CREDENTIALS_FILE: &str = ".credentials.json";
 /// The prefix of the temporary files the token file is written through.
 pub(crate) const TEMPORARY_PREFIX: &str = ".useful-claude-code.token.tmp";
 
-/// Whether the service already has a Claude Code login of its own: it
-/// carries `CLAUDE_CODE_OAUTH_TOKEN`, or a credentials file is present in
-/// Claude Code's configuration directory (`CLAUDE_CONFIG_DIR`, else `.claude`
-/// under `HOME`). The file is only looked at, never opened; one the runner
-/// cannot tell is absent counts as present. A login kept only in an
-/// operating-system credential store is not seen (REQ-GRANT-46).
+/// Whether the service already has a Claude Code login of its own: it carries
+/// `CLAUDE_CODE_OAUTH_TOKEN`, or a credentials file is present in Claude
+/// Code's configuration directory (`CLAUDE_CONFIG_DIR`, else `.claude` under
+/// `HOME`). The file is only looked at, never opened; one the runner cannot
+/// tell is absent counts as present. A login kept only in an operating-system
+/// credential store is not seen.
 pub(crate) fn foreign_login(environment: &ServiceEnvironment) -> bool {
     if environment.claude_code_oauth_token {
         return true;

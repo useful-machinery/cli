@@ -91,8 +91,8 @@ pub struct WorkflowRunCancellation {
 pub enum WorkflowRunStepKind {
     Command,
     Agent,
-    /// A step that runs a child workflow; like an agent it has no command output
-    /// (REQ-WFEXEC-60).
+    /// A step that runs a child workflow; like an agent it has no command
+    /// output.
     Workflow,
 }
 
@@ -107,14 +107,13 @@ pub struct WorkflowRunStep {
     pub command_output: Option<StepDiagnostic>,
     pub recovery: Option<StepRecoverySummaryV1>,
     pub invocations: Vec<RecoveryInvocationV1>,
-    /// The failed child a `succeeded` `workflow` step recorded (REQ-WFEXEC-77); `None` for
-    /// any other step.
+    /// The failed child a `succeeded` `workflow` step recorded; `None` for any other step.
     pub failed_child: Option<FailedChild>,
-    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79); `None` for any other
-    /// step and for every finalizer.
+    /// The class of a `failed` ordinary step's failure; `None` for any other step and for
+    /// every finalizer.
     pub failure_class: Option<FailureClass>,
     /// The source each `firstOf` of the step's body took; empty for a step that did not
-    /// start in the attempt and a step with no `firstOf` (REQ-EVIDENCE-28).
+    /// start in the attempt and a step with no `firstOf`.
     pub input_sources: Vec<InputSource>,
 }
 
@@ -141,20 +140,23 @@ pub struct ContinuationRecordV1 {
     pub(crate) inherited_steps: Vec<ContinuationInheritedStepV1>,
     pub(crate) definition_source: ContinuationDefinitionSourceV1,
     pub(crate) workspace: ContinuationWorkspaceV1,
-    /// Why the attempt continues (REQ-CONTINUE-77): every local continuation writes it; a
-    /// record written before it existed, and a Cloud continuation's, has none.
+    /// Why the attempt continues: every local continuation writes it; a record written
+    /// before it existed, and a Cloud continuation's, has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<ContinuationReasonV1>,
-    /// The edge a `reason` `edge` continuation took (REQ-CONTINUE-77, REQ-WFEXEC-64).
+    /// The edge a `reason` `edge` continuation took.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) edge: Option<ContinuationEdgeV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) rebuilt_workspaces: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) revalidated_steps: Vec<String>,
 }
 
-/// A continuation's `reason` (REQ-CONTINUE-77): `retry` for a `repair` wait resolved by
-/// `control.retry`, `host` for a `host` wait the host condition resolved (REQ-WFEXEC-81),
-/// `edge` for an attempt a backward or limited edge started, `restart` for the first own
-/// attempt of a successor run (REQ-CONTINUE-98), `resume` for every other local
-/// continuation.
+/// A continuation's `reason`: `retry` for a `repair` wait resolved by `control.retry`,
+/// `host` for a `host` wait the host condition resolved, `edge` for an attempt a backward
+/// or limited edge started, `restart` for the first own attempt of a successor run,
+/// `resume` for every other local continuation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContinuationReasonV1 {
@@ -165,9 +167,8 @@ pub enum ContinuationReasonV1 {
     Restart,
 }
 
-/// The edge a continuation took (REQ-CONTINUE-77): the step and child outcome whose edge it
-/// was, the step the attempt starts from and whether the taking was counted in `run.json`
-/// `edges` (REQ-WFEXEC-64, REQ-LOCALRUN-175).
+/// The edge a continuation took: the step and child outcome whose edge it was, the step the
+/// attempt starts from and whether the taking was counted in `run.json` `edges`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContinuationEdgeV1 {
@@ -189,7 +190,7 @@ impl From<TakenEdgeRecord> for ContinuationEdgeV1 {
 }
 
 impl ContinuationEdgeV1 {
-    /// The edge's key in `run.json` `edges` (REQ-WFDEF-50).
+    /// The edge's key in `run.json` `edges`.
     pub fn key(&self) -> String {
         super::runtime::edge_key(&self.step, &self.outcome)
     }
@@ -257,6 +258,8 @@ pub fn cloud_continuation_record(
         workspace,
         reason: None,
         edge: None,
+        rebuilt_workspaces: Vec::new(),
+        revalidated_steps: Vec::new(),
     };
     if super::result_metadata::validate_continuation_record(&record) {
         Ok(record)
@@ -268,6 +271,14 @@ pub fn cloud_continuation_record(
 impl ContinuationRecordV1 {
     pub fn reexecuted_steps(&self) -> &[String] {
         &self.reexecuted_steps
+    }
+
+    pub fn rebuilt_workspaces(&self) -> &[String] {
+        &self.rebuilt_workspaces
+    }
+
+    pub fn revalidated_steps(&self) -> &[String] {
+        &self.revalidated_steps
     }
 
     pub fn inherited_step_ids(&self) -> impl Iterator<Item = &str> {
@@ -677,9 +688,9 @@ pub(crate) enum WorkflowOutcomeV1 {
     Succeeded,
     Failed,
     Cancelled,
-    /// The attempt ended on a wait (REQ-WFEXEC-15, REQ-WFEXEC-61).
+    /// The attempt ended on a wait.
     Waiting,
-    /// The attempt took a backward or limited edge (REQ-WFEXEC-15, REQ-WFEXEC-64).
+    /// The attempt took a backward or limited edge.
     Continued,
 }
 
@@ -696,7 +707,7 @@ pub struct WorkflowRunTerminalResultV1 {
     attempt_number: u64,
     result_directory: String,
     result: WorkflowResultV1,
-    /// The wait record an attempt that ended `waiting` wrote (REQ-LOCALRUN-127).
+    /// The wait record an attempt that ended `waiting` wrote.
     #[serde(skip_serializing_if = "Option::is_none")]
     wait: Option<super::wait::WaitRecord>,
 }
@@ -724,8 +735,7 @@ impl WorkflowRunTerminalResultV1 {
     }
 
     /// A `continued` attempt whose next attempt an interruption with `reason` held back exits
-    /// by that reason (REQ-WFEXEC-40, REQ-LOCALRUN-135), unless a local failure already
-    /// selected exit 1 (REQ-LOCALRUN-134).
+    /// by that reason, unless a local failure already selected exit 1.
     pub fn hold_back_continuation(&mut self, reason: CancellationReason) {
         if self.outcome == WorkflowOutcomeV1::Continued
             && self.execution_outcome == ExecutionOutcome::Succeeded
@@ -740,25 +750,24 @@ impl WorkflowRunTerminalResultV1 {
     }
 
     /// Names `useful workflow run upgrade`: with `--from` the successor's first own attempt is
-    /// the command's (REQ-LOCALRUN-194); without it the command starts no attempt of its own,
-    /// and an attempt of the upgraded successor is a `resume` or `retry` (REQ-LOCALRUN-197).
+    /// the command's; without it the command starts no attempt of its own, and an attempt of
+    /// the upgraded successor is a `resume` or `retry`.
     pub fn mark_upgrade(&mut self) {
         self.command = UPGRADE_COMMAND;
     }
 
-    /// Names the control command that continued the run (REQ-LOCALRUN-182,
-    /// REQ-LOCALRUN-183).
+    /// Names the control command that continued the run.
     pub fn mark_control(&mut self, control: super::presentation::ContinuingControl) {
         self.command = control.command();
     }
 
-    /// Carries the wait record the attempt wrote (REQ-LOCALRUN-127).
+    /// Carries the wait record the attempt wrote.
     pub fn set_wait(&mut self, wait: super::wait::WaitRecord) {
         self.wait = Some(wait);
     }
 
-    /// The wait record the attempt wrote, which the summary's wait line reads
-    /// (REQ-LOCALRUN-220); `None` for an attempt that did not end `waiting`.
+    /// The wait record the attempt wrote, which the summary's wait line
+    /// reads; `None` for an attempt that did not end `waiting`.
     pub(crate) fn wait(&self) -> Option<&super::wait::WaitRecord> {
         self.wait.as_ref()
     }
@@ -1091,29 +1100,29 @@ pub struct WorkflowStepV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub detail: Option<NodeDetail>,
-    /// A failed node's classified facts in a local result only (REQ-EVIDENCE-27).
+    /// A failed node's classified facts in a local result only.
     #[serde(
         default,
         deserialize_with = "deserialize_non_null_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) diagnostic: Option<FailureDiagnosticV1>,
-    /// The failed child of a `succeeded` `workflow` step (REQ-WFEXEC-77, REQ-LOCALRUN-219).
+    /// The failed child of a `succeeded` `workflow` step.
     #[serde(
         default,
         deserialize_with = "deserialize_non_null_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) failed_child: Option<FailedChild>,
-    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79).
+    /// The class of a `failed` ordinary step's failure.
     #[serde(
         default,
         deserialize_with = "deserialize_non_null_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) failure_class: Option<FailureClass>,
-    /// The source each `firstOf` of a step that started took (REQ-EVIDENCE-28); absent
-    /// from a result an earlier `useful` published.
+    /// The source each `firstOf` of a step that started took; absent from a result an
+    /// earlier `useful` published.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) input_sources: Vec<InputSource>,
     #[serde(
@@ -1124,8 +1133,8 @@ pub struct WorkflowStepV1 {
     pub(crate) command_output: Option<CommandOutputV1>,
 }
 
-/// The classified facts a failed node's failure reports, beside its `detail`
-/// (REQ-EVIDENCE-27): the closed decoding of `FailureDetail::finalization_diagnostic()`.
+/// The classified facts a failed node's failure reports, beside its `detail`: the closed
+/// decoding of `FailureDetail::finalization_diagnostic()`.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FailureDiagnosticV1 {
@@ -1371,7 +1380,7 @@ pub(crate) struct RecoveryHandlerFailureCauseV1 {
     pub(crate) diagnostic: Option<RecoveryHandlerLaunchDiagnosticV1>,
 }
 
-/// What refused a recovery command handler's unclassified launch (REQ-WFRECOVERY-62).
+/// What refused a recovery command handler's unclassified launch.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RecoveryHandlerLaunchDiagnosticV1 {
@@ -3053,7 +3062,7 @@ fn build_result_with_provenance(
             super::runtime::RunCancellationPhase::Finalization => ForceAbortPhaseV1::Finalization,
         },
     });
-    // A Cloud result keeps byte omission of the classified diagnostic (REQ-EVIDENCE-27).
+    // A Cloud result keeps byte omission of the classified diagnostic.
     let local = matches!(provenance, WorkflowProvenanceV1::Local { .. });
     let steps = run
         .steps
@@ -3220,7 +3229,7 @@ fn finalization_v1(
 }
 
 /// `local` selects the classified `diagnostic` of a failed node, which only a local result
-/// carries (REQ-EVIDENCE-27).
+/// carries.
 fn step_v1(step: &WorkflowRunStep, local: bool) -> Result<WorkflowStepV1, LocalPublicationError> {
     let (started_at, duration_milliseconds) = match &step.timing {
         Some(timing) => (
@@ -3268,12 +3277,12 @@ fn step_v1(step: &WorkflowRunStep, local: bool) -> Result<WorkflowStepV1, LocalP
         StepState::Failed { detail } if local => FailureDiagnosticV1::project(detail)?,
         _ => None,
     };
-    // REQ-LOCALRUN-219: only a `succeeded` entry carries its failed child.
+    // Only a `succeeded` entry carries its failed child.
     let failed_child = match &step.state {
         StepState::Succeeded { .. } => step.failed_child.clone(),
         _ => None,
     };
-    // REQ-WFEXEC-79: only a `failed` entry carries its failure's class.
+    // Only a `failed` entry carries its failure's class.
     let failure_class = match &step.state {
         StepState::Failed { .. } => step.failure_class,
         _ => None,
@@ -4017,8 +4026,8 @@ fn execution_outcome(run: &WorkflowRunResult, outcome: WorkflowOutcomeV1) -> Exe
     match (outcome, &run.outcome) {
         // An attempt an interruption ended exits by its reason, whether it failed on the
         // interrupted step, waits on the repair an interrupted stage routed to or keeps the
-        // wait it continued from (REQ-WFEXEC-40, REQ-WFEXEC-69, REQ-WFEXEC-70,
-        // REQ-WFEXEC-72); a required failure recorded first is the primary issue and exits 1.
+        // wait it continued from; a required failure recorded first is the primary issue and
+        // exits 1.
         (WorkflowOutcomeV1::Failed, run_outcome) => run_outcome
             .interruption()
             .map_or(ExecutionOutcome::Failed, |interruption| {
@@ -4029,9 +4038,9 @@ fn execution_outcome(run: &WorkflowRunResult, outcome: WorkflowOutcomeV1) -> Exe
             .map(|interruption| interruption.reason)
             .or_else(|| wait.kept())
             .map_or(ExecutionOutcome::Succeeded, signal_outcome),
-        // Any other wait or a continuing edge exits 0 like a success (REQ-WFEXEC-40); the
-        // chained attempt's result decides the command's exit (REQ-WFEXEC-64), unless the
-        // interruption held it back (`hold_back_continuation`).
+        // Any other wait or a continuing edge exits 0 like a success; the chained
+        // attempt's result decides the command's exit, unless the interruption held it
+        // back (`hold_back_continuation`).
         (
             WorkflowOutcomeV1::Succeeded
             | WorkflowOutcomeV1::Waiting
@@ -4043,7 +4052,7 @@ fn execution_outcome(run: &WorkflowRunResult, outcome: WorkflowOutcomeV1) -> Exe
     }
 }
 
-/// The exit a signal's reason selects (REQ-WFEXEC-40): 130 for `user_request`, 143 for
+/// The exit a signal's reason selects: 130 for `user_request`, 143 for
 /// `termination_request`; any other reason is a failure.
 const fn signal_outcome(reason: CancellationReason) -> ExecutionOutcome {
     match reason {

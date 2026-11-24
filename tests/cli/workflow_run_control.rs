@@ -23,11 +23,11 @@ use super::workflow_run::{open_tui_pty, spawn_tui_run};
 use super::workflow_run_list::shown_plain;
 use super::workflow_status::show_error;
 
-/// The login name every control command in these tests runs as (REQ-LOCALRUN-181).
+/// The login name every control command in these tests runs as.
 pub(super) const OPERATOR: &str = "control-operator";
 
 /// `cancel`'s hidden option that records a withdrawal whatever the run's state, as the runner
-/// passes it (REQ-LOCALRUN-186, REQ-RUNNERENROLL-123).
+/// passes it.
 pub(super) const WITHDRAW: [&str; 2] = ["--control", "withdraw"];
 
 /// `useful workflow run LEAF RUN ARGS --json` as `OPERATOR`, with `USEFUL_HOME` set when `home` is.
@@ -70,7 +70,7 @@ fn json(output: &Output) -> serde_json::Value {
 }
 
 /// The document of a control `leaf` that exited 0 with `outcome`, checked against the
-/// facts every recorded control carries (REQ-LOCALRUN-181, REQ-LOCALRUN-232).
+/// facts every recorded control carries.
 pub(super) fn recorded_as(
     output: &Output,
     leaf: &str,
@@ -92,7 +92,7 @@ fn recorded(output: &Output, leaf: &str, run: &Path) -> serde_json::Value {
     recorded_as(output, leaf, "recorded", run)
 }
 
-/// The one diagnostic of a control `leaf` refused with `code`, exit 1 (REQ-LOCALRUN-233).
+/// The one diagnostic of a control `leaf` refused with `code`, exit 1.
 pub(super) fn refused(output: &Output, leaf: &str, code: &str) -> serde_json::Value {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let document = json(output);
@@ -151,8 +151,7 @@ fn answer_the_one_question(run: &Path) {
     assert_eq!(control_file(run, &document)["payload"]["complete"], true);
 }
 
-// REQ-LOCALRUN-181, REQ-LOCALRUN-182: answers accumulate per question and only the
-// complete set resolves the wait.
+// Answers accumulate per question and only the complete set resolves the wait.
 #[test]
 fn answers_accumulate_until_every_question_is_answered() {
     let questions = serde_json::json!([
@@ -233,9 +232,9 @@ fn answers_accumulate_until_every_question_is_answered() {
     assert_eq!(terminal["wait"]["kind"], "approval", "{terminal}");
 }
 
-// REQ-LOCALRUN-182: `answer` with no `--question` answers the one open question, and an
-// answer that completes the wait continues the run in the answering command; `--record-only`,
-// and an answer that leaves a question open, records the control alone for `resume`.
+// `answer` with no `--question` answers the one open question, and an answer that completes
+// the wait continues the run in the answering command; `--record-only`, and an answer that
+// leaves a question open, records the control alone for `resume`.
 #[test]
 fn an_answer_that_completes_the_wait_continues_the_run() {
     let bundle = wait_tree();
@@ -306,9 +305,9 @@ fn an_answer_that_completes_the_wait_continues_the_run() {
     );
 }
 
-// REQ-LOCALRUN-183: `approve` continues the run at the approval's `then` and `hand-back` at
-// its `onHandBack` with the notes, each in the calling command; with `--record-only` each
-// records its control alone.
+// `approve` continues the run at the approval's `then` and `hand-back` at its `onHandBack`
+// with the notes, each in the calling command; with `--record-only` each records its
+// control alone.
 #[test]
 fn an_approval_wait_is_approved_or_handed_back() {
     let bundle = wait_tree();
@@ -376,8 +375,7 @@ fn an_approval_wait_is_approved_or_handed_back() {
     }
 }
 
-// REQ-LOCALRUN-184, REQ-LOCALRUN-311: `retry` on a repair wait records the retry with the replacement and
-// runs the continuation itself.
+// `retry` on a repair wait records the retry with the replacement and runs the continuation itself.
 #[test]
 fn a_repair_wait_is_retried_by_the_retry_command() {
     let bundle = wait_tree();
@@ -442,9 +440,8 @@ fn a_repair_wait_is_retried_by_the_retry_command() {
     assert_eq!(attempt_count(&run), 1);
 }
 
-// REQ-LOCALRUN-184, REQ-LOCALRUN-310: `retry` on a run waiting for its host records the retry naming the wait
-// and continues it as for a repair wait, without running the root's `requires.check`;
-// `cancel` ends such a run.
+// `retry` on a run waiting for its host records the retry naming the wait and continues it as for a
+// repair wait, without running the root's `requires.check`; `cancel` ends such a run.
 #[test]
 fn a_host_wait_is_retried_without_reading_its_check() {
     let bundle = host_check_tree();
@@ -495,8 +492,8 @@ fn a_host_wait_is_retried_without_reading_its_check() {
     assert!(!checked.exists());
 }
 
-// REQ-LOCALRUN-185, REQ-LOCALRUN-237, REQ-LOCALRUN-238: `pause` parks the run before its step until `unpause` names it, and
-// `create --pause-before` sets a stop before the first step starts.
+// `pause` parks the run before its step until `unpause` names it, and `create --pause-before` sets
+// a stop before the first step starts.
 #[test]
 fn a_stop_parks_a_run_until_it_is_lifted() {
     let bundle = wait_tree();
@@ -612,7 +609,7 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
     assert_eq!(stop["payload"], serde_json::json!({"before": "review"}));
     assert!(stop.get("wait").is_none(), "{stop}");
 
-    // REQ-LOCALRUN-238, REQ-LOCALRUN-80: a step the workflow does not have is a usage error.
+    // A step the workflow does not have is a usage error.
     let destination = bundle.result("stop-nowhere");
     let mut args = bundle.args(&destination);
     args.splice(
@@ -623,9 +620,9 @@ fn a_stop_parks_a_run_until_it_is_lifted() {
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-185, REQ-LOCALRUN-237: `pause` before a step of the run's workflow that is not a `workflow` step,
-// which the engine never holds before, is refused `step_not_holdable` with nothing appended,
-// and `unpause` still clears such a stop an earlier release recorded.
+// `pause` before a step of the run's workflow that is not a `workflow` step, which the engine never
+// holds before, is refused `step_not_holdable` with nothing appended, and `unpause` still clears
+// such a stop an earlier release recorded.
 #[test]
 fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
     let tree = EngineeringWaitTree::publish_root(COMMAND_TREE_ROOT);
@@ -664,9 +661,9 @@ fn a_stop_before_a_step_the_engine_does_not_hold_is_refused() {
     assert_eq!(run_record(&run)["state"], "exited");
 }
 
-// REQ-LOCALRUN-238, REQ-RUNNERENROLL-192: `create --pause-before` a step of the workflow that is
-// not a `workflow` step is a `definition`-phase rejection, the document the runner's refusal
-// reads, printed before the run directory exists and before any step runs.
+// `create --pause-before` a step of the workflow that is not a `workflow` step is a
+// `definition`-phase rejection, the document the runner's refusal reads, printed before the run
+// directory exists and before any step runs.
 #[test]
 fn create_refuses_a_stop_before_a_step_the_engine_does_not_hold() {
     let tree = EngineeringWaitTree::publish_root(COMMAND_TREE_ROOT);
@@ -707,9 +704,8 @@ fn create_refuses_a_stop_before_a_step_the_engine_does_not_hold() {
     assert!(!execution.join("verdict-design.txt").exists());
 }
 
-// REQ-LOCALRUN-186, REQ-LOCALRUN-243, REQ-LOCALRUN-187, REQ-LOCALRUN-185: `cancel` ends a waiting run
-// `withdrawn` itself, `--control cancel` ends one `canceled`, `--force` is a Cloud run's, and
-// `release` records an exited run's release once.
+// `cancel` ends a waiting run `withdrawn` itself, `--control cancel` ends one `canceled`, `--force`
+// is a Cloud run's, and `release` records an exited run's release once.
 #[test]
 fn cancel_and_release_end_and_release_runs() {
     let bundle = wait_tree();
@@ -827,8 +823,8 @@ impl Drop for LiveRun {
     }
 }
 
-// REQ-LOCALRUN-244: `cancel` signals the process that holds a live run, which cancels its
-// step and marks the record `exited` `canceled`.
+// `cancel` signals the process that holds a live run, which cancels its step and marks
+// the record `exited` `canceled`.
 #[test]
 fn cancel_ends_a_live_run() {
     let bundle = wait_tree();
@@ -886,10 +882,10 @@ fn step<'a>(steps: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
         .unwrap_or_else(|| panic!("{steps}"))
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-240, REQ-WFEXEC-57: `withdraw` of a live run records the control
-// and lets the running stage finish; before the next `workflow` step starts the attempt ends as
-// a cancellation, so the finished stage keeps its outcome and outputs, the rest is `cancelled`
-// `user_request`, and the record reads `exited` `withdrawn`.
+// `withdraw` of a live run records the control and lets the running stage finish; before the
+// next `workflow` step starts the attempt ends as a cancellation, so the finished stage keeps
+// its outcome and outputs, the rest is `cancelled` `user_request`, and the record reads
+// `exited` `withdrawn`.
 #[test]
 fn withdraw_ends_a_live_run_after_its_running_stage() {
     let bundle = wait_tree();
@@ -922,7 +918,7 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
     assert_eq!(record["attempts"], 1, "{record}");
     assert_eq!(attempt_count(&run), 1);
 
-    // Publication validated the result before writing it (REQ-WFEXEC-45).
+    // Publication validated the result before writing it.
     let result = read_json(&run.join("attempts/000001/result/result.json"));
     assert_eq!(result["outcome"], "cancelled", "{result}");
     assert_eq!(result["cancellation"]["reason"], "user_request", "{result}");
@@ -974,12 +970,12 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
     assert_eq!(record["attempts"], 2, "{record}");
 }
 
-// REQ-LOCALRUN-212, REQ-LOCALRUN-242, REQ-WFEXEC-73: a `withdraw` that finds the run held by a
-// command that has not begun its attempt yet (a `retry` preparing one, which this test's own
-// hold of the run lock stands for) reads as pending only what that attempt would honor: the
-// withdrawal the earlier attempt honored does not refuse it, so it is `recorded`, and a second
-// one before it is honored is `withdraw_pending`. The attempt the retry then begins honors it
-// before its stage starts, and spends it: one more retry is not withdrawn.
+// A `withdraw` that finds the run held by a command that has not begun its attempt yet (a
+// `retry` preparing one, which this test's own hold of the run lock stands for) reads as
+// pending only what that attempt would honor: the withdrawal the earlier attempt honored does
+// not refuse it, so it is `recorded`, and a second one before it is honored is
+// `withdraw_pending`. The attempt the retry then begins honors it before its stage starts, and
+// spends it: one more retry is not withdrawn.
 #[test]
 fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     let bundle = wait_tree();
@@ -1049,11 +1045,11 @@ fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     assert_eq!(control_count(&run), 2);
 }
 
-// REQ-RUNNERENROLL-319, REQ-LOCALRUN-212, REQ-LOCALRUN-186: a withdrawal recorded for a command
-// that held the run and ended without beginning an attempt (an evaluation of a held wait, which
-// this test's own hold of the run lock stands for) stays pending on the waiting run, and does
-// not refuse the next `withdraw`: that one ends the run `withdrawn` at its wait with the
-// outcome's write. The runner relies on this to finish a withdrawal it reported `recorded`.
+// A withdrawal recorded for a command that held the run and ended without beginning an attempt
+// (an evaluation of a held wait, which this test's own hold of the run lock stands for) stays
+// pending on the waiting run, and does not refuse the next `withdraw`: that one ends the run
+// `withdrawn` at its wait with the outcome's write. The runner relies on this to finish a
+// withdrawal it reported `recorded`.
 #[test]
 fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() {
     let tree = EngineeringWaitTree::publish();
@@ -1094,17 +1090,16 @@ fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() 
     assert_eq!(outcomes, 1);
 }
 
-// REQ-WFEXEC-120, REQ-LOCALRUN-240, REQ-LOCALRUN-271: a live run a withdrawal reaches while the stage that
-// ends its attempt in a wait runs is not left waiting: the attempt ends `withdrawn` with no
-// wait record and no `onWait`, the stage keeps its outputs, and `onOutcome.withdrawn` fires once.
+// A live run a withdrawal reaches while the stage that ends its attempt in a wait runs is not left
+// waiting: the attempt ends `withdrawn` with no wait record and no `onWait`, the stage keeps its
+// outputs, and `onOutcome.withdrawn` fires once.
 #[test]
 fn withdraw_ends_a_live_run_whose_running_stage_ends_in_a_wait() {
     withdraw_ends_a_live_run_at_its_running_stage(WAIT_TREE_ROOT, "blocked", "waiting");
 }
 
-// REQ-WFEXEC-120, REQ-LOCALRUN-240, REQ-LOCALRUN-271: a live run a withdrawal reaches while its last stage
-// runs ends `withdrawn`, not with the exit the stage's outcome leads to, and fires
-// `onOutcome.withdrawn` once in place of that exit's.
+// A live run a withdrawal reaches while its last stage runs ends `withdrawn`, not with the exit the
+// stage's outcome leads to, and fires `onOutcome.withdrawn` once in place of that exit's.
 #[test]
 fn withdraw_ends_a_live_run_whose_running_stage_is_its_last() {
     let (design, _) = WAIT_TREE_ROOT.split_once("  review:\n").unwrap();
@@ -1137,9 +1132,9 @@ fn withdraw_ends_a_live_run_at_its_running_stage(root: &str, verdict: &str, resu
     }
 }
 
-// REQ-WFEXEC-120, REQ-LOCALRUN-240, REQ-LOCALRUN-271: a live run whose root has no `workflow`
-// step, withdrawn while its command step runs, ends `withdrawn` where the attempt settles, not
-// with the outcome the step chose, and fires `onOutcome.withdrawn` once in place of that one's.
+// A live run whose root has no `workflow` step, withdrawn while its command step runs, ends
+// `withdrawn` where the attempt settles, not with the outcome the step chose, and fires
+// `onOutcome.withdrawn` once in place of that one's.
 #[test]
 fn withdraw_ends_a_live_run_whose_root_has_no_workflow_step() {
     let tree = EngineeringWaitTree::publish_root(COMMAND_TREE_ROOT);
@@ -1153,11 +1148,10 @@ fn withdraw_ends_a_live_run_whose_root_has_no_workflow_step() {
     assert_eq!(step(&published["steps"], "decide")["state"], "succeeded");
 }
 
-// REQ-WFEXEC-120, REQ-LOCALRUN-240, REQ-LOCALRUN-271: a withdrawal recorded after the attempt
-// ended in a wait, while its `onWait` write is in flight, still ends the run `withdrawn` as
-// the attempt writes its final record: the wait record is removed, the `onWait` write stays
-// and `onOutcome.withdrawn` follows it once. The settlement that honored it spent it: a retry
-// of the withdrawn run is not withdrawn again.
+// A withdrawal recorded after the attempt ended in a wait, while its `onWait` write is in
+// flight, still ends the run `withdrawn` as the attempt writes its final record: the wait
+// record is removed, the `onWait` write stays and `onOutcome.withdrawn` follows it once. The
+// settlement that honored it spent it: a retry of the withdrawn run is not withdrawn again.
 #[test]
 fn withdraw_ends_a_live_run_withdrawn_while_its_attempt_finishes() {
     let tree = EngineeringWaitTree::publish();
@@ -1186,10 +1180,9 @@ fn withdraw_ends_a_live_run_withdrawn_while_its_attempt_finishes() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-243, REQ-WFEXEC-119: a withdrawal recorded while a canceled
-// attempt finishes, after it settled and before it ends the run, is answered `recorded` and
-// spent by that ending: the run still ends `canceled`, `cancel` exits 0, and a retry of the
-// run is not withdrawn by it.
+// A withdrawal recorded while a canceled attempt finishes, after it settled and before it
+// ends the run, is answered `recorded` and spent by that ending: the run still ends
+// `canceled`, `cancel` exits 0, and a retry of the run is not withdrawn by it.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1244,11 +1237,10 @@ fn a_withdrawal_recorded_while_a_canceled_attempt_finishes_is_spent() {
     assert_eq!(control_count(&run), 2);
 }
 
-// REQ-LOCALRUN-246, INV-ENGINE-39, INV-ENGINE-59, REQ-LOCALRUN-241, REQ-WFEXEC-73: a `withdraw`
-// that arrives after a live process's last read of the withdrawals, while it ends its attempt in a
-// wait, waits on the run's controls lock until the process released the run, appending nothing on
-// that process's account, and then ends the run as the waiting run it finds: one control naming the
-// wait.
+// A `withdraw` that arrives after a live process's last read of the withdrawals, while it ends its
+// attempt in a wait, waits on the run's controls lock until the process released the run, appending
+// nothing on that process's account, and then ends the run as the waiting run it finds: one control
+// naming the wait.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1304,9 +1296,9 @@ fn a_withdraw_waits_for_a_process_releasing_the_run_after_its_last_read() {
     assert_eq!(published["outcome"], "waiting", "{published}");
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-240, REQ-WFEXEC-119: a withdrawal recorded after a live
-// attempt settled and before its first read of the withdrawals ends the run `withdrawn` at
-// that read, and the attempt spends it as it ends the run: a retry is not withdrawn again.
+// A withdrawal recorded after a live attempt settled and before its first read of the
+// withdrawals ends the run `withdrawn` at that read, and the attempt spends it as it ends
+// the run: a retry is not withdrawn again.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1341,11 +1333,11 @@ fn a_withdrawal_honored_at_the_first_read_is_spent() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-241, REQ-WFEXEC-73, REQ-LOCALRUN-271, REQ-LOCALRUN-186: a live process that
-// releases the run `waiting` before `withdraw` finds it held leaves `withdraw` to end the run as
-// it ends a waiting run: one `control.withdraw` naming the wait, the run `exited` `withdrawn`
-// with no wait record, and `onOutcome.withdrawn` after the `onWait` once. That control is
-// honored once: a retry of the withdrawn run is not withdrawn at its first boundary.
+// A live process that releases the run `waiting` before `withdraw` finds it held leaves
+// `withdraw` to end the run as it ends a waiting run: one `control.withdraw` naming the wait,
+// the run `exited` `withdrawn` with no wait record, and `onOutcome.withdrawn` after the `onWait`
+// once. That control is honored once: a retry of the withdrawn run is not withdrawn at its first
+// boundary.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1378,11 +1370,10 @@ fn withdraw_ends_a_live_run_its_process_releases_waiting() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-241, REQ-LOCALRUN-242, REQ-WFEXEC-73: a live process that releases the run
-// `exited` with the outcome its attempt reached before `withdraw` finds it held leaves
-// `withdraw` to answer as it does for an exited run: `run_exited`, with no control appended and
-// the record and the mirror's writes unchanged, so the next retry of that `failed` run is not
-// withdrawn.
+// A live process that releases the run `exited` with the outcome its attempt reached before
+// `withdraw` finds it held leaves `withdraw` to answer as it does for an exited run:
+// `run_exited`, with no control appended and the record and the mirror's writes unchanged, so
+// the next retry of that `failed` run is not withdrawn.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1418,10 +1409,10 @@ fn withdraw_of_a_live_run_its_process_releases_exited_is_run_exited() {
     assert_eq!(control_count(&run), 0);
 }
 
-// REQ-LOCALRUN-204, REQ-LOCALRUN-254, REQ-LOCALRUN-241: a mirrored live run its process
-// releases `waiting` before a `withdraw` without `LINEAR_API_KEY` finds it held is refused
-// `mirror_credentials_unavailable` as a waiting run is, with no control appended; the same
-// command again appends none, and with the key it ends the run `withdrawn` on one control.
+// A mirrored live run its process releases `waiting` before a `withdraw` without
+// `LINEAR_API_KEY` finds it held is refused `mirror_credentials_unavailable` as a waiting
+// run is, with no control appended; the same command again appends none, and with the key
+// it ends the run `withdrawn` on one control.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1469,9 +1460,9 @@ fn a_withdraw_refused_credentials_across_release_appends_nothing() {
     ended_withdrawn_once(&tree, &stub, &mut live, &run, 1);
 }
 
-// REQ-LOCALRUN-233, REQ-LOCALRUN-234, REQ-LOCALRUN-241: `withdraw` of a waiting run refused `run_locked`, because
-// a process took the run between the inspection and the run lock, or `wait_changed`, because
-// the run's wait changed there, appends nothing.
+// `withdraw` of a waiting run refused `run_locked`, because a process took the run between the
+// inspection and the run lock, or `wait_changed`, because the run's wait changed there, appends
+// nothing.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1689,8 +1680,8 @@ fn ended_withdrawn_once(
     read_json(&run.join("attempts/000001/result/result.json"))
 }
 
-// REQ-LOCALRUN-239: a withdrawal the live process never honored ends the run when the
-// abandoned attempt is resumed, without another attempt.
+// A withdrawal the live process never honored ends the run when the abandoned attempt
+// is resumed, without another attempt.
 #[test]
 fn resume_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     let bundle = wait_tree();
@@ -1720,9 +1711,9 @@ fn resume_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-213, REQ-LOCALRUN-239, REQ-WFEXEC-73: a withdrawal the live process never
-// honored ends the run when the abandoned attempt is retried, as resume ends it: no second
-// attempt starts, and the withdrawal is spent, so a later retry is not withdrawn by it.
+// A withdrawal the live process never honored ends the run when the abandoned attempt is
+// retried, as resume ends it: no second attempt starts, and the withdrawal is spent, so a
+// later retry is not withdrawn by it.
 #[test]
 fn retry_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     let bundle = wait_tree();
@@ -1759,10 +1750,10 @@ fn retry_ends_an_abandoned_run_whose_withdrawal_is_pending() {
     assert_eq!(control_count(&run), 1);
 }
 
-// REQ-LOCALRUN-213, REQ-LOCALRUN-239, REQ-WFEXEC-73: a withdrawal that finds an abandoned run
-// held by a `retry --all`, or a `retry --from`, that has not begun its attempt is answered
-// `recorded`, and that command then ends the run `withdrawn` instead of beginning an attempt,
-// so no stage starts after the withdrawal was answered.
+// A withdrawal that finds an abandoned run held by a `retry --all`, or a `retry --from`, that
+// has not begun its attempt is answered `recorded`, and that command then ends the run
+// `withdrawn` instead of beginning an attempt, so no stage starts after the withdrawal was
+// answered.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1852,16 +1843,15 @@ fn ended_withdrawn_unattempted(output: &Output, leaf: &str, run: &Path) {
     assert_eq!(shown["attempts"][0]["state"], "interrupted", "{shown}");
 }
 
-// REQ-LOCALRUN-243, REQ-CONTINUE-2: `cancel` of a `running` run whose process is gone settles
-// the abandoned attempt and marks the record `exited` `canceled` without an attempt.
+// `cancel` of a `running` run whose process is gone settles the abandoned attempt and marks
+// the record `exited` `canceled` without an attempt.
 #[test]
 fn cancel_ends_an_abandoned_run() {
     ends_an_abandoned_run(&[], "cancel", "canceled");
 }
 
-// REQ-LOCALRUN-239, REQ-CONTINUE-2: `cancel --control withdraw` of a `running` run whose
-// process is gone settles the abandoned attempt and marks the record `exited` `withdrawn`
-// without an attempt.
+// `cancel --control withdraw` of a `running` run whose process is gone settles the
+// abandoned attempt and marks the record `exited` `withdrawn` without an attempt.
 #[test]
 fn a_withdrawal_ends_an_abandoned_run() {
     ends_an_abandoned_run(&WITHDRAW, "withdraw", "withdrawn");
@@ -1909,7 +1899,7 @@ fn ends_an_abandoned_run(args: &[&str], event: &str, outcome: &str) {
 /// The first line of the wait tree's root as a definition publishes it, naming the tree.
 const WAIT_TREE_HEADER: &str = "schemaVersion: 1\nname: waits\n";
 
-/// The wait tree's header naming its `ticket` input as its `subject` (REQ-WFFORMAT-100).
+/// The wait tree's header naming its `ticket` input as its `subject`.
 const SUBJECT_HEADER: &str =
     "schemaVersion: 1\nname: waits\nsubject: ticket\ninputs:\n  ticket:\n    kind: text\n";
 
@@ -1932,8 +1922,8 @@ fn fan_out_root(root: &str) -> String {
     root.replacen("schemaVersion: 1\n", "schemaVersion: 1\nname: fanout\n", 1)
 }
 
-/// The wait tree published as a definition under a fresh `useful` home (REQ-WFDEF-17), with
-/// its execution root.
+/// The wait tree published as a definition under a fresh `useful` home, with its execution
+/// root.
 pub(super) struct PublishedWaitTree {
     pub(super) home: Home,
     pub(super) bundle: TreeBundle,
@@ -1951,13 +1941,13 @@ impl PublishedWaitTree {
     }
 
     /// The wait tree whose root names its `ticket` input as its `subject`, published as `new`
-    /// does (REQ-WFFORMAT-100).
+    /// does.
     pub(super) fn with_subject() -> Self {
         Self::publish_root(wait_tree(), &wait_tree_root(SUBJECT_HEADER))
     }
 
     /// The subject's wait tree whose `design` continues at `design` over a limited `failed`
-    /// edge (REQ-WFEXEC-64) instead of waiting for a repair, published as `new` does.
+    /// edge instead of waiting for a repair, published as `new` does.
     pub(super) fn with_subject_retrying_design() -> Self {
         let root = wait_tree_root(SUBJECT_HEADER);
         assert!(root.contains(DESIGN_REPAIR_EDGE), "{root}");
@@ -2051,9 +2041,9 @@ impl PublishedWaitTree {
     }
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-227: a subject that names no path addresses the run its definition's slot
-// holds, live and then exited; a subject two definitions' slots hold is `subject_ambiguous`
-// naming both runs, and one no slot holds is `run_not_found`.
+// A subject that names no path addresses the run its definition's slot holds, live and then exited;
+// a subject two definitions' slots hold is `subject_ambiguous` naming both runs, and one no slot
+// holds is `run_not_found`.
 #[test]
 fn run_commands_address_a_run_by_its_subject() {
     let published = PublishedWaitTree::with_subject();
@@ -2121,8 +2111,8 @@ fn run_commands_address_a_run_by_its_subject() {
     assert!(unknown.get("runDirectory").is_none(), "{unknown}");
 }
 
-// REQ-LOCALRUN-230: a second run for a subject whose run waits is refused
-// `subject_busy` with the waiting run's id, and no run directory is created.
+// A second run for a subject whose run waits is refused `subject_busy` with the
+// waiting run's id, and no run directory is created.
 #[test]
 fn a_second_run_for_a_waiting_subject_is_busy() {
     let published = PublishedWaitTree::with_subject();
@@ -2156,8 +2146,8 @@ fn a_second_run_for_a_waiting_subject_is_busy() {
     );
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-227, REQ-LOCALRUN-233: a control command addresses a run under the home by
-// its id, and refuses an unknown id and a run without a run record.
+// A control command addresses a run under the home by its id, and refuses an unknown id and a run
+// without a run record.
 #[test]
 fn control_commands_address_a_run_by_its_id() {
     let published = PublishedWaitTree::new();
@@ -2202,8 +2192,8 @@ fn control_commands_address_a_run_by_its_id() {
     assert!(!destination.join("controls").exists());
 }
 
-// REQ-LOCALRUN-80: a control command missing a required option, `retry` given `--from` with
-// `--all`, and an option of a Cloud run given a run under the home are usage errors.
+// A control command missing a required option, `retry` given `--from` with `--all`, and an
+// option of a Cloud run given a run under the home are usage errors.
 #[test]
 fn control_command_usage_errors_exit_two() {
     let bundle = wait_tree();
@@ -2231,10 +2221,10 @@ fn control_command_usage_errors_exit_two() {
     assert!(!Path::new(run).join("controls").exists());
 }
 
-/// A subject's waiting run upgraded from a step onto a changed revision (REQ-LOCALRUN-194):
-/// the wait tree published with `subject: ticket`, a run for `AUTO-1` waiting on `answer` after
-/// `design` on revision 1, revision 2 publishing a changed `review.yaml`, and `useful workflow
-/// run upgrade <predecessor id> --from review --json` run to its `approval` wait.
+/// A subject's waiting run upgraded from a step onto a changed revision: the wait tree
+/// published with `subject: ticket`, a run for `AUTO-1` waiting on `answer` after `design` on
+/// revision 1, revision 2 publishing a changed `review.yaml`, and `useful workflow run upgrade
+/// <predecessor id> --from review --json` run to its `approval` wait.
 pub(super) struct RestartedSubject {
     pub(super) published: PublishedWaitTree,
     pub(super) predecessor: PathBuf,
@@ -2337,10 +2327,8 @@ fn upgrade_refused(output: &Output, phase: &str, codes: &[&str]) -> serde_json::
     rejection
 }
 
-// REQ-LOCALRUN-194, REQ-LOCALRUN-259, REQ-LOCALRUN-260, REQ-LOCALRUN-261, REQ-LOCALRUN-196, REQ-CONTINUE-79, REQ-CONTINUE-97, REQ-CONTINUE-99,
-// REQ-WFDEF-28, SC-CONTINUE-9: a
-// restart creates a successor on the current revision that inherits `design` and runs from
-// `review` under revision 2, supersedes the waiting predecessor and moves the subject's
+// SC-CONTINUE-9: a restart creates a successor on the current revision that inherits `design` and
+// runs from `review` under revision 2, supersedes the waiting predecessor and moves the subject's
 // slot; a refused restart leaves both runs as they were.
 #[test]
 fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
@@ -2420,8 +2408,8 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
     );
     unchanged();
     assert_eq!(run_record(successor)["state"], "waiting");
-    // REQ-LOCALRUN-194, REQ-LOCALRUN-80: `--input-text` and `--execution-root` name what the
-    // successor runs again, so each is a usage error without `--from`.
+    // `--input-text` and `--execution-root` name what the successor runs again, so each is a
+    // usage error without `--from`.
     for options in [
         ["--input-text", "note", "hello"].as_slice(),
         &["--execution-root", "."],
@@ -2480,10 +2468,10 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
     assert_eq!(run_record(successor)["outcome"], "landed");
 }
 
-// REQ-LOCALRUN-284, INV-ENGINE-49: a move the command died in, the successor published and
-// named in the slot while the predecessor still waits, is completed by the successor's next
-// continuation; when the predecessor moved on without it, the successor is withdrawn, the slot
-// given back and the command refused `successor_abandoned`.
+// A move the command died in, the successor published and named in the slot while the
+// predecessor still waits, is completed by the successor's next continuation; when the
+// predecessor moved on without it, the successor is withdrawn, the slot given back and the
+// command refused `successor_abandoned`.
 #[test]
 fn an_unfinished_move_is_completed_or_undone_by_the_successors_continuation() {
     let restarted = RestartedSubject::new();
@@ -2556,10 +2544,10 @@ fn an_unfinished_move_is_completed_or_undone_by_the_successors_continuation() {
     );
 }
 
-// REQ-CONTINUE-29, REQ-CONTINUE-30, REQ-LOCALRUN-129, REQ-LOCALRUN-285: a superseded
-// predecessor keeps its last attempt `waiting`, yet `resume` with or without `--from` and
-// `retry` refuse it with `continuation_disposition_ineligible` naming the successor, leaving
-// it as it was, and `status` reports its continuation and retry ineligible with that code.
+// A superseded predecessor keeps its last attempt `waiting`, yet `resume` with or without
+// `--from` and `retry` refuse it with `continuation_disposition_ineligible` naming the
+// successor, leaving it as it was, and `status` reports its continuation and retry
+// ineligible with that code.
 #[test]
 fn a_superseded_predecessor_is_not_continued_or_retried() {
     let restarted = RestartedSubject::new();
@@ -2647,9 +2635,9 @@ fn a_superseded_predecessor_is_not_continued_or_retried() {
     unchanged();
 }
 
-// REQ-WFEXEC-121, REQ-LOCALRUN-282: the answers a person gave on the predecessor reach a
-// successor step that maps `controls.answers`, since the copied control still resolves the
-// imported attempt's wait it resolved on the predecessor.
+// The answers a person gave on the predecessor reach a successor step that maps
+// `controls.answers`, since the copied control still resolves the imported attempt's wait
+// it resolved on the predecessor.
 #[test]
 fn a_restarted_successors_design_receives_the_predecessors_answers() {
     let published = PublishedWaitTree::with_subject();
@@ -2680,10 +2668,9 @@ fn a_restarted_successors_design_receives_the_predecessors_answers() {
     assert_eq!(control_count(&successor), 1);
 }
 
-// REQ-LOCALRUN-188, REQ-LOCALRUN-189, REQ-LOCALRUN-203, SC-LOCALRUN-13: after a restart,
-// `list --all` names each run's lineage after its outcome, `list` the live successor alone,
-// and `show` prints the predecessor and successor and marks the attempts the successor
-// imported.
+// SC-LOCALRUN-13: after a restart, `list --all` names each run's lineage after its outcome,
+// `list` the live successor alone, and `show` prints the predecessor and successor and
+// marks the attempts the successor imported.
 #[test]
 fn list_and_show_print_a_restarted_runs_lineage() {
     let restarted = RestartedSubject::new();
@@ -2786,11 +2773,11 @@ fn list_and_show_print_a_restarted_runs_lineage() {
     );
 }
 
-// REQ-LOCALRUN-194, REQ-LOCALRUN-80: a restart carries the predecessor's inputs onto the
-// current revision with each `--input-text` on top, retained in the successor's own
-// `workflow/`; a revision that declares a new text input is refused at phase `continuation`
-// until `--input-text` supplies it, and an `--input-text` naming the workflow's `subject` is a
-// usage error, each leaving both the run and the home as they were.
+// A restart carries the predecessor's inputs onto the current revision with each
+// `--input-text` on top, retained in the successor's own `workflow/`; a revision that declares
+// a new text input is refused at phase `continuation` until `--input-text` supplies it, and an
+// `--input-text` naming the workflow's `subject` is a usage error, each leaving both the run
+// and the home as they were.
 #[test]
 fn a_restart_sets_text_inputs_of_the_current_revision() {
     let published = PublishedWaitTree::with_subject();
@@ -2870,10 +2857,10 @@ fn a_restart_sets_text_inputs_of_the_current_revision() {
     assert_eq!(retained("ticket"), "AUTO-1");
 }
 
-// REQ-LOCALRUN-197, REQ-LOCALRUN-263, REQ-LOCALRUN-196, REQ-CONTINUE-80, REQ-CONTINUE-100, SC-LOCALRUN-14: an
-// upgrade moves a subject's run waiting on `approval` to the current revision with its wait,
-// position, edge counts and attempts carried and no attempt started; the approval recorded on the
-// successor resumes it from `merge` under revision 2 with `design` and `review` inherited.
+// SC-LOCALRUN-14: an upgrade moves a subject's run waiting on `approval` to the current revision
+// with its wait, position, edge counts and attempts carried and no attempt started; the approval
+// recorded on the successor resumes it from `merge` under revision 2 with `design` and `review`
+// inherited.
 #[test]
 fn an_upgrade_moves_a_waiting_subject_with_its_wait() {
     let published = PublishedWaitTree::with_subject_retrying_design();
@@ -2991,10 +2978,10 @@ fn an_upgrade_moves_a_waiting_subject_with_its_wait() {
     assert_eq!(record["revision"], 2, "{record}");
 }
 
-// REQ-LOCALRUN-264, REQ-LOCALRUN-265, REQ-LOCALRUN-80: an upgrade of a run waiting on `approval` is refused
-// with every carried piece the current revision does not resolve, on a run already on the
-// current revision and on a wait a recorded control resolves, each refusal leaving the run
-// and the home as they were; an execution option is a usage error.
+// An upgrade of a run waiting on `approval` is refused with every carried piece the current
+// revision does not resolve, on a run already on the current revision and on a wait a recorded
+// control resolves, each refusal leaving the run and the home as they were; an execution option is
+// a usage error.
 #[test]
 fn an_upgrade_is_refused_with_every_miss_and_changes_nothing() {
     let published = PublishedWaitTree::new();
@@ -3063,9 +3050,9 @@ fn an_upgrade_is_refused_with_every_miss_and_changes_nothing() {
     unchanged();
 }
 
-// REQ-LOCALRUN-306, REQ-LOCALRUN-194: `upgrade` looks under the home alone, so an ID the home
-// lacks is `run_not_found` saying that a Cloud run has no upgrade, with or without `--from`,
-// and nothing is sent to the deployment in effect.
+// `upgrade` looks under the home alone, so an ID the home lacks is `run_not_found` saying
+// that a Cloud run has no upgrade, with or without `--from`, and nothing is sent to the
+// deployment in effect.
 #[test]
 fn an_upgrade_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
     let home = Home::new();
@@ -3095,10 +3082,10 @@ fn an_upgrade_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-LOCALRUN-264, REQ-LOCALRUN-282: an approval recorded on the predecessor after the
-// upgrade inspected it and before it took the lock refuses the upgrade `wait_resolved` under
-// the lock, instead of being copied to a successor it would not resolve; the predecessor is
-// unchanged, and resuming it takes the approval.
+// An approval recorded on the predecessor after the upgrade inspected it and before it took
+// the lock refuses the upgrade `wait_resolved` under the lock, instead of being copied to a
+// successor it would not resolve; the predecessor is unchanged, and resuming it takes the
+// approval.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -3108,7 +3095,7 @@ fn an_upgrade_refuses_a_wait_resolved_between_its_inspection_and_the_lock() {
     approval_prevents_upgrade(true);
 }
 
-// REQ-LOCALRUN-197, REQ-LOCALRUN-195. This ordering also runs against release builds.
+// This ordering also runs against release builds.
 #[test]
 fn a_recorded_approval_stays_with_the_wait_when_upgrade_is_refused() {
     approval_prevents_upgrade(false);
@@ -3174,12 +3161,11 @@ fn approval_prevents_upgrade(pause_after_inspection: bool) {
     assert_eq!(record["revision"], 1, "{record}");
 }
 
-// REQ-LOCALRUN-197, REQ-LOCALRUN-265, REQ-LOCALRUN-195, REQ-LOCALRUN-177, REQ-CONTINUE-100, REQ-WFEXEC-96: an
-// upgrade of a fan-out waiting at element 2 carries that position, and the answered successor
-// resumes at element 2 under the current revision: element 1 does not run again, element 2
-// and element 3 run as the successor's own children, and the predecessor's children stay as
-// they were. A revision whose `build` no longer fans out is refused with the position and the
-// items it cannot resolve.
+// An upgrade of a fan-out waiting at element 2 carries that position, and the answered successor
+// resumes at element 2 under the current revision: element 1 does not run again, element 2 and
+// element 3 run as the successor's own children, and the predecessor's children stay as they were.
+// A revision whose `build` no longer fans out is refused with the position and the items it cannot
+// resolve.
 #[test]
 fn an_upgraded_fan_out_resumes_at_its_element() {
     let published = PublishedWaitTree::fan_out();
@@ -3291,11 +3277,10 @@ fn an_upgraded_fan_out_resumes_at_its_element() {
     assert_eq!(run_record(&second)["state"], "waiting");
 }
 
-// REQ-LOCALRUN-199, REQ-LOCALRUN-262, REQ-LOCALRUN-194, REQ-WFEXEC-97: a restart at the fan-out a run waits
-// inside at element 2 runs the step again from its first element and advises `upgrade` on
-// standard error, its `--json` document unchanged on standard output; a restart at another
-// step, a refused restart and a restart of a run waiting at the fan-out's first element write
-// no advisory, and the refusal leaves the run waiting.
+// A restart at the fan-out a run waits inside at element 2 runs the step again from its first
+// element and advises `upgrade` on standard error, its `--json` document unchanged on standard
+// output; a restart at another step, a refused restart and a restart of a run waiting at the
+// fan-out's first element write no advisory, and the refusal leaves the run waiting.
 #[test]
 fn a_restart_at_a_fan_out_waiting_past_its_first_element_advises_upgrade() {
     let published = PublishedWaitTree::fan_out();
@@ -3782,7 +3767,7 @@ pub(super) fn attempt_result(run: &Path, attempt: u64) -> serde_json::Value {
 }
 
 /// Each step's id and state in a published result.
-fn step_states(result: &serde_json::Value) -> Vec<(String, String)> {
+pub(super) fn step_states(result: &serde_json::Value) -> Vec<(String, String)> {
     result["steps"]
         .as_array()
         .unwrap()
@@ -3796,7 +3781,7 @@ fn step_states(result: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
-fn states(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+pub(super) fn states(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
         .iter()
         .map(|(id, state)| ((*id).to_owned(), (*state).to_owned()))
@@ -3821,13 +3806,10 @@ pub(super) fn file_tree(directory: &Path) -> std::collections::BTreeMap<PathBuf,
     files
 }
 
-// SC-CONTINUE-10, REQ-CONTINUE-81, REQ-CONTINUE-114, REQ-CONTINUE-105,
-// REQ-LOCALRUN-184, REQ-LOCALRUN-177, REQ-CONTINUE-9,
-// REQ-CONTINUE-15, REQ-CONTINUE-16, INV-ENGINE-53: a repair retry continues the physically
-// failed child in place: the same child's next attempts inherit `read` and `plan` from
-// attempt 1, re-execute `route` and `effect` with reason `retry`, and the parent lands with
-// the child's export; the profile replacement of the last retry resolves the child's
-// re-executed attempt.
+// SC-CONTINUE-10: a repair retry continues the physically failed child in place: the same
+// child's next attempts inherit `read` and `plan` from attempt 1, re-execute `route` and
+// `effect` with reason `retry`, and the parent lands with the child's export; the profile
+// replacement of the last retry resolves the child's re-executed attempt.
 #[test]
 fn a_repair_retry_continues_the_failed_child_without_repeating_its_completed_steps() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -3933,11 +3915,10 @@ fn a_repair_retry_continues_the_failed_child_without_repeating_its_completed_ste
     assert_eq!(file_tree(&child.join("attempts/000001")), first_attempt);
 }
 
-// SC-CONTINUE-15, REQ-CONTINUE-93, REQ-CONTINUE-115: a stage whose later step fails on its host
-// waits for the host; while the check fails `resume` holds the wait and changes nothing, and
-// once it passes the same child's attempt 2 inherits `read` and `plan` and re-executes
-// `route` and `effect` with reason `host`, and the run lands. A `retry` of the host wait
-// continues the same child with reason `retry`.
+// SC-CONTINUE-15: a stage whose later step fails on its host waits for the host; while the
+// check fails `resume` holds the wait and changes nothing, and once it passes the same child's
+// attempt 2 inherits `read` and `plan` and re-executes `route` and `effect` with reason `host`,
+// and the run lands. A `retry` of the host wait continues the same child with reason `retry`.
 #[test]
 fn a_resolved_host_wait_continues_the_failed_child_without_repeating_its_completed_steps() {
     for leaf in ["resume", "retry"] {
@@ -4003,9 +3984,8 @@ fn a_resolved_host_wait_continues_the_failed_child_without_repeating_its_complet
     }
 }
 
-// SC-CONTINUE-10, REQ-CONTINUE-115, REQ-WFEXEC-96: at a fan-out's second element the retry
-// continues that element's child; the first element is not run again and the third runs once,
-// after the repaired second plans.
+// SC-CONTINUE-10: at a fan-out's second element the retry continues that element's child; the
+// first element is not run again and the third runs once, after the repaired second plans.
 #[test]
 fn a_repair_retry_continues_the_failed_fan_out_element_before_the_next() {
     let bundle = stage_tree(STAGE_FAN_OUT_ROOT);
@@ -4049,9 +4029,9 @@ fn a_repair_retry_continues_the_failed_fan_out_element_before_the_next() {
     );
 }
 
-// REQ-CONTINUE-93, REQ-WFEXEC-68: a host wait at a fan-out's second element, resolved by the
-// condition, continues that element's failed child in place before the third element runs;
-// the first element is not run again.
+// A host wait at a fan-out's second element, resolved by the condition, continues that
+// element's failed child in place before the third element runs; the first element is not
+// run again.
 #[test]
 fn a_resolved_host_wait_continues_the_failed_fan_out_element_before_the_next() {
     let bundle = host_stage_tree(STAGE_FAN_OUT_ROOT);
@@ -4196,8 +4176,7 @@ fn failed_stage_record(
     record
 }
 
-// REQ-WFEXEC-77, REQ-WFEXEC-114, REQ-WFEXEC-115, REQ-LOCALRUN-219, REQ-WFEXEC-117, INV-ENGINE-42: a
-// stage whose child's result is `failed` stays `succeeded` and records the child's outcome and
+// A stage whose child's result is `failed` stays `succeeded` and records the child's outcome and
 // primary issue; a fan-out's record names the element whose child ended the step, and a plain
 // step's names none.
 #[test]
@@ -4220,8 +4199,8 @@ fn a_stage_whose_child_failed_records_the_childs_primary_issue() {
     assert_eq!(record["item"], 2, "{record}");
 }
 
-/// The words of the summary row (REQ-LOCALRUN-122) whose first column is `node` in the human
-/// stream `stream`; progress records, which start with their timestamp, are not rows.
+/// The words of the summary row whose first column is `node` in the human stream `stream`;
+/// progress records, which start with their timestamp, are not rows.
 pub(super) fn summary_row(stream: &[u8], node: &str) -> Vec<String> {
     let stream = String::from_utf8_lossy(stream);
     let summary = stream
@@ -4251,10 +4230,9 @@ pub(super) fn summary_wait_line(stream: &[u8]) -> Vec<String> {
         .collect()
 }
 
-// REQ-LOCALRUN-220, REQ-LOCALRUN-287, REQ-WFEXEC-41: a stage whose child's result is `failed` completes with a
-// `failed` record naming the child's failing node after that node's own `failed` record, its
-// summary row reads `failed`, and the wait line names the failed stage's failing node; a
-// fan-out names the element.
+// A stage whose child's result is `failed` completes with a `failed` record naming the child's
+// failing node after that node's own `failed` record, its summary row reads `failed`, and the wait
+// line names the failed stage's failing node; a fan-out names the element.
 #[test]
 fn a_stage_whose_child_failed_is_shown_failed_in_the_stream_and_summary() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -4344,9 +4322,9 @@ pub(super) fn failed_stage_line(status: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
-// REQ-LOCALRUN-221, REQ-LOCALRUN-145: the plain status of a run waiting at a stage whose
-// child failed names, under its wait line, the stage, the child's outcome and its failing
-// node with the node's phase and code; a fan-out names the element.
+// The plain status of a run waiting at a stage whose child failed names, under its wait
+// line, the stage, the child's outcome and its failing node with the node's phase and
+// code; a fan-out names the element.
 #[test]
 fn run_status_names_the_failed_stage_under_its_wait_line() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -4419,9 +4397,9 @@ fn row_names(row: &[String], word: &str) -> bool {
         .any(|field| field.split_whitespace().any(|seen| seen == word))
 }
 
-// REQ-LOCALRUN-293: the plain view of a run waiting at a stage whose child failed shows the
-// stage `failed`, names the child's failing node in its detail and counts the stage failed,
-// not succeeded; a fan-out names the element.
+// The plain view of a run waiting at a stage whose child failed shows the stage `failed`,
+// names the child's failing node in its detail and counts the stage failed, not succeeded;
+// a fan-out names the element.
 #[test]
 fn run_view_shows_a_stage_whose_child_failed_as_failed() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -4448,9 +4426,8 @@ fn run_view_shows_a_stage_whose_child_failed_as_failed() {
     assert!(row_names(&row, "design[2].route"), "{row:?}");
 }
 
-// REQ-OUTPUTS-17, REQ-LOCALRUN-295: the plain view counts the outputs a stage committed, not
-// the ones it declares: a stage whose child failed at the step its one export reads committed
-// its outcome alone.
+// The plain view counts the outputs a stage committed, not the ones it declares: a stage
+// whose child failed at the step its one export reads committed its outcome alone.
 #[test]
 fn run_view_counts_the_outputs_a_stage_committed() {
     let bundle = unexported_stage_tree();
@@ -4463,9 +4440,9 @@ fn run_view_counts_the_outputs_a_stage_committed() {
     );
 }
 
-// REQ-LOCALRUN-57, REQ-WFEXEC-60: the terminal interface finishes a run whose stage committed
-// its outcome and left its declared export unavailable: the result is published, the run is
-// released and `q` ends the command with 0 and the plain summary.
+// The terminal interface finishes a run whose stage committed its outcome and left its
+// declared export unavailable: the result is published, the run is released and `q` ends the
+// command with 0 and the plain summary.
 #[cfg(target_os = "linux")]
 #[test]
 fn terminal_interface_finishes_a_run_whose_stage_left_an_export_uncommitted() {
@@ -4532,8 +4509,8 @@ fn terminal_interface_finishes_a_run_whose_stage_left_an_export_uncommitted() {
     );
 }
 
-// REQ-LOCALRUN-200, REQ-WFEXEC-66: each fan-out element's child steps reach the parent's
-// progress stream scoped by the element, the first element's before the second's.
+// Each fan-out element's child steps reach the parent's progress stream scoped by the
+// element, the first element's before the second's.
 #[test]
 fn a_fan_out_childs_step_states_are_scoped_by_their_element() {
     let bundle = stage_tree(STAGE_FAN_OUT_ROOT);
@@ -4615,12 +4592,10 @@ fn plan_carrier(child: &Path) -> PathBuf {
     carriers.into_iter().next().unwrap()
 }
 
-// REQ-CONTINUE-82, REQ-CONTINUE-118, REQ-CONTINUE-119, REQ-CONTINUE-120, REQ-LOCALRUN-235,
-// INV-ENGINE-27: a retry whose wait names a child the run
-// does not own for that step, or whose child's record, tree, retained outputs or lock do not
-// match, is refused before the parent's wait is consumed: no child step runs, no attempt
-// begins and no file changes, and the recorded retry control still resolves the wait for a
-// later resume.
+// A retry whose wait names a child the run does not own for that step, or whose child's
+// record, tree, retained outputs or lock do not match, is refused before the parent's wait
+// is consumed: no child step runs, no attempt begins and no file changes, and the recorded
+// retry control still resolves the wait for a later resume.
 #[test]
 fn a_repair_retry_refuses_an_unowned_or_altered_child() {
     type Alteration = fn(&Path, &Path);
@@ -4733,10 +4708,9 @@ fn a_repair_retry_refuses_an_unowned_or_altered_child() {
     }
 }
 
-// REQ-CONTINUE-117, REQ-CONTINUE-120, INV-ENGINE-52: the inputs the waiting step would map for
-// the child must be the ones its run retained; a resolving control whose `notes` change them is
-// refused before the parent's wait is consumed, and once the inputs are restored the recorded
-// control continues the same child.
+// The inputs the waiting step would map for the child must be the ones its run retained; a
+// resolving control whose `notes` change them is refused before the parent's wait is consumed,
+// and once the inputs are restored the recorded control continues the same child.
 #[test]
 fn a_repair_continuation_refuses_changed_mapped_inputs() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -4863,11 +4837,11 @@ fn continued_with_the_hand_back_notes(run: &Path, root: &Path, reason: &str, att
     );
 }
 
-// SC-CONTINUE-14, REQ-WFEXEC-123, REQ-CONTINUE-114, REQ-CONTINUE-117: a repair retry of a stage a
-// hand-back started keeps the hand-back's `wait.notes` for that stage, so the step maps the
-// inputs its failed child retained and the same child continues, re-running only its failed
-// step, which reads the notes again; a retry whose own payload carries other notes is still
-// refused before the wait is consumed, and continues the same child once they are gone.
+// SC-CONTINUE-14: a repair retry of a stage a hand-back started keeps the hand-back's
+// `wait.notes` for that stage, so the step maps the inputs its failed child retained and the same
+// child continues, re-running only its failed step, which reads the notes again; a retry whose
+// own payload carries other notes is still refused before the wait is consumed, and continues the
+// same child once they are gone.
 #[test]
 fn a_repair_retry_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     let bundle = stage_tree(STAGE_HAND_BACK_ROOT);
@@ -4920,10 +4894,10 @@ fn a_repair_retry_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     continued_with_the_hand_back_notes(&run, root, "retry", 2);
 }
 
-// REQ-WFEXEC-63, REQ-WFEXEC-138, REQ-CONTINUE-93: a host wait at a stage a hand-back started, resolved by the
-// condition, keeps the hand-back's `wait.notes` for that stage, so the step maps the inputs
-// its failed child retained and the same child continues rather than being refused
-// `continuation_inputs_unsatisfied`; so it does after two host waits in a row.
+// A host wait at a stage a hand-back started, resolved by the condition, keeps the hand-back's
+// `wait.notes` for that stage, so the step maps the inputs its failed child retained and the same
+// child continues rather than being refused `continuation_inputs_unsatisfied`; so it does after two
+// host waits in a row.
 #[test]
 fn a_resolved_host_wait_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     for waits in [1, 2] {
@@ -4954,10 +4928,8 @@ fn a_resolved_host_wait_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     }
 }
 
-// REQ-CONTINUE-81, REQ-CONTINUE-119, REQ-CONTINUE-116, REQ-LOCALRUN-235:
-// automatic continuation stays in the retained execution
-// root; a same-path root the retained path no longer resolves to is refused, and an explicit
-// other root starts the stage afresh there, leaving the original workspace intact.
+// This child's steps run in the execution root. If its path resolves elsewhere, automatic
+// continuation refuses. Naming the new root starts a fresh child there.
 #[test]
 fn a_repair_retry_in_another_execution_root_starts_a_fresh_child() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -5014,8 +4986,8 @@ fn continue_command(run: &Path) -> Vec<String> {
     ]
 }
 
-// REQ-CONTINUE-116, REQ-LOCALRUN-235: a repair wait that continues at another step runs that
-// step and the failed stage afresh, as a new stage evaluation.
+// A repair wait that continues at another step runs that step and the failed stage afresh,
+// as a new stage evaluation.
 #[test]
 fn a_repair_retry_targeting_another_step_runs_fresh_children() {
     let bundle = stage_tree(STAGE_SETUP_ROOT);
@@ -5037,9 +5009,9 @@ fn a_repair_retry_targeting_another_step_runs_fresh_children() {
     assert_eq!(stage_counts(root), [2, 2, 2]);
 }
 
-// REQ-CONTINUE-81, REQ-CONTINUE-119: a child whose ordinary steps all succeeded and whose
-// required finalizer failed leaves no unfinished step to continue from, so the retry is refused
-// rather than starting the stage afresh or continuing nothing.
+// A child whose ordinary steps all succeeded and whose required finalizer failed leaves no
+// unfinished step to continue from, so the retry is refused rather than starting the stage
+// afresh or continuing nothing.
 #[test]
 fn a_repair_retry_refuses_a_child_that_failed_only_in_its_finalizer() {
     let bundle = stage_tree(STAGE_TREE_ROOT);
@@ -5071,7 +5043,7 @@ const ADMITTED_AT: &str = "2026-11-10T10:00:00Z";
 
 /// The wait tree under the engineering root's `bindings`, `triggers` and `mirror` blocks,
 /// published with the engineering bindings and given the revision's resolution record, as
-/// the Cloud runner materializes a revision (REQ-WFDEF-32).
+/// the Cloud runner materializes a revision.
 struct EngineeringWaitTree {
     home: Home,
     bundle: TreeBundle,
@@ -5353,9 +5325,9 @@ fn applied(output: &Output, run: &Path, action: &str, outcome: &str) -> serde_js
     document
 }
 
-// REQ-LOCALRUN-208, REQ-LOCALRUN-266, REQ-LOCALRUN-268, REQ-LOCALRUN-269: a delivered departure acts only when it is later than the claim's
-// admission observation, from a fresh read of the issue in the bound team outside the owned
-// state, and the fresh state, not the event's `to`, chooses `cancel` or `withdraw`.
+// A delivered departure acts only when it is later than the claim's admission observation, from a
+// fresh read of the issue in the bound team outside the owned state, and the fresh state, not the
+// event's `to`, chooses `cancel` or `withdraw`.
 #[test]
 fn a_delivered_departure_is_applied_from_the_fresh_issue_state() {
     let tree = EngineeringWaitTree::publish();
@@ -5429,9 +5401,9 @@ fn a_delivered_departure_is_applied_from_the_fresh_issue_state() {
     assert_eq!(run_record(&moved)["state"], "waiting");
 }
 
-// REQ-LOCALRUN-268, REQ-WFDEF-37: a control trigger's `when` that names `$linear.canceled`
-// reads the integration binding's id from the resolution record's `linear` member, so the
-// fresh state still chooses `cancel` or `withdraw`.
+// A control trigger's `when` that names `$linear.canceled` reads the integration binding's
+// id from the resolution record's `linear` member, so the fresh state still chooses
+// `cancel` or `withdraw`.
 #[test]
 fn a_delivered_departure_reads_an_integration_binding_from_the_fresh_issue_state() {
     let tree = EngineeringWaitTree::publish_nested();
@@ -5459,8 +5431,8 @@ fn a_delivered_departure_reads_an_integration_binding_from_the_fresh_issue_state
     assert_eq!(run_record(&withdrawn)["outcome"], "withdrawn");
 }
 
-// REQ-LOCALRUN-266: a delivered departure acts only for the claim's issue; one whose
-// `issue.id` is another issue is refused before the issue is read or the run is touched.
+// A delivered departure acts only for the claim's issue; one whose `issue.id` is another
+// issue is refused before the issue is read or the run is touched.
 #[test]
 fn a_delivered_departure_of_another_issue_is_refused_before_any_read() {
     let tree = EngineeringWaitTree::publish();
@@ -5483,9 +5455,9 @@ fn a_delivered_departure_of_another_issue_is_refused_before_any_read() {
     assert_eq!(run_record(&run)["state"], "waiting");
 }
 
-// REQ-LOCALRUN-266, REQ-TRIGGER-259: a manual start's claim is carried with the event's own
-// issue and no admission observation, so the issue comparison cannot refuse it; the missing
-// observation does, `claim_invalid`, before the issue is read or the run is touched.
+// A manual start's claim is carried with the event's own issue and no admission
+// observation, so the issue comparison cannot refuse it; the missing observation does,
+// `claim_invalid`, before the issue is read or the run is touched.
 #[test]
 fn a_delivered_departure_under_a_claim_with_no_observation_is_refused_before_any_read() {
     let tree = EngineeringWaitTree::publish();
@@ -5509,9 +5481,9 @@ fn a_delivered_departure_under_a_claim_with_no_observation_is_refused_before_any
     assert_eq!(run_record(&run)["state"], "waiting");
 }
 
-// REQ-LOCALRUN-266, REQ-LOCALRUN-267: a revision that cannot be read is `control_unavailable`, and the
-// refusal's diagnostic keeps the class of its cause: a resolution record that cannot be
-// read, one that is not of its shape, or a retained tree whose root does not resolve.
+// A revision that cannot be read is `control_unavailable`, and the refusal's diagnostic keeps the
+// class of its cause: a resolution record that cannot be read, one that is not of its shape, or a
+// retained tree whose root does not resolve.
 #[test]
 fn an_unreadable_revision_refuses_the_event_with_the_class_of_its_cause() {
     let tree = EngineeringWaitTree::publish();
@@ -5563,8 +5535,8 @@ fn an_unreadable_revision_refuses_the_event_with_the_class_of_its_cause() {
     assert_eq!(run_record(&run)["state"], "waiting");
 }
 
-// REQ-LOCALRUN-266: a control trigger whose action is the bare `release`, not `cancel` or
-// `withdraw`, refuses a departure `control_unavailable` and writes nothing.
+// A control trigger whose action is the bare `release`, not `cancel` or `withdraw`,
+// refuses a departure `control_unavailable` and writes nothing.
 #[test]
 fn a_bare_release_action_refuses_the_event_control_unavailable_and_changes_nothing() {
     let tree = EngineeringWaitTree::publish_releasing("release");
@@ -5719,11 +5691,10 @@ fn result_step<'a>(result: &'a serde_json::Value, id: &str) -> &'a serde_json::V
         .unwrap()
 }
 
-// SC-LOCALRUN-15, SC-CONTINUE-11, REQ-LOCALRUN-135, REQ-WFEXEC-69, REQ-WFEXEC-70, REQ-WFEXEC-40,
-// REQ-CONTINUE-81, REQ-LOCALRUN-184: SIGINT or SIGTERM to the process of a staged run interrupts
+// SC-LOCALRUN-15, SC-CONTINUE-11: SIGINT or SIGTERM to the process of a staged run interrupts
 // it: the stage's running step fails `interrupted`, the root waits for a repair at the stage
-// with the interruption in its payload, no control is recorded and the command exits 130 or
-// 143; `retry` continues the same child from the interrupted step, `prepare` inherited and the
+// with the interruption in its payload, no control is recorded and the command exits 130 or 143;
+// `retry` continues the same child from the interrupted step, `prepare` inherited and the
 // workspace kept, to the run's outcome.
 #[test]
 fn a_signal_interrupts_a_staged_run_and_retry_continues_its_stage() {
@@ -5788,11 +5759,11 @@ fn a_signal_interrupts_a_staged_run_and_retry_continues_its_stage() {
     }
 }
 
-// REQ-LOCALRUN-289, REQ-WFEXEC-40: SIGINT or SIGTERM to an `upgrade`, with or without
-// `--from`, before its successor's run directory exists ends the command with 130 or 143 and
-// creates no successor, so none is left `canceled`: the predecessor still waits, unchanged and
-// holding its subject, and the same command later moves it. The command is held between its
-// inspection and the predecessor's lock.
+// SIGINT or SIGTERM to an `upgrade`, with or without `--from`, before its successor's run
+// directory exists ends the command with 130 or 143 and creates no successor, so none is left
+// `canceled`: the predecessor still waits, unchanged and holding its subject, and the same
+// command later moves it. The command is held between its inspection and the predecessor's
+// lock.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -5905,12 +5876,12 @@ fn signalled_at_gate(
     command.output()
 }
 
-// REQ-LOCALRUN-290: SIGINT or SIGTERM a `retry` holds before its attempt begins starts no
-// attempt and ends the command with 130 or 143. A retry of a run waiting for a repair keeps
-// the `control.retry` it recorded and leaves the run, its wait and its stage's child as they
-// were, so `resume` continues the same child; a retry from the start of a run that ended
-// `failed` leaves it `exited` `failed` for a later retry. The command is held between its
-// inspection and the run's lock.
+// SIGINT or SIGTERM a `retry` holds before its attempt begins starts no attempt and ends the
+// command with 130 or 143. A retry of a run waiting for a repair keeps the `control.retry`
+// it recorded and leaves the run, its wait and its stage's child as they were, so `resume`
+// continues the same child; a retry from the start of a run that ended `failed` leaves it
+// `exited` `failed` for a later retry. The command is held between its inspection and the
+// run's lock.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -5984,14 +5955,12 @@ fn a_signal_before_a_continuation_begins_starts_no_attempt() {
     assert_eq!(attempt_count(&run), 2);
 }
 
-// SC-CONTINUE-12, REQ-WFEXEC-72, REQ-WFEXEC-129, REQ-WFEXEC-40, REQ-LOCALRUN-178,
-// REQ-CONTINUE-81: SIGINT or
-// SIGTERM to a `retry` whose attempt has begun but has not yet prepared its stage's child keeps
-// the repair wait it continued from: the command exits 130 or 143, the run still waits on the
-// same record, written again as attempt 2's copy, `build` is `not_run` `not_reached`, and the
-// child gets no attempt. The recorded `control.retry` still resolves the wait, so a second
-// `retry` is refused and `resume` continues the same child to the run's outcome. The command
-// is held before its child dispatcher prepares the child.
+// SC-CONTINUE-12: SIGINT or SIGTERM to a `retry` whose attempt has begun but has not yet
+// prepared its stage's child keeps the repair wait it continued from: the command exits 130 or
+// 143, the run still waits on the same record, written again as attempt 2's copy, `build` is
+// `not_run` `not_reached`, and the child gets no attempt. The recorded `control.retry` still
+// resolves the wait, so a second `retry` is refused and `resume` continues the same child to
+// the run's outcome. The command is held before its child dispatcher prepares the child.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -6058,11 +6027,10 @@ fn an_interrupted_retry_keeps_the_wait_it_continued_from() {
     }
 }
 
-// REQ-WFEXEC-103, REQ-WFEXEC-131, REQ-WFEXEC-40, REQ-LOCALRUN-291: an attempt that continues
-// from no wait keeps none. SIGINT to a `create` whose first attempt has not yet prepared its stage's child creates
-// no child and gives it no attempt: `build` fails at `start` with `interrupted`, the run ends
-// `failed` with no wait and the command exits 130. The command is held before its child
-// dispatcher prepares the child.
+// An attempt that continues from no wait keeps none. SIGINT to a `create` whose first attempt has
+// not yet prepared its stage's child creates no child and gives it no attempt: `build` fails at
+// `start` with `interrupted`, the run ends `failed` with no wait and the command exits 130. The
+// command is held before its child dispatcher prepares the child.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -6097,10 +6065,9 @@ fn an_interrupted_first_attempt_creates_no_child_and_fails_its_stage() {
     assert_eq!(build_counts(bundle.execution_root()), [0, 0]);
 }
 
-// REQ-LOCALRUN-244, REQ-LOCALRUN-288, REQ-LOCALRUN-243: `cancel` on a live staged run records the cancel its
-// signal carries, so the run and its child end `canceled`; that recorded cancel does not make
-// a signal to a later attempt of the run a cancel; a run an interruption left waiting for a
-// repair is cancelled from its wait.
+// `cancel` on a live staged run records the cancel its signal carries, so the run and its child end
+// `canceled`; that recorded cancel does not make a signal to a later attempt of the run a cancel; a
+// run an interruption left waiting for a repair is cancelled from its wait.
 #[test]
 fn cancel_still_cancels_a_live_staged_run_and_an_interrupted_one() {
     let bundle = interrupt_tree();
@@ -6149,11 +6116,10 @@ fn cancel_still_cancels_a_live_staged_run_and_an_interrupted_one() {
     assert_eq!(record["outcome"], "canceled", "{record}");
 }
 
-// SC-LOCALRUN-16, REQ-LOCALRUN-202, REQ-WFEXEC-70, REQ-WFEXEC-40, REQ-CONTINUE-81,
-// REQ-LOCALRUN-184, REQ-LOCALRUN-256, REQ-LOCALRUN-257: `interrupt` records `control.interrupt` and wakes the one process that
-// holds the run, which interrupts its stage with `termination_request` and parks the root on
-// its repair wait naming the control; another live run is untouched, and `retry` continues
-// the same child from the interrupted step.
+// SC-LOCALRUN-16: `interrupt` records `control.interrupt` and wakes the one process that holds the
+// run, which interrupts its stage with `termination_request` and parks the root on its repair wait
+// naming the control; another live run is untouched, and `retry` continues the same child from the
+// interrupted step.
 #[test]
 fn interrupt_parks_one_live_run_and_retry_continues_its_stage() {
     let bundle = interrupt_tree();
@@ -6231,9 +6197,9 @@ fn interrupt_refused(run: &Path, code: &str) {
     assert_eq!(control_count(run), before, "{code}");
 }
 
-// REQ-LOCALRUN-258, REQ-LOCALRUN-233: `interrupt` refuses, before writing anything, an exited
-// run, a waiting run of any kind, a `running` run whose process is gone, and a live root
-// whose positioned stage has no running child.
+// `interrupt` refuses, before writing anything, an exited run, a waiting run of any kind, a
+// `running` run whose process is gone, and a live root whose positioned stage has no running
+// child.
 #[test]
 fn interrupt_refuses_a_run_it_cannot_interrupt() {
     let bundle = interrupt_tree();
@@ -6283,8 +6249,7 @@ fn interrupt_refuses_a_run_it_cannot_interrupt() {
 }
 
 /// `leaf ARGS` on `run`, a run under the home, refused for the run's state with `code`, exit
-/// 1, its one diagnostic's message naming every verb of `verbs`, and nothing written
-/// (REQ-LOCALRUN-223).
+/// 1, its one diagnostic's message naming every verb of `verbs`, and nothing written.
 fn refused_in_state(run: &Path, leaf: &str, args: &[&str], code: &str, verbs: &[&str]) {
     let before = (records(run), control_count(run));
     let output = run_control(None, leaf, run, args);
@@ -6304,9 +6269,8 @@ fn refused_in_state(run: &Path, leaf: &str, args: &[&str], code: &str, verbs: &[
     assert_eq!((records(run), control_count(run)), before, "{leaf}");
 }
 
-// REQ-LOCALRUN-223, REQ-LOCALRUN-181: a control verb given a run in a state it does not apply
-// in is refused, exit 1, with the code it always had and a message naming the verbs the
-// state takes, and nothing is written.
+// A control verb given a run in a state it does not apply in is refused, exit 1, with the
+// code it always had and a message naming the verbs the state takes, and nothing is written.
 #[test]
 fn a_control_verb_refused_for_the_runs_state_names_the_verbs_that_apply() {
     const ANSWER: &[&str] = &["--text", "keep"];
@@ -6446,9 +6410,9 @@ fn a_control_verb_refused_for_the_runs_state_names_the_verbs_that_apply() {
     drop(held);
 }
 
-// REQ-LOCALRUN-202, REQ-LOCALRUN-306: `interrupt` looks under the home alone, so an ID the
-// home lacks is `run_not_found`, saying that Cloud carries no interrupt and naming `cancel`,
-// and nothing is sent to the deployment in effect.
+// `interrupt` looks under the home alone, so an ID the home lacks is `run_not_found`, saying
+// that Cloud carries no interrupt and naming `cancel`, and nothing is sent to the deployment
+// in effect.
 #[test]
 fn an_interrupt_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
     let home = Home::new();
@@ -6555,9 +6519,9 @@ fn run_lock_holder_fixture() {
     drop(held);
 }
 
-// REQ-LOCALRUN-202, REQ-LOCALRUN-257, REQ-WFDEF-6: a process that does not act on the wake-up leaves the
-// interrupt `interrupt_pending` after the wait, recorded and the process alive; a later
-// attempt of the run, woken, does not act on that earlier control.
+// A process that does not act on the wake-up leaves the interrupt `interrupt_pending` after the
+// wait, recorded and the process alive; a later attempt of the run, woken, does not act on that
+// earlier control.
 #[test]
 fn an_unanswered_interrupt_is_pending_and_no_later_attempt_acts_on_it() {
     let bundle = interrupt_tree();

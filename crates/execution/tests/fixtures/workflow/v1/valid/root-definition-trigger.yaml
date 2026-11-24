@@ -1,5 +1,5 @@
 # A root whose triggers start on another definition's run ending with a named outcome,
-# one name or a list of them (REQ-WFDEF-39, REQ-WFFORMAT-82).
+# one name or a list of them.
 schemaVersion: 1
 inputs:
   ticket:

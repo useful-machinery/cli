@@ -1,0 +1,1 @@
+{"schemaVersion":1,"outcome":"issued","capabilityExpiresAt":"2026-11-10T12:05:00Z","files":[{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sizeBytes":12,"held":true},{"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sizeBytes":0,"held":false,"url":"https://objects.example.test/upload","headers":{"If-None-Match":"*"}}]}

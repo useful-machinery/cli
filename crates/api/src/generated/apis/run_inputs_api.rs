@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -137,6 +137,7 @@ pub enum SealRunInputSetError {
     UnknownValue(serde_json::Value),
 }
 
+/// Problem types: 400 `run-input-limit-exceeded`, `run-input-manifest-invalid`; 409 `run-input-quota-exceeded`.
 pub fn create_run_input_set(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -250,6 +251,7 @@ pub fn delete_run_input_set(
     }
 }
 
+/// Problem types: 409 `run-input-delete-unavailable`.
 pub fn delete_run_inputs(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -297,6 +299,7 @@ pub fn delete_run_inputs(
     }
 }
 
+/// Problem types: 409 `run-input-set-consumed`; 410 `run-input-set-expired`.
 pub fn get_run_input_set(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -358,6 +361,7 @@ pub fn get_run_input_set(
     }
 }
 
+/// Problem types: 409 `run-input-retained-unavailable`; 410 `run-input-content-gone`.
 pub fn get_run_inputs(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -419,7 +423,7 @@ pub fn get_run_inputs(
     }
 }
 
-/// Reauthorizes the parent run and returns fresh exact GET authority. No Idempotency-Key is accepted.
+/// Reauthorizes the parent run and returns fresh exact GET authority. No Idempotency-Key is accepted.  Problem types: 409 `run-input-retained-unavailable`; 410 `run-input-content-gone`.
 pub fn issue_run_input_download_capabilities(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -488,7 +492,7 @@ pub fn issue_run_input_download_capabilities(
     }
 }
 
-/// No Idempotency-Key is accepted; every success is a fresh database-time-bounded issuance.
+/// No Idempotency-Key is accepted; every success is a fresh database-time-bounded issuance.  Problem types: 409 `run-input-set-not-open`; 503 `run-input-storage-unavailable`.
 pub fn issue_run_input_upload_capabilities(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -556,6 +560,7 @@ pub fn issue_run_input_upload_capabilities(
     }
 }
 
+/// Problem types: 400 `run-input-content-invalid`; 409 `run-input-object-conflict`, `run-input-upload-incomplete`.
 pub fn seal_run_input_set(
     configuration: &configuration::Configuration,
     organization_ref: &str,

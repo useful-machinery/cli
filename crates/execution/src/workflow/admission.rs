@@ -27,6 +27,7 @@ use super::git_capture::{
 use super::pi::PiConfig;
 use super::pi::PiJsonV1ProtocolLimits;
 use super::resolution::{ResolvedWorkflow, WorkflowContentDigest};
+use super::step_workspace::StepWorkspaces;
 use super::tree::{TreeFile, ValidatedTree};
 use super::validated::{
     ValidatedEdgeTarget, ValidatedHarness, ValidatedRecoveryHandler, ValidatedStep,
@@ -105,7 +106,7 @@ pub(crate) enum CancellationOperation {
         reason: CancellationReason,
     },
     /// A graceful stop that settles the stopped ordinary steps `failed` with `interrupted`
-    /// instead of `cancelled` (REQ-WFEXEC-69).
+    /// instead of `cancelled`.
     Interruption {
         id: CancellationOperationId,
         reason: CancellationReason,
@@ -132,7 +133,7 @@ struct CancellationOperationState {
     pending_force_abort: bool,
     phase_reason: Option<CancellationReason>,
     force_abort_requested: bool,
-    /// The ordinary-phase cancellation was requested as a withdrawal (REQ-WFEXEC-73).
+    /// The ordinary-phase cancellation was requested as a withdrawal.
     withdrawal: bool,
     interruption_requested: bool,
 }
@@ -202,9 +203,9 @@ impl CancellationSource {
     }
 
     /// Requests the graceful `user_request` cancellation a withdrawal honored at a `workflow`
-    /// step boundary ends the attempt with (REQ-WFEXEC-73), and marks it a withdrawal when it
-    /// is the one the ordinary phase accepts; false when another cancellation came first or
-    /// the ordinary phase has ended.
+    /// step boundary ends the attempt with, and marks it a withdrawal when it is the one the
+    /// ordinary phase accepts; false when another cancellation came first or the ordinary
+    /// phase has ended.
     pub fn request_withdrawal(&self) -> bool {
         self.request_graceful(CancellationReason::UserRequest, true)
     }
@@ -250,10 +251,10 @@ impl CancellationSource {
         true
     }
 
-    /// Requests an interruption: the local CLI's stop for a signal or the terminal
-    /// interface (REQ-WFEXEC-69). Only `UserRequest` and `TerminationRequest` are accepted.
-    /// While finalization is armed or being armed, or once a stop was requested, it is
-    /// exactly `request_cancellation(reason)` (REQ-WFFINALIZE-15). The runner never makes it.
+    /// Requests an interruption: the local CLI's stop for a signal or the terminal interface.
+    /// Only `UserRequest` and `TerminationRequest` are accepted. While finalization is armed
+    /// or being armed, or once a stop was requested, it is exactly
+    /// `request_cancellation(reason)`. The runner never makes it.
     pub fn request_interruption(&self, reason: CancellationReason) -> bool {
         if !matches!(
             reason,
@@ -761,7 +762,7 @@ impl ResolvedInputs {
     }
 
     /// Sets the input `name` to `value`, replacing any value it had: a successor's
-    /// `--input-text` on top of the projected inputs (REQ-LOCALRUN-194).
+    /// `--input-text` on top of the projected inputs.
     pub fn insert(&mut self, name: String, value: ResolvedInput) {
         self.values.insert(name, value);
     }
@@ -825,10 +826,9 @@ impl EnvironmentSnapshot {
         }
     }
 
-    /// REQ-WFEXEC-53: `PATH` led by `<copy_root>/<program>` for each of `programs` in
-    /// declared order, ahead of this environment's value, and `USEFUL_WORKFLOW_ROOT` naming
-    /// `copy_root`. A copy root that cannot be a `PATH` entry, one containing `:`, fails with
-    /// the cause.
+    /// `PATH` led by `<copy_root>/<program>` for each of `programs` in declared order, ahead
+    /// of this environment's value, and `USEFUL_WORKFLOW_ROOT` naming `copy_root`. A copy
+    /// root that cannot be a `PATH` entry, one containing `:`, fails with the cause.
     pub(crate) fn with_tree_copy(
         &self,
         copy_root: &Path,
@@ -850,8 +850,7 @@ impl EnvironmentSnapshot {
     }
 
     /// Keeps the fixed inherited names, the root's `environmentPassthrough` and the names
-    /// of the run's declared integrations (REQ-WFFORMAT-33, REQ-WFEXEC-78), after dropping
-    /// every runner-private name (INV-ENGINE-63).
+    /// of the run's declared integrations, after dropping every runner-private name.
     pub(crate) fn for_workflow_children(
         &self,
         passthrough: &BTreeSet<String>,
@@ -866,10 +865,10 @@ impl EnvironmentSnapshot {
         })
     }
 
-    /// Removes the root-declared names a node's effective `environmentPassthrough` omits
-    /// (INV-ENGINE-31). A fixed inherited name stays even when the root lists it, a name of
-    /// the run's declared integrations stays whatever the node lists (INV-ENGINE-63), and an
-    /// engine variable cannot be a passthrough name, so none of them is ever removed.
+    /// Removes the root-declared names a node's effective `environmentPassthrough` omits. A
+    /// fixed inherited name stays even when the root lists it, a name of the run's declared
+    /// integrations stays whatever the node lists, and an engine variable cannot be a
+    /// passthrough name, so none of them is ever removed.
     fn narrowed_for_node(
         &self,
         root: &BTreeSet<String>,
@@ -916,11 +915,11 @@ fn is_base_workflow_environment_name(name: &OsStr) -> bool {
     )
 }
 
-/// The grant token names (REQ-WFFORMAT-32): a workflow may declare them in
-/// `environmentPassthrough` although `GH_TOKEN` is a GitHub credential name and the
-/// Linear names start with `USEFUL_`. On a runner a step that declares one receives the
-/// service's own value where the service environment sets the provider's names, and
-/// otherwise the run's grant token (REQ-GRANT-87, REQ-WORKSPACE-18).
+/// The grant token names: a workflow may declare them in `environmentPassthrough`
+/// although `GH_TOKEN` is a GitHub credential name and the Linear names start with
+/// `USEFUL_`. On a runner a step that declares one receives the service's own value
+/// where the service environment sets the provider's names, and otherwise the run's
+/// grant token.
 pub fn grant_token_environment_names() -> [&'static str; 3] {
     [
         "GH_TOKEN",
@@ -931,8 +930,8 @@ pub fn grant_token_environment_names() -> [&'static str; 3] {
 
 /// The names a step receives only because its workflow lists them in
 /// `environmentPassthrough`: a name of the passthrough grammar that is neither reserved
-/// (REQ-WFFORMAT-32) nor one every step inherits (REQ-WFFORMAT-33). A workflow may still
-/// list an inherited name; this predicate refuses it because declaring it adds nothing.
+/// nor one every step inherits. A workflow may still list an inherited name; this
+/// predicate refuses it because declaring it adds nothing.
 pub fn is_declared_only_environment_name(name: &str) -> bool {
     let name_os = OsStr::new(name);
     is_environment_passthrough_name(name)
@@ -940,8 +939,8 @@ pub fn is_declared_only_environment_name(name: &str) -> bool {
         && !is_base_workflow_environment_name(name_os)
 }
 
-/// The `environmentPassthrough` name grammar (REQ-WFFORMAT-32): an ASCII letter or `_`,
-/// then ASCII letters, digits and `_`.
+/// The `environmentPassthrough` name grammar: an ASCII letter or `_`, then ASCII
+/// letters, digits and `_`.
 pub(super) fn is_environment_passthrough_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes
@@ -1170,8 +1169,8 @@ pub struct SourceRevisionProvenance {
 impl SourceRevisionProvenance {
     /// A source revision: the commit the execution root is checked out at, its branch when
     /// one applies, and the branch and commit the workflow was pinned at when they are
-    /// known. A Cloud run's comes from its execution spec (REQ-WORKSPACE-16) and a local
-    /// run's from `--source-revision` and its manifest (REQ-LOCALRUN-217).
+    /// known. A Cloud run's comes from its execution spec and a local run's from
+    /// `--source-revision` and its manifest.
     pub fn from_parts(
         commit_oid: impl Into<Arc<str>>,
         branch: Option<impl Into<Arc<str>>>,
@@ -1210,8 +1209,8 @@ pub const CODEX_LOGIN_VARIABLE: &str = "CODEX_HOME";
 /// The variable that carries a Claude Code login to its harness.
 pub const CLAUDE_CODE_LOGIN_VARIABLE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
-/// How the harness of one agent invocation that received its login variable answered it
-/// (INV-ENGINE-36).
+/// How the harness of one agent invocation that received its login variable answered
+/// it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessLoginOutcome {
     /// The invocation succeeded.
@@ -1221,9 +1220,9 @@ pub enum HarnessLoginOutcome {
 }
 
 /// Told, by the step runtime and never by an adapter, how a harness that received its
-/// login variable fared at one agent invocation (INV-ENGINE-36). It receives the
-/// variable's name only, never its value, and is called on the engine's executor, so it
-/// must return without blocking.
+/// login variable fared at one agent invocation. It receives the variable's name only,
+/// never its value, and is called on the engine's executor, so it must return without
+/// blocking.
 pub trait HarnessLoginObserver: Send + Sync {
     fn observe(&self, variable: &str, outcome: HarnessLoginOutcome);
 }
@@ -1283,16 +1282,14 @@ impl ExecutionContext {
     }
 
     /// The observer the step runtime tells how a harness that received its login variable
-    /// fared at each agent invocation (INV-ENGINE-36). None unless given; a local run gives
-    /// none.
+    /// fared at each agent invocation. None unless given; a local run gives none.
     pub fn with_harness_login_observer(mut self, observer: Arc<dyn HarnessLoginObserver>) -> Self {
         self.harness_login_observer = Some(SharedHarnessLoginObserver(observer));
         self
     }
 
     /// The `(source, event)` pairs the caller's condition sources evaluate, against which
-    /// admission checks each `external` wait's rule (REQ-WFEXEC-93, REQ-WFEXEC-125); none
-    /// unless given.
+    /// admission checks each `external` wait's rule; none unless given.
     pub fn with_conditions<'a>(
         mut self,
         supported: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -1304,8 +1301,8 @@ impl ExecutionContext {
         self
     }
 
-    /// Admission from a tree: probe its `requires.tools` and record it for the run copy
-    /// (REQ-WFEXEC-53, REQ-WFEXEC-55).
+    /// Admission from a tree: probe its `requires.tools` and record it for the run
+    /// copy.
     pub fn with_tree(mut self, tree: ValidatedTree) -> Self {
         self.tree = Some(tree);
         self
@@ -1465,7 +1462,7 @@ pub struct AdmittedExecutionContext {
     limits: ExecutionLimits,
     environment: EnvironmentSnapshot,
     /// The environment names of the run's declared integrations, which no node's own
-    /// `environmentPassthrough` removes (REQ-WFEXEC-86, INV-ENGINE-63).
+    /// `environmentPassthrough` removes.
     integration_environment_names: BTreeSet<&'static str>,
     harness_login_observer: Option<SharedHarnessLoginObserver>,
     cancellation: CancellationPolicy,
@@ -1494,7 +1491,7 @@ impl AdmittedExecutionContext {
     }
 
     /// The source revision whose variables the admission set, which a local run records
-    /// in its manifest and hands to its child runs (REQ-LOCALRUN-217).
+    /// in its manifest and hands to its child runs.
     pub fn source_revision(&self) -> Option<&SourceRevisionProvenance> {
         self.source_revision.as_ref()
     }
@@ -1612,7 +1609,7 @@ impl AdmittedHarness {
 }
 
 /// The tree a run was admitted from: what its run copy is written from and what
-/// `AdmittedWorkflow::with_tree_copy` binds (REQ-WFEXEC-53).
+/// `AdmittedWorkflow::with_tree_copy` binds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmittedTree {
     root: PathBuf,
@@ -1657,8 +1654,8 @@ impl AdmittedTree {
         &self.files
     }
 
-    /// REQ-WFEXEC-55: each required tool is looked up in the source tree's `programs`
-    /// directories and on the inherited `PATH` (`unavailable_required_tool`).
+    /// Each required tool is looked up in the source tree's `programs` directories
+    /// and on the inherited `PATH` (`unavailable_required_tool`).
     fn probe_required_tools(
         &self,
         environment: &EnvironmentSnapshot,
@@ -1689,7 +1686,7 @@ pub(crate) fn program_directories<'a>(
         .map(move |program| root.join(program.trim_end_matches('/')))
 }
 
-/// Where a bare program name is looked up, as a step looks one up (REQ-WFEXEC-20): each of
+/// Where a bare program name is looked up, as a step looks one up: each of
 /// `program_directories` in order, then each entry of `environment`'s `PATH`, a relative
 /// entry taken from the execution root, a step's default working directory.
 pub(crate) fn program_search_directories(
@@ -1716,10 +1713,10 @@ pub(crate) fn find_program(directories: &[PathBuf], program: &str) -> Option<Pat
         .find(|candidate| is_executable_file(candidate))
 }
 
-/// REQ-WFEXEC-55: the first of `tools` that is no executable regular file in a
+/// The first of `tools` that is no executable regular file in a
 /// `program_directories` directory or on `environment`'s `PATH`, looked up as
 /// `program_search_directories` states. Admission asks it over the source tree's
-/// directories, the host condition over the run's copy of them (REQ-WFEXEC-81).
+/// directories, the host condition over the run's copy of them.
 pub(crate) fn unavailable_required_tool<'a>(
     program_directories: impl Iterator<Item = PathBuf>,
     tools: &'a [String],
@@ -1742,6 +1739,7 @@ pub struct AdmittedWorkflow {
     capacity: AdmittedWorkflowCapacity,
     git_capture: Option<Arc<GitCaptureContext>>,
     tree: Option<Arc<AdmittedTree>>,
+    step_workspaces: Option<StepWorkspaces>,
 }
 
 impl AdmittedWorkflow {
@@ -1758,14 +1756,13 @@ impl AdmittedWorkflow {
     }
 
     /// The admitted environment a step or finalizer process starts from, narrowed by the
-    /// node's own `environmentPassthrough` when it declares one (REQ-WFEXEC-71).
+    /// node's own `environmentPassthrough` when it declares one.
     pub(crate) fn node_environment(&self, node: &str) -> EnvironmentSnapshot {
         self.environment_narrowed_to(self.node_passthrough(node))
     }
 
     /// The admitted environment the recovery handler of `step` starts from: narrowed by
-    /// the handler's own `environmentPassthrough`, or its step's when it declares none
-    /// (REQ-WFRECOVERY-64).
+    /// the handler's own `environmentPassthrough`, or its step's when it declares none.
     pub(crate) fn recovery_handler_environment(&self, step: &str) -> EnvironmentSnapshot {
         self.environment_narrowed_to(self.recovery_handler_passthrough(step))
     }
@@ -1830,24 +1827,24 @@ impl AdmittedWorkflow {
 
     /// The same admission observing `source` for cancellation and force abort: a child
     /// continuation admitted before its parent's attempt begins observes the cancellation of
-    /// the step that dispatches it (REQ-WFEXEC-59, INV-ENGINE-27).
+    /// the step that dispatches it.
     pub fn with_cancellation_source(mut self, source: CancellationSource) -> Self {
         self.execution.cancellation =
             CancellationPolicy::new(source, self.execution.cancellation.grace());
         self
     }
 
-    /// The tree this run was admitted from, when it was (REQ-LOCALRUN-169).
+    /// The tree this run was admitted from, when it was.
     pub fn tree(&self) -> Option<&AdmittedTree> {
         self.tree.as_deref()
     }
 
-    /// Binds the run's copy of the admitted tree once it exists (REQ-WFEXEC-53): `PATH`
-    /// is led by `<copy_root>/<program>` for each `programs` directory in declared order,
-    /// ahead of the inherited value, and `USEFUL_WORKFLOW_ROOT` names `copy_root`. Every
-    /// command, recovery handler and agent child reads this environment. A run admitted
-    /// without a tree is returned unchanged. A copy root that cannot be a `PATH` entry,
-    /// one containing `:`, fails with the cause.
+    /// Binds the run's copy of the admitted tree once it exists: `PATH` is led by
+    /// `<copy_root>/<program>` for each `programs` directory in declared order, ahead of
+    /// the inherited value, and `USEFUL_WORKFLOW_ROOT` names `copy_root`. Every command,
+    /// recovery handler and agent child reads this environment. A run admitted without a
+    /// tree is returned unchanged. A copy root that cannot be a `PATH` entry, one
+    /// containing `:`, fails with the cause.
     pub fn with_tree_copy(mut self, copy_root: &Path) -> Result<Self, env::JoinPathsError> {
         let Some(tree) = self.tree.clone() else {
             return Ok(self);
@@ -1859,6 +1856,20 @@ impl AdmittedWorkflow {
         Ok(self)
     }
 
+    /// Binds the run directory that owns the workspaces established by this run's steps.
+    pub fn with_step_workspaces(
+        mut self,
+        workspaces: StepWorkspaces,
+    ) -> Result<Self, super::local_run::LocalRunDirectoryError> {
+        workspaces.validate(self.execution.root_identity())?;
+        self.step_workspaces = Some(workspaces);
+        Ok(self)
+    }
+
+    pub(super) fn step_workspaces(&self) -> Option<&StepWorkspaces> {
+        self.step_workspaces.as_ref()
+    }
+
     pub(crate) fn agent_step(&self, step: &str) -> Option<&AdmittedHarness> {
         self.agent_steps.get(step)
     }
@@ -1868,8 +1879,8 @@ impl AdmittedWorkflow {
     }
 
     /// Whether execution needs the agent runtime: admission admitted a harness for an agent
-    /// step, an agent finalizer or an agent recovery handler (INV-ENGINE-30). Hosts prepare
-    /// agent staging, and the engine refuses `AgentExecution::Disabled`, by this predicate.
+    /// step, an agent finalizer or an agent recovery handler. Hosts prepare agent staging,
+    /// and the engine refuses `AgentExecution::Disabled`, by this predicate.
     pub fn requires_agent_runtime(&self) -> bool {
         !self.agent_steps().is_empty() || !self.recovery_handlers().is_empty()
     }
@@ -1941,7 +1952,7 @@ pub enum AdmissionFailureKind {
     /// release does not run.
     WaitTargetUnsupported,
     /// An edge of a `workflow` step targets an `external` wait whose rule names a `source`
-    /// and `event` pair no condition source of the caller evaluates (REQ-WFEXEC-93).
+    /// and `event` pair no condition source of the caller evaluates.
     WaitConditionUnsupported,
     /// A workflow with `workflow` steps was not admitted from a tree.
     WorkflowStepRequiresTree,
@@ -2029,8 +2040,8 @@ impl fmt::Display for AdmissionFailure {
 
 impl std::error::Error for AdmissionFailure {}
 
-/// Admits a local run (REQ-WFEXEC-91): a workflow with `workflow` steps runs only from a
-/// tree, since its children read the run's tree copy.
+/// Admits a local run: a workflow with `workflow` steps runs only from a tree, since its
+/// children read the run's tree copy.
 pub fn admit_local_workflow(
     workflow: ResolvedWorkflow,
     inputs: ResolvedInputs,
@@ -2063,11 +2074,10 @@ fn first_workflow_step(workflow: &ResolvedWorkflow) -> Option<&str> {
         .map(String::as_str)
 }
 
-/// The refusals every admission applies to `workflow` steps (REQ-WFEXEC-91): Cloud runs
-/// none, and no admission runs an edge whose target is a wait whose `then` is an exit, or
-/// an `external` wait whose rule names a `source` and `event` pair
-/// outside `conditions` (REQ-WFEXEC-65), at any depth of a wait's `then` or a limited
-/// edge's or a host wait's `else`.
+/// The refusals every admission applies to `workflow` steps: Cloud runs none, and no
+/// admission runs an edge whose target is a wait whose `then` is an exit, or an
+/// `external` wait whose rule names a `source` and `event` pair outside `conditions`, at
+/// any depth of a wait's `then` or a limited edge's or a host wait's `else`.
 fn admit_workflow_steps(
     workflow: &ResolvedWorkflow,
     execution_contract: WorkflowExecutionContract,
@@ -2145,10 +2155,9 @@ pub fn local_continuation_input_failures(
     collect_input_admission_failures(workflow, inputs)
 }
 
-/// Whether `supplied`, a child's mapped inputs, are the inputs its run retained, once
-/// admission completes each omitted optional or defaulted input of `workflow` as it did for
-/// the retained ones (REQ-WFFORMAT-84, REQ-CONTINUE-117): the same names, the same text and the
-/// same canonical JSON.
+/// Whether `supplied`, a child's mapped inputs, are the inputs its run retained, once admission
+/// completes each omitted optional or defaulted input of `workflow` as it did for the retained
+/// ones: the same names, the same text and the same canonical JSON.
 pub fn completed_inputs_match(
     workflow: &ResolvedWorkflow,
     supplied: ResolvedInputs,
@@ -2235,10 +2244,10 @@ pub fn admit_workflow(
     admit_local_workflow_for(workflow, inputs, context)
 }
 
-/// The environment names of the run's declared integrations (REQ-WFEXEC-78): the tree
-/// root's declaration in a run admitted from a tree, for the root and every child run
-/// alike, and otherwise the admitted file's own `requires.integrations`. A stage file's
-/// override names a subset of the root's (REQ-WFDEF-35), so it is never read alone.
+/// The environment names of the run's declared integrations: the tree root's
+/// declaration in a run admitted from a tree, for the root and every child run alike,
+/// and otherwise the admitted file's own `requires.integrations`. A stage file's
+/// override names a subset of the root's, so it is never read alone.
 pub(crate) fn declared_integration_environment_names(
     tree: Option<&ValidatedTree>,
     workflow: &ResolvedWorkflow,
@@ -2346,7 +2355,7 @@ fn collect_input_admission_failures(
 }
 
 /// Completes the supplied inputs with every omitted optional or defaulted one, after the
-/// input check, so no schema applies to an engine-supplied empty value (REQ-WFFORMAT-84).
+/// input check, so no schema applies to an engine-supplied empty value.
 pub(super) fn complete_inputs(
     workflow: &ResolvedWorkflow,
     inputs: ResolvedInputs,
@@ -2663,6 +2672,7 @@ fn admit_workflow_for(
         capacity,
         git_capture,
         tree,
+        step_workspaces: None,
     })
 }
 
@@ -2979,7 +2989,6 @@ mod untested_advisory_tests {
         )
     }
 
-    // REQ-AGENT-66
     #[test]
     fn untested_harness_advisories_name_each_untested_installation_once() {
         let anchors = context()

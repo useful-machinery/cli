@@ -1,6 +1,6 @@
 //! The internal helper that runs a program as the leader of a new session whose controlling
 //! terminal is the helper's standard input, so that the Claude Code sign-in's `claude
-//! setup-token` has the pseudo-terminal `useful` opened as its own (INV-CLI-14).
+//! setup-token` has the pseudo-terminal `useful` opened as its own.
 //!
 //! A process takes a controlling terminal only for itself, so the sign-in starts this
 //! executable again with [`REQUEST`] set rather than running code in a forked child before it

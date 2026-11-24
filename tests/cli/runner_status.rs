@@ -67,7 +67,7 @@ pub(super) struct ServeStatusFixture {
 
 impl ServeStatusFixture {
     /// A runner that keeps no minimum of free space, so the host's disk never declines an
-    /// offer it is sent (REQ-RUNNERENROLL-154).
+    /// offer it is sent.
     pub(super) fn new(endpoint: &str) -> Self {
         Self::new_inner(endpoint, false, 0)
     }
@@ -374,10 +374,9 @@ pub(super) async fn accept_runner_socket(
     .unwrap()
 }
 
-// REQ-RUNNERENROLL-41, REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80: `runner show` with no
-// `RUNNER` asks the control socket alone, whatever deployment and organization the
-// environment names; a status without readiness, as from a runner that has set up nothing,
-// prints no agent-login line.
+// `runner show` with no `RUNNER` asks the control socket alone, whatever deployment and
+// organization the environment names; a status without readiness, as from a runner that
+// has set up nothing, prints no agent-login line.
 #[test]
 fn runner_show_without_a_runner_queries_only_the_configured_local_socket() {
     let directory = private_credential_directory();
@@ -421,8 +420,6 @@ fn runner_show_without_a_runner_queries_only_the_configured_local_socket() {
     server.join().unwrap();
 }
 
-// REQ-RUNNERENROLL-35
-// REQ-TELEMETRY-1
 #[test]
 fn terminal_authentication_remains_locally_inspectable() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -636,9 +633,9 @@ fn holds_entry_named(directory: &std::path::Path, name: &str) -> bool {
     })
 }
 
-// REQ-RUNNERENROLL-154, REQ-DIAG-44: a runner whose disk is below its minimum declines the
-// offer of a new run `capacity_unavailable` with the stage `host_disk` and the cause
-// `disk_space_low`, before it prepares anything for it.
+// A runner whose disk is below its minimum declines the offer of a new run
+// `capacity_unavailable` with the stage `host_disk` and the cause `disk_space_low`, before
+// it prepares anything for it.
 #[test]
 fn a_runner_on_a_low_disk_declines_an_offer_before_preparing_it() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -775,8 +772,8 @@ fn run_status_with_response(response: &'static [u8]) -> Output {
     output
 }
 
-// REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80: the assignment line gives the total and each
-// nonzero count, a waiting run's among them, and one line follows for each held run.
+// The assignment line gives the total and each nonzero count, a waiting run's among
+// them, and one line follows for each held run.
 #[test]
 fn runner_status_counts_waiting_runs_and_lists_each_held_run() {
     let output = run_status_with_response(include_bytes!(
@@ -809,7 +806,6 @@ fn runner_status_counts_waiting_runs_and_lists_each_held_run() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-42, REQ-GRANT-88
 #[test]
 fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     let output = run_status_with_response(
@@ -827,8 +823,8 @@ fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     ]
     .concat();
     assert!(stdout.starts_with(&expected), "{stdout}");
-    // A readiness without `lastUse`, as an earlier runner reports it, gives
-    // the availability its state alone gives (REQ-GRANT-53).
+    // A readiness without `lastUse`, as an earlier runner reports it, gives the
+    // availability its state alone gives.
     super::runner_agent_login::assert_provider_lines(
         &stdout,
         &[
@@ -839,9 +835,9 @@ fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
             ("linear", "not_delivered", "not_delivered"),
         ],
     );
-    // An OAuth entry is one assignment's outcome: its line names the
-    // generation issued, and no runner command helps one Cloud did not
-    // answer, since the next assignment asks again (REQ-GRANT-159).
+    // An OAuth entry is one assignment's outcome: its line names the generation
+    // issued, and no runner command helps one Cloud did not answer, since the
+    // next assignment asks again.
     let line = |provider: &str| {
         stdout
             .lines()
@@ -854,7 +850,6 @@ fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-GRANT-92, REQ-RUNNERENROLL-42
 #[test]
 fn runner_status_prints_each_recorded_source_beside_its_provider() {
     let output = run_status_with_response(
@@ -889,7 +884,6 @@ fn runner_status_prints_each_recorded_source_beside_its_provider() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-42, REQ-GRANT-158, REQ-GRANT-53
 #[test]
 fn runner_status_prints_an_ended_oauth_entry_as_of_its_run_and_not_as_current() {
     let output = run_status_with_response(
@@ -932,7 +926,6 @@ fn runner_status_prints_an_ended_oauth_entry_as_of_its_run_and_not_as_current() 
     assert!(output.stderr.is_empty());
 }
 
-// REQ-GRANT-88, REQ-GRANT-53
 #[test]
 fn runner_status_names_the_grant_to_reconnect_by_its_grant_provider() {
     let output = run_status_with_response(
@@ -966,7 +959,6 @@ fn runner_status_names_the_grant_to_reconnect_by_its_grant_provider() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-42, REQ-GRANT-53, REQ-GRANT-38
 #[test]
 fn runner_status_prints_the_availability_the_state_and_last_use_give() {
     let output = run_status_with_response(
@@ -996,7 +988,7 @@ fn runner_status_prints_the_availability_the_state_and_last_use_give() {
     assert!(line.contains("reconnect"), "{line}");
     assert!(line.contains("agl_01k0z6r1w8f4jy2m7q9v3x5abc"), "{line}");
     // Its owner signs in to it again with `useful account integration reconnect`, naming the agent
-    // login, which is the grant (REQ-GRANT-73, REQ-GRANT-53).
+    // login, which is the grant.
     let codex = stdout.lines().find(|line| line.starts_with("codex login:"));
     assert!(
         codex.is_some_and(|line| line
@@ -1006,7 +998,6 @@ fn runner_status_prints_the_availability_the_state_and_last_use_give() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-44
 #[test]
 fn runner_status_maps_control_protocol_errors_through_the_protocol_outcome() {
     let output = run_status_with_response(
@@ -1018,7 +1009,6 @@ fn runner_status_maps_control_protocol_errors_through_the_protocol_outcome() {
     assert!(!output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-44
 #[test]
 fn runner_status_maps_malformed_control_responses_through_the_protocol_outcome() {
     let output = run_status_with_response(b"not-json\n");
@@ -1028,7 +1018,6 @@ fn runner_status_maps_malformed_control_responses_through_the_protocol_outcome()
     assert!(!output.stderr.is_empty());
 }
 
-// REQ-RUNNERENROLL-44
 #[test]
 fn runner_status_reports_absent_and_refused_sockets_as_not_reachable() {
     let directory = private_credential_directory();
@@ -1073,7 +1062,6 @@ async fn open_runner_session(
     (socket, hello)
 }
 
-// INV-RUNNER-1, INV-RUNNER-2, INV-RUNNER-4, REQ-RUNNERENROLL-37, REQ-RUNNERENROLL-38
 #[tokio::test]
 async fn reconnect_retains_the_boot_and_does_not_replay_an_old_effect_receipt() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

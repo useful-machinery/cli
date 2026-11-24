@@ -783,7 +783,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-42
     #[test]
     fn protocol_rejection_is_retained_beside_its_invocation_correlation() {
         let temporary = tempfile::tempdir().unwrap();

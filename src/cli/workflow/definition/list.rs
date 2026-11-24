@@ -1,6 +1,5 @@
-//! `useful workflow definition list [--on local|project]` (REQ-WFDEF-25): the definitions under
-//! the home and then those of the project in effect, read to the last page, each saying where
-//! it lives.
+//! `useful workflow definition list [--on local|project]`: the definitions under the home and
+//! then those of the project in effect, read to the last page, each saying where it lives.
 
 use std::io::{self, Write};
 

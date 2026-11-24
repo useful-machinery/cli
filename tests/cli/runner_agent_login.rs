@@ -18,18 +18,20 @@ pub(super) const SYNC_REQUEST: &[u8] =
 
 /// The control socket's answer to a sync whose `codex` entry is `state`.
 pub(super) fn synced_response(codex: &str) -> Vec<u8> {
+    synced_with(serde_json::json!([
+        serde_json::from_str::<serde_json::Value>(codex).unwrap(),
+        {"provider": "github", "state": "not_delivered"},
+        {"provider": "gitlab", "state": "not_delivered"},
+        {"provider": "linear", "state": "not_delivered"}
+    ]))
+}
+
+/// The control socket's answer to a sync whose providers are `providers`.
+fn synced_with(providers: serde_json::Value) -> Vec<u8> {
     let mut response = serde_json::to_vec(&serde_json::json!({
         "schemaVersion": 1,
         "outcome": "synced",
-        "agentLogins": {
-            "updatedAt": "2026-11-12T01:00:00Z",
-            "providers": [
-                serde_json::from_str::<serde_json::Value>(codex).unwrap(),
-                {"provider": "github", "state": "not_delivered"},
-                {"provider": "gitlab", "state": "not_delivered"},
-                {"provider": "linear", "state": "not_delivered"}
-            ]
-        }
+        "agentLogins": {"updatedAt": "2026-11-12T01:00:00Z", "providers": providers}
     }))
     .unwrap();
     response.push(b'\n');
@@ -38,7 +40,7 @@ pub(super) fn synced_response(codex: &str) -> Vec<u8> {
 
 pub(super) const READY_CODEX: &str = r#"{"provider":"codex","state":"ready","agentLoginId":"agl_01k0z6r1w8f4jy2m7q9v3x5abc","generation":3,"checkedAt":"2026-11-12T01:00:00Z","installedAt":"2026-11-12T00:55:00Z"}"#;
 
-/// The sync command (REQ-GRANT-41).
+/// The sync command.
 pub(super) const SYNC: [&str; 2] = ["runner", "sync"];
 
 const BUSY_RESPONSE: &[u8] =
@@ -110,7 +112,6 @@ fn sync_with_no_live_runner(command: [&str; 2], config: &str) -> Output {
     run(&args)
 }
 
-// REQ-GRANT-41
 #[test]
 fn sync_asks_the_live_runner_and_prints_each_provider_readiness() {
     let (output, request) = sync_against(SYNC, synced_response(READY_CODEX), &[]);
@@ -130,8 +131,8 @@ fn sync_asks_the_live_runner_and_prints_each_provider_readiness() {
     assert!(output.stderr.is_empty());
 }
 
-// INV-CLI-21: the earlier spellings of the sync are unknown commands, refused before any
-// request, with no notice naming the command that replaced them.
+// The earlier spellings of the sync are unknown commands, refused before any request,
+// with no notice naming the command that replaced them.
 #[test]
 fn the_earlier_sync_spellings_are_unknown_and_print_no_notice() {
     let directory = private_credential_directory();
@@ -159,7 +160,7 @@ fn the_earlier_sync_spellings_are_unknown_and_print_no_notice() {
 }
 
 /// Asserts that `stdout` has exactly one line per provider, in order, each
-/// naming the provider's state and availability (REQ-GRANT-53).
+/// naming the provider's state and availability.
 pub(super) fn assert_provider_lines(stdout: &str, providers: &[(&str, &str, &str)]) {
     let lines = stdout
         .lines()
@@ -177,23 +178,106 @@ pub(super) fn assert_provider_lines(stdout: &str, providers: &[(&str, &str, &str
     }
 }
 
-/// The source `stdout` prints on the provider's line: the word after
-/// `source`, or none where the line names no source (REQ-GRANT-92).
-pub(super) fn printed_source<'a>(stdout: &'a str, provider: &str) -> Option<&'a str> {
-    let line = stdout
+/// The provider's line in `stdout`.
+fn provider_line<'a>(stdout: &'a str, provider: &str) -> &'a str {
+    stdout
         .lines()
         .find(|line| line.starts_with(&format!("{provider} login:")))
-        .unwrap_or_else(|| panic!("{stdout}"));
-    let mut words = line
-        .split([' ', ',', ':'])
-        .filter(|word| !word.is_empty())
-        .skip_while(|word| *word != "source");
-    words
-        .next()
-        .map(|_| words.next().unwrap_or_else(|| panic!("{line}")))
+        .unwrap_or_else(|| panic!("{stdout}"))
 }
 
-// REQ-GRANT-92, REQ-GRANT-41
+/// The source `stdout` prints on the provider's line: the rest of the line
+/// after `source: `, or none where the line names no source.
+pub(super) fn printed_source<'a>(stdout: &'a str, provider: &str) -> Option<&'a str> {
+    provider_line(stdout, provider)
+        .split_once("source: ")
+        .map(|(_, source)| source)
+}
+
+const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+#[test]
+fn sync_prints_org_connection_as_the_organizations_github_app_installation() {
+    let codex = READY_CODEX.replace(r#""installedAt""#, r#""source":"grant","installedAt""#);
+    let response = synced_with(serde_json::json!([
+        serde_json::from_str::<serde_json::Value>(&codex).unwrap(),
+        {
+            "provider": "github",
+            "state": "ready",
+            "connectionAuthorizationId": CONNECTION_AUTHORIZATION_ID,
+            "generation": 1,
+            "expiresAt": "2026-11-12T02:00:00Z",
+            "checkedAt": "2026-11-12T01:00:00Z",
+            "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abp",
+            "source": "org_connection",
+        },
+        {
+            "provider": "gitlab",
+            "state": "not_delivered",
+            "checkedAt": "2026-11-12T01:00:00Z",
+            "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abp",
+            "source": "host",
+        },
+        {"provider": "linear", "state": "not_delivered"},
+    ]));
+
+    let (output, _) = sync_against(SYNC, response.clone(), &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for (provider, source) in [
+        ("codex", Some("grant")),
+        ("github", Some("the organization's GitHub App installation")),
+        ("gitlab", Some("host")),
+        ("linear", None),
+    ] {
+        assert_eq!(printed_source(&stdout, provider), source, "{stdout}");
+    }
+    assert!(!stdout.contains("org_connection"), "{stdout}");
+
+    let (output, _) = sync_against(SYNC, response, &["--json"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let github = &document["agentLogins"]["providers"][1];
+    assert_eq!(github["provider"], "github", "{document}");
+    assert_eq!(github["source"], "org_connection", "{document}");
+    assert_eq!(
+        github["connectionAuthorizationId"], CONNECTION_AUTHORIZATION_ID,
+        "{document}"
+    );
+}
+
+#[test]
+fn sync_names_the_installations_remedy_beside_the_grants_for_github_alone() {
+    let reconnect = |provider: &str| {
+        serde_json::json!({
+            "provider": provider,
+            "state": "reconnect_required",
+            "checkedAt": "2026-11-12T01:00:00Z",
+        })
+    };
+    let response = synced_with(serde_json::json!([
+        reconnect("github"),
+        reconnect("gitlab"),
+        {"provider": "linear", "state": "not_delivered"},
+    ]));
+
+    let (output, _) = sync_against(SYNC, response, &[]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let github = provider_line(&stdout, "github");
+    for command in [
+        "`useful account integration reconnect github`",
+        "`useful org integration connect github`",
+    ] {
+        assert!(github.contains(command), "{github}");
+    }
+    let gitlab = provider_line(&stdout, "gitlab");
+    assert!(
+        gitlab.contains("`useful account integration reconnect gitlab.com`"),
+        "{gitlab}"
+    );
+    assert!(!gitlab.contains("org integration"), "{gitlab}");
+}
+
 #[test]
 fn sync_prints_each_recorded_source_and_its_json_carries_it() {
     let codex = READY_CODEX.replace(r#""installedAt""#, r#""source":"grant","installedAt""#);
@@ -241,7 +325,6 @@ fn sync_prints_each_recorded_source_and_its_json_carries_it() {
     );
 }
 
-// REQ-GRANT-41
 #[test]
 fn sync_json_prints_the_readiness_as_a_document() {
     let (output, request) = sync_against(SYNC, synced_response(READY_CODEX), &["--json"]);
@@ -251,8 +334,8 @@ fn sync_json_prints_the_readiness_as_a_document() {
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["schemaVersion"], 1);
     assert_eq!(document["outcome"], "synced");
-    // The control socket's readiness, each provider with its availability
-    // and next action (REQ-GRANT-53).
+    // The control socket's readiness, each provider with its availability and
+    // next action.
     let mut expected = serde_json::from_slice::<serde_json::Value>(&synced_response(READY_CODEX))
         .unwrap()["agentLogins"]
         .clone();
@@ -273,7 +356,6 @@ fn sync_json_prints_the_readiness_as_a_document() {
     assert_eq!(document["agentLogins"], expected);
 }
 
-// REQ-GRANT-128, REQ-GRANT-129, REQ-GRANT-53, REQ-GRANT-38
 #[test]
 fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_last_use() {
     let used = |last_use: &str| {
@@ -286,8 +368,8 @@ fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_las
         (used("refused"), 1, "reconnect_required", "reconnect"),
         (used("accepted"), 0, "available", "none"),
         (READY_CODEX.to_owned(), 0, "unverified", "none"),
-        // An earlier serving process may still say the provider was
-        // selected, which changes nothing (REQ-GRANT-118).
+        // An earlier serving process may still say the provider was selected,
+        // which changes nothing.
         (
             r#"{"provider":"codex","state":"not_authorized","agentLoginId":"agl_01k0z6r1w8f4jy2m7q9v3x5abc","checkedAt":"2026-11-12T01:00:00Z","selected":true}"#.to_owned(),
             0,
@@ -323,7 +405,6 @@ fn sync_reports_each_providers_availability_and_fails_a_login_refused_at_its_las
     }
 }
 
-// REQ-GRANT-129
 #[test]
 fn sync_prints_a_logins_last_use_with_its_time_where_the_runner_states_one() {
     const LAST_USE_AT: &str = "2026-11-12T00:58:00Z";
@@ -363,7 +444,6 @@ fn sync_prints_a_logins_last_use_with_its_time_where_the_runner_states_one() {
     assert!(!line.contains("2026-"), "{line}");
 }
 
-// REQ-GRANT-130
 #[test]
 fn sync_names_each_login_whose_check_gave_no_answer_without_changing_its_exit_status() {
     let unanswered = |codex: &str| {
@@ -425,7 +505,6 @@ fn sync_names_each_login_whose_check_gave_no_answer_without_changing_its_exit_st
     assert!(document.get("unansweredChecks").is_none(), "{document}");
 }
 
-// REQ-GRANT-128, REQ-GRANT-51
 #[test]
 fn sync_exits_1_only_when_an_authorized_provider_is_not_ready() {
     for (codex, code) in [
@@ -455,7 +534,6 @@ fn sync_exits_1_only_when_an_authorized_provider_is_not_ready() {
     }
 }
 
-// REQ-GRANT-128
 #[test]
 fn sync_exits_4_when_no_runner_is_live_or_a_run_it_holds_is_working() {
     let directory = private_credential_directory();
@@ -473,7 +551,6 @@ fn sync_exits_4_when_no_runner_is_live_or_a_run_it_holds_is_working() {
     assert!(String::from_utf8_lossy(&busy.stderr).contains("runner_busy"));
 }
 
-// REQ-GRANT-41
 #[test]
 fn sync_against_an_older_runner_says_it_must_be_restarted_on_this_release() {
     let (output, _) = sync_against(
@@ -656,7 +733,6 @@ impl ServedRunner {
     }
 }
 
-// REQ-RUNNERENROLL-86, REQ-GRANT-128, REQ-GRANT-119
 #[test]
 fn a_runner_with_nothing_authorized_passes_against_a_cloud_without_the_routes() {
     let ServedRunner {
@@ -687,7 +763,6 @@ fn a_runner_with_nothing_authorized_passes_against_a_cloud_without_the_routes() 
     );
 }
 
-// REQ-GRANT-36, REQ-GRANT-37, REQ-GRANT-42, REQ-GRANT-44, REQ-GRANT-90
 #[test]
 fn installed_agent_logins_reach_their_files_and_no_output() {
     let ServedRunner {
@@ -725,8 +800,7 @@ fn installed_agent_logins_reach_their_files_and_no_output() {
         "{synced}"
     );
     // Both logins are in the runner's own directory beside its state, and
-    // nothing is written under the service's home (REQ-GRANT-36,
-    // REQ-GRANT-37).
+    // nothing is written under the service's home.
     let mode =
         |path: &std::path::Path| fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777;
     let directory = fixture.state_directory().join(".runner-agent-login");
@@ -1047,7 +1121,6 @@ impl EndedGrantAssignment {
     }
 }
 
-// REQ-GRANT-149, REQ-GRANT-151, REQ-GRANT-88, INV-RUNNER-28
 #[test]
 fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowhere() {
     let served = EndedGrantAssignment::served(
@@ -1117,7 +1190,6 @@ fn an_admitted_assignment_keeps_its_grant_token_in_its_file_and_prints_it_nowher
     }
 }
 
-// REQ-GRANT-149, REQ-GRANT-151, INV-RUNNER-28
 #[test]
 fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
     let served = EndedGrantAssignment::served(
@@ -1174,7 +1246,6 @@ fn a_configured_providers_token_is_kept_in_its_own_file_and_printed_nowhere() {
     }
 }
 
-// REQ-GRANT-158, REQ-GRANT-129, REQ-GRANT-53
 #[test]
 fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current() {
     let served = EndedGrantAssignment::served(
@@ -1182,7 +1253,7 @@ fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current(
         &grant_token_file(GITHUB_TOKEN_FILE),
     );
     let config = served.fixture.config.clone();
-    // The runner answers a sync only once it is idle (REQ-GRANT-128).
+    // The runner answers a sync only once it is idle.
     let sync = poll_until(
         "sync once the runner is idle",
         || run(&["runner", "sync", "--config", &config]),
@@ -1191,7 +1262,7 @@ fn sync_shows_an_ended_assignments_grant_token_as_of_its_run_and_not_as_current(
     let json = run(&["runner", "sync", "--json", "--config", &config]);
     let serve_stderr = served.stop();
 
-    // An OAuth entry never fails the sync, ended or not (REQ-GRANT-159).
+    // An OAuth entry never fails the sync, ended or not.
     assert_eq!(
         sync.status.code(),
         Some(0),

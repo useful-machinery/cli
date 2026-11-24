@@ -451,7 +451,46 @@ exports:
     .await;
 }
 
-// REQ-WFEXEC-9
+#[tokio::test]
+async fn agent_step_in_an_established_workspace_is_not_dispatched() {
+    with_watchdog(async {
+        let source = agent_login_source("codex", "", "    workspace: new\n");
+        let fixture = execution_fixture_with_source_files(
+            &source,
+            &[("prompt.md", b"start")],
+            ResolvedInputs::default(),
+            EnvironmentSnapshot::default(),
+            CancellationSource::new(),
+            1,
+            1024,
+        );
+        let (adapter, mut control) = scripted_agent_dispatcher();
+        let agents = agent_runtime(&fixture, adapter);
+        let diagnostics = StepDiagnosticLog::default();
+        let execution = execute_workflow(
+            fixture.admitted,
+            &fixture.artifacts,
+            &fixture.inputs,
+            &diagnostics,
+            agents,
+            TestClock,
+            NoopExecutionObserver,
+        );
+        let (result, ()) = tokio::join!(execution, async {
+            assert!(
+                control.wait_until_started().await.is_err(),
+                "agent dispatched"
+            );
+        });
+        assert!(matches!(
+            &result.unwrap().steps["task"], StepState::Failed { detail }
+                if detail.phase == FailurePhase::Start
+                    && detail.code == FailureCode::WorkingDirectoryUnavailable
+        ));
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn harness_start_failure_is_a_start_failure() {
     with_watchdog(async {
@@ -534,7 +573,7 @@ fn agent_login_source(kind: &str, root: &str, step: &str) -> String {
     )
 }
 
-/// Records each harness login the step runtime reports (INV-ENGINE-36).
+/// Records each harness login the step runtime reports.
 #[derive(Default)]
 struct RecordingLoginObserver {
     observed: Mutex<Vec<(String, HarnessLoginOutcome)>>,
@@ -637,7 +676,6 @@ const LOGIN_ENVIRONMENT: &[(&str, &str)] = &[
     ("CLAUDE_CODE_OAUTH_TOKEN", "claude-login"),
 ];
 
-// INV-ENGINE-36
 #[tokio::test]
 async fn a_codex_step_that_received_its_login_reports_only_acceptance_or_refusal() {
     with_watchdog(async {
@@ -683,7 +721,6 @@ async fn a_codex_step_that_received_its_login_reports_only_acceptance_or_refusal
     .await;
 }
 
-// INV-ENGINE-36
 #[tokio::test]
 async fn a_step_whose_environment_omits_its_login_reports_nothing() {
     with_watchdog(async {
@@ -708,7 +745,6 @@ async fn a_step_whose_environment_omits_its_login_reports_nothing() {
     .await;
 }
 
-// INV-ENGINE-36
 #[tokio::test]
 async fn a_claude_code_step_reports_its_own_login_variable_only() {
     with_watchdog(async {
@@ -744,7 +780,6 @@ async fn a_claude_code_step_reports_its_own_login_variable_only() {
     .await;
 }
 
-// INV-ENGINE-36
 #[tokio::test]
 async fn a_context_without_a_login_observer_runs_its_agent_step_as_before() {
     with_watchdog(async {

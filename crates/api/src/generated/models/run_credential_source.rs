@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 pub struct RunCredentialSource {
     #[serde(rename = "provider")]
     pub provider: String,
-    /// `host` for a credential the runner's host provides; `grant` for one of a member's grants.
+    /// `host` for a credential the runner's host provides; `grant` for one of a member's grants; `org_connection`, for `github` alone, for the organization's GitHub App installation that a connection authorization issued to the run's runner.
     #[serde(rename = "source")]
     pub source: Source,
-    /// The member whose grant a `grant` source is; null for `host` and for a grant Cloud recorded no member of.
+    /// The member whose grant a `grant` source is; null for `host`, for `org_connection` and for a grant Cloud recorded no member of.
     #[serde(rename = "principalId", deserialize_with = "Option::deserialize")]
     pub principal_id: Option<String>,
 }
@@ -40,13 +40,15 @@ impl RunCredentialSource {
         }
     }
 }
-/// `host` for a credential the runner's host provides; `grant` for one of a member's grants.
+/// `host` for a credential the runner's host provides; `grant` for one of a member's grants; `org_connection`, for `github` alone, for the organization's GitHub App installation that a connection authorization issued to the run's runner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Source {
     #[serde(rename = "host")]
     RunCredentialSourceHost,
     #[serde(rename = "grant")]
     RunCredentialSourceGrant,
+    #[serde(rename = "org_connection")]
+    RunCredentialSourceOrgConnection,
 }
 
 impl Default for Source {

@@ -115,8 +115,7 @@ fn native_grant(id: &str, state: &str) -> serde_json::Value {
 }
 
 // The Codex grant authorized for one runner, which reported it ready and accepted at its last
-// use, after another runner's authorization ended while it was serving a run (REQ-GRANT-13,
-// REQ-GRANT-47, REQ-GRANT-48).
+// use, after another runner's authorization ended while it was serving a run.
 pub(super) fn native_grant_in_use() -> serde_json::Value {
     let mut grant = native_grant(NATIVE_GRANT_ID, "active");
     grant["authorizations"] = serde_json::json!([{
@@ -226,8 +225,7 @@ fn not_connected(provider: &str) -> serde_json::Value {
 }
 
 /// Every command a printed next action names is a `useful account integration` command or
-/// `useful runner sync`, and none of the earlier commands is named anywhere in `text`
-/// (REQ-GRANT-53).
+/// `useful runner sync`, and none of the earlier commands is named anywhere in `text`.
 pub(super) fn assert_next_actions_name_the_grant_commands(text: &str) {
     let mut commands = 0;
     for line in text.lines().filter(|line| line.contains("next action:")) {
@@ -279,10 +277,6 @@ const READ_ORGANIZATION: &str = "GET /api/v1/organizations/org_01k0z6r1w8f4jy2m7
 const READ_USES: &str =
     "GET /api/v1/me/grants/pgr_01k0z6r1w8f4jy2m7q9v3x5abc/uses?limit=20&vocabulary=2 HTTP/1.1";
 
-// REQ-GRANT-64
-// REQ-GRANT-53
-// REQ-INTEGRATION-13
-// REQ-INTEGRATION-50
 #[test]
 fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_rest() {
     let mut responses = Vec::new();
@@ -343,7 +337,7 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
                 }
             ],
             // A deployment that predates the served read serves no token service, so no token
-            // list is read (REQ-INTEGRATION-19).
+            // list is read.
             "tokens": [],
             "notConnected": [
                 not_connected("gitlab.com"),
@@ -387,7 +381,6 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
         assert!(rest.contains(name), "missing {name:?} in\n{text}");
     }
     assert!(!text.contains(REVOKED_OAUTH_GRANT_ID), "{text}");
-    // REQ-GRANT-53
     assert_next_actions_name_the_grant_commands(&text);
 
     let requests = server.finish();
@@ -403,7 +396,6 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
     assert_eq!(request_lines(&requests[5..]), expected);
 }
 
-// REQ-GRANT-64
 #[test]
 fn an_account_the_member_cannot_name_is_printed_by_its_id() {
     let (server, _directory, credential) = prepared(vec![
@@ -443,8 +435,6 @@ fn an_account_the_member_cannot_name_is_printed_by_its_id() {
     );
 }
 
-// REQ-GRANT-64
-// REQ-GRANT-138
 #[test]
 fn list_names_the_command_that_authorizes_a_runner_for_an_oauth_grant_with_none() {
     let responses = vec![
@@ -494,9 +484,6 @@ fn list_names_the_command_that_authorizes_a_runner_for_an_oauth_grant_with_none(
     server.finish();
 }
 
-// REQ-GRANT-171
-// REQ-INTEGRATION-13
-// REQ-INTEGRATION-50
 #[test]
 fn show_prints_a_native_grants_exchange_and_ended_authorizations() {
     let grant = native_grant_in_use();
@@ -574,8 +561,8 @@ fn show_prints_a_native_grants_exchange_and_ended_authorizations() {
     );
 }
 
-// REQ-GRANT-171: a runner authorized again keeps its last ended authorization listed, with
-// its removal state, beside the one in force.
+// A runner authorized again keeps its last ended authorization listed, with its removal
+// state, beside the one in force.
 #[test]
 fn show_prints_a_runners_ended_authorization_beside_its_authorization_in_force() {
     const ENDED_ID: &str = "aga_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -628,8 +615,8 @@ fn show_prints_a_runners_ended_authorization_beside_its_authorization_in_force()
     server.finish();
 }
 
-// REQ-GRANT-64, REQ-GRANT-171: `list` and `show` print the last use a runner reported for a native grant and, where
-// Cloud holds it, when; a last use with no time prints alone.
+// `list` and `show` print the last use a runner reported for a native grant and, where Cloud holds
+// it, when; a last use with no time prints alone.
 #[test]
 fn list_and_show_print_a_native_authorizations_last_use_and_when() {
     const LAST_USE_AT: &str = "2026-11-02T10:06:30Z";
@@ -706,7 +693,6 @@ fn list_and_show_print_a_native_authorizations_last_use_and_when() {
     }
 }
 
-// REQ-GRANT-171
 #[test]
 fn show_prints_an_oauth_grants_scopes_last_use_and_expiries() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -763,8 +749,8 @@ fn show_prints_an_oauth_grants_scopes_last_use_and_expiries() {
     );
 }
 
-// REQ-GRANT-64: a failed identity read still prints the grant, its account by identity ID,
-// and says on standard error that the names could not be read.
+// A failed identity read still prints the grant, its account by identity ID, and says on
+// standard error that the names could not be read.
 #[test]
 fn show_whose_identity_read_fails_prints_the_grant_and_a_diagnostic() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -812,8 +798,8 @@ fn show_whose_identity_read_fails_prints_the_grant_and_a_diagnostic() {
     );
 }
 
-// The tokens Cloud issued from the GitHub grant, newest first, as the uses route answers them
-// (REQ-GRANT-8).
+// The tokens Cloud issued from the GitHub grant, newest first, as the uses route answers
+// them.
 fn three_uses() -> [serde_json::Value; 3] {
     [
         (
@@ -849,7 +835,6 @@ fn uses(items: &[serde_json::Value]) -> Vec<u8> {
     page(items, None)
 }
 
-// REQ-GRANT-172, REQ-GRANT-8
 #[test]
 fn show_lists_the_tokens_issued_from_an_oauth_grant_newest_first_as_many_as_uses_names() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -925,7 +910,7 @@ fn show_lists_the_tokens_issued_from_an_oauth_grant_newest_first_as_many_as_uses
     );
 }
 
-// REQ-GRANT-172, REQ-GRANT-65: a grant named by its provider has its uses read by its ID.
+// A grant named by its provider has its uses read by its ID.
 #[test]
 fn a_grant_named_by_its_provider_has_its_uses_read_by_its_id() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -951,7 +936,7 @@ fn a_grant_named_by_its_provider_has_its_uses_read_by_its_id() {
     );
 }
 
-// REQ-GRANT-172: a failed uses read ends the command as a failed grant read does.
+// A failed uses read ends the command as a failed grant read does.
 #[test]
 fn show_whose_uses_read_fails_exits_1_as_a_failed_grant_read_does() {
     let grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -969,7 +954,7 @@ fn show_whose_uses_read_fails_exits_1_as_a_failed_grant_read_does() {
     assert_eq!(requests.len(), 3);
 }
 
-// REQ-GRANT-172: `show` takes a grant and at most 200 uses, and `list` takes neither.
+// `show` takes a grant and at most 200 uses, and `list` takes neither.
 #[test]
 fn show_without_a_grant_or_with_a_uses_limit_out_of_range_exits_2_before_anything_is_sent() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -990,7 +975,6 @@ fn show_without_a_grant_or_with_a_uses_limit_out_of_range_exits_2_before_anythin
     assert!(server.finish().is_empty());
 }
 
-// REQ-GRANT-65
 #[test]
 fn a_provider_name_resolves_to_the_members_one_unrevoked_grant_of_it() {
     let (server, _directory, credential) = prepared(vec![
@@ -1023,7 +1007,6 @@ fn a_provider_name_resolves_to_the_members_one_unrevoked_grant_of_it() {
     );
 }
 
-// REQ-GRANT-65
 #[test]
 fn a_provider_name_with_no_grant_is_not_found_and_one_with_several_is_refused_naming_them() {
     let (server, _directory, credential) = prepared(vec![
@@ -1059,8 +1042,6 @@ fn a_provider_name_with_no_grant_is_not_found_and_one_with_several_is_refused_na
     assert_eq!(requests.len(), 3);
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-96
 #[test]
 fn a_grant_that_is_no_grant_id_nor_provider_is_refused_before_anything_is_sent() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -1081,10 +1062,9 @@ fn a_grant_that_is_no_grant_id_nor_provider_is_refused_before_anything_is_sent()
     assert!(server.finish().is_empty());
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-96: any name of the provider id shape may name a provider, so one the member holds
-// no grant of is read for and not found. Such a name may also name a token service, which a
-// deployment that predates the served read serves none of (REQ-INTEGRATION-20).
+// Any name of the provider id shape may name a provider, so one the member holds no grant of
+// is read for and not found. Such a name may also name a token service, which a deployment
+// that predates the served read serves none of.
 #[test]
 fn a_provider_the_member_holds_no_grant_of_is_not_found_after_the_grants_are_read() {
     let (server, _directory, credential) = prepared(vec![
@@ -1102,7 +1082,6 @@ fn a_provider_the_member_holds_no_grant_of_is_not_found_after_the_grants_are_rea
 
 const EXAMPLE_GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abg";
 
-// REQ-GRANT-96
 #[test]
 fn a_grant_of_any_provider_is_listed_shown_and_revoked_by_its_provider() {
     let github = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -1184,8 +1163,44 @@ fn a_grant_of_any_provider_is_listed_shown_and_revoked_by_its_provider() {
     );
 }
 
-// REQ-GRANT-64
-// REQ-GRANT-170
+/// Acting as the GitHub App, the other choice `useful` names wherever the member's own GitHub
+/// sign-in is missing, failed or cannot be made.
+pub(super) const ACTING_AS_THE_APP: &str =
+    "useful org integration authorize github --runner RUNNER --project PROJECT --runs all";
+
+#[test]
+fn list_names_acting_as_the_github_app_in_the_step_that_connects_github() {
+    let (server, _directory, credential) = prepared(vec![nothing_held(), predating_served()]);
+    let output = run_grant(&server, &credential, &["list"]);
+    server.finish();
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let text = stdout(&output);
+    let (_, rest) = text.split_once("── not connected ──").unwrap();
+    let lines: Vec<_> = rest.lines().collect();
+    let at = |provider: &str| lines.iter().position(|line| *line == provider).unwrap();
+    let commands = |provider: &str| -> Vec<&str> {
+        lines[at(provider) + 2]
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .collect()
+    };
+    assert_eq!(
+        commands("github"),
+        [
+            "useful account integration connect github",
+            ACTING_AS_THE_APP
+        ],
+        "{text}"
+    );
+    assert_eq!(
+        commands("gitlab.com"),
+        ["useful account integration connect gitlab.com"],
+        "{text}"
+    );
+}
+
 #[test]
 fn list_names_each_other_oauth_provider_served_that_the_member_holds_nothing_of() {
     let github = || page(&[oauth_grant(OAUTH_GRANT_ID, "github", "active")], None);
@@ -1262,7 +1277,6 @@ fn list_names_each_other_oauth_provider_served_that_the_member_holds_nothing_of(
     );
 }
 
-// REQ-GRANT-64
 #[test]
 fn a_service_api_key_is_refused() {
     let directory = tempfile::tempdir().unwrap();
@@ -1353,7 +1367,7 @@ fn refusal_without_yes(server: &ScriptedServer, credential: &Path, args: &[&str]
 }
 
 // A statement made before acting is one the refusal without `--yes` states for both kinds,
-// each on a line of its own (REQ-GRANT-66, REQ-GRANT-67, REQ-GRANT-68).
+// each on a line of its own.
 pub(super) fn assert_stated_by_the_refusal(statement: &[String], refusal: &str) {
     assert!(!statement.is_empty(), "no statement before acting");
     for line in statement {
@@ -1368,7 +1382,6 @@ pub(super) fn assert_stated_by_the_refusal(statement: &[String], refusal: &str) 
     }
 }
 
-// REQ-GRANT-66
 #[test]
 fn authorize_states_who_can_use_the_grant_then_authorizes_the_runner_with_one_key() {
     let native = native_grant(NATIVE_GRANT_ID, "active");
@@ -1478,8 +1491,6 @@ fn authorize_states_who_can_use_the_grant_then_authorizes_the_runner_with_one_ke
     assert_ne!(header_value(&requests[4], "idempotency-key"), key);
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-66
 #[test]
 fn authorize_without_yes_states_the_runs_issued_oauth_tokens_and_the_steps_reading_them() {
     let oauth = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -1521,10 +1532,6 @@ fn authorize_without_yes_states_the_runs_issued_oauth_tokens_and_the_steps_readi
     );
 }
 
-// REQ-GRANT-66
-// REQ-GRANT-67
-// REQ-GRANT-68
-// REQ-GRANT-82
 #[test]
 fn a_missing_confirmation_or_a_malformed_target_exits_2_before_anything_is_sent() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -1631,7 +1638,6 @@ fn grant_outcomes(document: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
-// REQ-GRANT-173
 #[test]
 fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
     let mut responses = Vec::new();
@@ -1702,7 +1708,7 @@ fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
     let requests = server.finish();
     assert_member_requests(&requests);
     // A deployment that predates the served read serves no token service, so no token list is
-    // read (REQ-INTEGRATION-20).
+    // read.
     let expected = [
         LIST_FIRST_PAGE,
         READ_SERVED,
@@ -1720,8 +1726,6 @@ fn authorize_all_authorizes_every_grant_that_can_serve_the_runner() {
     assert_eq!(keys.len(), 3);
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-173
 #[test]
 fn authorize_all_exits_1_when_a_grant_is_refused_for_another_reason() {
     let mut responses = Vec::new();
@@ -1779,8 +1783,6 @@ fn authorize_all_exits_1_when_a_grant_is_refused_for_another_reason() {
     assert_eq!(server.finish().len(), 10);
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-173
 #[test]
 fn authorize_all_tells_a_codex_grant_authorized_elsewhere_from_one_authorized_here() {
     // The GitHub grant is authorized for the runner already; the Codex grant is refused because
@@ -1876,7 +1878,6 @@ fn authorize_all_tells_a_codex_grant_authorized_elsewhere_from_one_authorized_he
     );
 }
 
-// REQ-GRANT-173
 #[test]
 fn authorize_all_reports_runner_not_found_when_no_grant_finds_the_runner() {
     let mut linear = oauth_grant(LINEAR_GRANT_ID, "linear", "active");
@@ -1932,7 +1933,6 @@ fn rate_limited() -> Vec<u8> {
     )
 }
 
-// REQ-GRANT-174
 #[test]
 fn authorize_all_reports_the_authorizations_made_before_a_failure_that_ends_it() {
     let mut linear = oauth_grant(LINEAR_GRANT_ID, "linear", "active");
@@ -2053,7 +2053,6 @@ fn native_grant_deauthorized() -> serde_json::Value {
 
 const DEAUTHORIZE_NATIVE: &str = "DELETE /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations/aga_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
 
-// REQ-GRANT-67
 #[test]
 fn deauthorize_ends_a_native_grants_authorization_and_reports_its_removal_and_stop() {
     let read = "GET /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1";
@@ -2143,7 +2142,6 @@ fn deauthorize_ends_a_native_grants_authorization_and_reports_its_removal_and_st
     assert_eq!(header_value(&requests[2], "idempotency-key"), key);
 }
 
-// REQ-GRANT-67
 #[test]
 fn deauthorize_ends_an_oauth_grants_authorization_without_a_stop() {
     let (server, _directory, credential) = prepared(vec![
@@ -2209,7 +2207,6 @@ fn native_grant_revoked() -> serde_json::Value {
     grant
 }
 
-// REQ-GRANT-68
 #[test]
 fn revoke_erases_a_native_grant_and_reports_each_runners_removal_and_stop() {
     let delete = "DELETE /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
@@ -2295,7 +2292,6 @@ fn revoke_erases_a_native_grant_and_reports_each_runners_removal_and_stop() {
     );
 }
 
-// REQ-GRANT-68
 #[test]
 fn revoke_revokes_an_oauth_grant_without_reading_it_after() {
     let (server, _directory, credential) = prepared(vec![
@@ -2337,11 +2333,6 @@ fn revoke_revokes_an_oauth_grant_without_reading_it_after() {
     assert!(requests[1].ends_with("\r\n\r\n"), "{}", requests[1]);
 }
 
-// REQ-GRANT-31
-// REQ-GRANT-65
-// REQ-GRANT-66
-// REQ-GRANT-67
-// REQ-GRANT-68
 #[test]
 fn each_refusal_these_leaves_meet_exits_1_with_its_remedy() {
     let native = || one(&native_grant(NATIVE_GRANT_ID, "active"));
@@ -2432,7 +2423,6 @@ fn each_refusal_these_leaves_meet_exits_1_with_its_remedy() {
     }
 }
 
-// REQ-GRANT-66
 #[test]
 fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_it() {
     // Cloud answers a Codex grant authorized for another runner `grant-already-authorized`.
@@ -2456,7 +2446,7 @@ fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_
         "{text}"
     );
     // Another sign-in cannot serve the other runner: the held grant is refused or replaced
-    // in place (REQ-GRANT-73).
+    // in place.
     assert!(
         !text.contains("useful account integration connect codex"),
         "{text}"
@@ -2471,8 +2461,8 @@ fn a_codex_grant_authorized_for_another_runner_names_the_deauthorize_that_moves_
     );
 }
 
-// `useful account integration authorize` and `deauthorize` given no `--runner`, which name the runners
-// they can act on in its place, on a terminal or not (REQ-GRANT-176).
+// `useful account integration authorize` and `deauthorize` given no `--runner`, which name the
+// runners they can act on in its place, on a terminal or not.
 const GLOBEX_RUNNER_ID: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abf";
 pub(super) const LIST_ACME_RUNNERS: &str = "GET /api/v1/organizations/org_01k0z6r1w8f4jy2m7q9v3x5abc/runner-registrations?limit=200 HTTP/1.1";
 const LIST_GLOBEX_RUNNERS: &str = "GET /api/v1/organizations/org_01k0z6r1w8f4jy2m7q9v3x5abe/runner-registrations?limit=200 HTTP/1.1";
@@ -2551,7 +2541,6 @@ pub(super) fn named_runners(output: &Output, runners: &[(&str, &str, &str)]) -> 
     named.into_iter().map(|(_, name)| name).collect()
 }
 
-// REQ-GRANT-81, REQ-GRANT-176
 #[test]
 fn authorize_without_a_runner_names_each_runner_it_can_act_on() {
     let grants = || page(&[native_grant(NATIVE_GRANT_ID, "active")], None);
@@ -2616,7 +2605,6 @@ fn authorize_without_a_runner_names_each_runner_it_can_act_on() {
     );
 }
 
-// REQ-GRANT-81
 #[test]
 fn deauthorize_without_a_runner_names_only_the_runners_the_grant_is_authorized_for() {
     let (server, _directory, credential) = prepared(vec![
@@ -2665,7 +2653,6 @@ fn deauthorize_without_a_runner_names_only_the_runners_the_grant_is_authorized_f
     );
 }
 
-// REQ-GRANT-81
 #[test]
 fn authorize_all_without_a_runner_names_the_runners_of_every_active_organization() {
     let organizations = || {
@@ -2720,7 +2707,6 @@ fn authorize_all_without_a_runner_names_the_runners_of_every_active_organization
     );
 }
 
-// REQ-GRANT-175
 #[test]
 fn a_command_with_no_runner_to_offer_exits_1_with_why() {
     let mut oauth = oauth_grant(OAUTH_GRANT_ID, "github", "active");
@@ -2807,10 +2793,6 @@ const READ_NATIVE: &str =
 const READ_OAUTH: &str =
     "GET /api/v1/me/grants/pgr_01k0z6r1w8f4jy2m7q9v3x5abc?vocabulary=2 HTTP/1.1";
 
-// REQ-GRANT-65
-// REQ-GRANT-66
-// REQ-GRANT-67
-// INV-CLI-23
 #[test]
 fn a_runner_named_by_its_exact_name_is_sent_by_the_id_of_the_one_runner_that_has_it() {
     // An OAuth grant already authorized for `build-1`, which the name still finds: Cloud
@@ -2916,7 +2898,6 @@ fn a_runner_named_by_its_exact_name_is_sent_by_the_id_of_the_one_runner_that_has
     }
 }
 
-// REQ-GRANT-65
 #[test]
 fn a_runner_name_that_names_no_runner_or_several_sends_nothing() {
     let organizations = || {
@@ -2996,8 +2977,8 @@ fn a_runner_name_that_names_no_runner_or_several_sends_nothing() {
     );
 }
 
-// `useful account integration authorize` and `deauthorize` on a terminal, where they show no list and
-// ask only whether to go on (REQ-GRANT-81, REQ-GRANT-82).
+// `useful account integration authorize` and `deauthorize` on a terminal, where they show no list
+// and ask only whether to go on.
 
 /// `useful account integration` with `args`, to run on a terminal: as the leader of a new session whose
 /// controlling terminal is its standard input, the terminal the list measures to draw on. The
@@ -3029,8 +3010,6 @@ fn grant_on_terminal(server: &ScriptedServer, credential: &Path, args: &[&str]) 
     command
 }
 
-// REQ-GRANT-81
-// INV-CLI-16
 #[test]
 fn on_a_terminal_a_leaf_given_no_runner_names_the_runners_and_asks_nothing() {
     let grants = || page(&[native_grant(NATIVE_GRANT_ID, "active")], None);
@@ -3075,8 +3054,6 @@ fn on_a_terminal_a_leaf_given_no_runner_names_the_runners_and_asks_nothing() {
     );
 }
 
-// REQ-GRANT-82
-// INV-CLI-16, INV-CLI-23
 #[test]
 fn without_yes_on_a_terminal_a_leaf_states_what_acting_does_then_asks_whether_to_go_on() {
     // The runner as `--runner` names it, the answer typed, and whether the runner is
@@ -3369,7 +3346,6 @@ fn poll_line() -> String {
     format!("GET /api/v1/me/grant-sessions/{SESSION_ID}?vocabulary=2 HTTP/1.1")
 }
 
-// REQ-GRANT-69
 #[test]
 fn create_starts_the_consent_opens_its_url_and_waits_for_the_grant() {
     // An opener that fails changes nothing: the URL is printed whatever it does.
@@ -3423,7 +3399,6 @@ fn create_starts_the_consent_opens_its_url_and_waits_for_the_grant() {
     }
 }
 
-// REQ-GRANT-69
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -3473,7 +3448,6 @@ fn an_opener_that_waits_for_the_browser_to_quit_does_not_keep_the_consent_waitin
     );
 }
 
-// REQ-GRANT-69
 #[test]
 fn create_prints_the_url_without_opening_it_where_this_machine_has_no_browser() {
     // Only Linux needs a display for a browser.
@@ -3502,7 +3476,6 @@ fn create_prints_the_url_without_opening_it_where_this_machine_has_no_browser() 
     }
 }
 
-// REQ-GRANT-69
 #[test]
 fn create_without_waiting_returns_after_the_start_event() {
     let (server, _directory, credential) = prepared(vec![nothing_held(), started()]);
@@ -3525,7 +3498,6 @@ fn create_without_waiting_returns_after_the_start_event() {
     assert_eq!(request_lines(&server.finish()), [LIST_OAUTH, START_CONSENT]);
 }
 
-// REQ-GRANT-1, REQ-GRANT-69
 #[test]
 fn create_replays_its_key_once_after_a_lost_start_response() {
     let (server, _directory, credential) = prepared(vec![nothing_held(), Vec::new(), started()]);
@@ -3552,7 +3524,6 @@ fn create_replays_its_key_once_after_a_lost_start_response() {
     assert_eq!(key, header_value(&requests[2], "idempotency-key"));
 }
 
-// REQ-GRANT-1, REQ-GRANT-69
 #[test]
 fn create_waits_out_a_rate_limited_poll_and_then_reports_the_grant() {
     let limited = http_response_with_headers(
@@ -3591,7 +3562,6 @@ fn create_waits_out_a_rate_limited_poll_and_then_reports_the_grant() {
     );
 }
 
-// REQ-GRANT-69
 #[test]
 fn create_reports_a_consent_that_did_not_complete_with_its_reason() {
     for (status, reason) in [("failed", "consent_denied"), ("expired", "session_expired")] {
@@ -3625,7 +3595,6 @@ fn create_reports_a_consent_that_did_not_complete_with_its_reason() {
     }
 }
 
-// REQ-GRANT-69
 #[test]
 fn create_reports_a_refused_consent_without_polling() {
     for (slug, status, code, outcome, exit) in [
@@ -3668,8 +3637,107 @@ fn create_reports_a_refused_consent_without_polling() {
     }
 }
 
-// REQ-GRANT-73
-// REQ-GRANT-69
+#[test]
+fn a_github_consent_that_did_not_complete_names_acting_as_the_github_app() {
+    let settled = |provider: &str, status: &str, reason: &str| {
+        let mut session = consent_of(provider, status);
+        session["reasonCode"] = reason.into();
+        session
+    };
+    let started_for =
+        |provider: &str| json_http_response("201 Created", consent_of(provider, "pending"));
+    let mismatch = || polled(settled("github", "failed", "subject_mismatch"));
+    let (server, _directory, credential) = prepared(vec![
+        nothing_held(),
+        started_for("github"),
+        mismatch(),
+        nothing_held(),
+        started_for("github"),
+        mismatch(),
+    ]);
+    let opener = Opener::new(0);
+    let json = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["github", "--json"],
+    );
+    let human = run_create(&server, &credential, &opener, Place::Remote, &["github"]);
+    server.finish();
+
+    assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
+    let lines = events(&json);
+    assert_eq!(lines[1]["event"], "consent_result");
+    assert_eq!(lines[1]["outcome"], "failed");
+    assert_eq!(lines[1]["reason"], "subject_mismatch");
+    assert_eq!(lines[1]["alternative"], ACTING_AS_THE_APP);
+    assert!(lines[1]["grant"].is_null());
+    // Consenting again as a GitHub user linked to another account cannot succeed, so the report
+    // names acting as the GitHub App, and not the consent, as the step.
+    assert_eq!(human.status.code(), Some(1));
+    let text = stdout(&human);
+    assert!(
+        text.lines().any(|line| line.trim() == ACTING_AS_THE_APP),
+        "{text}"
+    );
+    assert!(
+        text.contains("linked to another Useful Machinery account"),
+        "{text}"
+    );
+    assert!(!text.contains("connect github"), "{text}");
+
+    // Any other GitHub consent that does not complete, and a refusal for want of GitHub, name it
+    // too; another provider's names none.
+    let (server, _directory, credential) = prepared(vec![
+        nothing_held(),
+        started_for("github"),
+        polled(settled("github", "expired", "session_expired")),
+        nothing_held(),
+        problem("503 Service Unavailable", 503, "provider-unavailable"),
+        nothing_held(),
+        started_for("gitlab.com"),
+        polled(settled("gitlab.com", "failed", "subject_mismatch")),
+    ]);
+    let expired = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["github", "--json"],
+    );
+    let unavailable = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["github", "--json"],
+    );
+    let gitlab = run_create(
+        &server,
+        &credential,
+        &opener,
+        Place::Remote,
+        &["gitlab.com", "--json"],
+    );
+    server.finish();
+    let result = |output: &Output| events(output).pop().unwrap();
+    assert_eq!(expired.status.code(), Some(1), "{}", stderr(&expired));
+    assert_eq!(result(&expired)["outcome"], "expired");
+    assert_eq!(result(&expired)["alternative"], ACTING_AS_THE_APP);
+    assert_eq!(
+        unavailable.status.code(),
+        Some(4),
+        "{}",
+        stderr(&unavailable)
+    );
+    assert_eq!(result(&unavailable)["outcome"], "provider_unavailable");
+    assert_eq!(result(&unavailable)["alternative"], ACTING_AS_THE_APP);
+    assert_eq!(gitlab.status.code(), Some(1), "{}", stderr(&gitlab));
+    assert_eq!(result(&gitlab)["reason"], "subject_mismatch");
+    assert!(result(&gitlab).get("alternative").is_none());
+}
+
 #[test]
 fn a_consent_that_did_not_complete_names_the_command_that_started_it() {
     let mut denied = session("failed");
@@ -3711,7 +3779,6 @@ fn reconnect_line(id: &str) -> String {
     format!("useful account integration reconnect {id}")
 }
 
-// REQ-GRANT-73
 #[test]
 fn create_never_replaces_a_held_grant_and_names_the_reconnect_of_each() {
     for state in ["active", "reconnect_required"] {
@@ -3745,7 +3812,6 @@ fn create_never_replaces_a_held_grant_and_names_the_reconnect_of_each() {
     }
 }
 
-// REQ-GRANT-73
 #[test]
 fn create_does_not_hold_a_revoked_grant_or_one_of_another_provider_against_a_consent() {
     let (server, _directory, credential) = prepared(vec![
@@ -3775,7 +3841,7 @@ fn create_does_not_hold_a_revoked_grant_or_one_of_another_provider_against_a_con
 const BUILT_IN: [&str; 5] = ["github", "gitlab.com", "linear", "claude_code", "codex"];
 
 /// The answer of a deployment that serves the five and `example`, an OAuth provider titled
-/// `title` when one is given (REQ-GRANT-78).
+/// `title` when one is given.
 fn serving_example(title: Option<&str>) -> Vec<u8> {
     serving_titled(
         &[
@@ -3803,8 +3869,6 @@ fn approval_line(text: &str, url: &str) -> String {
     lines[at - 1].to_owned()
 }
 
-// REQ-GRANT-69
-// REQ-GRANT-96, REQ-GRANT-170
 #[test]
 fn create_connects_any_oauth_provider_the_deployment_serves_titled_as_it_serves_it() {
     for (title, json) in [
@@ -3859,7 +3923,6 @@ fn create_connects_any_oauth_provider_the_deployment_serves_titled_as_it_serves_
     }
 }
 
-// REQ-GRANT-69
 #[test]
 fn a_provider_the_deployment_does_not_serve_as_oauth_is_refused_naming_those_that_can_be_given() {
     let mut with_example = BUILT_IN.to_vec();
@@ -3917,9 +3980,6 @@ fn a_provider_the_deployment_does_not_serve_as_oauth_is_refused_naming_those_tha
     assert!(server.finish().is_empty());
 }
 
-// REQ-GRANT-69
-// REQ-GRANT-73
-// REQ-GRANT-96
 #[test]
 fn a_held_grant_of_a_served_provider_is_refused_by_create_and_consented_to_by_reconnect() {
     let held = page(&[oauth_grant(EXAMPLE_GRANT_ID, "example", "active")], None);
@@ -4041,7 +4101,6 @@ pub(super) fn on_terminal(mut command: Command, steps: &[(&str, &str)]) -> (Stri
     (String::from_utf8_lossy(&shown).into_owned(), output)
 }
 
-// REQ-GRANT-73
 #[test]
 fn create_on_a_terminal_asks_nothing_and_refuses_a_held_grant() {
     let (server, _directory, credential) = prepared(vec![page(
@@ -4100,8 +4159,6 @@ fn approved_as(provider: &str, made: &str) -> [Vec<u8>; 2] {
     ]
 }
 
-// REQ-GRANT-73, REQ-GRANT-179
-// REQ-GRANT-2
 #[test]
 fn reconnect_consents_again_and_exits_1_when_the_consent_made_another_grant() {
     let held = || one(&oauth_grant(OAUTH_GRANT_ID, "github", "active"));
@@ -4172,8 +4229,6 @@ fn reconnect_consents_again_and_exits_1_when_the_consent_made_another_grant() {
     }
 }
 
-// REQ-GRANT-73
-// REQ-GRANT-65
 #[test]
 fn reconnect_refuses_a_revoked_grant_and_an_option_its_provider_does_not_take() {
     let directory = tempfile::tempdir().unwrap();
@@ -4311,10 +4366,10 @@ fn stored_in(
     )
 }
 
-/// Runs `useful account integration connect` from the member's `home` with the fake `program`, when there
-/// is one, and the opener on `PATH`, and standard input `input`. Whatever the outcome, the member's
-/// home is as it was, the temporary sign-in directory is gone and no login reached the output
-/// (REQ-GRANT-74, INV-CLI-13, INV-CLI-14).
+/// Runs `useful account integration connect` from the member's `home` with the fake `program`, when
+/// there is one, and the opener on `PATH`, and standard input `input`. Whatever the outcome, the
+/// member's home is as it was, the temporary sign-in directory is gone and no login reached the
+/// output.
 fn run_native(
     server: &ScriptedServer,
     credential: &Path,
@@ -4425,7 +4480,7 @@ enum Input<'a> {
     Null,
     /// These bytes on a pipe, as `--token-file -` and `--from-file -` read them.
     Piped(&'a [u8]),
-    /// A terminal these bytes are typed on, which Claude Code's sign-in needs (REQ-GRANT-71).
+    /// A terminal these bytes are typed on, which Claude Code's sign-in needs.
     Typed(&'a [u8]),
 }
 
@@ -4523,10 +4578,6 @@ fn assert_imported(request: &str, organization: &str, (provider, material): Logi
     );
 }
 
-// REQ-GRANT-70
-// REQ-GRANT-72
-// REQ-GRANT-74
-// INV-CLI-13
 #[test]
 fn create_codex_signs_in_in_a_private_codex_home_and_imports_the_login_it_wrote() {
     for args in [&["codex"][..], &["codex", "--login", "--json"]] {
@@ -4589,7 +4640,6 @@ fn create_codex_signs_in_in_a_private_codex_home_and_imports_the_login_it_wrote(
     }
 }
 
-// REQ-GRANT-70
 #[test]
 fn create_codex_signs_in_by_device_code_with_device_or_where_this_machine_has_no_browser() {
     for (place, args) in [
@@ -4635,8 +4685,6 @@ fn create_codex_signs_in_by_device_code_with_device_or_where_this_machine_has_no
     }
 }
 
-// REQ-GRANT-32
-// REQ-GRANT-70
 #[test]
 fn create_codex_imports_a_named_file_or_standard_input_without_running_codex() {
     let directory = tempfile::tempdir().unwrap();
@@ -4674,10 +4722,6 @@ fn create_codex_imports_a_named_file_or_standard_input_without_running_codex() {
     }
 }
 
-// REQ-GRANT-32
-// REQ-GRANT-73
-// REQ-GRANT-115
-// INV-CLI-13
 #[test]
 fn reconnect_stores_a_named_codex_file_or_standard_input_as_the_grants_next_generation() {
     let directory = tempfile::tempdir().unwrap();
@@ -4720,8 +4764,6 @@ fn reconnect_stores_a_named_codex_file_or_standard_input_as_the_grants_next_gene
     }
 }
 
-// REQ-GRANT-70
-// REQ-GRANT-73
 // `create codex` refuses a held grant, so the remedy of a sign-in `reconnect` started names
 // `reconnect` with the file, not the `create` that would send the member back here.
 #[test]
@@ -4750,10 +4792,6 @@ fn reconnect_whose_codex_sign_in_fails_names_reconnect_with_a_file_as_the_remedy
     assert_eq!(request_lines(&server.finish()), [READ_NATIVE, READ_SERVED]);
 }
 
-// REQ-GRANT-32
-// REQ-GRANT-33
-// REQ-GRANT-73
-// INV-CLI-13
 #[test]
 fn reconnect_checks_a_named_file_before_any_request_and_its_provider_before_any_sign_in() {
     let directory = tempfile::tempdir().unwrap();
@@ -4812,8 +4850,6 @@ fn reconnect_checks_a_named_file_before_any_request_and_its_provider_before_any_
     );
 }
 
-// REQ-GRANT-31
-// REQ-GRANT-65
 #[test]
 fn create_reports_an_import_cloud_refuses_with_exit_1_and_its_remedy() {
     let directory = tempfile::tempdir().unwrap();
@@ -4882,11 +4918,6 @@ fn create_reports_an_import_cloud_refuses_with_exit_1_and_its_remedy() {
     }
 }
 
-// REQ-GRANT-32
-// REQ-GRANT-33
-// REQ-GRANT-70
-// REQ-GRANT-71
-// REQ-GRANT-72
 #[test]
 fn create_refuses_an_unsafe_file_or_an_option_the_provider_does_not_take_before_any_request() {
     use std::os::unix::fs::symlink;
@@ -4964,8 +4995,6 @@ fn create_refuses_an_unsafe_file_or_an_option_the_provider_does_not_take_before_
     }
 }
 
-// REQ-GRANT-70
-// REQ-GRANT-74
 #[test]
 fn a_codex_sign_in_that_fails_stores_nothing_and_reports_provider_login_failed() {
     let cases = [
@@ -5014,7 +5043,6 @@ fn a_codex_sign_in_that_fails_stores_nothing_and_reports_provider_login_failed()
     }
 }
 
-// REQ-GRANT-72
 #[test]
 fn create_codex_imports_for_the_named_organization_and_needs_one_when_the_member_has_several() {
     let (server, _directory, credential) = prepared(vec![
@@ -5073,8 +5101,6 @@ fn create_codex_imports_for_the_named_organization_and_needs_one_when_the_member
     assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
 }
 
-// REQ-GRANT-72
-// REQ-ORG-87
 #[test]
 fn create_codex_imports_for_the_organization_in_effect() {
     let directory = tempfile::tempdir().unwrap();
@@ -5183,7 +5209,6 @@ fn create_codex_imports_for_the_organization_in_effect() {
     assert_imported(&requests[4], GLOBEX_ORGANIZATION_ID, CODEX);
 }
 
-// REQ-GRANT-72
 #[test]
 fn create_of_an_oauth_provider_reads_no_organization_the_variable_names() {
     // The variable is not an option: it is neither refused nor read, valid or not.
@@ -5218,7 +5243,6 @@ fn create_of_an_oauth_provider_reads_no_organization_the_variable_names() {
     }
 }
 
-// REQ-GRANT-73
 #[test]
 fn create_codex_refuses_the_grant_held_in_that_organization_and_reconnect_renews_it() {
     let held = || {
@@ -5321,7 +5345,6 @@ fn create_codex_refuses_the_grant_held_in_that_organization_and_reconnect_renews
     );
 }
 
-// REQ-GRANT-73
 #[test]
 fn create_codex_names_the_several_grants_held_in_that_organization_and_starts_no_sign_in() {
     let (server, _directory, credential) = prepared(vec![
@@ -5359,8 +5382,6 @@ fn create_codex_names_the_several_grants_held_in_that_organization_and_starts_no
     );
 }
 
-// REQ-GRANT-73
-// INV-CLI-13
 #[test]
 fn create_codex_starts_no_sign_in_without_a_session() {
     let server = ScriptedServer::respond(vec![]);
@@ -5394,9 +5415,6 @@ fn claude_grant(id: &str, state: &str) -> serde_json::Value {
     grant
 }
 
-// REQ-GRANT-71
-// REQ-GRANT-74
-// INV-CLI-14
 #[test]
 fn create_claude_code_runs_setup_token_on_a_terminal_and_imports_the_token_without_showing_it() {
     let paste = format!("{PASTE_CODE}\n");
@@ -5468,8 +5486,6 @@ fn create_claude_code_runs_setup_token_on_a_terminal_and_imports_the_token_witho
     }
 }
 
-// REQ-GRANT-71
-// REQ-GRANT-74
 #[test]
 fn a_claude_setup_token_that_fails_stores_nothing_and_reports_provider_login_failed() {
     let cases = [
@@ -5517,7 +5533,6 @@ fn a_claude_setup_token_that_fails_stores_nothing_and_reports_provider_login_fai
     }
 }
 
-// REQ-GRANT-177
 #[test]
 fn create_claude_code_without_a_terminal_starts_no_sign_in_and_names_the_token_file() {
     let claude = FakeProgram::claude(SetupToken::Prints);
@@ -5586,7 +5601,6 @@ fn spawn_claude_sign_in(
     .unwrap()
 }
 
-// REQ-GRANT-71
 #[test]
 fn input_written_after_the_claude_sign_in_ends_is_left_for_the_next_reader() {
     let mut server = ScriptedServer::respond_with_paused_last_response(vec![
@@ -5651,7 +5665,6 @@ fn input_written_after_the_claude_sign_in_ends_is_left_for_the_next_reader() {
     home.assert_untouched_and_clean();
 }
 
-// REQ-GRANT-71
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -5723,8 +5736,6 @@ fn a_descendant_of_the_claude_sign_in_holding_its_terminal_does_not_keep_useful_
     home.assert_untouched_and_clean();
 }
 
-// REQ-GRANT-71
-// INV-CLI-14
 #[test]
 fn the_claude_sign_in_leads_its_own_session_with_the_terminal_useful_owns_as_its_controlling_terminal()
  {
@@ -5775,14 +5786,12 @@ fn the_claude_sign_in_leads_its_own_session_with_the_terminal_useful_owns_as_its
     home.assert_untouched_and_clean();
 }
 
-// REQ-GRANT-33
-// REQ-GRANT-71
 #[test]
 fn create_claude_code_imports_a_named_token_file_or_standard_input_without_running_claude() {
     let directory = tempfile::tempdir().unwrap();
     let line = format!("{CLAUDE_TOKEN}\n");
     let file = private_file(directory.path(), "token", line.as_bytes());
-    // Neither source needs a terminal (REQ-GRANT-71).
+    // Neither source needs a terminal.
     for (path, input) in [
         (file.to_str().unwrap(), Input::Null),
         ("-", Input::Piped(line.as_bytes())),
@@ -5816,8 +5825,6 @@ fn create_claude_code_imports_a_named_token_file_or_standard_input_without_runni
     }
 }
 
-// REQ-GRANT-73
-// REQ-GRANT-71
 #[test]
 fn reconnect_claude_code_runs_setup_token_and_stores_the_token_as_the_grants_next_generation() {
     let (server, _directory, credential) = prepared(vec![
@@ -5857,10 +5864,6 @@ fn reconnect_claude_code_runs_setup_token_and_stores_the_token_as_the_grants_nex
     );
 }
 
-// REQ-GRANT-33
-// REQ-GRANT-71
-// REQ-GRANT-73
-// REQ-GRANT-115
 #[test]
 fn reconnect_claude_code_takes_a_token_file_and_without_one_needs_a_terminal() {
     let directory = tempfile::tempdir().unwrap();
@@ -6057,7 +6060,6 @@ fn outcomes(entries: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-// REQ-GRANT-75
 #[test]
 fn create_without_a_provider_all_or_workflow_exits_2_naming_the_three() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -6081,7 +6083,6 @@ fn create_without_a_provider_all_or_workflow_exits_2_naming_the_three() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-GRANT-75
 #[test]
 fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
     let args: &[&str] = &["--all"];
@@ -6152,7 +6153,6 @@ fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
     assert_imported(&requests[8], ORGANIZATION_ID, CODEX);
 }
 
-// REQ-GRANT-75
 #[test]
 fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
     let mut denied = consent_of("linear", "failed");
@@ -6221,8 +6221,6 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
     assert_eq!(request_lines(&requests)[7..], [IMPORT_GRANT, IMPORT_GRANT]);
 }
 
-// REQ-GRANT-177
-// REQ-GRANT-75
 #[test]
 fn without_a_terminal_the_claude_sign_in_fails_and_the_codex_sign_in_after_it_still_runs() {
     let (server, _directory, credential) = prepared(vec![
@@ -6291,8 +6289,6 @@ fn signalled_claude(then: &str) -> tempfile::TempDir {
     directory
 }
 
-// REQ-GRANT-183
-// REQ-GRANT-71
 #[test]
 fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
     // How the sign-in ends, and the status and outcome it stops `useful account integration connect` with:
@@ -6363,7 +6359,6 @@ fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
     }
 }
 
-// REQ-GRANT-181
 #[test]
 fn a_provider_the_deployment_does_not_serve_is_reported_and_passed_over_without_a_sign_in() {
     let (server, _directory, credential) = prepared(
@@ -6413,13 +6408,13 @@ fn a_provider_the_deployment_does_not_serve_is_reported_and_passed_over_without_
 
 pub(super) const READ_SERVED: &str = "GET /api/v1/me/grant-providers HTTP/1.1";
 
-/// The deployment's answer naming the providers it serves, each with its kind (REQ-GRANT-78).
+/// The deployment's answer naming the providers it serves, each with its kind.
 fn serving(providers: &[&str]) -> Vec<u8> {
     serving_titled(providers, &[])
 }
 
 /// The deployment's answer naming `providers` in order, each with its kind, and each provider
-/// `titles` names with that display name (REQ-GRANT-78).
+/// `titles` names with that display name.
 fn serving_titled(providers: &[&str], titles: &[(&str, &str)]) -> Vec<u8> {
     let items: Vec<_> = providers
         .iter()
@@ -6458,8 +6453,6 @@ fn import_outcomes(events: &[serde_json::Value]) -> Vec<&str> {
         .collect()
 }
 
-// REQ-GRANT-181
-// REQ-GRANT-78
 #[test]
 fn a_coding_agent_the_deployment_does_not_serve_is_passed_over_before_its_sign_in() {
     // Named alone, it is refused before its organization, its sign-in or an import.
@@ -6523,7 +6516,6 @@ fn a_coding_agent_the_deployment_does_not_serve_is_passed_over_before_its_sign_i
     assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
 }
 
-// REQ-GRANT-182
 #[test]
 fn a_deployment_that_predates_the_served_providers_read_is_signed_in_to_as_before() {
     let (server, _directory, credential) = prepared(vec![
@@ -6593,8 +6585,7 @@ fn a_deployment_that_predates_the_served_providers_read_is_signed_in_to_as_befor
 }
 
 /// The answer of a deployment that serves `example`, titled `Example Cloud`, between `github`
-/// and `gitlab.com`: a command names the providers in its own order, not the deployment's
-/// (REQ-GRANT-75).
+/// and `gitlab.com`: a command names the providers in its own order, not the deployment's.
 fn serving_example_early() -> Vec<u8> {
     serving_titled(
         &[
@@ -6609,8 +6600,6 @@ fn serving_example_early() -> Vec<u8> {
     )
 }
 
-// REQ-GRANT-75
-// REQ-GRANT-170
 #[test]
 fn create_without_a_provider_consents_to_each_other_oauth_provider_served_after_the_built_in_ones()
 {
@@ -6666,7 +6655,7 @@ fn create_without_a_provider_consents_to_each_other_oauth_provider_served_after_
         assert_eq!(started, consents, "{held:?}");
     }
 
-    // The consent of a served provider is titled by its served display name (REQ-GRANT-96).
+    // The consent of a served provider is titled by its served display name.
     let mut responses = vec![
         holding(&["github", "gitlab.com", "linear"], true),
         serving_example_early(),
@@ -6702,7 +6691,6 @@ fn remedies<'a>(report: &[&'a str]) -> Vec<&'a str> {
     report[fields + 1..].to_vec()
 }
 
-// REQ-GRANT-183
 #[test]
 fn a_summary_with_a_provider_passed_over_is_no_success_verdict_and_names_it() {
     let (server, _directory, credential) = prepared(
@@ -6746,7 +6734,6 @@ fn a_summary_with_a_provider_passed_over_is_no_success_verdict_and_names_it() {
     );
 }
 
-// REQ-GRANT-183
 #[test]
 fn a_summary_of_consents_only_started_is_no_success_verdict_and_names_where_to_see_them() {
     let (server, _directory, credential) = prepared(vec![
@@ -6774,7 +6761,6 @@ fn a_summary_of_consents_only_started_is_no_success_verdict_and_names_where_to_s
     );
 }
 
-// REQ-GRANT-75
 #[test]
 fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_again() {
     let (server, _directory, credential) = prepared(vec![
@@ -6817,7 +6803,6 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
     );
 }
 
-// REQ-GRANT-75
 #[test]
 fn a_member_who_holds_every_provider_is_told_so_after_the_list_and_the_served_read() {
     for json in [false, true] {
@@ -6849,8 +6834,6 @@ fn a_member_who_holds_every_provider_is_told_so_after_the_list_and_the_served_re
     }
 }
 
-// REQ-GRANT-72
-// REQ-GRANT-180
 #[test]
 fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_still_run() {
     let cases = [
@@ -6969,8 +6952,6 @@ fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_sti
     }
 }
 
-// REQ-GRANT-72
-// REQ-GRANT-180
 #[test]
 fn a_coding_agent_held_only_in_another_organization_is_selected_for_the_one_named() {
     let mut claude_in_globex = claude_grant_of(OTHER_NATIVE_GRANT_ID);
@@ -7016,7 +6997,6 @@ fn a_coding_agent_held_only_in_another_organization_is_selected_for_the_one_name
     assert_imported(&requests[2], GLOBEX_ORGANIZATION_ID, CODEX);
 }
 
-// REQ-GRANT-75
 #[test]
 fn an_option_that_needs_a_provider_or_all_with_one_exits_2_before_any_request() {
     let directory = tempfile::tempdir().unwrap();
@@ -7048,7 +7028,6 @@ fn an_option_that_needs_a_provider_or_all_with_one_exits_2_before_any_request() 
     }
 }
 
-// REQ-GRANT-178
 #[test]
 fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_without_one() {
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
@@ -7305,7 +7284,6 @@ fn origins(text: &str) -> serde_json::Value {
     serde_json::from_str(text).unwrap()
 }
 
-// REQ-GRANT-76
 #[test]
 fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7350,7 +7328,7 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
     }
     // Git is asked for the repository's root and its `origin` remote, then, since no option
     // names the organization of the Claude Code grant, for the checkout's remotes, which name
-    // none here, so the only membership does (REQ-GRANT-72, REQ-ORG-87); nothing else.
+    // none here, so the only membership does; nothing else.
     assert_eq!(
         git.invocations(),
         [
@@ -7377,7 +7355,6 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
     assert_imported(&requests[5], ORGANIZATION_ID, CLAUDE_CODE);
 }
 
-// REQ-GRANT-76
 #[test]
 fn a_held_provider_is_passed_over_and_json_carries_the_plan_before_the_sign_ins() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7442,8 +7419,7 @@ fn a_held_provider_is_passed_over_and_json_carries_the_plan_before_the_sign_ins(
 }
 
 // The Claude Code grant `id` in Acme, authorized for a runner that reported it ready at its
-// generation and refused at its last use, so its status there is `reconnect_required`
-// (REQ-GRANT-53).
+// generation and refused at its last use, so its status there is `reconnect_required`.
 fn claude_grant_refused(id: &str) -> serde_json::Value {
     let mut grant = native_grant_in_use();
     grant["id"] = id.into();
@@ -7464,8 +7440,6 @@ fn needing_reconnect() -> Vec<u8> {
     )
 }
 
-// REQ-GRANT-79, REQ-GRANT-185
-// REQ-GRANT-76
 #[test]
 fn create_workflow_passes_over_each_grant_that_needs_reconnecting_naming_its_reconnect() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7534,7 +7508,6 @@ fn create_workflow_passes_over_each_grant_that_needs_reconnecting_naming_its_rec
     );
 }
 
-// REQ-GRANT-79
 #[test]
 fn create_workflow_on_a_terminal_asks_nothing_and_passes_over_a_grant_that_needs_reconnecting() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7588,7 +7561,6 @@ fn create_workflow_on_a_terminal_asks_nothing_and_passes_over_a_grant_that_needs
     }
 }
 
-// REQ-GRANT-79
 #[test]
 fn create_workflow_holds_a_provider_with_a_healthy_grant_beside_one_that_needs_reconnecting() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7639,8 +7611,8 @@ fn create_workflow_holds_a_provider_with_a_healthy_grant_beside_one_that_needs_r
 }
 
 // A Claude Code grant in Acme that needs reconnecting, since another runner reported it refused at
-// its last use (REQ-GRANT-53), and that is authorized for `RUNNER_ID` too, which last reported
-// that its host holds a Claude Code sign-in of its own (REQ-GRANT-27).
+// its last use, and that is authorized for `RUNNER_ID` too, which last reported that its host
+// holds a Claude Code sign-in of its own.
 fn claude_grant_on_a_signed_in_host() -> serde_json::Value {
     let mut grant = claude_grant_refused(NATIVE_GRANT_ID);
     let mut on_host = grant["authorizations"][0].clone();
@@ -7657,8 +7629,6 @@ fn claude_grant_on_a_signed_in_host() -> serde_json::Value {
     grant
 }
 
-// REQ-GRANT-76
-// REQ-GRANT-65
 #[test]
 fn create_workflow_runner_passes_over_a_coding_agent_the_runners_host_supplies() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7759,8 +7729,6 @@ fn create_workflow_runner_passes_over_a_coding_agent_the_runners_host_supplies()
     }
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-76
 #[test]
 fn create_workflow_runner_refuses_a_name_no_runner_or_several_have_before_the_plan() {
     let tree = Tree::linear_and_claude_code(true);
@@ -7830,7 +7798,6 @@ fn create_workflow_runner_refuses_a_name_no_runner_or_several_have_before_the_pl
     );
 }
 
-// REQ-GRANT-76
 #[test]
 fn create_takes_runner_only_with_workflow() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -7858,8 +7825,6 @@ fn create_takes_runner_only_with_workflow() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-GRANT-75
-// REQ-GRANT-79
 #[test]
 fn create_all_selects_nothing_for_a_grant_that_needs_reconnecting() {
     let (server, _directory, credential) = prepared(vec![
@@ -7917,8 +7882,7 @@ fn authorize_line(grant_id: &str) -> String {
     format!("POST /api/v1/me/grants/{grant_id}/authorizations HTTP/1.1")
 }
 
-// SC-GRANT-4, REQ-GRANT-76, REQ-GRANT-69, REQ-GRANT-71, REQ-GRANT-72, REQ-GRANT-74,
-// REQ-GRANT-64, REQ-GRANT-173
+// SC-GRANT-4
 #[test]
 fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runner_for() {
     let tree = Tree::new(
@@ -7987,7 +7951,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     let opener = Opener::new(0);
     let claude = FakeProgram::claude(SetupToken::Prints);
     // run_in checks that no output carries the token or Ada's own Claude Code configuration
-    // changed (REQ-GRANT-74).
+    // changed.
     let created = run_in(
         &server,
         &credential,
@@ -8012,7 +7976,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     let listed_after = run_grant(&server, &credential, &["list", "--json"]);
 
     // GitHub is passed over as held, Linear and Claude Code are signed in to, and the variable
-    // of no known kind is listed as unknown (REQ-GRANT-76).
+    // of no known kind is listed as unknown.
     assert_eq!(created.status.code(), Some(0), "{}", stderr(&created));
     let events = events(&created);
     let plan = &events[0];
@@ -8037,8 +8001,8 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
             outcomes(&[("linear", "created"), ("claude_code", "created")])
         )
     );
-    // The Linear consent URL opens (REQ-GRANT-69), and `claude setup-token` runs on a terminal
-    // and shows its prompts (REQ-GRANT-71).
+    // The Linear consent URL opens, and `claude setup-token` runs on a terminal and shows its
+    // prompts.
     assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
     assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
     assert_eq!(claude.recorded("terminal").unwrap(), "yes\n");
@@ -8049,7 +8013,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     );
 
     // Three grants, none with a runner authorized, each naming the authorization as its next
-    // action (REQ-GRANT-64).
+    // action.
     let grant_ids = [OAUTH_GRANT_ID, LINEAR_GRANT_ID, NATIVE_GRANT_ID];
     assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
     let document = json_output(&listed);
@@ -8064,7 +8028,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         assert_eq!(grant["nextAction"], "authorize_runner", "{grant}");
     }
 
-    // One command authorizes the runner for each (REQ-GRANT-173), and the list shows it on each.
+    // One command authorizes the runner for each, and the list shows it on each.
     assert_eq!(
         authorized_all.status.code(),
         Some(0),
@@ -8120,7 +8084,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     .collect();
     assert_eq!(request_lines(&requests), expected);
     assert_eq!(start_body(&requests[3]), "linear");
-    // The Claude Code grant is made for Acme, which Ada did not name (REQ-GRANT-72).
+    // The Claude Code grant is made for Acme, which Ada did not name.
     assert_imported(&requests[5], ORGANIZATION_ID, CLAUDE_CODE);
     for request in &requests[12..15] {
         assert_eq!(
@@ -8161,7 +8125,7 @@ fn codex_refused_at(generation: i64) -> serde_json::Value {
 }
 
 /// A grant `grant` of a report's requirement carries with no runner authorized: none reported,
-/// and its own status `not_connected` with `authorize_runner` (REQ-CREDREADY-23).
+/// and its own status `not_connected` with `authorize_runner`.
 fn assert_authorizes_no_runner(grant: &serde_json::Value) {
     assert_eq!(grant["authorizations"], serde_json::json!([]), "{grant}");
     assert_eq!(grant["availability"], "not_connected", "{grant}");
@@ -8190,8 +8154,7 @@ const LIST_ACME_INSTALLATIONS: &str =
 const LIST_ACME_LINEAR: &str =
     "GET /api/v1/organizations/acme/connections/linear?limit=100 HTTP/1.1";
 
-// SC-CREDREADY-3, REQ-CREDREADY-22, REQ-CREDREADY-23, REQ-CREDREADY-26, REQ-GRANT-76,
-// REQ-GRANT-79, REQ-GRANT-73, REQ-CREDREADY-9, INV-CLI-15
+// SC-CREDREADY-3
 #[test]
 fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_the_runner() {
     let tree = Tree::new(
@@ -8253,7 +8216,7 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
     // run_command_in checks that no output carries the login and that Ada's own Codex home is
-    // untouched (REQ-GRANT-74).
+    // untouched.
     let run = |command: &[&str], args: &[&str], status: i32| {
         let output = run_command_in(
             &server,
@@ -8284,7 +8247,7 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
 
     // GitHub is met by the grant the runner can use; Linear is missing, as the organization's
     // connections show it, and the member holds no grant of it; Codex needs reconnecting on the
-    // runner (REQ-CREDREADY-22, REQ-CREDREADY-23, REQ-CREDREADY-26).
+    // runner.
     assert_eq!(judged(&report, "github"), met_by("grant", "grant_usable"));
     assert_eq!(
         judged(&report, "linear"),
@@ -8310,8 +8273,7 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     );
 
     // The plan names Linear to sign in, Codex as needing reconnecting and GitHub as held; the
-    // Linear consent is approved and Codex is passed over, asking nothing (REQ-GRANT-76,
-    // REQ-GRANT-185).
+    // Linear consent is approved and Codex is passed over, asking nothing.
     let flow = events(&connected);
     let plan = &flow[0];
     assert_eq!(plan["event"], "workflow_requirements", "{flow:?}");
@@ -8339,9 +8301,8 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     assert_eq!(linear_grant["id"], LINEAR_GRANT_ID);
     assert_authorizes_no_runner(linear_grant);
 
-    // Ada signs in to Codex again, which stores the grant's next generation (REQ-GRANT-73).
-    // `codex` was last started for the sign-in, so the tree's agent step did not run
-    // (REQ-CREDREADY-9).
+    // Ada signs in to Codex again, which stores the grant's next generation. `codex` was
+    // last started for the sign-in, so the tree's agent step did not run.
     let reconnected = run(GRANT_RECONNECT, &[NATIVE_GRANT_ID], 0);
     assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
     let import = events(&reconnected).pop().unwrap();
@@ -8392,7 +8353,6 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     );
 }
 
-// REQ-GRANT-76
 #[test]
 fn a_tree_that_calls_for_gitlab_selects_gitlab_com() {
     let tree = Tree::gitlab();
@@ -8434,7 +8394,47 @@ fn a_tree_that_calls_for_gitlab_selects_gitlab_com() {
     assert_eq!(start_body(&requests[1]), "gitlab.com");
 }
 
-// REQ-GRANT-76
+#[test]
+fn the_plan_names_acting_as_the_github_app_beside_a_github_sign_in() {
+    let tree = Tree::new(
+        &[(
+            "tools.yaml",
+            &GITLAB_WORKFLOW.replace("tools: [glab]", "tools: [gh, glab]"),
+        )],
+        true,
+    );
+    let git = Git::new();
+    let answers = || [vec![nothing_held()], approved("github").to_vec()].concat();
+    let (server, _directory, credential) = prepared(
+        [
+            answers(),
+            approved("gitlab.com").to_vec(),
+            answers(),
+            approved("gitlab.com").to_vec(),
+        ]
+        .concat(),
+    );
+    let opener = Opener::new(0);
+    let connect =
+        |args: &[&str]| run_in(&server, &credential, &opener, &[], git.in_tree(&tree), args);
+    let json = connect(&["--workflow", "tools.yaml", "--json"]);
+    let human = connect(&["--workflow", "tools.yaml"]);
+    server.finish();
+
+    assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
+    let plan = &events(&json)[0];
+    assert_eq!(providers_of(plan, "selected"), ["github", "gitlab.com"]);
+    assert_eq!(
+        plan["selected"][0]["alternative"], ACTING_AS_THE_APP,
+        "{plan}"
+    );
+    assert!(plan["selected"][1].get("alternative").is_none(), "{plan}");
+    assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
+    // A completed consent names no other choice, so only the plan can.
+    let text = stdout(&human);
+    assert!(text.contains(ACTING_AS_THE_APP), "{text}");
+}
+
 #[test]
 fn a_tree_directory_is_planned_from_its_root_file() {
     // The tree's root file calls for GitLab; the directory is its own boundary, so no Git is
@@ -8481,7 +8481,6 @@ fn a_tree_directory_is_planned_from_its_root_file() {
     );
 }
 
-// REQ-GRANT-76
 #[test]
 fn a_declared_integration_changes_nothing_the_grant_flow_selects() {
     let tree = Tree::new(
@@ -8533,7 +8532,6 @@ fn a_declared_integration_changes_nothing_the_grant_flow_selects() {
     assert_eq!(start_body(&requests[1]), "gitlab.com");
 }
 
-// REQ-GRANT-184
 #[test]
 fn files_in_two_repositories_are_each_derived_under_their_own_root_and_merged() {
     let first = Tree::linear_and_claude_code(true);
@@ -8590,7 +8588,6 @@ fn files_in_two_repositories_are_each_derived_under_their_own_root_and_merged() 
     );
 }
 
-// REQ-GRANT-184
 #[test]
 fn a_named_source_root_is_used_as_given_and_a_tree_calling_for_nothing_lacked_exits_0() {
     for json in [false, true] {
@@ -8629,7 +8626,6 @@ fn a_named_source_root_is_used_as_given_and_a_tree_calling_for_nothing_lacked_ex
     }
 }
 
-// REQ-GRANT-184
 #[test]
 fn a_file_in_no_repository_or_that_does_not_resolve_or_with_a_provider_starts_nothing() {
     let outside = Tree::linear_and_claude_code(false);
@@ -8682,7 +8678,6 @@ fn a_file_in_no_repository_or_that_does_not_resolve_or_with_a_provider_starts_no
     }
 }
 
-// REQ-GRANT-184
 #[test]
 fn a_file_whose_directory_is_missing_is_rejected_as_workflow_validate_rejects_it() {
     for json in [false, true] {
@@ -8719,7 +8714,6 @@ fn a_file_whose_directory_is_missing_is_rejected_as_workflow_validate_rejects_it
     }
 }
 
-// REQ-GRANT-184
 #[test]
 fn git_missing_from_path_or_failing_is_reported_as_that_and_starts_nothing() {
     let tree = Tree::linear_and_claude_code(true);
@@ -8760,7 +8754,7 @@ fn git_missing_from_path_or_failing_is_reported_as_that_and_starts_nothing() {
 }
 
 // The fake coding agent programs and the member's home a sign-in `useful` runs is checked
-// against (REQ-GRANT-70, REQ-GRANT-71, REQ-GRANT-74).
+// against.
 
 // The Codex login's sentinel, which `CODEX_MATERIAL` carries.
 const CODEX_SENTINEL: &str = "private-agent-login-material-sentinel";
@@ -8806,7 +8800,7 @@ struct FakeProgram {
 const DEVICE_CODE_PROMPT: &str = "codex-device-code-prompt";
 
 // How the fake `claude setup-token` ends after it records its invocation and shows the sign-in
-// URL; it takes the flow, a browser or a pasted code, from `CLAUDE_FLOW` (REQ-GRANT-71).
+// URL; it takes the flow, a browser or a pasted code, from `CLAUDE_FLOW`.
 enum SetupToken {
     // Prints the token in colour, as its own line, and a line after it.
     Prints,

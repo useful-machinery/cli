@@ -146,7 +146,6 @@ fn accept_control_request(listener: &UnixListener) -> (UnixStream, Vec<u8>) {
     (stream, request)
 }
 
-// REQ-RUNNERENROLL-48, REQ-RUNNERENROLL-49, REQ-RUNNERENROLL-81
 #[test]
 fn enrolls_then_promotes_a_replacement_without_exposing_credential_material() {
     let fixture = PendingEnrollmentFixture::new();
@@ -234,7 +233,6 @@ fn enrolls_then_promotes_a_replacement_without_exposing_credential_material() {
     }
 }
 
-// REQ-RUNNERENROLL-51
 #[test]
 fn retries_a_staged_replacement_through_the_secret_free_control_request() {
     let fixture = PendingEnrollmentFixture::new();
@@ -271,7 +269,6 @@ fn retries_a_staged_replacement_through_the_secret_free_control_request() {
     }
 }
 
-// REQ-RUNNERENROLL-50
 #[test]
 fn explicit_state_update_failure_is_not_reinterpreted_as_success() {
     let fixture = PendingEnrollmentFixture::new();
@@ -321,7 +318,6 @@ fn explicit_state_update_failure_is_not_reinterpreted_as_success() {
     assert!(state.get("pendingCredential").is_none());
 }
 
-// REQ-RUNNERENROLL-50
 #[test]
 fn reports_cloud_enrollment_separately_when_runner_serve_is_unreachable() {
     let fixture = PendingEnrollmentFixture::new();
@@ -837,7 +833,6 @@ pub(super) fn future_expiry() -> String {
     "2099-08-06T20:00:00Z".to_owned()
 }
 
-// REQ-RUNNERENROLL-97, REQ-RUNNERENROLL-30
 #[test]
 fn serve_joins_with_a_key_file_on_a_host_without_state_and_connects_with_its_own_credential() {
     let witness = ConnectionWitness::new();
@@ -854,7 +849,6 @@ fn serve_joins_with_a_key_file_on_a_host_without_state_and_connects_with_its_own
     assert_join_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-97
 #[test]
 fn serve_joins_with_the_key_in_the_environment() {
     let witness = ConnectionWitness::new();
@@ -875,7 +869,6 @@ fn serve_joins_with_the_key_in_the_environment() {
     assert_join_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-97, REQ-RUNNERENROLL-240
 #[test]
 fn serve_joins_with_the_key_on_piped_standard_input() {
     let witness = ConnectionWitness::new();
@@ -900,7 +893,6 @@ fn serve_joins_with_the_key_on_piped_standard_input() {
     assert_join_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-97
 #[test]
 fn one_key_joins_three_configured_hosts_with_three_verifiers() {
     // Each host connects to its own witness: a stopped host's reconnection
@@ -951,7 +943,6 @@ fn one_key_joins_three_configured_hosts_with_three_verifiers() {
     assert_eq!(idempotency_keys.len(), 3);
 }
 
-// REQ-RUNNERENROLL-104, REQ-RUNNERENROLL-30
 #[test]
 fn an_enrolled_host_serves_with_its_state_and_sends_no_join() {
     let witness = ConnectionWitness::new();
@@ -1045,7 +1036,6 @@ fn assert_serving_environment_holds_no_join_key(
     );
 }
 
-// REQ-RUNNERENROLL-234, REQ-RUNNERENROLL-127
 #[test]
 fn the_serving_process_holds_no_join_key_in_its_environment() {
     // A host that joins with the key.
@@ -1087,7 +1077,6 @@ fn the_serving_process_holds_no_join_key_in_its_environment() {
     assert_rejoin_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-235
 #[test]
 fn a_refused_join_key_stops_the_start_and_writes_no_state() {
     for (status, code) in [
@@ -1114,7 +1103,6 @@ fn a_refused_join_key_stops_the_start_and_writes_no_state() {
     }
 }
 
-// REQ-RUNNERENROLL-236
 #[test]
 fn an_ambiguous_join_is_retried_as_the_same_request_and_makes_one_runner() {
     let witness = ConnectionWitness::new();
@@ -1143,7 +1131,6 @@ fn an_ambiguous_join_is_retried_as_the_same_request_and_makes_one_runner() {
     assert_eq!(join_body(&requests[0]), join_body(&requests[1]));
 }
 
-// REQ-RUNNERENROLL-238, REQ-RUNNERENROLL-113
 #[test]
 fn a_join_retry_is_reported_and_a_later_unauthorized_answer_keeps_the_journal() {
     let server = api_test_support::ScriptedHttpServer::respond_in_sequence(vec![
@@ -1180,7 +1167,6 @@ fn a_join_retry_is_reported_and_a_later_unauthorized_answer_keeps_the_journal() 
     );
 }
 
-// REQ-RUNNERENROLL-240, REQ-RUNNERENROLL-241, REQ-RUNNERENROLL-17
 #[test]
 fn an_unsafe_or_expired_join_key_is_refused_before_contacting_cloud() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1223,9 +1209,9 @@ fn an_unsafe_or_expired_join_key_is_refused_before_contacting_cloud() {
     );
 }
 
-// REQ-RUNNERENROLL-104, REQ-RUNNERENROLL-248: a host whose credential came from
-// an activation serves with its state and never reads its join key, so a key
-// that is missing, unsafe, empty or malformed does not stop the start.
+// A host whose credential came from an activation serves with its state and
+// never reads its join key, so a key that is missing, unsafe, empty or
+// malformed does not stop the start.
 #[test]
 fn an_enrolled_host_serves_without_reading_its_join_key() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1274,9 +1260,9 @@ fn an_enrolled_host_serves_without_reading_its_join_key() {
     );
 }
 
-// REQ-RUNNERENROLL-104, REQ-RUNNERENROLL-30: a host whose state file is present
-// is enrolled even when its configuration or state does not load, so the start
-// fails with that cause and never reads its join key, whatever the key's condition.
+// A host whose state file is present is enrolled even when its configuration or
+// state does not load, so the start fails with that cause and never reads its join
+// key, whatever the key's condition.
 #[test]
 fn an_enrolled_host_that_does_not_load_fails_with_its_own_cause() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1340,10 +1326,10 @@ fn an_enrolled_host_that_does_not_load_fails_with_its_own_cause() {
     );
 }
 
-// REQ-RUNNERENROLL-105, REQ-RUNNERENROLL-30: a host with no state whose work
-// root does not exist fails with that cause before it reads its join key or
-// contacts Cloud, so it registers no runner, stages no join and writes no
-// state, and a join an earlier start staged stays as it was.
+// A host with no state whose work root does not exist fails with that cause
+// before it reads its join key or contacts Cloud, so it registers no runner,
+// stages no join and writes no state, and a join an earlier start staged stays
+// as it was.
 #[test]
 fn a_host_without_a_work_root_fails_before_it_joins() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1412,9 +1398,9 @@ fn a_host_without_a_work_root_fails_before_it_joins() {
     );
 }
 
-// REQ-RUNNERENROLL-105, REQ-RUNNERENROLL-30: a host with no state whose
-// operator configuration is missing or malformed fails with that cause before
-// it reads its join key, so a key file that is gone is never the failure.
+// A host with no state whose operator configuration is missing or malformed
+// fails with that cause before it reads its join key, so a key file that is
+// gone is never the failure.
 #[test]
 fn a_host_whose_configuration_does_not_read_fails_before_it_reads_its_join_key() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1444,9 +1430,9 @@ fn a_host_whose_configuration_does_not_read_fails_before_it_reads_its_join_key()
     );
 }
 
-// REQ-RUNNERENROLL-104: the start of an enrolled host, with or without a join
-// key, removes the journal its own completed join left, a second copy of the
-// state's credential secret, and leaves a journal for another credential.
+// The start of an enrolled host, with or without a join key, removes the
+// journal its own completed join left, a second copy of the state's credential
+// secret, and leaves a journal for another credential.
 #[test]
 fn an_enrolled_host_removes_only_its_completed_joins_journal() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1505,9 +1491,8 @@ fn connection_state(config: &str) -> String {
         .unwrap()
 }
 
-/// Waits past the first reconnect delays, whose caps are one and two seconds
-/// (REQ-RUNNERENROLL-37), so that a join a parked runner would send again
-/// has had the time to arrive.
+/// Waits past the first reconnect delays, whose caps are one and two seconds,
+/// so that a join a parked runner would send again has had the time to arrive.
 #[expect(
     clippy::disallowed_methods,
     reason = "only a span longer than the resend delay shows that a parked runner sends no further join"
@@ -1530,7 +1515,6 @@ fn rejoin_unavailable_response() -> Vec<u8> {
     )
 }
 
-// REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-244, REQ-RUNNERENROLL-290
 #[test]
 fn a_key_joined_host_whose_credential_is_refused_rejoins_and_serves_as_the_new_runner() {
     let rejecting = ConnectionWitness::rejecting();
@@ -1549,8 +1533,8 @@ fn a_key_joined_host_whose_credential_is_refused_rejoins_and_serves_as_the_new_r
     assert_rejoin_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-127: a connection with no definite answer keeps the key
-// unused, so the host sends no join and keeps its state.
+// A connection with no definite answer keeps the key unused, so the host sends
+// no join and keeps its state.
 #[test]
 fn a_key_joined_host_whose_connection_is_unanswered_sends_no_join() {
     let witness = ConnectionWitness::new();
@@ -1576,8 +1560,8 @@ fn a_key_joined_host_whose_connection_is_unanswered_sends_no_join() {
     );
 }
 
-// REQ-RUNNERENROLL-246, REQ-RUNNERENROLL-35: a refused rejoin leaves the
-// host's state as it was and parks the runner, which sends no further join.
+// A refused rejoin leaves the host's state as it was and parks the runner,
+// which sends no further join.
 #[test]
 fn a_refused_rejoin_keeps_the_state_and_parks_the_runner() {
     let refusals = [
@@ -1652,8 +1636,8 @@ fn assert_refused_hosts_send_no_join(
     );
 }
 
-// REQ-RUNNERENROLL-248: a host whose credential came from an activation reads
-// no join key and never rejoins.
+// A host whose credential came from an activation reads no join key and never
+// rejoins.
 #[test]
 fn an_activation_enrolled_host_whose_credential_is_refused_sends_no_join() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1701,9 +1685,9 @@ fn hosts_with_unusable_join_keys(
     cases
 }
 
-// REQ-RUNNERENROLL-247: a key that cannot be read, is not a join key artifact
-// or has expired never stops a key-joined host's start, which serves with its
-// state, and it never rejoins with it.
+// A key that cannot be read, is not a join key artifact or has expired never
+// stops a key-joined host's start, which serves with its state, and it never
+// rejoins with it.
 #[test]
 fn a_key_joined_host_given_an_unusable_key_serves_and_never_rejoins() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1735,8 +1719,8 @@ fn a_key_joined_host_given_an_unusable_key_serves_and_never_rejoins() {
     assert_refused_hosts_send_no_join(&cases, &cloud);
 }
 
-// REQ-RUNNERENROLL-245: a rejoin an earlier start staged is resent as the same
-// request, so one host never makes two runners from one rejoin.
+// A rejoin an earlier start staged is resent as the same request, so one host
+// never makes two runners from one rejoin.
 #[test]
 fn a_staged_rejoin_is_resent_as_the_same_request() {
     let rejecting = ConnectionWitness::rejecting();
@@ -1762,7 +1746,6 @@ fn a_staged_rejoin_is_resent_as_the_same_request() {
     );
 }
 
-// REQ-RUNNERENROLL-245, REQ-RUNNERENROLL-113
 #[test]
 fn an_unanswered_rejoin_is_reported_and_sent_again_as_the_same_request() {
     let rejecting = ConnectionWitness::rejecting();
@@ -1827,7 +1810,6 @@ fn contains_join_secret(bytes: &[u8]) -> bool {
         .any(|part| part == JOIN_SECRET.as_bytes())
 }
 
-// REQ-RUNNERENROLL-114, REQ-RUNNERENROLL-300, REQ-RUNNERENROLL-301, REQ-RUNNERENROLL-97
 #[test]
 fn serve_joins_with_the_key_given_at_a_prompt_that_does_not_echo_it() {
     let witness = ConnectionWitness::new();
@@ -1866,8 +1848,8 @@ fn serve_joins_with_the_key_given_at_a_prompt_that_does_not_echo_it() {
     assert_join_request(&server.finish_one(), &secret);
 }
 
-// REQ-RUNNERENROLL-302: a start that cannot prompt fails at once, its standard
-// input left open, and stages, sends and writes nothing.
+// A start that cannot prompt fails at once, its standard input left open, and
+// stages, sends and writes nothing.
 #[test]
 fn the_join_key_prompt_without_a_terminal_is_a_usage_error_that_sends_nothing() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1892,7 +1874,6 @@ fn the_join_key_prompt_without_a_terminal_is_a_usage_error_that_sends_nothing() 
     );
 }
 
-// REQ-RUNNERENROLL-104
 #[test]
 fn an_enrolled_host_started_with_the_join_key_prompt_serves_without_a_terminal() {
     let witness = ConnectionWitness::new();
@@ -1917,9 +1898,9 @@ fn an_enrolled_host_started_with_the_join_key_prompt_serves_without_a_terminal()
     );
 }
 
-// REQ-RUNNERENROLL-242: the prompt with a key file or the variable is refused
-// from the arguments and the environment alone, before the operator
-// configuration, the key file or the terminal is read.
+// The prompt with a key file or the variable is refused from the arguments and
+// the environment alone, before the operator configuration, the key file or the
+// terminal is read.
 #[test]
 fn the_join_key_prompt_with_another_join_key_input_is_a_usage_error() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1959,8 +1940,8 @@ fn the_join_key_prompt_with_another_join_key_input_is_a_usage_error() {
     );
 }
 
-// REQ-RUNNERENROLL-105: a host with no state that cannot serve fails with its
-// configuration's cause before it prompts, so it never waits for a key.
+// A host with no state that cannot serve fails with its configuration's cause
+// before it prompts, so it never waits for a key.
 #[test]
 fn a_host_without_a_work_root_fails_before_it_prompts_for_its_join_key() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1989,8 +1970,8 @@ fn a_host_without_a_work_root_fails_before_it_prompts_for_its_join_key() {
     );
 }
 
-// REQ-RUNNERENROLL-300: a signal that ends the start during the prompt leaves
-// the terminal echoing, and the start ends as the signal ends a process.
+// A signal that ends the start during the prompt leaves the terminal echoing,
+// and the start ends as the signal ends a process.
 #[test]
 fn a_signal_during_the_join_key_prompt_restores_the_terminal() {
     use std::os::unix::process::ExitStatusExt;
@@ -2123,7 +2104,6 @@ fn assert_silent(cloud: &TcpListener) {
     );
 }
 
-// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-167
 #[test]
 fn serve_enrolls_with_a_single_runner_key_given_any_way_and_connects_with_its_own_credential() {
     for input in ["file", "standard input", "variable"] {
@@ -2178,7 +2158,6 @@ fn serve_enrolls_with_a_single_runner_key_given_any_way_and_connects_with_its_ow
     assert_silent(&cloud);
 }
 
-// REQ-RUNNERENROLL-21
 #[test]
 fn an_ambiguous_enrollment_keeps_its_journal_and_says_to_start_the_runner_again() {
     let server = api_test_support::ScriptedHttpServer::respond(http_response(
@@ -2203,7 +2182,6 @@ fn an_ambiguous_enrollment_keeps_its_journal_and_says_to_start_the_runner_again(
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-22
 #[test]
 fn a_staged_enrollment_is_resent_with_no_key_or_its_own_after_the_key_expired() {
     for with_key in [false, true] {
@@ -2235,7 +2213,6 @@ fn a_staged_enrollment_is_resent_with_no_key_or_its_own_after_the_key_expired() 
     }
 }
 
-// REQ-RUNNERENROLL-23
 #[test]
 fn a_gone_activation_leaves_its_receipt_and_a_later_start_with_its_key_sends_nothing() {
     let server =
@@ -2273,7 +2250,6 @@ fn a_gone_activation_leaves_its_receipt_and_a_later_start_with_its_key_sends_not
     assert_silent(&cloud);
 }
 
-// REQ-RUNNERENROLL-24
 #[test]
 fn an_unresolved_enrollment_refuses_another_single_runner_key_and_a_pool_key() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2296,9 +2272,8 @@ fn an_unresolved_enrollment_refuses_another_single_runner_key_and_a_pool_key() {
     assert_silent(&cloud);
 }
 
-// REQ-RUNNERENROLL-48, REQ-RUNNERENROLL-22: the staged request is resent as it was staged by
-// a replacement start with no key and by one with the key it was staged for, after that
-// key's expiry included.
+// The staged request is resent as it was staged by a replacement start with no key and by
+// one with the key it was staged for, after that key's expiry included.
 #[test]
 fn a_staged_replacement_is_resent_by_a_replacement_start_with_no_key_or_with_its_key() {
     for with_key in [false, true] {
@@ -2374,7 +2349,6 @@ fn a_staged_replacement_is_resent_by_a_replacement_start_with_no_key_or_with_its
     }
 }
 
-// REQ-RUNNERENROLL-48
 #[test]
 fn a_replacement_start_with_a_pool_key_is_a_usage_error_that_sends_nothing() {
     let fixture = PendingEnrollmentFixture::new();

@@ -1290,6 +1290,11 @@ impl From<models::OrganizationAuditChange> for OrganizationAuditChange {
             Field::Provider => "provider",
             Field::RunnerId => "runner_id",
             Field::ConnectionId => "connection_id",
+            Field::TriggerName => "trigger_name",
+            Field::GithubUserId => "github_user_id",
+            Field::GithubLogin => "github_login",
+            Field::Runs => "runs",
+            Field::Permissions => "permissions",
         };
         Self {
             field: field.to_owned(),

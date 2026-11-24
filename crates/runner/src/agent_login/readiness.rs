@@ -1,23 +1,18 @@
-//! The readiness document, `.runner-agent-logins.json` beside the runner
-//! state (`runner-agent-logins-v1`): each provider's readiness and the record
-//! of what the runner installed. It holds no login material
-//! (REQ-GRANT-38). A missing document means the
-//! runner has installed nothing. An entry for a provider this build does not
-//! know, which a newer `useful` may have written, is kept as it was read.
-//! Beside an install, a coding agent's entry records how the provider
-//! answered the login's last use (REQ-GRANT-52). Each OAuth provider's entry records what the last
-//! assignment the runner admitted was issued, the run of that assignment and,
-//! once it has ended, when (REQ-GRANT-88): never the token or the path of its
-//! file. One the runner has asked for no token of, the host's own provider's
-//! included (REQ-GRANT-153), is written as `not_delivered`, which is how a
-//! document written before these entries lists all three. Whether a provider
-//! was selected, which an earlier `useful` wrote on its entry, is read and
-//! dropped: no provider is selected (REQ-GRANT-51), and no entry this build
-//! writes, one it keeps as read included, carries it.
-//! Each entry may also record where the provider's credential comes from,
-//! `host` or `grant` (REQ-GRANT-92): a coding agent's as each pass settles
-//! it, an OAuth provider's as the admission of its run did, and only beside
-//! that run.
+//! The readiness document, `.runner-agent-logins.json` beside the runner state
+//! (`runner-agent-logins-v1`): each provider's readiness and the record of what the runner
+//! installed. It holds no login material. A missing document means the runner has installed
+//! nothing. An entry for a provider this build does not know, which a newer `useful` may have
+//! written, is kept as it was read. Beside an install, a coding agent's entry records how the
+//! provider answered the login's last use. Each OAuth provider's entry records what the last
+//! assignment the runner admitted was issued, the run of that assignment and, once it has ended,
+//! when: never the token or the path of its file. One the runner has asked for no token of, the
+//! host's own provider's included, is written as `not_delivered`, which is how a document written
+//! before these entries lists all three. Whether a provider was selected, which an earlier
+//! `useful` wrote on its entry, is read and dropped: no provider is selected, and no entry this
+//! build writes, one it keeps as read included, carries it. Each entry may also record where the
+//! provider's credential comes from, `host` or `grant`, or for `github` `org_connection`: a coding
+//! agent's as each pass settles it, an OAuth provider's as the admission of its run did, and only
+//! beside that run.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::cloud::Issuer;
 use crate::control_protocol::{
     AgentLoginProvider, AgentLoginReadiness, AgentLoginState, CredentialSource, EarlierSelection,
     ProviderReadiness,
@@ -66,8 +62,7 @@ pub(crate) struct ReadinessDocument {
     /// The entries the agent-login setup carries from one document to the
     /// next without reading them: those of providers this build does not
     /// know, as they were read, kept for the build that wrote them, then each
-    /// OAuth provider's (REQ-GRANT-88), which `grant` reads and
-    /// `record_grant` replaces.
+    /// OAuth provider's, which `grant` reads and `record_grant` replaces.
     pub(crate) unknown: Vec<KeptEntry>,
 }
 
@@ -85,9 +80,8 @@ pub(crate) enum KeptEntry {
 pub(crate) struct UnknownEntry(WireEntry);
 
 /// What the last assignment the runner admitted was issued for an OAuth
-/// provider (REQ-GRANT-157). The entry outlives the assignment, and is marked
-/// ended when it ends; the token and its file do not, and neither is
-/// recorded here.
+/// provider. The entry outlives the assignment, and is marked ended when it
+/// ends; the token and its file do not, and neither is recorded here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GrantReadiness {
     /// `github`, `gitlab` or `linear`.
@@ -95,25 +89,27 @@ pub(crate) struct GrantReadiness {
     /// Any state but `foreign_login` and `stale_generation`.
     pub(crate) state: AgentLoginState,
     pub(crate) checked_at: Option<OffsetDateTime>,
-    /// The grant the token was issued from, exactly when `ready`.
+    /// What the token was issued under, exactly when `ready`.
     pub(crate) issued: Option<IssuedGrant>,
     /// The `run_` ID of the assignment the entry was recorded for; `None`
     /// for one recorded before runs were. Only beside a check time.
     pub(crate) run_id: Option<String>,
     /// When that assignment ended on this runner, by the setup's clock;
-    /// `None` while it runs (INV-RUNNER-30). Only beside a check time.
+    /// `None` while it runs. Only beside a check time.
     pub(crate) ended_at: Option<OffsetDateTime>,
     /// Where the provider's credential came from for that assignment, as its
-    /// admission settled it (REQ-GRANT-92); only beside its run.
+    /// admission settled it; only beside its run.
     pub(crate) source: Option<CredentialSource>,
 }
 
-/// The grant a `ready` OAuth provider's token was issued from.
+/// What a `ready` OAuth provider's token was issued under: a grant, or for
+/// `github` a connection authorization, never an integration token, since a
+/// token service has no entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct IssuedGrant {
-    /// The grant's `pgr_` ID.
-    pub(crate) grant_id: String,
-    /// The grant's generation the token belongs to, at least 1.
+    /// The grant or the connection authorization, by its ID.
+    pub(crate) issuer: Issuer,
+    /// The generation the token belongs to, at least 1.
     pub(crate) generation: u64,
     /// When the token expires.
     pub(crate) expires_at: OffsetDateTime,
@@ -121,14 +117,25 @@ pub(crate) struct IssuedGrant {
 
 impl GrantReadiness {
     /// Whether the entry is one the document holds: an OAuth provider, a
-    /// state its entry holds, the grant exactly when `ready`, and a run and
-    /// an end only beside a check time.
+    /// state its entry holds, what issued the token exactly when `ready`, a
+    /// grant or, on `github`'s entry alone, a connection authorization,
+    /// `source` `org_connection` on `github`'s entry alone, and a run and an
+    /// end only beside a check time. The source and the kind of the issuer
+    /// are not tied: a switch during the run records the new issuer beside
+    /// the admission's source.
     fn valid(&self) -> bool {
+        let github = self.provider == AgentLoginProvider::Github;
         self.provider.is_brokered()
             && self.state.held_by_grant()
             && self.issued.is_some() == (self.state == AgentLoginState::Ready)
             && self.issued.as_ref().is_none_or(|issued| {
-                issued.generation >= 1 && useful_support::valid_typed_id(&issued.grant_id, "pgr_")
+                issued.generation >= 1
+                    && issued.issuer.valid()
+                    && match issued.issuer {
+                        Issuer::Grant(_) => true,
+                        Issuer::ConnectionAuthorization(_) => github,
+                        Issuer::IntegrationToken(_) => false,
+                    }
             })
             && self
                 .run_id
@@ -136,10 +143,11 @@ impl GrantReadiness {
                 .is_none_or(|run_id| useful_support::valid_typed_id(run_id, "run_"))
             && (self.checked_at.is_some() || (self.run_id.is_none() && self.ended_at.is_none()))
             && (self.source.is_none() || self.run_id.is_some())
+            && (github || self.source != Some(CredentialSource::OrgConnection))
     }
 
-    /// Marks the entry ended at `at` when it has a check time and no end
-    /// (INV-RUNNER-30), changing nothing else; answers whether it did.
+    /// Marks the entry ended at `at` when it has a check time and no
+    /// end, changing nothing else; answers whether it did.
     fn end(&mut self, at: OffsetDateTime) -> bool {
         let ending = self.checked_at.is_some() && self.ended_at.is_none();
         if ending {
@@ -156,7 +164,12 @@ impl GrantReadiness {
         Some(WireEntry {
             provider: self.provider.as_str().to_owned(),
             state: EntryState::Login(self.state),
-            grant_id: issued.map(|issued| issued.grant_id.clone()),
+            grant_id: issued
+                .and_then(|issued| issued.issuer.grant_id())
+                .map(str::to_owned),
+            connection_authorization_id: issued
+                .and_then(|issued| issued.issuer.connection_authorization_id())
+                .map(str::to_owned),
             generation: issued.map(|issued| issued.generation),
             expires_at: issued
                 .map(|issued| format_time(issued.expires_at))
@@ -187,10 +200,19 @@ impl GrantReadiness {
         {
             return None;
         }
-        let issued = match (entry.grant_id, entry.generation, entry.expires_at) {
+        // The member names the issuer's kind; `valid` checks its form.
+        let issuer = match (entry.grant_id, entry.connection_authorization_id) {
+            (None, None) => None,
+            (Some(grant_id), None) => Some(Issuer::Grant(grant_id)),
+            (None, Some(authorization_id)) => {
+                Some(Issuer::ConnectionAuthorization(authorization_id))
+            }
+            (Some(_), Some(_)) => return None,
+        };
+        let issued = match (issuer, entry.generation, entry.expires_at) {
             (None, None, None) => None,
-            (Some(grant_id), Some(generation), Some(expires_at)) => Some(IssuedGrant {
-                grant_id,
+            (Some(issuer), Some(generation), Some(expires_at)) => Some(IssuedGrant {
+                issuer,
                 generation,
                 expires_at: parse_rfc3339(&expires_at)?,
             }),
@@ -234,15 +256,15 @@ pub(crate) struct LoginReadiness {
     pub(crate) checked_at: Option<OffsetDateTime>,
     pub(crate) login: Option<RecordedLogin>,
     /// How the provider answered the last use of the login installed, and
-    /// when; only ever beside an install (REQ-GRANT-52).
+    /// when; only ever beside an install.
     pub(crate) last_use: Option<LastUse>,
     /// Where the coding agent's login comes from, as the pass that wrote the
-    /// entry settled it (REQ-GRANT-92).
+    /// entry settled it.
     pub(crate) source: Option<CredentialSource>,
 }
 
 /// How the provider answered an agent step that received the login's
-/// variable (REQ-GRANT-52), as the control socket also reports it.
+/// variable, as the control socket also reports it.
 pub(crate) use crate::control_protocol::AgentLoginUse as UseOutcome;
 
 /// The last use of an installed login: how the provider answered it, and
@@ -298,8 +320,8 @@ pub(crate) enum ReadinessError {
 impl ReadinessError {
     /// Whether a load failed because what is at the path is not the runner's
     /// document (not its private file, over its bound, or not a valid
-    /// document), which a setup replaces (REQ-GRANT-121). Any other I/O
-    /// failure says nothing about the document, which stays.
+    /// document), which a setup replaces. Any other I/O failure says nothing
+    /// about the document, which stays.
     pub(crate) const fn replaceable(self) -> bool {
         matches!(
             self,
@@ -324,8 +346,8 @@ impl ReadinessDocument {
         self.logins.iter().find(|login| login.provider == provider)
     }
 
-    /// The OAuth provider's entry, if the runner recorded one
-    /// (REQ-GRANT-88).
+    /// The OAuth provider's entry, if the runner recorded
+    /// one.
     pub(crate) fn grant(&self, provider: AgentLoginProvider) -> Option<&GrantReadiness> {
         self.unknown.iter().find_map(|kept| match kept {
             KeptEntry::Grant(grant) if grant.provider == provider => Some(grant),
@@ -334,8 +356,8 @@ impl ReadinessDocument {
     }
 
     /// Marks ended at `at` each OAuth provider's entry that has a check time
-    /// and no end, changing nothing else of it (REQ-GRANT-157,
-    /// INV-RUNNER-30); answers whether it marked one.
+    /// and no end, changing nothing else of it; answers whether it marked
+    /// one.
     pub(crate) fn end_grants(&mut self, at: OffsetDateTime) -> bool {
         self.unknown
             .iter_mut()
@@ -346,7 +368,7 @@ impl ReadinessDocument {
     }
 
     /// Records `grant` as its provider's entry, in place of the one recorded
-    /// before (REQ-GRANT-88).
+    /// before.
     pub(crate) fn record_grant(&mut self, grant: GrantReadiness) {
         self.unknown.retain(
             |kept| !matches!(kept, KeptEntry::Grant(kept) if kept.provider == grant.provider),
@@ -381,9 +403,8 @@ impl ReadinessDocument {
     }
 
     /// The readiness as the control socket returns it: the document without
-    /// the path of any install (REQ-RUNNERENROLL-63) or the entries of
-    /// providers this build does not know. An OAuth provider's entry is
-    /// reported as recorded (REQ-GRANT-88).
+    /// the path of any install or the entries of providers this build does
+    /// not know. An OAuth provider's entry is reported as recorded.
     pub(crate) fn reported(&self) -> Option<AgentLoginReadiness> {
         let wire = self.to_wire()?;
         Some(AgentLoginReadiness {
@@ -399,16 +420,16 @@ impl ReadinessDocument {
     fn to_wire(&self) -> Option<WireDocument> {
         let mut providers = Vec::with_capacity(self.unknown.len() + AgentLoginProvider::ALL.len());
         // Each entry stands in its own place: a login's for an installable
-        // provider, a grant's for an OAuth one.
-        if self
-            .logins
-            .iter()
-            .any(|login| login.provider.is_brokered() || !login.state.held_by_login())
-            || self.unknown.iter().any(|kept| match kept {
-                KeptEntry::Grant(grant) => !grant.provider.is_brokered(),
-                KeptEntry::Unknown(_) => false,
-            })
-        {
+        // provider, a grant's for an OAuth one. A coding agent's source is
+        // `host` or `grant`.
+        if self.logins.iter().any(|login| {
+            login.provider.is_brokered()
+                || !login.state.held_by_login()
+                || login.source == Some(CredentialSource::OrgConnection)
+        }) || self.unknown.iter().any(|kept| match kept {
+            KeptEntry::Grant(grant) => !grant.provider.is_brokered(),
+            KeptEntry::Unknown(_) => false,
+        }) {
             return None;
         }
         for login in &self.logins {
@@ -552,13 +573,15 @@ struct Recorded {
 }
 
 /// An installable entry's check time, the agent login it records, only
-/// beside an install its last use, and its source.
+/// beside an install its last use, and its source, `host` or `grant`.
 fn recorded_from_wire(entry: WireEntry) -> Option<Recorded> {
     if entry
         .agent_login_id
         .as_deref()
         .is_some_and(|id| !useful_support::valid_typed_id(id, "agl_"))
         || entry.grant_id.is_some()
+        || entry.connection_authorization_id.is_some()
+        || entry.source == Some(CredentialSource::OrgConnection)
         || entry.expires_at.is_some()
         || entry.run_id.is_some()
         || entry.ended_at.is_some()
@@ -637,6 +660,8 @@ struct WireEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grant_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    connection_authorization_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
     #[serde(default, skip_serializing)]
     selected: EarlierSelection,
@@ -665,6 +690,7 @@ impl WireEntry {
             installed_at: None,
             installed_path: None,
             grant_id: None,
+            connection_authorization_id: None,
             expires_at: None,
             selected: EarlierSelection,
             last_use: None,
@@ -689,6 +715,7 @@ impl WireEntry {
             checked_at: self.checked_at,
             installed_at: self.installed_at,
             grant_id: self.grant_id,
+            connection_authorization_id: self.connection_authorization_id,
             expires_at: self.expires_at,
             earlier_selection: EarlierSelection,
             last_use: self.last_use,

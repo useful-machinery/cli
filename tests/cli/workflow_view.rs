@@ -123,7 +123,6 @@ fn successful_run(name: &str) -> (RunBundle, PathBuf) {
     (bundle, run_directory)
 }
 
-// REQ-EVIDENCE-18, REQ-EXPORTS-4, REQ-EXPORTS-5, REQ-LOCALRUN-120, REQ-LOCALRUN-121, REQ-LOCALRUN-152, REQ-LOCALRUN-155, REQ-LOCALRUN-156
 #[cfg(target_os = "linux")]
 #[test]
 fn automatic_and_explicit_plain_and_json_are_complete_frozen_snapshots() {
@@ -231,8 +230,8 @@ fn automatic_and_explicit_plain_and_json_are_complete_frozen_snapshots() {
     assert_eq!(durable_files(&run_directory), before);
 }
 
-// REQ-WFRECOVERY-62: `valid/recovery-handler-launch-diagnostic.json` carries a recovery
-// handler's `command_launch_failed` diagnostic, and
+// `valid/recovery-handler-launch-diagnostic.json` carries a recovery handler's
+// `command_launch_failed` diagnostic, and
 // `invalid/recovery-handler-launch-diagnostic-slug.json` is refused for its `launchFailure`
 // that is no slug.
 #[test]
@@ -258,7 +257,7 @@ fn closed_workflow_view_schema_accepts_valid_and_rejects_invalid_fixtures() {
         }
     }
 
-    // REQ-EVIDENCE-27: only a failed node carries a closed, non-empty `diagnostic`.
+    // Only a failed node carries a closed, non-empty `diagnostic`.
     let succeeded: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("valid/success-current.json")).unwrap())
             .unwrap();
@@ -343,7 +342,6 @@ fn workflow_view_schema_accepts_valid_tilde_workflow_path() {
     );
 }
 
-// REQ-LOCALRUN-80, REQ-LOCALRUN-157, REQ-LOCALRUN-166
 #[test]
 fn view_accepts_explicit_noninteractive_modes_and_rejects_their_conflict() {
     let missing = tempfile::tempdir().unwrap().path().join("missing-run");
@@ -373,7 +371,6 @@ fn view_accepts_explicit_noninteractive_modes_and_rejects_their_conflict() {
     assert!(conflict.stdout.is_empty());
 }
 
-// REQ-EVIDENCE-13, REQ-EVIDENCE-29
 #[test]
 fn plain_view_shows_the_source_a_first_of_took_and_refuses_one_the_state_does_not_hold() {
     let bundle = RunBundle::new(FIRST_OF_WORKFLOW);
@@ -424,9 +421,8 @@ fn plain_view_shows_the_source_a_first_of_took_and_refuses_one_the_state_does_no
     );
 }
 
-// REQ-LOCALRUN-227, REQ-LOCALRUN-306, REQ-LOCALRUN-166: `view` looks under the home alone, so an ID the home
-// lacks is `run_not_found` naming `useful workflow run show`, which reads a Cloud run, and
-// nothing is sent to the deployment in effect.
+// `view` looks under the home alone, so an ID the home lacks is `run_not_found` naming `useful
+// workflow run show`, which reads a Cloud run, and nothing is sent to the deployment in effect.
 #[test]
 fn json_view_refuses_an_unknown_run_id_with_its_error_document() {
     let home = tempfile::tempdir().unwrap();
@@ -463,7 +459,6 @@ fn json_view_refuses_an_unknown_run_id_with_its_error_document() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-LOCALRUN-63, REQ-LOCALRUN-152
 #[cfg(target_os = "linux")]
 #[test]
 fn every_ineligible_automatic_terminal_arrangement_continues_to_plain_loading() {
@@ -498,7 +493,6 @@ fn an_ineligible_automatic_arrangement_continues_to_plain_loading() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("run_directory_unavailable"));
 }
 
-// REQ-EVIDENCE-14, REQ-LOCALRUN-101, REQ-LOCALRUN-153, REQ-LOCALRUN-156
 #[cfg(target_os = "linux")]
 #[test]
 fn view_selects_current_and_historical_attempts_without_blocking_status_or_retry() {
@@ -601,7 +595,6 @@ fn view_selects_current_and_historical_attempts_without_blocking_status_or_retry
     assert_eq!(durable_files(&run_directory), settled_before);
 }
 
-// REQ-EXPORTS-10, REQ-EXPORTS-11, REQ-LOCALRUN-156
 #[test]
 fn json_view_carries_resolved_export_presentation_valid_against_its_schema() {
     let bundle = RunBundle::new(
@@ -705,7 +698,6 @@ exports:
     );
 }
 
-// REQ-LOCALRUN-63, REQ-LOCALRUN-65, REQ-EVIDENCE-13, REQ-WFFINALIZE-20
 #[cfg(target_os = "linux")]
 #[test]
 fn archived_finalization_is_ordered_and_presented_as_a_distinct_phase() {
@@ -785,7 +777,6 @@ finalizers:
     assert!(invalid_transcript.contains("published_result_invalid"));
 }
 
-// REQ-LOCALRUN-65
 #[cfg(target_os = "linux")]
 #[test]
 fn archived_finalization_cancellation_uses_the_ordinary_trigger() {
@@ -887,9 +878,9 @@ fn stream_at_live_tui_cap_is_published_validated_and_viewable() {
     assert!(terminal_writes(&transcript).contains("attemptstatesucceeded·outcomesucceeded"));
 }
 
-// REQ-LOCALRUN-64, REQ-LOCALRUN-70, REQ-LOCALRUN-71, REQ-LOCALRUN-135: an attempt the
-// operator stopped with SIGINT, which the interruption failed, is inspectable with its
-// cancellation reason, and Ctrl-C in the viewer restores the terminal.
+// An attempt the operator stopped with SIGINT, which the interruption failed, is
+// inspectable with its cancellation reason, and Ctrl-C in the viewer restores the
+// terminal.
 #[cfg(target_os = "linux")]
 #[test]
 fn interrupted_attempt_is_inspectable_and_ctrl_c_restores_the_terminal() {
@@ -964,7 +955,6 @@ fn interrupted_attempt_is_inspectable_and_ctrl_c_restores_the_terminal() {
     assert_eq!(durable_files(&run_directory), before);
 }
 
-// REQ-LOCALRUN-63, REQ-LOCALRUN-154, REQ-LOCALRUN-157, REQ-LOCALRUN-166
 #[cfg(target_os = "linux")]
 #[test]
 fn view_reports_unavailable_attempts_and_results_before_terminal_ownership() {
@@ -1005,7 +995,6 @@ fn view_reports_unavailable_attempts_and_results_before_terminal_ownership() {
     assert!(missing_json.get("attemptNumber").is_none());
 }
 
-// REQ-LOCALRUN-158
 #[cfg(target_os = "linux")]
 #[test]
 fn signals_abandon_blocked_plain_and_json_output_without_replacement() {
@@ -1075,7 +1064,6 @@ fn signals_abandon_blocked_plain_and_json_output_without_replacement() {
     assert_eq!(durable_files(&run_directory), before);
 }
 
-// REQ-LOCALRUN-159
 #[cfg(target_os = "linux")]
 #[test]
 fn a_blocked_json_view_holds_its_snapshot_without_blocking_status_or_retry() {
@@ -1138,7 +1126,6 @@ fn a_blocked_json_view_holds_its_snapshot_without_blocking_status_or_retry() {
     );
 }
 
-// REQ-LOCALRUN-158
 #[cfg(target_os = "linux")]
 #[test]
 fn broken_plain_and_json_destinations_fail_without_mutating_the_run() {
@@ -1159,7 +1146,6 @@ fn broken_plain_and_json_destinations_fail_without_mutating_the_run() {
     assert_eq!(durable_files(&run_directory), before);
 }
 
-// REQ-LOCALRUN-72
 #[cfg(target_os = "linux")]
 #[test]
 fn terminal_setup_failure_after_raw_mode_restores_input_and_preserves_the_archive() {

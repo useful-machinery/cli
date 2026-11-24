@@ -1,11 +1,10 @@
-//! What a command that moves a waiting definition run to a successor shares
-//! (REQ-LOCALRUN-194 to REQ-LOCALRUN-197, INV-ENGINE-26): inspecting the predecessor without
-//! its lock, reading the definition's current revision, the pre-check of the continuation
-//! against it under the predecessor's lock, the take-create-name-supersede sequence and then
-//! the hand-off to `continue_run` for `upgrade --from` or the `upgraded` report for `upgrade`
-//! without it. Nothing is written before the pre-check passes, so every refusal leaves both
-//! runs as they were, and `reconcile` completes or undoes a move a command died in
-//! (REQ-LOCALRUN-196).
+//! What a command that moves a waiting definition run to a successor shares: inspecting the
+//! predecessor without its lock, reading the definition's current revision, the pre-check of
+//! the continuation against it under the predecessor's lock, the take-create-name-supersede
+//! sequence and then the hand-off to `continue_run` for `upgrade --from` or the `upgraded`
+//! report for `upgrade` without it. Nothing is written before the pre-check passes, so every
+//! refusal leaves both runs as they were, and `reconcile` completes or undoes a move a
+//! command died in.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -42,14 +41,14 @@ type CommandResult = super::super::super::CommandResult;
 /// What the command asks of the successor.
 pub(super) enum SuccessorRequest {
     /// `upgrade --from`: the step the successor continues from, the `--input-text` values set
-    /// on top of the projected inputs and its execution root (REQ-LOCALRUN-194).
+    /// on top of the projected inputs and its execution root.
     Restart {
         from: String,
         input_text: Vec<(String, String)>,
         execution_root: Option<PathBuf>,
     },
     /// `upgrade` without `--from`: the successor carries the predecessor's wait and starts no
-    /// attempt (REQ-LOCALRUN-197).
+    /// attempt.
     Upgrade,
 }
 
@@ -64,7 +63,7 @@ impl SuccessorRequest {
 }
 
 /// The `--input-text NAME VALUE` pairs as `create` reads them (`text_bindings`), a usage
-/// error (REQ-LOCALRUN-80) for a name given twice as well.
+/// error for a name given twice as well.
 pub(super) fn text_inputs(values: &[OsString]) -> Result<Vec<(String, String)>, anyhow::Error> {
     let mut inputs: Vec<(String, String)> = Vec::new();
     for (name, value) in text_bindings(values)? {
@@ -78,11 +77,10 @@ pub(super) fn text_inputs(values: &[OsString]) -> Result<Vec<(String, String)>, 
     Ok(inputs)
 }
 
-/// Starts the successor of the waiting run at `requested` (REQ-LOCALRUN-194,
-/// REQ-LOCALRUN-197): a restarted successor continues, and the command's documents are
-/// `continue_run`'s once it exists; an upgraded one is reported `upgraded`. A refusal before
-/// the successor exists is reported at phase `successor`, `definition`, `tree` or
-/// `continuation`.
+/// Starts the successor of the waiting run at `requested`: a restarted successor continues,
+/// and the command's documents are `continue_run`'s once it exists; an upgraded one is
+/// reported `upgraded`. A refusal before the successor exists is reported at phase
+/// `successor`, `definition`, `tree` or `continuation`.
 pub(super) async fn start(
     requested: PathBuf,
     request: SuccessorRequest,
@@ -93,9 +91,9 @@ pub(super) async fn start(
         cancellation.clone(),
         super::create::UnixSignals::new()?,
     );
-    // REQ-LOCALRUN-135: a signal reads the predecessor's control journal from here on, so one
-    // that arrives while the successor is made is an interruption, never a cancel; the
-    // successor's own journal is watched once it continues.
+    // A signal reads the predecessor's control journal from here on, so one that arrives
+    // while the successor is made is an interruption, never a cancel; the successor's own
+    // journal is watched once it continues.
     let journal = signal_task.watch(&requested);
     match create(requested, request, &config, &cancellation).await {
         Ok(Created::Continue {
@@ -103,9 +101,9 @@ pub(super) async fn start(
             restarted_element,
         }) => {
             drop(journal);
-            // REQ-LOCALRUN-199: written once the successor exists, so a refusal leaves stderr
-            // to its report, and before the attempt; the advisory is nonblocking, so a failed
-            // write does not stop the run.
+            // Written once the successor exists, so a refusal leaves stderr to its report,
+            // and before the attempt; the advisory is nonblocking, so a failed write does not
+            // stop the run.
             if let Some(restarted) = restarted_element {
                 let _ = writeln!(io::stderr(), "{restarted}");
             }
@@ -133,8 +131,8 @@ enum Created {
 }
 
 /// The fan-out step a restart names while its predecessor waits inside it at an element past
-/// its first (REQ-LOCALRUN-199): the step runs again from element 1, and its display is the
-/// advisory naming `upgrade`, which would have kept the wait at `element`.
+/// its first: the step runs again from element 1, and its display is the advisory naming
+/// `upgrade`, which would have kept the wait at `element`.
 struct RestartedElement {
     step: String,
     element: u64,
@@ -167,7 +165,7 @@ impl fmt::Display for RestartedElement {
     }
 }
 
-/// A successor `upgrade` created waiting on its predecessor's wait (REQ-LOCALRUN-197).
+/// A successor `upgrade` created waiting on its predecessor's wait.
 struct Upgraded {
     run_directory: PathBuf,
     run: String,
@@ -175,7 +173,7 @@ struct Upgraded {
     wait: WaitRecord,
 }
 
-/// The `--json` document of `useful workflow run upgrade` (REQ-LOCALRUN-197).
+/// The `--json` document of `useful workflow run upgrade`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpgradedDocument<'a> {
@@ -287,8 +285,8 @@ fn inspect(requested: &Path) -> Result<Predecessor, Unsuitable> {
     let probe = inspect_wait(&snapshot.run_directory, &NoConditions)
         .context("inspect the run's wait")
         .map_err(Unsuitable::Failed)?;
-    // REQ-LOCALRUN-223: a run in a state `upgrade` does not apply in is refused naming the
-    // state and the verbs that apply.
+    // A run in a state `upgrade` does not apply in is refused naming the state and the
+    // verbs that apply.
     let standing = || {
         super::control::Standing::of(&probe.inspection, || {
             super::control::latest_attempt_succeeded(&snapshot.state)
@@ -350,8 +348,8 @@ async fn create(
     let predecessor_id = predecessor.record.id.clone();
     let refuse_predecessor =
         |code, message: &str| refuse(&run_directory, Some(&predecessor_id), code, message);
-    // REQ-LOCALRUN-196: a run that is itself a successor whose move did not finish is settled
-    // before it gets a successor of its own.
+    // A run that is itself a successor whose move did not finish is settled before it gets a
+    // successor of its own.
     let lineage_directory = run_directory.clone();
     match blocking_operation(move || reconcile(&lineage_directory)).await {
         Ok(Lineage::Abandoned { .. }) => {
@@ -370,7 +368,7 @@ async fn create(
         }
     }
 
-    // REQ-LOCALRUN-173: the current revision's tree, read and checked as `create` reads it.
+    // The current revision's tree, read and checked as `create` reads it.
     let definition_id = predecessor.definition.clone();
     let definition = match blocking_operation(move || definition_tree(&definition_id)).await {
         Ok(definition) => definition,
@@ -382,8 +380,8 @@ async fn create(
         }
     };
     if matches!(request, SuccessorRequest::Upgrade) {
-        // REQ-LOCALRUN-197: an upgrade moves a run to a newer revision, carrying a wait no
-        // control resolves yet.
+        // An upgrade moves a run to a newer revision, carrying a wait no control resolves
+        // yet.
         if predecessor
             .record
             .revision
@@ -395,8 +393,8 @@ async fn create(
             ));
         }
         if predecessor.resolved {
-            // REQ-LOCALRUN-197, REQ-LOCALRUN-223: decided from the inspection before the lock
-            // and again from the controls under it.
+            // Decided from the inspection before the lock and again from the controls under
+            // it.
             let refusal = super::control::wait_resolved();
             return Err(refuse_predecessor(refusal.code, &refusal.message));
         }
@@ -439,13 +437,12 @@ async fn create(
     };
     // The inspection ran without the lock: the wait it found must still be the run's.
     if !matches!(pending.wait(), Ok(Some(current)) if current.id() == predecessor.wait.id()) {
-        let result = refuse_predecessor(
+        return Err(refuse_predecessor(
             "wait_changed",
             "The run's wait changed while the command inspected it; run the command again.",
-        );
-        return Err(settled(pending, result).await);
+        ));
     }
-    match precheck(
+    let admission = precheck(
         &pending,
         &predecessor,
         definition,
@@ -453,31 +450,26 @@ async fn create(
         cancellation,
         config,
     )
-    .await
-    {
-        Ok(admission) => {
-            // REQ-LOCALRUN-135: a signal before the successor's directory exists ends the
-            // command and creates no run; the predecessor is settled and still waits.
-            if let Some(reason) = cancellation.cancellation_reason() {
-                let failure = super::create::signalled_before_creation(Some(reason));
-                return Err(settled(pending, Err(failure)).await);
-            }
-            let created =
-                tokio::task::spawn_blocking(move || create_and_supersede(admission, pending)).await;
-            match created {
-                Ok(Ok(continuation)) => Ok(continuation),
-                Ok(Err(Creation::Subject(error))) => Err(subject_refusal(
-                    output(&run_directory),
-                    &predecessor.definition,
-                    error,
-                )),
-                Ok(Err(Creation::Failed(error))) => Err(Err(error.into())),
-                Err(error) => Err(Err(anyhow::Error::new(error)
-                    .context("create the successor run")
-                    .into())),
-            }
-        }
-        Err(result) => Err(settled(pending, result).await),
+    .await?;
+    // A signal before the successor's directory exists ends the command while the
+    // predecessor still waits.
+    if let Some(reason) = cancellation.cancellation_reason() {
+        let failure = super::create::signalled_before_creation(Some(reason));
+        return Err(Err(failure));
+    }
+    let created =
+        tokio::task::spawn_blocking(move || create_and_supersede(admission, pending)).await;
+    match created {
+        Ok(Ok(continuation)) => Ok(continuation),
+        Ok(Err(Creation::Subject(error))) => Err(subject_refusal(
+            output(&run_directory),
+            &predecessor.definition,
+            error,
+        )),
+        Ok(Err(Creation::Failed(error))) => Err(Err(error.into())),
+        Err(error) => Err(Err(anyhow::Error::new(error)
+            .context("create the successor run")
+            .into())),
     }
 }
 
@@ -503,13 +495,12 @@ enum Next {
     Report { wait: WaitRecord },
 }
 
-/// Admits the successor against the current revision's workflow under the predecessor's
-/// lock. For `upgrade --from` (REQ-LOCALRUN-194, REQ-CONTINUE-79) the continuation from
-/// `STEP`: `STEP` and its dependents re-executed, the rest inherited from the predecessor's
-/// attempts, the predecessor's inputs projected with each `--input-text` on top. For `upgrade`
-/// without it (REQ-LOCALRUN-197) the carried state resolved against the workflow, every miss
-/// listed, then the continuations from the wait's `then` and `onHandBack`. A refusal is the
-/// command's result, for the caller to return once the predecessor is settled.
+/// Admits the successor against the current revision's workflow under the predecessor's lock.
+/// For `upgrade --from` the continuation from `STEP`: `STEP` and its dependents re-executed,
+/// the rest inherited from the predecessor's attempts, the predecessor's inputs projected with
+/// each `--input-text` on top. For `upgrade` without it the carried state resolved against the
+/// workflow, every miss listed, then the continuations from the wait's `then` and
+/// `onHandBack`. A refusal is the command's result.
 async fn precheck(
     pending: &PendingLocalContinuation,
     predecessor: &Predecessor,
@@ -562,7 +553,7 @@ async fn precheck(
             input_text,
             execution_root,
         } => {
-            // REQ-LOCALRUN-80: the successor keeps the predecessor's subject and slot.
+            // The successor keeps the predecessor's subject and slot.
             if let Some(subject) = &workflow.definition.subject
                 && input_text.iter().any(|(name, _)| name == subject)
             {
@@ -588,9 +579,8 @@ async fn precheck(
         }
         SuccessorRequest::Upgrade => {
             let wait = predecessor.wait.clone();
-            // REQ-LOCALRUN-197: the inspection ran without the lock, so a control recorded
-            // since is asked about here; copied to the successor it would resolve nothing
-            // (REQ-LOCALRUN-195).
+            // The inspection ran without the lock, so a control recorded since is asked
+            // about here; copied to the successor it would resolve nothing.
             let resolving = pending.resolving_control(&wait).map_err(|error| {
                 Err(anyhow::Error::new(error)
                     .context("read the run's controls under its lock")
@@ -662,7 +652,7 @@ async fn precheck(
     record.predecessor = Some(predecessor.record.id.clone());
     record.attempts = pending.prior_attempt_number();
     if let Next::Report { .. } = next {
-        // REQ-LOCALRUN-197: the successor waits where the predecessor waits.
+        // The successor waits where the predecessor waits.
         record.state = RunState::Waiting;
         record.position.clone_from(&predecessor.record.position);
         record.edges.clone_from(&predecessor.record.edges);
@@ -680,18 +670,18 @@ async fn precheck(
 
 /// Why the successor was not created once admitted.
 enum Creation {
-    /// The slot was refused under the index's lock (REQ-WFDEF-28).
+    /// The slot was refused under the index's lock.
     Subject(SubjectError),
     Failed(anyhow::Error),
 }
 
 /// Takes the subject index's lock as a claimant naming the predecessor, creates the
-/// successor, names it in the slot, supersedes the predecessor and releases the lock
-/// (REQ-LOCALRUN-196, INV-ENGINE-26): the slot never names a run that does not exist, so a
-/// death anywhere in the sequence leaves the subject busy, and `reconcile` finishes or undoes
-/// the move on the successor's next continuation. A restarted successor's continuation from
-/// `STEP` follows, and an upgraded one, carrying the wait, is reported (REQ-LOCALRUN-197). A
-/// failure before the successor exists settles the predecessor, which keeps its slot.
+/// successor, names it in the slot, supersedes the predecessor and releases the lock: the
+/// slot never names a run that does not exist, so a death anywhere in the sequence leaves the
+/// subject busy, and `reconcile` finishes or undoes the move on the successor's next
+/// continuation. A restarted successor's continuation from `STEP` follows, and an upgraded
+/// one, carrying the wait, is reported. A failure before the successor exists leaves the
+/// predecessor holding its slot.
 fn create_and_supersede(
     admission: Admission,
     pending: PendingLocalContinuation,
@@ -709,46 +699,29 @@ fn create_and_supersede(
         Next::Report { .. } => SuccessorCarry::Wait,
     };
     let predecessor = record.predecessor.clone().unwrap_or_default();
-    if let Err(error) = home.create_runs_directory(&definition) {
-        return Err(settle_before_creation(
-            pending,
-            Creation::Failed(anyhow::Error::new(error)),
-        ));
-    }
-    // REQ-WFDEF-75: the claim names the predecessor, so it may take the slot the predecessor
-    // holds; the index lock is held, and the slot still names the predecessor, until the
-    // successor's directory exists.
+    home.create_runs_directory(&definition)
+        .map_err(|error| Creation::Failed(anyhow::Error::new(error)))?;
+    // The claim names the predecessor, so it may take the slot the predecessor holds; the
+    // index lock is held, and the slot still names the predecessor, until the successor's
+    // directory exists.
     let claim = match &record.subject {
-        Some(subject) => {
-            match SubjectClaim::take(&home, &definition, subject, Some(&predecessor)) {
-                Ok(claim) => Some(claim),
-                Err(error) => {
-                    return Err(settle_before_creation(pending, Creation::Subject(error)));
-                }
-            }
-        }
+        Some(subject) => Some(
+            SubjectClaim::take(&home, &definition, subject, Some(&predecessor))
+                .map_err(Creation::Subject)?,
+        ),
         None => None,
     };
-    let successor = match InitialLocalRun::create_successor(
-        &run_directory,
-        &admitted,
-        &record,
-        &pending,
-        carry,
-    ) {
-        Ok(successor) => successor,
-        Err(error) => {
-            // Nothing names the successor: the predecessor keeps its slot and still waits.
-            drop(claim);
-            let failure = anyhow::Error::new(error).context(format!(
-                "create successor run {}",
-                normalize_terminal_path(&run_directory)
-            ));
-            return Err(settle_before_creation(pending, Creation::Failed(failure)));
-        }
-    };
-    // REQ-LOCALRUN-196: the slot names the successor only now that its directory exists; a
-    // failure from here on leaves both runs for `reconcile` to settle.
+    let successor =
+        InitialLocalRun::create_successor(&run_directory, &admitted, &record, &pending, carry)
+            .with_context(|| {
+                format!(
+                    "create successor run {}",
+                    normalize_terminal_path(&run_directory)
+                )
+            })
+            .map_err(Creation::Failed)?;
+    // The slot names the successor only now that its directory exists; a failure from here
+    // on leaves both runs for `reconcile` to settle.
     if let Some(claim) = &claim
         && let Err(error) = claim.name(&record.id)
     {
@@ -795,7 +768,7 @@ pub(super) const ABANDONED_MESSAGE: &str = "The run's predecessor continued or e
 pub(super) const PREDECESSOR_LOCKED_CODE: &str = "predecessor_locked";
 pub(super) const PREDECESSOR_LOCKED_MESSAGE: &str = "A live process holds the run's predecessor, which this run has not superseded yet; run the command again.";
 
-/// What `reconcile` found of a run's predecessor (REQ-LOCALRUN-196).
+/// What `reconcile` found of a run's predecessor.
 pub(super) enum Lineage {
     /// The run has no predecessor, or its predecessor is gone or already names it as
     /// `successor`.
@@ -812,12 +785,12 @@ pub(super) enum Lineage {
 }
 
 /// Completes or undoes a move to the successor at `run_directory` that the command performing
-/// it did not finish (REQ-LOCALRUN-196, INV-ENGINE-49): the sequence names the slot after the
-/// successor exists and supersedes the predecessor after that, so a death between leaves a
-/// predecessor that still waits and a successor it does not name. Reads the records without a
-/// lock first, so a run that is no successor, or one its predecessor names, costs two reads;
-/// otherwise takes the successor's lock (a successor a live process holds is left to that
-/// process) and the predecessor's, and settles the pair as `Lineage` states.
+/// it did not finish: the sequence names the slot after the successor exists and supersedes
+/// the predecessor after that, so a death between leaves a predecessor that still waits and a
+/// successor it does not name. Reads the records without a lock first, so a run that is no
+/// successor, or one its predecessor names, costs two reads; otherwise takes the successor's
+/// lock (a successor a live process holds is left to that process) and the predecessor's, and
+/// settles the pair as `Lineage` states.
 pub(super) fn reconcile(run_directory: &Path) -> Result<Lineage, anyhow::Error> {
     let Some(record) = record_of(run_directory) else {
         return Ok(Lineage::Settled);
@@ -912,22 +885,8 @@ fn record_of(run_directory: &Path) -> Option<WorkflowRunRecord> {
         .and_then(|record| serde_json::from_value(record).ok())
 }
 
-/// Settles the predecessor after `failure` and returns it, carrying a settlement failure too.
-fn settle_before_creation(pending: PendingLocalContinuation, failure: Creation) -> Creation {
-    match pending.settle_abandoned() {
-        Ok(()) => failure,
-        Err(error) => {
-            let failure = match failure {
-                Creation::Subject(subject) => anyhow::Error::new(subject),
-                Creation::Failed(failure) => failure,
-            };
-            Creation::Failed(failure.context(format!("settle the predecessor: {error}")))
-        }
-    }
-}
-
-/// A slot the successor could not take, at phase `definition` (REQ-LOCALRUN-173); a failure
-/// to read or write the index is a command failure.
+/// A slot the successor could not take, at phase `definition`; a failure to read or write
+/// the index is a command failure.
 fn subject_refusal(
     output: WorkflowRunOutput<io::Stdout, io::Stderr>,
     definition: &str,
@@ -944,13 +903,4 @@ fn subject_refusal(
         None,
         error.run(),
     ))
-}
-
-/// Settles the predecessor without an attempt and returns `result`.
-async fn settled(pending: PendingLocalContinuation, result: CommandResult) -> CommandResult {
-    tokio::task::spawn_blocking(move || pending.settle_abandoned())
-        .await
-        .map_err(anyhow::Error::new)?
-        .map_err(anyhow::Error::new)?;
-    result
 }

@@ -749,16 +749,14 @@ def prove_workflow_contract() -> None:
     ):
         if forbidden in workflow:
             fail(f"public workflow retains allocation state: {forbidden}")
-    # INV-TESTING-38
     prove_named_tests(workflow)
-    # INV-RELEASE-43: the release build is the only Cargo invocation before packaging.
+    # The release build is the only Cargo invocation before packaging.
     prove_release_order(workflow)
     prefix, _, publish = workflow.partition("  reconcile_release:\n")
     if "contents: write" in prefix or "environment: cli-release" not in publish:
         fail("public workflow exposes write authority before protected publication")
 
 
-# REQ-ONBOARD-1
 def prove_release_asset_names(module: ModuleType) -> None:
     """The candidate publishes `useful-` archives; a prior release keeps the name it shipped."""
     if module.expected_asset_names("0.60.0") != asset_names("useful", "0.60.0", *RELEASE_TARGETS):
@@ -826,7 +824,6 @@ def prove_release_asset_names(module: ModuleType) -> None:
             fail(f"prior release with {description} archives was judged {state}")
 
 
-# REQ-ONBOARD-1
 def main() -> int:
     module = load_verifier()
     prove_workflow_contract()

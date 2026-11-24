@@ -57,7 +57,7 @@ const PRIVATE_MODE: u32 = 0o600;
 const RUNTIME_LOCK_FILE: &str = ".runner-serve.lock";
 const MAXIMUM_CONNECTIONS: usize = 16;
 /// How many `assignment` requests read a run directory at a time, each holding its place
-/// until its read ends (REQ-RUNNERENROLL-136, INV-RUNNER-45).
+/// until its read ends.
 pub(super) const RUN_READ_PLACES: usize = 4;
 #[expect(
     clippy::cast_possible_wrap,
@@ -112,10 +112,9 @@ pub(super) struct ControlContext {
 /// after it had recorded an install or removal: answers that readiness with
 /// each login whose check gave no answer, `runner_busy` when a run the
 /// runner holds is working, or has a command in flight where the setup had
-/// a login to install or remove (REQ-GRANT-126), or once a rejoined service
-/// has ended the setup (INV-RUNNER-41), and `state_update_failed`
-/// when the readiness could not be recorded. The live status carries no
-/// check's answer.
+/// a login to install or remove, or once a rejoined service has ended the
+/// setup, and `state_update_failed` when the readiness could not be
+/// recorded. The live status carries no check's answer.
 pub(super) async fn set_up_agent_logins(
     setup: &Arc<AgentLoginSetup>,
     status: &LiveStatus,
@@ -136,8 +135,8 @@ pub(super) async fn set_up_agent_logins(
 }
 
 /// Lists among the runner's events that a pass `cause` asked for ended with
-/// `outcome` (REQ-RUNNERENROLL-138), then publishes and answers what it
-/// recorded as `publish` does.
+/// `outcome`, then publishes and answers what it recorded as `publish`
+/// does.
 fn publish_pass(
     cause: AgentLoginSetupCause,
     outcome: SetupOutcome,
@@ -177,11 +176,11 @@ fn publish(
     }
 }
 
-/// The agent-login setup an admission makes for itself before its
-/// assignment is offered the runner's logins (REQ-GRANT-49), publishing
-/// what it records in the live status as every pass does. The assignment
-/// manager holds it, and the setup's own gate holds the manager, so it holds
-/// the setup weakly: a setup that is gone makes no pass.
+/// The agent-login setup an admission makes for itself before its assignment
+/// is offered the runner's logins, publishing what it records in the live
+/// status as every pass does. The assignment manager holds it, and the
+/// setup's own gate holds the manager, so it holds the setup weakly: a setup
+/// that is gone makes no pass.
 #[derive(Clone)]
 pub(super) struct AdmissionAgentLogins {
     setup: Weak<AgentLoginSetup>,
@@ -198,10 +197,9 @@ impl AdmissionAgentLogins {
 
     /// Makes the admission's pass, when the readiness names a login, under
     /// `beside`, the gate over the other runs the runner held when the
-    /// preparation began (INV-RUNNER-56), then asks Cloud for the grant
-    /// tokens of the assignment `assignment_id` of the run `run_id` and this
-    /// boot (REQ-GRANT-86), whatever the gate answers, and publishes what
-    /// each recorded. It
+    /// preparation began, then asks Cloud for the grant tokens of the
+    /// assignment `assignment_id` of the run `run_id` and this boot,
+    /// whatever the gate answers, and publishes what each recorded. It
     /// blocks, on the admission's preparation task, for the bounded requests
     /// of each; what it fails at or the gate stops is the setup's own record
     /// and never the admission's. It answers what the admission holds of its
@@ -226,11 +224,11 @@ impl AdmissionAgentLogins {
     }
 
     /// Reports to Cloud where the credentials of the assignment
-    /// `assignment_id` of this boot come from, `reported` (REQ-GRANT-93,
-    /// REQ-INTEGRATION-12), through the setup, on the admission's
-    /// preparation task once it has settled them; the setup records a
-    /// report Cloud does not take, and nothing here fails the admission.
-    /// Nothing is reported when the setup is gone.
+    /// `assignment_id` of this boot come from, `reported`, through the
+    /// setup, on the admission's preparation task once it has settled
+    /// them; the setup records a report Cloud does not take, and nothing
+    /// here fails the admission. Nothing is reported when the setup is
+    /// gone.
     pub(super) fn report_sources(&self, assignment_id: &str, reported: ReportedSources) {
         let ReportedSources {
             sources,
@@ -247,9 +245,8 @@ impl AdmissionAgentLogins {
     }
 
     /// The observer of the logins `offered` added to the admission's
-    /// environment, which notes each use for the next pass
-    /// (REQ-GRANT-52); `None` when it was offered none or the setup
-    /// is gone.
+    /// environment, which notes each use for the next pass; `None`
+    /// when it was offered none or the setup is gone.
     pub(super) fn observer(
         &self,
         offered: Vec<OfferedLogin>,
@@ -327,8 +324,8 @@ impl LiveStatus {
     }
 
     /// The status of a process that writes its log at `log_path`, the path the
-    /// recorder answered when its log opened (REQ-RUNNERENROLL-42). A path that is not
-    /// UTF-8 or not absolute cannot travel in the snapshot and is shown as no log.
+    /// recorder answered when its log opened. A path that is not UTF-8 or not absolute
+    /// cannot travel in the snapshot and is shown as no log.
     pub(super) fn with_log_path(self, log_path: Option<&Path>) -> Self {
         Self {
             log_path: log_path
@@ -341,7 +338,7 @@ impl LiveStatus {
 
     /// The status of a process whose disk monitor publishes in `disk`: the snapshot and
     /// the overview give the reading it holds, copied before the status's own lock is
-    /// taken (REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-133, INV-RUNNER-49).
+    /// taken.
     pub(super) fn with_disk(self, disk: DiskReadingHandle) -> Self {
         Self {
             disk: Some(disk),
@@ -367,7 +364,7 @@ impl LiveStatus {
         })
     }
 
-    /// The log of the runner's own events (REQ-RUNNERENROLL-138).
+    /// The log of the runner's own events.
     pub(super) fn events(&self) -> &Arc<EventLog> {
         &self.events
     }
@@ -484,7 +481,7 @@ impl LiveStatus {
     }
 
     /// The live status, beside the assignment counts and held runs the manager answered
-    /// in one read (REQ-RUNNERENROLL-42).
+    /// in one read.
     fn snapshot(
         &self,
         assignment_counts: crate::control_protocol::AssignmentCounts,
@@ -511,7 +508,7 @@ impl LiveStatus {
     }
 
     /// The overview of the process serving as `runner_id` with `version`, beside the
-    /// assignments the manager answered in one read (REQ-RUNNERENROLL-133).
+    /// assignments the manager answered in one read.
     fn overview(
         &self,
         runner_id: String,
@@ -588,8 +585,8 @@ pub(super) fn milliseconds(duration: Duration) -> u64 {
 /// The bytes of `overview` within `limit`: while they pass it, the last event is left out and
 /// counted in `eventsOmitted`, the oldest first; once none is left the last recent
 /// assignment, counted in `recentAssignmentsOmitted`; and once none is left the last entry,
-/// counted in `assignmentsOmitted`, so what the runner holds goes last
-/// (REQ-RUNNERENROLL-136). `Oversized` when the overview without any of them passes it.
+/// counted in `assignmentsOmitted`, so what the runner holds goes last. `Oversized` when the
+/// overview without any of them passes it.
 fn fit_overview(mut overview: Overview, limit: usize) -> Result<Vec<u8>, ProtocolFailure> {
     loop {
         match encode_overview_response(&overview) {
@@ -610,11 +607,11 @@ fn fit_overview(mut overview: Overview, limit: usize) -> Result<Vec<u8>, Protoco
     }
 }
 
-/// The `overview` answer (REQ-RUNNERENROLL-133), built on a blocking worker under the
-/// snapshot bound from one read of the manager, whose guard is dropped before the live
-/// status is read and the answer encoded (INV-RUNNER-45). `None` when the snapshot is not
-/// built within the bound or cannot be written: the connection is closed unanswered, since
-/// `invalid_request` would read as a serving process of an earlier release.
+/// The `overview` answer, built on a blocking worker under the snapshot bound from one
+/// read of the manager, whose guard is dropped before the live status is read and the
+/// answer encoded. `None` when the snapshot is not built within the bound or cannot be
+/// written: the connection is closed unanswered, since `invalid_request` would read as a
+/// serving process of an earlier release.
 async fn overview_answer(
     status: Arc<LiveStatus>,
     assignments: Arc<Mutex<AssignmentManager>>,
@@ -641,8 +638,8 @@ async fn overview_answer(
     .ok()
 }
 
-/// The `kept` answer for what the schedule reported (REQ-RUNNERENROLL-164), cut to its
-/// bound; none when it cannot be written, so the connection is closed unanswered.
+/// The `kept` answer for what the schedule reported, cut to its bound; none when it
+/// cannot be written, so the connection is closed unanswered.
 fn kept_answer(report: KeptRunReport) -> Option<Vec<u8>> {
     let KeptRunReport {
         scope,
@@ -725,8 +722,8 @@ fn kept_answer(report: KeptRunReport) -> Option<Vec<u8>> {
     .ok()
 }
 
-/// The `pruned` answer for what the schedule's pass did (REQ-RUNNERENROLL-165), cut to its
-/// bound; none when it cannot be written, so the connection is closed unanswered.
+/// The `pruned` answer for what the schedule's pass did, cut to its bound; none when it
+/// cannot be written, so the connection is closed unanswered.
 fn prune_answer(result: KeptRunPrune) -> Option<Vec<u8>> {
     let KeptRunPrune {
         scope,
@@ -880,9 +877,9 @@ const fn kept_reason(reason: RetentionReason) -> KeptReason {
     }
 }
 
-/// Hands `request` to the kept-run schedule and waits, with no bound, for what it answers
-/// (INV-RUNNER-54): the pass's gates end the pass, and the service's stop ends and joins it.
-/// None when the schedule no longer takes requests or dropped the answer.
+/// Hands `request` to the kept-run schedule and waits, with no bound, for what it answers:
+/// the pass's gates end the pass, and the service's stop ends and joins it. None when the
+/// schedule no longer takes requests or dropped the answer.
 async fn kept_run_answer<A>(
     kept_runs: &mpsc::Sender<KeptRunRequest>,
     request: impl FnOnce(oneshot::Sender<A>) -> KeptRunRequest,
@@ -892,13 +889,12 @@ async fn kept_run_answer<A>(
     answered.await.ok()
 }
 
-/// The `assignment` answer (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145), built under the
-/// snapshot bound on a blocking worker that holds one of `run_reads`' places until it ends,
-/// also when the answer was given up, so reads abandoned at the bound cannot accumulate. The
-/// worker takes the manager's lock once for the entry and the run's two paths and releases
-/// it before it reads the run directory or the run log (INV-RUNNER-45). `None` when no place
-/// is free or the answer is not built within the bound, or cannot be written: the
-/// connection is closed unanswered, as the overview's is.
+/// The `assignment` answer, built under the snapshot bound on a blocking worker that holds
+/// one of `run_reads`' places until it ends, also when the answer was given up, so reads
+/// abandoned at the bound cannot accumulate. The worker takes the manager's lock once for
+/// the entry and the run's two paths and releases it before it reads the run directory or
+/// the run log. `None` when no place is free or the answer is not built within the bound, or
+/// cannot be written: the connection is closed unanswered, as the overview's is.
 async fn assignment_answer(
     assignments: Arc<Mutex<AssignmentManager>>,
     run_reads: Arc<Semaphore>,
@@ -929,10 +925,10 @@ async fn assignment_answer(
 }
 
 /// The assignment the manager's `read` gives, with the run its published run directory holds
-/// at the path `query` names and its log (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145). A
-/// run directory that cannot be read whole, or a path that names no child run, leaves the
-/// run out; a run log that is absent or cannot be read leaves the log out. Neither fails the
-/// answer. A single-workflow run is answered from its view instead.
+/// at the path `query` names and its log. A run directory that cannot be read whole, or a
+/// path that names no child run, leaves the run out; a run log that is absent or cannot be
+/// read leaves the log out. Neither fails the answer. A single-workflow run is answered from
+/// its view instead.
 fn assignment_detail(read: AssignmentRead, query: AssignmentQuery) -> AssignmentDetail {
     let AssignmentRead {
         entry,
@@ -981,8 +977,7 @@ fn assignment_detail(read: AssignmentRead, query: AssignmentQuery) -> Assignment
 /// A single-workflow assignment's answer from its run's `view`: the run and the newest records
 /// of the named `step` while `path` names the root, and no run for a child run, which such a
 /// run has none of. The log is always a `step_records` one, `source` alone when the view gave
-/// no step's records: such a run has no run log (REQ-RUNNERENROLL-144,
-/// REQ-RUNNERENROLL-145).
+/// no step's records: such a run has no run log.
 fn viewed_assignment(
     entry: OverviewAssignment,
     view: &AssignmentRunView,
@@ -1216,8 +1211,7 @@ fn log_stream(stream: RunViewStream) -> AssignmentLogStream {
 }
 
 /// The end of the run log at `log`, at most `LOG_WINDOW_BYTES`, begun after a line feed when
-/// bytes were left out before it (REQ-RUNNERENROLL-145). `None` when it is absent or cannot be
-/// read.
+/// bytes were left out before it. `None` when it is absent or cannot be read.
 fn run_log(log: &Path) -> Option<AssignmentLog> {
     let FileTail {
         bytes,
@@ -1250,7 +1244,7 @@ fn run_log(log: &Path) -> Option<AssignmentLog> {
 /// left, and the longer of its texts loses its first half at a character boundary, the bytes
 /// counted in that text's `omittedBytes`, until every text is empty; then the last step is
 /// left out, counted in `stepsOmitted`; and once none is left the run. The entry is always
-/// kept (REQ-RUNNERENROLL-136). `Oversized` when the entry alone passes it.
+/// kept. `Oversized` when the entry alone passes it.
 fn fit_assignment(mut detail: AssignmentDetail, limit: usize) -> Result<Vec<u8>, ProtocolFailure> {
     loop {
         match encode_assignment_response(&detail) {
@@ -1803,7 +1797,7 @@ mod tests {
     const STATUS_REQUEST: &[u8] = b"{\"schemaVersion\":1,\"operation\":\"status\"}\n";
 
     /// The cause and result of each `agent_logins_set_up` the overview of `context` lists,
-    /// the newest first, each once (REQ-RUNNERENROLL-138).
+    /// the newest first, each once.
     async fn logged_setups(
         context: &ControlContext,
     ) -> Vec<(AgentLoginSetupCause, AgentLoginSetupResult)> {
@@ -1824,8 +1818,7 @@ mod tests {
             .collect()
     }
 
-    // REQ-GRANT-41, REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-63, REQ-RUNNERENROLL-138: the
-    // pass a sync made is logged as an `agent_logins_set_up` it caused, finished.
+    // The pass a sync made is logged as an `agent_logins_set_up` it caused, finished.
     #[tokio::test]
     async fn sync_runs_a_pass_and_answers_its_readiness_without_a_path() {
         let root = tempfile::tempdir().unwrap();
@@ -1848,7 +1841,7 @@ mod tests {
             panic!("sync request did not return readiness");
         };
         // The setup checked the login it left `ready`, and the fake check,
-        // like a runner without the program, gave no answer (REQ-GRANT-144).
+        // like a runner without the program, gave no answer.
         assert_eq!(
             synced.unanswered_checks,
             [UnansweredCheck {
@@ -1920,8 +1913,8 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-128, REQ-GRANT-125, REQ-RUNNERENROLL-82, REQ-RUNNERENROLL-138: the pass a sync made while a
-    // held run works is logged as one it caused that found the runner busy.
+    // The pass a sync made while a held run works is logged as one it caused that found the runner
+    // busy.
     #[tokio::test]
     async fn sync_while_a_held_run_is_working_answers_runner_busy_without_asking() {
         let root = tempfile::tempdir().unwrap();
@@ -1953,7 +1946,6 @@ mod tests {
         assert_eq!(status.agent_logins, None);
     }
 
-    // REQ-GRANT-128, REQ-RUNNERENROLL-42
     #[tokio::test]
     async fn a_sync_a_working_run_interrupts_answers_runner_busy_and_status_shows_what_it_recorded()
     {
@@ -2000,7 +1992,6 @@ mod tests {
         assert_eq!(codex.state, AgentLoginState::Ready);
     }
 
-    // REQ-GRANT-128, REQ-GRANT-49
     #[tokio::test]
     async fn sync_while_an_admitted_assignment_is_held_answers_runner_busy() {
         let root = tempfile::tempdir().unwrap();
@@ -2055,7 +2046,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-33, REQ-RUNNERENROLL-34
     #[tokio::test]
     async fn lifecycle_rejects_hostile_paths_and_recovers_an_owned_stale_socket() {
         let root = tempfile::tempdir_in("/tmp").unwrap();
@@ -2093,7 +2083,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-63
     #[tokio::test]
     async fn serves_a_bounded_secret_free_idle_snapshot() {
         let response = exchange(b"{\"schemaVersion\":1,\"operation\":\"status\"}\n").await;
@@ -2123,7 +2112,6 @@ mod tests {
         assert_eq!(ControlTimeouts::production().io, Duration::from_secs(2));
     }
 
-    // REQ-RUNNERENROLL-43
     #[test]
     fn reconnecting_retains_the_last_closed_failure_category() {
         let status = LiveStatus::new(
@@ -2141,7 +2129,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-63
     #[tokio::test]
     async fn contains_malformed_and_oversized_requests() {
         for request in [
@@ -2161,7 +2148,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-33
     #[test]
     fn runtime_directory_must_be_private_and_owned() {
         let root = tempfile::tempdir().unwrap();
@@ -2183,9 +2169,9 @@ mod tests {
         *overview
     }
 
-    // REQ-RUNNERENROLL-133: an idle process answers who it is, its connection and credential,
-    // and no assignment; while it backs off it gives the attempts since it was last connected
-    // and the time to the next, and while it stops the time left of the stop's bound.
+    // An idle process answers who it is, its connection and credential, and no assignment;
+    // while it backs off it gives the attempts since it was last connected and the time to
+    // the next, and while it stops the time left of the stop's bound.
     #[tokio::test]
     async fn an_overview_answers_the_process_its_connection_and_its_stop() {
         let context = context(None);
@@ -2261,8 +2247,8 @@ mod tests {
         assert!(left <= 315_000, "{left}");
     }
 
-    // REQ-RUNNERENROLL-135: `overview` is asked for by name in a closed request, and asking
-    // for it leaves the closed `status` answer as it was.
+    // `overview` is asked for by name in a closed request, and asking for it leaves the
+    // closed `status` answer as it was.
     #[tokio::test]
     async fn an_overview_request_is_closed_and_leaves_status_as_it_was() {
         let context = context(None);
@@ -2313,9 +2299,9 @@ mod tests {
         super::super::history::listed_event(Some(String::new()), kind, 1).unwrap()
     }
 
-    // REQ-RUNNERENROLL-138: the overview lists what the live status was told as the runner's
-    // events, newest first, a repeated failure once with its count and its last delay and a
-    // second stop not at all; `status` answers as before.
+    // The overview lists what the live status was told as the runner's events, newest first,
+    // a repeated failure once with its count and its last delay and a second stop not at
+    // all; `status` answers as before.
     #[tokio::test]
     async fn an_overview_lists_the_runners_events_newest_first() {
         let context = context(None);
@@ -2398,8 +2384,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-136, INV-RUNNER-45: a run with a command in flight does not hold the
-    // overview off; it is answered within the snapshot bound and lists the run.
+    // A run with a command in flight does not hold the overview off; it is answered within
+    // the snapshot bound and lists the run.
     #[tokio::test]
     async fn an_overview_is_answered_while_a_run_has_a_command_in_flight() {
         let context = context(None);
@@ -2526,12 +2512,11 @@ mod tests {
         (context, offer, activity)
     }
 
-    // REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-63, REQ-RUNNERENROLL-82: an `assignment` request
-    // answers the assignment's overview entry and the run its published run directory holds,
-    // each step with what it runs; an assignment the runner does not hold is answered
-    // `assignment_not_held`; a run directory that cannot be read, or a child path that names
-    // no child run, leaves the run out of an answer that is still given; and a request with a
-    // member it does not admit is `invalid_request`.
+    // An `assignment` request answers the assignment's overview entry and the run its
+    // published run directory holds, each step with what it runs; an assignment the runner
+    // does not hold is answered `assignment_not_held`; a run directory that cannot be read,
+    // or a child path that names no child run, leaves the run out of an answer that is still
+    // given; and a request with a member it does not admit is `invalid_request`.
     #[tokio::test]
     async fn an_assignment_answers_its_entry_and_the_run_its_directory_holds() {
         let root = tempfile::tempdir().unwrap();
@@ -2678,12 +2663,11 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-144: a single-workflow assignment is answered from its run's view: the
-    // entry lists its steps in flight, as the overview does, and the run has no path, one
-    // attempt, and each step with its kind, its state and what it runs.
-    // REQ-RUNNERENROLL-145: its log is always a `step_records` one, naming a step of the run it
-    // was asked for, `source` alone with no step named; and a child run, which such a run has
-    // none of, answers no run and that log.
+    // A single-workflow assignment is answered from its run's view: the entry lists its steps
+    // in flight, as the overview does, and the run has no path, one attempt, and each step with
+    // its kind, its state and what it runs. Its log is always a `step_records` one, naming a
+    // step of the run it was asked for, `source` alone with no step named; and a child run,
+    // which such a run has none of, answers no run and that log.
     #[tokio::test]
     async fn a_single_workflow_assignment_is_answered_from_its_runs_view() {
         let (context, offer) = viewed_context().await;
@@ -2788,8 +2772,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-144: an assignment still being prepared is answered with its entry
-    // alone.
+    // An assignment still being prepared is answered with its entry alone.
     #[tokio::test]
     async fn an_assignment_being_prepared_answers_its_entry_alone() {
         let context = context(None);
@@ -2818,9 +2801,9 @@ mod tests {
         drop(release);
     }
 
-    // REQ-RUNNERENROLL-145: with no step named, an assignment's log is the end of its run
-    // log: the whole of a short one, and of a long one at most its window, begun after a
-    // line feed, with the bytes before it counted; an overview gives no log.
+    // With no step named, an assignment's log is the end of its run log: the whole of a
+    // short one, and of a long one at most its window, begun after a line feed, with the
+    // bytes before it counted; an overview gives no log.
     #[tokio::test]
     async fn an_assignment_gives_the_end_of_its_run_log_and_an_overview_none() {
         let root = tempfile::tempdir().unwrap();
@@ -2870,8 +2853,8 @@ mod tests {
         assert!(long.ends_with(&text));
     }
 
-    // REQ-RUNNERENROLL-145: a named step that is still pending has no output to give, so the
-    // answer carries its run beside the end of the run log.
+    // A named step that is still pending has no output to give, so the answer carries its
+    // run beside the end of the run log.
     #[tokio::test]
     async fn a_pending_steps_assignment_gives_its_run_and_the_run_log() {
         let root = tempfile::tempdir().unwrap();
@@ -2897,11 +2880,11 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-145: a settled step's retained output is the answer's log: each
-    // stream's recorded counts and its window as text from its first character boundary,
-    // the bytes before it counted and bytes that are not UTF-8 given as U+FFFD, with the
-    // earlier invocations counted; a settled step that retained none says so; and a read
-    // that gave no output gives no step log, for the run log to stand in.
+    // A settled step's retained output is the answer's log: each stream's recorded
+    // counts and its window as text from its first character boundary, the bytes before
+    // it counted and bytes that are not UTF-8 given as U+FFFD, with the earlier
+    // invocations counted; a settled step that retained none says so; and a read that
+    // gave no output gives no step log, for the run log to stand in.
     #[test]
     fn a_settled_steps_retained_output_is_the_answers_log() {
         let retained = RunViewStepOutput::Retained(useful_execution::RunViewRetainedOutput {
@@ -2973,8 +2956,8 @@ mod tests {
         assert_eq!(step_log(None, retained), None);
     }
 
-    // REQ-RUNNERENROLL-144: a run's wait is given as the overview gives one, its step by the
-    // same rule: a fan-out element as its number, and the child path asked for echoed.
+    // A run's wait is given as the overview gives one, its step by the same rule: a fan-out
+    // element as its number, and the child path asked for echoed.
     #[test]
     fn a_read_runs_wait_is_given_as_the_overview_gives_one() {
         let path = vec![OverviewRunElement {
@@ -3104,9 +3087,9 @@ mod tests {
         *detail
     }
 
-    // REQ-RUNNERENROLL-136: an assignment answer past its byte bound gives up the start of its
-    // log first, the longer text halved at a character boundary and the bytes counted, then
-    // its last steps, each counted, and then its run, never its entry.
+    // An assignment answer past its byte bound gives up the start of its log first, the longer
+    // text halved at a character boundary and the bytes counted, then its last steps, each
+    // counted, and then its run, never its entry.
     #[test]
     fn an_assignment_past_its_bound_gives_up_its_log_then_its_last_steps() {
         let text = "é".repeat(2_000);
@@ -3186,9 +3169,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-136: an answer past its bound with many records gives up the older half
-    // of them at a time, counting them and their bytes, until none is left, then its last
-    // steps, and never its entry.
+    // An answer past its bound with many records gives up the older half of them at a time,
+    // counting them and their bytes, until none is left, then its last steps, and never its
+    // entry.
     #[test]
     fn an_assignment_past_its_bound_gives_up_its_older_records_then_its_last_steps() {
         let records: Vec<_> = (0..64)
@@ -3243,9 +3226,9 @@ mod tests {
         assert_eq!(cut.entry, detail.entry);
     }
 
-    // INV-RUNNER-45, REQ-RUNNERENROLL-136: with every place for a run directory read taken,
-    // an `assignment` request is closed unanswered within the snapshot bound while an
-    // `overview` is answered; and a run's command in flight does not hold the read off.
+    // With every place for a run directory read taken, an `assignment` request is closed
+    // unanswered within the snapshot bound while an `overview` is answered; and a run's
+    // command in flight does not hold the read off.
     #[tokio::test]
     async fn an_assignment_read_waits_on_no_run_and_keeps_to_its_places() {
         let root = tempfile::tempdir().unwrap();
@@ -3277,8 +3260,8 @@ mod tests {
         drop(in_flight);
     }
 
-    // REQ-RUNNERENROLL-136: an overview past its byte bound is cut from its last entry, each
-    // entry left out counted, and one whose runner alone passes the bound is not written.
+    // An overview past its byte bound is cut from its last entry, each entry left out
+    // counted, and one whose runner alone passes the bound is not written.
     #[test]
     fn an_overview_past_its_bound_is_cut_from_its_last_entry() {
         // The events and the recent assignments are cut before any entry; this cut has none.
@@ -3351,8 +3334,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-164: a kept report past its bound is cut from its last workspace, each
-    // left out counted, the bytes a prune would free counted over all of them.
+    // A kept report past its bound is cut from its last workspace, each left out counted, the
+    // bytes a prune would free counted over all of them.
     #[test]
     fn a_kept_report_past_its_bound_is_cut_from_its_last_workspace() {
         let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(20_000);
@@ -3415,9 +3398,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-165: a prune result past its bound is cut from its last directory,
-    // each left out counted, the failed directories and the bytes removed counted over all
-    // of them.
+    // A prune result past its bound is cut from its last directory, each left out counted,
+    // the failed directories and the bytes removed counted over all of them.
     #[test]
     fn a_prune_result_past_its_bound_is_cut_from_its_last_directory() {
         for path_bytes in [400, 8] {
@@ -3501,8 +3483,8 @@ mod tests {
         *overview
     }
 
-    // REQ-RUNNERENROLL-136: an overview past its byte bound leaves out its events from the
-    // last, each counted, before any recent assignment or entry.
+    // An overview past its byte bound leaves out its events from the last, each counted,
+    // before any recent assignment or entry.
     #[test]
     fn an_overview_past_its_bound_is_cut_from_its_last_event_first() {
         let overview = fixture_overview();
@@ -3546,8 +3528,8 @@ mod tests {
         assert_eq!(cut.assignments, overview.assignments);
     }
 
-    // REQ-RUNNERENROLL-136, REQ-RUNNERENROLL-137: an overview past its byte bound leaves out
-    // its recent assignments from the last, each counted, before it leaves out any entry.
+    // An overview past its byte bound leaves out its recent assignments from the last, each
+    // counted, before it leaves out any entry.
     #[test]
     fn an_overview_past_its_bound_is_cut_from_its_last_recent_assignment_first() {
         // The events are cut before any recent assignment; this cut has none.
@@ -3592,8 +3574,7 @@ mod tests {
         assert_eq!(cut.assignments_omitted, omitted + 1);
     }
 
-    // REQ-RUNNERENROLL-137: the overview gives the recent assignments the manager answered, in
-    // its order.
+    // The overview gives the recent assignments the manager answered, in its order.
     #[test]
     fn an_overview_gives_the_recent_assignments_in_the_order_the_manager_answers_them() {
         let status = LiveStatus::new(
@@ -3618,9 +3599,8 @@ mod tests {
         assert_eq!(overview.recent_assignments_omitted, 0);
     }
 
-    // REQ-RUNNERENROLL-133, INV-RUNNER-49: the snapshot and the overview give the reading
-    // the monitor's handle holds, and neither gives one while the handle holds none or the
-    // status was handed no handle.
+    // The snapshot and the overview give the reading the monitor's handle holds, and
+    // neither gives one while the handle holds none or the status was handed no handle.
     #[test]
     fn the_status_answers_give_the_published_disk_reading_and_none_without_one() {
         let answers = |status: &LiveStatus| {

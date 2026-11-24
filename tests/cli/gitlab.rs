@@ -70,7 +70,7 @@ fn token_file(dir: &tempfile::TempDir) -> String {
     fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
     path.to_str().unwrap().to_owned()
 }
-/// The options that confirm the verified identity `42` without a terminal (REQ-CONNECTION-58).
+/// The options that confirm the verified identity `42` without a terminal.
 const CONFIRM: [&str; 3] = [
     "--expected-provider-user-id",
     "42",
@@ -257,8 +257,6 @@ fn request(
     }
 }
 
-// REQ-CONNECTION-56, REQ-CONNECTION-74, REQ-CONNECTION-75, REQ-CONNECTION-104,
-// REQ-CONNECTION-105
 #[test]
 fn connection_and_candidate_verbs_use_exact_resources_and_explicit_bodies() {
     let (server, dir, credential) = prepared(vec![
@@ -359,7 +357,6 @@ fn connection_and_candidate_verbs_use_exact_resources_and_explicit_bodies() {
     );
 }
 
-// REQ-CONNECTION-56
 #[test]
 fn a_candidate_that_fails_verification_ends_the_command_without_cancelling_it() {
     let instance = "https://gitlab.example.com";
@@ -398,7 +395,6 @@ fn a_candidate_that_fails_verification_ends_the_command_without_cancelling_it() 
     request(&requests[2], "GET", &candidate_path(), None, None);
 }
 
-// REQ-CONNECTION-56, REQ-CONNECTION-58, REQ-CONNECTION-74
 #[test]
 fn an_identity_other_than_the_confirmed_one_cancels_the_candidate() {
     for (answer, cancellation) in [
@@ -443,7 +439,6 @@ fn an_identity_other_than_the_confirmed_one_cancels_the_candidate() {
     }
 }
 
-// REQ-CONNECTION-56, REQ-CONNECTION-77
 #[test]
 fn a_wait_that_times_out_cancels_the_candidate() {
     let (server, dir, credential) = prepared(vec![
@@ -461,7 +456,6 @@ fn a_wait_that_times_out_cancels_the_candidate() {
     request(&requests[2], "DELETE", &candidate_path(), None, None);
 }
 
-// REQ-CONNECTION-56
 #[test]
 fn a_signal_while_the_candidate_is_pending_cancels_it() {
     for (signal, code) in [
@@ -522,7 +516,6 @@ fn a_signal_while_the_candidate_is_pending_cancels_it() {
     }
 }
 
-// REQ-CONNECTION-58
 #[test]
 fn a_confirmation_that_cannot_be_asked_is_refused_before_any_request() {
     let (server, dir, credential) = prepared(vec![]);
@@ -566,7 +559,6 @@ fn a_confirmation_that_cannot_be_asked_is_refused_before_any_request() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-108, REQ-CONNECTION-57
 #[test]
 fn reconnect_stages_a_token_on_the_existing_connection() {
     let mut pending = candidate("pending");
@@ -620,7 +612,6 @@ fn reconnect_stages_a_token_on_the_existing_connection() {
     );
 }
 
-// REQ-CONNECTION-106
 #[test]
 fn options_of_another_provider_are_refused_before_any_request() {
     let (server, dir, credential) = prepared(vec![]);
@@ -638,7 +629,7 @@ fn options_of_another_provider_are_refused_before_any_request() {
         [&gitlab[..], &CONFIRM, &["--state-updates"]].concat(),
         [&gitlab[..], &CONFIRM, &["--installation", "7"]].concat(),
         vec!["connect", "github", "--token-file", token.as_str()],
-        vec!["connect", "github", "--timeout", "1m"],
+        vec!["connect", "github", "--instance-url", "https://gitlab.com"],
         vec!["connect", "linear", "--kind", "group-access-token"],
         vec!["connect", "linear", "--instance-url", "https://gitlab.com"],
         vec![
@@ -667,7 +658,6 @@ fn options_of_another_provider_are_refused_before_any_request() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-56, REQ-CONNECTION-72, REQ-CONNECTION-73
 #[test]
 fn repository_discovery_and_selection_use_exact_generated_actions() {
     let mut selected = active_connection();
@@ -790,7 +780,6 @@ fn repository_discovery_and_selection_use_exact_generated_actions() {
     }
 }
 
-// REQ-CONNECTION-70
 #[test]
 fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
     let (server, _dir, credential) = prepared(vec![]);
@@ -909,7 +898,6 @@ fn repository_selection_preconditions_conflicts_and_lost_response_replay() {
     }
 }
 
-// REQ-CONNECTION-74, REQ-CONNECTION-107
 #[test]
 fn an_omitted_expected_version_is_read_from_the_connection_and_a_given_one_is_sent_unread() {
     // `gitlab` names the connection still in use, though a disconnected one stays listed.
@@ -969,7 +957,6 @@ fn an_omitted_expected_version_is_read_from_the_connection_and_a_given_one_is_se
     request(&requests[5], "GET", "?limit=100", None, None);
 }
 
-// REQ-CONNECTION-105
 #[test]
 fn active_connection_rendering_uses_only_nonsecret_metadata() {
     let mut active = active_connection();
@@ -1075,7 +1062,6 @@ fn await_terminal_prompt(
     }
 }
 
-// REQ-CONNECTION-58
 #[test]
 fn terminal_review_requires_exact_identity_and_dedication_before_activation() {
     for (id, attestation, exit, last) in [
@@ -1183,7 +1169,6 @@ fn mismatched_resource_response_cannot_authorize_identity_review() {
     request(&requests[2], "DELETE", &candidate_path(), None, None);
 }
 
-// REQ-CONNECTION-58
 #[test]
 fn help_links_public_setup_and_requires_explicit_activation_flags() {
     for args in [
@@ -1222,7 +1207,6 @@ fn help_links_public_setup_and_requires_explicit_activation_flags() {
     );
 }
 
-// REQ-CONNECTION-77, REQ-CONNECTION-123, REQ-CONNECTION-104
 #[test]
 fn authentication_and_candidate_conflicts_have_distinct_exits() {
     let problem = |status, code, kind| {
@@ -1286,7 +1270,6 @@ fn authentication_and_candidate_conflicts_have_distinct_exits() {
     assert_eq!(server.finish().len(), 5);
 }
 
-// REQ-CONNECTION-74
 #[test]
 fn a_server_error_answer_to_a_mutation_is_not_repeated() {
     // Only one answer is scripted: a repeat would find no listener and report `connection`.
@@ -1316,7 +1299,6 @@ fn a_server_error_answer_to_a_mutation_is_not_repeated() {
     );
 }
 
-// REQ-CONNECTION-57
 #[test]
 fn credential_kinds_select_only_the_approved_token_declaration() {
     for (flag, kind, account) in [
@@ -1367,7 +1349,6 @@ fn credential_kinds_select_only_the_approved_token_declaration() {
     }
 }
 
-// REQ-CONNECTION-57, REQ-CONNECTION-74
 #[test]
 fn unsafe_token_sources_and_versions_fail_before_network_use() {
     use std::os::unix::fs::symlink;
@@ -1437,7 +1418,6 @@ fn unsafe_token_sources_and_versions_fail_before_network_use() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-58, REQ-CONNECTION-74
 #[test]
 fn a_lost_mutation_response_replays_the_same_key_and_body() {
     // A closed socket with no HTTP response is an ambiguous transport result.
@@ -1485,7 +1465,6 @@ fn a_lost_mutation_response_replays_the_same_key_and_body() {
     }
 }
 
-// REQ-CONNECTION-74
 #[test]
 fn generated_key_survives_two_lost_responses_and_recovers_on_later_invocation() {
     let (server, dir, credential) = prepared(vec![
@@ -1522,7 +1501,6 @@ fn generated_key_survives_two_lost_responses_and_recovers_on_later_invocation() 
     }
 }
 
-// REQ-CONNECTION-74
 #[test]
 fn explicit_activation_replay_recovers_after_terminal_or_missing_candidate() {
     for terminal in [
@@ -1586,7 +1564,6 @@ fn vanished_candidate_is_unavailable_for_activation() {
     }
 }
 
-// REQ-CONNECTION-77
 #[test]
 fn candidate_submission_and_activation_conflicts_do_not_retry() {
     let conflict = |kind: &str| {
@@ -1620,7 +1597,6 @@ fn candidate_submission_and_activation_conflicts_do_not_retry() {
     assert_eq!(server.finish().len(), 6);
 }
 
-// REQ-CONNECTION-57
 #[test]
 fn token_stdin_is_exclusive_and_never_printed() {
     let mut failed = group_pending();

@@ -18,7 +18,7 @@ pub(super) const AFTER_HELP: &str = "This host:\n  With no RUNNER, the command a
 
 // With a `RUNNER` this is the Cloud read of a registration in the organization in effect;
 // with none it is the host's live runner, asked through the control socket alone, so the
-// Cloud options need a `RUNNER` and `--config` refuses one (REQ-RUNNERENROLL-41).
+// Cloud options need a `RUNNER` and `--config` refuses one.
 #[derive(Debug, Args)]
 #[command(group(
     ArgGroup::new("cloud_read")
@@ -89,7 +89,7 @@ fn show_registration(
 }
 
 /// The host's live runner, asked through the control socket alone: no deployment is loaded
-/// and no credential read (REQ-RUNNERENROLL-41, REQ-RUNNERENROLL-44).
+/// and no credential read.
 fn show_live_runner(config: Option<&Path>) -> CommandResult {
     let socket_path = super::configured_control_socket_path(config)?;
     let response = useful_runner::request(&socket_path, Operation::Status).map_err(|error| {
@@ -229,7 +229,6 @@ mod tests {
     use super::*;
     use useful_runner::{ConnectionState, ProcessState};
 
-    // REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80
     #[test]
     fn renders_idle_and_nonzero_assignment_counts() {
         assert_eq!(
@@ -273,7 +272,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-42
     #[test]
     fn renders_the_closed_live_snapshot_without_absent_optional_fields() {
         let status = StatusSnapshot {
@@ -310,7 +308,7 @@ mod tests {
         assert_eq!(String::from_utf8(output).unwrap(), expected);
     }
 
-    // REQ-RUNNERENROLL-42: the log the process writes is shown directly after its uptime.
+    // The log the process writes is shown directly after its uptime.
     #[test]
     fn renders_the_log_path_after_the_uptime() {
         let status = StatusSnapshot {
@@ -383,9 +381,9 @@ mod tests {
         })
     }
 
-    // REQ-RUNNERENROLL-42: the disk reading is shown directly after the log path, and a
-    // warning giving the minimum directly after it while the disk is low; a snapshot
-    // without a reading shows neither.
+    // The disk reading is shown directly after the log path, and a warning giving the
+    // minimum directly after it while the disk is low; a snapshot without a reading
+    // shows neither.
     #[test]
     fn renders_the_disk_reading_after_the_log_and_a_warning_while_it_is_low() {
         let log = |lines: &[String]| {

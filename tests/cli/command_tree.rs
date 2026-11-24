@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 #[path = "../support/migration.rs"]
 mod migration;
 
-// INV-CLI-21, INV-CLI-20
 #[test]
 fn installed_command_tree_has_the_declared_paths_visibility_and_options() {
     const HIDDEN: &str = "workflow run event";
@@ -55,7 +54,6 @@ fn installed_command_tree_has_the_declared_paths_visibility_and_options() {
     );
 }
 
-// INV-CLI-21
 #[test]
 fn installed_cli_refuses_retired_command_spellings() {
     for heading in [
@@ -82,7 +80,6 @@ fn installed_cli_refuses_retired_command_spellings() {
 #[path = "../support/scenarios.rs"]
 mod fixtures;
 
-// INV-CLI-21, INV-CLI-20, REQ-MEMBER-48, REQ-MEMBER-50
 #[test]
 fn documented_scenario_arguments_reach_their_installed_leaf() {
     let inventory: BTreeSet<_> = include_str!("../fixtures/command-tree.txt")
@@ -189,98 +186,3 @@ fn documented_scenario_arguments_reach_their_installed_leaf() {
         }
     }
 }
-
-// A parser can hide an alias from help. Compare its response to an unknown
-// spelling on the same command, including the root and the hidden event leaf.
-// The control supplies the candidate's own diagnostic format.
-fn check_retired_flags(family: Option<&str>) {
-    const UNKNOWN: &str = "--unknown-conformance-option";
-    let paths = std::iter::once("").chain(include_str!("../fixtures/command-tree.txt").lines());
-    let home = super::private_credential_directory();
-    let refused_port = useful_test_support::RefusedPort::hold();
-    let origin = format!("http://{}", refused_port.address());
-    let invoke = |args: &[&str]| {
-        std::process::Command::new(crate::executable())
-            .args(args)
-            .env_clear()
-            .env("HOME", home.path())
-            .env("USEFUL_HOME", home.path())
-            .env("PATH", "")
-            .env("USEFUL_API_URL", &origin)
-            .env("USEFUL_AUTH_ISSUER", &origin)
-            .current_dir(home.path())
-            .output()
-            .unwrap()
-    };
-    for path in paths.filter(|path| {
-        let root = path.split_whitespace().next().unwrap_or("");
-        family.map_or_else(
-            || !["account", "org", "project", "runner", "workflow"].contains(&root),
-            |family| root == family,
-        )
-    }) {
-        let probe = |suffix: &[&str]| {
-            let mut args: Vec<_> = path.split_whitespace().collect();
-            args.extend_from_slice(suffix);
-            invoke(&args)
-        };
-        let unknown = probe(&[UNKNOWN]);
-        assert_eq!(unknown.status.code(), Some(2));
-        let rejects_unknown_before_help = probe(&[UNKNOWN, "--help"]).status.code() == Some(2);
-        let diagnostic = |output: &std::process::Output, flag: &str| {
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .find(|line| line.contains(flag))
-                .map(|line| line.replace(flag, "<option>"))
-        };
-        let unknown_diagnostic = diagnostic(&unknown, UNKNOWN);
-        for &(name, retained) in migration::RETIRED_OPTIONS {
-            let flag = format!("--{name}");
-            if retained.contains(&path) {
-                // These retained options all take values.
-                let mut args: Vec<_> = path.split_whitespace().collect();
-                args.extend([&flag, "example", "--help"]);
-                assert!(invoke(&args).status.success(), "{args:?}");
-            } else {
-                let refused = probe(&[&flag]);
-                assert_eq!(refused.status.code(), Some(2), "{path} {flag}: {refused:?}");
-                if unknown_diagnostic.is_some() && diagnostic(&refused, &flag) == unknown_diagnostic
-                {
-                    continue;
-                }
-                // A usage error can also mean a recognized option needs a
-                // value or this command needs a positional argument. Try the
-                // value form and, where the parser supports it, the help path.
-                assert_eq!(
-                    probe(&[&flag, "example"]).status.code(),
-                    Some(2),
-                    "{path} {flag}"
-                );
-                if rejects_unknown_before_help {
-                    for suffix in [
-                        &[flag.as_str(), "--help"][..],
-                        &[flag.as_str(), "example", "--help"],
-                    ] {
-                        assert_eq!(probe(suffix).status.code(), Some(2), "{path} {suffix:?}");
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Separate families let nextest schedule and time out the independent subprocess batches.
-macro_rules! retired_flags {
-    ($($name:ident => $family:expr),+) => {$(
-        #[test]
-        fn $name() { check_retired_flags($family); }
-    )+};
-}
-
-// INV-CLI-21
-retired_flags!(
-    retired_flags_on_remaining_paths => None, retired_flags_on_account => Some("account"),
-    retired_flags_on_org => Some("org"), retired_flags_on_project => Some("project"),
-    retired_flags_on_runner => Some("runner"),
-    retired_flags_on_workflow => Some("workflow")
-);

@@ -1,6 +1,5 @@
-//! `useful workflow definition show DEFINITION` (REQ-WFDEF-26, REQ-CLOUDDEF-15): a definition
-//! under the home, read without a request, or else one of the project in effect
-//! (REQ-CLOUDDEF-42).
+//! `useful workflow definition show DEFINITION`: a definition under the home, read without a
+//! request, or else one of the project in effect.
 
 use std::io::{self, Write};
 
@@ -226,7 +225,7 @@ fn write_human(shown: &Shown) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `run` as `show` reports it, drifted when behind `current` (REQ-LOCALRUN-190).
+/// `run` as `show` reports it, drifted when behind `current`.
 fn live_run(run: &ListedRun, current: u64) -> JsonRun<'_> {
     let record = &run.record;
     JsonRun {

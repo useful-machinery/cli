@@ -104,8 +104,8 @@ pub(crate) enum FailureCode {
     CommandWaitFailed,
     ExecutionTaskUnavailable,
     ChildRunInterrupted,
-    /// The step was stopped, or never started, because the local CLI interrupted the run
-    /// (REQ-WFEXEC-69); not the attempt state `interrupted` nor `child_run_interrupted`.
+    /// The step was stopped, or never started, because the local CLI interrupted the
+    /// run; not the attempt state `interrupted` nor `child_run_interrupted`.
     Interrupted,
     OutputUnsupported,
     CaptureTaskUnavailable,
@@ -181,8 +181,8 @@ struct DiagnosticFacts {
     harness_input: Option<&'static str>,
     limit_bytes: Option<u64>,
     observed_bytes: Option<u64>,
-    /// Finalization and local result only: the closed runner diagnostic never carries it
-    /// (REQ-AGENT-72).
+    /// Finalization and local result only: the closed runner diagnostic never carries
+    /// it.
     resets_at: Option<u64>,
     launch_failure: Option<&'static str>,
     os_error: Option<i32>,
@@ -264,13 +264,13 @@ impl FailureDetail {
         }
     }
 
-    /// A step the local CLI's interruption stopped while it ran (REQ-WFEXEC-69).
+    /// A step the local CLI's interruption stopped while it ran.
     pub(crate) fn interrupted_in_execution() -> Self {
         Self::code(FailurePhase::Execution, FailureCode::Interrupted)
     }
 
-    /// The first pending step an interruption failed because no step was active
-    /// (REQ-WFEXEC-69).
+    /// The first pending step an interruption failed because no step was
+    /// active.
     pub(crate) fn interrupted_before_start() -> Self {
         Self::code(FailurePhase::Start, FailureCode::Interrupted)
     }
@@ -338,8 +338,8 @@ impl FailureDetail {
     }
 
     /// The finalization context's issue diagnostic and a local result's failed-node
-    /// `diagnostic`: the runner diagnostic plus the provider's kept reset time as `resetsAt`
-    /// (REQ-WFFINALIZE-5, REQ-EVIDENCE-27, REQ-AGENT-72).
+    /// `diagnostic`: the runner diagnostic plus the provider's kept reset time as
+    /// `resetsAt`.
     pub(crate) fn finalization_diagnostic(&self) -> Option<serde_json::Value> {
         let mut diagnostic = self.runner_diagnostic();
         let reset = self
@@ -608,7 +608,7 @@ impl BlockedDetail {
 pub(crate) enum NonExecutionCode {
     FailureStop,
     FinalizerTriggerNotSelected,
-    /// An edge-scheduled walk exited before reaching the step (REQ-WFEXEC-83).
+    /// An edge-scheduled walk exited before reaching the step.
     NotReached,
 }
 
@@ -839,9 +839,8 @@ impl PrimaryIssue {
     }
 }
 
-/// The class of a failed ordinary step's failure (REQ-WFEXEC-79): `infrastructure` says the
-/// failure was the host's, as a recovery handler decided (REQ-WFRECOVERY-65) or the step's own
-/// listed exit status said (REQ-WFRECOVERY-66).
+/// The class of a failed ordinary step's failure: `infrastructure` says the failure was the
+/// host's, as a recovery handler decided or the step's own listed exit status said.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureClass {
@@ -858,9 +857,9 @@ impl FailureClass {
 }
 
 /// The failure of the child a `workflow` step succeeded on, when the child's published
-/// result is `failed` (REQ-WFEXEC-77): the outcome the child recorded, for a fan-out the
-/// one-based element whose child ended the step, and the `primaryIssue` of the child's
-/// result as that result holds it.
+/// result is `failed`: the outcome the child recorded, for a fan-out the one-based
+/// element whose child ended the step, and the `primaryIssue` of the child's result as
+/// that result holds it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FailedChild {
@@ -891,9 +890,8 @@ impl FailedChild {
     }
 
     /// The failing node of the child's run as plain data: its `id`, its role and its state,
-    /// for a failed node with the phase and code of its failure as the record spells them
-    /// (REQ-RUNNERENROLL-125). A blocked node gives neither, although its detail holds a
-    /// code.
+    /// for a failed node with the phase and code of its failure as the record spells them.
+    /// A blocked node gives neither, although its detail holds a code.
     pub fn failing_node(&self) -> FailingNode {
         let issue = &self.primary_issue;
         FailingNode {
@@ -910,7 +908,7 @@ impl FailedChild {
     }
 
     /// The failed stage's position path under its step `step`: `step` or, for a fan-out
-    /// element, `step[n]` (REQ-LOCALRUN-200).
+    /// element, `step[n]`.
     pub fn step_path(&self, step: &str) -> String {
         match self.item {
             Some(item) => format!("{step}[{item}]"),
@@ -919,11 +917,10 @@ impl FailedChild {
     }
 }
 
-/// The output one `firstOf` of a step's body took when the step was started
-/// (REQ-EVIDENCE-28, REQ-WFCOND-45): where the `firstOf` is bound and the
-/// `outputs.<step>.<output>` reference the value was taken from, never the value. It is
-/// written `{input, ref}` for a command step's input and `{message, index, ref}` for an
-/// agent message entry.
+/// The output one `firstOf` of a step's body took when the step was started: where the
+/// `firstOf` is bound and the `outputs.<step>.<output>` reference the value was taken
+/// from, never the value. It is written `{input, ref}` for a command step's input and
+/// `{message, index, ref}` for an agent message entry.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "InputSourceWire", into = "InputSourceWire")]
 pub struct InputSource {
@@ -1025,8 +1022,7 @@ impl fmt::Display for FirstOfBinding {
     }
 }
 
-/// The `inputSources` of a step started with `chosen`, in the order REQ-EVIDENCE-28 gives,
-/// which is the order of `FirstOfBinding`.
+/// The `inputSources` of a step started with `chosen`, in the order of `FirstOfBinding`.
 pub(crate) fn input_sources(chosen: &ChosenSources) -> Vec<InputSource> {
     chosen
         .iter()
@@ -1037,9 +1033,9 @@ pub(crate) fn input_sources(chosen: &ChosenSources) -> Vec<InputSource> {
         .collect()
 }
 
-/// Whether `sources` is a well-formed `inputSources` list (REQ-EVIDENCE-28): each input an
-/// identifier, each `ref` an output reference, and the bindings strictly ascending, so no
-/// binding repeats and the entries are in order.
+/// Whether `sources` is a well-formed `inputSources` list: each input an identifier, each
+/// `ref` an output reference, and the bindings strictly ascending, so no binding repeats
+/// and the entries are in order.
 pub(crate) fn valid_input_sources(sources: &[InputSource]) -> bool {
     sources.iter().all(|source| {
         is_output_reference(&source.reference)
@@ -1286,8 +1282,8 @@ fn working_directory_detail(source: &WorkingDirectoryFailure) -> FailureDetail {
     )
 }
 
-/// The committed failure code (REQ-AGENT-39) an agent failure's node reports; the recovery
-/// context's cause names the same code (REQ-WFRECOVERY-61).
+/// The committed failure code an agent failure's node reports; the recovery context's
+/// cause names the same code.
 pub(crate) fn agent_failure_code(cause: &AgentFailureCause) -> FailureCode {
     match cause {
         AgentFailureCause::HarnessStartFailed { .. }
@@ -1505,7 +1501,6 @@ mod tests {
     use super::super::agent::{AgentHarnessFailureDetail, HarnessFailureDiagnostic};
     use super::*;
 
-    // REQ-WFEXEC-83
     #[test]
     fn a_step_an_edge_walk_never_reached_validates_in_a_succeeded_result() {
         let result = |code: &str| {
@@ -1568,7 +1563,6 @@ mod tests {
         );
     }
 
-    // REQ-EVIDENCE-12
     #[test]
     fn harness_diagnostic_is_sibling_only_and_never_changes_canonical_evidence() {
         use super::super::agent::CanonicalHarnessFailure;
@@ -1632,7 +1626,6 @@ mod tests {
         );
     }
 
-    // REQ-DIAG-37, REQ-EVIDENCE-12, REQ-DIAG-4
     #[test]
     fn harness_input_too_large_projects_the_input_and_both_sizes_beside_its_code() {
         use super::super::agent::AgentInputKind;
@@ -1674,7 +1667,6 @@ mod tests {
         assert_eq!(system_prompt, bare);
     }
 
-    // REQ-DIAG-38, REQ-DIAG-2
     #[test]
     fn unclassified_command_launch_projects_its_cause_and_os_error_beside_its_code() {
         use super::super::step_runtime::{
@@ -1716,7 +1708,6 @@ mod tests {
         assert_eq!(classified.runner_diagnostic(), None);
     }
 
-    // REQ-DIAG-36, REQ-AGENT-70, REQ-EVIDENCE-12
     #[test]
     fn harness_failure_projects_the_slug_of_its_canonical_detail() {
         use super::super::agent::CanonicalHarnessFailure;
@@ -1781,7 +1772,6 @@ mod tests {
         );
     }
 
-    // REQ-EVIDENCE-10
     #[test]
     fn blocked_detail_deduplicates_and_sorts_exact_pairs() {
         let detail = BlockedDetail::new([
@@ -1821,7 +1811,6 @@ mod tests {
         assert!(serde_json::from_value::<FailureDetail>(missing_pointer).is_err());
     }
 
-    // REQ-EVIDENCE-5, REQ-EVIDENCE-6, REQ-EVIDENCE-7, REQ-EVIDENCE-26, REQ-OUTPUTS-5
     #[test]
     fn failure_detail_rejects_cross_phase_auxiliary_and_unsafe_names() {
         for value in [
@@ -1884,7 +1873,6 @@ mod tests {
         assert!(serde_json::from_value::<ConditionFalseDetail>(detail).is_err());
     }
 
-    // REQ-EVIDENCE-5, REQ-EVIDENCE-11
     #[test]
     fn primary_issue_state_selects_the_closed_detail_member() {
         let failed = json!({

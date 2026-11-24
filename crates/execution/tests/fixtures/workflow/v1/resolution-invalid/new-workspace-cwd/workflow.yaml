@@ -1,0 +1,7 @@
+schemaVersion: 1
+steps:
+  work:
+    kind: cmd
+    workspace: new
+    cwd: src
+    command: {argv: ["true"]}

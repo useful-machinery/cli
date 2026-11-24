@@ -1,17 +1,15 @@
-//! Reading the local run and wait records a tree run leaves (REQ-LOCALRUN-175,
-//! REQ-LOCALRUN-178) and the terminal report they map to (REQ-RUNNERENROLL-172): the
-//! transport result is `cancelled` when the record's outcome is the engine's `canceled` or
-//! `withdrawn`, and otherwise the outcome of the engine's published result (REQ-WFEXEC-15),
+//! Reading the local run and wait records a tree run leaves and the terminal report they
+//! map to: the transport result is `cancelled` when the record's outcome is the engine's
+//! `canceled` or `withdrawn`, and otherwise the outcome of the engine's published result,
 //! read from the last `--json` document or, when that carries none, from the run
 //! directory's record of the current attempt, a failure there with the primary issue of the
 //! `result.json` that attempt published and never a step the runner selects itself; the
 //! record's outcome, the workflow's choice, travels as `chosenOutcome` and never selects
 //! the result, its run's mirror writes, every attempt's, as `mirror` and the departure the
-//! attempt's own outcome write confirmed as `claimRelease`. An adopted run
-//! (REQ-RUNNERENROLL-218) whose record already read `exited` is concluded by the result its
-//! current attempt recorded, and one whose first `retry --from` the runtime refused ends
-//! `failed` with the refusal's code, as does a run whose `create` the runtime refused
-//! (REQ-RUNNERENROLL-192).
+//! attempt's own outcome write confirmed as `claimRelease`. An adopted run whose record
+//! already read `exited` is concluded by the result its current attempt recorded, and one
+//! whose first `retry --from` the runtime refused ends `failed` with the refusal's code, as
+//! does a run whose `create` the runtime refused.
 
 use std::path::Path;
 
@@ -54,24 +52,24 @@ pub(in crate::service) struct TreeRecord {
     pub(in crate::service) outcome: Option<String>,
     pub(in crate::service) attempts: u64,
     pub(in crate::service) position: Vec<Value>,
-    /// The run's subject (REQ-LOCALRUN-175), a string or null; any other value reads as none.
+    /// The run's subject, a string or null; any other value reads as none.
     pub(in crate::service) subject: Option<String>,
-    /// The run's `mirror/` writes in order (REQ-LOCALRUN-193), every attempt's, read only
-    /// for the record the loop ends on; empty while the loop observes the record.
+    /// The run's `mirror/` writes in order, every attempt's, read only for the record the
+    /// loop ends on; empty while the loop observes the record.
     pub(in crate::service) mirror: Vec<MirrorWrite>,
     /// How many leading writes of `mirror` an earlier attempt of the run made: those
     /// `mirror/` held when the runner took the run, or all of them when that count could
-    /// not be read (REQ-RUNNERENROLL-179). Zero while the loop observes the record.
+    /// not be read. Zero while the loop observes the record.
     pub(in crate::service) earlier_writes: usize,
-    /// The root's text exports the exit lists (REQ-RUNNERENROLL-131), read only for the
-    /// record the loop ends on, when it exits with a workflow outcome the runner reports
-    /// from the record; empty while the loop observes the record.
+    /// The root's text exports the exit lists, read only for the record the loop ends
+    /// on, when it exits with a workflow outcome the runner reports from the record;
+    /// empty while the loop observes the record.
     pub(in crate::service) exports: Vec<TreeExport>,
 }
 
 impl TreeRecord {
     /// Whether the record's outcome is the engine's own cancellation, `canceled` or
-    /// `withdrawn`, which no workflow can declare (REQ-WFFORMAT-87).
+    /// `withdrawn`, which no workflow can declare.
     pub(in crate::service) fn reads_cancellation(&self) -> bool {
         matches!(self.outcome.as_deref(), Some("canceled" | "withdrawn"))
     }
@@ -117,10 +115,10 @@ pub(in crate::service) fn read_record(run_directory: &Path) -> Option<TreeRecord
 const MAXIMUM_PUBLISHED_PATH: usize = 16;
 
 /// The loop's read of `record`, `wait` and the step observations `steps` as an overview
-/// publishes it (REQ-RUNNERENROLL-134). A step of the run can replace its records and the
-/// read is copied at each record interval, so a position or a wait's step is published
-/// only when it is a path `published_path` admits, and otherwise as empty, and a wait's
-/// `since` only when it is RFC 3339.
+/// publishes it. A step of the run can replace its records and the read is copied at each
+/// record interval, so a position or a wait's step is published only when it is a path
+/// `published_path` admits, and otherwise as empty, and a wait's `since` only when it is
+/// RFC 3339.
 pub(in crate::service) fn published_read(
     record: &TreeRecord,
     wait: Option<&TreeWait>,
@@ -144,7 +142,7 @@ pub(in crate::service) fn published_read(
 
 /// `path` as an overview or an assignment answer publishes it: at most 16 parts, each a
 /// string, a non-negative integer or the engine's fan-out element `{"item": n}` as its
-/// number (REQ-WFDEF-4); empty for any other path.
+/// number; empty for any other path.
 pub(in crate::service) fn published_path(path: &[Value]) -> Vec<StepPathPart> {
     if path.len() > MAXIMUM_PUBLISHED_PATH {
         return Vec::new();
@@ -163,9 +161,9 @@ pub(in crate::service) fn published_path(path: &[Value]) -> Vec<StepPathPart> {
 }
 
 /// The class of a failure to read a run's `mirror/`, which the run event records beside the
-/// exit that reports no writes for it (REQ-RUNNERENROLL-180): a file there that is not a
-/// write, or a repeated ordinal; a `mirror/` or a file in it of the wrong kind or size; a
-/// file operation that failed; or any other refusal of the run directory.
+/// exit that reports no writes for it: a file there that is not a write, or a repeated
+/// ordinal; a `mirror/` or a file in it of the wrong kind or size; a file operation that
+/// failed; or any other refusal of the run directory.
 pub(in crate::service) fn mirror_read_failure(error: &LocalRunDirectoryError) -> &'static str {
     match error {
         LocalRunDirectoryError::StateFile { source, .. } => match **source {
@@ -181,8 +179,8 @@ pub(in crate::service) fn mirror_read_failure(error: &LocalRunDirectoryError) ->
 pub(in crate::service) const MIRROR_READER_LOST: &str = "mirror_reader_lost";
 
 /// What `wait.json` reads: the wait's kind, start and step, its rule's source, for an
-/// `answer` wait the questions it reports (REQ-RUNNERENROLL-119) and, for a wait of any
-/// kind, the failed child it reports (REQ-RUNNERENROLL-125).
+/// `answer` wait the questions it reports and, for a wait of any kind, the failed child
+/// it reports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) struct TreeWait {
     pub(in crate::service) kind: String,
@@ -199,13 +197,13 @@ pub(in crate::service) struct TreeWait {
 }
 
 impl TreeWait {
-    /// The wait's identity `<kind>@<since>` (REQ-LOCALRUN-181).
+    /// The wait's identity `<kind>@<since>`.
     pub(in crate::service) fn identity(&self) -> String {
         wait_identity(&self.kind, &self.since)
     }
 
     /// Whether only a recorded control resolves it: a local kind's derived rule names
-    /// the source `um`; any other source is an external condition (REQ-WFEXEC-61).
+    /// the source `um`; any other source is an external condition.
     pub(in crate::service) fn awaits_control(&self) -> bool {
         self.source == "um"
     }
@@ -234,9 +232,9 @@ pub(in crate::service) fn read_wait(run_directory: &Path) -> Option<TreeWait> {
 }
 
 /// The questions an `answer` wait's `payload` asks, read as `useful workflow run answer` reads
-/// them (REQ-RUNNERENROLL-321): the listed questions, or the one question with id `1` that a
-/// payload without a list asks; `None` when they break a bound Cloud admits, so the wait is
-/// reported without them and nothing is truncated.
+/// them: the listed questions, or the one question with id `1` that a payload without a list
+/// asks; `None` when they break a bound Cloud admits, so the wait is reported without them and
+/// nothing is truncated.
 fn answer_questions(payload: &Map<String, Value>) -> Option<TreeProgressWaitQuestions> {
     let questions = match wait_questions(payload) {
         WaitQuestions::Listed(questions) => questions
@@ -255,10 +253,10 @@ fn answer_questions(payload: &Map<String, Value>) -> Option<TreeProgressWaitQues
 }
 
 /// The failed child a wait's `payload` records, read as `useful workflow run show` reads
-/// it (REQ-RUNNERENROLL-327) and reduced to the outcome, the failing node's `id` and role,
-/// its state and, for a failed node, its phase and code; `None` when the payload records
-/// none or the reduction breaks a bound Cloud admits, so the wait is reported without it
-/// and nothing is truncated.
+/// it and reduced to the outcome, the failing node's `id` and role, its state and, for a
+/// failed node, its phase and code; `None` when the payload records none or the reduction
+/// breaks a bound Cloud admits, so the wait is reported without it and nothing is
+/// truncated.
 fn reported_failed_child(payload: &Map<String, Value>) -> Option<TreeProgressFailedChild> {
     let record = wait_failed_child(payload)?;
     let node = record.failing_node();
@@ -333,9 +331,9 @@ impl TransportResult {
     }
 }
 
-/// The engine's published result for the attempt that exited the run (REQ-WFEXEC-15), as
-/// the runner read it, and whether it read it from the run directory's record of that
-/// attempt rather than from a command's `--json` document.
+/// The engine's published result for the attempt that exited the run, as the runner read
+/// it, and whether it read it from the run directory's record of that attempt rather
+/// than from a command's `--json` document.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::service) struct EngineResult {
     pub(in crate::service) outcome: EngineOutcome,
@@ -354,10 +352,10 @@ pub(in crate::service) enum EngineOutcome {
 }
 
 impl EngineResult {
-    /// The settled result a command's `--json` `document` carries (REQ-LOCALRUN-127): its
-    /// `result.outcome` `succeeded`, `failed`, with `result.primaryIssue` when that is an
-    /// object, or `cancelled`; `None` for a `waiting` or `continued` result, a refusal, or a
-    /// document with no result.
+    /// The settled result a command's `--json` `document` carries: its `result.outcome`
+    /// `succeeded`, `failed`, with `result.primaryIssue` when that is an object, or
+    /// `cancelled`; `None` for a `waiting` or `continued` result, a refusal, or a document
+    /// with no result.
     pub(in crate::service) fn from_document(document: &Value) -> Option<Self> {
         Some(Self {
             outcome: settled_outcome(&document["result"])?,
@@ -386,9 +384,9 @@ fn settled_outcome(result: &Value) -> Option<EngineOutcome> {
 /// The result `<run directory>/state.json` records for the run's current attempt, counted
 /// only once the attempt's result is recorded `published`, which the engine does before the
 /// run's record reads `exited`: its state `succeeded`, `workflow_failed`, a failure whose
-/// primary issue is that of the result the attempt published (REQ-WFEXEC-12), as a
-/// document would carry it, or `cancelled`. `None` for any other state, a result not
-/// recorded published, or a file `read_json` cannot read.
+/// primary issue is that of the result the attempt published, as a document would carry it,
+/// or `cancelled`. `None` for any other state, a result not recorded published, or a file
+/// `read_json` cannot read.
 pub(in crate::service) fn read_recorded_result(run_directory: &Path) -> Option<EngineResult> {
     let state = read_json(run_directory, "state.json")?;
     let attempt = published_attempt(&state)?;
@@ -532,7 +530,7 @@ fn unchanged_exit() -> TreeExit {
 
 /// The exit `record` reports: its outcome as the chosen outcome, its run's mirror writes,
 /// every attempt's, whether a write past the earlier attempts' confirms the runner's own
-/// departure, and the root's text exports read for it (REQ-RUNNERENROLL-131).
+/// departure, and the root's text exports read for it.
 fn recorded_exit(record: &TreeRecord) -> TreeExit {
     TreeExit {
         chosen_outcome: record.outcome.clone(),
@@ -565,8 +563,8 @@ fn mirror_results(writes: &[MirrorWrite]) -> Vec<Value> {
 }
 
 /// Whether the runner protocol's `MirrorResult` names `reason`, so that it travels with its
-/// write (REQ-RUNNERENROLL-171): a reason the protocol does not name would have Cloud refuse
-/// the frame, so its write travels `skipped` with no `reason`.
+/// write: a reason the protocol does not name would have Cloud refuse the frame, so its
+/// write travels `skipped` with no `reason`.
 const fn travels(reason: MirrorSkipReason) -> bool {
     match reason {
         MirrorSkipReason::GuardHeld => true,
@@ -574,10 +572,10 @@ const fn travels(reason: MirrorSkipReason) -> bool {
     }
 }
 
-/// Whether `write` confirms a departure (REQ-RUNNERENROLL-178): the outcome hook's state
-/// write landed, or was skipped because its guard held, the issue already being elsewhere.
-/// A failed write, whose effect is unknown, confirms nothing, and only a write the attempt
-/// itself made confirms the runner's own departure (`recorded_exit`).
+/// Whether `write` confirms a departure: the outcome hook's state write landed, or was
+/// skipped because its guard held, the issue already being elsewhere. A failed write,
+/// whose effect is unknown, confirms nothing, and only a write the attempt itself made
+/// confirms the runner's own departure (`recorded_exit`).
 fn confirms_departure(write: &MirrorWrite) -> bool {
     write.hook == MirrorHook::Outcome
         && matches!(write.action, MirrorAction::State { .. })
@@ -589,8 +587,8 @@ fn confirms_departure(write: &MirrorWrite) -> bool {
 }
 
 /// How a run ended when the runner classifies the end itself rather than concluding the
-/// record and the engine's result: an adopted run's (REQ-RUNNERENROLL-221), or a created
-/// run's whose `create` the runtime refused (REQ-RUNNERENROLL-192).
+/// record and the engine's result: an adopted run's, or a created run's whose `create`
+/// the runtime refused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) enum ClassifiedEnd {
     /// The runtime refused `command`, the run's first, with its first diagnostic's `code`,

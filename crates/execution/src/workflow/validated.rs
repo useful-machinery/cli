@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::claude_code::ClaudeCodeConfig;
 use super::codex::CodexConfig;
 use super::condition::ResolvedPredicate;
-use super::document::{FailurePolicy, FinalizationTrigger, Output, RootBlocks, WaitKind, WaitRule};
+use super::document::{
+    DeclaredWorkspace, FailurePolicy, FinalizationTrigger, Output, RootBlocks, WaitKind, WaitRule,
+};
 use super::evidence::Prerequisite;
 use super::pi::PiConfig;
 
@@ -20,7 +22,7 @@ pub enum WorkflowValueType {
 /// Every declared root input with its value type; it types `inputs.<name>` references.
 pub(crate) type DeclaredInputs = BTreeMap<String, WorkflowValueType>;
 
-/// A declared input's default (REQ-WFFORMAT-28). A JSON default file holds its canonical
+/// A declared input's default. A JSON default file holds its canonical
 /// source-root-relative path once resolved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ValidatedInputDefault {
@@ -57,35 +59,35 @@ pub struct ValidatedWorkflow {
     pub finalizers: BTreeMap<String, ValidatedFinalizer>,
     pub finalizer_source_order: Vec<String>,
     pub finalizer_presentation_order: Vec<String>,
-    /// Each export's sources in written order (REQ-WFFORMAT-65, REQ-WFFORMAT-107).
+    /// Each export's sources in written order.
     pub exports: BTreeMap<String, OutputSources>,
     pub export_presentation: BTreeMap<String, ValidatedExportPresentation>,
-    /// The declared outcomes and their source (REQ-WFFORMAT-87, REQ-WFFORMAT-88); `None`
-    /// leaves the implicit outcomes `succeeded` and `failed`.
+    /// The declared outcomes and their source; `None` leaves the implicit outcomes
+    /// `succeeded` and `failed`.
     pub outcome: Option<ValidatedOutcome>,
     pub(crate) declared_inputs: DeclaredInputs,
-    /// Declared inputs marked `optional: true` (REQ-WFFORMAT-84).
+    /// Declared inputs marked `optional: true`.
     pub(crate) optional_inputs: BTreeSet<String>,
     pub(crate) input_defaults: BTreeMap<String, ValidatedInputDefault>,
     pub(crate) input_json_schema_paths: BTreeMap<String, String>,
     pub(crate) input_file_media_types: BTreeMap<String, String>,
     /// Profiles replaced at invocation time, with their pinned effective configuration.
     pub(crate) replaced_agent_profiles: BTreeMap<String, ValidatedHarness>,
-    /// The root workflow's definition name, a lowercase identifier (REQ-WFFORMAT-7).
+    /// The root workflow's definition name, a lowercase identifier.
     pub name: Option<String>,
-    /// A label for people (REQ-WFFORMAT-7).
+    /// A label for people.
     pub version: Option<String>,
-    /// The declared `text` root input whose value is a run's subject (REQ-WFFORMAT-100).
+    /// The declared `text` root input whose value is a run's subject.
     pub subject: Option<String>,
-    /// The root-only blocks (REQ-WFFORMAT-82); a run acts on none of them but `mirror`
-    /// (REQ-WFFORMAT-86) and, through admission, `requires` (REQ-WFEXEC-55, REQ-WFEXEC-78).
+    /// The root-only blocks; a run acts on none of them but `mirror` and, through
+    /// admission, `requires`.
     pub root: Option<RootBlocks>,
-    /// How the ordinary steps are started (REQ-WFFORMAT-93).
+    /// How the ordinary steps are started.
     pub scheduling: Scheduling,
 }
 
 /// A workflow without `workflow` steps starts a step when its prerequisites are met; one
-/// with them is edge-scheduled from its first step (REQ-WFFORMAT-93).
+/// with them is edge-scheduled from its first step.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Scheduling {
     Dataflow,
@@ -93,6 +95,13 @@ pub enum Scheduling {
 }
 
 impl ValidatedWorkflow {
+    /// Whether any ordinary step runs in the execution root.
+    pub fn runs_steps_in_execution_root(&self) -> bool {
+        self.steps
+            .values()
+            .any(|step| step.common().workspace == StepWorkspace::Starting)
+    }
+
     /// The step or finalizer named `id`; the two share one namespace.
     pub fn node(&self, id: &str) -> Option<&ValidatedStep> {
         self.steps
@@ -100,8 +109,8 @@ impl ValidatedWorkflow {
             .or_else(|| self.finalizers.get(id).map(|finalizer| &finalizer.body))
     }
 
-    /// The workflow's root `environmentPassthrough` names (REQ-WFFORMAT-102); a node's own
-    /// list can only narrow it.
+    /// The workflow's root `environmentPassthrough` names; a node's own list can only
+    /// narrow it.
     pub fn environment_passthrough(&self) -> &BTreeSet<String> {
         &self.environment_passthrough
     }
@@ -114,8 +123,8 @@ impl ValidatedWorkflow {
 
 /// A workflow's declared outcomes: `source` holds the `text` outputs of required ordinary
 /// steps that `outcome.from` names, in written order, a list of one for a single reference,
-/// whose step then declares no `condition` (REQ-WFFORMAT-88, REQ-WFFORMAT-108); `on_failure`
-/// is one of `names`, and so is `on_infrastructure` when declared (REQ-WFFORMAT-110).
+/// whose step then declares no `condition`; `on_failure` is one of `names`, and so is
+/// `on_infrastructure` when declared.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedOutcome {
     pub names: Vec<String>,
@@ -191,24 +200,24 @@ impl ValidatedStep {
     }
 }
 
-/// A `workflow` step (REQ-WFFORMAT-89 to REQ-WFFORMAT-92). `common.outputs` holds the
-/// derived outputs, `outcome` included, and `common.prerequisites` is empty: edges, not
-/// dataflow, order an edge-scheduled run.
+/// A `workflow` step. `common.outputs` holds the derived outputs, `outcome` included,
+/// and `common.prerequisites` is empty: edges, not dataflow, order an edge-scheduled
+/// run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedWorkflowStep {
     pub common: ValidatedCommonStep,
     /// The child workflow file, source-root-relative.
     pub workflow: String,
     /// The canonical paths the child's resolution reached, the child file included, whose
-    /// bytes a continuation compares for an inherited step (REQ-CONTINUE-12).
+    /// bytes a continuation compares for an inherited step.
     pub(crate) child_paths: BTreeSet<String>,
     pub(crate) inputs: BTreeMap<String, ValidatedChildInput>,
     pub(crate) edges: BTreeMap<String, ValidatedEdgeTarget>,
     pub(crate) for_each: Option<ValidatedForEach>,
 }
 
-/// A validated `forEach` (REQ-WFFORMAT-98): `items` a `json` root input or a `json`
-/// export of an earlier `workflow` step, and `empty` one of the child's outcomes.
+/// A validated `forEach`: `items` a `json` root input or a `json` export of an
+/// earlier `workflow` step, and `empty` one of the child's outcomes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedForEach {
     pub(crate) items: ResolvedValueReference,
@@ -223,13 +232,13 @@ pub(crate) struct ValidatedChildInput {
     pub(crate) may_be_omitted: bool,
 }
 
-/// A validated `on` target (REQ-WFFORMAT-92): a step of the workflow, which may be the
-/// producer itself or an earlier step, an exit, a limited edge, a wait or a host wait.
+/// A validated `on` target: a step of the workflow, which may be the producer itself
+/// or an earlier step, an exit, a limited edge, a wait or a host wait.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ValidatedEdgeTarget {
     Step(String),
     Exit(String),
-    /// `{then, limit, else}` (REQ-WFFORMAT-96): `then` a step, `else_` never limited.
+    /// `{then, limit, else}`: `then` a step, `else_` never limited.
     Limited {
         then: String,
         limit: u32,
@@ -240,13 +249,13 @@ pub(crate) enum ValidatedEdgeTarget {
         then: Box<ValidatedEdgeTarget>,
         /// The step a hand-back continues at; present exactly for `approval`.
         on_hand_back: Option<String>,
-        /// The authored rule, present exactly for `external` (REQ-WFFORMAT-97), its `where`
-        /// parsed and its `inputs.` and `outputs.` operands checked.
+        /// The authored rule, present exactly for `external`, its `where` parsed and its
+        /// `inputs.` and `outputs.` operands checked.
         rule: Option<WaitRule>,
     },
-    /// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111): a `host` wait entered at `then`,
-    /// the step whose edge it is, while the edge's count is below `limit`, and `else_`, never
-    /// limited nor a host wait, taken once it reaches it.
+    /// `{wait: host, then, limit, else}`: a `host` wait entered at `then`, the step whose
+    /// edge it is, while the edge's count is below `limit`, and `else_`, never limited nor a
+    /// host wait, taken once it reaches it.
     HostWait {
         then: String,
         limit: u32,
@@ -259,8 +268,8 @@ pub struct ValidatedCommandStep {
     pub common: ValidatedCommonStep,
     pub(crate) inputs: BTreeMap<String, ResolvedValueReference>,
     pub(crate) argv: Vec<String>,
-    /// The exit codes that classify an ordinary step's failure `infrastructure`
-    /// (REQ-WFFORMAT-109, REQ-WFRECOVERY-66); empty for a finalizer's body.
+    /// The exit codes that classify an ordinary step's failure
+    /// `infrastructure`; empty for a finalizer's body.
     pub(crate) infrastructure_exit_codes: BTreeSet<u8>,
 }
 
@@ -277,14 +286,23 @@ pub(crate) struct ResolvedDirectPrerequisite {
     pub(crate) disposition_control: bool,
     pub(crate) data: bool,
     pub(crate) condition_data: bool,
-    /// The producer is a source of a `firstOf` in the consumer's body (REQ-WFFORMAT-39),
-    /// independent of `data`: a source may be skipped and passed over, so it is never a
-    /// data prerequisite unless the consumer also names it by a single reference.
+    /// The producer is a source of a `firstOf` in the consumer's body, independent of
+    /// `data`: a source may be skipped and passed over, so it is never a data
+    /// prerequisite unless the consumer also names it by a single reference.
     pub(crate) first_of: bool,
+}
+
+/// The workspace selected during validation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum StepWorkspace {
+    Starting,
+    Established { by: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedCommonStep {
+    pub(crate) workspace: StepWorkspace,
+    pub(crate) workspace_use: DeclaredWorkspace,
     pub failure_policy: FailurePolicy,
     pub(crate) condition: Option<ResolvedPredicate>,
     pub(crate) condition_values: BTreeMap<String, ResolvedValueSource>,
@@ -292,7 +310,7 @@ pub struct ValidatedCommonStep {
     pub(crate) evidence_prerequisites: Vec<Prerequisite>,
     pub(crate) cwd: Option<String>,
     /// The node's own `environmentPassthrough`, each name one the root declares; `None`
-    /// when the node declares none (REQ-WFFORMAT-102).
+    /// when the node declares none.
     pub(crate) environment_passthrough: Option<BTreeSet<String>>,
     pub(crate) outputs: BTreeMap<String, ValidatedOutput>,
 }
@@ -308,18 +326,18 @@ pub(crate) enum ResolvedValueSource {
     Input(String),
     Output(ResolvedOutputSource),
     FinalizationContext,
-    /// `wait.<field>`, a `workflow` step's input only (REQ-WFFORMAT-95).
+    /// `wait.<field>`, a `workflow` step's input only.
     Wait(String),
-    /// `controls.answers`, a `workflow` step's input only (REQ-WFFORMAT-95).
+    /// `controls.answers`, a `workflow` step's input only.
     ControlsAnswers,
     /// `item`, or `item.<field>` with `field` set: the element a `forEach` step's child
-    /// runs for, a `workflow` step's input only (REQ-WFFORMAT-99).
+    /// runs for, a `workflow` step's input only.
     Item {
         field: Option<String>,
     },
     /// A `firstOf`, its sources in the order they are tried; an ordinary step's `inputs`
-    /// and agent message only (REQ-WFFORMAT-105). The reference's `value_type` is the kind
-    /// every source shares (REQ-WFFORMAT-106).
+    /// and agent message only. The reference's `value_type` is the kind every source
+    /// shares.
     FirstOf(Vec<ResolvedOutputSource>),
 }
 
@@ -346,17 +364,17 @@ pub(crate) enum MessageList {
     Attachments,
 }
 
-/// Where a `firstOf` is bound in an ordinary step's body (REQ-WFFORMAT-105): a command
-/// step's input by name, or an agent message entry by list and zero-based index. The order
-/// is inputs by name, then text entries, then attachments, each by index.
+/// Where a `firstOf` is bound in an ordinary step's body: a command step's input by name,
+/// or an agent message entry by list and zero-based index. The order is inputs by name,
+/// then text entries, then attachments, each by index.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum FirstOfBinding {
     Input(String),
     Message { list: MessageList, index: usize },
 }
 
-/// The source each `firstOf` of a step's body took when the step was started
-/// (REQ-WFCOND-45, INV-ENGINE-44).
+/// The source each `firstOf` of a step's body took when the step was
+/// started.
 pub(crate) type ChosenSources = BTreeMap<FirstOfBinding, ResolvedOutputSource>;
 
 impl ValidatedStep {
@@ -422,7 +440,7 @@ fn chosen_source(
 
 impl ValidatedCommandStep {
     /// The step with each `firstOf` input replaced by the source the reducer chose for it, so
-    /// the input is materialized as a single reference's (INV-ENGINE-44).
+    /// the input is materialized as a single reference's.
     pub(crate) fn with_chosen_sources(&self, chosen: &ChosenSources) -> Cow<'_, Self> {
         if chosen.is_empty() {
             return Cow::Borrowed(self);
@@ -443,7 +461,7 @@ impl ValidatedCommandStep {
 
 impl ValidatedAgentStep {
     /// The step with each `firstOf` message entry replaced by the source the reducer chose
-    /// for it, so the entry is read as a single reference's (INV-ENGINE-44).
+    /// for it, so the entry is read as a single reference's.
     pub(crate) fn with_chosen_sources(&self, chosen: &ChosenSources) -> Cow<'_, Self> {
         if chosen.is_empty() {
             return Cow::Borrowed(self);
@@ -481,8 +499,8 @@ impl ResolvedOutputSource {
 }
 
 /// The sources an export or the outcome takes its value from, in written order: one for a
-/// single reference, two to sixteen for a `firstOf` (REQ-WFFORMAT-107, REQ-WFFORMAT-108). It
-/// is never empty, and every source has the kind of the first (REQ-WFFORMAT-106).
+/// single reference, two to sixteen for a `firstOf`. It is never empty, and every source has
+/// the kind of the first.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutputSources {
     first: ResolvedOutputSource,
@@ -523,9 +541,9 @@ impl OutputSources {
         self.first.value_type
     }
 
-    /// The source the value resolves to once the run has ended (INV-ENGINE-45): the source
-    /// the choice takes, or else the first that neither succeeded nor was skipped, or the
-    /// first source when every source was skipped. `None` while a source is not terminal.
+    /// The source the value resolves to once the run has ended: the source the choice
+    /// takes, or else the first that neither succeeded nor was skipped, or the first
+    /// source when every source was skipped. `None` while a source is not terminal.
     pub(crate) fn settled_source(
         &self,
         ended: impl Fn(&ResolvedOutputSource) -> SourceEnd,
@@ -540,7 +558,7 @@ impl OutputSources {
     }
 }
 
-/// How the step of a `firstOf` source stands, as the choice reads it (INV-ENGINE-44).
+/// How the step of a `firstOf` source stands, as the choice reads it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceEnd {
     /// The step has not reached a terminal state.
@@ -553,8 +571,7 @@ pub(crate) enum SourceEnd {
     Unsupplied,
 }
 
-/// How a `firstOf` stands, from the node states of its sources alone (REQ-WFCOND-45,
-/// REQ-WFCOND-46, INV-ENGINE-44).
+/// How a `firstOf` stands, from the node states of its sources alone.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FirstOfChoice<'a> {
     /// A source has not reached a terminal state.
@@ -568,8 +585,8 @@ pub(crate) enum FirstOfChoice<'a> {
     Blocked(Vec<&'a ResolvedOutputSource>),
 }
 
-/// The choice of a `firstOf` (INV-ENGINE-44), the one rule a step's body, an export and the
-/// archived view apply; `ended` answers how each source's step stands.
+/// The choice of a `firstOf`, the one rule a step's body, an export and the archived view
+/// apply; `ended` answers how each source's step stands.
 pub(crate) fn choose_first_of<'a, Sources>(
     sources: Sources,
     ended: impl Fn(&ResolvedOutputSource) -> SourceEnd,

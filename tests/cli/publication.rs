@@ -123,7 +123,6 @@ fn gitlab_publication_body() -> serde_json::Value {
     body
 }
 
-// REQ-PUBLISH-75, REQ-PUBLISH-76
 #[test]
 fn publication_commands_decode_gitlab_and_reject_mixed_variants() {
     let body = gitlab_publication_body();
@@ -182,7 +181,7 @@ fn publication_commands_decode_gitlab_and_reject_mixed_variants() {
     }
 }
 
-// REQ-PUBLISH-75, REQ-PUBLISH-76: command, list and run readers share this decoder.
+// Command, list and run readers share this decoder.
 #[test]
 fn gitlab_failure_phases_are_provider_specific() {
     let mut failed = gitlab_publication_body();
@@ -479,7 +478,6 @@ fn assert_no_publication_secret(output: &Output, secrets: &[&str]) {
     }
 }
 
-// REQ-PUBLISH-57
 #[test]
 fn publication_timeout_requires_wait_on_create_and_show() {
     for args in [
@@ -633,7 +631,6 @@ fn publication_commands_use_only_the_explicit_service_api_key() {
     )));
 }
 
-// REQ-PUBLISH-13, REQ-PUBLISH-54
 #[test]
 fn publication_create_sends_the_closed_request_and_renders_plain_and_json_receipts() {
     for json in [false, true] {
@@ -707,8 +704,8 @@ fn publication_create_sends_the_closed_request_and_renders_plain_and_json_receip
     }
 }
 
-// REQ-PUBLISH-54, REQ-LOCALRUN-309: `--run` naming a subject is the run the runs listing names
-// for it, in the organization in effect, and the publication is created for that run.
+// `--run` naming a subject is the run the runs listing names for it, in the organization in
+// effect, and the publication is created for that run.
 #[test]
 fn publication_create_of_a_subject_finds_the_run_in_the_runs_listing() {
     use super::run_command::workflow_run_show::{listing_route, page, row};
@@ -761,7 +758,6 @@ fn publication_create_of_a_subject_finds_the_run_in_the_runs_listing() {
     )));
 }
 
-// REQ-PUBLISH-87, REQ-PUBLISH-92, REQ-PUBLISH-95
 #[test]
 fn publication_create_existing_target_sends_selection_and_reads_retained_binding() {
     let mut body = publication_body();
@@ -795,8 +791,8 @@ fn publication_create_existing_target_sends_selection_and_reads_retained_binding
     );
 }
 
-// REQ-PUBLISH-91: an existing-target path refusal is a branch-phase failure,
-// not an invalid server response, on every publication read path.
+// An existing-target path refusal is a branch-phase failure, not an invalid
+// server response, on every publication read path.
 #[test]
 fn existing_target_workflow_policy_failure_is_readable() {
     let mut failed = publication_history().remove(3);
@@ -859,7 +855,6 @@ fn existing_target_workflow_policy_failure_is_readable() {
     }
 }
 
-// REQ-PUBLISH-54
 #[test]
 fn publication_create_wait_classifies_every_stored_terminal_outcome() {
     let mut terminal = [
@@ -934,8 +929,6 @@ fn publication_create_wait_completes_from_a_terminal_acceptance_without_an_item_
     )));
 }
 
-// REQ-DIAG-27, REQ-DIAG-30, REQ-DIAG-32
-// REQ-PUBLISH-56
 #[test]
 fn publication_show_renders_a_stored_failure_as_a_successful_read() {
     for json in [false, true] {
@@ -995,7 +988,6 @@ fn publication_show_renders_a_stored_failure_as_a_successful_read() {
     }
 }
 
-// REQ-PUBLISH-56
 #[test]
 fn publication_show_wait_reports_every_stored_terminal_outcome_as_a_successful_read() {
     let mut terminal = [
@@ -1202,8 +1194,6 @@ fn publication_show_wait_rejects_a_malformed_observation_without_partial_output(
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-DIAG-27
-// REQ-PUBLISH-59
 #[test]
 fn publication_list_requests_and_renders_exactly_one_bounded_page() {
     for json in [false, true] {
@@ -1367,7 +1357,6 @@ fn publication_plain_reads_escape_remote_text_and_redact_receipt_url_secrets() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-DIAG-31
 #[test]
 fn publication_reads_reject_malformed_or_private_response_shapes() {
     let signed_url = "https://storage.example.test/private?X-Amz-Credential=private-evidence&X-Amz-Signature=unique-signature";
@@ -1446,7 +1435,6 @@ fn publication_reads_reject_malformed_or_private_response_shapes() {
     }
 }
 
-// REQ-PUBLISH-55
 #[test]
 fn generated_key_is_reused_across_authentication_and_transport_retries() {
     let mut replayed = publication_body();
@@ -1606,7 +1594,6 @@ fn publication_create_rejects_malformed_success_without_partial_success_output()
     }
 }
 
-// REQ-PUBLISH-60
 #[test]
 fn publication_failures_use_registered_exits_and_redact_response_details() {
     let unauthenticated = run(&create_args(true, true));
@@ -1662,7 +1649,6 @@ fn publication_failures_use_registered_exits_and_redact_response_details() {
     server.finish();
 }
 
-// REQ-PUBLISH-58
 #[test]
 fn ambiguous_creation_preserves_the_generated_key_when_refresh_loses_authentication() {
     for json in [false, true] {
@@ -1772,7 +1758,6 @@ fn post_dispatch_session_protocol_failure_emits_one_recovery_document() {
     assert!(requests[2].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
 }
 
-// REQ-PUBLISH-57, REQ-PUBLISH-65
 #[cfg(target_os = "linux")]
 #[test]
 fn create_wait_timeout_and_signal_after_acceptance_stop_only_observation() {
@@ -1981,7 +1966,6 @@ fn signal_during_session_acquisition_emits_no_false_publication_receipt() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-PUBLISH-24
 #[test]
 fn publication_targets_require_the_exact_accepted_branch_version() {
     for (version, prefix, valid) in [

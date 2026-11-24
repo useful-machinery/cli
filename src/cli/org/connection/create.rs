@@ -1,6 +1,5 @@
-//! `useful org integration connect`: connects a provider to the organization (REQ-CONNECTION-17,
-//! REQ-CONNECTION-40, REQ-CONNECTION-56), or stores the organization's token of a token service
-//! (REQ-INTEGRATION-16, REQ-INTEGRATION-17).
+//! `useful org integration connect`: connects a provider to the organization, or stores the
+//! organization's token of a token service.
 use std::path::PathBuf;
 
 use anyhow::anyhow;
@@ -20,7 +19,7 @@ pub(super) const ABOUT: &str =
     "Connect a provider to the organization, or store its token of a token service";
 /// The help of `--from-file`, which `connect` and `reconnect` share.
 pub(super) const FROM_FILE_HELP: &str = "Read the organization's token of a token service from an owned mode-0600 file, or - for standard input";
-const AFTER_HELP: &str = "Providers:\n  github prints the URL to open to install the GitHub App. The page GitHub returns to shows\n  the installation ID; then complete the connection with it:\n    useful org integration connect github --installation <INSTALLATION_ID>\n  gitlab creates a connection, stages the token --token-file names, waits for GitLab to\n  verify it, asks for the verified identity to be confirmed and activates it. Without a\n  terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  linear prints the URL to open to approve a Linear workspace and waits for the approval\n  unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
+const AFTER_HELP: &str = "Providers:\n  github lists the organization's installations, begins a setup session and prints the URL\n  to open to install the GitHub App and the URL to open to prove at GitHub which account you\n  are, opening the latter where this machine has a browser. It then waits for the proof and\n  completes the installation it can, or the one --installation names, unless --no-wait is\n  given. Show the session:\n    useful org integration show SESSION\n  gitlab creates a connection, stages the token --token-file names, waits for GitLab to\n  verify it, asks for the verified identity to be confirmed and activates it. Without a\n  terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  linear prints the URL to open to approve a Linear workspace and waits for the approval\n  unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -39,7 +38,7 @@ pub(super) struct Command {
         long,
         value_name = "ID",
         value_parser = github::installation_id,
-        help = "Complete a GitHub connection for this decimal GitHub installation ID"
+        help = "Complete the GitHub setup for this decimal GitHub installation ID once it is verified"
     )]
     installation: Option<String>,
 
@@ -114,10 +113,10 @@ impl Command {
                 ),
                 (instance.given(), &[Provider::Gitlab]),
                 (gitlab.given(), &[Provider::Gitlab]),
-                (linear.given(), &[Provider::Linear]),
+                (linear.state_updates_given(), &[Provider::Linear]),
                 (
-                    wait.timeout.is_some().then_some("--timeout"),
-                    &[Provider::Gitlab, Provider::Linear],
+                    linear.no_wait().then_some("--no-wait"),
+                    &[Provider::Github, Provider::Linear],
                 ),
             ],
         ) {
@@ -125,11 +124,15 @@ impl Command {
         }
         match provider {
             Provider::Github => {
+                let no_wait = linear.no_wait();
                 target::execute_in(org, options, deployment, |options, organization| {
-                    match installation {
-                        None => github::begin(deployment, &options, organization),
-                        Some(id) => github::complete(deployment, &options, organization, &id),
-                    }
+                    github::connect(
+                        deployment,
+                        options,
+                        organization,
+                        installation.as_deref(),
+                        (no_wait, wait.timeout),
+                    )
                 })
             }
             Provider::Gitlab => {
@@ -162,10 +165,10 @@ impl Command {
 }
 
 impl Command {
-    /// Stores the organization's token of `service` (REQ-INTEGRATION-16, REQ-INTEGRATION-17):
-    /// the options of a connection are refused with exit 2 before any request, then the
-    /// providers the deployment serves are read, and a name it serves as no token service is
-    /// refused with exit 2, naming those it does, before any token is read.
+    /// Stores the organization's token of `service`: the options of a connection are refused
+    /// with exit 2 before any request, then the providers the deployment serves are read, and
+    /// a name it serves as no token service is refused with exit 2, naming those it does,
+    /// before any token is read.
     fn connect_token(self, deployment: &Deployment, service: &str) -> CommandResult {
         let unsuited = [
             self.installation.is_some().then_some("--installation"),

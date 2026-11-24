@@ -1,5 +1,4 @@
-# A definition rule names a literal definition where a binding reference is expected
-# (REQ-WFDEF-39, REQ-WFFORMAT-82).
+# A definition rule names a literal definition where a binding reference is expected.
 schemaVersion: 1
 inputs:
   ticket:

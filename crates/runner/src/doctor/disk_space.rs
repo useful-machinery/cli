@@ -11,10 +11,9 @@ use crate::telemetry::io_error_class;
 /// How the check reads a disk: `useful_execution::read_disk_space` outside its tests.
 type DiskReader = fn(&Path) -> io::Result<DiskSpace>;
 
-/// `environment.disk-space` (REQ-RUNNERENROLL-153): reads the disk the configured work
-/// root is on by the rule the serving runner uses (REQ-RUNNERENROLL-152) and judges it
-/// against the configured minimum. It asks neither Cloud nor a serving runner, reads no
-/// runner state and creates nothing.
+/// `environment.disk-space`: reads the disk the configured work root is on by the rule
+/// the serving runner uses and judges it against the configured minimum. It asks
+/// neither Cloud nor a serving runner, reads no runner state and creates nothing.
 pub(super) struct DiskSpaceCheck {
     config: Option<OperatorConfigSource>,
     read: DiskReader,
@@ -191,7 +190,6 @@ mod tests {
             .map(|key| outcome.details.get(key).map(String::as_str))
     }
 
-    // REQ-RUNNERENROLL-153
     #[test]
     fn the_check_passes_at_the_minimum_and_fails_a_byte_below_it() {
         let root = tempfile::tempdir().unwrap();
@@ -219,7 +217,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-153
     #[test]
     fn the_check_reads_the_runner_homes_configuration() {
         let root = tempfile::tempdir().unwrap();
@@ -235,7 +232,6 @@ mod tests {
         assert_eq!(read_path().as_deref(), Some(work_root.as_path()));
     }
 
-    // REQ-RUNNERENROLL-153
     #[test]
     fn an_unreadable_disk_fails_with_its_class_and_no_path() {
         let root = tempfile::tempdir().unwrap();
@@ -253,7 +249,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-153
     #[test]
     fn the_check_fails_without_a_configuration_it_can_load() {
         let root = tempfile::tempdir().unwrap();

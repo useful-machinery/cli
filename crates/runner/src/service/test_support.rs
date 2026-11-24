@@ -52,10 +52,10 @@ pub(crate) type FixtureSocket = WebSocketStream<TcpStream>;
 const INTERNAL_WORKER_EXECUTABLE_VARIABLE: &str = "USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE";
 
 /// The built `internal-worker` example that guards every command step a runner test
-/// executes, as `cli/scripts/check-suite` exports it. Without it the execution crate
-/// takes the example beside this test binary, never the binary itself (INV-TESTING-20),
-/// and `cargo test -p useful-runner` does not build that example, so every step would fail
-/// at launch. A runner fixture therefore refuses to exist while the variable is unset,
+/// executes, as `cli/scripts/check-suite` exports it. Without it the execution crate takes
+/// the example beside this test binary, never the binary itself, and
+/// `cargo test -p useful-runner` does not build that example, so every step would fail at
+/// launch. A runner fixture therefore refuses to exist while the variable is unset,
 /// failing once with the build command before any step can launch.
 pub(crate) fn require_internal_worker_executable() -> PathBuf {
     let Some(worker) = std::env::var_os(INTERNAL_WORKER_EXECUTABLE_VARIABLE) else {
@@ -168,10 +168,11 @@ impl Deref for ConfigFixture {
 }
 
 /// Bounds a runner test's awaited wait against hangs on `FIXTURE_WAIT_BASE`, scaled by the
-/// host's load (INV-TESTING-26). The case is the call site (`file:line`), and an expiry is
-/// returned as an error that every call site prints, through `unwrap` or `expect` or in its
-/// own panic message. A plain function, not an `async fn`, so the body is heap-pinned
-/// before this wrapper's state exists (chapter 19, "Load-sensitive bounds").
+/// host's load. The case is the call site (`file:line`), and an expiry is returned as an
+/// error that every call site prints, through `unwrap` or `expect` or in its own panic
+/// message. A plain function, not an `async fn`, so the body is heap-pinned before this
+/// wrapper's state exists and an unoptimized build's copies of that state stay
+/// pointer-sized rather than crossing the test thread's stack once per wrapper.
 #[track_caller]
 pub(crate) fn with_watchdog<F: Future>(
     future: F,
@@ -1112,6 +1113,10 @@ pub(crate) const FAKE_GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abc";
 /// The integration token the fake Cloud issues a token service's tokens
 /// from when a test asks it to.
 pub(crate) const FAKE_INTEGRATION_TOKEN_ID: &str = "itk_01k0z6r1w8f4jy2m7q9v3x5abc";
+/// The connection authorization the fake Cloud issues `github`'s tokens
+/// under when a test asks it to: the organization's GitHub App
+/// installation an owner authorized for the run.
+pub(crate) const FAKE_CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
 /// Text in every grant token the fake Cloud issues, which no output but the
 /// token file may hold.
 pub(crate) const FAKE_GRANT_TOKEN_SENTINEL: &str = "grant-token-sentinel";
@@ -1163,9 +1168,10 @@ pub(crate) enum FakeGrantToken {
     /// Issues `fake_grant_token` from `FAKE_INTEGRATION_TOKEN_ID` at this
     /// version, as Cloud issues a token service's token.
     IssueIntegrationToken(u64),
-    /// Issues `fake_grant_token` from this grant or integration token ID at
-    /// this generation, as Cloud issues the token of a grant or token other
-    /// than the one a runner holds.
+    /// Issues `fake_grant_token` under this grant, connection authorization
+    /// or integration token ID at this generation, as Cloud issues the token
+    /// of an issuer other than the one a runner holds; an ID the provider
+    /// does not take is answered as an invalid answer.
     IssueFrom(&'static str, u64),
     Fail(GrantTokenFailure),
 }
@@ -1458,8 +1464,6 @@ impl AgentLoginCloud for FakeAgentLoginCloud {
         answered
     }
 
-    fn follow_credential(&self, _endpoint: &url::Url, _runner_credential: &Credential) {}
-
     fn delivery(&self, request: &DeliveryRequest) -> Result<Delivery, DeliveryFailure> {
         self.deliveries.fetch_add(1, Ordering::SeqCst);
         if let Some(failure) = *self
@@ -1509,8 +1513,14 @@ impl AgentLoginCloud for FakeAgentLoginCloud {
             FakeGrantToken::IssueFrom(grant_id, generation) => (grant_id, generation),
             FakeGrantToken::Fail(failure) => return Err(failure),
         };
+        // The ID is read as the client reads Cloud's: one the provider does
+        // not take is an answer the runner cannot trust.
+        let issuer = request
+            .provider
+            .issuer(grant_id.to_owned())
+            .ok_or(GrantTokenFailure::Cloud(CloudFailure::InvalidResponse))?;
         Ok(IssuedToken {
-            grant_id: grant_id.to_owned(),
+            issuer,
             generation,
             access_token: GrantAccessToken::new(
                 fake_grant_token(request.provider.clone(), generation).as_bytes(),
@@ -1743,7 +1753,6 @@ pub(crate) fn step_execution_transition(
 mod tests {
     use super::*;
 
-    // INV-TESTING-26
     #[tokio::test]
     async fn watchdog_names_its_call_site_and_returns_the_case_output() {
         let location = Location::caller();
@@ -1981,6 +1990,7 @@ case "$1 $2 $3" in
   ;;
 "workflow run create")
   printf '%s\n' "$@" > "$log/create.args"
+  ls -A "$6" > "$log/create.workspace" || exit 1
   env > "$log/create.env"
   if [ -e "$log/unlaunchable" ]; then rm -f "$0"; fi
   if [ -d "$log/git-home" ]; then
@@ -2289,6 +2299,450 @@ esac
         )
     }
 
+    #[derive(Default)]
+    pub(in crate::service) enum RecordFault {
+        #[default]
+        None,
+        DropStored {
+            reconnect: bool,
+        },
+        Close(usize),
+        Status(u16),
+        Answer(Value),
+        // The holder releases the answer by sending or dropping the sender.
+        HoldCommit(std::sync::mpsc::Receiver<()>),
+        HoldRunState(&'static str, std::sync::mpsc::Receiver<()>),
+        NeverAnswer(Arc<Mutex<std::sync::mpsc::Receiver<()>>>),
+    }
+
+    pub(in crate::service) struct RecordRequest {
+        pub(in crate::service) target: String,
+        pub(in crate::service) headers: Vec<(String, String)>,
+        pub(in crate::service) body: Vec<u8>,
+    }
+
+    #[derive(Default)]
+    pub(in crate::service) struct RecordState {
+        pub(in crate::service) requests: Vec<RecordRequest>,
+        pub(in crate::service) objects: std::collections::BTreeMap<String, Vec<u8>>,
+        reservations: std::collections::BTreeMap<String, u64>,
+        confirmed: std::collections::BTreeSet<String>,
+        kept: Option<(u64, String)>,
+        pub(in crate::service) dropped_store: Option<Vec<u8>>,
+        pub(in crate::service) answered_store: Option<Vec<u8>>,
+        pub(in crate::service) disconnected: bool,
+        pub(in crate::service) closed_requests: usize,
+        pub(in crate::service) duplicate_put: bool,
+        pub(in crate::service) requested_held: bool,
+        fault: RecordFault,
+    }
+
+    impl RecordState {
+        pub(in crate::service) fn set_fault(&mut self, fault: RecordFault) {
+            self.fault = fault;
+        }
+
+        pub(in crate::service) fn kept_manifest(&self) -> Option<(u64, Value)> {
+            let (sequence, digest) = self.kept.as_ref()?;
+            Some((
+                *sequence,
+                serde_json::from_slice(&self.objects[digest]).unwrap(),
+            ))
+        }
+
+        fn kept_json(&self, path: &str) -> Option<Value> {
+            let (_, manifest) = self.kept_manifest()?;
+            let entry = manifest["entries"]
+                .as_array()?
+                .iter()
+                .find(|file| file["path"] == path)?;
+            serde_json::from_slice(self.objects.get(entry["sha256"].as_str()?)?).ok()
+        }
+
+        pub(in crate::service) fn kept_run_state(&self) -> Option<String> {
+            self.kept_json("run.json")?["state"]
+                .as_str()
+                .map(str::to_owned)
+        }
+
+        pub(in crate::service) fn kept_step_succeeded(&self, id: &str) -> bool {
+            self.kept_json("state.json").is_some_and(|progress| {
+                progress["attempts"][0]["progress"]["steps"]
+                    .as_array()
+                    .is_some_and(|steps| {
+                        steps
+                            .iter()
+                            .any(|step| step["id"] == id && step["state"] == "succeeded")
+                    })
+            })
+        }
+
+        pub(in crate::service) fn repeated_store(&self) -> bool {
+            let mut commits = std::collections::BTreeSet::new();
+            self.requests
+                .iter()
+                .filter(|r| r.target.ends_with("/commit"))
+                .any(|r| !commits.insert(&r.body))
+        }
+
+        fn read_record(
+            &self,
+            address: std::net::SocketAddr,
+            method: &str,
+            request: &RecordRequest,
+        ) -> Option<(u16, &'static str, Vec<u8>)> {
+            let json_reply =
+                |value: Value| (200, "application/json", serde_json::to_vec(&value).unwrap());
+            let target = request.target.split('?').next().unwrap();
+            let path: Vec<_> = target.trim_start_matches('/').split('/').collect();
+            match (method, path.as_slice()) {
+                ("GET", ["objects", digest]) => Some(match self.objects.get(*digest) {
+                    Some(bytes) => (200, "application/octet-stream", bytes.clone()),
+                    None => (404, "application/octet-stream", vec![]),
+                }),
+                ("GET", ["v1", "organizations", _, "runs", run, "record"]) => {
+                    let Some((sequence, digest)) = &self.kept else {
+                        let problem = json!({
+                            "status": 404, "title": "No kept run record",
+                            "type": "https://api.usefulmachinery.com/problems/run-record-absent"
+                        });
+                        return Some((
+                            404,
+                            "application/problem+json",
+                            serde_json::to_vec(&problem).unwrap(),
+                        ));
+                    };
+                    let manifest = &self.objects[digest];
+                    let index: Value = serde_json::from_slice(manifest).unwrap();
+                    let sizes = index["entries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|file| file["sizeBytes"].as_u64());
+                    Some(json_reply(json!({
+                        "runId": run, "engineRunId": index["run"], "attemptNumber": 1,
+                        "sequence": sequence, "manifest": {"sha256": digest, "sizeBytes": manifest.len()},
+                        "fileCount": sizes.clone().count(), "totalSizeBytes": sizes.sum::<u64>(),
+                        "storedAt": "2026-11-10T12:05:00Z", "expiresAt": null
+                    })))
+                }
+                (
+                    "POST",
+                    [
+                        "v1",
+                        "organizations",
+                        _,
+                        "runs",
+                        _,
+                        "record",
+                        "download-capabilities",
+                    ],
+                ) => {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    let mut files = vec![];
+                    for file in body["files"].as_array().unwrap() {
+                        let digest = file.as_str().unwrap();
+                        let Some(bytes) = self.objects.get(digest) else {
+                            return Some((409, "application/json", vec![]));
+                        };
+                        files.push(json!({
+                            "sha256": digest, "sizeBytes": bytes.len(),
+                            "url": format!("http://{address}/objects/{digest}?signed=yes")
+                        }));
+                    }
+                    Some(json_reply(
+                        json!({"files": files, "capabilityExpiresAt": "2999-01-01T00:00:00Z"}),
+                    ))
+                }
+                _ => None,
+            }
+        }
+
+        fn respond(
+            &mut self,
+            address: std::net::SocketAddr,
+            request: &RecordRequest,
+        ) -> (u16, Value) {
+            if let RecordFault::Status(status) = self.fault {
+                return (status, Value::Null);
+            }
+            if let RecordFault::Answer(value) = &self.fault {
+                return (200, value.clone());
+            }
+            if let Some(key) = request.target.strip_prefix("/objects/") {
+                assert_eq!(sha256_hex(&request.body), key);
+                assert_eq!(self.reservations[key], request.body.len() as u64);
+                if self.objects.contains_key(key) {
+                    self.duplicate_put = true;
+                    return (412, Value::Null);
+                }
+                self.objects.insert(key.to_owned(), request.body.clone());
+                return (200, Value::Null);
+            }
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            if request.target.ends_with("/upload-capabilities") {
+                let files = body["files"].as_array().unwrap().iter().map(|file| {
+                    let key = file["sha256"].as_str().unwrap();
+                    let size = file["sizeBytes"].as_u64().unwrap();
+                    self.reservations.insert(key.into(),size);
+                    let mut file = file.clone();
+                    let held = self.confirmed.contains(key);
+                    file["held"] = held.into();
+                    self.requested_held |= held;
+                    if !held {
+                        file["url"] = format!("http://{address}/objects/{key}").into();
+                        file["headers"] = json!({"If-None-Match":"*", "Content-Length":size.to_string(), "Content-Type":"application/octet-stream"});
+                    }
+                    file
+                }).collect::<Vec<_>>();
+                return (
+                    200,
+                    json!({"schemaVersion":1,"outcome":"issued","capabilityExpiresAt":"2099-01-01T00:00:00Z","files":files}),
+                );
+            }
+            assert!(request.target.ends_with("/commit"));
+            let sequence = body["sequence"].as_u64().unwrap();
+            let digest = body["manifest"]["sha256"].as_str().unwrap();
+            if let Some((kept, key)) = &self.kept {
+                if *kept > sequence {
+                    return (
+                        200,
+                        json!({"outcome":"superseded","schemaVersion":1,"keptSequence":kept}),
+                    );
+                }
+                if *kept == sequence && key != digest {
+                    return (
+                        200,
+                        json!({"outcome":"refused","schemaVersion":1,"reason":"sequence_reused"}),
+                    );
+                }
+            }
+            let mut files = vec![body["manifest"].clone()];
+            if let Some(bytes) = self.objects.get(digest) {
+                let manifest: Value = serde_json::from_slice(bytes).unwrap();
+                files.extend(
+                    manifest["entries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|f| f["kind"] == "file")
+                        .map(|f| json!({"sha256":f["sha256"],"sizeBytes":f["sizeBytes"]})),
+                );
+            }
+            let mut missing = Vec::new();
+            for file in files {
+                let key = file["sha256"].as_str().unwrap();
+                if self
+                    .objects
+                    .get(key)
+                    .is_some_and(|b| Some(b.len() as u64) == file["sizeBytes"].as_u64())
+                {
+                    self.confirmed.insert(key.to_owned());
+                } else {
+                    missing.push(file);
+                }
+            }
+            if !missing.is_empty() {
+                return (
+                    200,
+                    json!({"schemaVersion":1,"outcome":"incomplete","missingCount":missing.len(),"missing":missing}),
+                );
+            }
+            self.kept = Some((sequence, digest.into()));
+            (
+                200,
+                json!({"schemaVersion":1,"outcome":"stored","sequence":sequence,"storedAt":"2026-11-10T12:05:00Z"}),
+            )
+        }
+    }
+
+    pub(in crate::service) struct RecordGateway {
+        pub(in crate::service) endpoint: Url,
+        pub(in crate::service) state: Arc<Mutex<RecordState>>,
+        address: std::net::SocketAddr,
+        stopped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    fn write_record_response(
+        mut connection: std::net::TcpStream,
+        status: u16,
+        content_type: &str,
+        body: &[u8],
+    ) {
+        if write!(connection, "HTTP/1.1 {status} Answer\r\nContent-Type: {content_type}\r\nCache-Control: private, no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).is_ok() {
+            let _ = connection.write_all(body);
+        }
+    }
+
+    impl RecordGateway {
+        pub(in crate::service) fn api_url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        pub(in crate::service) fn new(fault: RecordFault) -> Self {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = Arc::new(Mutex::new(RecordState {
+                fault,
+                ..Default::default()
+            }));
+            let server_state = state.clone();
+            let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop = stopped.clone();
+            std::thread::spawn(move || {
+                for connection in listener.incoming().flatten() {
+                    if stop.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let server_state = server_state.clone();
+                    std::thread::spawn(move || {
+                        let mut reader = BufReader::new(connection);
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        let mut parts = line.split_whitespace().map(str::to_owned);
+                        let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+                            return;
+                        };
+                        let mut headers = vec![];
+                        let mut length = 0;
+                        loop {
+                            line.clear();
+                            if reader.read_line(&mut line).unwrap() == 0 {
+                                return;
+                            }
+                            if line == "\r\n" {
+                                break;
+                            }
+                            let (k, v) = line.trim_end().split_once(':').unwrap();
+                            let v = v.trim();
+                            if k.eq_ignore_ascii_case("content-length") {
+                                length = v.parse().unwrap();
+                            }
+                            headers.push((k.to_ascii_lowercase(), v.to_string()));
+                        }
+                        let mut body = vec![0; length];
+                        reader.read_exact(&mut body).unwrap();
+                        let request = RecordRequest {
+                            target,
+                            headers,
+                            body,
+                        };
+                        let mut state = server_state.lock().unwrap();
+                        if let Some((status, content_type, body)) =
+                            state.read_record(address, &method, &request)
+                        {
+                            drop(state);
+                            write_record_response(reader.into_inner(), status, content_type, &body);
+                            return;
+                        }
+                        assert!(
+                            matches!(
+                                (method.as_str(), request.target.as_str()),
+                                (
+                                    "POST",
+                                    "/v1/runner/run-records/upload-capabilities"
+                                        | "/v1/runner/run-records/commit"
+                                )
+                            ) || method == "PUT" && request.target.starts_with("/objects/")
+                        );
+                        if let RecordFault::Close(n) = &mut state.fault
+                            && *n > 0
+                        {
+                            *n -= 1;
+                            state.closed_requests += 1;
+                            state.requests.push(request);
+                            return;
+                        }
+                        if let RecordFault::NeverAnswer(wait) = &state.fault {
+                            let wait = Arc::clone(wait);
+                            state.requests.push(request);
+                            drop(state);
+                            let connection = reader.into_inner();
+                            connection
+                                .set_read_timeout(Some(std::time::Duration::from_millis(20)))
+                                .unwrap();
+                            while matches!(
+                                wait.lock().unwrap().try_recv(),
+                                Err(std::sync::mpsc::TryRecvError::Empty)
+                            ) {
+                                match connection.peek(&mut [0]) {
+                                    Err(e)
+                                        if matches!(
+                                            e.kind(),
+                                            std::io::ErrorKind::TimedOut
+                                                | std::io::ErrorKind::WouldBlock
+                                        ) =>
+                                    {
+                                        continue;
+                                    }
+                                    _ => {
+                                        server_state.lock().unwrap().disconnected = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                        let (status, value) = state.respond(address, &request);
+                        let stored = value["outcome"] == "stored";
+                        if stored && let RecordFault::DropStored { reconnect } = state.fault {
+                            // Cutting subsequent connections here prevents an acknowledgement from
+                            // racing the test's observation of the durable commit.
+                            state.fault = if reconnect {
+                                RecordFault::None
+                            } else {
+                                RecordFault::Close(usize::MAX)
+                            };
+                            state.dropped_store = Some(request.body.clone());
+                            state.requests.push(request);
+                            return;
+                        }
+                        if stored {
+                            state.answered_store = Some(request.body.clone());
+                        }
+                        state.requests.push(request);
+                        let wait = stored
+                            && match &state.fault {
+                                RecordFault::HoldCommit(_) => true,
+                                RecordFault::HoldRunState(expected, _) => {
+                                    state.kept_run_state().as_deref() == Some(*expected)
+                                }
+                                _ => false,
+                            };
+                        let fault = wait.then(|| std::mem::take(&mut state.fault));
+                        drop(state);
+                        if let Some(
+                            RecordFault::HoldCommit(rx) | RecordFault::HoldRunState(_, rx),
+                        ) = fault
+                        {
+                            let _ = rx.recv();
+                        }
+                        let bytes = serde_json::to_vec(&value).unwrap();
+                        write_record_response(
+                            reader.into_inner(),
+                            status,
+                            "application/json",
+                            &bytes,
+                        );
+                    });
+                }
+            });
+            Self {
+                endpoint: Url::parse(&format!("ws://{address}/v1/runner/connect")).unwrap(),
+                state,
+                address,
+                stopped,
+            }
+        }
+    }
+
+    impl Drop for RecordGateway {
+        fn drop(&mut self) {
+            self.stopped
+                .store(true, std::sync::atomic::Ordering::Release);
+            let _ = std::net::TcpStream::connect(self.address);
+        }
+    }
     const TREE_OFFER: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-workflow-tree.json"
@@ -2312,10 +2766,20 @@ esac
         payload["attemptNumber"] = json!(offer.attempt_number);
         let spec = &offer.execution_spec;
         let wire = &mut payload["executionSpec"];
-        wire["workflowDefinitionSource"]["commitOid"] =
-            json!(spec.workflow_definition_source.commit_oid);
-        wire["primaryWorkspaceSource"]["commitOid"] =
-            json!(spec.primary_workspace_source.commit_oid);
+        wire["workflowDefinitionSource"]["commitOid"] = json!(
+            spec.source
+                .as_ref()
+                .unwrap()
+                .workflow_definition_source
+                .commit_oid
+        );
+        wire["primaryWorkspaceSource"]["commitOid"] = json!(
+            spec.source
+                .as_ref()
+                .unwrap()
+                .primary_workspace_source
+                .commit_oid
+        );
         let tree = spec.workflow_tree.as_ref().unwrap();
         let wire = &mut wire["workflowTree"];
         wire["digest"] = json!(tree.digest);
@@ -2435,11 +2899,11 @@ esac
         )
         .unwrap();
         let broker = HttpTreeBroker::new(
-            &endpoint,
-            &test_credential(),
+            crate::runner_http::ServingTarget::new(
+                crate::runner_http::Target::new(&endpoint, &test_credential()).unwrap(),
+            ),
             "rbt_01k0z6r1w8f4jy2m7q9v3x5abe",
-        )
-        .unwrap();
+        );
         let environment = EnvironmentSnapshot::new(
             [
                 ("PATH", std::env::var_os("PATH").unwrap_or_default()),
@@ -2483,10 +2947,18 @@ esac
         };
         let mut execution_spec = *execution_spec;
         execution_spec
+            .source
+            .as_mut()
+            .unwrap()
             .workflow_definition_source
             .commit_oid
             .clone_from(&commit);
-        execution_spec.primary_workspace_source.commit_oid = commit;
+        execution_spec
+            .source
+            .as_mut()
+            .unwrap()
+            .primary_workspace_source
+            .commit_oid = commit;
         let tree = execution_spec.workflow_tree.as_mut().unwrap();
         tree.digest = TREE_DIGEST.to_owned();
         tree.workflow_path = "workflow.yaml".to_owned();

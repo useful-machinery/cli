@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -35,9 +35,9 @@ pub struct Run {
     pub current_attempt_id: String,
     #[serde(rename = "currentAttemptNumber")]
     pub current_attempt_number: i32,
-    /// Mutable branch name retained only as provenance.
-    #[serde(rename = "sourceBranch")]
-    pub source_branch: String,
+    /// Mutable branch name retained as provenance, or null for a run with no source.
+    #[serde(rename = "sourceBranch", deserialize_with = "Option::deserialize")]
+    pub source_branch: Option<String>,
     #[serde(rename = "workspaceSource", deserialize_with = "Option::deserialize")]
     pub workspace_source: Option<Box<models::WorkspaceSourceSelection>>,
     #[serde(rename = "workspaceBranch", deserialize_with = "Option::deserialize")]
@@ -47,8 +47,12 @@ pub struct Run {
         deserialize_with = "Option::deserialize"
     )]
     pub workspace_membership: Option<Box<models::WorkspaceMembership>>,
-    #[serde(rename = "workflowDefinitionSource")]
-    pub workflow_definition_source: Box<models::WorkflowDefinitionSource>,
+    /// Null for a run with no source.
+    #[serde(
+        rename = "workflowDefinitionSource",
+        deserialize_with = "Option::deserialize"
+    )]
+    pub workflow_definition_source: Option<Box<models::WorkflowDefinitionSource>>,
     /// The pinned definition revision; null for a run by `workflowPath`.
     #[serde(
         rename = "definition",
@@ -124,8 +128,12 @@ pub struct Run {
         skip_serializing_if = "Option::is_none"
     )]
     pub exits: Option<Option<Vec<models::RunWorkflowExit>>>,
-    #[serde(rename = "primaryWorkspaceSource")]
-    pub primary_workspace_source: Box<models::PrimaryWorkspaceSource>,
+    /// Null for a run with no source.
+    #[serde(
+        rename = "primaryWorkspaceSource",
+        deserialize_with = "Option::deserialize"
+    )]
+    pub primary_workspace_source: Option<Box<models::PrimaryWorkspaceSource>>,
     /// Immutable historical display labels observed when this run was accepted. They can become stale and never identify, authorize, or resolve a resource. Null is retained only for runs accepted before this snapshot contract.
     #[serde(
         rename = "sourceDisplaySnapshot",
@@ -177,12 +185,12 @@ impl Run {
         version: i64,
         current_attempt_id: String,
         current_attempt_number: i32,
-        source_branch: String,
+        source_branch: Option<String>,
         workspace_source: Option<models::WorkspaceSourceSelection>,
         workspace_branch: Option<String>,
         workspace_membership: Option<models::WorkspaceMembership>,
-        workflow_definition_source: models::WorkflowDefinitionSource,
-        primary_workspace_source: models::PrimaryWorkspaceSource,
+        workflow_definition_source: Option<models::WorkflowDefinitionSource>,
+        primary_workspace_source: Option<models::PrimaryWorkspaceSource>,
         source_display_snapshot: Option<models::SourceDisplaySnapshot>,
         inputs: models::RunInputSummary,
         integration_context: std::collections::HashMap<String, String>,
@@ -212,7 +220,7 @@ impl Run {
             workspace_source: workspace_source.map(Box::new),
             workspace_branch,
             workspace_membership: workspace_membership.map(Box::new),
-            workflow_definition_source: Box::new(workflow_definition_source),
+            workflow_definition_source: workflow_definition_source.map(Box::new),
             definition: None,
             subject_claim: None,
             owner: None,
@@ -223,7 +231,7 @@ impl Run {
             workflow_state: None,
             workflow_progress: None,
             exits: None,
-            primary_workspace_source: Box::new(primary_workspace_source),
+            primary_workspace_source: primary_workspace_source.map(Box::new),
             source_display_snapshot: source_display_snapshot.map(Box::new),
             inputs: Box::new(inputs),
             integration_context,

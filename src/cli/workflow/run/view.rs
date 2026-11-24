@@ -53,7 +53,7 @@ impl Command {
         let config = viewer_config(&self.presentation, TerminalCapabilities::detect());
         let mode = config.mode();
         let requested = match self.run.home_only().map_err(|mut error| {
-            // REQ-LOCALRUN-180: a Cloud run has nothing to view; `show` reads it.
+            // A Cloud run has nothing to view; `show` reads it.
             if error.code == super::super::RUN_NOT_FOUND {
                 error.message.push_str(
                     " A Cloud run has no viewer; read it with useful workflow run show RUN.",
@@ -62,7 +62,7 @@ impl Command {
             error
         }) {
             Ok(requested) => requested,
-            // REQ-LOCALRUN-180: a run id the home does not answer is a view `error` document.
+            // A run id the home does not answer is a view `error` document.
             Err(error) if mode == PresentationMode::Json => {
                 return write_noninteractive(
                     move || error.write_error_document(COMMAND),
@@ -209,7 +209,6 @@ fn load_error(requested: &Path, error: ArchivedAttemptLoadError) -> anyhow::Erro
 mod tests {
     use super::parse_attempt;
 
-    // REQ-LOCALRUN-153
     #[test]
     fn attempt_parser_accepts_only_positive_unsigned_decimal_values() {
         assert_eq!(parse_attempt("0002").unwrap().get(), 2);

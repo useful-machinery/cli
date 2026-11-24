@@ -59,9 +59,9 @@ pub fn request(socket_path: &Path, operation: Operation) -> Result<Response, Req
     decode_response(&response).map_err(RequestFailure::Protocol)
 }
 
-/// Asks the serving process for its overview (REQ-RUNNERENROLL-135). A serving process
-/// of an earlier release refuses the operation, which is answered as
-/// `OverviewAnswer::Refused`, not as a failure of the request.
+/// Asks the serving process for its overview. A serving process of an earlier release
+/// refuses the operation, which is answered as `OverviewAnswer::Refused`, not as a
+/// failure of the request.
 pub fn request_overview(socket_path: &Path) -> Result<OverviewAnswer, RequestFailure> {
     let response = exchange(
         socket_path,
@@ -73,9 +73,9 @@ pub fn request_overview(socket_path: &Path) -> Result<OverviewAnswer, RequestFai
 }
 
 /// Asks the serving process for one assignment it holds, the run `query` names and a
-/// step's output or the end of the run log (REQ-RUNNERENROLL-144). The request is written
-/// only when it fits its bound; a serving process of an earlier release refuses the
-/// operation, which is answered as `AssignmentAnswer::Refused`.
+/// step's output or the end of the run log. The request is written only when it fits its
+/// bound; a serving process of an earlier release refuses the operation, which is
+/// answered as `AssignmentAnswer::Refused`.
 pub fn request_assignment(
     socket_path: &Path,
     query: &AssignmentQuery,
@@ -91,9 +91,9 @@ pub fn request_assignment(
 }
 
 /// Asks the serving process what it keeps on the host and what a prune of `scope` would
-/// remove now (REQ-RUNNERENROLL-164). The answer waits for any pass in flight, so it is
-/// read with no timeout; a serving process of an earlier release refuses the operation,
-/// which is answered as `KeptAnswer::Refused`.
+/// remove now. The answer waits for any pass in flight, so it is read with no timeout;
+/// a serving process of an earlier release refuses the operation, which is answered as
+/// `KeptAnswer::Refused`.
 pub fn request_kept(socket_path: &Path, scope: PruneScope) -> Result<KeptAnswer, RequestFailure> {
     let response = exchange(
         socket_path,
@@ -104,10 +104,10 @@ pub fn request_kept(socket_path: &Path, scope: PruneScope) -> Result<KeptAnswer,
     decode_kept_response(&response).map_err(RequestFailure::Protocol)
 }
 
-/// Asks the serving process to prune what `scope` covers now (REQ-RUNNERENROLL-165). A
-/// pass takes as long as its file system does, so the answer is read with no timeout; a
-/// runner whose held run is working answers `PruneAnswer::Refused` with `runner_busy`, and
-/// one of an earlier release with `invalid_request`.
+/// Asks the serving process to prune what `scope` covers now. A pass takes as long as its
+/// file system does, so the answer is read with no timeout; a runner whose held run is
+/// working answers `PruneAnswer::Refused` with `runner_busy`, and one of an earlier
+/// release with `invalid_request`.
 pub fn request_prune(socket_path: &Path, scope: PruneScope) -> Result<PruneAnswer, RequestFailure> {
     let response = exchange(
         socket_path,
@@ -216,7 +216,7 @@ mod tests {
         (answered, server.join().unwrap())
     }
 
-    // REQ-RUNNERENROLL-135: the client asks by name and reads the overview answered.
+    // The client asks by name and reads the overview answered.
     #[test]
     fn an_overview_request_is_the_fixture_line_and_its_answer_decodes() {
         let idle = fixture("valid/overview-idle-response.json");
@@ -229,8 +229,8 @@ mod tests {
         assert_eq!(answered, Ok(decode_overview_response(&idle).unwrap()));
     }
 
-    // REQ-RUNNERENROLL-135: a serving process of an earlier release refuses the
-    // operation, which is an answer and not a failure of the request.
+    // A serving process of an earlier release refuses the operation, which is
+    // an answer and not a failure of the request.
     #[test]
     fn an_earlier_server_refuses_the_overview_with_invalid_request() {
         let (answered, _) = exchange(
@@ -242,7 +242,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-135: an answer the client cannot read is a protocol failure.
+    // An answer the client cannot read is a protocol failure.
     #[test]
     fn an_unreadable_overview_answer_is_a_protocol_failure() {
         let (answered, _) = exchange(b"{\"schemaVersion\":1,\"outcome\":\"overview\"}\n".to_vec());
@@ -252,8 +252,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-136: an overview answer past the bound of
-    // the other answers is read whole.
+    // An overview answer past the bound of the other answers is read whole.
     #[test]
     fn an_overview_answer_longer_than_the_status_bound_is_read_whole() {
         let Ok(OverviewAnswer::Overview(mut overview)) =
@@ -276,8 +275,8 @@ mod tests {
         assert_eq!(answered, Ok(OverviewAnswer::Overview(overview)));
     }
 
-    // REQ-RUNNERENROLL-164: the client writes the fixture's `kept` request line for its
-    // scope and reads the report answered.
+    // The client writes the fixture's `kept` request line for its scope and reads the
+    // report answered.
     #[test]
     fn a_kept_request_is_the_fixture_line_and_its_answer_decodes() {
         let answer = fixture("valid/kept-response.json");
@@ -288,9 +287,8 @@ mod tests {
         assert_eq!(answered, Ok(decode_kept_response(&answer).unwrap()));
     }
 
-    // REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-82: the client writes the fixture's `prune`
-    // request line for its scope and reads the result answered, or the refusal of a
-    // runner whose held run is working.
+    // The client writes the fixture's `prune` request line for its scope and reads the
+    // result answered, or the refusal of a runner whose held run is working.
     #[test]
     fn a_prune_request_is_the_fixture_line_and_its_answer_decodes() {
         let answer = fixture("valid/pruned-response.json");
@@ -320,8 +318,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-144: the client writes the fixture's request line for its query
-    // and reads an answer past the bound of the closed answers whole.
+    // The client writes the fixture's request line for its query and reads an answer
+    // past the bound of the closed answers whole.
     #[test]
     fn an_assignment_request_is_the_fixture_line_and_a_long_answer_is_read_whole() {
         let Ok(AssignmentAnswer::Assignment(mut detail)) =
@@ -342,8 +340,8 @@ mod tests {
         assert_eq!(answered, Ok(AssignmentAnswer::Assignment(detail)));
     }
 
-    // REQ-RUNNERENROLL-144: a serving process of an earlier release refuses the
-    // operation, which is an answer and not a failure of the request.
+    // A serving process of an earlier release refuses the operation, which is
+    // an answer and not a failure of the request.
     #[test]
     fn an_earlier_server_refuses_the_assignment_with_invalid_request() {
         let (answered, _) = exchange_with(
@@ -356,8 +354,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-144: a query whose request would pass the request bound is refused
-    // before the client connects, so nothing reaches the socket.
+    // A query whose request would pass the request bound is refused before the client
+    // connects, so nothing reaches the socket.
     #[test]
     fn an_assignment_request_past_its_bound_is_never_written() {
         let root = tempfile::tempdir_in("/tmp").unwrap();

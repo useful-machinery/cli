@@ -105,7 +105,9 @@ pub use workflow::document::RootBlocks;
 pub use workflow::document::{
     BindingKey, Integration, IntegrationAs, IntegrationBinding, IntegrationProvider,
 };
-pub use workflow::document::{BusyBehavior, OwnerDeclaration, OwnerSource, StopBefore};
+pub use workflow::document::{
+    BusyBehavior, OwnerDeclaration, OwnerSource, StopBefore, TriggerControlAction,
+};
 pub use workflow::evidence::{BlockedDetail, Prerequisite};
 pub use workflow::evidence::{
     FailedChild, FailingNode, FailingNodeState, FailureClass, FailureDetail, InheritedDetail,
@@ -122,26 +124,29 @@ pub use workflow::invocation_accounting::InvocationAccountingLog;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use workflow::local_run::retain_cloud_workflow_evidence;
 pub use workflow::local_run::{
-    AttemptControls, CANCELED_OUTCOME, CarryMiss, ChildCommitFailure, ChildRun, ChildRunDirectory,
-    ChildRunParent, ContinuationDefinitionMode, ControlsLock, DurableDeadline,
-    DurableInvocationStateV1, DurableInvocationV1, FailedAttemptRestart, FileTail, InitialLocalRun,
-    ListedRun, LiveRunViewRequest, LiveRunningStep, LiveRunningSteps, LocalAttemptOwner,
-    LocalAttemptOwnershipReleased, LocalContinuationOpen, LocalRecoveryStatus,
-    LocalRetryBeginError, LocalRetryEligibility, LocalRetryOpen, LocalRetryRejection,
-    LocalRunStatusSnapshot, LocalStatusError, LocalStatusResult, MAXIMUM_DURABLE_RECORD_BYTES,
-    PendingLocalContinuation, PublicationFailurePhaseV1, ResolvedBy, RetryIneligibilityReason,
-    RunListing, RunView, RunViewChildRun, RunViewError, RunViewObservedOutput, RunViewOutput,
-    RunViewPathElement, RunViewRecord, RunViewRequest, RunViewRetainedOutput, RunViewStage,
-    RunViewStep, RunViewStepOutput, RunViewStream, RunViewWait, RunViewWork, SUPERSEDED_OUTCOME,
-    SuccessorCarry, TreeCopyMismatch, WITHDRAWN_OUTCOME, WaitChild, WaitInspection, WaitProbe,
+    AttemptControls, CANCELED_OUTCOME, CapturedPortableRecord, CarryMiss, ChildCommitFailure,
+    ChildRun, ChildRunDirectory, ChildRunParent, ContinuationDefinitionMode, ControlsLock,
+    CreatedPortableRecord, DurableDeadline, DurableInvocationStateV1, DurableInvocationV1,
+    FailedAttemptRestart, FileTail, InitialLocalRun, ListedRun, LiveRunViewRequest,
+    LiveRunningStep, LiveRunningSteps, LocalAttemptOwner, LocalAttemptOwnershipReleased,
+    LocalContinuationOpen, LocalRecoveryStatus, LocalRetryBeginError, LocalRetryEligibility,
+    LocalRetryOpen, LocalRetryRejection, LocalRunStatusSnapshot, LocalStatusError,
+    LocalStatusResult, MAXIMUM_DURABLE_RECORD_BYTES, OpenedPortableRecord,
+    PendingLocalContinuation, PortableRecordCapture, PortableRecordError, PortableRecordFiles,
+    PublicationFailurePhaseV1, ResolvedBy, RetryIneligibilityReason, RunListing, RunView,
+    RunViewChildRun, RunViewError, RunViewObservedOutput, RunViewOutput, RunViewPathElement,
+    RunViewRecord, RunViewRequest, RunViewRetainedOutput, RunViewStage, RunViewStep,
+    RunViewStepOutput, RunViewStream, RunViewWait, RunViewWork, SUPERSEDED_OUTCOME, SuccessorCarry,
+    TreeCopyMismatch, WITHDRAWN_OUTCOME, WaitChild, WaitInspection, WaitProbe,
     acquire_local_continuation, acquire_local_continuation_bridged, acquire_local_retry,
-    attempt_controls, await_begin_gate, await_child_start_gate, await_release_gate,
-    await_run_lock_gate, await_settled_gate, bind_cloud_continuation_context,
-    child_run_directories, child_runs, inspect_wait, is_run_id, latest_attempt_failed,
-    latest_child_run, list_runs, live_run_view, live_running_steps, load_cloud_continuation_seed,
-    locate_run, lock_holder, positioned_element, read_durable_record, read_local_run_status,
-    read_run_file_bounded, read_run_file_tail, read_run_view, retain_cloud_continuation_evidence,
-    wait_child,
+    assemble_portable_record, attempt_controls, await_begin_gate, await_child_start_gate,
+    await_release_gate, await_run_lock_gate, await_settled_gate, bind_cloud_continuation_context,
+    child_run_directories, child_runs, create_portable_record, inspect_wait, is_run_id,
+    latest_attempt_failed, latest_child_run, list_runs, live_run_view, live_running_steps,
+    load_cloud_continuation_seed, locate_run, lock_holder, open_portable_record,
+    portable_record_files, positioned_element, read_durable_record, read_local_run_status,
+    read_run_file_bounded, read_run_file_tail, read_run_view, restore_portable_record,
+    retain_cloud_continuation_evidence, wait_child,
 };
 pub use workflow::login_check::{
     HarnessLoginCheck, HarnessLoginCheckCause, HarnessLoginCheckStage, check_claude_code_login,
@@ -211,6 +216,7 @@ pub use workflow::step_runtime::spawn_isolated_command_launch;
 pub use workflow::step_runtime::{
     AgentExecution, RecoveryFailureKind, StepFailureCause, StepFailureKind, WorkflowExecutionStart,
 };
+pub use workflow::step_workspace::StepWorkspaces;
 pub use workflow::subject_index::{
     SlotHolder, SubjectClaim, SubjectError, check as check_subject, claim as claim_subject,
     is_subject, slot as subject_slot,

@@ -1,8 +1,8 @@
-//! The root workflow's `mirror` block (REQ-WFFORMAT-101): what Linear sees of a run of the
-//! root. Decoding keeps the authored strings; the template and guard grammars here parse
-//! them, which `useful workflow validate` of a tree does with a location for each failure.
-//! The `Mirror` driver performs a run's hooks through a `MirrorTarget` the CLI implements
-//! and appends each write's record under the run's `mirror/` (REQ-LOCALRUN-193).
+//! The root workflow's `mirror` block: what Linear sees of a run of the root. Decoding
+//! keeps the authored strings; the template and guard grammars here parse them, which
+//! `useful workflow validate` of a tree does with a location for each failure. The
+//! `Mirror` driver performs a run's hooks through a `MirrorTarget` the CLI implements and
+//! appends each write's record under the run's `mirror/`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -82,7 +82,7 @@ impl MirrorHook {
     }
 }
 
-/// The variables a hook's template may name (REQ-WFFORMAT-112).
+/// The variables a hook's template may name.
 pub fn hook_variables(hook: MirrorHook) -> &'static [&'static str] {
     match hook {
         MirrorHook::Start | MirrorHook::Outcome => {
@@ -190,7 +190,7 @@ fn is_variable_name(name: &str) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirrorGuard {
     pub operator: MirrorGuardOperator,
-    /// The binding key as written, without `$`: a flat key or `<id>.<name>` (REQ-WFDEF-37).
+    /// The binding key as written, without `$`: a flat key or `<id>.<name>`.
     pub binding: String,
 }
 
@@ -245,9 +245,8 @@ impl MirrorGuard {
     }
 }
 
-/// Why a mirror write failed (REQ-LOCALRUN-193): one closed `code` and a `diagnostic` that
-/// names the cause and never a credential or a response body beyond the target's error
-/// message.
+/// Why a mirror write failed: one closed `code` and a `diagnostic` that names the cause
+/// and never a credential or a response body beyond the target's error message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirrorFailure {
     pub code: &'static str,
@@ -314,8 +313,8 @@ impl std::error::Error for MirrorFailure {}
 /// Where the mirror writes: the execution crate declares it and the CLI implements it over
 /// Linear. `issue_state` answers the issue's state name and `set_state` moves it to the state
 /// of a name; `issue_state_id` and `set_state_id` do the same by the provider's state id, for
-/// a revision with a resolution record (REQ-WFDEF-32). `comments` answers the bodies of the
-/// issue's newest comments, at most 50, for the start rule (REQ-LOCALRUN-216).
+/// a revision with a resolution record. `comments` answers the bodies of the issue's newest
+/// comments, at most 50, for the start rule.
 pub trait MirrorTarget {
     fn issue_state(&self, issue: &str) -> Result<String, MirrorFailure>;
     fn issue_state_id(&self, issue: &str) -> Result<String, MirrorFailure>;
@@ -355,7 +354,7 @@ pub enum MirrorWriteOutcome {
     Failed,
 }
 
-/// Why a write was skipped (REQ-LOCALRUN-193).
+/// Why a write was skipped.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MirrorSkipReason {
@@ -365,7 +364,7 @@ pub enum MirrorSkipReason {
     StartAnnounced,
 }
 
-/// One `mirror/<NNNN>-<hook>.json` (REQ-LOCALRUN-193).
+/// One `mirror/<NNNN>-<hook>.json`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MirrorWrite {
@@ -476,9 +475,9 @@ const WRITES: NumberedRecords<MirrorWrite> = NumberedRecords::new(
     decode_write,
 );
 
-/// Appends `write` to the run at `run_directory` as `mirror/<NNNN>-<hook>.json`
-/// (REQ-LOCALRUN-193), as `wait::append_control` appends a control. Returns the file's
-/// path; a write that is not valid is `MirrorWriteInvalid` and writes nothing.
+/// Appends `write` to the run at `run_directory` as `mirror/<NNNN>-<hook>.json`, as
+/// `wait::append_control` appends a control. Returns the file's path; a write that is
+/// not valid is `MirrorWriteInvalid` and writes nothing.
 pub(crate) fn append_write(
     run_directory: &Path,
     write: &MirrorWrite,
@@ -489,9 +488,9 @@ pub(crate) fn append_write(
     WRITES.append(run_directory, write.hook.as_str(), write)
 }
 
-/// The mirror writes of the run at `run_directory` in ordinal order (REQ-LOCALRUN-193),
-/// none when it has no `mirror/`. A file there that is not a write is refused at its path
-/// with `MirrorWriteInvalid`.
+/// The mirror writes of the run at `run_directory` in ordinal order, none when it has no
+/// `mirror/`. A file there that is not a write is refused at its path with
+/// `MirrorWriteInvalid`.
 pub fn read_mirror_writes(
     run_directory: &Path,
 ) -> Result<Vec<MirrorWrite>, LocalRunDirectoryError> {
@@ -508,12 +507,12 @@ pub fn read_numbered_mirror_writes(
     WRITES.read(run_directory)
 }
 
-/// What a run's mirror holds of the run (REQ-LOCALRUN-191): the values of the `operator`,
-/// `run.id`, `run.url` and `run.reference` placeholders, each composed by the caller, the
-/// record's `external.url` when it has one, which the start rule looks for on the issue
-/// (REQ-LOCALRUN-216), and the run directory the mirror's records go under. `url` and
-/// `reference` fall back to the run directory and the `show` command, so only
-/// `external_url` says whether the record has an external URL.
+/// What a run's mirror holds of the run: the values of the `operator`, `run.id`,
+/// `run.url` and `run.reference` placeholders, each composed by the caller, the record's
+/// `external.url` when it has one, which the start rule looks for on the issue, and the
+/// run directory the mirror's records go under. `url` and `reference` fall back to the
+/// run directory and the `show` command, so only `external_url` says whether the record
+/// has an external URL.
 #[derive(Clone, Debug)]
 pub struct MirrorRun {
     pub operator: String,
@@ -524,16 +523,15 @@ pub struct MirrorRun {
     pub directory: PathBuf,
 }
 
-/// A run's mirror (REQ-LOCALRUN-193): the root's block, the issue identifier, the bound
-/// values of its revision's bindings snapshot (or why they cannot be had), the resolved
-/// provider ids when the revision has a resolution record, both keyed by the text a
-/// reference names after `$` (a flat key, or `<id>.<name>` for an integration binding,
-/// REQ-WFDEF-37), and the run
+/// A run's mirror: the root's block, the issue identifier, the bound values of its
+/// revision's bindings snapshot (or why they cannot be had), the resolved provider ids
+/// when the revision has a resolution record, both keyed by the text a reference names
+/// after `$` (a flat key, or `<id>.<name>` for an integration binding), and the run
 /// (`MirrorRun`): the operator, the run's id, URL and reference, and the run directory the
 /// records go under. With resolved ids the outcome's guard and state write go by id, else
-/// by the bound name (REQ-LOCALRUN-192). Each hook performs the block's write when the
-/// block declares it and appends one record of how it ended; its only error is that
-/// record's own write failing, and a failed write is a record, never an error.
+/// by the bound name. Each hook performs the block's write when the block declares it and
+/// appends one record of how it ended; its only error is that record's own write failing,
+/// and a failed write is a record, never an error.
 #[derive(Clone, Debug)]
 pub struct Mirror {
     block: MirrorBlock,
@@ -560,7 +558,7 @@ impl Mirror {
     }
 
     /// The mirror matching and writing states by the provider ids of the revision's
-    /// resolution record (REQ-WFDEF-32), by the reference key the bound values are keyed by.
+    /// resolution record, by the reference key the bound values are keyed by.
     #[must_use]
     pub fn with_resolved_ids(mut self, resolved_ids: BTreeMap<String, String>) -> Self {
         self.resolved_ids = Some(resolved_ids);
@@ -568,7 +566,7 @@ impl Mirror {
     }
 
     /// `onStart`, once when `useful workflow run create` has made the run, skipped when the issue
-    /// already links the run (`start_announced`, REQ-LOCALRUN-216).
+    /// already links the run (`start_announced`).
     pub fn start(&self, target: &dyn MirrorTarget) -> Result<(), LocalRunDirectoryError> {
         self.comment(target, MirrorHook::Start, &[])
     }
@@ -611,8 +609,8 @@ impl Mirror {
         )
     }
 
-    /// Whether `onOutcome` maps `outcome`, so that `outcome` performs a write
-    /// (REQ-LOCALRUN-204).
+    /// Whether `onOutcome` maps `outcome`, so that `outcome` performs a
+    /// write.
     pub fn maps_outcome(&self, outcome: &str) -> bool {
         self.block.on_outcome.contains_key(outcome)
     }
@@ -674,10 +672,10 @@ impl Mirror {
         self.record(hook, MirrorAction::Comment { body }, performed)
     }
 
-    /// Whether one of the issue's newest comments already links the run (REQ-LOCALRUN-216):
-    /// it contains the record's non-empty external URL, as the target answers it or with
-    /// every backslash removed, which undoes Markdown's escapes. A run without one reads
-    /// nothing, and a read that fails is no announcement and leaves no trace.
+    /// Whether one of the issue's newest comments already links the run: it contains the
+    /// record's non-empty external URL, as the target answers it or with every backslash
+    /// removed, which undoes Markdown's escapes. A run without one reads nothing, and a
+    /// read that fails is no announcement and leaves no trace.
     fn start_announced(&self, target: &dyn MirrorTarget) -> bool {
         let Some(url) = self
             .run
@@ -960,7 +958,6 @@ mod tests {
         fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn each_declared_hook_writes_through_the_target_and_appends_its_record_in_call_order() {
         let root = run_root();
@@ -1066,7 +1063,6 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn a_guarded_outcome_reads_the_issue_once_and_skips_while_the_guard_holds() {
         let root = run_root();
@@ -1128,9 +1124,9 @@ mod tests {
         .collect()
     }
 
-    // REQ-LOCALRUN-192, REQ-WFDEF-32: with resolved ids the guard compares the issue's state
-    // id with the bound state's id and the write sends the id, whatever the states are named
-    // now; the record keeps the bound value.
+    // With resolved ids the guard compares the issue's state id with the bound state's id
+    // and the write sends the id, whatever the states are named now; the record keeps the
+    // bound value.
     #[test]
     fn with_resolved_ids_the_guard_compares_and_the_write_sends_state_ids() {
         let root = run_root();
@@ -1182,8 +1178,8 @@ mod tests {
         assert_eq!(skipped["reason"], "guard_held");
     }
 
-    // REQ-LOCALRUN-192, REQ-WFDEF-32: with a resolution record, a bound state or guard key it
-    // gives no id is `mirror_state_unknown` before any request.
+    // With a resolution record, a bound state or guard key it gives no id is
+    // `mirror_state_unknown` before any request.
     #[test]
     fn with_resolved_ids_a_bound_key_without_an_id_is_state_unknown() {
         for missing in ["done", "ownedState", "backlog"] {
@@ -1205,7 +1201,6 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn a_hook_the_block_does_not_declare_writes_and_records_nothing() {
         let root = run_root();
@@ -1229,7 +1224,6 @@ mod tests {
         assert_eq!(read_mirror_writes(root.path()).unwrap(), []);
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn a_failed_write_is_recorded_with_its_code_and_never_fails_the_hook() {
         let root = run_root();
@@ -1252,7 +1246,6 @@ mod tests {
         assert_eq!(failed.get("reason"), None);
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn a_mirror_without_its_bindings_records_every_hook_failed_and_calls_no_target() {
         let root = run_root();
@@ -1332,9 +1325,9 @@ mod tests {
         format!("Engineering started by saeed. Run: {url}")
     }
 
-    // REQ-LOCALRUN-216: a comment holding the run's external URL, as Linear returns it or
-    // with its backslashes removed, leaves the start comment unwritten and recorded
-    // `skipped` `start_announced` with the body it would have written.
+    // A comment holding the run's external URL, as Linear returns it or with its
+    // backslashes removed, leaves the start comment unwritten and recorded `skipped`
+    // `start_announced` with the body it would have written.
     #[test]
     fn a_start_comment_is_skipped_when_the_issue_already_links_the_run() {
         for announced in [
@@ -1362,8 +1355,8 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-216: comments that do not hold the URL, or a read that fails, leave the
-    // start comment to be written as without the rule, and nothing of the read is recorded.
+    // Comments that do not hold the URL, or a read that fails, leave the start comment to
+    // be written as without the rule, and nothing of the read is recorded.
     #[test]
     fn a_start_comment_is_written_when_no_comment_links_the_run_or_none_can_be_read() {
         for target in [
@@ -1394,8 +1387,8 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-216: a run without an external URL, or with an empty one, and every other
-    // hook never ask for the comments, and a mirror without its bindings asks nothing.
+    // A run without an external URL, or with an empty one, and every other hook never ask
+    // for the comments, and a mirror without its bindings asks nothing.
     #[test]
     fn only_the_start_of_a_run_with_an_external_url_and_its_bindings_reads_the_comments() {
         for external_url in [None, Some("")] {
@@ -1444,7 +1437,6 @@ mod tests {
         assert_eq!(write["code"], "mirror_bindings_unavailable", "{write}");
     }
 
-    // REQ-LOCALRUN-193
     #[test]
     fn a_wait_payload_summary_names_the_wait_and_a_fan_out_stage_its_position() {
         let root = run_root();
@@ -1475,7 +1467,6 @@ mod tests {
         );
     }
 
-    // REQ-WFFORMAT-112
     #[test]
     fn templates_parse_exactly_lowercase_dotted_placeholders() {
         let template = Template::parse("Engineering started by {{operator}}. Run: {{run.url}}")
@@ -1507,7 +1498,6 @@ mod tests {
         }
     }
 
-    // REQ-WFFORMAT-113
     #[test]
     fn guards_parse_to_the_operator_and_binding_key() {
         assert_eq!(
@@ -1544,8 +1534,8 @@ mod tests {
         }
     }
 
-    // REQ-WFDEF-37, REQ-WFDEF-63: a guard takes a `$<id>.<name>` binding, the integration before the last
-    // `.`, and passes its key on as written.
+    // A guard takes a `$<id>.<name>` binding, the integration before the last `.`, and passes its
+    // key on as written.
     #[test]
     fn guards_take_an_integration_binding_as_written() {
         assert_eq!(

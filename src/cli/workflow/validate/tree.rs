@@ -1,5 +1,5 @@
-//! The tree form of `useful workflow validate DIR` (REQ-WFDEF-9): the tree's own document,
-//! valid or invalid, exactly as `useful workflow definition publish` validates the tree it
+//! The tree form of `useful workflow validate DIR`: the tree's own document, valid or
+//! invalid, exactly as `useful workflow definition publish` validates the tree it
 //! publishes.
 
 use std::collections::BTreeMap;
@@ -15,7 +15,7 @@ use super::super::definition::report::{
 use crate::exit_code::ExitCode;
 use useful_execution::{
     BindingValue, BusyBehavior, Integration, IntegrationAs, IntegrationProvider, OwnerDeclaration,
-    OwnerSource, StopBefore, ValidatedTree, validate_workflow_tree,
+    OwnerSource, StopBefore, TriggerControlAction, ValidatedTree, validate_workflow_tree,
 };
 
 /// Validates the tree `directory` holds and prints its report: exit 0 for a valid tree, 1 for
@@ -123,6 +123,22 @@ fn write_human_valid(tree: &ValidatedTree) -> anyhow::Result<()> {
         )?;
         if let Some(condition) = &trigger.condition {
             writeln!(stdout, "    where: {}", display(condition))?;
+        }
+        if let Some(action) = &trigger.action {
+            let action = match action {
+                TriggerControlAction::Named(name) => display(name),
+                TriggerControlAction::Conditional {
+                    when,
+                    then,
+                    otherwise,
+                } => format!(
+                    "when {} then {} else {}",
+                    display(when),
+                    display(then),
+                    display(otherwise)
+                ),
+            };
+            writeln!(stdout, "    action: {action}")?;
         }
         if let Some(subject) = &trigger.subject {
             writeln!(stdout, "    subject: {}", display(subject))?;
@@ -277,6 +293,7 @@ fn valid_report(tree: &ValidatedTree) -> JsonReport<'_> {
                         source: trigger.source.as_deref(),
                         event: trigger.event.as_deref(),
                         condition: trigger.condition.as_deref(),
+                        action: trigger.action.as_ref().map(JsonControlAction::from),
                         schedule: trigger.schedule.as_deref(),
                         timezone: trigger.timezone.as_deref(),
                         definition: trigger.definition.as_deref(),
@@ -345,7 +362,38 @@ struct JsonDigest<'a> {
     value: &'a str,
 }
 
-/// A provider trigger's `source`, `event` and `where`, a schedule's `schedule` and
+#[derive(Serialize)]
+#[serde(untagged)]
+enum JsonControlAction<'a> {
+    Named {
+        name: &'a str,
+    },
+    Conditional {
+        when: &'a str,
+        then: &'a str,
+        #[serde(rename = "else")]
+        otherwise: &'a str,
+    },
+}
+
+impl<'a> From<&'a TriggerControlAction> for JsonControlAction<'a> {
+    fn from(action: &'a TriggerControlAction) -> Self {
+        match action {
+            TriggerControlAction::Named(name) => Self::Named { name },
+            TriggerControlAction::Conditional {
+                when,
+                then,
+                otherwise,
+            } => Self::Conditional {
+                when,
+                then,
+                otherwise,
+            },
+        }
+    }
+}
+
+/// A provider trigger's `source`, `event` and `where`, a control's `action`, a schedule's `schedule` and
 /// `timezone`, or a definition trigger's `definition` and `outcomes`, then a start trigger's
 /// `subject`, `inputs` (input name to the value as written), `stopBefore`, `owner` as
 /// `{from, only?, except?}` and `busyBehavior` as written, absent when undeclared.
@@ -360,10 +408,12 @@ struct JsonTrigger<'a> {
     #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
     condition: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<JsonControlAction<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     schedule: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timezone: Option<&'a str>,
-    /// A definition trigger's binding reference as written (REQ-WFDEF-39).
+    /// A definition trigger's binding reference as written.
     #[serde(skip_serializing_if = "Option::is_none")]
     definition: Option<&'a str>,
     /// A definition trigger's outcome names in the order written.

@@ -200,13 +200,19 @@ pub(crate) async fn run_nested_workflow_delivery_failure_scenario(
         "connection change did not change its URL"
     );
     source_broker.set_repository_url(&alternate_source)?;
-    let original_commit = successor
+    let prior_source = offered
         .execution_spec
-        .primary_workspace_source
-        .commit_oid
-        .clone();
+        .source
+        .as_ref()
+        .context("original offer omitted repository source")?;
+    let original_commit = &prior_source.primary_workspace_source.commit_oid;
     align_offer_with_source(&source, &mut successor)?;
-    successor.execution_spec.primary_workspace_source.commit_oid = original_commit.clone();
+    let successor_source = successor
+        .execution_spec
+        .source
+        .as_mut()
+        .context("replacement offer omitted repository source")?;
+    successor_source.primary_workspace_source.commit_oid = original_commit.clone();
     ensure!(
         successor.execution_spec.capacity.encoded_outbox_bytes
             > offered.execution_spec.capacity.encoded_outbox_bytes,
@@ -225,15 +231,14 @@ pub(crate) async fn run_nested_workflow_delivery_failure_scenario(
             .join("workspace")
             .to_string_lossy()
             .into_owned(),
-        definition_source: successor.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(successor_source.workflow_definition_source.clone()),
         effective_capacity: successor.execution_spec.capacity.clone(),
-        prior_manifest_digest: offered
-            .execution_spec
+        prior_manifest_digest: prior_source
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),
         request: serde_json::json!({"fromSteps":["nested"],"definition":{
-            "replaced":{"commitOid":successor.execution_spec.workflow_definition_source.commit_oid,
+            "replaced":{"commitOid":successor_source.workflow_definition_source.commit_oid,
                 "workflowPath":"workflow.yaml"}}}),
         reexecuted_steps: vec!["nested".into(), "follow".into()],
         inherited_steps: Vec::new(),
@@ -245,6 +250,9 @@ pub(crate) async fn run_nested_workflow_delivery_failure_scenario(
     invalid.attempt_id = "atm_01k0z6r1w8f4jy2m7q9v3x5abv".into();
     invalid
         .execution_spec
+        .source
+        .as_mut()
+        .context("corrupted digest offer omitted repository source")?
         .workflow_definition_source
         .workflow_source_closure_digest
         .value = "0".repeat(64);
@@ -396,7 +404,7 @@ pub(crate) async fn run_nested_workflow_delivery_failure_scenario(
         "continued worktree still points at the prior connection"
     );
     ensure!(
-        run_git(&retained_workspace, &["rev-parse", "HEAD"])? == original_commit,
+        run_git(&retained_workspace, &["rev-parse", "HEAD"])? == *original_commit,
         "origin rewiring changed the retained baseline"
     );
     let helper_key = format!("credential.{new_origin}.helper");
@@ -489,10 +497,21 @@ pub(crate) async fn run_nested_workflow_delivery_failure_scenario(
             .join("workspace")
             .to_string_lossy()
             .into_owned(),
-        definition_source: third.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(
+            third
+                .execution_spec
+                .source
+                .as_ref()
+                .context("inherited offer omitted repository source")?
+                .workflow_definition_source
+                .clone(),
+        ),
         effective_capacity: third.execution_spec.capacity.clone(),
         prior_manifest_digest: successor
             .execution_spec
+            .source
+            .as_ref()
+            .context("replacement offer omitted repository source")?
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),
@@ -785,25 +804,29 @@ fn offer() -> AssignmentOffer {
                 maximum_parallel_steps: 1,
                 cancellation_grace_seconds: 1,
             },
-            source_branch: "main".to_owned(),
+            source: Some(
+                useful_runner_protocol::RepositorySourcesV1RunnerProjection {
+                    source_branch: "main".to_owned(),
+                    workflow_definition_source: WorkflowDefinitionSourceV1RunnerProjection {
+                        repository_connection_id: "rpc_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                        object_format: "sha1".to_owned(),
+                        commit_oid: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                        workflow_path: "workflow.yaml".to_owned(),
+                        workflow_source_closure_digest: source_digest_fixture(),
+                    },
+                    primary_workspace_source: PrimaryWorkspaceSourceV1RunnerProjection {
+                        kind: "connected_repository".to_owned(),
+                        provider_kind: "github".to_owned(),
+                        repository_connection_id: "rpc_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                        object_format: "sha1".to_owned(),
+                        commit_oid: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                        materialization_contract: "git_full_clone_v1".to_owned(),
+                    },
+                },
+            ),
             source_display_snapshot: None,
             workspace_branch: None,
             workspace_membership: None,
-            workflow_definition_source: WorkflowDefinitionSourceV1RunnerProjection {
-                repository_connection_id: "rpc_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
-                object_format: "sha1".to_owned(),
-                commit_oid: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-                workflow_path: "workflow.yaml".to_owned(),
-                workflow_source_closure_digest: source_digest_fixture(),
-            },
-            primary_workspace_source: PrimaryWorkspaceSourceV1RunnerProjection {
-                kind: "connected_repository".to_owned(),
-                provider_kind: "github".to_owned(),
-                repository_connection_id: "rpc_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
-                object_format: "sha1".to_owned(),
-                commit_oid: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-                materialization_contract: "git_full_clone_v1".to_owned(),
-            },
             capacity: ExecutionCapacityV1RunnerProjection {
                 execution_contract: "workflow_v1_cloud_inputs_artifacts@1".to_owned(),
                 source_closure_digest: source_digest_fixture(),
@@ -837,8 +860,13 @@ fn source_digest_fixture() -> WorkflowSourceClosureDigestV1RunnerProjection {
 
 fn align_offer_with_source(source: &Path, offered: &mut AssignmentOffer) -> anyhow::Result<()> {
     let commit_oid = run_git(source, &["rev-parse", "HEAD"])?;
-    offered.execution_spec.workflow_definition_source.commit_oid = commit_oid.clone();
-    offered.execution_spec.primary_workspace_source.commit_oid = commit_oid;
+    let repository_source = offered
+        .execution_spec
+        .source
+        .as_mut()
+        .context("workflow fixture offer omitted repository source")?;
+    repository_source.workflow_definition_source.commit_oid = commit_oid.clone();
+    repository_source.primary_workspace_source.commit_oid = commit_oid;
     let workflow = resolve(source, Path::new("workflow.yaml"))
         .map_err(|error| anyhow!("resolve assignment workflow fixture: {error:?}"))?;
     let digest = &workflow.capacity.source_closure_digest;
@@ -847,8 +875,7 @@ fn align_offer_with_source(source: &Path, offered: &mut AssignmentOffer) -> anyh
         algorithm: digest.algorithm.as_str().to_owned(),
         value: digest.value.clone(),
     };
-    offered
-        .execution_spec
+    repository_source
         .workflow_definition_source
         .workflow_source_closure_digest = projected_digest.clone();
     offered.execution_spec.capacity = ExecutionCapacityV1RunnerProjection {

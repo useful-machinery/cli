@@ -3,9 +3,11 @@ use crate::workflow::observation::{ExecutionSettlement, SettledExecution, Starte
 use crate::workflow::runtime::{
     ActionId, ActiveStepInvocation, RecoveryRoundNumber, TargetExecutionNumber,
 };
-use crate::workflow::step_runtime::{CommandLaunchFailure, RecoveryFailureKind, StepFailureKind};
+use crate::workflow::step_runtime::{
+    CommandLaunchFailure, RecoveryFailureKind, StepFailureKind, StepStartFailure,
+    WorkingDirectoryFailure,
+};
 
-// REQ-WFEXEC-22
 #[tokio::test]
 async fn command_environment_requires_declared_passthrough() {
     with_watchdog(async {
@@ -51,7 +53,6 @@ async fn command_environment_requires_declared_passthrough() {
 const OBSERVE_SCOPED_ENVIRONMENT: &str =
     r#"'printf "%s %s" "${KEPT-unset}" "${DROPPED-unset}" > "$0.txt"'"#;
 
-// REQ-WFEXEC-71, INV-ENGINE-31
 #[tokio::test]
 async fn node_environment_passthrough_scopes_each_command_to_its_listed_names() {
     with_watchdog(async {
@@ -116,7 +117,6 @@ async fn node_environment_passthrough_scopes_each_command_to_its_listed_names() 
     .await;
 }
 
-// REQ-WFRECOVERY-64, REQ-WFRECOVERY-7, REQ-WFEXEC-71
 #[tokio::test]
 async fn command_handler_receives_its_own_or_its_steps_environment_selection() {
     with_watchdog(async {
@@ -257,7 +257,6 @@ exports:
     ref: outputs.repair.artifact
 "#;
 
-// REQ-WFRECOVERY-7, REQ-WFRECOVERY-8, REQ-WFRECOVERY-9, REQ-WFRECOVERY-21, REQ-WFRECOVERY-30, REQ-WFRECOVERY-39, REQ-WFRECOVERY-59
 #[tokio::test]
 async fn source_neutral_command_handler_repairs_and_rechecks_with_private_authority() {
     with_watchdog(async {
@@ -333,7 +332,6 @@ async fn source_neutral_command_handler_repairs_and_rechecks_with_private_author
     .await;
 }
 
-// REQ-WFRECOVERY-16
 #[tokio::test]
 async fn omitted_recovery_handler_cwd_inherits_command_target_cwd() {
     with_watchdog(async {
@@ -387,7 +385,6 @@ steps:
     .await;
 }
 
-// REQ-WFRECOVERY-17
 #[tokio::test]
 async fn recovery_handler_cwd_is_contained_and_moves_only_the_handler() {
     with_watchdog(async {
@@ -480,7 +477,307 @@ steps:
     .await;
 }
 
-// REQ-OUTPUTS-3
+#[tokio::test]
+async fn step_in_an_established_workspace_never_runs_in_the_execution_root() {
+    with_watchdog(async {
+        let recovery = r#"    recovery:
+      retries: 1
+      handler:
+        kind: cmd
+        command:
+          argv: [/bin/sh, -c, 'echo handler > handler.txt']
+"#;
+        for declaration in ["", recovery] {
+            let source = format!(
+                r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+{declaration}    command:
+      argv: [/bin/sh, -c, 'echo candidate > candidate.txt']
+  check:
+    kind: cmd
+    dependsOn: [candidate]
+    command:
+      argv: [/bin/sh, -c, 'echo check > check.txt']
+  baseline:
+    kind: cmd
+    command:
+      argv: [/bin/sh, -c, 'echo independent > independent.txt']
+"#
+            );
+            let fixture = execution_fixture(
+                &source,
+                ResolvedInputs::default(),
+                EnvironmentSnapshot::default(),
+                CancellationSource::new(),
+                1,
+                1024,
+            );
+            let result = execute_workflow(
+                fixture.admitted,
+                &fixture.artifacts,
+                &fixture.inputs,
+                &StepDiagnosticLog::default(),
+                AgentExecution::disabled(),
+                TestClock,
+                NoopExecutionObserver,
+            )
+            .await
+            .unwrap();
+
+            assert!(!fixture.execution_root.join("candidate.txt").exists());
+            assert!(!fixture.execution_root.join("check.txt").exists());
+            assert!(matches!(result.steps["check"], StepState::Blocked { .. }));
+            assert!(fixture.execution_root.join("independent.txt").is_file());
+
+            if declaration.is_empty() {
+                assert!(matches!(
+                    &result.steps["candidate"], StepState::Failed { detail }
+                        if detail.phase == FailurePhase::Start
+                            && detail.code == FailureCode::WorkingDirectoryUnavailable
+                ));
+            } else {
+                let round = &result.recoveries["candidate"].as_ref().unwrap().rounds[0];
+                assert_eq!(
+                    round.failed_execution.cause,
+                    StepFailureCause::Start(StepStartFailure::WorkingDirectory(
+                        WorkingDirectoryFailure::Unavailable
+                    ))
+                );
+                assert!(matches!(
+                    round.handler.as_ref().unwrap().outcome,
+                    RecoveryHandlerOutcome::Failed {
+                        cause: StepFailureCause::RecoveryHandler(
+                            RecoveryHandlerFailure::WorkingDirectoryUnavailable
+                        ),
+                        ..
+                    }
+                ));
+                assert!(!fixture.execution_root.join("handler.txt").exists());
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_new_step_starts_empty_and_later_steps_run_in_its_workspace() {
+    let source = r#"schemaVersion: 1
+steps:
+  seed:
+    kind: cmd
+    command: {argv: [sh, -c, 'touch old.txt']}
+  candidate:
+    kind: cmd
+    dependsOn: [seed]
+    workspace: new
+    command: {argv: [sh, -c, 'listing=$(ls -A) && printf %s "$listing" > listing && touch candidate.txt']}
+  check:
+    kind: cmd
+    dependsOn: [candidate]
+    workspace: write
+    command: {argv: [sh, -c, 'test -f candidate.txt && test ! -e old.txt']}
+  again:
+    kind: cmd
+    dependsOn: [check]
+    workspace: new
+    command: {argv: [sh, -c, 'listing=$(ls -A) && printf %s "$listing" > listing']}
+"#;
+    let fixture = workspace_fixture(source);
+    let result = run_workspace_fixture(&fixture).await;
+    assert_eq!(result.outcome, RunOutcome::Succeeded);
+    let workspaces = fixture.run_directory().join("workspaces");
+    for step in ["candidate", "again"] {
+        assert!(
+            fs::read(workspaces.join(step).join("listing"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(workspaces.join("candidate/candidate.txt").is_file());
+    assert!(fixture.execution_root.join("old.txt").is_file());
+    assert!(!fixture.execution_root.join("candidate.txt").exists());
+}
+
+#[tokio::test]
+async fn a_none_step_starts_empty_and_the_step_after_it_stays_in_its_path_workspace() {
+    let fixture = workspace_fixture(
+        r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'touch candidate.txt']}
+  check:
+    kind: cmd
+    workspace: read
+    dependsOn: [candidate]
+    command: {argv: [sh, -c, 'test -f candidate.txt && touch read-left.txt']}
+  summary:
+    kind: cmd
+    workspace: none
+    dependsOn: [check]
+    command: {argv: [sh, -c, 'listing=$(ls -A) && printf %s "$listing" > listing && echo ok > summary.txt']}
+    outputs: {message: {kind: text, from: path, path: summary.txt}}
+  publish:
+    kind: cmd
+    inputs: {message: {ref: outputs.summary.message}}
+    command: {argv: [sh, -c, 'test -f candidate.txt && test -f read-left.txt && test ! -e summary.txt']}
+"#,
+    );
+    let result = run_workspace_fixture(&fixture).await;
+    assert_eq!(result.outcome, RunOutcome::Succeeded);
+    let workspaces = fixture.run_directory().join("workspaces");
+    assert!(
+        fs::read(workspaces.join("summary/listing"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(workspaces.join("summary/summary.txt").is_file());
+    assert!(!workspaces.join("candidate/summary.txt").exists());
+    for name in ["listing", "candidate.txt", "read-left.txt", "summary.txt"] {
+        assert!(!fixture.execution_root.join(name).exists(), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_new_step_rerun_by_recovery_starts_empty_again() {
+    let source = r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'test ! -e attempt.txt && touch attempt.txt && test -f ../handler-saw-attempt']}
+    recovery:
+      retries: 1
+      handler:
+        kind: cmd
+        command:
+          argv:
+            - sh
+            - -c
+            - |
+              test -f attempt.txt && touch ../handler-saw-attempt || exit 1
+              printf '%s' '{"schemaVersion":1,"decision":"recheck","summary":"observed failed attempt","reason":"rerun"}' > "$USEFUL_RECOVERY_RESULT"
+"#;
+    let fixture = workspace_fixture(source);
+    let result = run_workspace_fixture(&fixture).await;
+    assert_eq!(result.outcome, RunOutcome::Succeeded);
+    assert!(
+        fixture
+            .run_directory()
+            .join("workspaces/handler-saw-attempt")
+            .is_file()
+    );
+    assert_eq!(
+        result.recoveries["candidate"]
+            .as_ref()
+            .unwrap()
+            .rounds
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_step_whose_workspace_was_never_established_fails_at_start() {
+    let source = r#"schemaVersion: 1
+steps:
+  gate:
+    kind: cmd
+    command: {argv: [sh, -c, 'printf skip > decision']}
+    outputs: {decision: {kind: text, from: path, path: decision}}
+  candidate:
+    kind: cmd
+    workspace: new
+    condition: {equals: [{ref: outputs.gate.decision}, {value: run}]}
+    command: {argv: [sh, -c, 'exit 1']}
+  check:
+    kind: cmd
+    dependsOn: [candidate]
+    workspace: write
+    command: {argv: [sh, -c, 'exit 1']}
+"#;
+    let fixture = workspace_fixture(source);
+    let result = run_workspace_fixture(&fixture).await;
+    assert!(matches!(
+        result.steps["candidate"],
+        StepState::Skipped { .. }
+    ));
+    assert!(
+        matches!(&result.steps["check"], StepState::Failed { detail }
+        if detail.phase == FailurePhase::Start && detail.code == FailureCode::WorkingDirectoryUnavailable)
+    );
+    assert!(
+        !fixture
+            .run_directory()
+            .join("workspaces/candidate")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn a_finalizer_runs_in_the_execution_root_after_a_new_step() {
+    let source = r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'touch step.txt']}
+finalizers:
+  finish:
+    kind: cmd
+    command: {argv: [sh, -c, 'test ! -e step.txt && touch final.txt']}
+"#;
+    let fixture = workspace_fixture(source);
+    let result = run_workspace_fixture(&fixture).await;
+    assert_eq!(result.outcome, RunOutcome::Succeeded);
+    assert!(fixture.execution_root.join("final.txt").is_file());
+    assert!(
+        fixture
+            .run_directory()
+            .join("workspaces/candidate/step.txt")
+            .is_file()
+    );
+}
+
+fn workspace_fixture(source: &str) -> ExecutionFixture {
+    let mut fixture = execution_fixture(
+        source,
+        ResolvedInputs::default(),
+        EnvironmentSnapshot::new([("PATH", env::var_os("PATH").unwrap())]),
+        CancellationSource::new(),
+        1,
+        1024,
+    );
+    let run = fixture.run_directory();
+    let directory: OwnedFd = fs::File::open(&run).unwrap().into();
+    fixture.admitted = fixture
+        .admitted
+        .with_step_workspaces(crate::StepWorkspaces::new(Arc::new(directory), run))
+        .unwrap();
+    fixture
+}
+
+async fn run_workspace_fixture(fixture: &ExecutionFixture) -> WorkflowExecutionResult<TestInstant> {
+    with_watchdog(async {
+        execute_workflow(
+            fixture.admitted.clone(),
+            &fixture.artifacts,
+            &fixture.inputs,
+            &StepDiagnosticLog::default(),
+            AgentExecution::disabled(),
+            TestClock,
+            NoopExecutionObserver,
+        )
+        .await
+        .unwrap()
+    })
+    .await
+}
+
 #[tokio::test]
 async fn path_outputs_are_read_from_the_execution_root_not_the_step_cwd() {
     with_watchdog(async {
@@ -531,7 +828,47 @@ exports:
     .await;
 }
 
-// REQ-WFCOND-25
+#[tokio::test]
+async fn path_outputs_are_read_from_the_steps_workspace() {
+    let source = r#"schemaVersion: 1
+steps:
+  seed:
+    kind: cmd
+    command: {argv: [sh, -c, 'printf from-root > out.txt && touch report.txt']}
+  candidate:
+    kind: cmd
+    dependsOn: [seed]
+    workspace: new
+    command: {argv: [sh, -c, 'printf from-workspace > out.txt && mkdir sub']}
+    outputs: {out: {kind: text, from: path, path: out.txt}}
+  report:
+    kind: cmd
+    dependsOn: [candidate]
+    workspace: write
+    cwd: sub
+    command: {argv: [sh, -c, 'printf from-cwd > report.txt && printf from-workspace-root > ../report.txt']}
+    outputs: {out: {kind: text, from: path, path: report.txt}}
+exports:
+  candidate: {ref: outputs.candidate.out}
+  report: {ref: outputs.report.out}
+"#;
+    let fixture = workspace_fixture(source);
+    let result = run_workspace_fixture(&fixture).await;
+    assert_eq!(result.outcome, RunOutcome::Succeeded);
+    for (name, expected) in [
+        ("candidate", "from-workspace"),
+        ("report", "from-workspace-root"),
+    ] {
+        let ExportValue::Available {
+            output: CapturedValue::Text(value),
+        } = &result.exports[name]
+        else {
+            panic!("expected text export {name}");
+        };
+        assert_eq!(value.as_ref(), expected);
+    }
+}
+
 #[tokio::test]
 async fn condition_failure_precedes_any_invocation_and_follows_the_failure_policy() {
     with_watchdog(async {
@@ -624,7 +961,6 @@ steps:
     .await;
 }
 
-// REQ-WFRECOVERY-6, REQ-WFRECOVERY-30
 #[tokio::test]
 async fn semantic_outputs_recovery_reruns_complete_target() {
     with_watchdog(async {
@@ -722,7 +1058,6 @@ exports:
     .await;
 }
 
-// REQ-WFRECOVERY-10, REQ-WFRECOVERY-23, REQ-WFRECOVERY-26, REQ-WFRECOVERY-62
 #[tokio::test]
 async fn command_handler_failures_stop_once_without_authorizing_recheck() {
     with_watchdog(async {
@@ -881,7 +1216,6 @@ fn failed_with_exit(
     )
 }
 
-// INV-ENGINE-47, REQ-WFRECOVERY-66, REQ-WFRECOVERY-65
 #[tokio::test]
 async fn infrastructure_classification_settles_the_failure_and_starts_no_round() {
     use crate::workflow::evidence::FailureClass;
@@ -1013,7 +1347,6 @@ async fn configured_inactive_local_recovery_preserves_target_execution() {
     .await;
 }
 
-// REQ-WFEXEC-28, REQ-WFEXEC-35
 #[tokio::test]
 async fn command_finalizer_receives_the_engine_context_after_ordinary_quiescence() {
     with_watchdog(async {
@@ -1082,7 +1415,6 @@ async fn command_finalizer_receives_the_engine_context_after_ordinary_quiescence
     .await;
 }
 
-// REQ-WFEXEC-19
 #[tokio::test]
 async fn command_receives_eof_instead_of_the_adapters_live_input() {
     with_watchdog(async {
@@ -1605,7 +1937,6 @@ async fn run_observed(
     (result, observed_step_executions(&entries))
 }
 
-// REQ-TELEMETRY-41, REQ-TELEMETRY-42
 #[tokio::test]
 async fn recovered_command_states_each_physical_execution_start_and_settlement() {
     with_watchdog(async {
@@ -1672,7 +2003,6 @@ async fn recovered_command_states_each_physical_execution_start_and_settlement()
     .await;
 }
 
-// REQ-TELEMETRY-41, REQ-TELEMETRY-43
 #[tokio::test]
 async fn failed_retried_and_finalizer_commands_settle_their_executions() {
     with_watchdog(async {
@@ -1782,7 +2112,6 @@ async fn failed_retried_and_finalizer_commands_settle_their_executions() {
     .await;
 }
 
-// REQ-TELEMETRY-41, REQ-TELEMETRY-43
 #[tokio::test]
 async fn failed_command_handler_settles_as_a_handler_failure() {
     with_watchdog(async {
@@ -1819,7 +2148,6 @@ async fn failed_command_handler_settles_as_a_handler_failure() {
     .await;
 }
 
-// REQ-TELEMETRY-41, REQ-TELEMETRY-43
 #[tokio::test]
 async fn handler_that_gives_up_settles_as_a_completed_handler_execution() {
     with_watchdog(async {
@@ -1877,7 +2205,6 @@ steps:
     .await;
 }
 
-// REQ-TELEMETRY-41, REQ-TELEMETRY-43
 #[tokio::test]
 async fn cancelled_command_settles_its_open_execution_with_the_reason() {
     with_watchdog(async {

@@ -24,8 +24,8 @@ pub(super) struct Command {
 }
 
 impl Command {
-    /// Lists one page of the caller's memberships and marks the organization in effect
-    /// (REQ-ORG-88), which, unlike a command that acts in it, the list does not need.
+    /// Lists one page of the caller's memberships and marks the organization in
+    /// effect, which, unlike a command that acts in it, the list does not need.
     pub(super) fn execute(self, deployment: &Deployment) -> crate::cli::CommandResult {
         let Self {
             pagination,

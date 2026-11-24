@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -86,6 +86,19 @@ pub enum GetRunLinearLifecycleError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`get_run_record`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GetRunRecordError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status410(models::Problem),
+    Status500(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`get_run_retry_request`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -96,6 +109,22 @@ pub enum GetRunRetryRequestError {
     Status404(models::Problem),
     Status500(models::Problem),
     Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`issue_run_record_download_capabilities`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum IssueRunRecordDownloadCapabilitiesError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status409(models::Problem),
+    Status410(models::Problem),
+    Status413(models::Problem),
+    Status415(models::Problem),
+    Status500(models::Problem),
     UnknownValue(serde_json::Value),
 }
 
@@ -254,7 +283,7 @@ pub enum RetryRunLinearLifecycleUpdateError {
     UnknownValue(serde_json::Value),
 }
 
-/// Names the run's workflow with `definition`. The run pins the definition's current revision and executes its tree; no workflow file or workflow closure is read from the repository. The project's bound repository supplies only the workspace: the source branch (omission selects the project's current default) resolves to a SHA-1 commit, pinned as the workspace, or the optional `workspaceSource` selects a branch or commit of the same repository with connected-branch membership evidence, before the coordinator command is enqueued. A project bound to a GitLab repository is admitted the same way while the deployment's GitLab admission control is open, with the definition and workspace pinned at the same commit; a `workspaceSource` on it is answered `409 workspace-selection-unsupported`. An archived project admits no new run: the request is answered `409 project-archived` with `reason` `project-archived` before the project's readiness is judged, reads no provider and stages nothing. The idempotency fingerprint covers only normalized caller inputs; completed or pending exact retries retain the original pin, an archived project's included. An explicit `workspaceSource` on a deployment without schema-3 activation is answered `409 workspace-selection-unsupported` and creates no run.  A request that names a top-level `workflowPath` and no `definition` is answered `410 path-run-retired`, whose detail names the replacement, and creates no run, command or idempotency record; a repeat, under the same key and body, of a creation by workflow path accepted before the retirement still answers its original run. Naming both `workflowPath` and `definition`, naming neither, or naming `publication` with `definition` is `400 bad-request`. Refusals of a definition run create no run: `404 not-found` for a definition of another project or a deleted one, `409 definition-archived` for an archived definition, `422 workflow-not-in-tree` when `definition.workflowPath` names no workflow file of the revision's tree, and, when the selected workflow declares a subject whose slot is held, `409 subject-busy` while the holder is live or `409 subject-settled` once it exited unreleased, both naming the holder in `workflow.holderRunId`.
+/// Names the run's workflow with `definition`. The run pins the definition's current revision and executes its tree; no workflow file or workflow closure is read from the repository. The project's bound repository supplies only the workspace: the source branch (omission selects the project's current default) resolves to a SHA-1 commit, pinned as the workspace, or the optional `workspaceSource` selects a branch or commit of the same repository with connected-branch membership evidence, before the coordinator command is enqueued. A project bound to a GitLab repository is admitted the same way while the deployment's GitLab admission control is open, with the definition and workspace pinned at the same commit; a `workspaceSource` on it is answered 409 `workspace-selection-unsupported`. An archived project admits no new run: the request is answered `409 project-archived` with `reason` `project-archived` before the project's readiness is judged, reads no provider and stages nothing. The idempotency fingerprint covers only normalized caller inputs; completed or pending exact retries retain the original pin, an archived project's included. An explicit `workspaceSource` on a deployment without schema-3 activation is answered 409 `workspace-selection-unsupported` and creates no run.  A request that names a top-level `workflowPath` and no `definition` is answered `410 path-run-retired`, whose detail names the replacement, and creates no run, command or idempotency record; a repeat, under the same key and body, of a creation by workflow path accepted before the retirement still answers its original run. Naming both `workflowPath` and `definition`, naming neither, or naming `publication` with `definition` is `400 bad-request`. Refusals of a definition run create no run: `404 not-found` for a definition of another project or a deleted one, `409 definition-archived` for an archived definition, 422 `workflow-not-in-tree` when `definition.workflowPath` names no workflow file of the revision's tree, and, when the selected workflow declares a subject whose slot is held, `409 subject-busy` while the holder is live or `409 subject-settled` once it exited unreleased, both naming the holder in `workflow.holderRunId`.  Problem types: 409 `project-not-ready`, `run-creation-rejected`, `run-input-bindings-invalid`, `run-input-schema-mismatch`, `run-input-set-consumed`, `run-input-set-not-sealed`, `workflow-source-unavailable`, `workspace-membership-unproven`, `workspace-source-unavailable`; 410 `run-input-content-gone`, `run-input-set-expired`; 422 `workflow-source-invalid`; 503 `run-input-storage-unavailable`, `source-resolution-unavailable`.
 pub fn create_run(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -321,6 +350,7 @@ pub fn create_run(
     }
 }
 
+/// Problem types: 409 `run-creation-rejected`.
 pub fn get_run(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -572,6 +602,68 @@ pub fn get_run_linear_lifecycle(
     }
 }
 
+/// Returns the kept manifest's facts for a run in any state. A run without a kept record answers 404 with problem type `run-record-absent`. A deleted record or one due for collection answers 410 with problem type `run-record-gone`.
+pub fn get_run_record(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    run_id: &str,
+) -> Result<models::RunRecord, Error<GetRunRecordError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_run_id = run_id;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/runs/{runId}/record",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        runId = crate::generated::apis::urlencode(p_path_run_id)
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::RunRecord`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::RunRecord`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<GetRunRecordError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
 pub fn get_run_retry_request(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -628,6 +720,77 @@ pub fn get_run_retry_request(
     } else {
         let content = resp.text()?;
         let entity: Option<GetRunRetryRequestError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Returns fresh exact GET authority for the run's record files. No Idempotency-Key is accepted.
+pub fn issue_run_record_download_capabilities(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    run_id: &str,
+    run_record_download_capability_request: models::RunRecordDownloadCapabilityRequest,
+) -> Result<
+    models::RunRecordDownloadCapabilityResponse,
+    Error<IssueRunRecordDownloadCapabilitiesError>,
+> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_run_id = run_id;
+    let p_body_run_record_download_capability_request = run_record_download_capability_request;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/runs/{runId}/record/download-capabilities",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        runId = crate::generated::apis::urlencode(p_path_run_id)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+    req_builder = req_builder.json(&p_body_run_record_download_capability_request);
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::RunRecordDownloadCapabilityResponse`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::RunRecordDownloadCapabilityResponse`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<IssueRunRecordDownloadCapabilitiesError> =
+            serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -1180,7 +1343,7 @@ pub fn request_run_claim_release(
     }
 }
 
-/// Admission is not execution. Exact authorized replay returns the original 201 response bytes. A 503 `retryable-conflict` for concurrent work carries `Retry-After`.  Only a definition-backed run is continued. A request for a run created by `workflowPath` is answered `410` `path-run-retired` after membership and the run's existence are judged, whatever it names, and admits nothing; repeating a request admitted before the retirement still returns its original 201. A definition-backed run is continued by adoption: Cloud plans no partition, the named root steps pass to the retaining runner unvalidated and the receipt inherits no step. Its refusals create no attempt and are each a 409 problem of its own type with no `continuationViolations`: `definition-run-not-continuable` for a replaced definition, `continuation-step-required` when the request names no step and the current attempt reported an exit, `tree-continuation-unavailable` when the retaining runner does not advertise adoption, and `subject-busy` or `subject-settled`, naming the holder in `workflow.holderRunId`, when another run holds the subject.  A run whose project is archived is not continued: the request is answered `409` `project-archived` with `reason` `project-archived`, judged before the project's readiness, and records nothing; repeating a request admitted before the archive still returns its original 201.
+/// Admission is not execution. Exact authorized replay returns the original 201 response bytes. A 503 `retryable-conflict` for concurrent work carries `Retry-After`.  Only a definition-backed run is continued. A request for a run created by `workflowPath` is answered `410` `path-run-retired` after membership and the run's existence are judged, whatever it names, and admits nothing; repeating a request admitted before the retirement still returns its original 201. A definition-backed run is continued by adoption: Cloud plans no partition, the named root steps pass to the retaining runner unvalidated and the receipt inherits no step. Its refusals create no attempt and are each a 409 problem of its own type with no `continuationViolations`: `definition-run-not-continuable` for a replaced definition, `continuation-step-required` when the request names no step and the current attempt reported an exit, `tree-continuation-unavailable` when the retaining runner does not advertise adoption, and `subject-busy` or `subject-settled`, naming the holder in `workflow.holderRunId`, when another run holds the subject.  A run whose project is archived is not continued: the request is answered `409` `project-archived` with `reason` `project-archived`, judged before the project's readiness, and records nothing; repeating a request admitted before the archive still returns its original 201.  Problem types: 409 `continuation-admission-invalid`, `project-not-ready`, `workflow-source-unavailable`.
 pub fn request_run_continuation(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1320,7 +1483,7 @@ pub fn request_run_control(
     }
 }
 
-/// Only a definition-backed run is retried. A request for a run created by `workflowPath` is refused `409` `path-run-retired` after ownership and the run's existence are judged, and records nothing; repeating a request accepted before the retirement still answers its original receipt. A request for a run whose project is archived is likewise refused `409` `project-archived` with `reason` `project-archived` and records nothing, while repeating a request accepted before the archive answers its original receipt.
+/// Only a definition-backed run is retried. A request for a run created by `workflowPath` is refused `409` `path-run-retired` after ownership and the run's existence are judged, and records nothing; repeating a request accepted before the retirement still answers its original receipt. A request for a run whose project is archived is likewise refused `409` `project-archived` with `reason` `project-archived` and records nothing, while repeating a request accepted before the archive answers its original receipt.  Problem types: 409 `run-retry-pending`.
 pub fn request_run_retry(
     configuration: &configuration::Configuration,
     organization_ref: &str,

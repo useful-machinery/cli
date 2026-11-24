@@ -113,7 +113,7 @@ pub struct RejectionLocation<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<&'a str>,
     /// The path of the field a structurally invalid workflow file or replacement document
-    /// breaks (REQ-WFFORMAT-103).
+    /// breaks.
     #[serde(skip_serializing_if = "Option::is_none")]
     field: Option<&'a str>,
     /// The rule that field breaks.
@@ -738,6 +738,22 @@ fn validation_classification(kind: ValidationFailureKind) -> (&'static str, &'st
             "conflicting_agent_value_outputs",
             "Declare at most one native agent output.",
         ),
+        ValidationFailureKind::WorkspaceAmbiguous => (
+            "workspace_ambiguous",
+            "Name the step whose workspace this step continues in dependsOn, or declare workspace: new.",
+        ),
+        ValidationFailureKind::NewWorkspaceCwd => (
+            "new_workspace_cwd",
+            "Remove cwd from a step that declares workspace: new.",
+        ),
+        ValidationFailureKind::NoneWorkspaceCwd => (
+            "none_workspace_cwd",
+            "Remove cwd from a step that declares workspace: none.",
+        ),
+        ValidationFailureKind::EstablishedWorkspaceGitBranch => (
+            "established_workspace_git_branch",
+            "Declare the git_branch output on a step that runs in the execution root.",
+        ),
         ValidationFailureKind::ExcessWorkspaceOutput => (
             "excess_workspace_output",
             "Declare at most one workspace output on a node.",
@@ -1182,7 +1198,6 @@ fn admission_classification(kind: AdmissionFailureKind) -> Option<(&'static str,
 mod tests {
     use super::*;
 
-    // REQ-WFFORMAT-100
     #[test]
     fn subject_failures_are_reported_at_the_workflow_subject_key() {
         let codes = [
@@ -1253,7 +1268,6 @@ mod tests {
         );
     }
 
-    // REQ-WFFORMAT-80
     #[test]
     fn every_diagnostic_location_kind_is_in_the_closed_set() {
         let text = || "a".to_owned();

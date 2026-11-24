@@ -52,8 +52,8 @@ const SYSTEM_PROMPT_FILE_PREFIX: &str = "claude-code-system-prompt-";
 pub(super) const MAXIMUM_INLINE_ATTACHMENT_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const NATIVE_TRANSCRIPT_CAPTURE_MISSING_DIAGNOSTIC: &str =
     "Claude Code native transcript capture missing";
-/// How long Claude Code may write nothing and submit nothing before the adapter interrupts it
-/// (REQ-AGENT-88, INV-HARNESS-24).
+/// How long Claude Code may write nothing and submit nothing before the adapter interrupts
+/// it.
 pub(super) const QUIET_BOUND: Duration = Duration::from_secs(2 * 60 * 60);
 /// How long after the quiet bound's interrupt the adapter forces the group. The run's
 /// cancellation grace never reaches the adapter, so this is its own.
@@ -309,8 +309,8 @@ struct ClaudeCodeNativeSessionBridge {
 /// The directories of the ambient project path the bridge created, outermost
 /// first. On drop it removes each one that is empty, innermost first, so the
 /// invocation leaves Claude Code's configuration directory as it found it
-/// unless the program itself wrote there (REQ-GRANT-37); a directory that was
-/// already present, or that holds anything, is kept.
+/// unless the program itself wrote there; a directory that was already
+/// present, or that holds anything, is kept.
 struct CreatedAmbientDirectories(Vec<PathBuf>);
 
 impl CreatedAmbientDirectories {
@@ -776,7 +776,7 @@ impl agent_process_driver::StdioLaunchPlan for ClaudeCodeStreamJsonV1LaunchPlan 
 
 type QuietBoundWait = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// The adapter's end of the result tool in Result mode (INV-HARNESS-23).
+/// The adapter's end of the result tool in Result mode.
 struct ResultTool<'a, Clock, Worker> {
     channel: PreparedResultChannel,
     hello: ResultChannelHello,
@@ -806,7 +806,7 @@ struct ClaudeProtocol<'a, Clock, Worker> {
     reader: StreamReader,
     result_tool: Option<ResultTool<'a, Clock, Worker>>,
     /// Held open from the prompt frame until Claude Code exits or the invocation is
-    /// cancelled; nothing more is written to it (INV-HARNESS-24).
+    /// cancelled; nothing more is written to it.
     standard_input: Option<UnixStream>,
     initial_input: Pin<Box<dyn Future<Output = InitialInputProgress> + Send + 'a>>,
     initial_input_pending: bool,
@@ -815,7 +815,7 @@ struct ClaudeProtocol<'a, Clock, Worker> {
     quiet_bound: Option<QuietBoundWait>,
     /// The deciding `result` held when the quiet bound interrupted Claude Code. What the
     /// interrupt makes it report afterwards, the `result` of the turn it aborts among it, is
-    /// activity and decides nothing (REQ-AGENT-88).
+    /// activity and decides nothing.
     held_at_bound: Option<Option<DecidingResult>>,
     failure: Option<AgentFailureCause>,
 }
@@ -895,7 +895,7 @@ where
         {
             // Claude Code writes `system/init` only after the relay has answered `initialize`,
             // which follows the adapter's answer to its hello, so a missing hello here means
-            // the result tool never connected (REQ-AGENT-44, REQ-AGENT-89).
+            // the result tool never connected.
             let acknowledged = initialization.claude_code_version.as_deref()
                 == Some(self.invocation.adapter().version())
                 && self
@@ -952,8 +952,7 @@ where
     }
 
     /// Once Claude Code has exited and its output has closed, what is left in its group is a
-    /// leftover, the relay or a stray child: it is forced and decides nothing
-    /// (INV-HARNESS-24).
+    /// leftover, the relay or a stray child: it is forced and decides nothing.
     fn on_group_live(&mut self, state: &mut agent_process_driver::State<Clock>) {
         if !state.termination_requested {
             state.force_group();
@@ -1087,7 +1086,7 @@ where
     }
 
     /// Restarts the quiet bound in full, unless it has already interrupted Claude Code or the
-    /// invocation was cancelled (INV-HARNESS-24).
+    /// invocation was cancelled.
     fn restart_quiet_bound(&mut self, clock: &mut Clock) {
         if self.quiet_bound.is_some() && self.held_at_bound.is_none() {
             self.quiet_bound = Some(quiet_bound_wait(clock, QUIET_BOUND));
@@ -1096,7 +1095,7 @@ where
 
     /// At the quiet bound Claude Code is interrupted, and 30 seconds later its group is
     /// forced and its output no longer read, so the step ends even when a process outside
-    /// the group holds the pipe (REQ-AGENT-88).
+    /// the group holds the pipe.
     async fn on_quiet_bound(&mut self, state: &mut agent_process_driver::State<Clock>) {
         if self.held_at_bound.is_some() {
             self.quiet_bound = None;
@@ -1116,8 +1115,8 @@ where
         agent_process_driver::signal_interrupt(state.process_group);
     }
 
-    /// A hello is answered; a submission is judged and answered (REQ-AGENT-93,
-    /// REQ-AGENT-85). Both restart the quiet bound.
+    /// A hello is answered; a submission is judged and answered. Both restart
+    /// the quiet bound.
     async fn on_channel_event(
         &mut self,
         event: ResultChannelEvent,
@@ -1311,7 +1310,7 @@ async fn initialize_standard_input(
     }
     // A full socket can mean the harness is still starting, so the prompt's delivery has no
     // deadline of its own. Standard input stays open after it until Claude Code exits:
-    // Claude Code ends the session by its own idle exit (INV-HARNESS-24).
+    // Claude Code ends the session by its own idle exit.
     let result = tokio::select! {
         biased;
         reason = cancellation.wait_for_cancellation() => return InitialInputProgress::Cancelled(reason),

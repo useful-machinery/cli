@@ -1,11 +1,10 @@
-//! `useful workflow definition evaluation list` and `show` (REQ-CLOUDDEF-63): a Cloud
-//! definition's retained start evaluations (REQ-TRIGGER-132) in evaluation vocabulary 4
-//! (REQ-TRIGGER-166), listed with the exact `state` and `runId` filters and read one at a
-//! time, each with its stored reason, what its event names (a Linear issue, a push's branch
-//! and commit, or an ended run with its attempt and outcome) and, when it waited for its
-//! issue's blockers, that blocker wait (REQ-TRIGGER-181) and, when it could not read its
-//! issue, its diagnostic (REQ-TRIGGER-190). The definition is one of the project in effect,
-//! named as REQ-CLOUDDEF-42 states.
+//! `useful workflow definition evaluation list` and `show`: a Cloud definition's retained
+//! start evaluations in evaluation vocabulary 4, listed with the exact `state` and `runId`
+//! filters and read one at a time, each with its stored reason, what its event names (a
+//! Linear issue, a push's branch and commit, or an ended run with its attempt and outcome)
+//! and, when it waited for its issue's blockers, that blocker wait and, when it could not
+//! read its issue, its diagnostic. The definition is one of the project in effect, named by its
+//! ID or its name.
 
 use std::io::{self, Write};
 
@@ -323,7 +322,7 @@ fn event_subject(evaluation: &WorkflowDefinitionEvaluation) -> String {
 }
 
 /// The readiness blockers Cloud observed on the evaluation's project, joined with `, `;
-/// `None` when it observed none (REQ-TRIGGER-164).
+/// `None` when it observed none.
 fn project_blockers(evaluation: &WorkflowDefinitionEvaluation) -> Option<String> {
     let blockers = &evaluation.observations.as_ref()?.project.as_ref()?.blockers;
     (!blockers.is_empty()).then(|| {
@@ -337,7 +336,7 @@ fn project_blockers(evaluation: &WorkflowDefinitionEvaluation) -> Option<String>
 
 /// The wait Cloud observed for the evaluation's issue's blockers, as `since <since> · blocked
 /// by <blockers>`, each open blocker by its identifier or else its Linear id, `-` when none is
-/// open; `None` when the evaluation never waited (REQ-TRIGGER-181).
+/// open; `None` when the evaluation never waited.
 fn blocker_wait(evaluation: &WorkflowDefinitionEvaluation) -> Option<String> {
     let wait = evaluation.observations.as_ref()?.blocker_wait.as_ref()?;
     let blockers = if wait.blockers.is_empty() {
@@ -357,8 +356,7 @@ fn blocker_wait(evaluation: &WorkflowDefinitionEvaluation) -> Option<String> {
 
 /// The safe facts of the failure the evaluation's reason names, each member Cloud returned as
 /// `stage <stage>`, `error type <errorType>` and `http status <httpStatus>`, joined with `, `;
-/// `None` when Cloud returned no diagnostic or one with no member (REQ-TRIGGER-190,
-/// REQ-DIAG-43).
+/// `None` when Cloud returned no diagnostic or one with no member.
 fn diagnostic(evaluation: &WorkflowDefinitionEvaluation) -> Option<String> {
     let diagnostic = evaluation.observations.as_ref()?.diagnostic.as_ref()?;
     let facts = [

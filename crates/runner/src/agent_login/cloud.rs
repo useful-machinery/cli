@@ -2,13 +2,11 @@
 //! directory: its agent-login status and one delivery, which name neither a
 //! boot nor an assignment, since an agent login is a standing install bound
 //! to the runner alone, and the OAuth providers an assignment can be issued
-//! a grant token of (REQ-GRANT-97) and the token of one of them, which name
-//! both (REQ-GRANT-84); and its report of where an assignment's credentials
-//! come from, which names both too (REQ-GRANT-91). Each is a POST on the
-//! HTTP base of the runner's endpoint, authenticated by the enrolled runner
-//! credential.
+//! a grant token of and the token of one of them, which name both; and its
+//! report of where an assignment's credentials come from, which names both
+//! too. Each is a POST on the HTTP base of the runner's endpoint,
+//! authenticated by the enrolled runner credential.
 
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -16,14 +14,12 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize, Serializer};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use url::Url;
 use zeroize::Zeroizing;
 
 use super::readiness::{LastUse, UseOutcome};
 use super::{FailureCause, OperatingSystem};
 use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialSource};
-use crate::credential::Credential;
-use crate::runner_http::{self, SensitiveString};
+use crate::runner_http::{self, SensitiveString, ServingTarget};
 
 const STATUS_PATH: &str = "/v1/runner/agent-logins/status";
 const DELIVERY_PATH: &str = "/v1/runner/agent-logins/delivery";
@@ -33,7 +29,7 @@ const TOKEN_SERVICES_PATH: &str = "/v1/runner/integrations/providers";
 const CREDENTIAL_SOURCES_PATH: &str = "/v1/runner/credential-sources";
 /// Cloud accepts no larger material for any provider.
 const MAXIMUM_MATERIAL_BYTES: usize = 32 * 1024;
-/// Cloud lists no more providers for an assignment (REQ-GRANT-97).
+/// Cloud lists no more providers for an assignment.
 const MAXIMUM_LISTED_PROVIDERS: usize = 32;
 /// The longest provider id, `^[a-z][a-z0-9.-]{0,62}$`.
 const MAXIMUM_PROVIDER_ID_BYTES: usize = 63;
@@ -43,50 +39,43 @@ const MAXIMUM_PROVIDER_ID_BYTES: usize = 63;
 /// blocking thread.
 pub(crate) trait AgentLoginCloud: Send + Sync {
     /// Which agent logins Cloud has authorized for this runner among the
-    /// providers the request names (REQ-GRANT-25). An entry for a
-    /// provider this build cannot install is dropped.
+    /// providers the request names. An entry for a provider this build
+    /// cannot install is dropped.
     fn status(&self, request: &StatusRequest) -> Result<Vec<ProviderLogin>, CloudFailure>;
 
-    /// One generation of one agent login (REQ-GRANT-26).
+    /// One generation of one agent login.
     fn delivery(&self, request: &DeliveryRequest) -> Result<Delivery, DeliveryFailure>;
 
     /// The access token of the grant Cloud resolves for the assignment the
-    /// request names (REQ-GRANT-84). A Cloud without the route answers
-    /// `NoRoute`.
+    /// request names. A Cloud without the route answers `NoRoute`.
     fn grant_token(&self, request: &GrantTokenRequest) -> Result<IssuedToken, GrantTokenFailure>;
 
     /// The OAuth providers Cloud can issue the assignment the request names
     /// a grant token of, in its order, each with the two names its token is
-    /// offered under (REQ-GRANT-97). A Cloud without the route answers
-    /// `NoRoute`.
+    /// offered under. A Cloud without the route answers `NoRoute`.
     fn grant_providers(
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure>;
 
     /// The token services the assignment the request names declares, in
-    /// Cloud's order, each with the two names its token is offered under
-    /// (REQ-INTEGRATION-9, REQ-INTEGRATION-12): the request and answers of
-    /// `grant_providers` under another path, where no id is one of the
-    /// runner's three. A Cloud without the route answers `NoRoute`.
+    /// Cloud's order, each with the two names its token is offered under:
+    /// the request and answers of `grant_providers` under another path,
+    /// where no id is one of the runner's three. A Cloud without the route
+    /// answers `NoRoute`.
     fn token_services(
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure>;
 
     /// Tells Cloud where the credentials of the assignment the request names
-    /// come from (REQ-GRANT-91, REQ-GRANT-93), a token service's included
-    /// (REQ-INTEGRATION-12), in one bounded request; Cloud
+    /// come from, a token service's included, in one bounded request; Cloud
     /// answers nothing more than that it recorded the report. A Cloud
     /// without the route answers `NoRoute`.
     fn credential_sources(
         &self,
         request: &CredentialSourcesRequest,
     ) -> Result<(), CredentialSourcesFailure>;
-
-    /// Makes later requests use the endpoint and credential the runner now
-    /// serves with, after a live credential promotion.
-    fn follow_credential(&self, endpoint: &Url, runner_credential: &Credential);
 }
 
 /// What the runner tells Cloud when it asks for its status.
@@ -110,8 +99,7 @@ pub(crate) struct ProviderReport {
 
 impl ProviderReport {
     /// The report of `provider`, stating `last_use` only with `state`
-    /// `ready` and an install, the only report Cloud takes it with
-    /// (REQ-GRANT-25, REQ-GRANT-52).
+    /// `ready` and an install, the only report Cloud takes it with.
     pub(crate) fn new(
         provider: AgentLoginProvider,
         installed: Option<InstalledLogin>,
@@ -230,9 +218,9 @@ impl CloudFailure {
 
 /// A provider whose token the runner asks Cloud for: one of the runner's
 /// three OAuth providers, GitHub, GitLab.com and Linear, an OAuth provider a
-/// deployment added by configuration, which Cloud lists by its id
-/// (REQ-GRANT-97), or a token service the assignment declares, which Cloud
-/// lists by its id on a list of its own (REQ-INTEGRATION-12).
+/// deployment added by configuration, which Cloud lists by its id, or a
+/// token service the assignment declares, which Cloud lists by its id on a
+/// list of its own.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GrantProvider(GrantProviderKind);
 
@@ -299,9 +287,9 @@ impl GrantProvider {
         ))
     }
 
-    /// The token service Cloud lists as `id` (REQ-INTEGRATION-12); `None`
-    /// for an id outside `^[a-z][a-z0-9.-]{0,62}$` and for `github`,
-    /// `gitlab.com` and `linear`, which are never token services.
+    /// The token service Cloud lists as `id`; `None` for an id outside
+    /// `^[a-z][a-z0-9.-]{0,62}$` and for `github`, `gitlab.com` and
+    /// `linear`, which are never token services.
     pub(crate) fn token_service(id: &str) -> Option<Self> {
         (valid_provider_id(id) && !runner_provider_id(id))
             .then(|| Self(GrantProviderKind::TokenService(id.to_owned())))
@@ -326,13 +314,83 @@ impl GrantProvider {
         }
     }
 
-    /// The prefix of the ID Cloud names the token's source by: an
-    /// integration token's (`itk_`) for a token service, a grant's (`pgr_`)
-    /// for any other provider.
-    const fn issued_id_prefix(&self) -> &'static str {
-        match &self.0 {
-            GrantProviderKind::TokenService(_) => "itk_",
-            GrantProviderKind::Runner(_) | GrantProviderKind::Configured(_) => "pgr_",
+    /// What the ID `id` Cloud named a token of the provider by issued it:
+    /// for `github` a grant (`pgr_`) or a connection authorization
+    /// (`cna_`), for any other OAuth provider a grant alone, and for a
+    /// token service an integration token (`itk_`) alone. `None` for an ID
+    /// of another kind or form, an answer the runner cannot trust.
+    pub(crate) fn issuer(&self, id: String) -> Option<Issuer> {
+        let issuer = match &self.0 {
+            GrantProviderKind::TokenService(_) => Issuer::IntegrationToken(id),
+            GrantProviderKind::Runner(RunnerGrantProvider::Github)
+                if id.starts_with(Issuer::CONNECTION_AUTHORIZATION_PREFIX) =>
+            {
+                Issuer::ConnectionAuthorization(id)
+            }
+            GrantProviderKind::Runner(_) | GrantProviderKind::Configured(_) => Issuer::Grant(id),
+        };
+        issuer.valid().then_some(issuer)
+    }
+}
+
+/// What Cloud issued a token under, by its ID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Issuer {
+    /// A member's grant, by its `pgr_` ID.
+    Grant(String),
+    /// For `github`, a connection authorization, by its `cna_` ID: the
+    /// organization's GitHub App installation an owner authorized for the
+    /// run.
+    ConnectionAuthorization(String),
+    /// For a token service, an integration token, by its `itk_` ID.
+    IntegrationToken(String),
+}
+
+impl Issuer {
+    const CONNECTION_AUTHORIZATION_PREFIX: &'static str = "cna_";
+
+    /// The issuer's ID.
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Grant(id) | Self::ConnectionAuthorization(id) | Self::IntegrationToken(id) => id,
+        }
+    }
+
+    /// The prefix an ID of the issuer's kind has.
+    const fn prefix(&self) -> &'static str {
+        match self {
+            Self::Grant(_) => "pgr_",
+            Self::ConnectionAuthorization(_) => Self::CONNECTION_AUTHORIZATION_PREFIX,
+            Self::IntegrationToken(_) => "itk_",
+        }
+    }
+
+    /// Whether the issuer's ID is one of its kind's form.
+    pub(crate) fn valid(&self) -> bool {
+        useful_support::valid_typed_id(self.id(), self.prefix())
+    }
+
+    /// The grant's `pgr_` ID, where the issuer is a grant.
+    pub(crate) fn grant_id(&self) -> Option<&str> {
+        match self {
+            Self::Grant(id) => Some(id),
+            Self::ConnectionAuthorization(_) | Self::IntegrationToken(_) => None,
+        }
+    }
+
+    /// The connection authorization's `cna_` ID, where the issuer is one.
+    pub(crate) fn connection_authorization_id(&self) -> Option<&str> {
+        match self {
+            Self::ConnectionAuthorization(id) => Some(id),
+            Self::Grant(_) | Self::IntegrationToken(_) => None,
+        }
+    }
+
+    /// The integration token's `itk_` ID, where the issuer is one.
+    pub(crate) fn integration_token_id(&self) -> Option<&str> {
+        match self {
+            Self::IntegrationToken(id) => Some(id),
+            Self::Grant(_) | Self::ConnectionAuthorization(_) => None,
         }
     }
 }
@@ -380,8 +438,8 @@ pub(crate) struct GrantTokenRequest {
     pub(crate) provider: GrantProvider,
 }
 
-/// A request for the OAuth providers of an assignment the runner holds
-/// (REQ-GRANT-97).
+/// A request for the OAuth providers of an assignment the runner
+/// holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GrantProvidersRequest {
     pub(crate) boot_id: String,
@@ -415,20 +473,19 @@ impl From<CloudFailure> for GrantProvidersFailure {
     }
 }
 
-/// The access token Cloud issued from a grant (REQ-GRANT-84, REQ-GRANT-85),
-/// or from an integration token for a token service (REQ-INTEGRATION-10).
+/// The access token Cloud issued from a grant, for `github` under a
+/// connection authorization, or from an integration token for a token
+/// service.
 #[derive(Debug)]
 pub(crate) struct IssuedToken {
-    /// The grant's `pgr_` ID, or the integration token's `itk_` ID for a
-    /// token service.
-    pub(crate) grant_id: String,
+    /// What issued it, as the provider admits (`GrantProvider::issuer`).
+    pub(crate) issuer: Issuer,
     /// The grant's generation the token belongs to, or the integration
     /// token's version, at least 1.
     pub(crate) generation: u64,
     pub(crate) access_token: GrantAccessToken,
     pub(crate) expires_at: OffsetDateTime,
-    /// How long the runner waits before asking again (REQ-GRANT-85,
-    /// REQ-GRANT-89).
+    /// How long the runner waits before asking again.
     pub(crate) refresh_after: std::time::Duration,
 }
 
@@ -453,7 +510,7 @@ impl std::fmt::Debug for GrantAccessToken {
     }
 }
 
-/// The reason Cloud names when it issues no token (REQ-GRANT-146).
+/// The reason Cloud names when it issues no token.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GrantTokenRefusal {
@@ -479,7 +536,7 @@ impl From<CloudFailure> for GrantTokenFailure {
 }
 
 /// The runner's report of where each provider's credential comes from for
-/// an assignment of this boot (REQ-GRANT-91).
+/// an assignment of this boot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CredentialSourcesRequest {
     pub(crate) boot_id: String,
@@ -487,13 +544,13 @@ pub(crate) struct CredentialSourcesRequest {
     /// Each provider that has a source, at most once.
     pub(crate) sources: Vec<ReportedSource>,
     /// Each token service Cloud listed for the assignment that has a
-    /// source, in the list's order, at most once (REQ-INTEGRATION-12):
-    /// reported in the same `sources` array, after the providers'.
+    /// source, in the list's order, at most once: reported in the same
+    /// `sources` array, after the providers'.
     pub(crate) token_services: Vec<ReportedTokenService>,
 }
 
-/// One token service's source as the runner reports it
-/// (REQ-INTEGRATION-12), by the id Cloud's token-service list named it by.
+/// One token service's source as the runner reports it, by the id Cloud's
+/// token-service list named it by.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReportedTokenService {
     pub(crate) provider: String,
@@ -510,16 +567,19 @@ pub(crate) enum TokenServiceSource {
     Token { integration_token_id: String },
 }
 
-/// One provider's source as the runner reports it: an OAuth grant names
-/// the grant its token was issued from, and a coding agent's grant the
-/// agent login the runner's record names, where it names one; a host
-/// source names neither.
+/// One provider's source as the runner reports it: an OAuth grant names the
+/// grant its token was issued from, `github`'s `org_connection` the
+/// connection authorization its token was issued under, and a coding
+/// agent's grant the agent login the runner's record names, where it names
+/// one; a host source names none.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReportedSource {
     pub(crate) provider: AgentLoginProvider,
     pub(crate) source: CredentialSource,
     /// The `pgr_` ID of an OAuth provider's grant.
     pub(crate) grant_id: Option<String>,
+    /// The `cna_` ID of `github`'s connection authorization.
+    pub(crate) connection_authorization_id: Option<String>,
     /// The `agl_` ID of a coding agent's agent login.
     pub(crate) agent_login_id: Option<String>,
 }
@@ -553,79 +613,32 @@ impl From<CloudFailure> for DeliveryFailure {
 }
 
 /// The requests over HTTP with the runner's current credential.
-#[derive(Debug)]
 pub(crate) struct HttpAgentLoginCloud {
-    target: Mutex<Target>,
+    target: ServingTarget,
     timeout: Duration,
 }
 
-/// Where the requests go and the credential they carry.
-#[derive(Clone, Debug)]
-struct Target {
-    status_endpoint: Url,
-    delivery_endpoint: Url,
-    grant_token_endpoint: Url,
-    grant_providers_endpoint: Url,
-    token_services_endpoint: Url,
-    credential_sources_endpoint: Url,
-    runner_credential: Credential,
-}
-
-impl Target {
-    /// `None` for an endpoint that is not `ws(s)`.
-    fn new(endpoint: &Url, runner_credential: &Credential) -> Option<Self> {
-        Some(Self {
-            status_endpoint: runner_http::private_runner_http_endpoint(endpoint, STATUS_PATH)
-                .ok()?,
-            delivery_endpoint: runner_http::private_runner_http_endpoint(endpoint, DELIVERY_PATH)
-                .ok()?,
-            grant_token_endpoint: runner_http::private_runner_http_endpoint(
-                endpoint,
-                GRANT_TOKEN_PATH,
-            )
-            .ok()?,
-            grant_providers_endpoint: runner_http::private_runner_http_endpoint(
-                endpoint,
-                GRANT_PROVIDERS_PATH,
-            )
-            .ok()?,
-            token_services_endpoint: runner_http::private_runner_http_endpoint(
-                endpoint,
-                TOKEN_SERVICES_PATH,
-            )
-            .ok()?,
-            credential_sources_endpoint: runner_http::private_runner_http_endpoint(
-                endpoint,
-                CREDENTIAL_SOURCES_PATH,
-            )
-            .ok()?,
-            runner_credential: runner_credential.clone(),
-        })
+impl std::fmt::Debug for HttpAgentLoginCloud {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpAgentLoginCloud")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
     }
 }
 
 impl HttpAgentLoginCloud {
-    /// The client for the runner's `ws(s)` endpoint; `None` for any other
-    /// scheme.
-    pub(crate) fn new(endpoint: &Url, runner_credential: &Credential) -> Option<Self> {
-        Some(Self {
-            target: Mutex::new(Target::new(endpoint, runner_credential)?),
+    pub(crate) fn new(target: ServingTarget) -> Self {
+        Self {
+            target,
             timeout: runner_http::REQUEST_TIMEOUT,
-        })
+        }
     }
 
-    fn target(&self) -> Target {
-        self.target
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// A provider list of the shape of `grant_providers` from `endpoint`,
+    /// A provider list of the shape of `grant_providers` from `path`,
     /// each id a provider id, at most once, and one `accepted` takes.
     fn list(
         &self,
-        endpoint: impl Fn(&Target) -> &Url,
+        path: &str,
         request: &GrantProvidersRequest,
         accepted: impl Fn(&str) -> bool,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
@@ -634,7 +647,7 @@ impl HttpAgentLoginCloud {
             boot_id: &request.boot_id,
             assignment_id: &request.assignment_id,
         };
-        let response = self.post(endpoint, &body, &[StatusCode::OK, StatusCode::CONFLICT])?;
+        let response = self.post(path, &body, &[StatusCode::OK, StatusCode::CONFLICT])?;
         match response.status {
             StatusCode::OK => {}
             StatusCode::CONFLICT => {
@@ -675,16 +688,16 @@ impl HttpAgentLoginCloud {
 
     fn post(
         &self,
-        endpoint: impl Fn(&Target) -> &Url,
+        path: &str,
         body: &impl Serialize,
         json_statuses: &[StatusCode],
     ) -> Result<runner_http::Response, CloudFailure> {
         // A body that cannot be encoded is never sent.
         let body = serde_json::to_vec(body).map_err(|_| CloudFailure::Transport)?;
-        let target = self.target();
+        let target = self.target.current();
         runner_http::post_json(
-            endpoint(&target),
-            &target.runner_credential,
+            &target.url(path),
+            target.credential(),
             body,
             json_statuses,
             self.timeout,
@@ -700,12 +713,6 @@ impl HttpAgentLoginCloud {
 }
 
 impl AgentLoginCloud for HttpAgentLoginCloud {
-    fn follow_credential(&self, endpoint: &Url, runner_credential: &Credential) {
-        if let Some(target) = Target::new(endpoint, runner_credential) {
-            *self.target.lock().unwrap_or_else(PoisonError::into_inner) = target;
-        }
-    }
-
     fn status(&self, request: &StatusRequest) -> Result<Vec<ProviderLogin>, CloudFailure> {
         let body = StatusRequestBody {
             schema_version: 1,
@@ -723,7 +730,7 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
                 })
                 .collect(),
         };
-        let response = self.post(|target| &target.status_endpoint, &body, &[StatusCode::OK])?;
+        let response = self.post(STATUS_PATH, &body, &[StatusCode::OK])?;
         if response.status != StatusCode::OK {
             return Err(CloudFailure::Status(response.status.as_u16()));
         }
@@ -778,7 +785,7 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
             generation: request.generation,
         };
         let response = self.post(
-            |target| &target.delivery_endpoint,
+            DELIVERY_PATH,
             &body,
             &[StatusCode::OK, StatusCode::CONFLICT],
         )?;
@@ -831,7 +838,7 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
             provider,
         };
         let response = self.post(
-            |target| &target.grant_token_endpoint,
+            GRANT_TOKEN_PATH,
             &body,
             &[StatusCode::OK, StatusCode::CONFLICT],
         )?;
@@ -852,20 +859,17 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
             serde_json::from_slice(&response.body).map_err(|_| CloudFailure::InvalidResponse)?;
         let expires_at = OffsetDateTime::parse(&answer.expires_at, &Rfc3339)
             .map_err(|_| CloudFailure::InvalidResponse)?;
-        if answer.schema_version != 1
-            || answer.provider != provider
-            || answer.generation < 1
-            || !useful_support::valid_typed_id(
-                &answer.grant_id,
-                request.provider.issued_id_prefix(),
-            )
-        {
+        if answer.schema_version != 1 || answer.provider != provider || answer.generation < 1 {
             return Err(CloudFailure::InvalidResponse.into());
         }
+        let issuer = request
+            .provider
+            .issuer(answer.grant_id)
+            .ok_or(CloudFailure::InvalidResponse)?;
         let access_token = GrantAccessToken::new(answer.access_token.0.as_bytes())
             .ok_or(CloudFailure::InvalidResponse)?;
         Ok(IssuedToken {
-            grant_id: answer.grant_id,
+            issuer,
             generation: answer.generation,
             access_token,
             expires_at,
@@ -877,18 +881,14 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
-        self.list(|target| &target.grant_providers_endpoint, request, |_| true)
+        self.list(GRANT_PROVIDERS_PATH, request, |_| true)
     }
 
     fn token_services(
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
-        self.list(
-            |target| &target.token_services_endpoint,
-            request,
-            |id| !runner_provider_id(id),
-        )
+        self.list(TOKEN_SERVICES_PATH, request, |id| !runner_provider_id(id))
     }
 
     fn credential_sources(
@@ -911,11 +911,12 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
                         .unwrap_or(entry.provider.as_str()),
                     source: entry.source.as_str(),
                     grant_id: entry.grant_id.as_deref(),
+                    connection_authorization_id: entry.connection_authorization_id.as_deref(),
                     agent_login_id: entry.agent_login_id.as_deref(),
                     integration_token_id: None,
                 })
                 // A token service's entry follows the providers', by the id
-                // Cloud listed it by, and names no grant or agent login.
+                // Cloud listed it by, and names no grant, authorization or agent login.
                 .chain(request.token_services.iter().map(|entry| {
                     let (source, integration_token_id) = match &entry.source {
                         TokenServiceSource::Host => ("host", None),
@@ -927,6 +928,7 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
                         provider: &entry.provider,
                         source,
                         grant_id: None,
+                        connection_authorization_id: None,
                         agent_login_id: None,
                         integration_token_id,
                     }
@@ -935,7 +937,7 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
         };
         // Cloud's answer carries nothing the runner reads: a refusal's
         // reason is recorded as its status alone.
-        let response = self.post(|target| &target.credential_sources_endpoint, &body, &[])?;
+        let response = self.post(CREDENTIAL_SOURCES_PATH, &body, &[])?;
         match response.status {
             StatusCode::NO_CONTENT => Ok(()),
             StatusCode::NOT_FOUND => Err(CredentialSourcesFailure::NoRoute),
@@ -1102,6 +1104,8 @@ struct CredentialSourceBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     grant_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    connection_authorization_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     agent_login_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     integration_token_id: Option<&'a str>,
@@ -1116,8 +1120,7 @@ struct IssuedTokenAnswer {
     generation: u64,
     access_token: SensitiveString,
     expires_at: String,
-    /// The wait before asking again (REQ-GRANT-85), a whole number of
-    /// seconds.
+    /// The wait before asking again, a whole number of seconds.
     refresh_after_seconds: u64,
 }
 

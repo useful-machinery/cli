@@ -1,30 +1,27 @@
-//! The grant tokens of each assignment the serving runner holds
-//! (REQ-GRANT-86): at each admission the runner asks Cloud for the
-//! assignment's providers and, at the same time, its token services
-//! (REQ-INTEGRATION-12), then for the token of the run's grant of each
-//! provider listed, and of each token service, that the host does not provide
-//! (REQ-GRANT-87), keeps each token it is issued in a private file of its own
-//! in the assignment's own directory of its agent-login directory, records
-//! the outcome of each of GitHub, GitLab.com and Linear for the run in the
-//! readiness document (REQ-GRANT-88), and writes a `runner.grant_token`
-//! record for each changed state and each failure (REQ-TELEMETRY-46). A
-//! token file is only ever the token of the assignment whose directory holds
-//! it (INV-RUNNER-28): every setup, an admission's included, removes what no
-//! assignment the runner holds owns, an admission clears its own
-//! assignment's directory before it uses any answer, and the hold an
+//! The grant tokens of each assignment the serving runner holds: at each
+//! admission the runner asks Cloud for the assignment's providers and, at the
+//! same time, its token services, then for the token of the run's grant of
+//! each provider listed, and of each token service, that the host does not
+//! provide, keeps each token it is issued in a private file of its own in the
+//! assignment's own directory of its agent-login directory, records the
+//! outcome of each of GitHub, GitLab.com and Linear for the run in the
+//! readiness document, and writes a `runner.grant_token` record for each
+//! changed state and each failure. A token file is only ever the token of the
+//! assignment whose directory holds it: every setup, an admission's included,
+//! removes what no assignment the runner holds owns, an admission clears its
+//! own assignment's directory before it uses any answer, and the hold an
 //! admission returns removes that directory when the assignment ends. The
 //! admission offers each token it holds, and its file, to the steps of its
-//! workflow that pass their names or, for the runner's own three, declare
-//! the provider (REQ-WFEXEC-85): the runner's own names for its three, and
-//! the names of a listed provider's entry once it has checked them
-//! (REQ-GRANT-152, INV-RUNNER-32). While the assignment runs, a task the hold
-//! owns keeps each file current (REQ-GRANT-89): it asks again when the wait
+//! workflow that pass their names or, for the runner's own three, declare the
+//! provider: the runner's own names for its three, and the names of a listed
+//! provider's entry once it has checked them. While the assignment runs, a
+//! task the hold owns keeps each file current: it asks again when the wait
 //! Cloud named has passed and replaces the file in one step, retries a
 //! request Cloud did not answer, removes the file at a refusal or once the
 //! held token has expired, and stops when the hold is dropped. Dropping the
 //! hold then marks the entries ended, unless a later admission has recorded
-//! its own since (INV-RUNNER-30); a refresh records an entry only while its
-//! admission is the last that recorded them.
+//! its own since; a refresh records an entry only while its admission is the
+//! last that recorded them.
 
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
@@ -45,7 +42,7 @@ use useful_execution::{
 use super::cloud::{
     AgentLoginCloud, CloudFailure, GrantAccessToken, GrantProvider, GrantProvidersFailure,
     GrantProvidersRequest, GrantTokenFailure, GrantTokenRefusal, GrantTokenRequest, IssuedToken,
-    ListedProvider, ReportedTokenService, TokenServiceSource,
+    Issuer, ListedProvider, ReportedTokenService, TokenServiceSource,
 };
 use super::directory::{self, LoginDirectory};
 use super::readiness::{GrantReadiness, IssuedGrant, ReadinessDocument, brokered_providers};
@@ -58,11 +55,10 @@ use crate::telemetry::{self, Outcome, Recorder, attribute};
 /// The record of a changed grant-token state or a failure.
 pub(crate) const GRANT_TOKEN_EVENT: &str = "runner.grant_token";
 
-/// The variables each of the runner's three providers' grant token is
-/// offered as, whatever Cloud's list names them: the token, and the path of
-/// its file (REQ-GRANT-87, REQ-GRANT-153). The host provides a provider while the service
-/// environment carries either. They are the names the engine delivers for a
-/// declared integration of the provider (INV-ENGINE-64).
+/// The variables each of the runner's three providers' grant token is offered as,
+/// whatever Cloud's list names them: the token, and the path of its file. The host
+/// provides a provider while the service environment carries either. They are the names
+/// the engine delivers for a declared integration of the provider.
 pub(super) const OFFERED_VARIABLES: [(AgentLoginProvider, &str, &str); 3] = [
     (AgentLoginProvider::Github, "GH_TOKEN", "GH_TOKEN_FILE"),
     (
@@ -77,17 +73,16 @@ pub(super) const OFFERED_VARIABLES: [(AgentLoginProvider, &str, &str); 3] = [
     ),
 ];
 
-/// The least a refresh waits before asking again after an answer
-/// (REQ-GRANT-161), and the wait after the first failure in a row.
+/// The least a refresh waits before asking again after an answer,
+/// and the wait after the first failure in a row.
 const MINIMUM_WAIT: Duration = Duration::from_secs(5);
 
 /// The longest wait after a failure: each failure in a row doubles the wait
-/// from `MINIMUM_WAIT` up to this (REQ-GRANT-161).
+/// from `MINIMUM_WAIT` up to this.
 const MAXIMUM_RETRY: Duration = Duration::from_secs(5 * 60);
 
-/// The status Cloud refuses `assignment_not_current` with (REQ-GRANT-146,
-/// REQ-GRANT-97), which a record of that failed request carries
-/// (REQ-TELEMETRY-73).
+/// The status Cloud refuses `assignment_not_current` with, which a record
+/// of that failed request carries.
 const ASSIGNMENT_NOT_CURRENT_STATUS: u16 = 409;
 
 /// What an admission's two lists answered: the OAuth providers' and the
@@ -97,7 +92,7 @@ type Lists = (
     Result<Vec<ListedProvider>, GrantProvidersFailure>,
 );
 
-/// Which of an assignment's requests a record is of (REQ-TELEMETRY-46).
+/// Which of an assignment's requests a record is of.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     /// The request its admission makes.
@@ -156,9 +151,9 @@ impl Failure {
 }
 
 /// The provider as a `runner.grant_token` record names it
-/// (`um.grant_token.provider`, REQ-TELEMETRY-46): `github`, `gitlab` or
-/// `linear` for the runner's three, as they have always been recorded, and
-/// Cloud's id for any other provider.
+/// (`um.grant_token.provider`): `github`, `gitlab` or `linear` for the
+/// runner's three, as they have always been recorded, and Cloud's id for
+/// any other provider.
 fn record_name(provider: &GrantProvider) -> &str {
     match provider.agent_login_provider() {
         Some(provider) => provider.as_str(),
@@ -167,10 +162,9 @@ fn record_name(provider: &GrantProvider) -> &str {
 }
 
 /// A provider whose grant token the runner asks Cloud for, with the two
-/// names `offer` offers the token and the path of its file under
-/// (REQ-GRANT-87): the runner's own for its three, and for any other
-/// provider the names of its entry in Cloud's list, once checked
-/// (INV-RUNNER-32).
+/// names `offer` offers the token and the path of its file under: the
+/// runner's own for its three, and for any other provider the names of
+/// its entry in Cloud's list, once checked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Offering {
     provider: GrantProvider,
@@ -193,18 +187,18 @@ impl Offering {
     }
 
     /// Whether the service environment carries either name, the host's
-    /// providing the provider (REQ-GRANT-153).
+    /// providing the provider.
     fn provided_by(&self, service: &ServiceEnvironment) -> bool {
         service.carries(&self.variable) || service.carries(&self.file_variable)
     }
 }
 
 /// Whether the entry of a provider other than the runner's three may offer
-/// its token under `variable` and `file_variable` (REQ-GRANT-152,
-/// INV-RUNNER-32): the two differ, and each is a name a step receives only
-/// by declaring it, is neither name the runner sets for an agent login, is
-/// no name of the runner's three, and is no name of a configured entry
-/// before it in the list, `earlier`, whether or not that entry was used.
+/// its token under `variable` and `file_variable`: the two differ, and
+/// each is a name a step receives only by declaring it, is neither name
+/// the runner sets for an agent login, is no name of the runner's three,
+/// and is no name of a configured entry before it in the list, `earlier`,
+/// whether or not that entry was used.
 fn usable_names(variable: &str, file_variable: &str, earlier: &[&str]) -> bool {
     variable != file_variable
         && [variable, file_variable].into_iter().all(|name| {
@@ -221,7 +215,7 @@ fn usable_names(variable: &str, file_variable: &str, earlier: &[&str]) -> bool {
 /// The runner's grant token files and the assignments it holds, whose
 /// directories hold them. Every write and removal of a token file is made
 /// under its lock, so the end of one assignment never removes the files of
-/// another (INV-RUNNER-28).
+/// another.
 pub(crate) struct TokenFiles {
     directory: LoginDirectory,
     recorder: Arc<Recorder>,
@@ -249,7 +243,7 @@ impl TokenFiles {
     }
 
     /// Whether the runner holds any assignment: while it does, no setup
-    /// marks an entry ended (INV-RUNNER-30).
+    /// marks an entry ended.
     pub(crate) fn holds_any(&self) -> bool {
         !self.held().is_empty()
     }
@@ -312,8 +306,8 @@ impl TokenFiles {
         }
     }
 
-    /// Removes what no assignment the runner holds owns, at a setup
-    /// (INV-RUNNER-28); nothing of a held assignment is touched.
+    /// Removes what no assignment the runner holds owns, at a
+    /// setup; nothing of a held assignment is touched.
     pub(crate) fn remove_leftovers(&self) {
         let held = self.held();
         self.remove_unowned(&held);
@@ -371,15 +365,15 @@ impl TokenFiles {
 }
 
 /// A token the runner kept in its file, the provider and the two names it
-/// is offered under, the grant Cloud issued it from, and the wait Cloud
+/// is offered under, what Cloud issued it under, and the wait Cloud
 /// named with it.
 #[derive(Clone, Debug)]
 struct HeldToken {
     offering: Offering,
-    /// The `pgr_` ID of the grant, or for a token service the `itk_` ID of
-    /// its integration token, as issued at the admission, which the
-    /// admission reports (REQ-GRANT-93, REQ-INTEGRATION-12).
-    grant_id: String,
+    /// The grant, `github`'s connection authorization or a token service's
+    /// integration token, as issued at the admission, which the admission
+    /// reports.
+    issuer: Issuer,
     file: PathBuf,
     generation: u64,
     expires_at: OffsetDateTime,
@@ -389,11 +383,11 @@ struct HeldToken {
 /// What an admission holds of its assignment's grant tokens, which the manager
 /// holds with the assignment until it ends, whether or not it kept a token. It is
 /// made before the admission registers the assignment in `TokenFiles`, so
-/// whatever ends the admission ends the registration with it: dropping it
-/// stops its refresh task, then removes the assignment's directory, with
-/// every token file in it, no longer counts the assignment held and marks
-/// the entries its admission recorded ended (INV-RUNNER-28, INV-RUNNER-30),
-/// on a blocking thread when there is a runtime to run one on.
+/// whatever ends the admission ends the registration with it: dropping it stops
+/// its refresh task, then removes the assignment's directory, with every token
+/// file in it, no longer counts the assignment held and marks the entries its
+/// admission recorded ended, on a blocking thread when there is a runtime to run
+/// one on.
 pub(crate) struct AssignmentGrantTokens {
     files: Arc<TokenFiles>,
     /// The setup each refresh is made and recorded through, and the end
@@ -406,8 +400,8 @@ pub(crate) struct AssignmentGrantTokens {
     held: Vec<HeldToken>,
     /// Each token service Cloud's list named whose names the runner
     /// checked, in the list's order, whether or not a token of it was kept:
-    /// those whose source the admission reports (REQ-INTEGRATION-12). None
-    /// where Cloud did not answer the list.
+    /// those whose source the admission reports. None where Cloud did not
+    /// answer the list.
     services: Vec<Offering>,
     /// The task keeping the files current, once started.
     refresh: Option<GrantTokenRefresh>,
@@ -443,15 +437,15 @@ impl AssignmentGrantTokens {
     }
 
     /// Whether the admission holds a token of the provider it can read
-    /// back, which `offer` offers (REQ-GRANT-154, REQ-GRANT-92).
+    /// back, which `offer` offers.
     pub(crate) fn holds(&self, provider: AgentLoginProvider) -> bool {
         self.read_back(provider).is_some()
     }
 
-    /// The ID of the grant the admission's token of the provider was issued
-    /// from, if it kept one (REQ-GRANT-93).
-    pub(crate) fn grant_id(&self, provider: AgentLoginProvider) -> Option<&str> {
-        self.held(provider).map(|held| held.grant_id.as_str())
+    /// What the admission's token of the provider was issued under, if it
+    /// kept one.
+    pub(crate) fn issuer(&self, provider: AgentLoginProvider) -> Option<&Issuer> {
+        self.held(provider).map(|held| &held.issuer)
     }
 
     /// Publishes with `publish` each readiness document a refresh of this
@@ -462,11 +456,11 @@ impl AssignmentGrantTokens {
 
     /// Starts the task that keeps each token file this hold has current
     /// while it is held, of the runner's three and of any other provider
-    /// alike (REQ-GRANT-89): for each provider, it waits on `sleeper` the
-    /// time Cloud named with its token, from now, then asks again, and
-    /// publishes each readiness document a refresh records as
-    /// `publish_with` named. Nothing is started without a token, without a
-    /// runtime to run on, or a second time.
+    /// alike: for each provider, it waits on `sleeper` the time Cloud
+    /// named with its token, from now, then asks again, and publishes each
+    /// readiness document a refresh records as `publish_with` named.
+    /// Nothing is started without a token, without a runtime to run on, or
+    /// a second time.
     pub(crate) fn keep_current(&mut self, sleeper: Arc<dyn Sleeper>) {
         if self.refresh.is_some() || self.held.is_empty() {
             return;
@@ -481,12 +475,12 @@ impl AssignmentGrantTokens {
             .map(|held| Due {
                 offering: held.offering.clone(),
                 file: held.file.clone(),
-                grant_id: held.grant_id.clone(),
+                issuer: held.issuer.clone(),
                 generation: held.generation,
                 expires_at: Some(held.expires_at),
                 recorded: Recorded {
                     state: AgentLoginState::Ready,
-                    grant_id: Some(held.grant_id.clone()),
+                    issuer: Some(held.issuer.clone()),
                     generation: Some(held.generation),
                 },
                 at: after(started, held.refresh_after),
@@ -507,7 +501,7 @@ impl AssignmentGrantTokens {
 }
 
 /// The task that keeps an assignment's token files current; dropping it
-/// stops it (REQ-GRANT-89).
+/// stops it.
 struct GrantTokenRefresh {
     task: tokio::task::JoinHandle<()>,
 }
@@ -529,15 +523,15 @@ struct Due {
     offering: Offering,
     /// The file the admission kept the token in.
     file: PathBuf,
-    /// The ID of the grant or integration token the token the runner last
-    /// kept was issued from.
-    grant_id: String,
+    /// The grant, connection authorization or integration token the token
+    /// the runner last kept was issued under.
+    issuer: Issuer,
     /// The generation of the token the runner last kept.
     generation: u64,
     /// The expiry of the token in the file, as the last answer for it named
     /// it; `None` once it is removed.
     expires_at: Option<OffsetDateTime>,
-    /// The state, grant and generation the assignment last recorded of the
+    /// The state, issuer and generation the assignment last recorded of the
     /// provider: `ready` with the kept token when the task starts, then what
     /// each refresh recorded.
     recorded: Recorded,
@@ -553,32 +547,32 @@ pub(crate) struct RefreshStep {
     offering: Offering,
     /// The file the admission kept the token in.
     file: PathBuf,
-    /// The ID of the grant or integration token the token the runner last
-    /// kept was issued from.
-    grant_id: String,
+    /// The grant, connection authorization or integration token the token
+    /// the runner last kept was issued under.
+    issuer: Issuer,
     /// The generation of the token the runner last kept.
     generation: u64,
     /// Whether its file still holds that token.
     held: bool,
     /// Whether the token's expiry has passed, on the task's clock.
     expired: bool,
-    /// The state, grant and generation the task carries for the provider,
+    /// The state, issuer and generation the task carries for the provider,
     /// which the refresh of a provider with no readiness entry compares
     /// against.
     recorded: Recorded,
 }
 
-/// The state, grant and generation last recorded of a provider, which a
+/// The state, issuer and generation last recorded of a provider, which a
 /// refresh compares its outcome against to tell whether to write a record
-/// (REQ-TELEMETRY-72) and, for one of the runner's three, its readiness
-/// entry: the three's from the readiness document, and any other
-/// provider's as the refresh task carries it for the assignment. A token
-/// issued from another grant or integration token is a change, whatever
-/// its generation.
+/// and, for one of the runner's three, its readiness entry: the three's
+/// from the readiness document, and any other provider's as the refresh
+/// task carries it for the assignment. A token issued under another
+/// grant, connection authorization or integration token, or one of
+/// another kind, is a change, whatever its generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Recorded {
     state: AgentLoginState,
-    grant_id: Option<String>,
+    issuer: Option<Issuer>,
     generation: Option<u64>,
 }
 
@@ -588,7 +582,7 @@ impl Recorded {
         let issued = grant.and_then(|grant| grant.issued.as_ref());
         Self {
             state: grant.map_or(AgentLoginState::NotDelivered, |grant| grant.state),
-            grant_id: issued.map(|issued| issued.grant_id.clone()),
+            issuer: issued.map(|issued| issued.issuer.clone()),
             generation: issued.map(|issued| issued.generation),
         }
     }
@@ -597,10 +591,7 @@ impl Recorded {
     fn outcome(outcome: &Settled) -> Self {
         Self {
             state: outcome.state,
-            grant_id: outcome
-                .issued
-                .as_ref()
-                .map(|issued| issued.grant_id.clone()),
+            issuer: outcome.issued.as_ref().map(|issued| issued.issuer.clone()),
             generation: outcome.issued.as_ref().map(|issued| issued.generation),
         }
     }
@@ -609,10 +600,11 @@ impl Recorded {
 /// What the refresh task does after a refresh.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Next {
-    /// A token of a newer generation, or issued from another grant or
-    /// integration token, is in the file: ask again after `wait`.
+    /// A token of a newer generation, or issued under another grant,
+    /// connection authorization or integration token, is in the file: ask
+    /// again after `wait`.
     Kept {
-        grant_id: String,
+        issuer: Issuer,
         generation: u64,
         expires_at: OffsetDateTime,
         wait: Duration,
@@ -662,7 +654,7 @@ impl Refresh {
                 let step = RefreshStep {
                     offering: due.offering.clone(),
                     file: due.file.clone(),
-                    grant_id: due.grant_id.clone(),
+                    issuer: due.issuer.clone(),
                     generation: due.generation,
                     held: due.expires_at.is_some(),
                     expired: due
@@ -696,19 +688,19 @@ impl Refresh {
                 let answered_at = sleeper.now();
                 match next {
                     Next::Kept {
-                        grant_id,
+                        issuer,
                         generation,
                         expires_at,
                         wait,
                     } => {
-                        due.grant_id = grant_id;
+                        due.issuer = issuer;
                         due.generation = generation;
                         due.expires_at = Some(expires_at);
                         due.at = after(answered_at, wait);
                         due.retry = MINIMUM_WAIT;
                     }
                     // Each answer for the held token names the expiry the
-                    // file stands until (REQ-INTEGRATION-12).
+                    // file stands until.
                     Next::Unchanged { expires_at, wait } => {
                         due.expires_at = Some(expires_at);
                         due.at = after(answered_at, wait);
@@ -772,16 +764,15 @@ impl Drop for AssignmentGrantTokens {
     }
 }
 
-/// `environment` with the grant tokens of `tokens` offered in it
-/// (REQ-GRANT-154): for each token the admission kept and can read back, the
-/// token as its file holds it under the first of the two names the hold
-/// carries for it and the file's path under the second, the runner's own
-/// for its three and the checked names of Cloud's list for any other
-/// provider (INV-RUNNER-32). The admission asks for no token of a provider
-/// the host provides, and a token either of whose names `environment`
-/// carries is skipped here too, so a token never replaces a value the
-/// service carries, whichever reading of the service's environment the
-/// admission asked from (INV-RUNNER-17). Every other name stays as
+/// `environment` with the grant tokens of `tokens` offered in it: for each
+/// token the admission kept and can read back, the token as its file holds
+/// it under the first of the two names the hold carries for it and the
+/// file's path under the second, the runner's own for its three and the
+/// checked names of Cloud's list for any other provider. The admission asks
+/// for no token of a provider the host provides, and a token either of whose
+/// names `environment` carries is skipped here too, so a token never
+/// replaces a value the service carries, whichever reading of the service's
+/// environment the admission asked from. Every other name stays as
 /// `environment` has it: nothing is removed or withheld, and a provider the
 /// host does not provide and the admission holds no token of has its names
 /// unset as the service has them.
@@ -792,7 +783,7 @@ pub(crate) fn offer(
     let mut variables = environment.variables().clone();
     for held in tokens.map_or(&[][..], |tokens| tokens.held.as_slice()) {
         // The host provides a provider either of whose names `environment`
-        // carries, whatever the admission held (INV-RUNNER-17).
+        // carries, whatever the admission held.
         if carried(environment, &held.offering) {
             continue;
         }
@@ -817,8 +808,7 @@ pub(crate) fn offer(
 }
 
 /// Whether `environment` carries either name `offering` offers its token
-/// under: the host's providing it, whatever the admission held
-/// (INV-RUNNER-17).
+/// under: the host's providing it, whatever the admission held.
 fn carried(environment: &EnvironmentSnapshot, offering: &Offering) -> bool {
     [&offering.variable, &offering.file_variable]
         .into_iter()
@@ -826,12 +816,12 @@ fn carried(environment: &EnvironmentSnapshot, offering: &Offering) -> bool {
 }
 
 /// The source of each token service Cloud listed for the assignment of
-/// `tokens` whose names the runner checked, in the list's order, settled
-/// from what `offer` reads of `environment` and `tokens` (REQ-INTEGRATION-12,
-/// INV-RUNNER-61): `host` where `environment` carries either of its names,
-/// else `token`, with the `itk_` ID it was issued from, where the
-/// admission kept its token and the file reads back, else none, and no
-/// entry. None where Cloud did not answer the list, or there is no hold.
+/// `tokens` whose names the runner checked, in the list's order, settled from
+/// what `offer` reads of `environment` and `tokens`: `host` where
+/// `environment` carries either of its names, else `token`, with the `itk_`
+/// ID it was issued from, where the admission kept its token and the file
+/// reads back, else none, and no entry. None where Cloud did not answer the
+/// list, or there is no hold.
 pub(crate) fn token_service_sources(
     environment: &EnvironmentSnapshot,
     tokens: Option<&AssignmentGrantTokens>,
@@ -852,7 +842,7 @@ pub(crate) fn token_service_sources(
                     .find(|held| held.offering.provider == offering.provider)
                     .filter(|held| read_token(&held.file).is_some())?;
                 TokenServiceSource::Token {
-                    integration_token_id: held.grant_id.clone(),
+                    integration_token_id: held.issuer.integration_token_id()?.to_owned(),
                 }
             };
             Some(ReportedTokenService {
@@ -875,14 +865,14 @@ pub(crate) struct Asking<'a> {
     pub(crate) cloud: &'a dyn AgentLoginCloud,
     pub(crate) files: &'a Arc<TokenFiles>,
     pub(crate) boot_id: &'a str,
-    /// The run of the assignment, which each entry records (REQ-GRANT-88).
+    /// The run of the assignment, which each entry records.
     pub(crate) run_id: &'a str,
     pub(crate) assignment_id: &'a str,
     pub(crate) now: OffsetDateTime,
 }
 
 /// Which providers an admission asks Cloud for the token of, by Cloud's
-/// list of the assignment's providers (REQ-GRANT-86).
+/// list of the assignment's providers.
 enum Listed {
     /// Cloud has no list: each of the runner's three is asked for, as
     /// before it, and no other provider.
@@ -917,11 +907,11 @@ impl Listed {
 /// service included, as the runner checked the two names its entry gives
 /// (`usable_names`).
 enum Configured {
-    /// Its token may be offered under both names (INV-RUNNER-32).
+    /// Its token may be offered under both names.
     Checked(Offering),
     /// A name may not carry its token, or a token service's id is one the
     /// OAuth list also names: the entry is not used, and its provider is
-    /// asked for nothing (REQ-GRANT-152, REQ-INTEGRATION-12).
+    /// asked for nothing.
     Refused(GrantProvider),
 }
 
@@ -988,35 +978,32 @@ struct Settled {
 impl Asking<'_> {
     /// Registers the assignment as held, with the hold it answers, removes
     /// what no held assignment owns and clears the assignment's own
-    /// directory (INV-RUNNER-28); then asks Cloud once for the assignment's
-    /// providers (REQ-GRANT-97) and, at the same time, once for its token
-    /// services (REQ-INTEGRATION-12), then for the token of the grant of
-    /// each provider the first list names, and of each token service the
-    /// second names, that the host, whose environment is `service`, does not
-    /// provide (REQ-GRANT-86, REQ-GRANT-87), the token requests at once so
-    /// that a Cloud that does not answer them costs one bounded request; the
-    /// two lists are independent. A token service is asked for, kept,
-    /// offered and recorded as a configured provider is; a Cloud without its
-    /// list lists none and records nothing, and a list Cloud did not answer
-    /// usefully lists none and is recorded once, with no provider
-    /// (REQ-TELEMETRY-78). A Cloud without the OAuth list is asked for each
-    /// of the runner's three as before it, one of the three a list does not
-    /// name is `not_authorized`, and a list Cloud did not answer usefully
-    /// asks for none and leaves each of the three `cloud_unavailable`
-    /// (REQ-GRANT-88). A listed provider other than the three is asked for
-    /// only when the names its entry gives may carry its token
-    /// (`usable_names`, INV-RUNNER-32), and an entry whose names may not is
-    /// recorded as a failure of stage `list` (REQ-TELEMETRY-77). A failure to
-    /// clear its own directory asks for no token and leaves each provider it
-    /// would have asked for `install_failed` with stage `remove`; a leftover
-    /// it cannot remove is recorded and withholds nothing. Keeps each
-    /// issued token in its file; records the entry of each of the three in
-    /// `document`, as `previous` recorded it before, a provider the host
-    /// provides as `not_delivered` for the run, each with its source as
-    /// `credential_source` settles it from what the hold keeps
-    /// (REQ-GRANT-92), and writes one record per changed state or failure,
-    /// a provider that has no entry counting as `not_delivered`. It never
-    /// fails: an answer it cannot use is the provider's state. Its hold
+    /// directory; then asks Cloud once for the assignment's providers and, at
+    /// the same time, once for its token services, then for the token of the
+    /// grant of each provider the first list names, and of each token service
+    /// the second names, that the host, whose environment is `service`, does
+    /// not provide, the token requests at once so that a Cloud that does not
+    /// answer them costs one bounded request; the two lists are independent.
+    /// A token service is asked for, kept, offered and recorded as a
+    /// configured provider is; a Cloud without its list lists none and
+    /// records nothing, and a list Cloud did not answer usefully lists none
+    /// and is recorded once, with no provider. A Cloud without the OAuth list
+    /// is asked for each of the runner's three as before it, one of the three
+    /// a list does not name is `not_authorized`, and a list Cloud did not
+    /// answer usefully asks for none and leaves each of the three
+    /// `cloud_unavailable`. A listed provider other than the three is asked
+    /// for only when the names its entry gives may carry its token
+    /// (`usable_names`), and an entry whose names may not is recorded as a
+    /// failure of stage `list`. A failure to clear its own directory asks for
+    /// no token and leaves each provider it would have asked for
+    /// `install_failed` with stage `remove`; a leftover it cannot remove is
+    /// recorded and withholds nothing. Keeps each issued token in its file;
+    /// records the entry of each of the three in `document`, as `previous`
+    /// recorded it before, a provider the host provides as `not_delivered`
+    /// for the run, each with its source as `credential_source` settles it
+    /// from what the hold keeps, and writes one record per changed state or
+    /// failure, a provider that has no entry counting as `not_delivered`. It
+    /// never fails: an answer it cannot use is the provider's state. Its hold
     /// refreshes through `setup` once started.
     pub(crate) fn admit(
         &self,
@@ -1150,26 +1137,24 @@ impl Asking<'_> {
         tokens
     }
 
-    /// Asks Cloud again for the token `step` names, for the assignment
-    /// whose files these are (REQ-GRANT-89, REQ-GRANT-160): keeps a token of a newer
-    /// generation, or one issued from another grant or integration token
-    /// whatever its generation, in place of the held one, at the same path
-    /// in one step; answers the expiry an answer for the held token names,
-    /// which the task holds for the file from then on; leaves the file as it
-    /// is when Cloud did not answer usefully, unless the held token has
-    /// expired, when it removes it, and removes it at a refusal. Writes one
-    /// record per changed state, grant, generation or failure, against the
-    /// provider's entry as `previous` recorded it for one of the runner's
-    /// three, and against what the task carries in `step` for any other
-    /// provider. Records the entry of one of the three in `document` when
-    /// its state, grant or generation changed; any other provider has no
-    /// entry, so its refresh changes no document. Answers what the task does
-    /// next, the state, grant and generation now recorded for it to carry
-    /// on, and whether it changed `document`. `entries` is `None` while the
-    /// entries are another admission's (INV-RUNNER-30): the refresh then
-    /// compares against what the task carries, as any other provider's does,
-    /// and records no entry. It asks nothing, and changes nothing, once the
-    /// runner no longer holds the assignment.
+    /// Asks Cloud again for the token `step` names, for the assignment whose files
+    /// these are: keeps a token of a newer generation, or one issued under another
+    /// grant, connection authorization or integration token whatever its generation,
+    /// in place of the held one, at the same path in one step; answers the expiry an
+    /// answer for the held token names, which the task holds for the file from then
+    /// on; leaves the file as it is when Cloud did not answer usefully, unless the
+    /// held token has expired, when it removes it, and removes it at a refusal.
+    /// Writes one record per changed state, grant, generation or failure, against
+    /// the provider's entry as `previous` recorded it for one of the runner's three,
+    /// and against what the task carries in `step` for any other provider. Records
+    /// the entry of one of the three in `document` when its state, grant or
+    /// generation changed; any other provider has no entry, so its refresh changes
+    /// no document. Answers what the task does next, the state, grant and generation
+    /// now recorded for it to carry on, and whether it changed `document`. `entries`
+    /// is `None` while the entries are another admission's: the refresh then
+    /// compares against what the task carries, as any other provider's does, and
+    /// records no entry. It asks nothing, and changes nothing, once the runner no
+    /// longer holds the assignment.
     pub(crate) fn refresh(
         &self,
         step: &RefreshStep,
@@ -1186,11 +1171,11 @@ impl Asking<'_> {
             return (Next::End, step.recorded.clone(), false);
         }
         let (outcome, next) = match &answer {
-            // The token in the file is still the current one: issued from
-            // the grant or integration token it was, at no newer generation.
+            // The token in the file is still the current one: issued under
+            // the issuer it was, of its kind, at no newer generation.
             Ok(issued)
                 if step.held
-                    && issued.grant_id == step.grant_id
+                    && issued.issuer == step.issuer
                     && issued.generation <= step.generation =>
             {
                 (
@@ -1205,7 +1190,7 @@ impl Asking<'_> {
                 let outcome = self.keep(offering, issued);
                 let next = match &outcome.kept {
                     Some(kept) => Next::Kept {
-                        grant_id: kept.grant_id.clone(),
+                        issuer: kept.issuer.clone(),
                         generation: kept.generation,
                         expires_at: kept.expires_at,
                         wait: kept.refresh_after,
@@ -1246,9 +1231,8 @@ impl Asking<'_> {
         let now = Recorded::outcome(&outcome);
         let changed = match entry {
             Some((own, grant, document)) if now != recorded => {
-                // The source is the one the admission settled for the run
-                // (INV-RUNNER-31): a refresh changes the file, never the
-                // offer.
+                // The source is the one the admission settled for the
+                // run: a refresh changes the file, never the offer.
                 let mut entry = self.entry(own, &outcome);
                 entry.source = grant
                     .filter(|grant| grant.run_id.as_deref() == Some(self.run_id))
@@ -1304,11 +1288,10 @@ impl Asking<'_> {
         })
     }
 
-    /// Cloud's list of the assignment's providers (REQ-GRANT-97) as it
-    /// answered it: the runner's three it names, and each other provider it
-    /// names with the names its entry gives, checked in the list's order
-    /// against `earlier`; a list Cloud did not answer usefully is its
-    /// failure.
+    /// Cloud's list of the assignment's providers as it answered it: the
+    /// runner's three it names, and each other provider it names with the
+    /// names its entry gives, checked in the list's order against
+    /// `earlier`; a list Cloud did not answer usefully is its failure.
     fn list<'l>(
         answer: &'l Result<Vec<ListedProvider>, GrantProvidersFailure>,
         earlier: &mut Vec<&'l str>,
@@ -1331,12 +1314,12 @@ impl Asking<'_> {
         Ok(Listed::Named { runner, configured })
     }
 
-    /// Cloud's list of the assignment's token services
-    /// (REQ-INTEGRATION-12) as it answered it: each entry checked in the
-    /// list's order against `earlier`, which holds the names of the OAuth
-    /// list's configured entries `oauth` first, and refused when one of
-    /// them has its id; none for a Cloud without the list, and a list Cloud
-    /// did not answer usefully is its failure.
+    /// Cloud's list of the assignment's token services as it answered it:
+    /// each entry checked in the list's order against `earlier`, which
+    /// holds the names of the OAuth list's configured entries `oauth`
+    /// first, and refused when one of them has its id; none for a Cloud
+    /// without the list, and a list Cloud did not answer usefully is its
+    /// failure.
     fn token_services<'l>(
         answer: &'l Result<Vec<ListedProvider>, GrantProvidersFailure>,
         oauth: &[Configured],
@@ -1413,8 +1396,7 @@ impl Asking<'_> {
             }
             // Cloud answered, but not for an assignment it counts as this
             // runner's: nothing about the grant has changed, and the request
-            // failed with Cloud's 409 as any other status fails it
-            // (REQ-TELEMETRY-73).
+            // failed with Cloud's 409 as any other status fails it.
             Err(GrantTokenFailure::Refused(GrantTokenRefusal::AssignmentNotCurrent)) => {
                 return self.unavailable(
                     provider,
@@ -1441,7 +1423,7 @@ impl Asking<'_> {
     fn ready(&self, provider: &GrantProvider, issued: &IssuedToken) -> Settled {
         Settled {
             issued: Some(IssuedGrant {
-                grant_id: issued.grant_id.clone(),
+                issuer: issued.issuer.clone(),
                 generation: issued.generation,
                 expires_at: issued.expires_at,
             }),
@@ -1486,7 +1468,7 @@ impl Asking<'_> {
             Ok(()) => Settled {
                 kept: Some(HeldToken {
                     offering: offering.clone(),
-                    grant_id: issued.grant_id.clone(),
+                    issuer: issued.issuer.clone(),
                     file: path,
                     generation: issued.generation,
                     expires_at: issued.expires_at,
@@ -1582,10 +1564,9 @@ impl Asking<'_> {
             });
     }
 
-    /// Records a token-service list Cloud did not answer usefully
-    /// (REQ-INTEGRATION-12, REQ-TELEMETRY-78): a failure of the admission's
-    /// stage `list` with its cause, which names no provider and no state,
-    /// since the list named none.
+    /// Records a token-service list Cloud did not answer usefully: a
+    /// failure of the admission's stage `list` with its cause, which names
+    /// no provider and no state, since the list named none.
     fn record_list_failure(&self, failure: CloudFailure) {
         let mut attributes = vec![
             KeyValue::new(attribute::GRANT_TOKEN_PHASE, Phase::Admission.as_str()),

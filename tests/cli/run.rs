@@ -111,11 +111,11 @@ pub(super) mod continuation_command_tests {
     /// Runs `useful` with `args` and `environment` against a server that answers one accepted
     /// socket per step. Each accepted socket is a scripted response barrier, not a timed race.
     /// Besides the named fixtures, `show-failed-at-build` answers a read of the run failed at
-    /// `build`, `show-failed-waiting-at-build` that run with the `repair` wait it ended at
-    /// still in its last progress report, `submitted` admits the POSTed request as it was sent, as
-    /// Cloud admits a definition-backed run (REQ-CONTINUE-84), and `violation:CODE` refuses it
-    /// with that one admission violation, `conflict:SLUG` answers 409 with that problem type and
-    /// no violation list, and `gone:SLUG` answers 410 with that problem type.
+    /// `build`, `show-failed-waiting-at-build` that run with the `repair` wait it ended at still
+    /// in its last progress report, `submitted` admits the POSTed request as it was sent, as Cloud
+    /// admits a definition-backed run, and `violation:CODE` refuses it with that one admission
+    /// violation, `conflict:SLUG` answers 409 with that problem type and no violation list, and
+    /// `gone:SLUG` answers 410 with that problem type.
     pub(crate) fn execute_with_env(
         steps: &[&str],
         args: &[&str],
@@ -242,7 +242,7 @@ pub(super) mod continuation_command_tests {
     }
 
     /// `useful workflow run retry RUN --org ORGANIZATION --from build --from test
-    /// --expected-version 7 --json`, a Cloud run's continuation (REQ-CONTINUE-55).
+    /// --expected-version 7 --json`, a Cloud run's continuation.
     fn args() -> Vec<&'static str> {
         vec![
             "workflow",
@@ -262,7 +262,6 @@ pub(super) mod continuation_command_tests {
         ]
     }
 
-    // REQ-CONTINUE-1, REQ-CONTINUE-56, REQ-CONTINUE-57
     #[test]
     fn lost_201_replays_same_request_then_reports_admission_not_execution() {
         let (output, requests) = execute(&["lost", "preparing"], &args());
@@ -295,7 +294,6 @@ pub(super) mod continuation_command_tests {
         );
     }
 
-    // REQ-CONTINUE-55
     #[test]
     fn retired_replacement_pair_is_unknown_and_the_definition_is_always_inherited() {
         let (output, requests) = execute(
@@ -345,7 +343,6 @@ pub(super) mod continuation_command_tests {
         );
     }
 
-    // REQ-CONTINUE-56, REQ-CONTINUE-61
     #[test]
     fn human_output_distinguishes_inheritance_and_keeps_an_earlier_replaced_definition() {
         let mut args = args();
@@ -384,7 +381,6 @@ pub(super) mod continuation_command_tests {
         }
     }
 
-    // REQ-CONTINUE-61
     #[test]
     fn run_show_reads_current_ready_and_boot_loss_projection_without_mutation() {
         for (state, marker) in [
@@ -414,7 +410,6 @@ pub(super) mod continuation_command_tests {
         }
     }
 
-    // REQ-CONTINUE-62
     #[test]
     fn show_wait_observes_boot_loss_without_submitting_another_attempt() {
         let (output, requests) = execute(
@@ -441,7 +436,6 @@ pub(super) mod continuation_command_tests {
         assert!(requests.iter().all(|request| request.starts_with("GET ")));
     }
 
-    // REQ-CONTINUE-60
     #[cfg(target_os = "linux")]
     #[test]
     fn signal_stops_receipt_observation_without_a_second_submission() {
@@ -514,7 +508,6 @@ pub(super) mod continuation_command_tests {
         assert!(post.starts_with("POST ") && get.starts_with("GET "));
     }
 
-    // REQ-CONTINUE-60
     #[test]
     fn older_receipt_keeps_its_partition_when_current_attempt_and_portable_result_advance() {
         let mut args = args();
@@ -566,7 +559,6 @@ pub(super) mod continuation_command_tests {
         assert!(text.contains("portable result: available"));
     }
 
-    // REQ-CONTINUE-57
     #[test]
     fn two_lost_responses_leave_one_key_and_unknown_acceptance() {
         let (output, requests) = execute(&["lost", "lost"], &args());
@@ -584,7 +576,6 @@ pub(super) mod continuation_command_tests {
         assert!(result["request"].is_null());
     }
 
-    // REQ-CONTINUE-57
     #[test]
     fn lost_response_then_unreadable_401_cannot_refresh_or_submit_again() {
         let (output, requests) = execute(&["lost", "truncated-401"], &args());
@@ -603,7 +594,6 @@ pub(super) mod continuation_command_tests {
         );
     }
 
-    // REQ-CONTINUE-59
     #[test]
     fn admission_violations_are_reported_by_code() {
         for (step, code) in [
@@ -627,7 +617,6 @@ pub(super) mod continuation_command_tests {
         assert!(stderr.contains("retained_workspace_unavailable"));
     }
 
-    // REQ-CONTINUE-57
     #[test]
     fn not_found_after_lost_response_is_not_proof_of_non_admission() {
         let (output, requests) = execute(&["lost", "not-found"], &args());
@@ -638,7 +627,6 @@ pub(super) mod continuation_command_tests {
         assert_eq!(requests.len(), 2);
     }
 
-    // REQ-CONTINUE-87
     #[test]
     fn a_path_run_retired_answer_is_reported_as_path_run_retired() {
         for (step, code) in [
@@ -663,7 +651,6 @@ pub(super) mod continuation_command_tests {
         }
     }
 
-    // REQ-CONTINUE-58
     #[test]
     fn post_cannot_report_a_different_semantic_request_as_accepted() {
         let (output, requests) = execute(&["changed-request"], &args());
@@ -674,7 +661,6 @@ pub(super) mod continuation_command_tests {
         assert_eq!(requests.len(), 1);
     }
 
-    // REQ-CONTINUE-58
     #[test]
     fn receipt_get_must_not_rewrite_original_admission() {
         let mut args = args();
@@ -687,7 +673,6 @@ pub(super) mod continuation_command_tests {
         assert_eq!(requests.len(), 2);
     }
 
-    // REQ-CONTINUE-60
     #[test]
     fn receipt_get_observes_ready_then_boot_loss_without_claiming_portable_result() {
         let mut args = args();
@@ -825,7 +810,7 @@ mod retry_command_tests {
     }
 
     /// `useful workflow run retry RUN --org ORGANIZATION --all --expected-version 7 --json`, a
-    /// Cloud run's retry of every step (REQ-RETRY-30).
+    /// Cloud run's retry of every step.
     fn args() -> [&'static str; 11] {
         [
             "workflow",
@@ -842,7 +827,6 @@ mod retry_command_tests {
         ]
     }
 
-    // REQ-RETRY-31, REQ-RETRY-33, REQ-RETRY-39
     #[test]
     fn lost_acceptance_replays_one_key_and_only_get_can_apply() {
         let (output, requests) = execute(
@@ -871,7 +855,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-31, REQ-RETRY-39
     #[test]
     fn two_lost_post_responses_report_unresolved_transport_and_the_one_key() {
         let (output, requests) = execute(&[("lost", None), ("lost", None)], &args());
@@ -891,7 +874,6 @@ mod retry_command_tests {
         assert!(requests.iter().all(|request| request.starts_with("POST ")));
     }
 
-    // REQ-RETRY-32
     #[test]
     fn definitive_post_rate_limit_does_not_claim_unknown_acceptance() {
         let (output, requests) = execute(&[("rate-limited", None)], &args());
@@ -902,7 +884,6 @@ mod retry_command_tests {
         assert_eq!(requests.len(), 1);
     }
 
-    // REQ-RETRY-31
     #[test]
     fn rate_limited_replay_does_not_erase_ambiguous_first_post() {
         let (output, requests) = execute(&[("lost", None), ("rate-limited", None)], &args());
@@ -921,7 +902,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-31
     #[test]
     fn unauthorized_replay_cannot_erase_unresolved_acceptance() {
         let (output, requests) = execute(&[("lost", None), ("unauthorized", None)], &args());
@@ -939,7 +919,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-33
     #[test]
     fn resolved_replay_still_requires_a_get_before_reporting_applied() {
         let (output, requests) = execute(
@@ -959,7 +938,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-33
     #[test]
     fn pending_get_is_not_application_until_a_later_get_applies() {
         let (output, requests) = execute(
@@ -978,7 +956,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-34
     #[test]
     fn rejected_receipts_preserve_every_code() {
         for code in [
@@ -1002,9 +979,7 @@ mod retry_command_tests {
         }
     }
 
-    // REQ-RETRY-36
     #[test]
-    // REQ-RETRY-48, REQ-DIAG-35
     fn coordinator_failure_stops_observation_and_preserves_diagnostic() {
         let (output, requests) = execute(&[("pending", None), ("failed", None)], &args());
         assert_eq!(output.status.code(), Some(1));
@@ -1022,7 +997,6 @@ mod retry_command_tests {
     }
 
     #[test]
-    // REQ-DIAG-35
     fn invalid_coordinator_failure_diagnostic_is_a_protocol_error() {
         let (output, requests) = execute(
             &[("pending", None), ("failed", Some("unsafe\nreason"))],
@@ -1105,7 +1079,6 @@ mod retry_command_tests {
         );
     }
 
-    // REQ-RETRY-36
     #[test]
     fn rejected_service_identity_does_not_resubmit_after_acceptance() {
         let directory = private_credential_directory();
@@ -1128,7 +1101,6 @@ mod retry_command_tests {
         assert_eq!(requests.len(), 2);
     }
 
-    // REQ-RETRY-33
     #[test]
     fn retry_after_does_not_resubmit_accepted_mutation() {
         for throttled in ["rate-limited", "unavailable"] {
@@ -1150,7 +1122,6 @@ mod retry_command_tests {
         }
     }
 
-    // REQ-RETRY-38
     #[cfg(target_os = "linux")]
     #[test]
     fn interruption_preserves_the_known_request_or_unknown_key_without_resubmission() {
@@ -1253,7 +1224,6 @@ mod retry_command_tests {
         }
     }
 
-    // REQ-RETRY-37
     #[test]
     fn pending_acceptance_times_out_without_claiming_application() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1299,7 +1269,6 @@ mod retry_command_tests {
         assert_eq!(json["receipt"]["state"], "pending");
     }
 
-    // REQ-RETRY-30, REQ-RETRY-40
     #[test]
     fn retry_human_result_and_invalid_version() {
         let human = [
@@ -1341,7 +1310,6 @@ mod retry_command_tests {
         assert!(!invalid.stderr.is_empty());
     }
 
-    // REQ-RETRY-35
     #[test]
     fn conflicts_are_not_reported_as_applied() {
         let (output, requests) = execute(&[("run-retry-pending", None)], &args());
@@ -1354,7 +1322,6 @@ mod retry_command_tests {
         assert_eq!(requests.len(), 1);
     }
 
-    // REQ-RETRY-35
     #[test]
     fn subject_refusals_name_the_holding_run() {
         const HOLDER: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -1390,8 +1357,8 @@ mod retry_command_tests {
         }
     }
 
-    // REQ-RETRY-35, REQ-RETRY-52: Cloud refuses the retry of a run by workflow path 409
-    // `path-run-retired`, which the scripted peer answers as it does any conflict.
+    // Cloud refuses the retry of a run by workflow path 409 `path-run-retired`, which
+    // the scripted peer answers as it does any conflict.
     #[test]
     fn a_path_run_retired_answer_is_reported_as_path_run_retired() {
         let (output, requests) = execute(&[("path-run-retired", None)], &args());
@@ -1456,8 +1423,6 @@ fn listed_cloud_rows(body: &serde_json::Value) -> serde_json::Value {
         .collect()
 }
 
-// REQ-TRIGGER-53
-// REQ-RUN-66
 #[test]
 fn list_runs_filters_and_renders_text_and_json() {
     let body = serde_json::json!({
@@ -1552,7 +1517,6 @@ fn list_runs_filters_and_renders_text_and_json() {
     }
 }
 
-// REQ-RUN-66, REQ-RUN-117, REQ-RUN-167
 #[test]
 fn list_runs_accepts_full_pages_with_large_valid_contexts() {
     let context = (0..15)
@@ -1854,7 +1818,6 @@ fn automatic_handoff(state: &str) -> serde_json::Value {
     })
 }
 
-// REQ-PUBLISH-89, REQ-PUBLISH-92, REQ-PUBLISH-94
 #[test]
 fn run_show_preserves_the_bound_existing_request_in_handoff_history() {
     let mut body = run_body_with_state("succeeded");
@@ -1883,8 +1846,8 @@ fn run_show_preserves_the_bound_existing_request_in_handoff_history() {
     server.finish();
 }
 
-// SC-RUN-6, REQ-RUN-82: `useful workflow run show` shows the run's actor, passes it through in JSON,
-// and reports a run without a well-formed actor as an invalid response.
+// SC-RUN-6: `useful workflow run show` shows the run's actor, passes it through in JSON, and
+// reports a run without a well-formed actor as an invalid response.
 #[test]
 fn run_show_reports_the_run_actor() {
     let principal = "prn_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1944,9 +1907,10 @@ fn run_show_reports_the_run_actor() {
     }
 }
 
-// REQ-RUN-107: `useful workflow run show` prints, after the run's actor, one line for each provider of
-// the run's credential sources, none for a run that records none, and passes the member
-// through in JSON.
+// `useful workflow run show` prints, after the run's actor, one line for each provider of the
+// run's credential sources, naming the organization's GitHub App installation for an
+// `org_connection` source, none for a run that records none, and passes the member and the
+// source through in JSON.
 #[test]
 fn run_show_reports_each_providers_credential_source() {
     let principal = "prn_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -1967,6 +1931,14 @@ fn run_show_reports_each_providers_credential_source() {
                 format!("credential linear: grant of {principal}"),
                 "credential codex: grant".to_owned(),
             ],
+        ),
+        (
+            serde_json::json!({
+                "runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "recordedAt": "2026-11-17T11:00:00Z",
+                "sources": [{"provider": "github", "source": "org_connection", "principalId": null}],
+            }),
+            vec!["credential github: the organization's GitHub App installation".to_owned()],
         ),
         (serde_json::Value::Null, vec![]),
     ] {
@@ -2014,9 +1986,10 @@ fn run_show_reports_each_providers_credential_source() {
     }
 }
 
-// REQ-RUN-109: `useful workflow run show` prints, after the credential lines, one line for each entry
-// of the run's integration sources in the API's order, none for a run without the member,
-// and passes the member through in JSON as received or omitted.
+// `useful workflow run show` prints, after the credential lines, one line for each entry of the
+// run's integration sources in the API's order, naming the organization's GitHub App
+// installation and the member who authorized it for an `org_connection` source, none for a run
+// without the member, and passes the member through in JSON as received or omitted.
 #[test]
 fn run_show_reports_each_declared_integrations_source() {
     let principal = "prn_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -2037,6 +2010,20 @@ fn run_show_reports_each_declared_integrations_source() {
                 "integration codex: not provided".to_owned(),
                 "integration mergify: connected by the organization, token v2".to_owned(),
             ],
+        ),
+        (
+            Some(serde_json::json!([
+                {"integration": "github", "actedAs": "org", "connectedBy": principal, "source": "org_connection", "tokenVersion": null},
+            ])),
+            vec![format!(
+                "integration github: the organization's GitHub App installation, authorized by {principal}"
+            )],
+        ),
+        (
+            Some(serde_json::json!([
+                {"integration": "github", "actedAs": "org", "connectedBy": null, "source": "org_connection", "tokenVersion": null},
+            ])),
+            vec!["integration github: the organization's GitHub App installation".to_owned()],
         ),
         (None, vec![]),
     ] {
@@ -2143,9 +2130,9 @@ fn wait_lines(report: &str) -> Vec<&str> {
         .collect()
 }
 
-// REQ-RUN-116: `useful workflow run show` prints the workflow state after the run's state and, while
-// it is waiting, the wait's kind, step and since; a running workflow state prints no wait, a
-// run without the member prints neither line, and a runner-reported step prints escaped.
+// `useful workflow run show` prints the workflow state after the run's state and, while it is
+// waiting, the wait's kind, step and since; a running workflow state prints no wait, a run without
+// the member prints neither line, and a runner-reported step prints escaped.
 #[test]
 fn run_show_names_the_workflow_state_and_the_wait() {
     let report = run_show_plain(waiting_for_repair(
@@ -2201,8 +2188,8 @@ fn run_show_names_the_workflow_state_and_the_wait() {
     );
 }
 
-// REQ-RUN-116: `useful workflow run show` names a wait for the host, as it names any other kind, rather
-// than refusing the run read.
+// `useful workflow run show` names a wait for the host, as it names any other kind, rather than
+// refusing the run read.
 #[test]
 fn run_show_names_a_wait_for_the_host() {
     let mut body = waiting_for_repair(run_body(), serde_json::json!(["design", "read"]));
@@ -2218,8 +2205,8 @@ fn run_show_names_a_wait_for_the_host() {
     );
 }
 
-// REQ-RUN-116: `useful workflow run list` prints one wait line under a listed Cloud run whose
-// item carries `workflowWait`, none under one without, and passes both through under --json.
+// `useful workflow run list` prints one wait line under a listed Cloud run whose item carries
+// `workflowWait`, none under one without, and passes both through under --json.
 #[test]
 fn list_runs_names_a_listed_runs_wait() {
     let item = |id: &str, wait: serde_json::Value| {
@@ -2282,8 +2269,8 @@ fn list_runs_names_a_listed_runs_wait() {
     server.finish();
 }
 
-// REQ-RUN-116, REQ-RUN-117: `useful workflow run list` reads a listed run whose `workflowWait` and
-// closed `workflowProgress` wait both name the host, and prints its one wait line.
+// `useful workflow run list` reads a listed run whose `workflowWait` and closed `workflowProgress`
+// wait both name the host, and prints its one wait line.
 #[test]
 fn list_runs_names_a_listed_wait_for_the_host() {
     let body = serde_json::json!({
@@ -2333,10 +2320,9 @@ fn list_runs_names_a_listed_wait_for_the_host() {
     server.finish();
 }
 
-// REQ-RUN-61, REQ-RUN-113: `useful workflow run show --wait` of a Cloud run prints each
-// observed state on standard error, naming the wait of a waiting run, keeps reading until the
-// run is final, and prints one `shown` document carrying the final read's workflow members as
-// the API returned them.
+// `useful workflow run show --wait` of a Cloud run prints each observed state on standard
+// error, naming the wait of a waiting run, keeps reading until the run is final, and prints
+// one `shown` document carrying the final read's workflow members as the API returned them.
 #[test]
 fn show_wait_names_the_wait_and_follows_to_the_final_state() {
     let waiting = waiting_for_repair(run_body(), serde_json::json!(["design", "read"]));
@@ -2390,7 +2376,6 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-COMPAT-16
 #[test]
 fn generated_client_requests_name_the_cli_version_in_the_user_agent() {
     let (output, server) = run_show_with_response(run_response(run_body_with_state("succeeded")));
@@ -2423,9 +2408,9 @@ pub(super) fn run_response(body: serde_json::Value) -> Vec<u8> {
 
 const CANCELLATION_ID: &str = "cmd_01k0z6r1w8f4jy2m7q9v3x5abc";
 
-/// The read `useful workflow run cancel` makes of a Cloud run before it sends anything
-/// (REQ-LOCALRUN-218): a run whose progress carries no wait, so the command goes on to the
-/// graceful cancellation request.
+/// The read `useful workflow run cancel` makes of a Cloud run before it sends anything: a
+/// run whose progress carries no wait, so the command goes on to the graceful cancellation
+/// request.
 fn unwaiting_read() -> Vec<u8> {
     run_response(run_body())
 }
@@ -2465,7 +2450,6 @@ fn cancellation_response(status: &str, key: &str, body: serde_json::Value) -> Ve
     )
 }
 
-// REQ-CANCEL-49
 #[cfg(target_os = "linux")]
 #[test]
 fn cancellation_signal_before_acceptance_preserves_key_and_never_observes() {
@@ -2541,7 +2525,6 @@ fn cancellation_signal_before_acceptance_preserves_key_and_never_observes() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CANCEL-49
 #[cfg(target_os = "linux")]
 #[test]
 fn cancellation_signal_after_acceptance_stops_observation_without_new_post() {
@@ -2616,7 +2599,6 @@ fn cancellation_signal_after_acceptance_stops_observation_without_new_post() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CANCEL-48, REQ-CANCEL-50, REQ-CANCEL-51, REQ-RUN-126
 #[test]
 fn cancellation_observation_failure_retains_reconciliation_identity_without_post_retry() {
     let key = "accepted-then-forbidden-key";
@@ -2694,7 +2676,6 @@ fn cancellation_observation_failure_retains_reconciliation_identity_without_post
     }
 }
 
-// REQ-CANCEL-40, REQ-CANCEL-41
 #[test]
 fn plain_force_cancellation_unknown_retains_requested_mode() {
     let key = "unknown-force-key";
@@ -2729,7 +2710,6 @@ fn plain_force_cancellation_unknown_retains_requested_mode() {
     }
 }
 
-// REQ-CANCEL-46, REQ-CANCEL-51
 #[test]
 fn plain_cancellation_timeout_retains_accepted_snapshot() {
     let key = "plain-timeout-key";
@@ -2798,7 +2778,6 @@ fn plain_cancellation_timeout_retains_accepted_snapshot() {
     )));
 }
 
-// REQ-CANCEL-45
 #[test]
 fn cancellation_wait_ends_as_creation_rejection_without_inventing_a_run() {
     let key = "rejected-create-key";
@@ -2845,7 +2824,6 @@ fn cancellation_wait_ends_as_creation_rejection_without_inventing_a_run() {
     assert_eq!(server.finish().len(), 3);
 }
 
-// REQ-CANCEL-43
 #[test]
 fn cancellation_wait_requires_resolved_receipt_and_terminal_run() {
     let key = "resolved-wait-key";
@@ -2901,8 +2879,6 @@ fn cancellation_wait_requires_resolved_receipt_and_terminal_run() {
     )));
 }
 
-// REQ-CANCEL-44
-// REQ-PUBLISH-64
 #[test]
 fn cancellation_wait_does_not_observe_a_linked_publication() {
     let key = "cancel-while-publication-started";
@@ -2951,7 +2927,6 @@ fn cancellation_wait_does_not_observe_a_linked_publication() {
     assert!(requests[2].contains(&format!("/cancellation-requests/{CANCELLATION_ID} ")));
 }
 
-// REQ-CANCEL-38
 #[test]
 fn explicit_force_escalation_uses_a_separate_key_and_never_reuses_graceful_strength() {
     let normal_key = "normal-request-key";
@@ -3004,7 +2979,6 @@ fn explicit_force_escalation_uses_a_separate_key_and_never_reuses_graceful_stren
     assert_eq!(request_body(&requests[2])["mode"], "force");
 }
 
-// REQ-CANCEL-42
 #[test]
 fn cancellation_local_authentication_failure_still_writes_one_json_result() {
     let environment = deployment_environment("http://127.0.0.1:1", "/dev/null/credentials.json");
@@ -3033,7 +3007,6 @@ fn cancellation_local_authentication_failure_still_writes_one_json_result() {
     assert_eq!(result["error"]["idempotencyKey"], "never-dispatched-key");
 }
 
-// REQ-CANCEL-42
 #[test]
 fn cancellation_definite_rate_limit_is_not_reported_as_unknown_acceptance() {
     let key = "rate-limit-key";
@@ -3070,7 +3043,6 @@ fn cancellation_definite_rate_limit_is_not_reported_as_unknown_acceptance() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-CANCEL-42
 #[test]
 fn cancellation_key_conflict_does_not_send_escalation_or_claim_acceptance() {
     let key = "same-key-mode-conflict";
@@ -3108,7 +3080,6 @@ fn cancellation_key_conflict_does_not_send_escalation_or_claim_acceptance() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-CANCEL-39, REQ-CANCEL-40
 #[test]
 fn cancellation_retry_reuses_key_and_mode_without_a_second_control() {
     let key = "cancellation-retry-key";
@@ -3150,7 +3121,6 @@ fn cancellation_retry_reuses_key_and_mode_without_a_second_control() {
     }
 }
 
-// REQ-CANCEL-39, REQ-CANCEL-50
 #[test]
 fn cancellation_terminal_noop_and_explicit_force_preserve_receipt_and_run() {
     for (mode, flag) in [("graceful", None), ("force", Some("--force"))] {
@@ -3200,7 +3170,6 @@ fn cancellation_terminal_noop_and_explicit_force_preserve_receipt_and_run() {
     }
 }
 
-// REQ-CANCEL-41
 #[test]
 fn cancellation_rejects_slug_location_even_when_receipt_is_valid() {
     let key = "slug-location-key";
@@ -3287,7 +3256,7 @@ fn cancellation_retry_can_observe_pending_receipt_with_prior_failed_attempt() {
 }
 
 /// `useful workflow run create DEFINITION --on personal --org ORGANIZATION --project PROJECT`,
-/// the command that creates a Cloud run (REQ-RUN-94), with a source branch and a display name.
+/// the command that creates a Cloud run, with a source branch and a display name.
 pub(super) fn create_args(json: bool) -> Vec<&'static str> {
     let mut args = vec![
         "workflow",
@@ -3312,7 +3281,6 @@ pub(super) fn create_args(json: bool) -> Vec<&'static str> {
     args
 }
 
-// REQ-RUN-80
 #[test]
 fn create_in_an_archived_project_is_a_definite_admission_rejection() {
     let (server, _directory, credential_path) = prepared_run(vec![problem_http_response(
@@ -3523,7 +3491,6 @@ fn run_show_with_response(response: Vec<u8>) -> (Output, ScriptedServer) {
     (output, server)
 }
 
-// REQ-RUN-94
 #[test]
 fn run_create_is_no_longer_a_command() {
     let (server, _directory, credential_path) = prepared_run(Vec::new());
@@ -3546,7 +3513,6 @@ fn run_create_is_no_longer_a_command() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CANCEL-47, REQ-CANCEL-54
 #[test]
 fn cloud_run_wait_flags_require_explicit_observation_and_bare_wait_is_absent() {
     for args in [
@@ -3592,8 +3558,6 @@ fn cloud_run_wait_flags_require_explicit_observation_and_bare_wait_is_absent() {
     }
 }
 
-// REQ-DIAG-28, REQ-DIAG-30
-// REQ-PUBLISH-62, REQ-PUBLISH-63
 #[test]
 fn show_wait_separates_failed_publication_handoff_from_execution() {
     for (json, wait) in [(true, true), (false, true), (false, false)] {
@@ -3664,7 +3628,6 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
     }
 }
 
-// REQ-DIAG-28
 #[test]
 fn human_run_observation_reports_failed_automatic_publication() {
     let publication_id = "pub_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -3768,7 +3731,6 @@ fn human_run_observation_reports_failed_automatic_publication() {
     }
 }
 
-// REQ-PUBLISH-63
 #[test]
 fn human_run_observation_reports_successful_automatic_publication_url() {
     let publication_id = "pub_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -3849,7 +3811,6 @@ fn human_run_observation_reports_successful_automatic_publication_url() {
     }
 }
 
-// REQ-PUBLISH-62
 #[test]
 fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
     let mut pending = run_body_with_state("succeeded");
@@ -3916,7 +3877,6 @@ fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
     }
 }
 
-// REQ-PUBLISH-22, REQ-PUBLISH-62
 #[test]
 fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
     let mut run = run_body_with_state("succeeded");
@@ -3957,8 +3917,8 @@ fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-PUBLISH-91, REQ-PUBLISH-62: run waits preserve a terminal existing-target
-// path-policy refusal independently of the successful run.
+// Run waits preserve a terminal existing-target path-policy refusal
+// independently of the successful run.
 #[test]
 fn run_wait_decodes_existing_target_workflow_policy_failure() {
     let mut run = run_body_with_state("succeeded");
@@ -4007,7 +3967,7 @@ fn run_wait_decodes_existing_target_workflow_policy_failure() {
     server.finish();
 }
 
-// REQ-PUBLISH-76: the run wait uses the same tagged failure decoder as publication show.
+// The run wait uses the same tagged failure decoder as publication show.
 #[test]
 fn run_wait_decodes_gitlab_merge_request_failure_phase() {
     let mut run = run_body_with_state("succeeded");
@@ -4097,7 +4057,6 @@ fn run_plain_publication_outcomes_do_not_invent_a_new_pull_request() {
     }
 }
 
-// REQ-PUBLISH-62
 #[cfg(target_os = "linux")]
 #[test]
 fn publication_observation_signal_stops_show_wait_and_retains_handoff() {
@@ -4265,7 +4224,6 @@ fn run_input_set(responses: Vec<Vec<u8>>, arguments: &[&str]) -> (Output, Vec<St
     (output, server.finish())
 }
 
-// REQ-RUNINPUT-61
 #[test]
 fn input_set_create_acts_in_the_organization_and_project_in_effect() {
     let input_bytes = b"input in effect\n";
@@ -4337,7 +4295,6 @@ fn input_set_create_acts_in_the_organization_and_project_in_effect() {
     assert_eq!(request_body(&requests[1])["projectId"], PROJECT_ID);
 }
 
-// REQ-RUNINPUT-61
 #[test]
 fn input_set_show_reads_the_organization_the_option_names_and_nothing_before() {
     let found = http_response_with_headers(
@@ -4368,7 +4325,6 @@ fn input_set_show_reads_the_organization_the_option_names_and_nothing_before() {
     );
 }
 
-// REQ-RUNINPUT-61
 #[test]
 fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     let input_bytes = b"explicit single-use input\n";
@@ -4519,7 +4475,6 @@ fn explicit_input_set_flow_creates_open_then_uploads_seals_and_consumes() {
     assert_eq!(request_body(&requests[0])["inputSetId"], INPUT_SET_ID);
 }
 
-// REQ-RUNINPUT-61, REQ-RUNINPUT-64, REQ-RUNINPUT-80
 #[test]
 fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     let input_bytes = b"selected single-use input\n";
@@ -4668,7 +4623,6 @@ fn input_set_mutation_commands_upload_seal_and_delete_with_fresh_requests() {
     assert_ne!(seal_key, delete_key);
 }
 
-// REQ-RUNINPUT-63
 #[test]
 fn sealing_an_already_sealed_input_set_reports_a_lifecycle_conflict() {
     let input_bytes = b"already sealed";
@@ -4713,7 +4667,6 @@ fn sealing_an_already_sealed_input_set_reports_a_lifecycle_conflict() {
     assert!(!requests[0].contains("/seal HTTP/1.1"));
 }
 
-// REQ-RUNINPUT-62
 #[test]
 fn input_set_upload_rejects_changed_member_bytes_before_capability_issue() {
     let expected = b"original immutable member";
@@ -4766,7 +4719,6 @@ fn input_set_upload_rejects_changed_member_bytes_before_capability_issue() {
     );
 }
 
-// REQ-RUNINPUT-61
 #[test]
 fn input_set_upload_resumes_one_exact_attachment_member() {
     let uploaded_bytes = b"already accepted sibling";
@@ -4898,7 +4850,6 @@ fn input_set_upload_resumes_one_exact_attachment_member() {
     );
 }
 
-// REQ-RUNINPUT-61
 #[test]
 fn input_set_and_retained_input_show_commands_emit_structural_json() {
     let input_bytes = b"show input";
@@ -4968,7 +4919,6 @@ fn input_set_and_retained_input_show_commands_emit_structural_json() {
     retained_server.finish();
 }
 
-// REQ-RUNINPUT-65
 #[test]
 fn retained_input_show_reports_counts_bytes_and_content_expiry() {
     let input_bytes = b"show expiry";
@@ -5212,7 +5162,6 @@ fn run_input_http_decoders_reject_duplicate_members_before_using_success_respons
     assert_no_secret_output(&output, &[TOKEN, "duplicate-upload", "duplicate-download"]);
 }
 
-// REQ-RUNINPUT-66, REQ-RUNINPUT-72, REQ-RUNINPUT-75
 #[test]
 fn retained_inputs_download_uses_inventory_bound_logical_paths() {
     let input_bytes = b"private retained input bytes\n";
@@ -5276,7 +5225,6 @@ fn retained_inputs_download_uses_inventory_bound_logical_paths() {
     );
 }
 
-// REQ-RUNINPUT-66
 #[test]
 fn retained_inputs_download_selects_exact_members_only() {
     let first = b"unselected private bytes";
@@ -5455,7 +5403,6 @@ fn retained_inputs_json_download_rejects_an_unrepresentable_destination_before_t
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNINPUT-66, REQ-RUNINPUT-75
 #[test]
 fn retained_input_integrity_failure_leaves_no_destination() {
     let expected = b"expected retained bytes";
@@ -5495,7 +5442,6 @@ fn retained_input_integrity_failure_leaves_no_destination() {
     storage.finish();
 }
 
-// REQ-RUNINPUT-66, REQ-RUNINPUT-79
 #[cfg(target_os = "linux")]
 #[test]
 fn interrupted_retained_input_download_removes_verified_private_staging() {
@@ -5623,7 +5569,6 @@ fn interrupted_retained_input_download_removes_verified_private_staging() {
     second_storage.finish();
 }
 
-// REQ-RUNINPUT-67
 #[test]
 fn retained_input_deletion_requires_confirmation_and_sends_one_idempotent_request() {
     let unconfirmed = Command::new(crate::executable())
@@ -5676,9 +5621,6 @@ fn retained_input_deletion_requires_confirmation_and_sends_one_idempotent_reques
     assert_eq!(header_value(&request, "idempotency-key").len(), 64);
 }
 
-// REQ-RUNINPUT-45
-// REQ-WORKSPACE-12
-// REQ-RUN-59, REQ-LOCALRUN-189
 #[test]
 fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
     for json in [false, true] {
@@ -5710,7 +5652,7 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
         assert!(output.stderr.is_empty());
         if json {
             // A run by `workflowPath` carries none of a definition-backed run's observed
-            // fields, which the document reports as null (REQ-RUN-96).
+            // fields, which the document reports as null.
             let mut run = body.clone();
             for field in [
                 "definition",
@@ -5782,6 +5724,57 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
     }
 }
 
+#[test]
+fn run_show_of_a_run_with_no_source_prints_source_none_and_its_definition() {
+    let mut body = run_body();
+    let source_fields = [
+        "sourceBranch",
+        "workflowDefinitionSource",
+        "primaryWorkspaceSource",
+    ];
+    for field in source_fields {
+        body[field] = serde_json::Value::Null;
+    }
+    body["sourceDisplaySnapshot"]["repository"] = serde_json::Value::Null;
+    body["definition"] = workflow_run_cloud::definition_run()["definition"].take();
+
+    for json in [false, true] {
+        let (server, _directory, credential_path) = prepared_run(vec![
+            run_response(body.clone()),
+            workflow_run_cloud::controls_response(&[], false),
+        ]);
+        let env = deployment_environment(&server.api_url, &credential_path);
+        let mut args = vec![
+            "workflow",
+            "run",
+            "show",
+            RUN_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ];
+        if json {
+            args.push("--json");
+        }
+        let output = run_with_env(&args, &env);
+        assert!(output.status.success(), "{output:?}");
+        if json {
+            let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            for field in source_fields {
+                assert_eq!(document["run"].get(field), Some(&serde_json::Value::Null));
+            }
+        } else {
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.lines().any(|line| line == "source: none"));
+            assert!(stdout.lines().any(|line| line == "workflow: workflow.yaml"));
+            assert!(!stdout.contains("source branch:"));
+            assert!(!stdout.contains("workflow source:"));
+            assert!(!stdout.contains("primary workspace source:"));
+        }
+        server.finish();
+    }
+}
+
 const HELD_WORKING_RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abd";
 const HELD_WAITING_RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abe";
 
@@ -5831,8 +5824,8 @@ fn assert_reports_held_runs(text: &str) {
     );
 }
 
-// REQ-RUN-120: `useful run show` lists the other runs the run's runner holds, each with
-// whether it is working or waiting, and carries `heldWith` under --json as received.
+// `useful run show` lists the other runs the run's runner holds, each with whether it
+// is working or waiting, and carries `heldWith` under --json as received.
 #[test]
 fn run_show_lists_the_other_runs_its_runner_holds() {
     for json in [false, true] {
@@ -5919,7 +5912,6 @@ fn lifecycle_identity_lines(indent: &str) -> Vec<String> {
     ]
 }
 
-// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     let view = linear_lifecycle_body("skipped", Some("team_unmapped"));
@@ -5952,7 +5944,6 @@ fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     server.finish();
 }
 
-// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
     let mut view = linear_lifecycle_body("awaiting_event", None);
@@ -6026,7 +6017,6 @@ fn linear_lifecycle_show_writes_the_latest_update_under_the_view() {
     server.finish();
 }
 
-// REQ-TRIGGER-145, REQ-TRIGGER-266
 #[test]
 fn linear_lifecycle_show_reports_absence_and_refuses_a_wrong_pair() {
     let (output, server) = linear_lifecycle_show(None, true);
@@ -6106,7 +6096,6 @@ fn lifecycle_problem(status: &str, problem: &str) -> Vec<u8> {
     )
 }
 
-// REQ-TRIGGER-145, REQ-TRIGGER-267
 #[test]
 fn linear_lifecycle_list_writes_the_page_unchanged_and_each_update_as_show_does() {
     let page = lifecycle_list_page();
@@ -6200,7 +6189,6 @@ fn linear_lifecycle_list_writes_the_page_unchanged_and_each_update_as_show_does(
     server.finish();
 }
 
-// REQ-TRIGGER-145, REQ-TRIGGER-267
 #[test]
 fn linear_lifecycle_list_reports_absence_and_refuses_invalid_updates() {
     let (output, server) = linear_lifecycle_command(
@@ -6252,7 +6240,6 @@ fn linear_lifecycle_list_reports_absence_and_refuses_invalid_updates() {
     }
 }
 
-// REQ-RUN-59, REQ-TRIGGER-145
 #[test]
 fn run_show_carries_the_linear_lifecycle_binding_only_when_present() {
     let mut body = run_body();
@@ -6352,7 +6339,6 @@ fn run_show_displays_terminal_failure_and_rejection() {
     }
 }
 
-// REQ-DIAG-29, REQ-DIAG-30
 #[test]
 fn run_show_json_keeps_harness_failure_and_input_size_diagnostic() {
     let mut body = run_body_with_state("failed");
@@ -6395,7 +6381,7 @@ fn run_show_json_keeps_harness_failure_and_input_size_diagnostic() {
 }
 
 /// A run a runner rejected because its `useful` refused the run's workflow tree, its
-/// diagnostic holding the refusal's validation facts (REQ-DIAG-42).
+/// diagnostic holding the refusal's validation facts.
 fn workflow_validation_rejection() -> serde_json::Value {
     serde_json::json!({
         "reason": "workflow_source_invalid",
@@ -6414,7 +6400,6 @@ const WORKFLOW_VALIDATION_FACTS: [(&str, &str); 4] = [
     ("validation step", "parts"),
 ];
 
-// REQ-DIAG-29, REQ-DIAG-30, REQ-DIAG-42
 #[test]
 fn run_show_json_keeps_workflow_validation_diagnostic() {
     let mut body = run_body_with_state("rejected");
@@ -6454,7 +6439,6 @@ fn run_show_json_keeps_workflow_validation_diagnostic() {
     }
 }
 
-// REQ-RUN-60
 #[test]
 fn run_show_distinguishes_pending_creation_and_creation_rejection() {
     let pending_response = http_response_with_headers(
@@ -6494,8 +6478,6 @@ fn run_show_distinguishes_pending_creation_and_creation_rejection() {
     server.finish();
 }
 
-// REQ-CANCEL-52
-// REQ-ARTIFACT-12
 #[test]
 fn run_show_renders_cancellation_interruption_and_artifact_delivery() {
     let mut body = run_body_with_state("interrupted");
@@ -6552,7 +6534,6 @@ fn run_show_renders_cancellation_interruption_and_artifact_delivery() {
     server.finish();
 }
 
-// REQ-RUN-45, REQ-RUN-61
 #[test]
 fn show_wait_emits_terminal_json_for_every_execution_outcome() {
     for state in [
@@ -6598,7 +6579,6 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
     }
 }
 
-// REQ-RUN-61
 #[test]
 fn show_wait_emits_the_terminal_plain_projection() {
     let (server, _directory, credential_path) =
@@ -6627,7 +6607,6 @@ fn show_wait_emits_the_terminal_plain_projection() {
     server.finish();
 }
 
-// REQ-RUN-62
 #[test]
 fn show_wait_bounds_expiring_and_rejected_credential_refresh() {
     for expiring in [true, false] {
@@ -6812,7 +6791,7 @@ fn show_wait_preserves_fatal_response_classifications() {
         "--wait",
         "--json",
     ]);
-    // Nobody is signed in, so Cloud is not asked and the run is not found (REQ-LOCALRUN-227).
+    // Nobody is signed in, so Cloud is not asked and the run is not found.
     assert_eq!(unauthenticated.status.code(), Some(1));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&unauthenticated.stdout).unwrap()["error"]["code"],
@@ -6881,7 +6860,6 @@ fn show_wait_preserves_fatal_response_classifications() {
     }
 }
 
-// REQ-RUN-60
 #[test]
 fn run_show_rejects_a_projection_for_a_different_run() {
     let mut response_body = run_body();
@@ -7040,7 +7018,6 @@ fn run_show_accepts_lease_expiry_with_either_stop_confirmation() {
     }
 }
 
-// REQ-RUN-126, REQ-RUN-125
 #[test]
 fn run_show_prints_the_lease_loss_reason_after_the_cause() {
     for lease_loss in [Some("lease_renewal_unreachable"), None] {
@@ -7082,7 +7059,6 @@ fn run_show_prints_the_lease_loss_reason_after_the_cause() {
     }
 }
 
-// REQ-RUN-48, REQ-RUN-125
 #[test]
 fn run_show_refuses_lease_loss_outside_a_confirmed_lease_expiry() {
     for (cause, stop_confirmed) in [
@@ -7266,7 +7242,6 @@ fn run_failures_use_registered_outcomes_without_exposing_secrets() {
     assert_no_secret_output(&output, &[TOKEN]);
 }
 
-// REQ-RUN-62
 #[test]
 fn show_wait_bounds_transport_retries_and_emits_one_unavailable_result() {
     let (server, _directory, credential_path) = prepared_run(vec![Vec::new(), Vec::new()]);
@@ -7298,7 +7273,6 @@ fn show_wait_bounds_transport_retries_and_emits_one_unavailable_result() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUN-62
 #[test]
 fn signals_stop_only_active_cloud_run_show_observation() {
     for (signal, expected_exit) in [
@@ -7520,7 +7494,7 @@ fn signalled_input_set_seal_reports_one_unknown_receipt() {
 }
 
 /// `useful workflow run show RUN` finding `RUN` in Cloud when the home holds no such run
-/// (REQ-LOCALRUN-228) and reading it there (REQ-LOCALRUN-189).
+/// and reading it there.
 pub(crate) mod workflow_run_show {
     use super::workflow_run_cloud::{
         controls_response, definition_run, deliveries_response, document, route, show_in_cloud,
@@ -7564,8 +7538,8 @@ pub(crate) mod workflow_run_show {
         requests.iter().map(|request| route(request)).collect()
     }
 
-    // REQ-LOCALRUN-227: an ID the home lacks, with nobody signed in, is `run_not_found` naming
-    // the home and saying Cloud was not asked because nobody is signed in; nothing is sent.
+    // An ID the home lacks, with nobody signed in, is `run_not_found` naming the home and
+    // saying Cloud was not asked because nobody is signed in; nothing is sent.
     #[test]
     fn show_of_an_id_signed_out_names_the_home_and_sends_nothing() {
         let home = tempfile::tempdir().unwrap();
@@ -7598,9 +7572,9 @@ pub(crate) mod workflow_run_show {
         assert!(server.finish().is_empty());
     }
 
-    // REQ-LOCALRUN-228, REQ-LOCALRUN-189: a subject no run under the home holds is the one
-    // live Cloud run whose claim names it, found in the `active` page of the runs listing and
-    // then read; `on` is `personal` for a run with an owner.
+    // A subject no run under the home holds is the one live Cloud run whose claim names it,
+    // found in the `active` page of the runs listing and then read; `on` is `personal` for a
+    // run with an owner.
     #[test]
     fn show_of_a_subject_reads_the_live_cloud_run_that_claims_it() {
         let home = tempfile::tempdir().unwrap();
@@ -7637,8 +7611,8 @@ pub(crate) mod workflow_run_show {
         assert_eq!(shown["on"], "personal", "{shown}");
     }
 
-    // REQ-LOCALRUN-228: with no live run of the subject, the `terminal` page is read and the
-    // newest of the subject's runs is the run.
+    // With no live run of the subject, the `terminal` page is read and the newest of the
+    // subject's runs is the run.
     #[test]
     fn show_of_a_subject_with_no_live_run_reads_its_newest_ended_run() {
         let home = tempfile::tempdir().unwrap();
@@ -7672,7 +7646,7 @@ pub(crate) mod workflow_run_show {
         assert_eq!(document(&output)["runId"], RUN_ID);
     }
 
-    // REQ-LOCALRUN-228: runs of two definitions whose claims name the subject are refused
+    // Runs of two definitions whose claims name the subject are refused
     // `subject_ambiguous` with both IDs, and neither is read.
     #[test]
     fn show_of_a_subject_two_definitions_claim_is_ambiguous() {
@@ -7700,10 +7674,10 @@ pub(crate) mod workflow_run_show {
         );
     }
 
-    // REQ-LOCALRUN-227, REQ-LOCALRUN-228: a state group read to its bound, five pages, with no run of the subject
-    // is `run_not_found`, saying the bound was reached and that the run's ID finds an older
-    // run. Live runs read to the bound end the lookup: an ended run is not the answer while a
-    // live one may lie past the bound, so the ended runs are not read.
+    // A state group read to its bound, five pages, with no run of the subject is `run_not_found`,
+    // saying the bound was reached and that the run's ID finds an older run. Live runs read to the
+    // bound end the lookup: an ended run is not the answer while a live one may lie past the bound,
+    // so the ended runs are not read.
     #[test]
     fn show_of_a_subject_past_the_bound_says_the_bound_was_reached() {
         let cursors = ["c1", "c2", "c3", "c4", "c5"];
@@ -7746,8 +7720,8 @@ pub(crate) mod workflow_run_show {
         }
     }
 
-    // REQ-LOCALRUN-189, REQ-LOCALRUN-308: `--attempt` reads a run under the home, so a Cloud run refuses it
-    // with exit 2 once it is found, before any read.
+    // `--attempt` reads a run under the home, so a Cloud run refuses it with exit 2 once it is
+    // found, before any read.
     #[test]
     fn show_of_a_cloud_run_refuses_attempt() {
         let home = tempfile::tempdir().unwrap();
@@ -7797,9 +7771,9 @@ mod workflow_run_input {
         (output, server.finish())
     }
 
-    // REQ-RUNINPUT-65, REQ-LOCALRUN-309: an ID is the Cloud run of that ID even when the home
-    // holds a run of it, which is neither read nor changed; the inventory read is the first
-    // request, and the document is the inventory document the earlier spelling printed.
+    // An ID is the Cloud run of that ID even when the home holds a run of it, which is
+    // neither read nor changed; the inventory read is the first request, and the document is
+    // the inventory document the earlier spelling printed.
     #[test]
     fn input_show_of_an_id_reads_the_cloud_run_and_not_the_homes() {
         let published = super::super::workflow_run_control::PublishedWaitTree::new();
@@ -7828,8 +7802,7 @@ mod workflow_run_input {
         assert_eq!(std::fs::read(directory.join("run.json")).unwrap(), before);
     }
 
-    // REQ-RUNINPUT-65, REQ-LOCALRUN-309: a subject is the run the runs listing names for it,
-    // whose inventory is then read.
+    // A subject is the run the runs listing names for it, whose inventory is then read.
     #[test]
     fn input_show_of_a_subject_finds_the_run_in_the_runs_listing() {
         let home = tempfile::tempdir().unwrap();
@@ -8005,9 +7978,9 @@ mod workflow_run_cloud {
     }
 
     /// `useful workflow run LEAF RUN --org ORGANIZATION ARGS --allow-insecure-http`, the leaf
-    /// finding `RUN` under the home and then in Cloud (REQ-LOCALRUN-228), against a Gateway
-    /// answering `responses` in order, with `USEFUL_HOME` at `home`: the output and the
-    /// requests served. `--org` costs no request, so the Gateway sees the leaf's own.
+    /// finding `RUN` under the home and then in Cloud, against a Gateway answering
+    /// `responses` in order, with `USEFUL_HOME` at `home`: the output and the requests
+    /// served. `--org` costs no request, so the Gateway sees the leaf's own.
     fn in_cloud(
         leaf: &str,
         run: &str,
@@ -8038,10 +8011,9 @@ mod workflow_run_cloud {
             .trim_end_matches(" HTTP/1.1")
     }
 
-    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-LOCALRUN-189, REQ-LOCALRUN-228: `show` of an ID
-    // the home lacks reads the Cloud run first, then the newest page of its deliveries and of
-    // its controls, and reports where it executes, the deployment, the definition identity,
-    // claim, workflow state and outcome, progress, exits and deliveries.
+    // `show` of an ID the home lacks reads the Cloud run first, then the newest page of its
+    // deliveries and of its controls, and reports where it executes, the deployment, the
+    // definition identity, claim, workflow state and outcome, progress, exits and deliveries.
     #[test]
     fn cloud_show_reports_a_definition_runs_identity_observations_and_deliveries() {
         let home = tempfile::tempdir().unwrap();
@@ -8204,9 +8176,8 @@ mod workflow_run_cloud {
         Some((value, questions))
     }
 
-    // REQ-RUN-104, REQ-RUN-140:
-    // Cloud show prints an answer wait's questions in order, each by its id and
-    // text, a question without text by its id alone, every one on its own line with control
+    // Cloud show prints an answer wait's questions in order, each by its id and text, a
+    // question without text by its id alone, every one on its own line with control
     // characters escaped; it says when the questions are unknown or none, prints none for a
     // wait of another kind, and passes them through under --json as received.
     #[test]
@@ -8287,12 +8258,11 @@ mod workflow_run_cloud {
             .collect()
     }
 
-    // REQ-RUN-112, REQ-RUN-140:
-    // Cloud show prints a waiting run's failed stage on one line, the stage's
-    // path, the outcome and the failing node by its path with its state, phase and code
-    // when each is reported; a null or absent failed child prints no such line; every value
-    // is escaped so the line stays one line; an answer wait's questions still print whole;
-    // and --json passes the member through as received.
+    // Cloud show prints a waiting run's failed stage on one line, the stage's path, the
+    // outcome and the failing node by its path with its state, phase and code when each is
+    // reported; a null or absent failed child prints no such line; every value is escaped
+    // so the line stays one line; an answer wait's questions still print whole; and --json
+    // passes the member through as received.
     #[test]
     fn cloud_show_prints_the_failed_stage_of_a_waiting_run() {
         let failed = serde_json::json!({
@@ -8380,9 +8350,9 @@ mod workflow_run_cloud {
         }
     }
 
-    // REQ-RUN-105, REQ-DIAG-29: Cloud show prints a rejected run's reason and validation
-    // facts beside its workflow state, passes the rejection through under --json as
-    // received, and prints no rejection for a run without one.
+    // Cloud show prints a rejected run's reason and validation facts beside its workflow
+    // state, passes the rejection through under --json as received, and prints no
+    // rejection for a run without one.
     #[test]
     fn cloud_show_prints_a_rejected_runs_reason_and_validation_facts() {
         let mut rejected = definition_run();
@@ -8413,8 +8383,8 @@ mod workflow_run_cloud {
         );
     }
 
-    // REQ-RUN-153: Cloud show of an exited run whose claim is still held names the subject,
-    // the `subject-settled` refusal a start for it reads, and the release command with the
+    // Cloud show of an exited run whose claim is still held names the subject, the
+    // `subject-settled` refusal a start for it reads, and the release command with the
     // run's ID, which finds the run itself; a released claim or a live run adds no release
     // command.
     #[test]
@@ -8483,10 +8453,10 @@ mod workflow_run_cloud {
         assert!(!waiting.contains("runners_offline"), "{text}");
     }
 
-    // REQ-RUN-101, SC-RUN-7: Cloud show names a run's owner, the rule that routed it, the
-    // pools it may use and, while it is queued, what it waits for in words; it says when a
-    // run has no owner or route, shows an unrecognized reason as given, and passes all
-    // three through under --json as received.
+    // SC-RUN-7: Cloud show names a run's owner, the rule that routed it, the pools it may
+    // use and, while it is queued, what it waits for in words; it says when a run has no
+    // owner or route, shows an unrecognized reason as given, and passes all three through
+    // under --json as received.
     #[test]
     fn cloud_show_reports_a_runs_owner_route_and_what_it_waits_for() {
         let home = tempfile::tempdir().unwrap();
@@ -8542,9 +8512,9 @@ mod workflow_run_cloud {
         assert_eq!(reported(&text, "waiting"), Some("runners_asleep"), "{text}");
     }
 
-    // REQ-RUN-120: Cloud show lists the other runs the run's runner holds, each with whether
-    // it is working or waiting, and its JSON document carries `heldWith` as received; a run
-    // whose observation has no `heldWith` lists none.
+    // Cloud show lists the other runs the run's runner holds, each with whether it is
+    // working or waiting, and its JSON document carries `heldWith` as received; a run whose
+    // observation has no `heldWith` lists none.
     #[test]
     fn cloud_show_lists_the_other_runs_its_runner_holds() {
         let home = tempfile::tempdir().unwrap();
@@ -8577,7 +8547,7 @@ mod workflow_run_cloud {
         assert_eq!(reported_held_runs(&text), None, "{text}");
     }
 
-    // REQ-RUN-101: `useful workflow run show` names the same owner, route and waiting reason.
+    // `useful workflow run show` names the same owner, route and waiting reason.
     #[test]
     fn run_show_reports_a_runs_owner_route_and_what_it_waits_for() {
         let (server, _directory, credential_path) = prepared_run(vec![run_response(
@@ -8601,10 +8571,8 @@ mod workflow_run_cloud {
         server.finish();
     }
 
-    // REQ-RUN-96, REQ-RUN-87, REQ-RUN-88, REQ-RUN-136, REQ-RUN-110: a run by `workflowPath`
-    // reads no
-    // deliveries and no controls, and the observations its read leaves out are null, not
-    // absent.
+    // A run by `workflowPath` reads no deliveries and no controls, and the observations its
+    // read leaves out are null, not absent.
     #[test]
     fn cloud_show_of_a_path_run_reads_no_deliveries_and_reports_unknown_fields_as_null() {
         let home = tempfile::tempdir().unwrap();
@@ -8670,13 +8638,12 @@ mod workflow_run_cloud {
         )
     }
 
-    // REQ-RUN-110, REQ-RUN-141, REQ-RUN-142, REQ-RUN-92, REQ-COMPAT-20, REQ-LOCALRUN-304, REQ-LOCALRUN-305:
-    // Cloud show of a
-    // definition-backed run reads the newest 100 of its controls after its deliveries and
-    // passes them through under --json as Cloud sent them, a kind and state this release does
-    // not name included, saying when older ones remain; it prints each control's id, kind,
-    // state and outcome or code, says when there are none, prints a run's cancellation mode,
-    // and is refused when the controls read fails, as when the deliveries read does.
+    // Cloud show of a definition-backed run reads the newest 100 of its controls after its
+    // deliveries and passes them through under --json as Cloud sent them, a kind and state
+    // this release does not name included, saying when older ones remain; it prints each
+    // control's id, kind, state and outcome or code, says when there are none, prints a run's
+    // cancellation mode, and is refused when the controls read fails, as when the deliveries
+    // read does.
     #[test]
     fn cloud_show_lists_a_runs_controls_and_its_cancellation() {
         let home = tempfile::tempdir().unwrap();
@@ -8836,8 +8803,8 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-227, REQ-LOCALRUN-307: an ID the home lacks is read in Cloud, and a run Cloud does not find
-    // is `run_not_found`, naming the home and the organization, with no local run read.
+    // An ID the home lacks is read in Cloud, and a run Cloud does not find is `run_not_found`,
+    // naming the home and the organization, with no local run read.
     #[test]
     fn show_of_an_id_cloud_does_not_find_names_where_it_looked() {
         let home = tempfile::tempdir().unwrap();
@@ -8868,9 +8835,8 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-CLOUDDEF-97, REQ-CLOUDDEF-98, REQ-LOCALRUN-248: Cloud release asks Cloud to release
-    // the run's current claim under one fresh key, sent again when the response is lost, and
-    // reports the released claim.
+    // Cloud release asks Cloud to release the run's current claim under one fresh key, sent
+    // again when the response is lost, and reports the released claim.
     #[test]
     fn cloud_release_sends_one_keyed_claim_release_and_reports_the_claim() {
         let home = tempfile::tempdir().unwrap();
@@ -8911,9 +8877,8 @@ mod workflow_run_cloud {
         assert!(text.contains(CLAIM_ID) && text.contains("owner"), "{text}");
     }
 
-    // REQ-CLOUDDEF-19, REQ-LOCALRUN-187, REQ-LOCALRUN-249: a live run's claim, a changed claim,
-    // a reused key and
-    // a member's release are refused with exit 1, and release without a session exits 3.
+    // A live run's claim, a changed claim, a reused key and a member's release are refused with
+    // exit 1, and release without a session exits 3.
     #[test]
     fn cloud_release_refusals_name_their_cause() {
         let home = tempfile::tempdir().unwrap();
@@ -9023,10 +8988,9 @@ mod workflow_run_cloud {
         format!("POST /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/controls")
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-250, REQ-LOCALRUN-251, REQ-LOCALRUN-228, REQ-RUN-91: answer of a run the home lacks reads the Cloud run, sends
-    // one control naming the run's current wait under one fresh key, sent again when the
-    // response is lost, and reports the accepted control; nothing under the `useful` home is
-    // read or written.
+    // Answer of a run the home lacks reads the Cloud run, sends one control naming the run's
+    // current wait under one fresh key, sent again when the response is lost, and reports the
+    // accepted control; nothing under the `useful` home is read or written.
     #[test]
     fn cloud_answer_sends_the_runs_current_wait_under_one_key_and_reports_the_control() {
         let home = tempfile::tempdir().unwrap();
@@ -9096,10 +9060,9 @@ mod workflow_run_cloud {
         run
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-308: answer with no `--question` takes the one question the run read's wait
-    // lists, and sends `1` when it lists none; with several listed it is refused
-    // `question_ambiguous` and sends nothing, and `--record-only` is a usage error once the run
-    // is read.
+    // Answer with no `--question` takes the one question the run read's wait lists, and sends `1`
+    // when it lists none; with several listed it is refused `question_ambiguous` and sends nothing,
+    // and `--record-only` is a usage error once the run is read.
     #[test]
     fn cloud_answer_without_a_question_takes_the_one_the_wait_lists() {
         let home = tempfile::tempdir().unwrap();
@@ -9167,10 +9130,10 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-218, REQ-LOCALRUN-228, REQ-RUN-91: `cancel` of a Cloud run whose read carries a wait sends
-    // one `withdraw` control naming no wait under one fresh key, sent again when the response
-    // is lost, and reports the accepted control; with `--wait` it then reads the run until it
-    // is final and reports it under `run`. Nothing under the `useful` home is read or written.
+    // `cancel` of a Cloud run whose read carries a wait sends one `withdraw` control naming no wait
+    // under one fresh key, sent again when the response is lost, and reports the accepted control;
+    // with `--wait` it then reads the run until it is final and reports it under `run`. Nothing
+    // under the `useful` home is read or written.
     #[test]
     fn cloud_cancel_of_a_waiting_run_sends_one_withdrawal_under_one_key() {
         let home = tempfile::tempdir().unwrap();
@@ -9248,11 +9211,10 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-250, REQ-LOCALRUN-313, REQ-LOCALRUN-218, REQ-RUN-91: approve, hand-back, retry (of a repair
-    // or a host wait) and an `unpause` name the run's current wait with their kinds, `pause`
-    // and `unpause` sending the kinds `stop` and `lift`; an `unpause` of a run that does not
-    // wait on a stop, a `pause` and the withdrawal `cancel` sends a waiting run name none, and
-    // a `pause` does not read the run.
+    // Approve, hand-back, retry (of a repair or a host wait) and an `unpause` name the run's
+    // current wait with their kinds, `pause` and `unpause` sending the kinds `stop` and `lift`; an
+    // `unpause` of a run that does not wait on a stop, a `pause` and the withdrawal `cancel` sends
+    // a waiting run name none, and a `pause` does not read the run.
     #[test]
     fn cloud_control_leaves_send_their_kinds() {
         let home = tempfile::tempdir().unwrap();
@@ -9331,9 +9293,9 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-251, REQ-LOCALRUN-250, REQ-RUN-91: Cloud's refusals exit 1 with their slugs, a run that does
-    // not wait on the leaf's kind is refused before any control is sent, and an `approve`
-    // nobody is signed in to send finds no run.
+    // Cloud's refusals exit 1 with their slugs, a run that does not wait on the leaf's kind is
+    // refused before any control is sent, and an `approve` nobody is signed in to send finds no
+    // run.
     #[test]
     fn cloud_control_refusals_name_their_cause() {
         let home = tempfile::tempdir().unwrap();
@@ -9364,9 +9326,9 @@ mod workflow_run_cloud {
             assert_eq!(refused["exitStatus"], 1);
             assert_eq!(refused["diagnostics"][0]["code"], code, "{refused}");
         }
-        // REQ-LOCALRUN-252, REQ-CANCEL-38: a withdrawal Cloud refuses because no runner
-        // executes the run or its runner's `useful` does not apply one is followed by the
-        // graceful cancellation request under the same key, reported as that request is.
+        // A withdrawal Cloud refuses because no runner executes the run or its runner's
+        // `useful` does not apply one is followed by the graceful cancellation request
+        // under the same key, reported as that request is.
         let echo = api_test_support::REQUEST_IDEMPOTENCY_KEY_ECHO;
         for slug in ["control-unsupported", "run-not-live"] {
             let (output, requests) = in_cloud(
@@ -9453,9 +9415,8 @@ mod workflow_run_cloud {
                 .unwrap()
                 .contains("wait_kind_mismatch")
         );
-        // With nobody signed in, Cloud is not asked and the run is not found
-        // (REQ-LOCALRUN-307), for a leaf that reads the run and for `pause`, which sends its
-        // control unread.
+        // With nobody signed in, Cloud is not asked and the run is not found, for a leaf
+        // that reads the run and for `pause`, which sends its control unread.
         for (leaf, args) in [
             ("approve", &[][..]),
             ("pause", &["--before", "review", "--reason", "hold"][..]),
@@ -9498,9 +9459,8 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-253, REQ-LOCALRUN-307, REQ-CANCEL-38, REQ-CANCEL-1, REQ-CANCEL-5: `cancel` of a Cloud run
-    // whose read carries no wait sends one graceful cancellation request and prints the
-    // document of the cancellation; an accepted request and one Cloud resolved
+    // `cancel` of a Cloud run whose read carries no wait sends one graceful cancellation request
+    // and prints the document of the cancellation; an accepted request and one Cloud resolved
     // `already_terminal` are each reported with the receipt, a run Cloud does not have is the
     // lookup's miss, and nothing under the `useful` home is read or written.
     #[test]
@@ -9573,9 +9533,8 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-218, REQ-CANCEL-38: `cancel --force` of a Cloud run sends the force
-    // request with no read before it, under the key `--idempotency-key` gives, and a 404 of
-    // that request is the lookup's miss.
+    // `cancel --force` of a Cloud run sends the force request with no read before it, under
+    // the key `--idempotency-key` gives, and a 404 of that request is the lookup's miss.
     #[test]
     fn cloud_cancel_with_force_sends_the_force_request_without_a_read() {
         let home = tempfile::tempdir().unwrap();
@@ -9627,8 +9586,8 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-215, REQ-RUN-60: a leaf that reads a run whose creation Cloud refused
-    // reports `creation_rejected`, and a control leaf sends no control for it.
+    // A leaf that reads a run whose creation Cloud refused reports `creation_rejected`,
+    // and a control leaf sends no control for it.
     #[test]
     fn cloud_leaves_report_a_refused_creation_as_creation_rejected() {
         let home = tempfile::tempdir().unwrap();
@@ -9667,11 +9626,11 @@ mod workflow_run_cloud {
         }
     }
 
-    // REQ-LOCALRUN-210, REQ-LOCALRUN-312, REQ-LOCALRUN-80: `retry` with neither `--from` nor `--all` of a Cloud
-    // run reads it and, ended other than `succeeded`, sends the continuation from the step its
-    // reported position names; a run that names none is refused `continuation_step_required`,
-    // a succeeded run `latest_attempt_succeeded` and a running one `run_not_waiting`, each
-    // sending nothing; a local option is a usage error before any request.
+    // `retry` with neither `--from` nor `--all` of a Cloud run reads it and, ended other than
+    // `succeeded`, sends the continuation from the step its reported position names; a run that
+    // names none is refused `continuation_step_required`, a succeeded run
+    // `latest_attempt_succeeded` and a running one `run_not_waiting`, each sending nothing; a local
+    // option is a usage error before any request.
     #[test]
     fn cloud_retry_continues_an_ended_run_from_its_position_or_refuses() {
         let home = tempfile::tempdir().unwrap();
@@ -9721,9 +9680,9 @@ mod workflow_run_cloud {
             "run_not_waiting"
         );
 
-        // REQ-CONTINUE-55: a run whose runner never reported the end of its wait, the runner
-        // lost or the run ended by Cloud, still reads that wait in its last progress report;
-        // it is an ended run all the same, continued from its position with no control sent.
+        // A run whose runner never reported the end of its wait, the runner lost or the run
+        // ended by Cloud, still reads that wait in its last progress report; it is an ended
+        // run all the same, continued from its position with no control sent.
         for read in ["show-failed-at-build", "show-failed-waiting-at-build"] {
             let (output, requests) = super::continuation_command_tests::execute_with_env(
                 &[read, "submitted"],
@@ -9768,8 +9727,8 @@ mod workflow_run_cloud {
             assert!(output.stdout.is_empty(), "{local:?}");
             assert!(requests.is_empty(), "{local:?}");
         }
-        // REQ-CONTINUE-85: `resume` of a Cloud run continues it under its own definition, so
-        // a replacement workflow or another execution root is refused, never dropped.
+        // `resume` of a Cloud run continues it under its own definition, so a replacement
+        // workflow or another execution root is refused, never dropped.
         for local in [
             &["--workflow", "repair.yaml"][..],
             &["--execution-root", "."][..],
@@ -9782,11 +9741,9 @@ mod workflow_run_cloud {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
-    // REQ-LOCALRUN-180, REQ-LOCALRUN-248, REQ-LOCALRUN-304, REQ-LOCALRUN-187, REQ-LOCALRUN-189: `show` and
-    // `release` of an ID the home holds read and change the local run and send nothing, with
-    // `--org` given and a session stored: `release` refuses the waiting run `run_live`, naming
-    // the verbs its state takes (REQ-LOCALRUN-223), and records `control.release` once the
-    // run has ended.
+    // `show` and `release` of an ID the home holds read and change the local run and send nothing,
+    // with `--org` given and a session stored: `release` refuses the waiting run `run_live`, naming
+    // the verbs its state takes, and records `control.release` once the run has ended.
     #[test]
     fn show_and_release_act_on_a_run_the_home_holds_and_ask_no_cloud() {
         let published = super::super::workflow_run_control::PublishedWaitTree::new();
@@ -9841,9 +9798,9 @@ mod workflow_run_cloud {
         );
     }
 
-    // REQ-LOCALRUN-223, REQ-LOCALRUN-210: a control verb given a Cloud run in a state it does
-    // not apply in is refused before anything is sent, keeping its code, with a message naming
-    // the verbs the run's state takes there.
+    // A control verb given a Cloud run in a state it does not apply in is refused before
+    // anything is sent, keeping its code, with a message naming the verbs the run's state
+    // takes there.
     #[test]
     fn cloud_control_refused_for_the_runs_state_names_the_verbs_that_apply() {
         let home = tempfile::tempdir().unwrap();

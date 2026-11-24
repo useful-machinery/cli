@@ -33,8 +33,8 @@ use super::agent_input::{
 };
 use super::artifact::CaptureBoundaryObserver;
 use super::artifact::{
-    ArtifactStaging, CaptureAttemptFailure, CaptureCancellation, CaptureCandidateSet,
-    CaptureDeclaration, CaptureFailure,
+    ArtifactStaging, CaptureAttemptFailure, CaptureCancellation, CaptureCandidateDeclaration,
+    CaptureCandidateSet, CaptureDeclaration, CaptureFailure, CaptureFailureKind,
 };
 use super::child_guard::{ChildGuardCancellation, StoppedChildGuard, force_stop_direct_child};
 use super::coordinator::{
@@ -46,8 +46,7 @@ use super::diagnostic::{PendingStepDiagnostic, StepDiagnosticLog};
 use super::document::Output;
 use super::evidence::{FailedChild, PrimaryIssue};
 use super::execution_root::{
-    AdmittedExecutionRoot, AdmittedWorkingDirectory, ExecutableCandidate,
-    WorkingDirectorySelectionFailure,
+    AdmittedWorkingDirectory, ExecutableCandidate, WorkingDirectorySelectionFailure,
 };
 use super::git_capture::{GitAwareCaptureDeclaration, GitCaptureFailure};
 use super::input::{InputPreparationFailure, InputStaging, InputValue, InputView};
@@ -70,8 +69,9 @@ use super::runtime::{
     RequestedAction, later_step,
 };
 use super::start_gate::{START_GATE_REREAD, StartGateReading, StepStartGate};
+use super::step_workspace::workspace_root;
 use super::validated::{
-    ChosenSources, ResolvedOutputSource, ResolvedValueSource, ValidatedAgentStep,
+    ChosenSources, ResolvedOutputSource, ResolvedValueSource, StepWorkspace, ValidatedAgentStep,
     ValidatedCommandStep, ValidatedCommonStep, ValidatedEdgeTarget, ValidatedMessageSource,
     ValidatedRecoveryHandler, ValidatedStep, ValidatedWorkflowStep, WorkflowValueType,
 };
@@ -150,10 +150,10 @@ const fn command_launch_refused(cause: CommandLaunchCause) -> StepStartFailure {
     )))
 }
 
-/// A recovery handler's launch keeps a step command's classification (REQ-WFRECOVERY-62). A
-/// working directory the spawn refuses, the execution root rebound after the handler resolved
-/// it, is the handler's own `working_directory_unavailable`; any other refusal, which the
-/// launch does not produce today, is reported as an incomplete launch task.
+/// A recovery handler's launch keeps a step command's classification. A working directory the
+/// spawn refuses, the execution root rebound after the handler resolved it, is the handler's
+/// own `working_directory_unavailable`; any other refusal, which the launch does not produce
+/// today, is reported as an incomplete launch task.
 fn recovery_handler_launch_failure(failure: StepStartFailure) -> RecoveryHandlerFailure {
     match failure {
         StepStartFailure::CommandLaunch(failure) => RecoveryHandlerFailure::CommandLaunch(failure),
@@ -179,8 +179,8 @@ pub enum StepStartFailure {
     WorkingDirectory(WorkingDirectoryFailure),
     CommandPreparation(CommandPreparationFailure),
     CommandLaunch(CommandLaunchFailure),
-    /// A `workflow` step's child could not be admitted or its run directory created
-    /// (REQ-WFEXEC-60); `code` is the child's own rejection code, kept for the diagnostic.
+    /// A `workflow` step's child could not be admitted or its run directory created;
+    /// `code` is the child's own rejection code, kept for the diagnostic.
     ChildAdmission {
         code: String,
     },
@@ -206,7 +206,7 @@ pub enum StepExecutionFailure {
     Command(CommandExecutionFailure),
     Agent(AgentFailure),
     TaskUnavailable,
-    /// A `workflow` step's child ended without a published result (REQ-WFEXEC-60).
+    /// A `workflow` step's child ended without a published result.
     ChildInterrupted,
 }
 
@@ -220,7 +220,7 @@ pub enum OutputCaptureFailure {
         failure: GitCaptureFailure,
     },
     /// The text of the output that `outcome.from` names is not one of the workflow's
-    /// declared `outcomes` (REQ-WFEXEC-56).
+    /// declared `outcomes`.
     OutcomeUndeclared {
         output: String,
     },
@@ -235,8 +235,8 @@ pub enum StepFailureCause {
     RecoveryHandler(RecoveryHandlerFailure),
 }
 
-/// The closed kind of a `StepFailureCause`, which telemetry reports without its text
-/// (REQ-TELEMETRY-43).
+/// The closed kind of a `StepFailureCause`, which telemetry reports without its
+/// text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StepFailureKind {
     Start,
@@ -263,7 +263,7 @@ impl StepFailureKind {
 }
 
 /// The closed kind of the failure a recovery handler is given: the `kind` its context
-/// document carries and the kind a recheck reports (REQ-TELEMETRY-42).
+/// document carries and the kind a recheck reports.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveryFailureKind {
     CommandExit,
@@ -315,7 +315,7 @@ pub(crate) enum StepRuntimeError {
 pub(crate) struct ProvisionalStepOutputs {
     values: BTreeMap<String, CapturedValue>,
     agent_staging: Option<Arc<AgentInputStagingLease>>,
-    /// How a `workflow` step's child ended (REQ-WFEXEC-70).
+    /// How a `workflow` step's child ended.
     child: Option<ChildEnding>,
 }
 
@@ -616,16 +616,16 @@ where
 {
 }
 
-/// A value a `workflow` step maps to one of its child's inputs (REQ-WFFORMAT-90).
+/// A value a `workflow` step maps to one of its child's inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChildInputValue {
     Text(Arc<str>),
     Json(Arc<serde_json::Value>),
 }
 
-/// What a `workflow` step asks its dispatcher to run (REQ-WFEXEC-59): the tree-relative
-/// child file and the mapped inputs, an omitted optional or defaulted input absent, and for
-/// a `forEach` step the one-based element the child runs for (REQ-WFEXEC-66).
+/// What a `workflow` step asks its dispatcher to run: the tree-relative child file and the
+/// mapped inputs, an omitted optional or defaulted input absent, and for a `forEach` step
+/// the one-based element the child runs for.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildRunRequest {
     pub step: String,
@@ -661,24 +661,24 @@ impl ChildRunControl {
     }
 }
 
-/// How a child run ended (REQ-WFEXEC-60).
+/// How a child run ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChildRunOutcome {
     /// The child published a result recording `outcome`; `exports` holds its available
-    /// `text` and `json` exports, `interruption` the interruption that failed it, when
-    /// its primary issue is a step that failed `interrupted` (REQ-WFEXEC-99), and `failure`
-    /// the primary issue of a result that is `failed`, read from the result and never from
-    /// the outcome's name (REQ-WFEXEC-77).
+    /// `text` and `json` exports, `interruption` the interruption that failed it, when its
+    /// primary issue is a step that failed `interrupted`, and `failure` the primary issue
+    /// of a result that is `failed`, read from the result and never from the outcome's
+    /// name.
     Exited {
         outcome: String,
         exports: BTreeMap<String, CapturedValue>,
         interruption: Option<ChildInterruption>,
         failure: Option<Box<PrimaryIssue>>,
     },
-    /// The child, a nested run (REQ-WFEXEC-74), entered the wait `wait` records in its own
-    /// run directory, which its parent's step carries to the root instead of an outcome
-    /// (REQ-WFEXEC-75); `interruption` is the one that failed its stage when the wait is the
-    /// `repair` that interruption routed it to (REQ-WFEXEC-70).
+    /// The child, a nested run, entered the wait `wait` records in its own run directory,
+    /// which its parent's step carries to the root instead of an outcome; `interruption` is
+    /// the one that failed its stage when the wait is the `repair` that interruption routed
+    /// it to.
     Waiting {
         wait: Box<WaitRecord>,
         interruption: Option<ChildInterruption>,
@@ -701,12 +701,12 @@ pub trait ChildRunDispatcher: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = ChildRunOutcome> + Send;
 
     /// Whether a stop control is in force for `step`, which then does not start and the
-    /// run enters a `stop` wait at it (REQ-WFEXEC-62).
+    /// run enters a `stop` wait at it.
     fn stop_before(&self, step: &str) -> impl Future<Output = bool> + Send;
 
     /// Whether a withdrawal recorded for the run is pending, which ends the attempt as a
-    /// cancellation before the next `workflow` step starts (REQ-WFEXEC-73). A dispatcher
-    /// that reads no run's controls has none.
+    /// cancellation before the next `workflow` step starts. A dispatcher that reads no
+    /// run's controls has none.
     fn withdrawal_pending(&self) -> impl Future<Output = bool> + Send {
         std::future::ready(false)
     }
@@ -729,15 +729,15 @@ impl ChildRunDispatcher for NoChildRunDispatcher {
 
 const CHILD_RUNS_DISABLED: &str = "workflow_step_unsupported";
 
-/// The control values a `workflow` step's inputs may map (REQ-WFFORMAT-95, REQ-WFEXEC-63):
-/// `wait`, the step the resolved wait continues at and the string fields of the resolving
-/// control's payload, and `answers`, each step's latest recorded answers.
+/// The control values a `workflow` step's inputs may map: `wait`, the step the resolved
+/// wait continues at and the string fields of the resolving control's payload, and
+/// `answers`, each step's latest recorded answers.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ControlContext {
     pub wait: Option<(String, BTreeMap<String, String>)>,
     pub answers: BTreeMap<String, Arc<serde_json::Value>>,
     /// The step and one-based element a continuation at the waiting step resumes a fan-out
-    /// at (REQ-WFEXEC-96): the element the resolved wait recorded in its `step`.
+    /// at: the element the resolved wait recorded in its `step`.
     pub resume_item: Option<(String, u64)>,
 }
 
@@ -761,7 +761,7 @@ enum ExecutionControl {
 
 impl ExecutionControl {
     /// Stops the work; a child run receives the parent's interruption as an interruption
-    /// and any other stop as a cancellation (REQ-WFEXEC-59, REQ-WFEXEC-70).
+    /// and any other stop as a cancellation.
     fn interrupt(&self, reason: CancellationReason, interruption: bool) {
         match self {
             Self::Agent(control) => control.interrupt(),
@@ -778,7 +778,7 @@ impl ExecutionControl {
     }
 
     /// Whether the step's force-stop deadline forces this work: an interrupted child is
-    /// left to settle, its own grace period and finalizers included (REQ-WFEXEC-70).
+    /// left to settle, its own grace period and finalizers included.
     const fn forced_at_deadline(&self, interruption: bool) -> bool {
         !(interruption && matches!(self, Self::Child(_)))
     }
@@ -855,7 +855,7 @@ pub(crate) struct StepRuntime<
     inputs: InputStaging,
     agents: AgentExecution<Dispatcher>,
     children: ChildRuns<Children>,
-    /// The gate a command or agent step waits at before it is prepared (INV-ENGINE-46).
+    /// The gate a command or agent step waits at before it is prepared.
     start_gate: Option<Arc<dyn StepStartGate>>,
     clock: Clock,
     observer: Observer,
@@ -1041,7 +1041,7 @@ where
         }
     }
 
-    /// The same runtime running `workflow` steps through `children` (REQ-WFEXEC-59).
+    /// The same runtime running `workflow` steps through `children`.
     fn with_children<Children>(
         self,
         children: ChildRuns<Children>,
@@ -1078,7 +1078,7 @@ where
     Dispatcher: WorkflowAgentDispatcher<Clock::Instant, Observer>,
     Children: ChildRunDispatcher,
 {
-    /// The same runtime holding command and agent steps at `start_gate` (INV-ENGINE-46).
+    /// The same runtime holding command and agent steps at `start_gate`.
     fn with_start_gate(mut self, start_gate: Option<Arc<dyn StepStartGate>>) -> Self {
         self.start_gate = start_gate;
         self
@@ -1204,7 +1204,7 @@ where
             )
         {
             // A withdrawal recorded for the run ends the attempt before an ordinary
-            // `workflow` step starts (REQ-WFEXEC-73).
+            // `workflow` step starts.
             if self
                 .admitted
                 .workflow()
@@ -1222,7 +1222,7 @@ where
                 return self.withdraw_before(step, action, cancellation).await;
             }
             // A stop control in force for a `workflow` step enters a `stop` wait instead of
-            // starting the step (REQ-WFEXEC-62).
+            // starting the step.
             if dispatcher.stop_before(&step).await {
                 return self
                     .settle_unlaunched(action, DriverOccurrence::stop_entered(step, action))
@@ -1276,9 +1276,9 @@ where
 
     // The withdrawal's cancellation reaches the step it was requested before as it reaches
     // any starting step, so the step quiesces unlaunched and ends `cancelled` with every
-    // unstarted step (REQ-WFEXEC-45, REQ-WFEXEC-73). The step's wake is sent only once its
-    // cancellation is registered, so after it the cancellation is found; were it not, the
-    // step settles as a start failure rather than waiting on a wake that cannot come.
+    // unstarted step. The step's wake is sent only once its cancellation is registered, so
+    // after it the cancellation is found; were it not, the step settles as a start failure
+    // rather than waiting on a wake that cannot come.
     async fn withdraw_before(
         &self,
         step: String,
@@ -1306,7 +1306,7 @@ where
 
     // The start gate stands only before a command or agent step of the workflow's own steps:
     // a finalizer is not one of them, a recovery handler never reaches the driver's start
-    // path, and a `workflow` step's child holds its own steps (INV-ENGINE-46).
+    // path, and a `workflow` step's child holds its own steps.
     fn gated_start(&self, step: &str) -> Option<&Arc<dyn StepStartGate>> {
         let gate = self.start_gate.as_ref()?;
         let gated = self.admitted.workflow().definition.steps.contains_key(step)
@@ -1319,8 +1319,8 @@ where
 
     // A held step stays `starting` with nothing prepared: the driver reports the hold once
     // for this start and reads the gate again each `START_GATE_REREAD` of the runtime's
-    // clock, until the gate is open or the start's wake fires (INV-ENGINE-46). A read whose
-    // worker is lost counts as open, so a broken gate never holds a run.
+    // clock, until the gate is open or the start's wake fires. A read whose worker is lost
+    // counts as open, so a broken gate never holds a run.
     async fn wait_at_start_gate(
         &self,
         gate: &Arc<dyn StepStartGate>,
@@ -1433,7 +1433,7 @@ where
             ValidatedRecoveryHandler::Command { argv, cwd, .. } => {
                 let cwd = recovery_handler_cwd(&self.admitted, step, cwd.as_deref())
                     .map_err(|()| RecoveryHandlerFailure::HandlerUnavailable)?;
-                let cwd = resolve_working_directory(self.admitted.execution().root_identity(), cwd)
+                let cwd = resolve_step_working_directory(&self.admitted, step, cwd)
                     .map_err(|_| RecoveryHandlerFailure::WorkingDirectoryUnavailable)?;
                 let environment = self.admitted.recovery_handler_environment(step);
                 let mut command = prepare_command(argv, cwd, environment.clone())
@@ -1863,8 +1863,8 @@ where
 
     /// Tells the execution context's harness-login observer how the harness of a settled
     /// agent invocation answered the login variable its environment carried: once per
-    /// invocation, by name only, and never for an outcome that says nothing of the login
-    /// (INV-ENGINE-36).
+    /// invocation, by name only, and never for an outcome that says nothing of the
+    /// login.
     fn observe_harness_login(&self, login_variable: Option<&'static str>, outcome: &AgentOutcome) {
         let Some(observer) = self.admitted.execution().harness_login_observer() else {
             return;
@@ -2206,13 +2206,12 @@ where
         self.settle_agent_occurrence(action, occurrence).await
     }
 
-    /// Runs a `workflow` step's child through the dispatcher (REQ-WFEXEC-59): the step is
-    /// `running` once the child's directory exists, a cancellation of the step cancels the
-    /// child through its own source, and the child's outcome and available exports settle
-    /// through the capture path (REQ-WFEXEC-60). A fan-out runs its elements' children one at
-    /// a time under the step's one launch, start report and cancellation source, goes on past
-    /// an element only while its outcome routes to a later step, and settles the element it
-    /// ends at as a plain step settles its child (REQ-WFEXEC-94).
+    /// Runs a `workflow` step's child through the dispatcher: the step is `running` once the
+    /// child's directory exists, a cancellation of the step cancels the child through its own
+    /// source, and the child's outcome and available exports settle through the capture path.
+    /// A fan-out runs its elements' children one at a time under the step's one launch, start
+    /// report and cancellation source, goes on past an element only while its outcome routes
+    /// to a later step, and settles the element it ends at as a plain step settles its child.
     async fn execute_prepared_child(
         &self,
         step: String,
@@ -2253,7 +2252,7 @@ where
         };
         // An empty fan-out runs no child and is `running` at once.
         let mut child_task = None;
-        // The fan-out element whose child produced the step's outcome (REQ-WFEXEC-77).
+        // The fan-out element whose child produced the step's outcome.
         let mut item = None;
         if let Some(request) = requests.next() {
             item = request.item;
@@ -2312,7 +2311,7 @@ where
             },
         };
         // The last element's outcome ends the step whatever its edge, and an element an
-        // interruption failed ends it with that element's outcome (REQ-WFEXEC-104).
+        // interruption failed ends it with that element's outcome.
         while self.continues_fan_out(&step, &outcome) {
             let Some(request) = requests.next() else {
                 break;
@@ -2328,8 +2327,7 @@ where
         }
         // A nested run that honored the root's withdrawal at its own step boundary ended as a
         // cancellation through the step's source; the withdrawal is this run's too, so it
-        // ends this attempt at this step as one honored before a step would (REQ-WFEXEC-76,
-        // REQ-WFEXEC-73).
+        // ends this attempt at this step as one honored before a step would.
         if matches!(outcome, ChildRunOutcome::Cancelled)
             && child_cancellation.withdrawal_requested()
             && self
@@ -2373,7 +2371,7 @@ where
     /// Settles a `workflow` step's completion under the run's interruption as
     /// `settle_agent_occurrence` does, except that a completion the stop reached is still
     /// delivered: the reducer routes it on the step's edge or fails the step `interrupted`,
-    /// and the stop settles only when the reducer does not take it (REQ-WFEXEC-70).
+    /// and the stop settles only when the reducer does not take it.
     async fn settle_interrupted_child(
         &self,
         action: ActionId,
@@ -2403,8 +2401,8 @@ where
     }
 
     /// Whether a fan-out goes on past an element that ended with `outcome`: the child
-    /// exited with an outcome whose edge is a step later in document order than `step`
-    /// (REQ-WFEXEC-94), the same comparison an ordinary edge makes (REQ-WFEXEC-82).
+    /// exited with an outcome whose edge is a step later in document order than
+    /// `step`, the same comparison an ordinary edge makes.
     fn continues_fan_out(&self, step: &str, outcome: &ChildRunOutcome) -> bool {
         let ChildRunOutcome::Exited {
             outcome,
@@ -2451,12 +2449,11 @@ where
 
     /// The values a child that exited commits for the step: `outcome` and each declared
     /// `text` or `json` export the child made available, detached from the child's staging,
-    /// with the child's ending the reducer routes on under an interruption (REQ-WFEXEC-70)
-    /// and, when the child's result is `failed`, records with the step as its failed child
-    /// at the fan-out element `item` (REQ-WFEXEC-77).
-    /// A nested run that waits commits nothing and its ending is the wait the reducer ends
-    /// the walk on (REQ-WFEXEC-75). An outcome the step routes nowhere, or any other ending,
-    /// is an interrupted child.
+    /// with the child's ending the reducer routes on under an interruption and, when the
+    /// child's result is `failed`, records with the step as its failed child at the fan-out
+    /// element `item`. A nested run that waits commits nothing and its ending is the wait
+    /// the reducer ends the walk on. An outcome the step routes nowhere, or any other
+    /// ending, is an interrupted child.
     fn child_outputs(
         &self,
         step: &str,
@@ -2739,7 +2736,7 @@ where
     }
 
     // The one path for a stopped start that launched nothing: its quiescing says so, and the
-    // reducer fails an interrupted command or agent step at `start` (REQ-WFEXEC-69).
+    // reducer fails an interrupted command or agent step at `start`.
     async fn quiesce_unlaunched(
         &self,
         action: ActionId,
@@ -2782,7 +2779,7 @@ where
     }
 
     // Each `firstOf` is resolved to the source the reducer chose (`input_sources`) before the
-    // body is read, so its value is materialized as a single reference's (INV-ENGINE-44).
+    // body is read, so its value is materialized as a single reference's.
     fn prepare_step(
         &self,
         step: &str,
@@ -2792,6 +2789,17 @@ where
     ) -> Result<PreparedStep, StepStartFailure> {
         let definition =
             workflow_node(&self.admitted, step).ok_or(StepStartFailure::StepUnavailable)?;
+        if let StepWorkspace::Established { by } = &definition.common().workspace
+            && by == step
+        {
+            self.admitted
+                .step_workspaces()
+                .ok_or(StepStartFailure::WorkingDirectory(
+                    WorkingDirectoryFailure::Unavailable,
+                ))?
+                .establish(by)
+                .map_err(StepStartFailure::WorkingDirectory)?;
+        }
         let body = match StepBody::from(definition) {
             StepBody::Command(command) => {
                 let command = command.with_chosen_sources(input_sources);
@@ -2803,8 +2811,9 @@ where
                 }) {
                     return Err(StepStartFailure::OutputsUnsupported);
                 }
-                let cwd = resolve_working_directory(
-                    self.admitted.execution().root_identity(),
+                let cwd = resolve_step_working_directory(
+                    &self.admitted,
+                    step,
                     command.common.cwd.as_deref(),
                 )
                 .map_err(StepStartFailure::WorkingDirectory)?;
@@ -2989,8 +2998,8 @@ where
         self.with_work(|work| work.cancel(step, action, reason, deadline, interruption))
     }
 
-    /// Whether the run's stop is an interruption (REQ-WFEXEC-69): the reducer settles its
-    /// stopped steps `interrupted` and routes a `workflow` step's child (REQ-WFEXEC-70).
+    /// Whether the run's stop is an interruption: the reducer settles its stopped steps
+    /// `interrupted` and routes a `workflow` step's child.
     fn interruption_requested(&self) -> bool {
         self.admitted
             .execution()
@@ -3264,21 +3273,33 @@ impl CaptureWorker {
                     }
                 });
         }
-        let files = declarations
-            .iter()
+        let mut files = declarations
+            .into_iter()
             .filter_map(|declaration| match declaration {
-                GitAwareCaptureDeclaration::File(declaration) => Some(*declaration),
+                GitAwareCaptureDeclaration::File(file) => {
+                    Some(CaptureCandidateDeclaration::File(file))
+                }
                 GitAwareCaptureDeclaration::GitBranch(_) => None,
             })
             .collect::<Vec<_>>();
-        self.artifacts
-            .capture_file_candidates(&files, cancellation)
-            .map_err(|failure| match failure {
-                CaptureAttemptFailure::Cancelled => CaptureWorkerFailure::Cancelled,
-                CaptureAttemptFailure::Capture(failure) => {
-                    CaptureWorkerFailure::Failed(OutputCaptureFailure::Capture(failure))
-                }
-            })
+        let capture = if let Some(first) = files.first() {
+            let root = workspace_root(&self.admitted, &common.workspace).map_err(|_| {
+                CaptureWorkerFailure::Failed(OutputCaptureFailure::Capture(CaptureFailure::new(
+                    Arc::from(first.output_identity()),
+                    CaptureFailureKind::SourceUnavailable,
+                )))
+            })?;
+            self.artifacts
+                .capture_candidates_from(root.directory(), &mut files, cancellation)
+        } else {
+            self.artifacts.capture_candidates(&mut [], cancellation)
+        };
+        capture.map_err(|failure| match failure {
+            CaptureAttemptFailure::Cancelled => CaptureWorkerFailure::Cancelled,
+            CaptureAttemptFailure::Capture(failure) => {
+                CaptureWorkerFailure::Failed(OutputCaptureFailure::Capture(failure))
+            }
+        })
     }
 
     async fn settle(
@@ -3438,9 +3459,8 @@ impl CaptureWorker {
 
 /// The failure a capture of `step` settles as when `outcome.from` names `step`, alone or as
 /// a source of a `firstOf`, and the captured text of the output it names is not one of the
-/// declared names (REQ-WFEXEC-56, INV-ENGINE-17). Validation names a step at most once and
-/// admits only a text output as a source, so any other shape is refused the same way rather
-/// than committed.
+/// declared names. Validation names a step at most once and admits only a text output as a
+/// source, so any other shape is refused the same way rather than committed.
 fn undeclared_outcome(
     admitted: &AdmittedWorkflow,
     step: &str,
@@ -4326,8 +4346,8 @@ impl WorkflowExecutionStart {
         self
     }
 
-    /// Holds each command and agent step of the run at `start_gate` before it is prepared
-    /// (INV-ENGINE-46).
+    /// Holds each command and agent step of the run at `start_gate` before it is
+    /// prepared.
     pub fn with_start_gate(mut self, start_gate: Arc<dyn StepStartGate>) -> Self {
         self.start_gate = Some(start_gate);
         self
@@ -4671,12 +4691,12 @@ enum PreparedStepBody {
 }
 
 /// The children a `workflow` step runs: its one child or, for a `forEach` step, one per
-/// element of the list from the element a continuation at the waiting step resumes
-/// (REQ-WFEXEC-66, REQ-WFEXEC-68). Every element's `item` inputs are resolved here, when
-/// the step starts, so a value no element can supply fails the step at `start` before
-/// its first child is created (REQ-WFEXEC-67). `root_inputs` are the run's admitted inputs
-/// and `controls` the control values the attempt resolved. The step runtime and a repair
-/// continuation's preflight (`child_preflight_inputs`) share this one mapper.
+/// element of the list from the element a continuation at the waiting step resumes. Every
+/// element's `item` inputs are resolved here, when the step starts, so a value no element
+/// can supply fails the step at `start` before its first child is created. `root_inputs`
+/// are the run's admitted inputs and `controls` the control values the attempt resolved.
+/// The step runtime and a repair continuation's preflight (`child_preflight_inputs`) share
+/// this one mapper.
 fn child_run_requests(
     root_inputs: &ResolvedInputs,
     controls: Option<&ControlContext>,
@@ -4733,7 +4753,7 @@ fn child_run_requests(
 }
 
 /// A `forEach` step's list: the `json` root input or export it references, which must
-/// be a JSON array (REQ-WFEXEC-67).
+/// be a JSON array.
 fn fan_out_list(
     root_inputs: &ResolvedInputs,
     source: &ResolvedValueSource,
@@ -4757,12 +4777,11 @@ fn fan_out_list(
     }
 }
 
-/// The mapped inputs of a `workflow` step's child (REQ-WFFORMAT-90, REQ-WFEXEC-60) but
-/// its `item` inputs, which each element resolves: an unavailable value omits an input
-/// the child may go without and otherwise fails the step's start with
-/// `inputs_unavailable`. A `wait.<field>` value is the resolving control's field when the
-/// wait continues at this step, and `controls.answers` the step's recorded answers
-/// (REQ-WFEXEC-63); both are the same for every element.
+/// The mapped inputs of a `workflow` step's child but its `item` inputs, which each
+/// element resolves: an unavailable value omits an input the child may go without and
+/// otherwise fails the step's start with `inputs_unavailable`. A `wait.<field>` value is
+/// the resolving control's field when the wait continues at this step, and
+/// `controls.answers` the step's recorded answers; both are the same for every element.
 fn resolve_child_inputs(
     root_inputs: &ResolvedInputs,
     controls: Option<&ControlContext>,
@@ -4824,8 +4843,8 @@ fn resolve_child_inputs(
 }
 
 /// The mapped inputs `admitted`'s `workflow` step `step` would give its child for element
-/// `item` when a continuation starts it with `controls`, read before the step runs
-/// (REQ-CONTINUE-117): the step's input sources are made available as the engine makes them
+/// `item` when a continuation starts it with `controls`, read before the step runs: the
+/// step's input sources are made available as the engine makes them
 /// (`resolved_action_inputs`), each output reference from `output`, and mapped by
 /// `child_run_requests`, the mapper the step itself runs. `None` when the step forms no
 /// request for that element; an error of `output` is returned as it is.
@@ -4883,17 +4902,17 @@ pub(crate) fn child_preflight_inputs<Error>(
 }
 
 /// The children a `workflow` step runs, one at a time and in order: its one child or each
-/// fan-out element from the one the step starts at (REQ-WFEXEC-66). An empty fan-out has
-/// none and commits `empty`, the outcome its `forEach` declares for an empty list.
+/// fan-out element from the one the step starts at. An empty fan-out has none and commits
+/// `empty`, the outcome its `forEach` declares for an empty list.
 struct PreparedChildRun {
     requests: Vec<ChildRunRequest>,
     empty: Option<String>,
 }
 
-/// Adds a fan-out element's `item` and `item.<field>` inputs to `inputs` (REQ-WFEXEC-67):
-/// the element, or the field of an element that is an object, a `text` input taking only a
-/// string. An absent value omits an input the child may go without and otherwise fails the
-/// step's start with `inputs_unavailable`.
+/// Adds a fan-out element's `item` and `item.<field>` inputs to `inputs`: the element, or
+/// the field of an element that is an object, a `text` input taking only a string. An
+/// absent value omits an input the child may go without and otherwise fails the step's
+/// start with `inputs_unavailable`.
 fn resolve_item_inputs(
     workflow: &ValidatedWorkflowStep,
     element: &serde_json::Value,
@@ -5037,7 +5056,7 @@ impl PreparedCommand {
         }
         if !cwd.validate_execution_root() {
             return Err(StepStartFailure::WorkingDirectory(
-                WorkingDirectoryFailure::ExecutionRootRebound,
+                cwd.rebound_failure().into(),
             ));
         }
         let environment = environment
@@ -5342,22 +5361,26 @@ impl LaunchedStepBody {
     }
 }
 
-pub(super) fn resolve_working_directory(
-    execution_root: &AdmittedExecutionRoot,
+pub(super) fn resolve_step_working_directory(
+    admitted: &AdmittedWorkflow,
+    node: &str,
     declared_cwd: Option<&str>,
 ) -> Result<AdmittedWorkingDirectory, WorkingDirectoryFailure> {
-    execution_root
+    let step = workflow_node(admitted, node).ok_or(WorkingDirectoryFailure::Unavailable)?;
+    workspace_root(admitted, &step.common().workspace)?
         .select_working_directory(declared_cwd)
-        .map_err(|failure| match failure {
-            WorkingDirectorySelectionFailure::ExecutionRootRebound => {
-                WorkingDirectoryFailure::ExecutionRootRebound
-            }
-            WorkingDirectorySelectionFailure::Unavailable => WorkingDirectoryFailure::Unavailable,
-            WorkingDirectorySelectionFailure::EscapesExecutionRoot => {
-                WorkingDirectoryFailure::EscapesExecutionRoot
-            }
-            WorkingDirectorySelectionFailure::NotDirectory => WorkingDirectoryFailure::NotDirectory,
-        })
+        .map_err(WorkingDirectoryFailure::from)
+}
+
+impl From<WorkingDirectorySelectionFailure> for WorkingDirectoryFailure {
+    fn from(failure: WorkingDirectorySelectionFailure) -> Self {
+        match failure {
+            WorkingDirectorySelectionFailure::ExecutionRootRebound => Self::ExecutionRootRebound,
+            WorkingDirectorySelectionFailure::Unavailable => Self::Unavailable,
+            WorkingDirectorySelectionFailure::EscapesExecutionRoot => Self::EscapesExecutionRoot,
+            WorkingDirectorySelectionFailure::NotDirectory => Self::NotDirectory,
+        }
+    }
 }
 
 fn prepare_command(
@@ -5375,7 +5398,7 @@ fn prepare_command(
         Err(failure) if cwd.validate_execution_root() => return Err(failure),
         Err(_) => {
             return Err(StepStartFailure::WorkingDirectory(
-                WorkingDirectoryFailure::ExecutionRootRebound,
+                cwd.rebound_failure().into(),
             ));
         }
     };
@@ -5457,7 +5480,6 @@ mod failure_kind_tests {
         AgentFailure::new(AgentFailureCause::start_failure("spawn", "unavailable"))
     }
 
-    // REQ-TELEMETRY-43
     #[test]
     fn failure_kinds_classify_every_step_failure_cause() {
         let handler = || StepFailureCause::RecoveryHandler(RecoveryHandlerFailure::ResultMissing);
@@ -5543,7 +5565,6 @@ mod failure_kind_tests {
         }
     }
 
-    // REQ-TELEMETRY-43
     #[test]
     fn recovery_failure_kinds_keep_the_handler_context_strings() {
         assert_eq!(

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-12T01:00:00Z",
+  "providers": [
+    {
+      "provider": "gitlab",
+      "state": "ready",
+      "connectionAuthorizationId": "cna_01k0z6r1w8f4jy2m7q9v3x5abc",
+      "generation": 1,
+      "expiresAt": "2026-11-12T02:00:00Z",
+      "checkedAt": "2026-11-12T01:00:00Z",
+      "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abc"
+    }
+  ]
+}

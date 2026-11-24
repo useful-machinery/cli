@@ -83,7 +83,7 @@ impl ActivationArtifact {
     }
 
     /// Writes the key as one line of JSON, as a pool key is written, so either kind can be
-    /// pasted at one prompt or held in one variable (REQ-RUNNERENROLL-167).
+    /// pasted at one prompt or held in one variable.
     pub fn write_json(&self, output: &mut impl Write) -> Result<(), EnrollmentError> {
         let transferable = TransferableActivationArtifact::from(self);
         serde_json::to_writer(&mut *output, &transferable)
@@ -133,10 +133,10 @@ pub struct JoinKeyArtifact {
     expires_at: String,
 }
 
-/// A key a host is given (REQ-RUNNERENROLL-167): a pool's join key, which any
-/// number of hosts may present, or a single-runner key, the activation of one
-/// registered runner. The two closed documents are told apart by the member
-/// each requires, `joinUrl` or `activationUrl`, never by an option.
+/// A key a host is given: a pool's join key, which any number of hosts may
+/// present, or a single-runner key, the activation of one registered runner.
+/// The two closed documents are told apart by the member each requires,
+/// `joinUrl` or `activationUrl`, never by an option.
 pub enum JoinKey {
     Pool(JoinKeyArtifact),
     SingleRunner(ActivationArtifact),
@@ -244,8 +244,7 @@ struct OperatorConfig {
     runner_state_path: PathBuf,
     control_socket_path: PathBuf,
     work_root: PathBuf,
-    /// The free space kept on the work root's disk (REQ-RUNNERENROLL-152); the default
-    /// where absent.
+    /// The free space kept on the work root's disk; the default where absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     minimum_free_disk_bytes: Option<u64>,
     // A present `keptRuns` reaches the object decode, so a null or an array
@@ -350,8 +349,8 @@ impl OperatorConfig {
         age_valid && document.maximum_total_bytes != Some(Some(0))
     }
 
-    // Judges `buildCaches` (REQ-RUNNERENROLL-160) on the paths as written,
-    // component by component, as `Path::starts_with` compares them.
+    // Judges `buildCaches` on the paths as written, component by
+    // component, as `Path::starts_with` compares them.
     fn build_caches_valid(&self) -> bool {
         let Some(caches) = &self.build_caches else {
             return true;
@@ -397,8 +396,7 @@ impl OperatorConfig {
             .collect()
     }
 
-    // The bounds `keptRuns` sets (REQ-RUNNERENROLL-157), each absent member
-    // taking its default.
+    // The bounds `keptRuns` sets, each absent member taking its default.
     fn kept_run_bounds(&self) -> KeptRunBounds {
         let defaults = KeptRunBounds::default();
         let Some(document) = &self.kept_runs else {
@@ -959,14 +957,13 @@ impl Error for PrivateArtifactError {
     }
 }
 
-/// Enrolls the host with a single-runner key when it holds no enrolled state
-/// (REQ-RUNNERENROLL-13). An enrollment staged for the key's activation is
-/// resent as it was staged, after the key's expiry included
-/// (REQ-RUNNERENROLL-22); a journal staged for another activation or a join
-/// is refused and nothing is sent (REQ-RUNNERENROLL-24); and an activation the
-/// host's receipt already records as gone is answered `Gone` without a
-/// request (REQ-RUNNERENROLL-23). The request is sent once: an ambiguous or
-/// refused answer keeps the journal for a later start to resend.
+/// Enrolls the host with a single-runner key when it holds no enrolled state.
+/// An enrollment staged for the key's activation is resent as it was staged,
+/// after the key's expiry included; a journal staged for another activation or
+/// a join is refused and nothing is sent; and an activation the host's receipt
+/// already records as gone is answered `Gone` without a request. The request
+/// is sent once: an ambiguous or refused answer keeps the journal for a later
+/// start to resend.
 pub fn enroll_unless_enrolled(
     config_path: &Path,
     key: ActivationArtifact,
@@ -1009,16 +1006,16 @@ pub fn enroll_unless_enrolled(
     send_staged_enrollment(host, &journal)
 }
 
-/// Resends the first enrollment a host with no enrolled state has staged, as
-/// a start given no key does (REQ-RUNNERENROLL-22), and answers `None` when it
-/// holds no journal or only a terminal receipt: the host is then not
-/// enrolled. A staged join is resolved only with its key, and a staged
-/// replacement only beside the state it replaces.
+/// Resends the first enrollment a host with no enrolled state has staged, as a
+/// start given no key does, and answers `None` when it holds no journal or
+/// only a terminal receipt: the host is then not enrolled. A staged join is
+/// resolved only with its key, and a staged replacement only beside the state
+/// it replaces.
 pub fn resend_staged_enrollment(
     config_path: &Path,
 ) -> Result<Option<EnrollmentOutcome>, EnrollmentError> {
     // A host that holds no journal at all is not enrolled, and its start
-    // writes nothing, not even the state lock (REQ-RUNNERENROLL-30).
+    // writes nothing, not even the state lock.
     let state_path = load_operator_config(config_path)?.runner_state_path;
     if fs::symlink_metadata(state_directory(&state_path)?.join(JOURNAL_FILE))
         .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
@@ -1041,11 +1038,10 @@ pub fn resend_staged_enrollment(
     send_staged_enrollment(host, &journal).map(Some)
 }
 
-/// Enrolls a second credential for the host's own runner with a
-/// single-runner key, keeping the current one (REQ-RUNNERENROLL-48). A
-/// replacement staged for the key's activation is resent; one already staged
-/// in the state or promoted answers `ReplacementCredential` without a request
-/// (REQ-RUNNERENROLL-51).
+/// Enrolls a second credential for the host's own runner with a single-runner
+/// key, keeping the current one. A replacement staged for the key's
+/// activation is resent; one already staged in the state or promoted answers
+/// `ReplacementCredential` without a request.
 pub fn enroll_replacement(
     config_path: &Path,
     key: ActivationArtifact,
@@ -1091,8 +1087,7 @@ pub fn enroll_replacement(
 }
 
 /// Resends the replacement the host has staged, as a replacement start given
-/// no key does (REQ-RUNNERENROLL-22); a host that has staged none answers
-/// `NoStagedReplacement`.
+/// no key does; a host that has staged none answers `NoStagedReplacement`.
 pub fn resend_staged_replacement(config_path: &Path) -> Result<EnrollmentOutcome, EnrollmentError> {
     let host = LockedStateDirectory::lock(config_path)?;
     let StagedDocument::Journal(journal) = read_staged_document(&host.journal_path)? else {
@@ -1780,8 +1775,8 @@ pub(crate) fn load_work_root(path: &Path) -> Result<PathBuf, EnrollmentError> {
 }
 
 /// The work root and the minimum of free space kept on its disk, `minimumFreeDiskBytes`
-/// or the default where the configuration names none (REQ-RUNNERENROLL-152), read without
-/// taking the state lock or reading the state.
+/// or the default where the configuration names none, read without taking the state lock
+/// or reading the state.
 pub(crate) fn load_disk_space_settings(path: &Path) -> Result<(PathBuf, u64), EnrollmentError> {
     let config = load_operator_config(path)?;
     let minimum = config.minimum_free_disk_bytes();
@@ -2671,7 +2666,7 @@ fn private_file(metadata: &Metadata) -> Result<(), PrivateFileFailure> {
 /// at most one link where `private_file` requires exactly one. A file that
 /// `write_private_file_atomically` renames over reports no link, to a stat of
 /// the path that the rename lands in as well as to the file opened before it,
-/// and is still the runner's own whole file (INV-RUNNER-44).
+/// and is still the runner's own whole file.
 fn private_file_for_read(metadata: &Metadata) -> Result<(), PrivateFileFailure> {
     if !private_regular_file(metadata) || metadata.nlink() > 1 {
         return Err(PrivateFileFailure::refused(
@@ -2833,10 +2828,10 @@ const OVER_LIMIT: &str = "input file exceeds its size limit";
 /// A private file with no link is the one the path named at the open, since
 /// renamed over by `write_private_file_atomically` or removed. The replace
 /// never writes the earlier file, so it is read as it stands: its bytes are
-/// the whole earlier version (INV-RUNNER-44). A second link is still refused.
-/// The path's own checks before the open admit a stat that reports no link
-/// for the same reason, and this check of the opened file is the one that
-/// decides what is read.
+/// the whole earlier version. A second link is still refused. The path's own
+/// checks before the open admit a stat that reports no link for the same
+/// reason, and this check of the opened file is the one that decides what is
+/// read.
 fn read_opened_bounded_file(
     file: File,
     limit: u64,
@@ -2972,7 +2967,7 @@ pub enum EnrollmentError {
     /// this start; its terminal receipt is written.
     ActivationGone,
     /// A join met a signed-in registration the host holds without enrolled
-    /// state (REQ-RUNNERENROLL-262).
+    /// state.
     RegistrationConflict(Box<RegistrationConflict>),
     /// A rejoin found enrolled state whose credential did not come from a
     /// join key, so it sent nothing.

@@ -1,9 +1,9 @@
-//! The organization's token of a token service, as `useful org integration` acts on it
-//! (REQ-INTEGRATION-3, REQ-INTEGRATION-16 to REQ-INTEGRATION-20): connected and reconnected
-//! through `integration_token`, shown and listed with who connected it named from the
-//! organization's directory, authorized for a runner of the organization, alone or with every
-//! token of the organization, and disconnected. Each is read and sent under the member's
-//! session, which Cloud admits for an owner alone; a service API key reaches none of them.
+//! The organization's token of a token service, as `useful org integration` acts on it:
+//! connected and reconnected through `integration_token`, shown and listed with who connected
+//! it named from the organization's directory, authorized for a runner of the organization,
+//! alone or with every token of the organization, and disconnected. Each is read and sent
+//! under the member's session, which Cloud admits for an owner alone; a service API key
+//! reaches none of them.
 
 use std::io::{self, Write as _};
 
@@ -28,8 +28,7 @@ use crate::exit_code::{ExitCode, OutcomeClass};
 /// The command group of the organization's integrations, which a remedy names.
 pub(super) const GROUP: &str = "useful org integration";
 
-/// Who can use the organization's token once a runner is authorized for it
-/// (REQ-INTEGRATION-20).
+/// Who can use the organization's token once a runner is authorized for it.
 pub(super) const ORG_TOKEN_AUTHORIZE: &[&str] = &[
     "every run of the organization on the runner whose workflow declares the service as org can \
      be issued the token, whoever caused the run",
@@ -75,10 +74,10 @@ impl OrgTokens<'_> {
         self.deployment.fingerprint().api_url()
     }
 
-    /// `failure` of an operation on the token of `service` as the member reads it
-    /// (REQ-INTEGRATION-17): an owner's refusal, a token stored meanwhile, a service the
-    /// organization holds no token of and the refusals that name the token's authorizations,
-    /// each with a remedy that names the organization; any other as a grant's.
+    /// `failure` of an operation on the token of `service` as the member reads it: an
+    /// owner's refusal, a token stored meanwhile, a service the organization holds no token
+    /// of and the refusals that name the token's authorizations, each with a remedy that
+    /// names the organization; any other as a grant's.
     pub(super) fn report(&self, failure: &MemberGrantFailure, service: &str) -> ApiFailureReport {
         let org = self.organization;
         let refused = |outcome, summary: String, remedy: String| {
@@ -177,7 +176,7 @@ impl OrgTokens<'_> {
     }
 
     /// `show SERVICE`: the organization's token of it, with who connected it named from the
-    /// organization's directory, whose failed read names nobody (REQ-INTEGRATION-19).
+    /// organization's directory, whose failed read names nobody.
     pub(super) fn show(&self, service: &str) -> anyhow::Result<ExitCode> {
         let token = match self.find(service, "show")? {
             Ok(token) => token,
@@ -194,8 +193,8 @@ impl OrgTokens<'_> {
 
     /// The organization's tokens, which `list` prints after its connections, read only where
     /// the deployment serves a token service, each with who connected it named from the
-    /// organization's directory, which is read only for an organization that holds a token
-    /// (REQ-INTEGRATION-19). A failed read of the tokens is the inner error.
+    /// organization's directory, which is read only for an organization that holds a token.
+    /// A failed read of the tokens is the inner error.
     pub(super) fn listed(&self) -> anyhow::Result<Result<Tokens, MemberGrantFailure>> {
         with_human_session_api(self.deployment, self.policy, |api: &MemberGrantApi| {
             if integration_token::served(api)?.is_empty() {
@@ -213,8 +212,7 @@ impl OrgTokens<'_> {
 
     /// `connect SERVICE`: stores the organization's first token of `service`, read from
     /// `from_file`, standard input or a prompt that does not echo; one the organization holds is
-    /// refused with exit 2 before any token is read, naming `reconnect` (REQ-INTEGRATION-16 to
-    /// REQ-INTEGRATION-18).
+    /// refused with exit 2 before any token is read, naming `reconnect`.
     pub(super) fn connect(
         &self,
         service: &ServedTokenService,
@@ -239,7 +237,7 @@ impl OrgTokens<'_> {
     }
 
     /// `reconnect SERVICE`: stores the next version of the organization's token of `service`,
-    /// which keeps its ID and its authorizations (REQ-INTEGRATION-18).
+    /// which keeps its ID and its authorizations.
     pub(super) fn reconnect(
         &self,
         service: &str,
@@ -273,8 +271,7 @@ impl OrgTokens<'_> {
     }
 
     /// `disconnect SERVICE --yes`: states what revoking a token does, then erases the
-    /// organization's token of `service` from Cloud; it stays valid at the service
-    /// (REQ-INTEGRATION-20).
+    /// organization's token of `service` from Cloud; it stays valid at the service.
     pub(super) fn disconnect(&self, service: &str) -> anyhow::Result<ExitCode> {
         let token = match self.find(service, "disconnect")? {
             Ok(token) => token,
@@ -322,10 +319,10 @@ impl OrgTokens<'_> {
         )
     }
 
-    /// `authorize SERVICE --runner RUNNER`: authorizes the runner `runner` names, an ID or a
-    /// name among the organization's runners, for the organization's token of `service`, stating
-    /// who can use it and asking first where `asks` (REQ-INTEGRATION-20). Given no runner it names
-    /// the organization's runners the token is not authorized for, and exits 2.
+    /// `authorize SERVICE --runner RUNNER`: authorizes the runner `runner` names, an ID or a name
+    /// among the organization's runners, for the organization's token of `service`, stating who
+    /// can use it and asking first where `asks`. Given no runner it names the organization's
+    /// runners the token is not authorized for, and exits 2.
     pub(super) fn authorize(
         &self,
         service: &str,
@@ -387,9 +384,9 @@ impl OrgTokens<'_> {
     }
 
     /// `authorize --all --runner RUNNER`: authorizes the runner for every token of the
-    /// organization, and for no connection (REQ-INTEGRATION-20). The tokens are read first: an
-    /// organization that holds none is `token_not_found`. Given no runner it names the
-    /// organization's runners and exits 2.
+    /// organization, and for no connection. The tokens are read first: an organization that
+    /// holds none is `token_not_found`. Given no runner it names the organization's runners
+    /// and exits 2.
     pub(super) fn authorize_all(
         &self,
         runner: Option<&str>,
@@ -473,8 +470,8 @@ impl OrgTokens<'_> {
 
     /// `deauthorize SERVICE --runner RUNNER`: ends the authorization of the runner `runner`
     /// names, an ID or a name among the runners the token is authorized for, stating that it is
-    /// issued the token no more and asking first where `asks` (REQ-INTEGRATION-20). Given no
-    /// runner it names those runners and exits 2.
+    /// issued the token no more and asking first where `asks`. Given no runner it names those
+    /// runners and exits 2.
     pub(super) fn deauthorize(
         &self,
         service: &str,

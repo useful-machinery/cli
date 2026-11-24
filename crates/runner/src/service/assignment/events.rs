@@ -617,8 +617,8 @@ impl AssignmentManager {
     }
 
     pub(super) fn apply_successor_fences(&mut self, successor_assignment_id: &str) {
-        // Only a predecessor that never reported a wait is settled by the successor's offer
-        // (INV-RUNNER-63).
+        // Only a predecessor that never reported a wait is settled by the successor's
+        // offer.
         let predecessors: Vec<String> = self
             .reporting
             .iter()
@@ -679,8 +679,8 @@ impl AssignmentManager {
     }
 
     /// Ends the run opened for an offer the runner answers with `decline`: names the
-    /// decline on its record, then finishes it `rejected` (REQ-TELEMETRY-47). Every
-    /// rejected ending goes through here.
+    /// decline on its record, then finishes it `rejected`. Every rejected ending
+    /// goes through here.
     pub(super) fn reject_offered_run(
         &mut self,
         assignment_id: &str,
@@ -778,7 +778,12 @@ impl AssignmentManager {
             validate_execution_spec(&offer.execution_spec)?;
         }
         if let Some(continuation) = &offer.continuation
-            && (continuation.definition_source != offer.execution_spec.workflow_definition_source
+            && (continuation.definition_source.as_ref()
+                != offer
+                    .execution_spec
+                    .source
+                    .as_ref()
+                    .map(|source| &source.workflow_definition_source)
                 || continuation.effective_capacity != offer.execution_spec.capacity)
         {
             return Err(AssignmentDecline::ExecutionSpecInvalid(

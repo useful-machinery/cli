@@ -32,7 +32,6 @@ fn is_command(root: &clap::Command, path: &str, visible: bool) -> bool {
     !node.has_subcommands()
 }
 
-// INV-CLI-21
 #[test]
 fn the_migration_guide_names_only_gone_paths_and_visible_replacements() {
     let earlier = guide_rows("Earlier commands and their replacements");
@@ -84,7 +83,6 @@ fn the_migration_guide_names_only_gone_paths_and_visible_replacements() {
     }
 }
 
-// INV-CLI-21
 #[test]
 fn no_command_takes_a_retired_option_spelling() {
     let expected: BTreeMap<&str, BTreeSet<&str>> = RETIRED_OPTIONS

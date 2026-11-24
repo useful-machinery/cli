@@ -58,7 +58,7 @@ const DIRECT_SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
 const FIRST_TEXT_BLOCK: &str = "first text block";
 const SECOND_TEXT_BLOCK: &str = "second text block";
 /// What the pinned release's `result` carries for a final message of several text blocks:
-/// the last block's text alone (REQ-AGENT-26).
+/// the last block's text alone.
 const SEVERAL_BLOCK_RESPONSE: &str = SECOND_TEXT_BLOCK;
 
 async fn launch_response_lifecycle(
@@ -171,9 +171,6 @@ fn assert_retained_native_session(root: &SyntheticClaudeCodeRoot, expected: &[&s
     );
 }
 
-// REQ-AGENT-4
-// INV-HARNESS-10
-// INV-HARNESS-25
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_claude_code_00_qualification_anchor_is_exact() {
@@ -202,7 +199,6 @@ fn pinned_real_claude_code_00_qualification_anchor_is_exact() {
     );
 }
 
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_01_normal_mode_loopback_conforms_from_a_synthetic_root() {
@@ -384,9 +380,6 @@ async fn pinned_real_claude_code_01_normal_mode_loopback_conforms_from_a_synthet
     .await;
 }
 
-// REQ-AGENT-26
-// REQ-AGENT-35
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_02_production_driver_returns_one_normalized_response() {
@@ -509,8 +502,7 @@ async fn pinned_real_claude_code_02_production_driver_returns_one_normalized_res
             LoopbackBlock::text(SECOND_TEXT_BLOCK),
         ]);
         // The adapter holds standard input open and no adapter deadline fires on the pending
-        // clock, so the step can end only by Claude Code's own idle exit after the turn
-        // (REQ-AGENT-35).
+        // clock, so the step can end only by Claude Code's own idle exit after the turn.
         execution.await.unwrap();
 
         let AgentOutcome::Completed(CompletedAgentInvocation::Response(response)) =
@@ -558,8 +550,6 @@ async fn pinned_real_claude_code_02_production_driver_returns_one_normalized_res
 }
 
 // SC-AGENT-3
-// REQ-AGENT-93
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one_turn() {
@@ -618,10 +608,6 @@ async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one
 }
 
 // SC-AGENT-7
-// REQ-AGENT-92
-// REQ-AGENT-64
-// REQ-AGENT-85
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03b_the_last_submission_after_a_backgrounded_subagent_stands() {
@@ -680,9 +666,6 @@ async fn pinned_real_claude_code_03b_the_last_submission_after_a_backgrounded_su
     .await;
 }
 
-// REQ-AGENT-32
-// REQ-AGENT-94
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03c_a_string_and_a_null_come_back_as_written() {
@@ -721,8 +704,6 @@ async fn pinned_real_claude_code_03c_a_string_and_a_null_come_back_as_written() 
     .await;
 }
 
-// REQ-AGENT-92
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03d_a_main_thread_background_command_begins_the_submitting_turn() {
@@ -799,8 +780,6 @@ async fn pinned_real_claude_code_03d_a_main_thread_background_command_begins_the
 }
 
 // SC-AGENT-8
-// REQ-AGENT-35
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03e_a_subagents_own_background_command_is_waited_for() {
@@ -901,10 +880,6 @@ async fn pinned_real_claude_code_03e_a_subagents_own_background_command_is_waite
     .await;
 }
 
-// REQ-AGENT-31
-// REQ-AGENT-95
-// REQ-AGENT-98
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03f_a_turn_without_a_submission_fails_missing_result() {
@@ -941,8 +916,6 @@ async fn pinned_real_claude_code_03f_a_turn_without_a_submission_fails_missing_r
     .await;
 }
 
-// REQ-AGENT-70
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_04_production_no_value_and_native_failure_are_typed() {
@@ -1029,7 +1002,6 @@ async fn pinned_real_claude_code_04_production_no_value_and_native_failure_are_t
     .await;
 }
 
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_04b_provider_overload_and_stream_error_are_retried() {
@@ -1098,8 +1070,6 @@ async fn pinned_real_claude_code_04b_provider_overload_and_stream_error_are_retr
     .await;
 }
 
-// INV-HARNESS-8
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_05_cancels_a_blocked_provider_request() {
@@ -1131,8 +1101,6 @@ async fn pinned_real_claude_code_05_cancels_a_blocked_provider_request() {
     .await;
 }
 
-// INV-HARNESS-8
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_06_cancels_a_stubborn_bash_descendant() {
@@ -1183,8 +1151,6 @@ async fn pinned_real_claude_code_06_cancels_a_stubborn_bash_descendant() {
     .await;
 }
 
-// INV-HARNESS-8
-// INV-HARNESS-25
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "requires pinned harness"]
@@ -1260,9 +1226,6 @@ async fn pinned_real_claude_code_06b_headless_term_and_cont_quiesce_owned_work()
     .await;
 }
 
-// REQ-AGENT-96
-// REQ-AGENT-97
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_06d_prompt_hook_deny_prevents_provider_request() {
@@ -1304,8 +1267,6 @@ async fn pinned_real_claude_code_06d_prompt_hook_deny_prevents_provider_request(
     }).await;
 }
 
-// REQ-AGENT-88
-// INV-HARNESS-25
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_07_the_quiet_bound_interrupts_a_held_claude_code() {

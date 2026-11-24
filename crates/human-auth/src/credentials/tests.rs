@@ -59,7 +59,6 @@ fn timestamp(value: &str) -> anyhow::Result<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).context("timestamp fixture should parse")
 }
 
-// REQ-AUTH-39
 #[test]
 fn environment_selects_override_or_normal_home_path() -> anyhow::Result<()> {
     let override_path = OsString::from("/private/test/credentials.json");
@@ -82,7 +81,6 @@ fn environment_selects_override_or_normal_home_path() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-39
 #[test]
 fn normal_home_store_writes_and_reads_private_credentials() -> anyhow::Result<()> {
     let home = tempfile::tempdir().context("temporary home should be created")?;
@@ -158,7 +156,6 @@ fn missing_file_is_empty_and_creates_only_private_lock_material() -> anyhow::Res
     Ok(())
 }
 
-// REQ-AUTH-39, REQ-AUTH-40
 #[test]
 fn replacement_writes_schema_one_and_selects_exact_deployment() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -223,7 +220,6 @@ fn replacement_writes_schema_one_and_selects_exact_deployment() -> anyhow::Resul
     Ok(())
 }
 
-// REQ-AUTH-24, REQ-AUTH-39
 #[test]
 fn replacing_one_deployment_never_creates_a_duplicate() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -252,7 +248,6 @@ fn replacing_one_deployment_never_creates_a_duplicate() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-45
 #[test]
 fn conditional_removal_does_not_delete_a_concurrently_replaced_token() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -283,8 +278,6 @@ fn conditional_removal_does_not_delete_a_concurrently_replaced_token() -> anyhow
     Ok(())
 }
 
-// REQ-AUTH-43
-// INV-CLI-7
 #[test]
 fn rotated_refresh_replacement_is_atomic_and_rejects_a_stale_overwrite() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -357,7 +350,6 @@ fn refresh_lock_paths_are_stable_and_fingerprint_scoped() -> anyhow::Result<()> 
     Ok(())
 }
 
-// INV-CLI-5
 #[test]
 fn token_size_boundary_is_enforced_without_modifying_existing_bytes() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -384,7 +376,6 @@ fn token_size_boundary_is_enforced_without_modifying_existing_bytes() -> anyhow:
     Ok(())
 }
 
-// REQ-AUTH-43
 #[test]
 fn safety_margin_marks_only_the_expiring_selected_credential_for_refresh() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -437,8 +428,6 @@ fn safety_margin_marks_only_the_expiring_selected_credential_for_refresh() -> an
     Ok(())
 }
 
-// REQ-AUTH-41
-// INV-CLI-5
 #[test]
 fn malformed_and_unknown_schema_files_are_preserved() -> anyhow::Result<()> {
     for bytes in [
@@ -458,8 +447,6 @@ fn malformed_and_unknown_schema_files_are_preserved() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-41
-// INV-CLI-5
 #[test]
 fn unsafe_file_and_directory_modes_are_rejected_without_modification() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -482,8 +469,6 @@ fn unsafe_file_and_directory_modes_are_rejected_without_modification() -> anyhow
     Ok(())
 }
 
-// REQ-AUTH-41
-// INV-CLI-5
 #[test]
 fn credential_symlink_is_rejected_without_touching_its_target() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -499,7 +484,6 @@ fn credential_symlink_is_rejected_without_touching_its_target() -> anyhow::Resul
     Ok(())
 }
 
-// INV-CLI-5
 #[test]
 fn credential_lock_symlink_is_rejected_without_touching_its_target() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -515,7 +499,6 @@ fn credential_lock_symlink_is_rejected_without_touching_its_target() -> anyhow::
     Ok(())
 }
 
-// REQ-AUTH-42
 #[test]
 fn busy_lock_respects_the_configured_deadline() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
@@ -533,8 +516,6 @@ fn busy_lock_respects_the_configured_deadline() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-54
-// INV-CLI-6
 #[test]
 fn debug_output_never_contains_tokens() -> anyhow::Result<()> {
     let credential = StoredCredential {

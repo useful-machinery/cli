@@ -90,7 +90,7 @@ impl CloudOptions {
 #[derive(Debug, Args)]
 struct ListCommand {
     // The API's registration list takes no pool, so `--pool` reads every page and keeps the
-    // pool's runners (REQ-RUNNERPOOL-91); a page and a cursor mean nothing then.
+    // pool's runners; a page and a cursor mean nothing then.
     #[arg(
         long,
         value_name = PoolArg::VALUE_NAME,
@@ -198,9 +198,8 @@ fn operator_config_path(path: &Path) -> anyhow::Result<PathBuf> {
 }
 
 /// The operator configuration of the command that prepares the host, `serve`:
-/// the file `--config` names, which touches no runner home, or else
-/// the runner home's, created where it is missing (REQ-RUNNERENROLL-109,
-/// REQ-RUNNERENROLL-110).
+/// the file `--config` names, which touches no runner home, or else the runner
+/// home's, created where it is missing.
 fn initialized_operator_config_path(config: Option<&Path>) -> anyhow::Result<PathBuf> {
     match config {
         Some(path) => operator_config_path(path),
@@ -208,11 +207,10 @@ fn initialized_operator_config_path(config: Option<&Path>) -> anyhow::Result<Pat
     }
 }
 
-/// The control socket of a command that only asks the live runner, `show` with
-/// no `RUNNER`, `watch`, `prune` and `sync`: the one the file `--config` names, which touches no runner
-/// home, or else the one the runner home's configuration names, the home's
-/// `runner/control.sock` when it holds none. Creates nothing
-/// (REQ-RUNNERENROLL-112).
+/// The control socket of a command that only asks the live runner, `show` with no `RUNNER`,
+/// `watch`, `prune` and `sync`: the one the file `--config` names, which touches no runner home, or
+/// else the one the runner home's configuration names, the home's `runner/control.sock` when it
+/// holds none. Creates nothing.
 fn configured_control_socket_path(config: Option<&Path>) -> anyhow::Result<PathBuf> {
     match config {
         Some(path) => {
@@ -233,8 +231,7 @@ fn configured_control_socket_path(config: Option<&Path>) -> anyhow::Result<PathB
 /// Where `doctor`'s check that needs the operator configuration finds it when
 /// it runs: the file `--config` names, which touches no runner home, or else
 /// the runner home's; `None` when there is no `--config` and the `useful` home
-/// cannot be located (REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-310). Reads and
-/// creates nothing.
+/// cannot be located. Reads and creates nothing.
 fn doctor_operator_config(
     config: Option<&Path>,
 ) -> anyhow::Result<Option<useful_runner::OperatorConfigSource>> {
@@ -246,8 +243,8 @@ fn doctor_operator_config(
     })
 }
 
-/// The runner home of the `useful` home the environment selects (REQ-WFDEF-17),
-/// for a command given no `--config`. Resolving it reads and creates nothing.
+/// The runner home of the `useful` home the environment selects, for a command
+/// given no `--config`. Resolving it reads and creates nothing.
 fn runner_home() -> anyhow::Result<useful_runner::RunnerHome> {
     located_runner_home()?
         .ok_or_else(|| unlocated_useful_home(&useful_execution::DefinitionError::HomeUnavailable))
@@ -357,7 +354,7 @@ impl ListCommand {
     }
 }
 
-/// Every runner of `pool` in `organization`, as one page with no cursor (REQ-RUNNERPOOL-91).
+/// Every runner of `pool` in `organization`, as one page with no cursor.
 fn pool_registrations(
     api: &useful_api::RunnerApi,
     organization: &str,
@@ -640,9 +637,9 @@ fn execute_in_cloud<T>(
 const CLOUD_CONTEXT: &str = "configure Useful Machinery runner administration";
 
 /// Runs `run` with `options` and the organization reference to send, the value `--org` or
-/// `USEFUL_ORG` gave or else the organization's ID, in the organization in effect
-/// (REQ-RUNNERPOOL-47, REQ-ORG-87). A refused read of the memberships is written as the
-/// family writes its own failures, and a failure `run` ends with keeps its exit code.
+/// `USEFUL_ORG` gave or else the organization's ID, in the organization in effect. A
+/// refused read of the memberships is written as the family writes its own failures, and
+/// a failure `run` ends with keeps its exit code.
 fn execute_in<E: Into<super::CommandFailure>>(
     org: OrgArgs,
     options: CloudOptions,

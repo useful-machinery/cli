@@ -1,20 +1,18 @@
-//! The repair continuation of a parent's failed child (REQ-CONTINUE-81, REQ-CONTINUE-82,
-//! INV-ENGINE-27): a `control.retry` that resolves a repair wait back to the waiting step, or
-//! the host condition or a `control.retry` that resolves a `host` wait there (REQ-CONTINUE-93),
-//! continues the child the wait names in its own run directory rather than starting the stage
-//! afresh. `prepare` verifies and admits that continuation under the parent's and the child's
-//! locks before the parent's wait is consumed; `begin` starts the child's next attempt once
-//! the parent's dispatcher requests the step.
+//! The repair continuation of a parent's failed child: a `control.retry` that resolves a repair
+//! wait back to the waiting step, or the host condition or a `control.retry` that resolves a
+//! `host` wait there, continues the child the wait names in its own run directory rather than
+//! starting the stage afresh. `prepare` verifies and admits that continuation under the
+//! parent's and the child's locks before the parent's wait is consumed; `begin` starts the
+//! child's next attempt once the parent's dispatcher requests the step.
 //!
-//! A wait the root carries from a nested run (REQ-CONTINUE-92) is continued one level down:
-//! `prepare_wait` verifies the waiting element's nested run under the root's lock and then its
-//! own, admits its next attempt from the nested step that waited and, for a repair, prepares
-//! that step's stage as `prepare` does with the nested run as the parent.
+//! A wait the root carries from a nested run is continued one level down: `prepare_wait`
+//! verifies the waiting element's nested run under the root's lock and then its own, admits
+//! its next attempt from the nested step that waited and, for a repair, prepares that step's
+//! stage as `prepare` does with the nested run as the parent.
 //!
-//! An abandoned root's nested run (REQ-CONTINUE-91) is settled by its record:
-//! `prepare_abandoned` carries the wait of one that reads `waiting` and admits the in-place
-//! continuation of one that reads `running`, as `useful workflow run resume` continues an
-//! abandoned root.
+//! An abandoned root's nested run is settled by its record: `prepare_abandoned` carries the
+//! wait of one that reads `waiting` and admits the in-place continuation of one that reads
+//! `running`, as `useful workflow run resume` continues an abandoned root.
 
 use std::path::PathBuf;
 
@@ -35,9 +33,9 @@ use super::resume::{
 };
 
 /// The code every ownership or selection refusal of a repair continuation reports: automatic
-/// selection found no child it may continue, so the operator names the steps (REQ-CONTINUE-27).
+/// selection found no child it may continue, so the operator names the steps.
 const REFUSAL_CODE: &str = "continuation_definition_invalid";
-/// The code of a child whose mapped inputs are not its retained ones (REQ-CONTINUE-9).
+/// The code of a child whose mapped inputs are not its retained ones.
 const INPUTS_UNSATISFIED: &str = "continuation_inputs_unsatisfied";
 const UNOWNED: &str = "The repair wait names no failed child this run holds for the waiting step and element; continue the run with --from STEP.";
 const CHANGED: &str =
@@ -59,13 +57,12 @@ pub(super) struct ChildContinuation {
     admitted: AdmittedWorkflow,
     from: Vec<String>,
     mode: ContinuationDefinitionMode,
-    /// `retry` for a failed stage (REQ-CONTINUE-81), or `host` for one a host wait the
-    /// condition resolved continues (REQ-CONTINUE-93); for a nested run, `retry`, `host` or
-    /// `resume` as the root's continuation (REQ-CONTINUE-92), or for an abandoned one `resume`,
-    /// or `edge` from the edge its latest attempt took (REQ-CONTINUE-91).
+    /// `retry` for a failed stage, or `host` for one a host wait the condition resolved
+    /// continues; for a nested run, `retry`, `host` or `resume` as the root's continuation, or
+    /// for an abandoned one `resume`, or `edge` from the edge its latest attempt took.
     reason: ContinuationReasonV1,
-    /// The edge an abandoned nested run's latest attempt ended `continued` on, uncounted
-    /// (REQ-CONTINUE-78); none otherwise.
+    /// The edge an abandoned nested run's latest attempt ended `continued` on,
+    /// uncounted; none otherwise.
     edge: Option<ContinuationEdgeV1>,
 }
 
@@ -76,7 +73,7 @@ impl ChildContinuation {
 }
 
 /// A parent's continuation of a repair or host wait at `target`, admitted in `admitted`'s
-/// execution root, which `explicit_root` says the command named.
+/// execution root. Naming a different root starts a fresh child if a step runs there.
 pub(super) struct Repair<'a> {
     pub(super) parent: &'a PendingLocalContinuation,
     pub(super) admitted: &'a AdmittedWorkflow,
@@ -85,7 +82,7 @@ pub(super) struct Repair<'a> {
 }
 
 /// The root a nested parent belongs to and the nested run's path from it, whose controls are
-/// the nested run's (REQ-WFEXEC-75).
+/// the nested run's.
 struct NestedRoot {
     directory: PathBuf,
     prefix: Vec<serde_json::Value>,
@@ -107,7 +104,7 @@ struct Expected {
     root: Option<NestedRoot>,
     next_attempt: u64,
     /// The continuation reason of the parent's next attempt, or for a nested parent its
-    /// root's, which no `state.json` records yet (REQ-CONTINUE-93).
+    /// root's, which no `state.json` records yet.
     reason: ContinuationReasonV1,
     parent_run: String,
     step: String,
@@ -153,13 +150,11 @@ enum Refusal {
     Directory(LocalRunDirectoryError),
 }
 
-/// The repair continuation of the child the parent's wait names (REQ-CONTINUE-81), started
-/// with `reason`, or `None` for a fresh stage: a successor's imported wait, another wait kind
-/// or step, a wait without a child, an explicitly different execution root, or a child whose
-/// latest attempt did not fail during execution, such as one that exited with a declared
-/// outcome. Every mismatch of the wait's locator, the child's record, tree, history, retained
-/// evidence or execution root is refused (REQ-CONTINUE-82), never answered with a fresh
-/// child.
+/// The repair continuation of the child the parent's wait names, started with `reason`, or
+/// `None` for a fresh stage: a successor's imported wait, another wait kind or step, a wait
+/// without a child, an explicitly different execution root that the child uses, or a child
+/// whose latest attempt did not fail during execution, such as one that exited with a
+/// declared outcome. The child must verify before it can continue in either root.
 async fn prepare(
     repair: Repair<'_>,
     reason: ContinuationReasonV1,
@@ -171,7 +166,7 @@ async fn prepare(
 
 /// Whether a wait of `kind` resolved with `reason` continues its failed child in place: a
 /// `repair` wait by `control.retry`, and a `host` wait by `control.retry` or by the host
-/// condition (REQ-CONTINUE-81, REQ-CONTINUE-93).
+/// condition.
 fn continues_in_place(kind: WaitKind, reason: ContinuationReasonV1) -> bool {
     matches!(
         (kind, reason),
@@ -209,7 +204,7 @@ async fn prepare_stage(
                 ),
         )
     };
-    // A successor's carried wait keeps its fresh-stage path (REQ-CONTINUE-116).
+    // A successor's carried wait keeps its fresh-stage path.
     if parent.imported_prior().is_some() {
         return Ok(None);
     }
@@ -228,18 +223,20 @@ async fn prepare_stage(
         WaitChild::Unowned | WaitChild::Carried { .. } => return Err(refuse(UNOWNED)),
         WaitChild::Owned { locator, item } => (locator, item),
     };
-    // Automatic continuation stays in the root the failed stage ran in; a root named on the
-    // command that resolves elsewhere starts the stage afresh there.
+    let step = admitted.workflow().definition.steps.get(target);
+    // Check the parent's tree before opening the failed child. Its established workspaces
+    // belong to the child run itself and can be rebuilt there after a restore.
     let execution_root = admitted.execution().root().to_owned();
-    if execution_root != parent.prior_execution_root() {
+    if execution_root != parent.prior_execution_root()
+        && child_uses_execution_root(parent, step).await?
+    {
         return if explicit_root {
             Ok(None)
         } else {
             Err(refuse(ROOT_CHANGED))
         };
     }
-    let Some(ValidatedStep::Workflow(step)) = admitted.workflow().definition.steps.get(target)
-    else {
+    let Some(ValidatedStep::Workflow(step)) = step else {
         return Ok(None);
     };
     let record = match parent.record() {
@@ -281,9 +278,9 @@ async fn prepare_stage(
         workflow,
         mode,
     } = verified;
-    // REQ-CONTINUE-117: the inputs the step will map for the child, from the run's admitted
-    // inputs, the outputs it inherits and the attempt's `wait.<field>` values
-    // (REQ-WFEXEC-63), must be the child's retained ones before the wait is consumed.
+    // The inputs the step will map for the child, from the run's admitted inputs, the
+    // outputs it inherits and the attempt's `wait.<field>` values, must be the child's
+    // retained ones before the wait is consumed.
     let mapped = Mapped {
         parent,
         admitted,
@@ -293,7 +290,7 @@ async fn prepare_stage(
     };
     check_mapped_inputs(mapped, &pending, &mut controls, output, UNOWNED)?;
     // The partition, retained inputs and inherited outputs are admitted as for any
-    // continuation, launched from the parent's admitted environment (REQ-WFEXEC-89).
+    // continuation, launched from the parent's admitted environment.
     let candidate = ContinuationCandidate {
         inputs: pending.candidate_inputs(&workflow),
         workflow: &workflow,
@@ -328,11 +325,10 @@ async fn prepare_stage(
     }))
 }
 
-/// The child recovery of a continuation that a resolved wait starts at `target` with `reason`
-/// (REQ-CONTINUE-75): for a wait the root carries from a nested run (REQ-WFEXEC-75), the
-/// continuation of that nested run in place (REQ-CONTINUE-92); for a `control.retry` of the
-/// run's own repair or host wait, or the host condition resolving its host wait
-/// (REQ-CONTINUE-93), the failed child's (`prepare`); otherwise none.
+/// The child recovery of a continuation that a resolved wait starts at `target` with
+/// `reason`: for a wait the root carries from a nested run, the continuation of that nested
+/// run in place; for a `control.retry` of the run's own repair or host wait, or the host
+/// condition resolving its host wait, the failed child's (`prepare`); otherwise none.
 pub(super) async fn prepare_wait(
     repair: Repair<'_>,
     reason: ContinuationReasonV1,
@@ -362,17 +358,44 @@ struct VerifiedNested {
     tree: ValidatedTree,
 }
 
-/// The continuation of the nested run that entered the root's carried `wait` (REQ-CONTINUE-92),
-/// or `None` for a fresh nested run: a successor's imported wait (REQ-CONTINUE-123), a target
-/// that is not the waiting step's `workflow` step, or an explicitly different execution root.
-/// Before the root's wait is consumed, under the root's lock and then the nested run's, the
-/// wait's `payload.child` must lie under the waiting element's nested run, which must name the
-/// root, the step and the element, keep its tree copy and wait on the root wait's kind and
-/// `since` at the nested step; anything else is refused as REQ-CONTINUE-82 refuses a failed
-/// child. The nested run's next attempt is admitted from the nested step that waited with
-/// `reason`; for a repair, or a host wait the condition or a `control.retry` resolved, that
-/// step's stage is adopted, continued or started afresh as the run's own would be, with the
-/// nested run as its parent and the root's resolving control, if any.
+/// Whether the child of `step`, read from the file the parent's tree copy holds for it, runs
+/// an ordinary step in the execution root. A step that is not a `workflow` step, a parent
+/// without a tree copy and a file that does not resolve all answer that it does, which keeps
+/// the child bound to the root it ran in.
+async fn child_uses_execution_root(
+    parent: &PendingLocalContinuation,
+    step: Option<&ValidatedStep>,
+) -> Result<bool, Unprepared> {
+    let (Some((copy_root, _)), Some(ValidatedStep::Workflow(step))) = (parent.tree_copy(), step)
+    else {
+        return Ok(true);
+    };
+    let file = copy_root.join(&step.workflow);
+    match blocking_operation(move || {
+        resolve_workflow_file(&copy_root, &file)
+            .map(|child| child.definition.runs_steps_in_execution_root())
+    })
+    .await
+    {
+        Ok(uses_root) => Ok(uses_root),
+        Err(BlockingOperationError::Operation(_)) => Ok(true),
+        Err(BlockingOperationError::WorkerUnavailable) => {
+            Err(Unprepared::Failed("resolve the failed child's workflow"))
+        }
+    }
+}
+
+/// The continuation of the nested run that entered the root's carried `wait`, or `None` for a
+/// fresh nested run: a successor's imported wait, a target that is not the waiting step's
+/// `workflow` step, or an explicitly different execution root. Before the root's wait is
+/// consumed, under the root's lock and then the nested run's, the wait's `payload.child` must
+/// lie under the waiting element's nested run, which must name the root, the step and the
+/// element, keep its tree copy and wait on the root wait's kind and `since` at the nested step;
+/// anything else is refused, as for a failed child whose relationship to its wait does not
+/// verify. The nested run's next attempt is admitted from the nested step that waited with `reason`; for a repair, or a host
+/// wait the condition or a `control.retry` resolved, that step's stage is adopted, continued or
+/// started afresh as the run's own would be, with the nested run as its parent and the root's
+/// resolving control, if any.
 async fn prepare_nested(
     repair: Repair<'_>,
     wait: WaitRecord,
@@ -427,7 +450,7 @@ async fn prepare_nested(
             Some(child),
         ),
         // A wait without a child, a `stop` entered before the nested step started, names its
-        // nested run by the element it waits at (REQ-WFEXEC-76).
+        // nested run by the element it waits at.
         WaitChild::Absent => match parent.nested_run_at_element(&wait) {
             Ok(Some((directory, item))) => {
                 let Some(nested) = wait.step.last().and_then(serde_json::Value::as_str) else {
@@ -520,9 +543,9 @@ async fn prepare_nested(
     if let Err(error) = pending.validate_execution_root(&nested_admitted) {
         return Err(Unprepared::Diagnosed(error));
     }
-    // REQ-CONTINUE-121, REQ-CONTINUE-93: a repair retry, or a host wait's resolution, treats
-    // the nested step's stage as the run's own would, with the nested run as the parent and
-    // the control, if any, recorded on the root.
+    // A repair retry, or a host wait's resolution, treats the nested step's stage as the
+    // run's own would, with the nested run as the parent and the control, if any, recorded
+    // on the root.
     let stage = if continues_in_place(nested_wait.kind, reason) {
         let adopted =
             match super::resume::adopted_repair(&pending, &nested_wait.then, &nested_wait, control)
@@ -565,15 +588,14 @@ async fn prepare_nested(
     }))
 }
 
-/// The child run an abandoned root's step left `running` or `waiting`, which the abandonment
-/// path chose to retry in place (REQ-CONTINUE-76), settled by its record when it is a nested
-/// run (REQ-CONTINUE-91): one that reads `waiting` is carried as the wait it recorded, starting
-/// nothing (REQ-WFEXEC-75), and one that reads `running` is continued in place as `useful workflow
-/// run resume` continues an abandoned root, from the edge its latest attempt ended `continued`
-/// on, uncounted (REQ-CONTINUE-78), or from its single running `workflow` step, whose latest
-/// stage is adopted, retried in place or run afresh. Its own definition and retained inputs are
-/// admitted with the root's admitted environment and execution root. A stage keeps its retry,
-/// and any other recovery is returned as it is.
+/// The child run an abandoned root's step left `running` or `waiting`, which the abandonment path
+/// chose to retry in place, settled by its record when it is a nested run: one that reads
+/// `waiting` is carried as the wait it recorded, starting nothing, and one that reads `running` is
+/// continued in place as `useful workflow run resume` continues an abandoned root, from the edge
+/// its latest attempt ended `continued` on, uncounted, or from its single running `workflow` step,
+/// whose latest stage is adopted, retried in place or run afresh. Its own definition and retained
+/// inputs are admitted with the root's admitted environment and execution root. A stage keeps its
+/// retry, and any other recovery is returned as it is.
 pub(super) async fn prepare_abandoned(
     recovery: ChildRecovery,
     parent: &PendingLocalContinuation,
@@ -697,7 +719,7 @@ pub(super) async fn prepare_abandoned(
 
 /// What an abandoned root's child run is: a stage, or a nested run read under its lock.
 enum AbandonedChild {
-    /// A stage, which keeps its retry (REQ-CONTINUE-76).
+    /// A stage, which keeps its retry.
     Stage,
     /// A nested run that reads `waiting` on this record.
     Waiting(Box<WaitRecord>),
@@ -756,9 +778,9 @@ fn open_abandoned_nested(directory: &std::path::Path) -> Result<AbandonedChild, 
             _ => return Err(Box::new(Refusal::Unowned(NESTED_ABANDONED))),
         },
     };
-    // REQ-CONTINUE-112 one level down: the running step's latest stage, from the nested run's
-    // own `position`, is adopted when it exited and retried in place when it did not; none
-    // runs afresh.
+    // As for the root's abandoned attempt, one level down: the running step's latest stage, from
+    // the nested run's own `position`, is adopted when it exited and retried in place when it did
+    // not; none runs afresh.
     let stage = match (&edge, from.as_slice()) {
         (None, [step]) => match latest_child_run(directory, step).map_err(Refusal::Directory)? {
             Some((directory, RunState::Exited, item)) => Some(ChildRecovery::Adopt {
@@ -897,9 +919,9 @@ struct Mapped<'a> {
     workflow: &'a str,
 }
 
-/// REQ-CONTINUE-82: refuses a continuation of the child `pending` holds unless the request
-/// the step would map for it under `controls`, at its element, is its own workflow with the
-/// inputs its run retained; another workflow is refused with `unowned`.
+/// Refuses a continuation of the child `pending` holds unless the request the step would
+/// map for it under `controls`, at its element, is its own workflow with the inputs its run
+/// retained; another workflow is refused with `unowned`.
 fn check_mapped_inputs(
     mapped: Mapped<'_>,
     pending: &PendingLocalContinuation,
@@ -959,7 +981,8 @@ fn check_mapped_inputs(
 
 /// Reads the child `expected` names without its lock to choose between a fresh stage and a
 /// continuation, then acquires it and verifies, under the lock, that it is the parent's own
-/// failed child of that step and element, in the same root and pinned tree.
+/// failed child of that step and element, in its pinned tree and, when one of its steps runs
+/// in the execution root, the same root.
 fn open_failed_child(expected: &Expected) -> Result<Opened, Box<Refusal>> {
     match latest_attempt_failed(&expected.directory) {
         Ok(true) => {}
@@ -981,7 +1004,12 @@ fn open_failed_child(expected: &Expected) -> Result<Opened, Box<Refusal>> {
             return Err(Box::new(Refusal::Unowned(FINALIZER_ONLY)));
         }
     };
-    if pending.prior_execution_root() != expected.execution_root {
+    if pending.prior_execution_root() != expected.execution_root
+        && pending
+            .previous_definition()
+            .definition
+            .runs_steps_in_execution_root()
+    {
         return Err(Box::new(Refusal::Unowned(ROOT_CHANGED)));
     }
     let tree = match pending.verify_tree_copy() {
@@ -1009,8 +1037,8 @@ fn open_failed_child(expected: &Expected) -> Result<Opened, Box<Refusal>> {
 
 /// Refuses with `unowned` unless the run `pending` holds is the child `expected` names: in
 /// that directory, naming the parent run, step and element, with the parent's child workflow,
-/// pinned tree, definition and revision and the parent's tree copy (REQ-CONTINUE-82). It
-/// returns the child's record.
+/// pinned tree, definition and revision and the parent's tree copy. It returns the child's
+/// record.
 fn owned_child(
     pending: &PendingLocalContinuation,
     expected: &Expected,
@@ -1040,7 +1068,7 @@ fn owned_child(
 }
 
 /// The controls the parent's next attempt starts with, with the continuation's reason: its
-/// own or, for a nested parent, its root's (REQ-WFEXEC-75).
+/// own or, for a nested parent, its root's.
 fn parent_controls(expected: &Expected) -> Result<AttemptControls, LocalRunDirectoryError> {
     let reason = Some(expected.reason);
     match &expected.root {
@@ -1056,8 +1084,8 @@ fn parent_controls(expected: &Expected) -> Result<AttemptControls, LocalRunDirec
 }
 
 /// The definition the child's continuation runs under: its prior attempt's, or that file
-/// resolved again with the agent-profile replacement a `control.retry` names for the step
-/// (REQ-AGENT-59), which a changed definition retains as the attempt's own.
+/// resolved again with the agent-profile replacement a `control.retry` names for the
+/// step, which a changed definition retains as the attempt's own.
 fn child_definition(
     pending: &PendingLocalContinuation,
     expected: &Expected,
@@ -1097,8 +1125,8 @@ fn child_definition(
 }
 
 /// Whether `request` is for the child `pending` holds: its own workflow, and mapped inputs
-/// that, completed as admission completes omitted optional inputs, are its retained inputs
-/// (REQ-CONTINUE-82). A mismatch is the child's rejection code.
+/// that, completed as admission completes omitted optional inputs, are its retained
+/// inputs. A mismatch is the child's rejection code.
 fn retained_request(
     pending: &PendingLocalContinuation,
     request: &ChildRunRequest,
@@ -1121,12 +1149,11 @@ fn retained_request(
 }
 
 /// Begins the next attempt of the child `continuation` holds for the step's dispatched
-/// `request`, with its reason, `retry` or `host` for a failed stage (REQ-CONTINUE-93) and
-/// `retry`, `host` or `resume` for a nested run (REQ-CONTINUE-92), and its continuation
-/// context bound (INV-ENGINE-53). The
-/// request must be for the child's own workflow with the mapped inputs its run retained
-/// (REQ-CONTINUE-82); otherwise nothing is written and the refusal is the child's rejection
-/// code. The attempt observes the step's `cancellation`.
+/// `request`, with its reason, `retry` or `host` for a failed stage and `retry`, `host` or
+/// `resume` for a nested run, and its continuation context bound. The request must be for
+/// the child's own workflow with the mapped inputs its run retained; otherwise nothing is
+/// written and the refusal is the child's rejection code. The attempt observes the step's
+/// `cancellation`.
 pub(super) fn begin(
     continuation: ChildContinuation,
     request: &ChildRunRequest,

@@ -71,9 +71,9 @@ const SOCKET_ADDRESS_PATH_CAPACITY: usize = 104;
 
 // Unix socket addresses have a much smaller limit than filesystem paths. Linux can
 // address the private staging directory through /proc/self/fd while bind/connect
-// runs, so a long TMPDIR does not consume the socket pathname budget. macOS does
-// not support traversing a directory through /dev/fd: it uses the direct path when
-// that fits and otherwise a short alias under /tmp for the one call (INV-ENGINE-34).
+// runs, so a long TMPDIR does not consume the socket pathname budget. macOS does not
+// support traversing a directory through /dev/fd: it uses the direct path when that
+// fits and otherwise a short alias under /tmp for the one call.
 fn with_staging_socket<T>(
     root: &Path,
     name: &str,
@@ -97,7 +97,7 @@ fn with_staging_socket<T>(
 
 // Binds or connects `<alias>/e/<name>`, where `<alias>` is a fresh private
 // directory under `alias_root` holding the one link `e` to `root`. The alias
-// exists only for this one operation (INV-ENGINE-58).
+// exists only for this one operation.
 #[cfg(any(not(target_os = "linux"), test))]
 fn with_staging_socket_alias<T>(
     alias_root: &Path,
@@ -461,7 +461,7 @@ fn child_guard_worker_executable() -> io::Result<PathBuf> {
 }
 
 /// The child-guard and result-validation worker this test build resolves as if
-/// `USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE` were unset, without launching it (INV-TESTING-20).
+/// `USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE` were unset, without launching it.
 #[cfg(feature = "test-fixtures")]
 pub fn unsupplied_internal_worker_executable() -> io::Result<PathBuf> {
     crate::process::unsupplied_internal_worker_executable()
@@ -576,8 +576,8 @@ fn worker_boundary_timed_out(elapsed: Duration) -> bool {
 }
 
 /// Whether this process was launched in a child-guard worker role. Asking also records that
-/// the executable dispatches the worker roles, which lets a test build of it be its own worker
-/// (INV-TESTING-20): an executable's `main` asks, a test never does.
+/// the executable dispatches the worker roles, which lets a test build of it be its own
+/// worker: an executable's `main` asks, a test never does.
 pub fn internal_worker_requested() -> bool {
     crate::process::record_internal_worker_dispatch();
     matches!(
@@ -1285,7 +1285,6 @@ mod tests {
         assert_eq!(output, b"received:long tmpdir\n");
     }
 
-    // INV-ENGINE-34
     #[test]
     fn guarded_child_starts_under_a_long_tmpdir() {
         let temporary = tempfile::tempdir_in("/tmp").unwrap();
@@ -1299,7 +1298,6 @@ mod tests {
         assert!(status.success());
     }
 
-    // INV-ENGINE-58
     #[test]
     fn a_socket_alias_lasts_only_for_its_operation() {
         use std::os::unix::fs::FileTypeExt as _;
@@ -1375,7 +1373,6 @@ mod tests {
         assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::Interrupted));
     }
 
-    // INV-ENGINE-66
     #[tokio::test]
     async fn a_boundary_written_before_the_guard_exits_is_read_after_its_exit() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1407,7 +1404,6 @@ mod tests {
         }
     }
 
-    // INV-TESTING-20
     #[tokio::test]
     async fn guarded_child_can_receive_streaming_standard_input() {
         let worker = child_guard_worker_executable().unwrap();

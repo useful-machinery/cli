@@ -1,7 +1,6 @@
 //! A run a runner read, drawn by the run interface's step graph and inspector: the step
 //! answers the shared widgets from the words it was given, which the execution crate reads
-//! here, and a word this release does not know is drawn as received
-//! (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-146).
+//! here, and a word this release does not know is drawn as received.
 
 use std::borrow::Cow;
 

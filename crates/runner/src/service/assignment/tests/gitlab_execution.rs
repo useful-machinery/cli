@@ -31,8 +31,8 @@ fn gitlab_assignment_fixture(
     (temporary, manager, offered, broker)
 }
 
-// REQ-WORKSPACE-51, REQ-WORKSPACE-34: preparation renews, executes, and
-// removes its relay wiring before terminal settlement.
+// Preparation renews, executes, and removes its relay wiring before
+// terminal settlement.
 #[tokio::test]
 async fn gitlab_assignment_fetches_executes_and_restores_the_relay_origin() {
     let (_temporary, mut manager, offered, broker) = gitlab_assignment_fixture(
@@ -57,8 +57,8 @@ async fn gitlab_assignment_fetches_executes_and_restores_the_relay_origin() {
     acknowledge_terminal_and_settle(&mut manager).await;
 }
 
-// REQ-WORKSPACE-26, REQ-WORKSPACE-34: failed GitLab work retains the exact
-// workspace bytes but never retains the runner's grant, helper or relay origin.
+// Failed GitLab work retains the exact workspace bytes but never retains the
+// runner's grant, helper or relay origin.
 #[tokio::test]
 async fn failed_gitlab_assignment_retains_edits_without_relay_wiring() {
     let (_temporary, mut manager, offered, broker) = gitlab_assignment_fixture(
@@ -84,7 +84,6 @@ async fn failed_gitlab_assignment_retains_edits_without_relay_wiring() {
     assert!(workspace.exists());
 }
 
-// REQ-CONTINUE-20, REQ-CONTINUE-47, REQ-CONTINUE-53:
 // A real failed GitLab attempt leaves a claimable workspace. Its successor, a
 // continuation admitted before Cloud stopped continuing runs created by
 // workflow path, fetches the effective definition separately and installs a
@@ -123,10 +122,21 @@ async fn failed_gitlab_assignment_continues_with_fresh_grants_and_retained_works
         prior_attempt_id: initial.attempt_id.clone(),
         required_runner_boot_id: manager.work_root.boot_id().unwrap().to_owned(),
         execution_root: workspace.to_str().unwrap().to_owned(),
-        definition_source: successor.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(
+            successor
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .workflow_definition_source
+                .clone(),
+        ),
         effective_capacity: successor.execution_spec.capacity.clone(),
         prior_manifest_digest: initial
             .execution_spec
+            .source
+            .as_ref()
+            .unwrap()
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),

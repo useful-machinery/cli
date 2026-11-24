@@ -1662,7 +1662,6 @@ mod tests {
         .unwrap()
     }
 
-    // REQ-CONTINUE-53
     #[test]
     fn retained_origin_replacement_preserves_head_and_rejects_extra_remotes() {
         let fixture = fixture();
@@ -1731,7 +1730,6 @@ mod tests {
         );
     }
 
-    // REQ-CONTINUE-53
     #[test]
     fn continued_assignment_installs_new_helper_for_replaced_origin() {
         let fixture = fixture();
@@ -1821,8 +1819,8 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-34: a retained GitLab checkout cannot keep the Cloud
-    // remote or the scoped helper after runner-owned teardown.
+    // A retained GitLab checkout cannot keep the Cloud remote or the
+    // scoped helper after runner-owned teardown.
     #[test]
     fn gitlab_teardown_restores_canonical_origin_without_overwriting_a_step() {
         const CLOUD: &str = "https://cloud.example/v1/runner/git-read/asn_01k0z6r1w8f4jy2m7q9v3x5abc/repository.git";
@@ -1902,7 +1900,6 @@ mod tests {
             .join(format!("useful{}", std::env::consts::EXE_SUFFIX))
     }
 
-    // REQ-WORKSPACE-19, REQ-WORKSPACE-20, REQ-WORKSPACE-21, REQ-WORKSPACE-28
     #[test]
     fn exact_origin_helper_is_inactive_before_start_and_refuses_other_repositories_after_start() {
         let fixture = fixture();
@@ -1990,7 +1987,6 @@ mod tests {
         assert!(!authority.inner.alias_directory.exists());
     }
 
-    // REQ-WORKSPACE-22
     #[test]
     fn managed_helper_resets_inherited_global_credential_helpers() {
         let fixture = fixture();

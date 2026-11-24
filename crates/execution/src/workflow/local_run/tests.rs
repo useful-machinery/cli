@@ -289,9 +289,8 @@ fn retry_ineligibility_uses_the_closed_precedence_order() {
             LocalRetryEligibility::Eligible
         );
     }
-    // REQ-LOCALRUN-129, REQ-LOCALRUN-285: a superseded record yields to the lock and to
-    // unproven ownership, and refuses a last attempt `waiting` that a record without
-    // `successor` admits.
+    // A superseded record yields to the lock and to unproven ownership, and refuses a
+    // last attempt `waiting` that a record without `successor` admits.
     assert_eq!(
         retry_eligibility(AttemptStateV1::Waiting, &ownership_unproven, true, true),
         LocalRetryEligibility::Ineligible(RetryIneligibilityReason::RunLocked)
@@ -436,7 +435,6 @@ fn host_restart_proves_old_work_absent_without_process_inspection() {
     );
 }
 
-// INV-ENGINE-10
 #[test]
 fn attempt_directory_names_are_exact_at_the_six_digit_boundary() {
     assert_eq!(attempt_directory_name(0), None);
@@ -554,8 +552,6 @@ fn retained_manifest_rejects_duplicate_named_input_keys() {
     assert!(!run_path.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-98
-// INV-ENGINE-10
 #[test]
 fn initial_publication_retains_the_staging_lock_and_immutable_execution_bytes() {
     let fixture = AdmittedFixture::new();
@@ -694,7 +690,7 @@ impl Drop for WritableTreeCopyOnDrop {
             }
         }
         restore(&self.0.join("workflow/tree"));
-        // A successor's imported attempt holds its predecessor's copy (REQ-LOCALRUN-195).
+        // A successor's imported attempt holds its predecessor's copy.
         for attempt in fs::read_dir(self.0.join(ATTEMPTS_DIRECTORY))
             .into_iter()
             .flatten()
@@ -719,7 +715,6 @@ fn tree_fixture() -> AdmittedFixture {
     )
 }
 
-// REQ-LOCALRUN-170, REQ-LOCALRUN-98
 #[test]
 fn a_tree_run_directory_pins_the_tree_read_only_beside_the_closure() {
     let fixture = tree_fixture();
@@ -797,7 +792,7 @@ impl DurableDeadline for crate::workflow::test_support::step_clock::TestInstant 
     }
 }
 
-/// A child dispatcher with a stop control in force for every step (REQ-WFEXEC-62).
+/// A child dispatcher with a stop control in force for every step.
 #[derive(Clone)]
 struct StoppingChildDispatcher;
 
@@ -826,7 +821,7 @@ fn edge_tree_fixture() -> AdmittedFixture {
 }
 
 /// Executes `run`'s attempt with a stop in force before every step, so it ends on the
-/// `stop` wait entered before `design` (REQ-WFEXEC-62).
+/// `stop` wait entered before `design`.
 async fn execute_to_a_stop_wait(
     fixture: &AdmittedFixture,
     run: &InitialLocalRun,
@@ -874,7 +869,6 @@ async fn execute_with_stops(
     result.outcome
 }
 
-// REQ-WFEXEC-61, INV-ENGINE-20
 #[tokio::test]
 async fn a_committed_wait_settles_the_attempt_waiting_with_a_settlement_snapshot() {
     let fixture = edge_tree_fixture();
@@ -901,7 +895,6 @@ async fn a_committed_wait_settles_the_attempt_waiting_with_a_settlement_snapshot
     }));
 }
 
-// REQ-WFEXEC-58
 #[test]
 fn an_inherited_workflow_step_retains_the_outcome_a_continuation_routes_from() {
     let fixture = AdmittedFixture::from_tree(
@@ -972,7 +965,6 @@ fn assert_layout_refused(run_path: &Path) {
     }
 }
 
-// REQ-LOCALRUN-175, REQ-LOCALRUN-98, REQ-WFDEF-4
 #[test]
 fn a_tree_run_created_with_a_record_holds_run_json_beside_local_run_json() {
     let fixture = tree_fixture();
@@ -1076,8 +1068,6 @@ fn manifest_tree(run_path: &Path) -> Value {
         .clone()
 }
 
-// REQ-LOCALRUN-177, REQ-LOCALRUN-281, REQ-LOCALRUN-98, REQ-LOCALRUN-101, REQ-WFDEF-4
-// INV-ENGINE-19
 #[test]
 fn a_child_run_nests_under_its_parent_with_the_next_ordinal_and_the_parents_tree() {
     let fixture = AdmittedFixture::from_tree(
@@ -1197,7 +1187,6 @@ fn a_child_run_nests_under_its_parent_with_the_next_ordinal_and_the_parents_tree
     );
 }
 
-// REQ-LOCALRUN-281
 #[test]
 fn a_child_run_whose_record_does_not_descend_from_the_parent_is_refused() {
     let fixture = AdmittedFixture::from_tree(
@@ -1239,8 +1228,6 @@ fn a_child_run_whose_record_does_not_descend_from_the_parent_is_refused() {
     assert!(!parent_path.join("children/design/000001").exists());
 }
 
-// REQ-LOCALRUN-177, REQ-WFDEF-48, REQ-WFEXEC-66, REQ-WFEXEC-68
-// INV-ENGINE-19, INV-ENGINE-23
 #[test]
 fn a_fan_out_child_nests_under_its_element_and_the_parent_position_names_it() {
     let fixture = AdmittedFixture::from_tree(
@@ -1459,7 +1446,7 @@ fn a_fan_out_child_nests_under_its_element_and_the_parent_position_names_it() {
 
 /// A tree run with a run record whose first attempt ended on the `stop` wait before
 /// `design`, left as the CLI leaves it: the wait record written, then `run.json` reading
-/// `waiting` (REQ-LOCALRUN-178, INV-ENGINE-20).
+/// `waiting`.
 async fn waiting_tree_run(
     fixture: &AdmittedFixture,
     name: &str,
@@ -1555,9 +1542,9 @@ fn queue_settled(state: &str) -> crate::workflow::wait::ExternalEvent {
     }
 }
 
-// REQ-CONTINUE-74, REQ-CONTINUE-103, REQ-WFEXEC-65: a waiting run's `external` wait is resolved
-// by the events its condition source observes, never by the controls; a condition the source
-// cannot read is reported as such, and a local wait never asks the source.
+// A waiting run's `external` wait is resolved by the events its condition source observes,
+// never by the controls; a condition the source cannot read is reported as such, and a local
+// wait never asks the source.
 #[tokio::test]
 async fn inspect_wait_asks_the_condition_source_for_an_external_wait_alone() {
     let fixture = edge_tree_fixture();
@@ -1622,10 +1609,9 @@ async fn inspect_wait_asks_the_condition_source_for_an_external_wait_alone() {
     assert_eq!(conditions.observed.get(), 0);
 }
 
-// REQ-CONTINUE-74, INV-ENGINE-48: a `host` wait's controls are read before its condition, by
-// the repair rule on `um`: a `control.retry` or `control.withdraw` naming the wait resolves
-// it without the host condition being asked, and with no control a source that observes no
-// host event holds it.
+// A `host` wait's controls are read before its condition, by the repair rule on `um`: a
+// `control.retry` or `control.withdraw` naming the wait resolves it without the host
+// condition being asked, and with no control a source that observes no host event holds it.
 #[tokio::test]
 async fn inspect_wait_reads_a_host_waits_controls_before_its_condition() {
     let fixture = edge_tree_fixture();
@@ -1683,7 +1669,6 @@ fn run_record_document(run_path: &Path) -> Value {
     document
 }
 
-// REQ-LOCALRUN-178, REQ-LOCALRUN-175, REQ-LOCALRUN-98, INV-ENGINE-20
 #[tokio::test]
 async fn a_waiting_run_holds_its_wait_record_until_a_continuation_begins() {
     let fixture = edge_tree_fixture();
@@ -1744,9 +1729,9 @@ async fn a_waiting_run_holds_its_wait_record_until_a_continuation_begins() {
     assert_layout_refused(&run_path);
 }
 
-// REQ-LOCALRUN-197, REQ-LOCALRUN-195: under the lock, `resolving_control` finds the control
-// that resolves the run's wait, recorded after the run was inspected and the lock taken, and
-// not one that names another run, as a copied control would on a successor.
+// Under the lock, `resolving_control` finds the control that resolves the run's wait,
+// recorded after the run was inspected and the lock taken, and not one that names another
+// run, as a copied control would on a successor.
 #[tokio::test]
 async fn a_pending_continuation_reads_the_control_that_resolves_its_wait_under_the_lock() {
     let fixture = edge_tree_fixture();
@@ -1783,12 +1768,10 @@ async fn a_pending_continuation_reads_the_control_that_resolves_its_wait_under_t
     crate::workflow::wait::append_control(&run_path, &own).unwrap();
     assert_eq!(pending.resolving_control(&wait).unwrap(), Some(own));
     assert_eq!(pending.wait().unwrap(), Some(wait));
-    pending.settle_abandoned().unwrap();
 }
 
-// REQ-WFDEF-50, REQ-LOCALRUN-280, REQ-CONTINUE-77, REQ-WFEXEC-132, REQ-WFEXEC-133: an `edge`
-// continuation records the edge it took, and a counted one increments its count in `run.json` in
-// the write that bumps `attempts`.
+// An `edge` continuation records the edge it took, and a counted one increments its count in
+// `run.json` in the write that bumps `attempts`.
 #[tokio::test]
 async fn an_edge_continuation_records_the_edge_and_counts_a_counted_one() {
     let fixture = edge_tree_fixture();
@@ -1841,7 +1824,6 @@ async fn an_edge_continuation_records_the_edge_and_counts_a_counted_one() {
     }
 }
 
-// REQ-LOCALRUN-178, REQ-LOCALRUN-175, REQ-CONTINUE-109
 #[tokio::test]
 async fn ending_a_waiting_run_exits_it_without_another_attempt() {
     type End = fn(PendingLocalContinuation) -> Result<(), LocalRunDirectoryError>;
@@ -1891,7 +1873,6 @@ async fn ending_a_waiting_run_exits_it_without_another_attempt() {
     }
 }
 
-// REQ-LOCALRUN-178
 #[tokio::test]
 async fn a_retry_of_a_waiting_run_removes_the_root_wait_record() {
     let fixture = edge_tree_fixture();
@@ -1912,10 +1893,9 @@ async fn a_retry_of_a_waiting_run_removes_the_root_wait_record() {
     drop(owned);
 }
 
-// REQ-LOCALRUN-211, REQ-WFEXEC-73: an attempt that ends the run spends a withdrawal naming no
-// wait recorded after it settled by taking its `settledAt` again, so a retry's attempt reads
-// none pending; with none later than `settledAt`, or only one naming a wait, the state is left
-// byte for byte.
+// An attempt that ends the run spends a withdrawal naming no wait recorded after it settled by
+// taking its `settledAt` again, so a retry's attempt reads none pending; with none later than
+// `settledAt`, or only one naming a wait, the state is left byte for byte.
 #[test]
 fn spending_withdrawals_takes_settled_at_again_only_for_a_later_withdrawal() {
     let fixture = AdmittedFixture::new();
@@ -1979,10 +1959,10 @@ fn withdrawal_at(at: &str) -> crate::workflow::wait::ControlEvent {
     }
 }
 
-// REQ-LOCALRUN-212, REQ-LOCALRUN-240, REQ-WFEXEC-73: a reader that does not own the latest
-// attempt answers as its owner while that attempt's span is open (unsettled, or `continued`
-// while the record does not read `exited`), counting a withdrawal recorded since the attempt
-// before it settled, and otherwise counts only one later than the latest attempt's `settledAt`.
+// A reader that does not own the latest attempt answers as its owner while that attempt's span
+// is open (unsettled, or `continued` while the record does not read `exited`), counting a
+// withdrawal recorded since the attempt before it settled, and otherwise counts only one later
+// than the latest attempt's `settledAt`.
 #[test]
 fn a_reader_counts_only_the_withdrawals_the_next_attempt_would_honor() {
     let fixture = AdmittedFixture::new();
@@ -2039,9 +2019,9 @@ fn assert_ended(run_path: &Path, running: &Value, outcome: &str) {
     assert_eq!(run_record_document(run_path), ended, "{outcome}");
 }
 
-// REQ-LOCALRUN-245, REQ-LOCALRUN-239, REQ-CONTINUE-2: ending a `running` run whose process is
-// gone marks the record `exited` with the outcome and settles its unsettled attempt as
-// interrupted, which spends the withdrawal recorded before; the run lock is released.
+// Ending a `running` run whose process is gone marks the record `exited` with the outcome and
+// settles its unsettled attempt as interrupted, which spends the withdrawal recorded before;
+// the run lock is released.
 #[test]
 fn ending_a_running_run_settles_its_unsettled_attempt_interrupted() {
     let fixture = tree_fixture();
@@ -2072,11 +2052,10 @@ fn ending_a_running_run_settles_its_unsettled_attempt_interrupted() {
     ));
 }
 
-// REQ-LOCALRUN-245, REQ-LOCALRUN-211, REQ-WFEXEC-73: ending a `running` run whose latest attempt
-// is terminal (as one that ended `continued` before its process was gone) marks the record
-// `exited` with the outcome and takes the attempt's `settledAt` again only when a withdrawal
-// naming no wait is later than it, so a retry's attempt reads none pending; otherwise the state
-// is left byte for byte.
+// Ending a `running` run whose latest attempt is terminal (as one that ended `continued` before
+// its process was gone) marks the record `exited` with the outcome and takes the attempt's
+// `settledAt` again only when a withdrawal naming no wait is later than it, so a retry's attempt
+// reads none pending; otherwise the state is left byte for byte.
 #[test]
 fn ending_a_running_run_spends_the_withdrawals_later_than_its_terminal_attempt() {
     let fixture = tree_fixture();
@@ -2130,12 +2109,10 @@ fn ending_a_running_run_spends_the_withdrawals_later_than_its_terminal_attempt()
     }
 }
 
-// REQ-LOCALRUN-247, REQ-LOCALRUN-213, REQ-WFEXEC-73: a command refused before its attempt begins
-// settles the abandoned attempt only when no withdrawal is unhonored over it. With one recorded,
-// `settle_abandoned` leaves the state byte for byte, so the same run's next continuation still
-// finds the withdrawal unhonored; without one it settles the attempt as interrupted.
+// Dropping a continuation preserves the abandoned attempt and any withdrawal the next
+// continuation must honor.
 #[test]
-fn settling_an_abandoned_attempt_keeps_an_unhonored_withdrawal_pending() {
+fn dropping_a_continuation_preserves_the_abandoned_attempt_and_pending_withdrawal() {
     let fixture = tree_fixture();
     for (name, withdrawn) in [("refused-withdrawn", true), ("refused", false)] {
         let run_path = fixture.run_path(name);
@@ -2155,16 +2132,10 @@ fn settling_an_abandoned_attempt_keeps_an_unhonored_withdrawal_pending() {
         let state_path = run_path.join(STATE_FILE);
         let before = fs::read(&state_path).unwrap();
 
-        acquired(&run_path).settle_abandoned().unwrap();
+        drop(acquired(&run_path));
+        assert_eq!(fs::read(&state_path).unwrap(), before, "{name}");
         let next = acquired(&run_path);
         assert_eq!(next.withdrawal_unhonored().unwrap(), withdrawn, "{name}");
-        if withdrawn {
-            assert_eq!(fs::read(&state_path).unwrap(), before);
-        } else {
-            let state = read_state(&open_directory_path(&run_path).unwrap()).unwrap();
-            assert_eq!(state.attempts.len(), 1);
-            assert_eq!(state.attempts[0].state, AttemptStateV1::Interrupted);
-        }
         assert_eq!(run_record_document(&run_path)["state"], json!("running"));
     }
 }
@@ -2213,10 +2184,9 @@ fn readmitted_with(
     .unwrap()
 }
 
-/// Settles `owner`'s attempt `waiting` on the stop before `second` (REQ-WFEXEC-61) with
-/// `first` succeeded unless the attempt inherited it, then records the wait and sets
-/// `run.json` `waiting`, as the CLI leaves a run whose attempt ended on a wait
-/// (INV-ENGINE-20).
+/// Settles `owner`'s attempt `waiting` on the stop before `second` with `first`
+/// succeeded unless the attempt inherited it, then records the wait and sets `run.json`
+/// `waiting`, as the CLI leaves a run whose attempt ended on a wait.
 fn settle_waiting_before_second(owner: &LocalAttemptOwner) {
     settle_waiting_before_second_on(owner, &stop_wait_record());
 }
@@ -2257,8 +2227,8 @@ fn settle_waiting_before_second_on(owner: &LocalAttemptOwner, wait: &WaitRecord)
 }
 
 /// A definition run of `fixture` for the subject `AUTO-1` whose first attempt entered an
-/// `answer` wait before `second` that a recorded `control.answer` with `answers` resolved
-/// (REQ-LOCALRUN-182), and that `second` is waiting at.
+/// `answer` wait before `second` that a recorded `control.answer` with `answers`
+/// resolved, and that `second` is waiting at.
 fn answered_predecessor(
     fixture: &AdmittedFixture,
     name: &str,
@@ -2300,7 +2270,7 @@ fn predecessor_waiting_on(
 }
 
 /// A definition run of `fixture` for the subject `AUTO-1` whose first attempt waits before
-/// `second` with `first` succeeded, holding one stop control (REQ-LOCALRUN-185).
+/// `second` with `first` succeeded, holding one stop control.
 fn waiting_predecessor(
     fixture: &AdmittedFixture,
     name: &str,
@@ -2351,7 +2321,6 @@ fn file_contents(directory: &Path) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
-// REQ-LOCALRUN-195, INV-ENGINE-50
 #[test]
 fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions() {
     let fixture = tree_fixture();
@@ -2490,10 +2459,10 @@ fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions
     assert_eq!(acquired(&predecessor_path).imported_prior(), None);
 }
 
-// REQ-WFEXEC-121, REQ-LOCALRUN-282: the control recorded on the predecessor that resolved an
-// imported attempt's wait still resolves its copy on the successor, so the successor's
-// `controls.answers` carries the predecessor's answers; a second import keeps the mark
-// naming the run the attempt was recorded under, so a chain of successors keeps finding them.
+// The control recorded on the predecessor that resolved an imported attempt's wait still
+// resolves its copy on the successor, so the successor's `controls.answers` carries the
+// predecessor's answers; a second import keeps the mark naming the run the attempt was
+// recorded under, so a chain of successors keeps finding them.
 #[test]
 fn a_successors_imported_wait_copy_resolves_by_the_control_recorded_under_its_run() {
     let fixture = tree_fixture();
@@ -2572,12 +2541,11 @@ fn host_wait_at_the_second_element() -> WaitRecord {
     .unwrap()
 }
 
-// REQ-WFEXEC-121, REQ-WFEXEC-138, REQ-CONTINUE-93: a `host` wait copy that no control resolved, followed by an
-// attempt with reason `host`, was resolved by the host condition: the attempt after it starts
-// with the `wait.<field>` values the attempt that entered the wait had at the step, here an
-// answer's, and at the element it waited at. That holds for a recorded next attempt and for
-// the reason a caller supplies for one not yet begun; a `--from` (`resume`) or a `restart`
-// keeps nothing.
+// A `host` wait copy that no control resolved, followed by an attempt with reason `host`, was
+// resolved by the host condition: the attempt after it starts with the `wait.<field>` values the
+// attempt that entered the wait had at the step, here an answer's, and at the element it waited at.
+// That holds for a recorded next attempt and for the reason a caller supplies for one not yet
+// begun; a `--from` (`resume`) or a `restart` keeps nothing.
 #[test]
 fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_resolved() {
     let fixture = tree_fixture();
@@ -2675,10 +2643,9 @@ fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_r
     }
 }
 
-// REQ-WFEXEC-121, REQ-LOCALRUN-282, REQ-LOCALRUN-197: a wait carried by `upgrade` is resolved
-// by a control naming the successor that carried it, not the run the attempt was recorded
-// under; the next successor along the chain imports that control and the attempt's copy
-// together and still carries the answers.
+// A wait carried by `upgrade` is resolved by a control naming the successor that carried it,
+// not the run the attempt was recorded under; the next successor along the chain imports that
+// control and the attempt's copy together and still carries the answers.
 #[test]
 fn a_chains_successor_carries_the_answer_recorded_on_the_run_that_carried_the_wait() {
     let fixture = tree_fixture();
@@ -2754,7 +2721,6 @@ fn a_chains_successor_carries_the_answer_recorded_on_the_run_that_carried_the_wa
     assert_eq!(carried(&successor_path), expected);
 }
 
-// REQ-CONTINUE-79, REQ-CONTINUE-97, REQ-CONTINUE-98, INV-ENGINE-50
 #[test]
 fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_deleted() {
     let fixture = tree_fixture();
@@ -2803,7 +2769,7 @@ fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_del
     );
     assert!(!predecessor_path.join(MIRROR_DIRECTORY).exists());
     // A superseded run is refused every continuation, naming its successor, so it is never
-    // superseded again (REQ-CONTINUE-29, REQ-LOCALRUN-285).
+    // superseded again.
     match acquire_local_continuation(&predecessor_path).unwrap() {
         LocalContinuationOpen::Rejected(rejection) => {
             assert_eq!(rejection.reason(), RetryIneligibilityReason::RunSuperseded);
@@ -2870,7 +2836,6 @@ fn a_successor_begins_a_run_definition_continuation_after_its_predecessor_is_del
     drop(owned);
 }
 
-// REQ-CONTINUE-98
 #[test]
 fn a_successor_begun_by_resume_records_reason_restart() {
     let fixture = tree_fixture();
@@ -2911,7 +2876,6 @@ fn a_successor_begun_by_resume_records_reason_restart() {
     assert_eq!(document["definitionSource"]["kind"], json!("replaced"));
 }
 
-// REQ-CONTINUE-97, REQ-LOCALRUN-195
 #[test]
 fn a_run_definition_continuation_refuses_another_definition_and_a_replaced_attempt_keeps_its_own() {
     let fixture = tree_fixture();
@@ -3030,7 +2994,6 @@ fn a_run_definition_continuation_refuses_another_definition_and_a_replaced_attem
 /// `TREE_ROOT_WORKFLOW` declaring an optional and a defaulted input that its runs lack.
 const INPUTS_TREE_ROOT_WORKFLOW: &str = "schemaVersion: 1\nprograms: [bin]\nexclude: [\"tests/\"]\ninputs:\n  extra:\n    kind: text\n    optional: true\n  base:\n    kind: text\n    default: main\nsteps:\n  first:\n    kind: cmd\n    command:\n      argv: [\"hello\"]\n  second:\n    kind: cmd\n    dependsOn: [first]\n    command:\n      argv: [\"true\"]\n";
 
-// REQ-CONTINUE-9, REQ-WFFORMAT-84
 #[test]
 fn begin_accepts_only_the_completion_of_an_input_the_run_lacks() {
     let fixture = tree_fixture();
@@ -3098,7 +3061,6 @@ fn waiting_predecessor_with_position_and_edges(
     (run_path, record, writable)
 }
 
-// REQ-LOCALRUN-283, REQ-CONTINUE-80, REQ-CONTINUE-100, INV-ENGINE-51
 #[test]
 fn an_upgraded_successor_carries_the_wait_position_and_edges() {
     let fixture = tree_fixture();
@@ -3393,7 +3355,6 @@ fn waiting_fan_out_predecessor(
     (run_path, writable)
 }
 
-// REQ-LOCALRUN-265
 #[test]
 fn the_resolve_check_lists_every_miss() {
     let fixture = carry_tree_fixture(CARRY_ROOT_WORKFLOW);
@@ -3433,7 +3394,6 @@ fn the_resolve_check_lists_every_miss() {
     );
 }
 
-// REQ-LOCALRUN-265
 #[test]
 fn the_carried_readers_answer_retained_child_outcomes_and_fan_out_lengths() {
     let fixture = carry_tree_fixture(CARRY_ROOT_WORKFLOW);
@@ -3562,8 +3522,8 @@ fn repair_wait_naming(step: Value, child: Value) -> WaitRecord {
     .unwrap()
 }
 
-// REQ-CONTINUE-82, REQ-LOCALRUN-177: a wait's child locator is owned only in the exact
-// canonical form of the waiting step's child, and of its element for a fan-out.
+// A wait's child locator is owned only in the exact canonical form of the waiting
+// step's child, and of its element for a fan-out.
 #[test]
 fn a_wait_names_its_own_child_only_by_the_canonical_locator() {
     let plain = json!(["design"]);
@@ -3621,7 +3581,6 @@ fn a_wait_names_its_own_child_only_by_the_canonical_locator() {
     assert_eq!(wait_child(&absent), WaitChild::Absent);
 }
 
-// REQ-LOCALRUN-180
 #[test]
 fn a_run_id_locates_its_run_under_the_home_and_the_home_lists_every_run() {
     let fixture = tree_fixture();
@@ -3712,7 +3671,6 @@ fn a_run_id_locates_its_run_under_the_home_and_the_home_lists_every_run() {
     assert_eq!(listing.unreadable[0].0.file_name(), unreadable.file_name());
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-188, REQ-WFDEF-17
 #[test]
 fn the_homes_own_runs_are_listed_beside_a_definitions_and_located_by_id() {
     let fixture = tree_fixture();
@@ -3766,7 +3724,6 @@ fn the_homes_own_runs_are_listed_beside_a_definitions_and_located_by_id() {
     assert!(listing.unreadable.is_empty(), "{:?}", listing.unreadable);
 }
 
-// REQ-LOCALRUN-177
 #[test]
 fn child_runs_lists_every_child_by_step_then_ordinal() {
     let fixture = AdmittedFixture::from_tree(
@@ -3882,7 +3839,6 @@ fn spawn_lock_holder(run_path: &Path) -> (std::process::Child, rustix::process::
     (holder, holder_pid)
 }
 
-// REQ-LOCALRUN-175
 #[tokio::test]
 async fn lock_holder_names_the_process_that_holds_the_run_lock() {
     let fixture = edge_tree_fixture();
@@ -3897,9 +3853,9 @@ async fn lock_holder_names_the_process_that_holds_the_run_lock() {
     assert_eq!(lock_holder(&run_path), Ok(None));
 }
 
-// A workflow that declares a `workflow` step is edge-scheduled and holds no `cmd` step
-// (REQ-WFFORMAT-93), so the view's steps are read from two runs: this dataflow one for
-// `cmd` steps and `edge_tree_fixture`'s for a `workflow` step and its child runs.
+// A workflow that declares a `workflow` step is edge-scheduled and holds no `cmd`
+// step, so the view's steps are read from two runs: this dataflow one for `cmd` steps
+// and `edge_tree_fixture`'s for a `workflow` step and its child runs.
 const VIEW_STEPS_WORKFLOW: &str = "schemaVersion: 1\nprograms: [bin]\nsteps:\n  plan:\n    kind: cmd\n    cwd: tools\n    command: {argv: [\"plan\"]}\n    recovery: {retries: 1}\n    outputs:\n      plan: {kind: text, from: path, path: tools/plan.txt}\n  build:\n    kind: cmd\n    dependsOn: [plan]\n    cwd: tools\n    command: {argv: [\"plan\"]}\n  review:\n    kind: cmd\n    dependsOn: [build]\n    cwd: tools\n    command: {argv: [\"plan\"]}\n";
 /// Fails its first run in a directory, retaining output on both streams, and then prints 40
 /// lines and writes `plan.txt`.
@@ -3928,7 +3884,7 @@ async fn running_steps_run(
     let record = tree_record(fixture, None);
     let run =
         InitialLocalRun::create_with_record(&run_path, &fixture.admitted, Some(&record)).unwrap();
-    // The commands find the tree's programs through the run's copy (REQ-WFEXEC-53).
+    // The commands find the tree's programs through the run's copy.
     let admitted = fixture
         .admitted
         .clone()
@@ -4046,7 +4002,6 @@ fn view_timestamp(value: &str) -> OffsetDateTime {
     crate::workflow::schema_common::parse_canonical_utc_timestamp(value).unwrap()
 }
 
-// REQ-RUNNERENROLL-144
 #[tokio::test]
 async fn run_view_reads_a_running_tree_runs_steps_and_child_runs() {
     let now = view_timestamp(VIEW_STARTED) + Duration::from_secs(61);
@@ -4228,7 +4183,6 @@ async fn run_view_reads_a_running_tree_runs_steps_and_child_runs() {
     }
 }
 
-// REQ-RUNNERENROLL-144
 #[tokio::test]
 async fn run_view_keeps_a_workflow_steps_last_child_runs_and_counts_the_earlier() {
     let fixture = edge_tree_fixture();
@@ -4258,7 +4212,6 @@ async fn run_view_keeps_a_workflow_steps_last_child_runs_and_counts_the_earlier(
     );
 }
 
-// REQ-RUNNERENROLL-144
 #[tokio::test]
 async fn run_view_reads_a_run_another_process_holds_locked() {
     let fixture = edge_tree_fixture();
@@ -4303,7 +4256,6 @@ fn view_output(run_path: &Path, step: &str, window: u64) -> RunViewStepOutput {
     read_run_view(run_path, &request).unwrap().output
 }
 
-// REQ-RUNNERENROLL-145
 #[tokio::test]
 async fn run_view_gives_a_settled_steps_newest_retained_output() {
     let fixture = view_steps_fixture();
@@ -4357,7 +4309,6 @@ async fn run_view_gives_a_settled_steps_newest_retained_output() {
     );
 }
 
-// REQ-RUNNERENROLL-145
 #[test]
 fn read_run_file_tail_reads_only_the_end_of_a_file_beneath_the_directory() {
     let directory = tempfile::tempdir().unwrap();
@@ -4401,7 +4352,6 @@ fn read_run_file_tail_reads_only_the_end_of_a_file_beneath_the_directory() {
     }
 }
 
-// REQ-LOCALRUN-279
 #[test]
 fn update_run_record_rewrites_state_attempts_and_outcome_and_nothing_else() {
     let fixture = tree_fixture();
@@ -4480,7 +4430,6 @@ fn update_run_record_rewrites_state_attempts_and_outcome_and_nothing_else() {
     verify_existing_run_layout(&open_directory_path(&run_path).unwrap()).unwrap();
 }
 
-// REQ-LOCALRUN-175, REQ-LOCALRUN-98
 #[test]
 fn a_run_created_without_a_record_has_no_run_json_and_the_old_layout_is_refused() {
     let fixture = AdmittedFixture::new();
@@ -4527,7 +4476,6 @@ fn a_run_created_without_a_record_has_no_run_json_and_the_old_layout_is_refused(
     }
 }
 
-// REQ-LOCALRUN-171
 #[test]
 fn a_modified_tree_copy_is_rejected_on_reopen() {
     let fixture = tree_fixture();
@@ -4570,7 +4518,6 @@ fn a_modified_tree_copy_is_rejected_on_reopen() {
     assert!(!run_path.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-97
 #[test]
 fn run_target_validation_rejects_overlap_in_both_path_directions() {
     assert!(paths_overlap(
@@ -4823,7 +4770,6 @@ fn invocation_evidence_republication_preserves_first_authoritative_bytes() {
     );
 }
 
-// INV-ENGINE-10
 #[test]
 fn atomic_state_crash_boundaries_expose_only_complete_snapshots() {
     let fixture = AdmittedFixture::new();
@@ -4879,7 +4825,6 @@ fn atomic_state_crash_boundaries_expose_only_complete_snapshots() {
     ));
 }
 
-// INV-ENGINE-33
 #[test]
 fn failed_state_commit_classifies_its_cause_without_path_or_message() {
     use crate::workflow::coordinator::{
@@ -4968,7 +4913,6 @@ fn retry_reports_state_path_and_failed_attempt_invariant() {
     assert!(error.to_string().contains("attempt execution root invalid"));
 }
 
-// REQ-WFRECOVERY-41
 #[test]
 fn status_preserves_unsupported_recovery_schema_through_state_file_context() {
     let fixture = AdmittedFixture::new();
@@ -5220,7 +5164,6 @@ fn rate_limited_diagnostic() -> crate::workflow::publication::FailureDiagnosticV
     }
 }
 
-// REQ-LOCALRUN-198
 #[test]
 fn a_failed_nodes_diagnostic_reads_back_and_is_refused_anywhere_else() {
     let fixture = AdmittedFixture::from_source(
@@ -5351,7 +5294,6 @@ impl DurableProcessGuardStore for GuardRegistrationRefusal {
     }
 }
 
-// REQ-LOCALRUN-198, REQ-DIAG-38
 #[tokio::test]
 async fn a_finalizer_refused_at_launch_records_its_diagnostic_when_finalization_completes() {
     let fixture = AdmittedFixture::from_source(
@@ -5429,7 +5371,6 @@ async fn a_finalizer_refused_at_launch_records_its_diagnostic_when_finalization_
     );
 }
 
-// REQ-LOCALRUN-201
 #[test]
 fn a_nodes_start_reads_back_and_is_refused_where_the_node_never_started() {
     let fixture = AdmittedFixture::from_source(
@@ -5501,7 +5442,6 @@ fn a_nodes_start_reads_back_and_is_refused_where_the_node_never_started() {
     }
 }
 
-// REQ-LOCALRUN-201
 #[test]
 fn a_nodes_start_is_recorded_once_when_it_becomes_active() {
     let fixture = AdmittedFixture::from_source(
@@ -5541,7 +5481,7 @@ fn a_nodes_start_is_recorded_once_when_it_becomes_active() {
         (StepState::Running, "2025-10-24T20:00:01Z"),
         (StepState::CapturingOutputs, "2025-10-24T20:00:02Z"),
     ] {
-        update_progress_nodes(&mut nodes, &runtime(state), &BTreeMap::new(), now).unwrap();
+        update_progress_nodes(&mut nodes, &[], &runtime(state), &BTreeMap::new(), now).unwrap();
         assert_eq!(nodes[0].started_at.as_deref(), Some(first));
         assert_eq!(nodes[1].started_at, None);
     }
@@ -5594,7 +5534,6 @@ fn archived_attempt_loads_schema_one_state_without_retained_output_foundation() 
     assert_eq!(archived.projection.state, AttemptStateV1::WorkflowFailed);
 }
 
-// REQ-LOCALRUN-168, REQ-LOCALRUN-98
 #[test]
 fn run_retains_original_git_baseline_for_descendant_retries() {
     let fixture = AdmittedFixture::new_with_environment(EnvironmentSnapshot::new([(
@@ -5636,7 +5575,7 @@ fn run_retains_original_git_baseline_for_descendant_retries() {
             commit_oid: original.clone(),
         })
     );
-    // REQ-LOCALRUN-168, REQ-LOCALRUN-98: the identity record is `local-run.json`.
+    // The identity record is `local-run.json`.
     let identity: Value =
         serde_json::from_slice(&fs::read(run_path.join("local-run.json")).unwrap()).unwrap();
     assert_eq!(
@@ -6241,6 +6180,7 @@ fn inherited_seed_loads_required_values_and_preserves_full_durable_references() 
         .clone();
     update_progress_nodes(
         &mut durable_nodes,
+        &[],
         &reduction.state.steps,
         &BTreeMap::from([(
             (AttemptNodeRoleV1::Step, "first".to_owned()),
@@ -6269,7 +6209,6 @@ fn inherited_seed_loads_required_values_and_preserves_full_durable_references() 
     assert_eq!(staged.st_ino, original.st_ino);
 }
 
-// INV-ENGINE-11
 #[test]
 fn continuation_validation_binds_inheritance_to_the_immediate_prior_step() {
     let fixture = AdmittedFixture::from_source(
@@ -6658,7 +6597,6 @@ fn retry_rejects_incomplete_succeeded_outputs_before_orphan_cleanup() {
     assert!(!run_path.join("attempts/000002").exists());
 }
 
-// REQ-WFFINALIZE-3
 #[test]
 fn retry_commits_only_fresh_attempt_state_and_retained_inputs() {
     let fixture = AdmittedFixture::new();
@@ -7030,8 +6968,9 @@ fn abandoned_exact_group_is_authenticated_terminated_and_proven_absent() {
     assert_eq!(authority.terminations.get(), 1);
 }
 
+// A failure reading retained evidence leaves the abandoned attempt unsettled.
 #[test]
-fn corrupted_retained_definition_after_quiescence_still_settles_abandonment() {
+fn corrupted_retained_definition_after_quiescence_preserves_the_abandoned_attempt() {
     let fixture = AdmittedFixture::new();
     let path = fixture.run_path("abandoned-invalid-retention");
     let original = InitialLocalRun::create(&path, &fixture.admitted).unwrap();
@@ -7041,6 +6980,8 @@ fn corrupted_retained_definition_after_quiescence_still_settles_abandonment() {
     let manifest_path = fs::canonicalize(&path)
         .unwrap()
         .join("workflow/manifest.json");
+    let state_path = path.join(STATE_FILE);
+    let before = fs::read(&state_path).unwrap();
     let Err(error) = acquire_local_continuation(&path) else {
         panic!("corrupted retained definition accepted");
     };
@@ -7055,49 +6996,12 @@ fn corrupted_retained_definition_after_quiescence_still_settles_abandonment() {
     );
     let state = read_state(&open_directory_path(&path).unwrap()).unwrap();
     assert_eq!(state.attempts.len(), 1);
-    assert_eq!(state.attempts[0].state, AttemptStateV1::Interrupted);
-    assert_eq!(
-        state.attempts[0]
-            .settlement_snapshot
-            .as_ref()
-            .unwrap()
-            .settled_by,
-        Some(WorkspaceSnapshotSettlementV1::AbandonmentRecovery)
-    );
-}
-
-#[test]
-fn abandoned_continuation_rejection_settles_only_the_prior_attempt() {
-    let fixture = AdmittedFixture::new();
-    let path = fixture.run_path("abandoned-continuation-rejection");
-    let original = InitialLocalRun::create(&path, &fixture.admitted).unwrap();
-    drop(original);
-    let LocalContinuationOpen::Acquired(pending) = acquire_local_continuation(&path).unwrap()
-    else {
-        panic!("unowned created attempt must be recoverable");
-    };
     assert!(
-        pending
-            .partition(pending.previous_definition(), &["second".to_owned()])
-            .is_err()
+        !state.attempts[0].state.is_terminal(),
+        "{:?}",
+        state.attempts[0].state
     );
-    pending.settle_abandoned().unwrap();
-    let state = read_state(&open_directory_path(&path).unwrap()).unwrap();
-    assert_eq!(state.attempts.len(), 1);
-    assert_eq!(state.attempts[0].state, AttemptStateV1::Interrupted);
-    assert_eq!(
-        state.attempts[0].interruption.as_ref().unwrap().cause,
-        InterruptionCauseV1::ExecutionOwnerLost
-    );
-    assert_eq!(
-        state.attempts[0]
-            .settlement_snapshot
-            .as_ref()
-            .unwrap()
-            .settled_by,
-        Some(WorkspaceSnapshotSettlementV1::AbandonmentRecovery)
-    );
-    assert!(!path.join("attempts/000002").exists());
+    assert_eq!(fs::read(&state_path).unwrap(), before);
 }
 
 #[test]
@@ -7235,7 +7139,7 @@ fn postclaim_owner_loss_remains_auditable_and_can_be_settled_again() {
         panic!("committed continuation must be recoverable");
     };
     assert_eq!(pending.prior_attempt_number(), 2);
-    pending.settle_abandoned().unwrap();
+    pending.end_running(CANCELED_OUTCOME).unwrap();
     let state = read_state(&open_directory_path(&path).unwrap()).unwrap();
     assert_eq!(state.attempts.len(), 2);
     assert_eq!(state.attempts[1].trigger, AttemptTriggerV1::Continuation);
@@ -7246,9 +7150,8 @@ fn postclaim_owner_loss_remains_auditable_and_can_be_settled_again() {
     );
 }
 
-// REQ-LOCALRUN-205: the retry, the continuation and an abandoned continuation's rejection
-// settle an unsettled attempt `interrupted{state_persistence_failure}` when the run recorded
-// that diagnostic for it, and `interrupted{execution_owner_lost}` otherwise.
+// A retry or continuation settles the abandoned attempt with `state_persistence_failure` when
+// the run recorded it and `execution_owner_lost` otherwise.
 #[test]
 fn a_recorded_state_persistence_failure_names_the_abandoned_attempts_interruption() {
     let fixture = AdmittedFixture::new();
@@ -7304,14 +7207,6 @@ fn a_recorded_state_persistence_failure_names_the_abandoned_attempts_interruptio
             cause,
             "continuation, recorded {recorded}"
         );
-
-        let path = unsettled("rejected");
-        let LocalContinuationOpen::Acquired(pending) = acquire_local_continuation(&path).unwrap()
-        else {
-            panic!("an abandoned attempt is continuable");
-        };
-        pending.settle_abandoned().unwrap();
-        assert_eq!(interruption(&path), cause, "rejection, recorded {recorded}");
     }
 }
 
@@ -7661,9 +7556,14 @@ fn continuation_admission_follows_skipped_disposition_through_inherited_history(
     assert!(violations.is_empty());
     assert_eq!(skipped, BTreeSet::from(["first".to_owned()]));
     let workflow = &fixture.admitted.workflow().definition;
-    let partition =
-        super::super::continuation::partition(workflow, &["second".to_owned()], &BTreeSet::new())
-            .unwrap();
+    let partition = super::super::continuation::partition(
+        workflow,
+        &["second".to_owned()],
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
     let violations = super::super::continuation::check_inheritance(
         workflow,
         workflow,
@@ -8867,7 +8767,6 @@ fn archived_attempt_uses_only_the_authoritative_recorded_result_location() {
     );
 }
 
-// REQ-LOCALRUN-166
 #[test]
 fn archived_attempt_rejects_a_broken_retained_workflow_closure() {
     let fixture = AdmittedFixture::new();
@@ -8961,7 +8860,8 @@ fn archived_attempt_loads_ordinary_force_with_suppressed_finalization() {
 
 #[test]
 fn archived_attempt_loads_valid_result_larger_than_state_document_limit() {
-    let maximum_retained_bytes_per_stream = 131_072_u64;
+    const STREAM_DATA_PLACEHOLDER: &str = "__ARCHIVED_STREAM_DATA__";
+    let maximum_retained_bytes_per_stream = 98_304_u64;
     let mut source = String::from("schemaVersion: 1\nsteps:\n");
     for index in 0..256 {
         source.push_str(&format!(
@@ -8981,10 +8881,7 @@ fn archived_attempt_loads_valid_result_larger_than_state_document_limit() {
     let run_document = read_run(run.root_handle()).unwrap();
     let stream = serde_json::json!({
         "encoding": "base64",
-        "data": BASE64_STANDARD.encode(vec![
-            b'x';
-            usize::try_from(maximum_retained_bytes_per_stream).unwrap()
-        ]),
+        "data": STREAM_DATA_PLACEHOLDER,
         "retainedBytes": maximum_retained_bytes_per_stream,
         "discardedBytes": 0,
         "truncated": false,
@@ -9045,8 +8942,23 @@ fn archived_attempt_loads_valid_result_larger_than_state_document_limit() {
         "steps": steps,
         "exports": {}
     });
-    let result_bytes = json_bytes(result);
-    assert!(u64::try_from(result_bytes.len()).unwrap() > MAXIMUM_DURABLE_JSON_BYTES);
+    // Base64 needs no JSON escaping, so serialize the envelope once with small streams.
+    let data = BASE64_STANDARD.encode(vec![
+        b'x';
+        usize::try_from(maximum_retained_bytes_per_stream)
+            .unwrap()
+    ]);
+    let result_bytes = String::from_utf8(json_bytes(result))
+        .unwrap()
+        .replace(STREAM_DATA_PLACEHOLDER, &data)
+        .into_bytes();
+    let result_length = u64::try_from(result_bytes.len()).unwrap();
+    assert!(result_length > MAXIMUM_DURABLE_JSON_BYTES);
+    // The archive load stays just over the state-document limit.
+    assert!(
+        result_length <= MAXIMUM_DURABLE_JSON_BYTES + 1024 * 1024,
+        "{result_length}"
+    );
     let result_directory = run
         .run_directory()
         .join(attempt_result_relative_path(attempt.attempt_number));
@@ -9061,8 +8973,8 @@ fn archived_attempt_loads_valid_result_larger_than_state_document_limit() {
 
 #[test]
 fn artifact_set_carrier_boundary_is_shared_by_archive_and_portable_inspection() {
-    // REQ-WFFORMAT-76 bounds the reachable metadata: the largest declared media types that fit
-    // a 1 MiB workflow file beside 4,096 maximal export names.
+    // The workflow file size limit bounds the reachable metadata: the largest declared media
+    // types that fit a 1 MiB workflow file beside 4,096 maximal export names.
     let media_type = format!("a/b;x={}", "\u{1f600}".repeat(20));
     let mut source = String::from(
         "schemaVersion: 1\nsteps:\n  produce:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n    outputs:\n",
@@ -9444,7 +9356,6 @@ fn archived_attempt_enforces_stream_prefix_retention_invariants() {
     );
 }
 
-// REQ-EVIDENCE-7, REQ-EVIDENCE-13, REQ-OUTPUTS-5
 #[test]
 fn archived_attempt_validates_failure_identities_against_the_retained_step() {
     let fixture = AdmittedFixture::from_source_with_inputs(
@@ -10198,9 +10109,8 @@ async fn cloud_checkpoint_accepts_carrier_free_git_and_rejects_unpublished_recor
     ));
 }
 
-// REQ-RUNNERENROLL-272: the bounded reader of a run directory's file returns a file of
-// exactly its bound and refuses one a byte larger from its size, with nothing read into the
-// answer.
+// The bounded reader of a run directory's file returns a file of exactly its bound and
+// refuses one a byte larger from its size, with nothing read into the answer.
 #[test]
 fn bounded_run_file_reader_returns_its_bound_and_refuses_a_byte_more() {
     let temporary = tempfile::tempdir().unwrap();
@@ -10218,4 +10128,590 @@ fn bounded_run_file_reader_returns_its_bound_and_refuses_a_byte_more() {
         Err(LocalRunDirectoryError::StateFile { operation: "validate", source, .. })
             if matches!(*source, LocalRunDirectoryError::FileSizeInvalid)
     ));
+}
+
+fn portable_paths(root: &Path) -> BTreeSet<PathBuf> {
+    durable_tree(root).into_keys().collect()
+}
+
+fn record_child(
+    fixture: &AdmittedFixture,
+    root: &Path,
+    parent: &WorkflowRunRecord,
+) -> WritableTreeCopyOnDrop {
+    let record = WorkflowRunRecord::child_of(parent, "first", "workflow.yaml", None);
+    let child = create_child_under(
+        &open_directory_path(root).unwrap(),
+        root,
+        "first",
+        None,
+        &fixture.admitted,
+        &record,
+    )
+    .unwrap();
+    WritableTreeCopyOnDrop(child.run_directory().into())
+}
+
+fn add_excluded_record_entries(root: &Path, child: &Path) {
+    for directory in [root, child] {
+        let attempt = directory.join("attempts/000001");
+        fs::create_dir_all(attempt.join("diagnostics/x/session")).unwrap();
+        fs::write(attempt.join("diagnostics/x/session/a"), b"private").unwrap();
+        fs::write(attempt.join("continuation-context.json"), b"private").unwrap();
+        let workspace = directory.join("workspaces/candidate");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("candidate.txt"), b"step file").unwrap();
+        std::os::unix::fs::symlink("candidate.txt", workspace.join("link")).unwrap();
+    }
+    let staging = child.with_file_name(".run-x");
+    fs::create_dir(&staging).unwrap();
+    fs::write(staging.join("run.lock"), b"").unwrap();
+}
+
+struct CaptureObserver<F> {
+    now: OffsetDateTime,
+    between: F,
+}
+
+impl<F: Fn()> portable_record::CaptureObserver for CaptureObserver<F> {
+    fn now(&self) -> OffsetDateTime {
+        self.now
+    }
+
+    fn between_readings(&self) {
+        (self.between)();
+    }
+}
+
+fn settled_capture_clock() -> CaptureObserver<impl Fn()> {
+    CaptureObserver {
+        now: useful_support::utc_now() + Duration::from_secs(60),
+        between: || {},
+    }
+}
+
+#[test]
+fn portable_record_capture_matches_creation_while_the_run_is_locked() {
+    use std::os::unix::fs::MetadataExt as _;
+    let fixture = tree_fixture();
+    let (root, record, _writable) = waiting_predecessor(&fixture, "parent");
+    let child = record_child(&fixture, &root, &record);
+    add_excluded_record_entries(&root, &child.0);
+    let before = durable_tree(&root);
+    let files = tempfile::tempdir().unwrap();
+    let mut capture = PortableRecordCapture::new(files.path());
+    let observer = settled_capture_clock();
+    let (mut holder, _) = spawn_lock_holder(&root);
+    let captured = capture.capture_observed(&root, &observer).unwrap();
+    drop(holder.stdin.take());
+    assert!(holder.wait().unwrap().success());
+    let output = fixture.run_path("output");
+    let created = create_portable_record(&root, &output).unwrap();
+    assert_eq!(captured.run, record.id);
+    assert_eq!(
+        (captured.file_count, captured.total_bytes),
+        (created.file_count, created.total_bytes)
+    );
+    let entries = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).unwrap()["entries"].clone();
+    let expected = entries(&fs::read(output.join("record.json")).unwrap());
+    assert_eq!(entries(&captured.manifest), expected);
+    let mut distinct = BTreeMap::new();
+    for entry in expected.as_array().unwrap() {
+        if let Some(digest) = entry["sha256"].as_str() {
+            let bytes = fs::read(root.join(entry["path"].as_str().unwrap())).unwrap();
+            assert_eq!(fs::read(files.path().join(digest)).unwrap(), bytes);
+            distinct.insert(digest.to_owned(), bytes.len() as u64);
+        }
+    }
+    assert_eq!(captured.files, distinct.into_iter().collect::<Vec<_>>());
+    let inodes = || {
+        directory_names(files.path())
+            .into_iter()
+            .map(|name| {
+                let inode = fs::metadata(files.path().join(&name)).unwrap().ino();
+                (name, inode)
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let first = inodes();
+    assert!(
+        first
+            .keys()
+            .eq(captured.files.iter().map(|(digest, _)| digest))
+    );
+    assert_eq!(
+        entries(&capture.capture_observed(&root, &observer).unwrap().manifest),
+        expected
+    );
+    assert_eq!(inodes(), first);
+    assert_eq!(durable_tree(&root), before);
+
+    let (digest, _) = &captured.files[0];
+    fs::remove_file(files.path().join(digest)).unwrap();
+    capture.capture_observed(&root, &observer).unwrap();
+    assert_eq!(
+        DigestV1::sha256(&fs::read(files.path().join(digest)).unwrap()).value,
+        *digest
+    );
+}
+
+#[test]
+fn portable_record_capture_refuses_changing_and_recent_files() {
+    let fixture = tree_fixture();
+    let (root, record, _writable) = waiting_predecessor(&fixture, "parent");
+    let child = record_child(&fixture, &root, &record);
+    let files = tempfile::tempdir().unwrap();
+    let mut capture = PortableRecordCapture::new(files.path());
+    let state = root.join(STATE_FILE);
+    let mut next = read_state(&open_directory_path(&root).unwrap()).unwrap();
+    next.revision += 1;
+    let replacement = encode_json(&next).unwrap();
+    let observer = settled_capture_clock();
+    let replacing = CaptureObserver {
+        now: observer.now,
+        between: || {
+            let temporary = state.with_extension("tmp");
+            fs::write(&temporary, &replacement).unwrap();
+            fs::rename(&temporary, &state).unwrap();
+        },
+    };
+    assert_eq!(
+        capture
+            .capture_observed(&root, &replacing)
+            .unwrap_err()
+            .code(),
+        "run_changing"
+    );
+    let captured = capture.capture_observed(&root, &observer).unwrap();
+    let manifest: Value = serde_json::from_slice(&captured.manifest).unwrap();
+    let entry = manifest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["path"] == STATE_FILE)
+        .unwrap();
+    assert_eq!(entry["sha256"], DigestV1::sha256(&replacement).value);
+    let recent = CaptureObserver {
+        now: fs::metadata(&state).unwrap().modified().unwrap().into(),
+        between: || {},
+    };
+    assert_eq!(
+        capture.capture_observed(&root, &recent).unwrap_err().code(),
+        "run_changing"
+    );
+    assert_eq!(
+        capture
+            .capture_observed(&child.0, &observer)
+            .unwrap_err()
+            .code(),
+        "child_run"
+    );
+    let missing = fixture.run_path("missing");
+    let _missing_writable = WritableTreeCopyOnDrop(missing.clone());
+    drop(InitialLocalRun::create(&missing, &fixture.admitted).unwrap());
+    assert_eq!(
+        capture
+            .capture_observed(&missing, &observer)
+            .unwrap_err()
+            .code(),
+        "run_record_missing"
+    );
+}
+
+#[test]
+fn portable_record_carries_durable_bytes_and_lists_every_entry() {
+    let fixture = tree_fixture();
+    let (root, record, _writable) = waiting_predecessor(&fixture, "parent");
+    let child = record_child(&fixture, &root, &record);
+    add_excluded_record_entries(&root, &child.0);
+    let write = serde_json::from_value(json!({
+        "schemaVersion": 1, "hook": "start", "at": "2026-11-06T16:01:17Z",
+        "issue": "AUTO-1", "action": {"kind": "comment", "body": "Started"}, "outcome": "written"
+    }))
+    .unwrap();
+    crate::workflow::mirror::append_write(&root, &write).unwrap();
+    let before = portable_paths(&root);
+    let state = fs::read(root.join("state.json")).unwrap();
+    let output = fixture.run_path("output");
+    let result = create_portable_record(&root, &output).unwrap();
+    assert_eq!(result.run, record.id);
+    assert_eq!(result.record_directory, fs::canonicalize(&output).unwrap());
+    assert_eq!(directory_names(&output), ["record.json", "run"]);
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(output.join("record.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schemaVersion"], 1);
+    assert_eq!(manifest["run"], record.id);
+    assert!(valid_timestamp(manifest["createdAt"].as_str().unwrap()));
+    let carried = output.join("run");
+    let expected: BTreeSet<_> = before
+        .iter()
+        .filter(|path| {
+            !path.iter().any(|part| {
+                [
+                    "run.lock",
+                    ".private",
+                    "diagnostics",
+                    "continuation-context.json",
+                    ".run-x",
+                    "workspaces",
+                ]
+                .iter()
+                .any(|name| part == *name)
+            })
+        })
+        .cloned()
+        .collect();
+    assert_eq!(portable_paths(&carried), expected);
+    let mut entries = Vec::new();
+    let mut count = 0;
+    let mut size = 0;
+    for path in expected {
+        let source = root.join(&path);
+        let mode = format!("{:03o}", mode(&source));
+        let entry = if source.is_dir() {
+            json!({"path": path, "kind":"directory", "mode": mode})
+        } else {
+            let bytes = fs::read(&source).unwrap();
+            assert_eq!(fs::read(carried.join(&path)).unwrap(), bytes);
+            if path.ends_with("workflow/tree/bin/hello") {
+                assert_eq!(mode, "555");
+            }
+            count += 1;
+            size += bytes.len() as u64;
+            json!({"path": path, "kind":"file", "mode": mode, "sizeBytes":bytes.len(), "sha256": DigestV1::sha256(&bytes).value})
+        };
+        entries.push(entry);
+    }
+    entries.sort_by(|l, r| l["path"].as_str().cmp(&r["path"].as_str()));
+    assert_eq!(manifest["entries"], Value::Array(entries));
+    assert_eq!((result.file_count, result.total_bytes), (count, size));
+    assert_eq!(portable_paths(&root), before);
+    assert_eq!(fs::read(root.join("state.json")).unwrap(), state);
+}
+
+#[test]
+fn portable_record_refusals_leave_the_destination_untouched() {
+    let fixture = tree_fixture();
+    let (root, record, _writable) = waiting_predecessor(&fixture, "parent");
+    let child = record_child(&fixture, &root, &record);
+    let output = fixture.run_path("output");
+    let refuse = |path: &Path, code| {
+        assert_eq!(
+            create_portable_record(path, &output).unwrap_err().code(),
+            code
+        );
+        assert!(!output.exists());
+    };
+    let (mut holder, _) = spawn_lock_holder(&root);
+    refuse(&root, "run_locked");
+    drop(holder.stdin.take());
+    assert!(holder.wait().unwrap().success());
+    refuse(&child.0, "child_run");
+
+    let missing = fixture.run_path("missing");
+    let _missing_writable = WritableTreeCopyOnDrop(missing.clone());
+    drop(InitialLocalRun::create(&missing, &fixture.admitted).unwrap());
+    refuse(&missing, "run_record_missing");
+    fs::create_dir(&output).unwrap();
+    fs::write(output.join("keep"), b"untouched").unwrap();
+    assert_eq!(
+        create_portable_record(&root, &output).unwrap_err().code(),
+        "destination_exists"
+    );
+    assert_eq!(fs::read(output.join("keep")).unwrap(), b"untouched");
+    fs::remove_dir_all(&output).unwrap();
+
+    let link = child.0.join("attempts/000001/result-link");
+    symlink(&missing, &link).unwrap();
+    let parent_entries = directory_names(&fixture.run_parent);
+    refuse(&root, "run_directory_invalid");
+    assert_eq!(directory_names(&fixture.run_parent), parent_entries);
+    let invalid = create_portable_record(&root, &output).unwrap_err();
+    assert!(invalid.to_string().contains("result-link"), "{invalid}");
+    fs::remove_file(link).unwrap();
+
+    let root_fd = open_directory_path(&child.0).unwrap();
+    let mut state = read_state(&root_fd).unwrap();
+    let host = state.attempts[0].owner.execution_host.clone();
+    state.attempts[0].process_guards = fixture_guarded_attempt().process_guards;
+    fs::write(child.0.join(STATE_FILE), encode_json(&state).unwrap()).unwrap();
+    let authority = ControlledQuiescenceAuthority {
+        host,
+        observations: [ProcessIdentityObservation::Unavailable]
+            .into_iter()
+            .collect::<VecDeque<_>>()
+            .into(),
+        signal: AuthenticatedSignalResult::Unavailable,
+        signalled: 0.into(),
+    };
+    assert_eq!(
+        portable_record::create_with_authority(&root, &output, &authority)
+            .unwrap_err()
+            .code(),
+        "ownership_unproven"
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn portable_record_assembly_restores_the_captured_tree() {
+    let fixture = tree_fixture();
+    let (source, record, _writable) = waiting_predecessor(&fixture, "parent");
+    let source = source.canonicalize().unwrap();
+    let child = record_child(&fixture, &source, &record);
+    add_excluded_record_entries(&source, &child.0);
+    let files = tempfile::tempdir().unwrap();
+    let captured = PortableRecordCapture::new(files.path())
+        .capture_observed(&source, &settled_capture_clock())
+        .unwrap();
+    let listed = portable_record_files(&captured.manifest).unwrap();
+    assert_eq!(listed.run, captured.run);
+    assert_eq!(listed.files, captured.files);
+    assert_eq!(
+        portable_record_files(b"{}").unwrap_err().code(),
+        "record_invalid"
+    );
+    // Whitespace is significant to the identity of the supplied manifest bytes.
+    let mut manifest = captured.manifest;
+    manifest.extend_from_slice(b"  \n");
+    let directory = fixture.run_path("record");
+    let assembled = assemble_portable_record(&manifest, files.path(), &directory).unwrap();
+    assert_eq!(
+        assembled.record_directory,
+        directory.canonicalize().unwrap()
+    );
+    assert_eq!(assembled.run, record.id);
+    assert_eq!(assembled.file_count, captured.file_count);
+    assert_eq!(assembled.total_bytes, captured.total_bytes);
+    assert_eq!(fs::read(directory.join("record.json")).unwrap(), manifest);
+
+    let opened = open_portable_record(&directory).unwrap();
+    let dest = fixture.run_path("restored");
+    restore_portable_record(&opened, &dest).unwrap();
+    let restored = WritableTreeCopyOnDrop(dest.clone());
+    let child_relative = child.0.strip_prefix(&source).unwrap();
+    let restored_child = WritableTreeCopyOnDrop(dest.join(child_relative));
+    let entries = serde_json::from_slice::<Value>(&manifest).unwrap();
+    let original = durable_tree(&source);
+    let mut expected = BTreeMap::new();
+    for entry in entries["entries"].as_array().unwrap() {
+        let path = Path::new(entry["path"].as_str().unwrap());
+        expected.insert(path.to_owned(), original[path].clone());
+        assert_eq!(mode(&dest.join(path)), mode(&source.join(path)));
+    }
+    for run in [&restored.0, &restored_child.0] {
+        let relative = run.strip_prefix(&dest).unwrap();
+        expected.insert(relative.join("run.lock"), Some(Vec::new()));
+        expected.insert(relative.join(".private"), None);
+        assert_eq!(lock_holder(run), Ok(None));
+    }
+    assert_eq!(durable_tree(&dest), expected);
+}
+
+#[test]
+fn portable_record_assembly_shares_manifest_vectors() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        name: String,
+        valid: bool,
+        manifest: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Vectors {
+        cases: Vec<Case>,
+    }
+
+    let vectors: Vectors = serde_json::from_str(include_str!(
+        "../../../../../tests/fixtures/run-records/v1/manifests.json"
+    ))
+    .unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let destinations = tempfile::tempdir().unwrap();
+    for case in vectors.cases {
+        let destination = destinations.path().join(&case.name);
+        let result = assemble_portable_record(case.manifest.as_bytes(), files.path(), &destination);
+        let expected = if case.valid {
+            let manifest: Value = serde_json::from_str(&case.manifest).unwrap();
+            manifest["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["kind"] == "file")
+                .then_some("record_incomplete")
+        } else {
+            Some("record_invalid")
+        };
+        assert_eq!(
+            result.as_ref().err().map(|err| err.code()),
+            expected,
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn portable_record_assembly_refuses_damage_without_publishing() {
+    let fixture = tree_fixture();
+    let (source, _, _writable) = waiting_predecessor(&fixture, "parent");
+    let path = "attempts/000001/durable-output";
+    fs::write(source.join(path), b"abc").unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let captured = PortableRecordCapture::new(files.path())
+        .capture_observed(&source, &settled_capture_clock())
+        .unwrap();
+    let directory = fixture.run_path("record");
+    let refused = |manifest: &[u8], code: &str, error_path: Option<&str>| {
+        let before = durable_tree(&fixture.run_parent);
+        let contents = file_contents(files.path());
+        let err = assemble_portable_record(manifest, files.path(), &directory).unwrap_err();
+        assert_eq!(err.code(), code);
+        assert_eq!(err.path(), error_path.map(Path::new));
+        assert_eq!(durable_tree(&fixture.run_parent), before);
+        assert_eq!(file_contents(files.path()), contents);
+    };
+    let mut other_version: Value = serde_json::from_slice(&captured.manifest).unwrap();
+    other_version["schemaVersion"] = json!(2);
+    refused(b"{", "record_invalid", Some("record.json"));
+    refused(
+        &encode_json(&other_version).unwrap(),
+        "record_invalid",
+        Some("record.json"),
+    );
+    fs::create_dir(&directory).unwrap();
+    refused(&captured.manifest, "destination_exists", None);
+    fs::remove_dir(&directory).unwrap();
+    let blob = files.path().join(DigestV1::sha256(b"abc").value);
+    fs::remove_file(&blob).unwrap();
+    refused(&captured.manifest, "record_incomplete", Some(path));
+    fs::write(&blob, b"abd").unwrap();
+    refused(&captured.manifest, "record_altered", Some(path));
+}
+
+#[test]
+fn portable_record_restores_carried_bytes_modes_wait_and_free_locks() {
+    let fixture = tree_fixture();
+    let (source, record, _source_writable) = waiting_predecessor(&fixture, "parent");
+    let source = source.canonicalize().unwrap();
+    let child = record_child(&fixture, &source, &record);
+    let record_dir = fixture.run_path("record");
+    create_portable_record(&source, &record_dir).unwrap();
+    let before = portable_paths(&record_dir);
+    let manifest = fs::read(record_dir.join("record.json")).unwrap();
+    let link = fixture.run_path("record-link");
+    symlink(&record_dir, &link).unwrap();
+    let opened = open_portable_record(&link).unwrap();
+    let status = read_local_run_status(&source).unwrap();
+    assert_eq!(
+        Some(serde_json::to_value(opened.run()).unwrap()),
+        status.record
+    );
+
+    for name in ["first-restore", "second-restore"] {
+        let dest = fixture.run_path(name);
+        restore_portable_record(&opened, &dest).unwrap();
+        let writable = WritableTreeCopyOnDrop(dest.clone());
+        let child_writable =
+            WritableTreeCopyOnDrop(dest.join(child.0.strip_prefix(&source).unwrap()));
+        for path in portable_paths(&record_dir.join("run")) {
+            let restored = dest.join(&path);
+            let original = source.join(&path);
+            assert_eq!(restored.is_dir(), original.is_dir(), "{}", path.display());
+            assert_eq!(mode(&restored), mode(&original), "{}", path.display());
+            if original.is_file() {
+                let bytes = fs::read(original).unwrap();
+                assert_eq!(fs::read(restored).unwrap(), bytes);
+                assert_eq!(fs::read(record_dir.join("run").join(&path)).unwrap(), bytes);
+            }
+        }
+        for dir in [&writable.0, &child_writable.0] {
+            assert_eq!(mode(&dir.join("run.lock")), 0o600);
+            assert_eq!(mode(&dir.join(".private")), 0o700);
+            assert!(directory_names(&dir.join(".private")).is_empty());
+        }
+        let restored = read_local_run_status(&dest).unwrap();
+        assert_eq!(restored.state, status.state);
+        assert_eq!(restored.record, status.record);
+        assert_eq!(restored.wait, status.wait);
+        assert!(matches!(
+            acquire_local_continuation(&dest).unwrap(),
+            LocalContinuationOpen::Acquired(_)
+        ));
+        assert_eq!(
+            restore_portable_record(&opened, &dest).unwrap_err().code(),
+            "destination_exists"
+        );
+    }
+    assert_eq!(portable_paths(&record_dir), before);
+    assert_eq!(fs::read(record_dir.join("record.json")).unwrap(), manifest);
+}
+
+#[test]
+fn portable_record_restore_refuses_damage_at_its_path_before_publication() {
+    let fixture = tree_fixture();
+    let (source, _, _source_writable) = waiting_predecessor(&fixture, "parent");
+    let record_dir = fixture.run_path("record");
+    let destination = fixture.run_path("restored");
+    let file = "run/attempts/000001/durable-output";
+    fs::write(source.join("attempts/000001/durable-output"), b"abc").unwrap();
+    for (damage, path, code) in [
+        ("delete", file, "record_incomplete"),
+        ("edit", file, "record_altered"),
+        ("append", file, "record_altered"),
+        ("stray", "run/stray", "record_altered"),
+        ("stray", "stray", "record_altered"),
+        ("kind", file, "record_altered"),
+        ("truncate", "record.json", "record_invalid"),
+        ("version", "record.json", "record_invalid"),
+        ("escape", "record.json", "record_invalid"),
+        ("id", "run/run.json", "record_invalid"),
+    ] {
+        create_portable_record(&source, &record_dir).unwrap();
+        let damaged = record_dir.join(path);
+        match damage {
+            "delete" => fs::remove_file(damaged).unwrap(),
+            "edit" => fs::write(damaged, b"abd").unwrap(),
+            "append" => fs::write(damaged, b"abcd").unwrap(),
+            "stray" | "truncate" => fs::write(damaged, []).unwrap(),
+            "kind" => {
+                fs::remove_file(&damaged).unwrap();
+                fs::create_dir(damaged).unwrap();
+            }
+            _ => {
+                let index = record_dir.join("record.json");
+                let mut manifest: Value =
+                    serde_json::from_slice(&fs::read(&index).unwrap()).unwrap();
+                match damage {
+                    "version" => manifest["schemaVersion"] = json!(2),
+                    "escape" => manifest["entries"][0]["path"] = json!("../x"),
+                    "id" => {
+                        let mut run: Value =
+                            serde_json::from_slice(&fs::read(&damaged).unwrap()).unwrap();
+                        run["id"] = json!("run_00000000000000000000000000");
+                        let bytes = encode_json(&run).unwrap();
+                        fs::write(damaged, &bytes).unwrap();
+                        let entry = manifest["entries"]
+                            .as_array_mut()
+                            .unwrap()
+                            .iter_mut()
+                            .find(|e| e["path"] == "run.json")
+                            .unwrap();
+                        entry["sizeBytes"] = json!(bytes.len());
+                        entry["sha256"] = json!(DigestV1::sha256(&bytes).value);
+                    }
+                    _ => panic!("unknown damage case {damage}"),
+                }
+                fs::write(index, encode_json(&manifest).unwrap()).unwrap();
+            }
+        }
+        let before = directory_names(&fixture.run_parent);
+        let err = open_portable_record(&record_dir)
+            .and_then(|record| restore_portable_record(&record, &destination))
+            .unwrap_err();
+        assert_eq!(err.code(), code, "{damage}: {err}");
+        assert_eq!(err.path(), Some(Path::new(path)), "{damage}");
+        assert!(!destination.exists());
+        assert_eq!(directory_names(&fixture.run_parent), before);
+        fs::remove_dir_all(&record_dir).unwrap();
+    }
 }

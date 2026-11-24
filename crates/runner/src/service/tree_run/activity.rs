@@ -1,19 +1,17 @@
-//! Whether a held tree run is working, as agent-login setup reads it (INV-RUNNER-15).
+//! Whether a held tree run is working, as agent-login setup reads it.
 //!
-//! A run is working unless its loop last reported a wait (REQ-GRANT-125): its `RunActivity`
-//! starts working, reads waiting once the loop's report of a wait is queued, and working
-//! again at the next report without one and when the loop ends. It also counts the run's
-//! `useful` commands in flight, and a setup that installs or removes a login holds it, so
-//! no command starts until the login is written. The assignment manager reads it too, to
-//! take an offer only while every run it holds waits and to fence the reports of an ended
-//! run only when it never reported a wait (INV-RUNNER-40, INV-RUNNER-63), and an
-//! admission's own setup reads the activities of the other runs held when its preparation
-//! began.
+//! A run is working unless its loop last reported a wait: its `RunActivity` starts working,
+//! reads waiting once the loop's report of a wait is queued, and working again at the next
+//! report without one and when the loop ends. It also counts the run's `useful` commands in
+//! flight, and a setup that installs or removes a login holds it, so no command starts
+//! until the login is written. The assignment manager reads it too, to take an offer only
+//! while every run it holds waits and to fence the reports of an ended run only when it
+//! never reported a wait, and an admission's own setup reads the activities of the other
+//! runs held when its preparation began.
 //!
-//! Beside that it keeps the loop's last read of the run directory (REQ-RUNNERENROLL-134),
-//! which the assignment manager's overview copies, and where the run's directory and its log
-//! are (REQ-RUNNERENROLL-144), which the manager's read of one assignment copies; nothing
-//! decides by either.
+//! Beside that it keeps the loop's last read of the run directory, which the assignment
+//! manager's overview copies, and where the run's directory and its log are, which the
+//! manager's read of one assignment copies; nothing decides by either.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -44,18 +42,17 @@ struct ActivityState {
     paths: RunPaths,
 }
 
-/// Where a held tree run's files are, as the manager's read of one assignment gives them
-/// (REQ-RUNNERENROLL-144): the run directory once the loop has located it, which for an
-/// adopted run is under the earlier attempt's home, and the assignment's own `tree-run.log`.
+/// Where a held tree run's files are, as the manager's read of one assignment gives them:
+/// the run directory once the loop has located it, which for an adopted run is under the
+/// earlier attempt's home, and the assignment's own `tree-run.log`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::service) struct RunPaths {
     pub(in crate::service) directory: Option<PathBuf>,
     pub(in crate::service) log: Option<PathBuf>,
 }
 
-/// The resume loop's read of a run directory, as an overview publishes it
-/// (REQ-RUNNERENROLL-134): the record's position and subject, the wait the read held, and
-/// the steps running now.
+/// The resume loop's read of a run directory, as an overview publishes it: the record's
+/// position and subject, the wait the read held, and the steps running now.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) struct RunRead {
     pub(in crate::service) position: Vec<StepPathPart>,
@@ -128,7 +125,7 @@ impl RunActivity {
     }
 
     /// Whether the loop ever reported a wait, which Cloud may have answered by offering the
-    /// runner another run before the end of this one is settled (INV-RUNNER-63).
+    /// runner another run before the end of this one is settled.
     pub(in crate::service) fn has_reported_wait(&self) -> bool {
         self.state().reported_wait
     }
@@ -195,11 +192,10 @@ impl Drop for ActivityHold {
     }
 }
 
-/// What the runner holds, as agent-login setup reads it from the assignment manager, and
-/// the gate of a setup's pass over it (INV-RUNNER-15). The pass an admission makes for itself
-/// reads the other tree runs the manager held when the preparation began, without its lock,
-/// as `Waiting` of their activities, which answers at once when there is none
-/// (REQ-GRANT-135).
+/// What the runner holds, as agent-login setup reads it from the assignment manager, and the
+/// gate of a setup's pass over it. The pass an admission makes for itself reads the other
+/// tree runs the manager held when the preparation began, without its lock, as `Waiting` of
+/// their activities, which answers at once when there is none.
 pub(in crate::service) enum HeldRuns {
     /// No assignment in any state.
     Nothing,

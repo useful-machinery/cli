@@ -1,8 +1,8 @@
-//! The roots that bound the files of `useful workflow doctor` and `useful account integration connect
-//! --workflow` (REQ-CREDREADY-1, REQ-GRANT-184): a directory named in place of a file stands for
-//! its tree's `workflow.yaml` and bounds it; otherwise `--source-root`, or the root of the Git
-//! repository that holds each file, with each root's derivation merged into one. `useful
-//! workflow validate FILE` finds a file's root the same way (REQ-WFFORMAT-12).
+//! The roots that bound the files of `useful workflow doctor` and `useful account integration
+//! connect --workflow`: a directory named in place of a file stands for its tree's `workflow.yaml`
+//! and bounds it; otherwise `--source-root`, or the root of the Git repository that holds each
+//! file, with each root's derivation merged into one. `useful workflow validate FILE` finds a
+//! file's root the same way.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -67,18 +67,18 @@ impl Roots {
         repository_of(&SystemCommandRunner, file, remedy)
     }
 
-    /// Each root's `origin` remote, asked of Git through the runner that asked for the roots
-    /// (REQ-CREDREADY-12).
+    /// Each root's `origin` remote, asked of Git through the runner that asked for the
+    /// roots.
     pub(in crate::cli) fn origin_remote(&self) -> RepositorySource {
         RepositorySource::OriginRemote(Arc::clone(&self.runner))
     }
 
-    /// The credentials the named workflows and the workflows their `workflow` steps name need,
-    /// or `None` once the first file that does not resolve was rejected as
-    /// `useful workflow validate` rejects it. The files of one root are derived together under it,
-    /// each reading its repository's provider from `source`, and the derivations are merged by
-    /// kind, the roots' inferences and reports each into their own (REQ-CREDREADY-27). The roots'
-    /// differences are concatenated, present when any root's are (REQ-CREDREADY-28).
+    /// The credentials the named workflows and the workflows their `workflow` steps name need, or
+    /// `None` once the first file that does not resolve was rejected as `useful workflow validate`
+    /// rejects it. The files of one root are derived together under it, each reading its
+    /// repository's provider from `source`, and the derivations are merged by kind, the roots'
+    /// inferences and reports each into their own. The roots' differences are concatenated,
+    /// present when any root's are.
     pub(in crate::cli) fn derive(
         &self,
         source: &RepositorySource,

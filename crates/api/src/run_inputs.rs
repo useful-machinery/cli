@@ -192,8 +192,8 @@ pub struct RunInputDownloadCapability {
 }
 
 pub struct ValidatedCapabilityBatch<C> {
-    expires_at: OffsetDateTime,
-    members: Vec<C>,
+    pub(super) expires_at: OffsetDateTime,
+    pub(super) members: Vec<C>,
 }
 
 impl fmt::Debug for RunInputDownloadCapability {
@@ -456,14 +456,24 @@ impl RunApi<'_> {
         capability: &RunInputDownloadCapability,
         cancellation: &HttpCancellation,
     ) -> Result<Zeroizing<Vec<u8>>, RunFailure> {
+        self.download_verified_file(
+            &capability.url,
+            capability.metadata.size_bytes,
+            capability.metadata.sha256,
+            cancellation,
+        )
+    }
+
+    pub(super) fn download_verified_file(
+        &self,
+        url: &Url,
+        size_bytes: u64,
+        sha256: [u8; 32],
+        cancellation: &HttpCancellation,
+    ) -> Result<Zeroizing<Vec<u8>>, RunFailure> {
         let downloaded = self
             .storage_transport
-            .signed_storage_get(
-                &capability.url,
-                capability.metadata.size_bytes,
-                STORAGE_REQUEST_TIMEOUT,
-                cancellation,
-            )
+            .signed_storage_get(url, size_bytes, STORAGE_REQUEST_TIMEOUT, cancellation)
             .map_err(|error| match error {
                 SignedStorageGetError::InvalidRequest => RunFailure::protocol(false),
                 SignedStorageGetError::Unreachable(category) => RunFailure::Unreachable(category),
@@ -478,9 +488,9 @@ impl RunApi<'_> {
         if downloaded.status != StatusCode::OK
             || downloaded
                 .content_length
-                .is_some_and(|length| length != capability.metadata.size_bytes)
-            || u64::try_from(downloaded.bytes.len()).ok() != Some(capability.metadata.size_bytes)
-            || digest_bytes(&downloaded.bytes) != capability.metadata.sha256
+                .is_some_and(|length| length != size_bytes)
+            || u64::try_from(downloaded.bytes.len()).ok() != Some(size_bytes)
+            || digest_bytes(&downloaded.bytes) != sha256
         {
             return Err(RunFailure::InputDownloadRejected);
         }
@@ -747,7 +757,7 @@ fn decode_download_capability_response(
     decode_closed_model(body, closed_download_capability_shape)
 }
 
-fn decode_closed_model<T: DeserializeOwned>(
+pub(super) fn decode_closed_model<T: DeserializeOwned>(
     body: &[u8],
     shape_is_valid: impl FnOnce(&serde_json::Value) -> bool,
 ) -> Result<T, RunFailure> {
@@ -759,7 +769,7 @@ fn decode_closed_model<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|_| RunFailure::protocol(false))
 }
 
-fn closed_object<'a>(
+pub(super) fn closed_object<'a>(
     value: &'a serde_json::Value,
     required: &[&str],
     optional: &[&str],
@@ -1389,7 +1399,7 @@ fn validate_capability_envelope(
     }
 }
 
-fn validate_capability_url(
+pub(super) fn validate_capability_url(
     raw: &str,
     policy: super::HttpTransportPolicy,
 ) -> Result<Url, RunFailure> {
@@ -1406,7 +1416,7 @@ fn validate_capability_url(
     Ok(url)
 }
 
-fn require_private_no_store(response: &ReceivedResponse) -> Result<(), RunFailure> {
+pub(super) fn require_private_no_store(response: &ReceivedResponse) -> Result<(), RunFailure> {
     let mut values = response.cache_controls.iter();
     let valid = values
         .next()
@@ -1431,7 +1441,7 @@ pub(crate) fn lowercase_hex(bytes: [u8; 32]) -> String {
     useful_support::lowercase_hex(&bytes)
 }
 
-fn decode_sha256(value: &str) -> Option<[u8; 32]> {
+pub(super) fn decode_sha256(value: &str) -> Option<[u8; 32]> {
     if !useful_support::is_lowercase_hex(value, 64) {
         return None;
     }
@@ -1444,7 +1454,7 @@ fn decode_sha256(value: &str) -> Option<[u8; 32]> {
     Some(decoded)
 }
 
-fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
+pub(super) fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 

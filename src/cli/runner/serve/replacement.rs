@@ -1,6 +1,6 @@
 //! `useful runner serve --replace-credential`: a second credential for the host's own runner,
 //! enrolled with a single-runner key or resent as staged, and the live runner's switch to it. The
-//! command reports both and exits; it never serves (REQ-RUNNERENROLL-48 to REQ-RUNNERENROLL-51).
+//! command reports both and exits; it never serves.
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -337,7 +337,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-50
     #[test]
     fn replacement_reports_cloud_and_live_outcomes_separately() {
         let mut output = Vec::new();

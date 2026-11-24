@@ -265,7 +265,6 @@ mod tests {
         ]
     }
 
-    // REQ-AUTH-50
     #[test]
     fn absent_overrides_select_the_production_deployment() -> anyhow::Result<()> {
         let deployment = load(&[]).context("production deployment should be valid")?;
@@ -282,7 +281,6 @@ mod tests {
         Ok(())
     }
 
-    // REQ-AUTH-50
     #[test]
     fn complete_override_is_preserved_as_one_deployment() -> anyhow::Result<()> {
         let values = complete_override(
@@ -303,8 +301,6 @@ mod tests {
         Ok(())
     }
 
-    // REQ-AUTH-51
-    // INV-CLI-8
     #[test]
     fn every_partial_override_combination_is_rejected() -> anyhow::Result<()> {
         for mask in 1_u8..15 {
@@ -346,7 +342,6 @@ mod tests {
         Ok(())
     }
 
-    // REQ-AUTH-51
     #[test]
     fn malformed_and_non_network_urls_are_rejected() -> anyhow::Result<()> {
         for api_url in [
@@ -363,7 +358,6 @@ mod tests {
         Ok(())
     }
 
-    // REQ-AUTH-51
     #[test]
     fn empty_audience_and_client_id_are_rejected() -> anyhow::Result<()> {
         for variable in [AUDIENCE_VARIABLE, CLIENT_ID_VARIABLE] {

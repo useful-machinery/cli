@@ -171,7 +171,7 @@ pub(crate) fn render_plain(
             .ok_or(ArchivedViewOutputFailure::InvalidProjection)?;
         rendered.push_str(&plain_step_row(step, definition, color));
         rendered.push('\n');
-        // REQ-EVIDENCE-29: the source each `firstOf` of the step took, a line each.
+        // The source each `firstOf` of the step took, a line each.
         for source in &step.input_sources {
             rendered.push_str(&format!(
                 "  input source {} · from {}\n",
@@ -421,7 +421,7 @@ struct WorkflowViewSuccess<'a> {
     attempt_state: &'static str,
     result_directory: &'a str,
     result: &'a WorkflowResultV1,
-    /// The attempt's wait record when it ended in a wait (REQ-LOCALRUN-179).
+    /// The attempt's wait record when it ended in a wait.
     #[serde(skip_serializing_if = "Option::is_none")]
     wait: Option<&'a super::wait::WaitRecord>,
 }
@@ -859,10 +859,9 @@ mod tests {
         assert_eq!(native, path);
     }
 
-    // REQ-LOCALRUN-221, REQ-OUTPUTS-17: a stage whose child failed reads `failed` in its row
-    // and counts under `failed`, naming the child's failing node and the outputs it
-    // committed; without the record it reads as any succeeded step, counting the outputs it
-    // committed, not the ones it declares.
+    // A stage whose child failed reads `failed` in its row and counts under `failed`, naming
+    // the child's failing node and the outputs it committed; without the record it reads as
+    // any succeeded step, counting the outputs it committed, not the ones it declares.
     #[test]
     fn archived_stage_whose_child_failed_is_shown_failed() {
         let definition = WorkflowPresentationStep::Workflow {

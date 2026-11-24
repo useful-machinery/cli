@@ -1,7 +1,7 @@
-//! What the serving process keeps of its recent past for the overview (INV-RUNNER-46): a
-//! fixed-capacity ring, allocated once, that drops its oldest entry when full, the bound of a
-//! text an entry keeps, and the log of the runner's own events. Nothing here is written to
-//! disk, sent to Cloud or read by a decision the runner makes.
+//! What the serving process keeps of its recent past for the overview: a fixed-capacity ring,
+//! allocated once, that drops its oldest entry when full, the bound of a text an entry keeps,
+//! and the log of the runner's own events. Nothing here is written to disk, sent to Cloud or
+//! read by a decision the runner makes.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -17,10 +17,10 @@ use crate::control_protocol::{
 };
 use crate::telemetry::DroppedRecordObserver;
 
-/// The assignments that ended most recently that the manager keeps (REQ-RUNNERENROLL-137).
+/// The assignments that ended most recently that the manager keeps.
 pub(super) const RECENT_ASSIGNMENTS: usize = 32;
 
-/// The runner's own events that the log keeps (REQ-RUNNERENROLL-138).
+/// The runner's own events that the log keeps.
 pub(super) const RUNNER_EVENTS: usize = 128;
 
 /// The most characters of a text an entry keeps: a longer one is left out, since a step of
@@ -69,7 +69,7 @@ impl<T> Ring<T> {
     }
 }
 
-/// One of the runner's own events, with the facts of its kind (REQ-RUNNERENROLL-138).
+/// One of the runner's own events, with the facts of its kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum LoggedEvent {
     Connected,
@@ -250,9 +250,8 @@ pub(super) fn listed_event(
     })
 }
 
-/// The runner's most recent events (REQ-RUNNERENROLL-138), an event that repeats the newest
-/// one folded into it. Recording takes this lock alone, allocates nothing that grows and
-/// awaits nothing (INV-RUNNER-46).
+/// The runner's most recent events, an event that repeats the newest one folded into it.
+/// Recording takes this lock alone, allocates nothing that grows and awaits nothing.
 #[derive(Debug)]
 pub(super) struct EventLog {
     entries: Mutex<Ring<LoggedEntry>>,
@@ -317,8 +316,8 @@ impl DroppedRecordObserver for EventLog {
 mod tests {
     use super::*;
 
-    // INV-RUNNER-46: a full ring drops its oldest entry, answers the rest newest first and
-    // does not grow its storage.
+    // A full ring drops its oldest entry, answers the rest newest first and does not grow
+    // its storage.
     #[test]
     fn a_full_ring_drops_its_oldest_entry_without_growing() {
         let mut ring = Ring::new(RECENT_ASSIGNMENTS);
@@ -331,7 +330,7 @@ mod tests {
         assert_eq!(ring.entries.capacity(), allocated);
     }
 
-    // INV-RUNNER-46: an entry keeps no text longer than 256 characters.
+    // An entry keeps no text longer than 256 characters.
     #[test]
     fn a_text_past_its_bound_is_left_out() {
         let bound = "é".repeat(MAXIMUM_KEPT_TEXT);
@@ -365,9 +364,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-138, INV-RUNNER-46: an event that repeats the newest one, a
-    // `connection_failed` whatever its delay, is that entry once more, at the later time and
-    // with the later delay; one that does not is a new entry, listed first.
+    // An event that repeats the newest one, a `connection_failed` whatever its delay, is
+    // that entry once more, at the later time and with the later delay; one that does not is
+    // a new entry, listed first.
     #[test]
     fn a_repeated_event_is_one_entry_with_its_count_its_last_time_and_its_last_delay() {
         let log = EventLog::new();
@@ -391,8 +390,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-138, INV-RUNNER-46: an event of another fact, or one that repeats an
-    // entry other than the newest, is a new entry.
+    // An event of another fact, or one that repeats an entry other than the newest, is a
+    // new entry.
     #[test]
     fn an_event_of_other_facts_or_after_another_is_a_new_entry() {
         let log = EventLog::new();
@@ -434,7 +433,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-138, INV-RUNNER-46: the log keeps the 128 newest distinct events.
+    // The log keeps the 128 newest distinct events.
     #[test]
     fn the_log_keeps_its_newest_events_and_drops_the_oldest() {
         let log = EventLog::new();
@@ -451,8 +450,8 @@ mod tests {
         assert_eq!(listed, expected);
     }
 
-    // REQ-RUNNERENROLL-138: each record the telemetry writer drops is one occurrence of
-    // `telemetry_dropped`, so three in a row are one entry with count 3.
+    // Each record the telemetry writer drops is one occurrence of `telemetry_dropped`,
+    // so three in a row are one entry with count 3.
     #[test]
     fn the_log_told_of_three_dropped_records_lists_one_entry_of_three() {
         let log = EventLog::new();

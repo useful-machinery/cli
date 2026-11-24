@@ -72,7 +72,7 @@ pub enum WebhookFailure {
     InvalidInput,
     NotFound,
     Conflict,
-    /// A `webhook-conflict` whose `reason` is `project-archived` (REQ-WEBHOOK-99).
+    /// A `webhook-conflict` whose `reason` is `project-archived`.
     ProjectArchived,
     RateLimited(u64),
     Unreachable(UnreachableCategory),

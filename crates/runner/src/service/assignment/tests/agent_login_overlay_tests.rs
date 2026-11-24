@@ -19,11 +19,11 @@ use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialSou
 use crate::service::HeldRunGate;
 use crate::service::control::{AdmissionAgentLogins, LiveStatus};
 use crate::service::test_support::{
-    CountedGate, FAKE_AGENT_LOGIN_ID, FAKE_GRANT_ID, FAKE_INTEGRATION_TOKEN_ID,
-    FakeAgentLoginCloud, FakeGrantToken, SleepRelease, controlled_sleeper,
-    fake_agent_login_material, fake_agent_login_setup, fake_agent_login_setup_serving,
-    fake_codex_answer, fake_codex_authorized, fake_grant_expiry, fake_grant_token,
-    preparation_teardown_holding_sleeper,
+    CountedGate, FAKE_AGENT_LOGIN_ID, FAKE_CONNECTION_AUTHORIZATION_ID, FAKE_GRANT_ID,
+    FAKE_INTEGRATION_TOKEN_ID, FakeAgentLoginCloud, FakeGrantToken, SleepRelease,
+    controlled_sleeper, fake_agent_login_material, fake_agent_login_setup,
+    fake_agent_login_setup_serving, fake_codex_answer, fake_codex_authorized, fake_grant_expiry,
+    fake_grant_token, preparation_teardown_holding_sleeper,
 };
 use crate::telemetry::test_recorder;
 
@@ -144,7 +144,6 @@ async fn release_unrun(manager: &mut AssignmentManager, offered: &AssignmentOffe
     assert!(held_assignment(manager).is_none());
 }
 
-// REQ-GRANT-44, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_kept_token_reaches_only_the_steps_of_a_workflow_that_passes_it() {
     let (_temporary, mut manager) = manager_without_agent_logins(PASSING_WORKFLOW);
@@ -161,7 +160,6 @@ async fn a_kept_token_reaches_only_the_steps_of_a_workflow_that_passes_it() {
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-44, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_does_not_pass_the_name_receives_no_token() {
     let workflow = r#"schemaVersion: 1
@@ -182,7 +180,6 @@ steps:
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-44, REQ-GRANT-45
 #[tokio::test]
 async fn a_token_in_the_process_environment_passes_through_unchanged() {
     let workflow = PASSING_WORKFLOW.replace(DELIVERED, "service-token");
@@ -205,7 +202,6 @@ async fn a_token_in_the_process_environment_passes_through_unchanged() {
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-44, REQ-GRANT-45
 #[tokio::test]
 async fn each_admission_reads_the_token_the_runner_keeps_then() {
     let (_temporary, mut manager) = manager_without_agent_logins(PASSING_WORKFLOW);
@@ -222,7 +218,6 @@ async fn each_admission_reads_the_token_the_runner_keeps_then() {
     assert_eq!(accepted_token(&manager), None);
 }
 
-// REQ-GRANT-37, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_kept_codex_login_reaches_only_the_steps_of_a_workflow_that_passes_codex_home() {
     let (_temporary, mut manager) = manager_without_agent_logins(PASSING_CODEX_WORKFLOW);
@@ -240,7 +235,6 @@ async fn a_kept_codex_login_reaches_only_the_steps_of_a_workflow_that_passes_cod
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-37, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_does_not_pass_codex_home_receives_none() {
     let workflow = r#"schemaVersion: 1
@@ -261,7 +255,6 @@ steps:
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-37
 #[tokio::test]
 async fn a_codex_home_in_the_process_environment_passes_through_unchanged() {
     let (temporary, mut manager) = manager_without_agent_logins(PASSING_CODEX_WORKFLOW);
@@ -283,7 +276,6 @@ async fn a_codex_home_in_the_process_environment_passes_through_unchanged() {
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-37
 #[tokio::test]
 async fn each_admission_looks_for_the_codex_login_the_runner_keeps_then() {
     let (_temporary, mut manager) = manager_without_agent_logins(PASSING_CODEX_WORKFLOW);
@@ -301,10 +293,9 @@ async fn each_admission_looks_for_the_codex_login_the_runner_keeps_then() {
 }
 
 /// A manager for `PASSING_CODEX_WORKFLOW` whose admissions set agent logins up
-/// and ask for their grant tokens against a fake Cloud (REQ-GRANT-49,
-/// REQ-GRANT-86), behind the lock the periodic pass's gate takes, and that
-/// setup, which keeps its readiness and agent-login directory beside the
-/// manager's state.
+/// and ask for their grant tokens against a fake Cloud, behind the lock the
+/// periodic pass's gate takes, and that setup, which keeps its readiness and
+/// agent-login directory beside the manager's state.
 struct SettingUp {
     temporary: tempfile::TempDir,
     manager: Arc<Mutex<AssignmentManager>>,
@@ -378,8 +369,8 @@ impl SettingUp {
         }
     }
 
-    /// Has each later admission keep its grant token files current
-    /// (REQ-GRANT-89) on a controlled sleeper, whose sleeps it answers.
+    /// Has each later admission keep its grant token files current on a
+    /// controlled sleeper, whose sleeps it answers.
     fn refreshing(&self) -> tokio::sync::mpsc::UnboundedReceiver<(Duration, SleepRelease)> {
         let (sleeper, sleeps) = controlled_sleeper();
         self.manager
@@ -475,7 +466,6 @@ fn auth_json_in(codex_home: &OsStr) -> Option<Vec<u8>> {
     fs::read(Path::new(codex_home).join("auth.json")).ok()
 }
 
-// REQ-GRANT-49, INV-RUNNER-57
 #[tokio::test]
 async fn an_admission_after_a_replacement_is_offered_the_new_generation() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -507,7 +497,6 @@ async fn an_admission_after_a_replacement_is_offered_the_new_generation() {
     assert_eq!(codex.installation().map(|login| login.generation), Some(3));
 }
 
-// REQ-GRANT-49, REQ-GRANT-40
 #[tokio::test]
 async fn an_admission_after_a_revocation_is_offered_no_codex_home_and_the_home_is_gone() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -521,7 +510,6 @@ async fn an_admission_after_a_revocation_is_offered_no_codex_home_and_the_home_i
     assert_eq!(fixture.codex().state, AgentLoginState::Revoked);
 }
 
-// REQ-GRANT-49
 #[tokio::test]
 async fn an_admission_whose_status_request_fails_is_offered_the_login_the_runner_holds() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -538,7 +526,6 @@ async fn an_admission_whose_status_request_fails_is_offered_the_login_the_runner
     assert_eq!(fixture.codex().state, AgentLoginState::CloudUnavailable);
 }
 
-// REQ-GRANT-49
 #[tokio::test]
 async fn an_admission_whose_delivery_is_refused_stale_is_offered_the_generation_it_holds() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -559,7 +546,6 @@ async fn an_admission_whose_delivery_is_refused_stale_is_offered_the_generation_
     assert_eq!(codex.installation().map(|login| login.generation), Some(2));
 }
 
-// REQ-GRANT-49
 #[tokio::test]
 async fn an_admission_asks_nothing_while_the_readiness_names_no_login() {
     let fixture = SettingUp::new(FakeAgentLoginCloud::new(fake_codex_authorized(1)));
@@ -582,7 +568,6 @@ async fn an_admission_asks_nothing_while_the_readiness_names_no_login() {
     assert_eq!(fixture.requests(), recorded);
 }
 
-// REQ-GRANT-49, REQ-GRANT-51
 #[tokio::test]
 async fn an_admission_asks_nothing_for_a_provider_cloud_refuses() {
     // Cloud names an authorization in force whose owner it refuses: the
@@ -604,7 +589,6 @@ async fn an_admission_asks_nothing_for_a_provider_cloud_refuses() {
     assert_eq!(fixture.requests(), recorded);
 }
 
-// INV-RUNNER-15
 #[tokio::test]
 async fn nothing_is_asked_for_installed_or_removed_between_an_offer_and_the_release() {
     let fixture = SettingUp::holding_generation_two().await;
@@ -648,7 +632,6 @@ fn record_selected(state_file: &Path, entries: &[(AgentLoginProvider, AgentLogin
     assert!(ReadinessDocument::load(&document).unwrap().is_some());
 }
 
-// REQ-GRANT-51, REQ-GRANT-37, INV-RUNNER-17
 #[test]
 fn a_provider_recorded_as_selected_has_nothing_removed_or_replaced() {
     for state in [
@@ -686,7 +669,6 @@ fn a_provider_recorded_as_selected_has_nothing_removed_or_replaced() {
     }
 }
 
-// REQ-GRANT-51, REQ-GRANT-44, INV-RUNNER-17
 #[tokio::test]
 async fn an_agent_step_with_no_login_to_offer_starts_with_the_variable_unset() {
     // A root list keeps only the names it declares, so it also passes the
@@ -743,7 +725,7 @@ async fn an_agent_step_with_no_login_to_offer_starts_with_the_variable_unset() {
 /// The last use the readiness records of the runner's Codex login once an
 /// admission whose Codex step succeeded has been followed by a pass, for a
 /// service whose environment carries `CODEX_HOME` of its own when
-/// `service_codex_home` holds (REQ-GRANT-52).
+/// `service_codex_home` holds.
 async fn codex_last_use_after_a_codex_step(service_codex_home: bool) -> Option<UseOutcome> {
     let (temporary, mut manager) = super::harness_executable_tests::manager_fixture_with_harnesses(
         CODEX_ONLY_WORKFLOW,
@@ -810,7 +792,6 @@ async fn codex_last_use_after_a_codex_step(service_codex_home: bool) -> Option<U
     codex.last_use.map(|last_use| last_use.outcome)
 }
 
-// REQ-GRANT-52
 #[tokio::test]
 async fn an_admissions_observer_notes_a_use_of_the_codex_home_the_runner_added() {
     assert_eq!(
@@ -819,14 +800,13 @@ async fn an_admissions_observer_notes_a_use_of_the_codex_home_the_runner_added()
     );
 }
 
-// REQ-GRANT-52, REQ-GRANT-37
 #[tokio::test]
 async fn a_codex_home_the_service_carried_notes_no_use() {
     assert_eq!(codex_last_use_after_a_codex_step(true).await, None);
 }
 
 /// The names each OAuth provider's grant token is offered as: the token's
-/// variable and the variable naming its file (REQ-GRANT-87).
+/// variable and the variable naming its file.
 const GRANT_NAMES: [(AgentLoginProvider, &str, &str); 3] = [
     (AgentLoginProvider::Github, "GH_TOKEN", "GH_TOKEN_FILE"),
     (
@@ -904,7 +884,6 @@ fn refused(refusal: GrantTokenRefusal) -> FakeGrantToken {
     FakeGrantToken::Fail(GrantTokenFailure::Refused(refusal))
 }
 
-// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn an_issued_token_and_its_file_reach_only_the_steps_that_pass_them() {
     for (provider, variable, file_variable) in GRANT_NAMES {
@@ -921,7 +900,6 @@ async fn an_issued_token_and_its_file_reach_only_the_steps_that_pass_them() {
     }
 }
 
-// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_passes_no_grant_name_receives_no_token() {
     let fixture = SettingUp::running(
@@ -937,7 +915,7 @@ async fn a_workflow_that_passes_no_grant_name_receives_no_token() {
     assert_succeeded(&fixture.run(&offer("bg")).await);
 }
 
-/// The `requires.integrations` id that declares `provider` (REQ-WFDEF-34).
+/// The `requires.integrations` id that declares `provider`.
 fn declared_id(provider: AgentLoginProvider) -> &'static str {
     match provider {
         AgentLoginProvider::Github => "github",
@@ -970,7 +948,6 @@ steps:
     )
 }
 
-// REQ-GRANT-154, REQ-WFEXEC-85, REQ-WFEXEC-87
 #[tokio::test]
 async fn a_declared_providers_token_and_its_file_reach_every_step() {
     for (provider, variable, file_variable) in GRANT_NAMES {
@@ -1038,7 +1015,6 @@ fn cloud_issuing_mergify() -> Arc<FakeAgentLoginCloud> {
     cloud
 }
 
-// REQ-WFEXEC-85, REQ-WFEXEC-87, REQ-INTEGRATION-12
 #[tokio::test]
 async fn a_declared_token_services_token_and_its_file_reach_every_step() {
     let token = fake_grant_token(mergify(), 1);
@@ -1076,7 +1052,6 @@ async fn a_declared_token_services_token_and_its_file_reach_every_step() {
     );
 }
 
-// REQ-WFEXEC-88, REQ-INTEGRATION-12
 #[tokio::test]
 async fn a_workflow_that_declares_no_token_service_receives_none_of_its_names() {
     let fixture = SettingUp::running(
@@ -1087,7 +1062,6 @@ async fn a_workflow_that_declares_no_token_service_receives_none_of_its_names() 
     assert_succeeded(&fixture.run(&offer("bg")).await);
 }
 
-// REQ-GRANT-44, REQ-WFEXEC-85
 #[tokio::test]
 async fn a_kept_token_reaches_every_step_of_a_workflow_that_declares_claude_code() {
     let (_temporary, mut manager) = manager_without_agent_logins(&workflow_declaring(
@@ -1103,7 +1077,6 @@ async fn a_kept_token_reaches_every_step_of_a_workflow_that_declares_claude_code
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-GRANT-37, REQ-WFEXEC-85
 #[tokio::test]
 async fn a_kept_codex_login_reaches_every_step_of_a_workflow_that_declares_codex() {
     let (_temporary, mut manager) = manager_without_agent_logins(&workflow_declaring(
@@ -1141,7 +1114,6 @@ fn example() -> GrantProvider {
     GrantProvider::listed("example").unwrap()
 }
 
-// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_configured_providers_token_and_its_file_reach_only_the_steps_that_pass_them() {
     let token = fake_grant_token(example(), 2);
@@ -1162,7 +1134,6 @@ async fn a_configured_providers_token_and_its_file_reach_only_the_steps_that_pas
     );
 }
 
-// REQ-GRANT-154, REQ-WFEXEC-71
 #[tokio::test]
 async fn a_workflow_that_passes_no_configured_providers_name_receives_nothing() {
     let fixture = SettingUp::running(
@@ -1192,7 +1163,6 @@ fn asked_for(cloud: &FakeAgentLoginCloud) -> Vec<AgentLoginProvider> {
         .collect()
 }
 
-// REQ-GRANT-153, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its_absence() {
     let issuing_every_grant = || {
@@ -1255,7 +1225,6 @@ async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its
     );
 }
 
-// REQ-GRANT-153, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn every_provider_the_host_provides_keeps_the_services_names_whatever_cloud_holds() {
     let check = SERVICE_GRANT_VALUES
@@ -1285,7 +1254,6 @@ async fn every_provider_the_host_provides_keeps_the_services_names_whatever_clou
     }
 }
 
-// REQ-GRANT-156, REQ-GRANT-86, REQ-WORKSPACE-18
 #[tokio::test]
 async fn a_provider_an_earlier_release_recorded_as_selected_with_no_token_leaves_its_names_unset() {
     let fixture = SettingUp::running(
@@ -1327,7 +1295,6 @@ async fn a_provider_an_earlier_release_recorded_as_selected_with_no_token_leaves
     );
 }
 
-// REQ-GRANT-156, REQ-GRANT-51
 #[tokio::test]
 async fn an_agent_step_starts_with_a_grant_name_unset() {
     // The names the Codex fixture reads, and the GitLab grant's.
@@ -1361,7 +1328,6 @@ async fn an_agent_step_starts_with_a_grant_name_unset() {
     assert!(fixture.temporary.path().join("codex.calls").exists());
 }
 
-// REQ-GRANT-89, INV-RUNNER-28
 #[tokio::test]
 async fn a_running_assignment_has_its_token_file_replaced_and_an_ended_one_does_not() {
     let wait = Duration::from_secs(60);
@@ -1410,7 +1376,7 @@ async fn a_running_assignment_has_its_token_file_replaced_and_an_ended_one_does_
     );
 
     // An assignment that has ended asks nothing when its wait passes, even
-    // while the worker that admitted it is still ending (INV-RUNNER-28).
+    // while the worker that admitted it is still ending.
     let fixture = SettingUp::running(&workflow, FakeAgentLoginCloud::new(Ok(Vec::new())));
     let mut sleeps = fixture.refreshing();
     let (sleeper, teardown) = preparation_teardown_holding_sleeper();
@@ -1462,7 +1428,7 @@ async fn a_running_assignment_has_its_token_file_replaced_and_an_ended_one_does_
     );
 }
 
-// REQ-GRANT-89, SC-GRANT-13
+// SC-GRANT-13
 #[tokio::test]
 async fn a_running_assignment_has_its_configured_providers_token_file_replaced() {
     let wait = Duration::from_secs(60);
@@ -1527,6 +1493,7 @@ fn reported(
         provider,
         source,
         grant_id: grant_id.map(str::to_owned),
+        connection_authorization_id: None,
         agent_login_id: agent_login_id.map(str::to_owned),
     }
 }
@@ -1583,8 +1550,17 @@ async fn admission_reports(
         .into_iter()
         .chain(service.iter().copied())
         .collect();
+    admission_reports_serving(cloud, &service).await
+}
+
+/// `admission_reports` for a service whose environment carries `service`
+/// alone.
+async fn admission_reports_serving(
+    cloud: Arc<FakeAgentLoginCloud>,
+    service: &[(&str, &str)],
+) -> (Vec<CredentialSourcesRequest>, String) {
     let fixture =
-        SettingUp::running_serving(&workflow_checking("OTHER_NAME", "true"), cloud, &service);
+        SettingUp::running_serving(&workflow_checking("OTHER_NAME", "true"), cloud, service);
     assert!(matches!(
         fixture.periodic_pass().await,
         SetupOutcome::Recorded(_)
@@ -1600,7 +1576,6 @@ async fn admission_reports(
     )
 }
 
-// REQ-GRANT-93, REQ-GRANT-92
 #[tokio::test]
 async fn an_admission_reports_each_providers_source_once_before_it_is_accepted() {
     // The host provides GitHub, Cloud issues a Linear token, and the runner
@@ -1617,6 +1592,38 @@ async fn an_admission_reports_each_providers_source_once_before_it_is_accepted()
             boot_id: SETTING_UP_BOOT.to_owned(),
             assignment_id,
             sources: reported_five(),
+            token_services: Vec::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn an_admission_reports_githubs_org_connection_by_the_authorization_its_token_was_issued_under()
+ {
+    // The host does not provide GitHub, and Cloud issues its token under a
+    // connection authorization.
+    let cloud = cloud_issuing_linear_and_claude_code();
+    cloud.answer_grant_token(
+        AgentLoginProvider::Github,
+        FakeGrantToken::IssueFrom(FAKE_CONNECTION_AUTHORIZATION_ID, 1),
+    );
+
+    let (reports, assignment_id) = admission_reports_serving(cloud, &[]).await;
+
+    let mut sources = reported_five();
+    sources[1] = ReportedSource {
+        provider: AgentLoginProvider::Github,
+        source: CredentialSource::OrgConnection,
+        grant_id: None,
+        connection_authorization_id: Some(FAKE_CONNECTION_AUTHORIZATION_ID.to_owned()),
+        agent_login_id: None,
+    };
+    assert_eq!(
+        reports,
+        [CredentialSourcesRequest {
+            boot_id: SETTING_UP_BOOT.to_owned(),
+            assignment_id,
+            sources,
             token_services: Vec::new(),
         }]
     );
@@ -1650,7 +1657,6 @@ fn mergify() -> GrantProvider {
 /// Buildkite's token and not Mergify's.
 const SERVICE_BUILDKITE: [(&str, &str); 1] = [("BUILDKITE_API_TOKEN", "service-buildkite-token")];
 
-// REQ-INTEGRATION-49, REQ-GRANT-93
 #[tokio::test]
 async fn an_admissions_one_report_names_each_listed_token_service_with_a_source_after_the_five() {
     // Cloud lists both token services and issues Mergify's token from an
@@ -1683,7 +1689,6 @@ async fn an_admissions_one_report_names_each_listed_token_service_with_a_source_
     );
 }
 
-// REQ-INTEGRATION-49, REQ-COMPAT-17
 #[tokio::test]
 async fn a_report_names_no_token_service_cloud_did_not_list_or_the_runner_has_no_source_of() {
     // A Cloud without the token-service list: the report is today's,
@@ -1721,7 +1726,6 @@ async fn a_report_names_no_token_service_cloud_did_not_list_or_the_runner_has_no
     );
 }
 
-// REQ-GRANT-93
 #[tokio::test]
 async fn an_admission_whose_report_cloud_does_not_take_is_accepted_and_runs_all_the_same() {
     for answer in [
@@ -1755,7 +1759,6 @@ async fn an_admission_whose_report_cloud_does_not_take_is_accepted_and_runs_all_
     }
 }
 
-// REQ-GRANT-93
 #[tokio::test]
 #[expect(
     clippy::await_holding_lock,

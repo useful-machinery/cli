@@ -71,7 +71,7 @@ impl CausalLease {
     /// the same request once more only when `retry_interval` has passed since the last one
     /// and Cloud has acknowledged it (its observation has left the outbox); otherwise it
     /// changes nothing. A repeat never moves the basis, and one the outbox refuses is not a
-    /// failure: the earlier request may still be answered (INV-LIFECYCLE-22).
+    /// failure: the earlier request may still be answered.
     pub(in crate::service) fn request_renewal(
         &self,
         current_sequence: u64,
@@ -122,7 +122,7 @@ impl CausalLease {
     /// Asks Cloud again, without waiting for any retry interval, for lease
     /// `current_sequence + 1` when it has been requested and Cloud has acknowledged the last
     /// request (its observation has left the outbox); otherwise it changes nothing. It never
-    /// makes a first request and never moves the basis (INV-RUNNER-48).
+    /// makes a first request and never moves the basis.
     pub(super) fn repeat_renewal_request(
         &self,
         current_sequence: u64,
@@ -189,7 +189,6 @@ impl CausalLease {
 mod tests {
     use super::*;
 
-    // REQ-RUNNERENROLL-156
     #[tokio::test]
     async fn deadline_counts_gateway_acknowledgement_and_ignores_outbox_fencing() {
         let (_temporary, mut manager, offer, _) =

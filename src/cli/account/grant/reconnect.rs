@@ -1,10 +1,10 @@
 //! `useful account integration reconnect INTEGRATION`: signs in again to a grant the member holds,
-//! which keeps its ID and the runners it is authorized for (REQ-GRANT-73), or stores the next
-//! version of the member's token of a token service, which keeps its ID and authorizations too
-//! (REQ-INTEGRATION-18). Naming the grant or the token is the decision, so it asks nothing. A
-//! coding agent's login is read or signed in to as `create` does and stored as the grant's next
-//! generation; an OAuth grant's provider is consented to, and the account the member consents as
-//! decides which grant the consent renews (REQ-GRANT-2); a token is read as `connect` reads one.
+//! which keeps its ID and the runners it is authorized for, or stores the next version of the
+//! member's token of a token service, which keeps its ID and authorizations too. Naming the grant
+//! or the token is the decision, so it asks nothing. A coding agent's login is read or signed in
+//! to as `create` does and stored as the grant's next generation; an OAuth grant's provider is
+//! consented to, and the account the member consents as decides which grant the consent renews; a
+//! token is read as `connect` reads one.
 
 use std::path::PathBuf;
 
@@ -71,10 +71,10 @@ pub(super) struct Command {
 
 impl Command {
     /// Reads the file or stream a source option names, before any request, so that an insecurely
-    /// held or malformed one is refused with exit 2 (INV-CLI-13), where the name can name a
-    /// coding agent's grant; then reads the grant or token, refuses an option that does not suit
-    /// it with exit 2 before any sign-in or token read, and signs in to it again (REQ-GRANT-73)
-    /// or stores the token's next version (REQ-INTEGRATION-18).
+    /// held or malformed one is refused with exit 2, where the name can name a coding agent's
+    /// grant; then reads the grant or token, refuses an option that does not suit it with exit 2
+    /// before any sign-in or token read, and signs in to it again or stores the token's next
+    /// version.
     pub(super) fn run(self, deployment: &Deployment) -> CommandResult {
         // A provider name that is no coding agent's names an OAuth grant, which takes no source,
         // or a token, whose `--from-file` is read as a token once it is found.
@@ -224,10 +224,10 @@ impl Command {
         }
     }
 
-    /// Stores the next version of the member's `token` of `service` (REQ-INTEGRATION-18): the
-    /// options of a sign-in are refused with exit 2, then the token is read from `--from-file`,
-    /// standard input or a prompt that does not echo, as `connect` reads one, and stored as the
-    /// next version, which keeps the record's ID and its authorizations.
+    /// Stores the next version of the member's `token` of `service`: the options of a sign-in
+    /// are refused with exit 2, then the token is read from `--from-file`, standard input or a
+    /// prompt that does not echo, as `connect` reads one, and stored as the next version, which
+    /// keeps the record's ID and its authorizations.
     fn replace_token(
         &self,
         deployment: &Deployment,
@@ -265,10 +265,10 @@ impl Command {
         .store(true, |failure| output::token_report(api_url, failure, name))
     }
 
-    /// Runs the consent of the OAuth grant's provider (REQ-GRANT-69), titled as `create` titles
-    /// it. When the consent made a grant other than the one named, it was given as another
-    /// account: the named grant is as it was, which is reported, naming the grant made, with
-    /// exit 1 (REQ-GRANT-73, REQ-GRANT-2). With `--no-wait` it ends once the consent started.
+    /// Runs the consent of the OAuth grant's provider, titled as `create` titles it. When the
+    /// consent made a grant other than the one named, it was given as another account: the
+    /// named grant is as it was, which is reported, naming the grant made, with exit 1. With
+    /// `--no-wait` it ends once the consent started.
     fn reconsent(&self, deployment: &Deployment, grant: &MemberGrant) -> CommandResult {
         let name = grant.provider.as_str();
         Self::refuse_unsuited(
@@ -317,9 +317,8 @@ impl Command {
     }
 
     /// Stores a coding agent's login as the native grant's next generation, in the grant's own
-    /// organization (REQ-GRANT-73): the login `read` from the file or stream named, or the coding
-    /// agent's own sign-in, run once the checks `create` makes before one pass (REQ-GRANT-70,
-    /// REQ-GRANT-71, REQ-GRANT-75).
+    /// organization: the login `read` from the file or stream named, or the coding agent's own
+    /// sign-in, run once the checks `create` makes before one pass.
     fn renew(
         &self,
         deployment: &Deployment,
@@ -380,8 +379,8 @@ impl Command {
             Some(material) => Login::Read(material),
             None => flow.sign_in_of(provider),
         };
-        // A Claude Code sign-in the member could not answer is refused before it starts
-        // (REQ-GRANT-71).
+        // A Claude Code sign-in the member could not answer is refused before it
+        // starts.
         if matches!(login, Login::ClaudeCode)
             && let Some(failure) = claude_setup_token::unanswerable()
         {

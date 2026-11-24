@@ -46,6 +46,7 @@ struct AdmittedExecutionRootInner {
     provenance_path: PathBuf,
     directory: OwnedFd,
     identity: DirectoryIdentity,
+    rebound_failure: WorkingDirectorySelectionFailure,
     prelaunch_boundary: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
@@ -70,6 +71,35 @@ impl AdmittedExecutionRoot {
                 ExecutionRootAdmissionFailure::Unavailable
             }
         })?;
+        Self::from_directory(
+            provenance_path,
+            directory,
+            WorkingDirectorySelectionFailure::ExecutionRootRebound,
+        )
+    }
+
+    /// Admit the directory opened relative to the run handle only while its named path
+    /// identifies that same directory. Agents need the path and commands use the descriptor.
+    pub(super) fn admit_workspace(
+        path: PathBuf,
+        directory: OwnedFd,
+    ) -> Result<Self, ExecutionRootAdmissionFailure> {
+        let root = Self::from_directory(
+            path,
+            directory,
+            WorkingDirectorySelectionFailure::Unavailable,
+        )?;
+        if !root.pathname_is_bound() {
+            return Err(ExecutionRootAdmissionFailure::Unavailable);
+        }
+        Ok(root)
+    }
+
+    fn from_directory(
+        provenance_path: PathBuf,
+        directory: OwnedFd,
+        rebound_failure: WorkingDirectorySelectionFailure,
+    ) -> Result<Self, ExecutionRootAdmissionFailure> {
         let identity = directory_identity(&directory)
             .map_err(|_| ExecutionRootAdmissionFailure::Unavailable)?;
         Ok(Self {
@@ -77,6 +107,7 @@ impl AdmittedExecutionRoot {
                 provenance_path,
                 directory,
                 identity,
+                rebound_failure,
                 prelaunch_boundary: Mutex::new(None),
             }),
         })
@@ -105,7 +136,7 @@ impl AdmittedExecutionRoot {
         command: &mut Command,
     ) -> Result<(), WorkingDirectorySelectionFailure> {
         if !self.pathname_is_bound() {
-            return Err(WorkingDirectorySelectionFailure::ExecutionRootRebound);
+            return Err(self.inner.rebound_failure);
         }
         let directory = dup(&self.inner.directory)
             .map_err(|_| WorkingDirectorySelectionFailure::Unavailable)?;
@@ -118,7 +149,7 @@ impl AdmittedExecutionRoot {
         declared_cwd: Option<&str>,
     ) -> Result<AdmittedWorkingDirectory, WorkingDirectorySelectionFailure> {
         if !self.pathname_is_bound() {
-            return Err(WorkingDirectorySelectionFailure::ExecutionRootRebound);
+            return Err(self.inner.rebound_failure);
         }
         let working_directory_path = declared_cwd.map_or_else(
             || self.inner.provenance_path.clone(),
@@ -206,13 +237,17 @@ impl AdmittedWorkingDirectory {
         &self.provenance_path
     }
 
+    pub(super) fn rebound_failure(&self) -> WorkingDirectorySelectionFailure {
+        self.execution_root.inner.rebound_failure
+    }
+
     pub(super) fn validate_execution_root(&self) -> bool {
         self.execution_root.pathname_is_bound()
     }
 
     pub(super) fn protocol_path(&self) -> Result<PathBuf, WorkingDirectorySelectionFailure> {
         if !self.validate_execution_root() {
-            return Err(WorkingDirectorySelectionFailure::ExecutionRootRebound);
+            return Err(self.rebound_failure());
         }
         let path = fs::canonicalize(&self.provenance_path)
             .map_err(|_| WorkingDirectorySelectionFailure::Unavailable)?;
@@ -255,7 +290,7 @@ impl AdmittedWorkingDirectory {
         command: &mut Command,
     ) -> Result<(), WorkingDirectorySelectionFailure> {
         if !self.validate_execution_root() {
-            return Err(WorkingDirectorySelectionFailure::ExecutionRootRebound);
+            return Err(self.rebound_failure());
         }
         let directory =
             dup(&self.directory).map_err(|_| WorkingDirectorySelectionFailure::Unavailable)?;

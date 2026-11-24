@@ -106,13 +106,13 @@ pub(super) enum ExecutionLeaf {
     Retry,
     Resume,
     /// `upgrade --from`: a successor's first own attempt, a continuation whose reason is
-    /// `restart` (REQ-LOCALRUN-194, REQ-CONTINUE-79).
+    /// `restart`.
     Restart,
-    /// A successor carrying its predecessor's wait, which starts no attempt
-    /// (REQ-LOCALRUN-197): it names the command on the refusals before the successor exists.
+    /// A successor carrying its predecessor's wait, which starts no attempt: it names the
+    /// command on the refusals before the successor exists.
     Upgrade,
-    /// `answer`, `approve` or `hand-back` continuing the run whose wait it resolved
-    /// (REQ-LOCALRUN-182, REQ-LOCALRUN-183).
+    /// `answer`, `approve` or `hand-back` continuing the run whose wait it
+    /// resolved.
     Control(ContinuingControl),
 }
 
@@ -133,9 +133,8 @@ impl ExecutionLeaf {
     }
 }
 
-// `--execution-root` is a local run's, the working directory when omitted (REQ-LOCALRUN-76).
-// An option of one place beside `--on` naming the other is refused by the leaf, before anything
-// is read (REQ-LOCALRUN-80).
+// `--execution-root` is a local run's, the working directory when omitted. An option of one
+// place beside `--on` naming the other is refused by the leaf, before anything is read.
 #[derive(Debug, Args)]
 #[command(mut_arg("execution_root", |arg| arg.required(false)))]
 pub(super) struct Command {
@@ -256,9 +255,8 @@ impl Command {
                  {flag} is an option of a Cloud run; drop it or name where the run executes."
             ));
         }
-        // `--on local` reads the definition under the home alone, by ID or by name
-        // (REQ-LOCALRUN-76, REQ-CLOUDDEF-42); an ID the home lacks is refused at phase
-        // `definition` as before (REQ-LOCALRUN-173).
+        // `--on local` reads the definition under the home alone, by ID or by name; an
+        // ID the home lacks is refused at phase `definition` as before.
         if let Some(named @ Named::Name(_)) = &self.definition {
             match target::home_only(named, definition_leaf(self.presentation.output.json)) {
                 Ok(definition) => self.definition = Some(Named::Id(definition.record.id)),
@@ -268,8 +266,8 @@ impl Command {
         execute_with_runtime("start local workflow runtime", self.execute_async())
     }
 
-    /// The first option of a local run given, by its flag, which a Cloud place refuses
-    /// (REQ-LOCALRUN-80).
+    /// The first option of a local run given, by its flag, which a Cloud place
+    /// refuses.
     fn local_option(&self) -> Option<&'static str> {
         [
             (self.path.is_some(), "--path"),
@@ -286,7 +284,7 @@ impl Command {
     }
 
     async fn execute_async(mut self) -> super::super::super::CommandResult {
-        // The working directory when omitted (REQ-LOCALRUN-76).
+        // The working directory when omitted.
         let execution_root = match self.execution.take() {
             Some(super::LocalExecutionRoot { execution_root }) => execution_root,
             None => std::env::current_dir().context("read the working directory")?,
@@ -301,7 +299,7 @@ impl Command {
                 root,
                 run_directory,
             },
-            // The argument rules admit exactly the two forms (REQ-LOCALRUN-80).
+            // The argument rules admit exactly the two forms.
             _ => {
                 return Err(super::super::super::CommandFailure::with_exit_code(
                     anyhow!("name a definition, or --path DIR"),
@@ -346,8 +344,8 @@ impl Command {
                         (Some(run_directory), _) => {
                             (root, tree, RunDestination::Path(run_directory))
                         }
-                        // REQ-LOCALRUN-174: a tree's run is recorded under the home; a
-                        // directory that is not a tree has no run record to name it there.
+                        // A tree's run is recorded under the home; a directory that is not
+                        // a tree has no run record to name it there.
                         (None, Some(_)) => match WorkflowHome::from_environment() {
                             Ok(home) => (root, tree, RunDestination::Home(home)),
                             Err(error) => {
@@ -440,9 +438,8 @@ impl Command {
                 output.render_workflow_not_in_tree(&workflow.source.workflow_path)
             });
         }
-        // REQ-LOCALRUN-80, REQ-LOCALRUN-185: the stop names a step of the selected workflow,
-        // or a `workflow` step of a nested workflow it names (REQ-WFEXEC-76), of a run that
-        // records itself, before the run directory exists.
+        // The stop names a step of the selected workflow, or a `workflow` step of a nested
+        // workflow it names, of a run that records itself, before the run directory exists.
         if let Some(step) = &self.pause_before {
             let holdable = super::control::holdable_step_ids(&workflow);
             if !workflow.definition.steps.contains_key(step) && !holdable.contains(step) {
@@ -459,9 +456,8 @@ impl Command {
                     ExitCode::UsageError,
                 ));
             }
-            // REQ-LOCALRUN-185, REQ-RUNNERENROLL-192: a step the engine does not hold before is
-            // refused with a rejection document rather than a usage error, so a runner that
-            // created the run names the refusal.
+            // A step the engine does not hold before is refused with a rejection document
+            // rather than a usage error, so a runner that created the run names the refusal.
             if !holdable.contains(step) {
                 let refusal = super::control::step_not_holdable();
                 let (definition, revision) = destination.definition().unzip();
@@ -475,7 +471,7 @@ impl Command {
                 });
             }
         }
-        // REQ-LOCALRUN-209: the owner and external references land in the run record.
+        // The owner and external references land in the run record.
         if tree.is_none() && (self.owner.is_some() || !external.is_empty()) {
             return Err(super::super::super::CommandFailure::with_exit_code(
                 anyhow!(
@@ -511,8 +507,8 @@ impl Command {
             Some(tree) => context.with_tree(tree),
             None => context,
         };
-        // REQ-LOCALRUN-217: the revision's variables; the manifest records it for every later
-        // admission of the run and its child runs.
+        // The revision's variables; the manifest records it for every later admission of the
+        // run and its child runs.
         let context = match source_revision {
             Some(source_revision) => context.with_source_revision(source_revision),
             None => context,
@@ -543,9 +539,9 @@ impl Command {
             )
             .into());
         }
-        // REQ-LOCALRUN-173, REQ-LOCALRUN-175: a tree run's subject is the resolved value of
-        // the input its file names as `subject`; a value outside the subject form, or a slot
-        // another run of the definition holds, is refused before the run directory exists.
+        // A tree run's subject is the resolved value of the input its file names as
+        // `subject`; a value outside the subject form, or a slot another run of the
+        // definition holds, is refused before the run directory exists.
         let subject = tree_digest
             .as_ref()
             .and_then(|_| run_subject(&workflow, &admitted));
@@ -555,8 +551,8 @@ impl Command {
             return subject_rejection(presentation_config, destination.definition(), error);
         }
         write_untested_advisories(&untested_advisories);
-        // REQ-LOCALRUN-175, REQ-LOCALRUN-209: a run admitted from a tree records itself in
-        // `run.json`, owned by `--owner` or the login name.
+        // A run admitted from a tree records itself in `run.json`, owned by `--owner` or
+        // the login name.
         let record = tree_digest.map(|digest| {
             let mut record = WorkflowRunRecord::new(
                 destination.definition(),
@@ -590,7 +586,7 @@ impl Command {
                 .await
                 .map_err(|error| CreationFailure::Other(anyhow::Error::new(error)))
                 .and_then(|result| result);
-        // REQ-LOCALRUN-135: a signal reads the created run's control journal.
+        // A signal reads the created run's control journal.
         let (owned_run, _journal) = match created {
             Ok(created) => created,
             Err(CreationFailure::Subject(error)) => {
@@ -607,8 +603,8 @@ impl Command {
             }
         };
         let admitted = bind_tree_copy(admitted, &owned_run.tree_copy_directory())?;
-        // REQ-LOCALRUN-191: the created run's `onStart`, once its record and directory exist;
-        // a resumed or retried attempt never writes it.
+        // The created run's `onStart`, once its record and directory exist; a resumed or
+        // retried attempt never writes it.
         if let Some(record) = &started_record {
             let mirror = super::mirror::run_mirror(
                 record,
@@ -667,9 +663,8 @@ impl Command {
     }
 }
 
-/// What `run create` runs: a definition's current revision under the home
-/// (REQ-LOCALRUN-173) or a directory with no definition, in `--run-dir` when given
-/// (REQ-LOCALRUN-174).
+/// What `run create` runs: a definition's current revision under the home or a
+/// directory with no definition, in `--run-dir` when given.
 enum RunSubject {
     Definition(String),
     Path {
@@ -682,8 +677,7 @@ enum RunSubject {
 /// given none, or `workflows/<id>/runs/<run id>/` under the home for a definition run.
 enum RunDestination {
     Path(PathBuf),
-    /// A `--path` tree's run with no `--run-dir`, which takes no subject claim
-    /// (REQ-LOCALRUN-174).
+    /// A `--path` tree's run with no `--run-dir`, which takes no subject claim.
     Home(WorkflowHome),
     Definition {
         home: WorkflowHome,
@@ -715,7 +709,7 @@ impl RunDestination {
     }
 
     /// Refuses `subject` when it is outside the subject form or, for a definition run, when
-    /// the definition's slot for it is held (REQ-WFDEF-28), read without the index's lock.
+    /// the definition's slot for it is held, read without the index's lock.
     fn refuse_subject(&self, subject: &str) -> Result<(), SubjectError> {
         match self {
             Self::Path(_) | Self::Home(_) if is_subject(subject) => Ok(()),
@@ -726,7 +720,7 @@ impl RunDestination {
 
     /// Takes the definition's claim on the slot for `subject`, holding the index's lock until
     /// the claim drops and writing nothing until the claim names a run; a `--path` run takes
-    /// no claim (REQ-LOCALRUN-173).
+    /// no claim.
     fn take_subject_slot(&self, subject: &str) -> Result<Option<SubjectClaim>, SubjectError> {
         match self {
             Self::Path(_) | Self::Home(_) => Ok(None),
@@ -766,12 +760,12 @@ struct RunCreation {
 
 impl RunCreation {
     /// Creates the run directory, holding the subject's claim under the index's lock and
-    /// writing the slot only after the directory exists, and returns the run with its
-    /// control journal watched in `journals`. A signal `cancellation` holds before the claim
-    /// is taken or the directory is created refuses the creation, so no run exists and no
-    /// slot is written. `journals` watches the run directory from before the first of those
-    /// checks, so a signal that arrives after the last one, while the directory is made, is
-    /// an interruption: the run it could not refuse never ends `canceled` (REQ-LOCALRUN-135).
+    /// writing the slot only after the directory exists, and returns the run with its control
+    /// journal watched in `journals`. A signal `cancellation` holds before the claim is taken
+    /// or the directory is created refuses the creation, so no run exists and no slot is
+    /// written. `journals` watches the run directory from before the first of those checks,
+    /// so a signal that arrives after the last one, while the directory is made, is an
+    /// interruption: the run it could not refuse never ends `canceled`.
     fn create(
         self,
         cancellation: &CancellationSource,
@@ -796,17 +790,16 @@ impl RunCreation {
         };
         refuse_when_signalled()?;
         destination.prepare().map_err(CreationFailure::Other)?;
-        // REQ-WFDEF-28: the claim is taken under the index's lock, held until the run
-        // directory exists and the slot names it, so of two creates for one subject one is
-        // refused.
+        // The claim is taken under the index's lock, held until the run directory exists
+        // and the slot names it, so of two creates for one subject one is refused.
         let claim = match (&subject, &record) {
             (Some(subject), Some(_)) => destination
                 .take_subject_slot(subject)
                 .map_err(CreationFailure::Subject)?,
             _ => None,
         };
-        // A refusal here drops the claim before it names a run, so no slot is written
-        // (REQ-LOCALRUN-135, REQ-WFDEF-28).
+        // A refusal here drops the claim before it names a run, so no slot is
+        // written.
         refuse_when_signalled()?;
         let owned_run =
             InitialLocalRun::create_with_record(&run_directory, &admitted, record.as_ref())
@@ -821,7 +814,7 @@ impl RunCreation {
             })?;
         }
         drop(claim);
-        // REQ-LOCALRUN-185: the stop is recorded before the first step starts.
+        // The stop is recorded before the first step starts.
         if let (Some(step), Some(record)) = (stop_before, &record) {
             let payload = serde_json::Map::from_iter([(
                 "before".to_owned(),
@@ -846,7 +839,7 @@ impl RunCreation {
 }
 
 /// The failure of a command a signal reached before the directory of the run it would
-/// create existed, `create`'s run or a successor: no run is created (REQ-LOCALRUN-135).
+/// create existed, `create`'s run or a successor: no run is created.
 pub(super) fn signalled_before_creation(
     reason: Option<CancellationReason>,
 ) -> super::super::super::CommandFailure {
@@ -857,7 +850,7 @@ pub(super) fn signalled_before_creation(
 }
 
 /// The failure of a `resume`, `retry` or `upgrade --from` a signal reached before its attempt
-/// began: no attempt began and the run is as it was (REQ-LOCALRUN-135).
+/// began: no attempt began and the run is as it was.
 pub(super) fn signalled_before_attempt(
     reason: Option<CancellationReason>,
 ) -> super::super::super::CommandFailure {
@@ -868,8 +861,8 @@ pub(super) fn signalled_before_attempt(
 }
 
 /// The failure of a command a signal stopped before its run's attempt, by the signal's
-/// `reason` (REQ-WFEXEC-40): 130 for `user_request`, 143 for `termination_request`, and a
-/// general failure for no signal.
+/// `reason`: 130 for `user_request`, 143 for `termination_request`, and a general failure
+/// for no signal.
 fn signalled_failure(
     error: anyhow::Error,
     reason: Option<CancellationReason>,
@@ -887,15 +880,15 @@ fn signalled_failure(
 
 /// Why the run directory of an admitted run was not created.
 enum CreationFailure {
-    /// The subject's slot was refused under the index's lock (REQ-WFDEF-28).
+    /// The subject's slot was refused under the index's lock.
     Subject(SubjectError),
-    /// A signal arrived before the run directory existed (REQ-LOCALRUN-135).
+    /// A signal arrived before the run directory existed.
     Signalled(super::super::super::CommandFailure),
     Other(anyhow::Error),
 }
 
-/// The resolved value of the text input the workflow file names as its `subject`
-/// (REQ-WFFORMAT-100), or `None` when it names none or the input has no value.
+/// The resolved value of the text input the workflow file names as its
+/// `subject`, or `None` when it names none or the input has no value.
 fn run_subject(workflow: &ResolvedWorkflow, admitted: &AdmittedWorkflow) -> Option<String> {
     let name = workflow.definition.subject.as_deref()?;
     match admitted.inputs().get(name)? {
@@ -904,8 +897,8 @@ fn run_subject(workflow: &ResolvedWorkflow, admitted: &AdmittedWorkflow) -> Opti
     }
 }
 
-/// A refusal of the run's subject at phase `definition` (REQ-LOCALRUN-173); a failure to
-/// read or write the index is a command failure.
+/// A refusal of the run's subject at phase `definition`; a failure to read or write the
+/// index is a command failure.
 fn subject_rejection(
     config: PresentationConfig,
     definition: Option<(String, u64)>,
@@ -927,9 +920,8 @@ fn subject_rejection(
     })
 }
 
-/// The definition lookup's leaf (REQ-CLOUDDEF-42): its refusals are `useful workflow run
-/// create`'s, and a failed read of a project's definitions is written as the definition family
-/// writes a failed `list`.
+/// The definition lookup's leaf: its refusals are `useful workflow run create`'s, and a failed
+/// read of a project's definitions is written as the definition family writes a failed `list`.
 const fn definition_leaf(json: bool) -> Leaf {
     Leaf {
         name: "list",
@@ -957,7 +949,7 @@ pub(super) enum DefinitionTreeFailure {
 }
 
 impl DefinitionTreeFailure {
-    /// The refusal at phase `definition` or `tree` (REQ-LOCALRUN-173).
+    /// The refusal at phase `definition` or `tree`.
     pub(super) fn render(
         &self,
         output: WorkflowRunOutput<io::Stdout, io::Stderr>,
@@ -976,7 +968,7 @@ impl From<DefinitionError> for DefinitionTreeFailure {
 }
 
 /// Reads definition `id` and validates the home's copy of its current revision's tree,
-/// enabled or not (REQ-LOCALRUN-173).
+/// enabled or not.
 pub(super) fn definition_tree(id: &str) -> Result<DefinitionTree, DefinitionTreeFailure> {
     let home = WorkflowHome::from_environment()?;
     let definition = read_definition(&home, id)?;
@@ -1014,8 +1006,8 @@ pub(super) fn tree_digest(tree: &ValidatedTree) -> String {
 }
 
 /// The workflow file a run executes, relative to the tree root or `--path` directory:
-/// `--workflow`, or `workflow.yaml`. An absolute or `..`-bearing `--workflow` is refused
-/// before any file is read (REQ-LOCALRUN-80).
+/// `--workflow`, or `workflow.yaml`. An absolute or `.`-bearing `--workflow` is refused
+/// before any file is read.
 fn tree_workflow_file(workflow: Option<&Path>) -> anyhow::Result<PathBuf> {
     let Some(workflow) = workflow else {
         return Ok(PathBuf::from(ROOT_WORKFLOW_FILE));
@@ -1053,7 +1045,7 @@ fn tree_relative_workflow(workflow: Option<&Path>) -> String {
 pub(super) const TREE_COPY_PATH_FAILURE: &str = "prepare local workflow paths: the run directory of a tree run cannot contain ':', since its tree copy's programs lead PATH";
 
 /// A source root with `workflow.yaml` directly under it is a tree, validated before the
-/// selected workflow file resolves (REQ-LOCALRUN-169); any other source root is not.
+/// selected workflow file resolves; any other source root is not.
 fn local_workflow_tree(source_root: &Path) -> Result<Option<ValidatedTree>, Vec<TreeDiagnostic>> {
     if !is_workflow_tree(source_root) {
         return Ok(None);
@@ -1061,8 +1053,8 @@ fn local_workflow_tree(source_root: &Path) -> Result<Option<ValidatedTree>, Vec<
     validate_workflow_tree(source_root).map(Some)
 }
 
-/// Binds the run's tree copy (REQ-WFEXEC-53); a workflow admitted without a tree is
-/// returned unchanged.
+/// Binds the run's tree copy; a workflow admitted without a tree is returned
+/// unchanged.
 pub(super) fn bind_tree_copy(
     admitted: AdmittedWorkflow,
     copy_root: &Path,
@@ -1164,15 +1156,15 @@ impl Drop for AbortOnDrop {
 
 struct AttemptTeardown {
     run: Option<LocalAttemptOwner>,
-    /// The run's controls lock a failed attempt that ends the run takes for its spend
-    /// (REQ-LOCALRUN-211), declared after `run` so it is released after the run lock.
+    /// The run's controls lock a failed attempt that ends the run takes for its
+    /// spend, declared after `run` so it is released after the run lock.
     controls: Option<ControlsLock>,
     /// The run's controls lock an attempt that ended `continued` and chains took before it
     /// released the run lock, which the attempt loop carries until the next attempt's
-    /// acquisition tried the run lock (REQ-LOCALRUN-214, INV-ENGINE-60).
+    /// acquisition tried the run lock.
     bridge: Option<ControlsLock>,
-    /// The outcome the run record takes when the attempt ends without a published result
-    /// (REQ-WFEXEC-57).
+    /// The outcome the run record takes when the attempt ends without a published
+    /// result.
     failure_outcome: String,
     signal_task: Option<SignalObservation>,
     private_staging: Option<useful_execution::AttemptPrivateStaging>,
@@ -1182,11 +1174,11 @@ struct AttemptTeardown {
     host: Option<ActiveRunHost>,
     execution_started: bool,
     armed: bool,
-    /// The edge the attempt ended `continued` on, which the attempt loop continues from
-    /// (REQ-WFEXEC-64).
+    /// The edge the attempt ended `continued` on, which the attempt loop continues
+    /// from.
     continued: Option<useful_execution::TakenEdgeRecord>,
-    /// The root attempt's mirror (REQ-LOCALRUN-191), which writes `onOutcome` for the
-    /// failure outcome too.
+    /// The root attempt's mirror, which writes `onOutcome` for the failure outcome
+    /// too.
     mirror: Option<Arc<Mirror>>,
 }
 
@@ -1275,19 +1267,18 @@ impl AttemptTeardown {
             let mirror = self.mirror.take();
             if let Ok((run, controls)) = blocking_operation(move || {
                 record_private_cleanup_failure(&run, cleanup_failed);
-                // REQ-LOCALRUN-206: an attempt left unsettled leaves the record `running`,
-                // the abandoned attempt a continuation settles, and performs no `onOutcome`.
+                // An attempt left unsettled leaves the record `running`, the abandoned
+                // attempt a continuation settles, and performs no `onOutcome`.
                 if !run.attempt_settled() {
                     return Ok((run, None));
                 }
-                // REQ-LOCALRUN-211: the attempt ends the run, so it spends every withdrawal
-                // recorded before it under the controls lock, kept until the run lock is
-                // released.
+                // The attempt ends the run, so it spends every withdrawal recorded before
+                // it under the controls lock, kept until the run lock is released.
                 let controls = run.lock_controls().ok();
                 let _ = run.spend_withdrawals();
                 let exited =
                     run.update_run_record(RunState::Exited, run.attempt_number(), Some(&outcome));
-                // REQ-LOCALRUN-191: the failure outcome's `onOutcome`, once the record reads it.
+                // The failure outcome's `onOutcome`, once the record reads it.
                 if let (Ok(()), Some(mirror)) = (exited, mirror) {
                     super::mirror::perform(
                         &mirror,
@@ -1354,19 +1345,18 @@ struct AttemptSettings<Hooks> {
     presentation_config: PresentationConfig,
     leaf: ExecutionLeaf,
     hooks: Hooks,
-    /// A child run's attempt (REQ-WFEXEC-59), with the presentation it has in its parent's
-    /// progress stream (REQ-LOCALRUN-200): no presentation and no child runs of its own.
+    /// A child run's attempt, with the presentation it has in its parent's progress
+    /// stream: no presentation and no child runs of its own.
     child: Option<ChildPresentation>,
-    /// The child run an abandoned parent's continuation adopts or retries in place
-    /// (REQ-CONTINUE-112), or the child an independent repair completed that a repair retry
-    /// adopts (REQ-CONTINUE-107).
+    /// The child run an abandoned parent's continuation adopts or retries in place, or the
+    /// child an independent repair completed that a repair retry adopts.
     child_recovery: Option<ChildRecovery>,
     /// The control journals the command's signal observer reads, which the attempt's run
-    /// directory and its children's join while they run (REQ-LOCALRUN-135).
+    /// directory and its children's join while they run.
     journals: ControlJournals,
-    /// For a child attempt, the root run its run belongs to and the path from the root to it
-    /// (INV-ENGINE-61), which a nested run's dispatcher carries (REQ-WFEXEC-74); `None` for a
-    /// root's own attempt, which is its own root.
+    /// For a child attempt, the root run its run belongs to and the path from the root to it,
+    /// which a nested run's dispatcher carries; `None` for a root's own attempt, which is its
+    /// own root.
     root: Option<RunRoot>,
 }
 
@@ -1431,8 +1421,8 @@ pub(super) async fn execute_owned_attempt(
 }
 
 /// `execute_owned_attempt` for a continuation whose `child_recovery` names the child run
-/// the abandoned attempt left behind (REQ-CONTINUE-112) or the child an independent repair
-/// completed, which a repair retry adopts (REQ-CONTINUE-107).
+/// the abandoned attempt left behind or the child an independent repair completed, which a
+/// repair retry adopts.
 pub(super) async fn execute_recovering_attempt(
     workflow: ResolvedWorkflow,
     admitted: AdmittedWorkflow,
@@ -1464,8 +1454,7 @@ pub(super) async fn execute_recovering_attempt(
 
 /// Executes the owned attempt and, when it ends `continued`, continues the run from the edge's
 /// target once its lock is released, so `create`, `retry` and `resume` all chain the attempts
-/// a backward or limited edge starts (REQ-WFEXEC-64); the last attempt's result is the
-/// command's.
+/// a backward or limited edge starts; the last attempt's result is the command's.
 async fn execute_owned_attempt_with(
     workflow: ResolvedWorkflow,
     admitted: AdmittedWorkflow,
@@ -1504,8 +1493,8 @@ async fn execute_owned_attempt_with(
     }
     let result = result.unwrap_or_else(|error| Err(error.into()));
     match (attempt.continued.take(), &result) {
-        // REQ-LOCALRUN-135: an interruption holds back the next attempt, leaving the run
-        // `running` for `useful workflow run resume` (REQ-CONTINUE-78).
+        // An interruption holds back the next attempt, leaving the run `running` for
+        // `useful workflow run resume`.
         (Some(edge), Ok(ExitCode::Success))
             if !admitted
                 .execution()
@@ -1535,11 +1524,11 @@ async fn execute_owned_attempt_with(
     }
 }
 
-/// REQ-LOCALRUN-143, INV-ENGINE-55: a failed state commit as the command reports it. Its
-/// diagnostic line reads the commit port's own error, which names the write, the file and
-/// the operating system's message, or, when the port kept none, the failure's write and
-/// error number; the class follows as a field and the remedy that resumes the run is last.
-/// It has no source, so the shared renderer prints nothing after the remedy.
+/// A failed state commit as the command reports it. Its diagnostic line reads the commit
+/// port's own error, which names the write, the file and the operating system's message,
+/// or, when the port kept none, the failure's write and error number; the class follows as
+/// a field and the remedy that resumes the run is last. It has no source, so the shared
+/// renderer prints nothing after the remedy.
 #[derive(Debug)]
 struct StateCommitFailed {
     failure: CommitFailure,
@@ -1598,8 +1587,8 @@ async fn execute_attempt_phases(
             anyhow!("prepare local workflow paths: an authoritative path is not valid UTF-8")
         })?
         .to_owned();
-    // REQ-LOCALRUN-175: the run record names this attempt while it is live. A created
-    // run's record already does; an attempt it chained into does not (REQ-WFEXEC-64).
+    // The run record names this attempt while it is live. A created run's record
+    // already does; an attempt it chained into does not.
     let attempt_number = attempt.run()?.attempt_number();
     if leaf != ExecutionLeaf::Run || attempt_number > 1 {
         let owned_run = attempt
@@ -1621,7 +1610,7 @@ async fn execute_attempt_phases(
         attempt.run = Some(owned_run);
         recorded.context("record the live local workflow attempt")?;
     }
-    // REQ-LOCALRUN-191, INV-ENGINE-25: a root attempt's mirror; a child attempt mirrors nothing.
+    // A root attempt's mirror; a child attempt mirrors nothing.
     if !quiet {
         let run = attempt.run()?;
         attempt.mirror = run
@@ -1637,6 +1626,10 @@ async fn execute_attempt_phases(
             })
             .map(Arc::new);
     }
+    let admitted = admitted
+        .clone()
+        .with_step_workspaces(attempt.run()?.step_workspaces())
+        .context("bind the run directory for step workspaces")?;
     let result_directory = attempt.run()?.result_directory().to_owned();
     let private_directory = attempt.run()?.private_directory().to_owned();
     let result_parent = rustix::io::dup(attempt.run()?.attempt_directory_handle())?;
@@ -1675,8 +1668,8 @@ async fn execute_attempt_phases(
     attempt.agents = agent_staging.clone();
     hooks.checkpoint(AttemptCheckpoint::BeforeHostStart)?;
 
-    // REQ-LOCALRUN-200: a nested run's stages present through the scope the nested run has
-    // in its root's progress stream.
+    // A nested run's stages present through the scope the nested run has in its root's
+    // progress stream.
     let nested_presentation = match &child {
         Some(ChildPresentation::Forwarding(presentation)) => Some(presentation.clone()),
         _ => None,
@@ -1804,8 +1797,8 @@ async fn execute_attempt_phases(
         .map_err(anyhow::Error::new)
         .context("load retained workflow values")?;
     let (run_id, attempt_id) = attempt.run()?.finalization_identity()?;
-    // INV-ENGINE-46: a runner names the disk a tree run's attempts hold their steps by; a
-    // child attempt reads the same process environment.
+    // A runner names the disk a tree run's attempts hold their steps by; a child attempt
+    // reads the same process environment.
     let disk_gate = env::var_os(RUNNER_DISK_GATE_ENVIRONMENT)
         .map(|value| {
             RunnerDiskGate::from_environment_value(&value)
@@ -1822,19 +1815,18 @@ async fn execute_attempt_phases(
         attempt
             .run()?
             .commit_port(diagnostics.clone(), accounting, artifacts.clone());
-    // REQ-LOCALRUN-143: the text of the port's failed commit outlives the engine's port.
+    // The text of the port's failed commit outlives the engine's port.
     let commit_failure_text = commit_port.failure_text();
-    // REQ-WFEXEC-74: a nested run, a child attempt whose workflow has `workflow` steps, runs
-    // its stages through a dispatcher of its own under the root it belongs to.
+    // A nested run, a child attempt whose workflow has `workflow` steps, runs its stages
+    // through a dispatcher of its own under the root it belongs to.
     let dispatcher = if !has_workflow_steps(workflow) {
         None
     } else {
-        // REQ-WFEXEC-63, REQ-CONTINUE-104: the values the resolved waits leave this attempt; a
-        // nested run has no controls of its own and reads the root's (REQ-WFEXEC-111,
-        // INV-ENGINE-40).
+        // The values the resolved waits leave this attempt; a nested run has no controls of
+        // its own and reads the root's.
         let run_directory = attempt.run()?.run_directory().to_owned();
         // The attempt's own continuation reason; `state.json` already records it, and a
-        // nested run's equals its root's for a carried host wait (REQ-CONTINUE-92).
+        // nested run's equals its root's for a carried host wait.
         let reason = attempt
             .run()?
             .continuation_record()
@@ -1863,29 +1855,27 @@ async fn execute_attempt_phases(
         })
         .context("read the run's controls")?;
         let (mut context, replacement) = (controls.controls, controls.replacement);
-        // REQ-WFEXEC-96: an abandoned fan-out resumes at the element of the child it left,
-        // and a repair retry at the element of the repaired child it adopts (REQ-CONTINUE-107).
+        // An abandoned fan-out resumes at the element of the child it left, and a repair retry
+        // at the element of the repaired child it adopts.
         if let Some((step, Some(item))) = child_recovery.as_ref().map(ChildRecovery::target) {
             context.resume_item = Some((step.to_owned(), item));
         }
         Some((
             LocalChildRunDispatcher::new(
                 attempt.run()?,
-                admitted,
+                &admitted,
                 replacement,
                 (child_recovery, root),
                 journals.clone(),
-                // REQ-LOCALRUN-200: a child's steps reach the root's progress stream, a nested
-                // run's stage's under the nested run's path; the terminal interface shows none
-                // of them.
+                // A child's steps reach the root's progress stream, a nested run's stage's
+                // under the nested run's path; the terminal interface shows none of them.
                 match (attempt.host.as_ref(), nested_presentation) {
                     (Some(ActiveRunHost::Standard(presentation)), _) => {
                         Some(ParentPresentation::Root(presentation.clone()))
                     }
                     (_, nested) => nested.map(ParentPresentation::Nested),
                 },
-                // REQ-LOCALRUN-207: a child's failed state commit refuses this attempt's
-                // later commits.
+                // A child's failed state commit refuses this attempt's later commits.
                 commit_port.child_failure_latch(),
             )?,
             context,
@@ -1922,8 +1912,8 @@ async fn execute_attempt_phases(
     let execution = match execution {
         Ok(execution) => execution,
         Err(error) => {
-            // REQ-LOCALRUN-143, REQ-LOCALRUN-205: a failed state commit is recorded, best
-            // effort, and settles nothing; the error prints it and downcasts to it.
+            // A failed state commit is recorded, best effort, and settles nothing; the
+            // error prints it and downcasts to it.
             if let CoordinationError::CommitFailed(failure) = error {
                 let _ = attempt
                     .run()?
@@ -1942,13 +1932,12 @@ async fn execute_attempt_phases(
     let observed_timing = observer.snapshot();
     let run_timing = observed_run_timing(&observed_timing)
         .ok_or_else(|| anyhow!("prepare authoritative local workflow terminal result"))?;
-    // REQ-WFEXEC-73, REQ-LOCALRUN-186: a withdrawal recorded while the attempt ran that no
-    // `workflow` step boundary honored, because the root has no `workflow` step, the active
-    // stage ended the attempt in a wait or the attempt exited, ends the run `withdrawn` here
-    // instead: no wait record and no `onWait`, the published result the attempt reached, and
-    // `onOutcome.withdrawn` once. It is read again as the final record is written. A
-    // continued attempt leaves it to the chained attempt's first boundary; a child run's
-    // withdrawal is its parent's.
+    // A withdrawal recorded while the attempt ran that no `workflow` step boundary honored,
+    // because the root has no `workflow` step, the active stage ended the attempt in a wait
+    // or the attempt exited, ends the run `withdrawn` here instead: no wait record and no
+    // `onWait`, the published result the attempt reached, and `onOutcome.withdrawn` once. It
+    // is read again as the final record is written. A continued attempt leaves it to the
+    // chained attempt's first boundary; a child run's withdrawal is its parent's.
     let settles_withdrawable = !quiet
         && matches!(
             execution.outcome,
@@ -1964,13 +1953,13 @@ async fn execute_attempt_phases(
             })?;
     }
     let withdrawn = settles_withdrawable && attempt_withdrawal_pending(attempt).await?;
-    // REQ-WFEXEC-61, REQ-LOCALRUN-178: an attempt that ends in a wait chooses no outcome
-    // and writes its wait record before the run record reads `waiting`.
+    // An attempt that ends in a wait chooses no outcome and writes its wait record
+    // before the run record reads `waiting`.
     let wait_record = match &execution.outcome {
         RunOutcome::Waiting { .. } if withdrawn => None,
         RunOutcome::Waiting { wait } => {
-            // REQ-WFEXEC-129: an attempt that kept the wait it continued from writes back the
-            // record `begin` removed, unchanged, and performs no `onWait` (REQ-LOCALRUN-191).
+            // An attempt that kept the wait it continued from writes back the record `begin`
+            // removed, unchanged, and performs no `onWait`.
             let kept = wait.kept().is_some();
             let record = if kept {
                 attempt
@@ -2007,15 +1996,15 @@ async fn execute_attempt_phases(
             };
             attempt.run = Some(owned_run);
             recorded.context("record the local workflow wait")?;
-            // REQ-WFEXEC-75: a nested run's wait, once its record is written, is its parent
-            // step's to carry.
+            // A nested run's wait, once its record is written, is its parent step's to
+            // carry.
             if let Some(ActiveRunHost::Quiet(host)) = attempt.host.as_mut() {
                 host.outcome = Some(ChildRunOutcome::Waiting {
                     wait: Box::new(record.clone()),
                     interruption: wait.interrupted().cloned(),
                 });
             }
-            // REQ-LOCALRUN-191: `onWait`, once the wait record is written, for a wait entered.
+            // `onWait`, once the wait record is written, for a wait entered.
             if !kept {
                 let waited = record.clone();
                 super::mirror::perform_blocking(
@@ -2028,14 +2017,14 @@ async fn execute_attempt_phases(
         }
         _ => None,
     };
-    // REQ-WFEXEC-80, REQ-WFDEF-4: a host wait entered under its limit and recorded is counted
-    // in the write that makes the run record read `waiting`; a kept wait counts nothing.
+    // A host wait entered under its limit and recorded is counted in the write that makes the
+    // run record read `waiting`; a kept wait counts nothing.
     let counted_edge = match (&execution.outcome, &wait_record) {
         (RunOutcome::Waiting { wait }, Some(_)) => wait.counted_edge(),
         _ => None,
     };
-    // REQ-WFEXEC-64: an attempt that took a backward or limited edge chooses no outcome
-    // either, and the run record stays `running` for the attempt the loop chains into.
+    // An attempt that took a backward or limited edge chooses no outcome either, and
+    // the run record stays `running` for the attempt the loop chains into.
     if let RunOutcome::Continued { edge } = &execution.outcome {
         attempt.continued = Some(edge.clone());
     }
@@ -2051,7 +2040,7 @@ async fn execute_attempt_phases(
     }
     let run = build_run_result(
         workflow,
-        admitted,
+        &admitted,
         execution,
         LocalRunEvidence {
             diagnostics: &diagnostics,
@@ -2066,8 +2055,8 @@ async fn execute_attempt_phases(
     let publication_run = run.clone();
     let publication_artifacts = artifacts.clone();
     let published_wait = wait_record.clone();
-    // REQ-WFEXEC-40, REQ-LOCALRUN-135: a `continued` attempt under an interruption starts no
-    // next attempt and exits by the interruption's reason.
+    // A `continued` attempt under an interruption starts no next attempt and exits by the
+    // interruption's reason.
     let source = admitted.execution().cancellation().source();
     let held_back = source
         .interruption_requested()
@@ -2143,21 +2132,21 @@ async fn execute_attempt_phases(
             } else {
                 Ok(())
             };
-            // REQ-WFEXEC-73: a withdrawal recorded while the attempt finished, after the first
-            // read, is read again under the run lock as the final record is written. It ends
-            // the run `withdrawn` in place of the outcome or wait the attempt chose: the wait
-            // record it wrote is removed, and an `onWait` already written stays. Every attempt
-            // that ends the run, a `canceled` one included, holds the run's controls lock from
-            // before that read until the run lock is released, so a withdrawal either appends
-            // before it or finds the run released (REQ-LOCALRUN-186); a lock that cannot be
-            // taken leaves the read unserialized, as unreadable controls withdraw nothing.
-            // REQ-LOCALRUN-211: under that lock it spends every withdrawal recorded before it,
-            // honored or not: its `settledAt` is taken again when one is later, so a retry of
-            // the run is not withdrawn by it. A `canceled` attempt keeps its outcome.
-            // REQ-LOCALRUN-214, INV-ENGINE-60: an attempt that ended `continued` and chains, one
-            // no interruption holds back, takes the same lock before it releases the run and
-            // hands it to the next attempt's acquisition, so a withdrawal arriving between the
-            // attempts waits for that acquisition and finds the run held.
+            // A withdrawal recorded while the attempt finished, after the first read, is read
+            // again under the run lock as the final record is written. It ends the run
+            // `withdrawn` in place of the outcome or wait the attempt chose: the wait record it
+            // wrote is removed, and an `onWait` already written stays. Every attempt that ends
+            // the run, a `canceled` one included, holds the run's controls lock from before that
+            // read until the run lock is released, so a withdrawal either appends before it or
+            // finds the run released; a lock that cannot be taken leaves the read unserialized,
+            // as unreadable controls withdraw nothing. Under that lock it
+            // spends every withdrawal recorded before it, honored or not: its `settledAt` is
+            // taken again when one is later, so a retry of the run is not withdrawn by it. A
+            // `canceled` attempt keeps its outcome. An attempt that ended
+            // `continued` and chains, one no interruption holds back, takes the same lock before
+            // it releases the run and hands it to the next attempt's acquisition, so a
+            // withdrawal arriving between the attempts waits for that acquisition and finds the
+            // run held.
             let ends_run = !quiet && !continued;
             let last_read = settles_withdrawable && !withdrawn;
             let controls = (ends_run || chains)
@@ -2194,8 +2183,8 @@ async fn execute_attempt_phases(
             let cleanup_state = cleanup_state.and(spent).and(record_state);
             let released_ownership = owned_run.release();
             let bridge = controls.filter(|_| chains);
-            // REQ-LOCALRUN-191: the chosen outcome's `onOutcome`, once the record reads it and
-            // the run is released, so a write never holds the run.
+            // The chosen outcome's `onOutcome`, once the record reads it and the run is
+            // released, so a write never holds the run.
             if let (true, Some(outcome), Some(mirror)) = (exited, outcome, exit_mirror) {
                 super::mirror::perform(
                     &mirror,
@@ -2233,9 +2222,9 @@ async fn execute_attempt_phases(
         .await)
 }
 
-/// REQ-WFEXEC-73: whether a withdrawal recorded while the run is live is pending, read
-/// through the attempt's owner under the run lock it holds. Controls that cannot be read
-/// withdraw nothing.
+/// Whether a withdrawal recorded while the run is live is pending, read through the
+/// attempt's owner under the run lock it holds. Controls that cannot be read withdraw
+/// nothing.
 async fn attempt_withdrawal_pending(attempt: &mut AttemptTeardown) -> anyhow::Result<bool> {
     let owned_run = attempt
         .run
@@ -2349,7 +2338,7 @@ fn parse_parallelism(value: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("value must be between 1 and {MAXIMUM_PARALLEL_STEPS}"))
 }
 
-/// REQ-LOCALRUN-209: a run's owner is a non-empty name.
+/// A run's owner is a non-empty name.
 fn parse_owner(value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Err("the owner must not be empty".to_owned());
@@ -2357,8 +2346,7 @@ fn parse_owner(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-/// REQ-LOCALRUN-209: `NAME=VALUE`, split at the first `=`, with `NAME` of the external
-/// reference form.
+/// `NAME=VALUE`, split at the first `=`, with `NAME` of the external reference form.
 fn parse_external(value: &str) -> Result<(String, String), String> {
     let (name, value) = value
         .split_once('=')
@@ -2371,7 +2359,7 @@ fn parse_external(value: &str) -> Result<(String, String), String> {
     Ok((name.to_owned(), value.to_owned()))
 }
 
-/// REQ-LOCALRUN-209: the `--external` references by name, each named at most once.
+/// The `--external` references by name, each named at most once.
 fn external_references(entries: &[(String, String)]) -> anyhow::Result<BTreeMap<String, String>> {
     let mut references = BTreeMap::new();
     for (name, value) in entries {
@@ -2382,11 +2370,11 @@ fn external_references(entries: &[(String, String)]) -> anyhow::Result<BTreeMap<
     Ok(references)
 }
 
-/// The names `--source-revision` accepts (REQ-LOCALRUN-217).
+/// The names `--source-revision` accepts.
 const SOURCE_REVISION_NAMES: [&str; 4] = ["commit", "branch", "workflowBranch", "workflowCommit"];
 
-/// REQ-LOCALRUN-217: `NAME=VALUE`, split at the first `=`, with `NAME` one of the source
-/// names and a non-empty `VALUE`.
+/// `NAME=VALUE`, split at the first `=`, with `NAME` one of the source names and a
+/// non-empty `VALUE`.
 fn parse_source_revision(value: &str) -> Result<(String, String), String> {
     let (name, value) = value
         .split_once('=')
@@ -2403,9 +2391,9 @@ fn parse_source_revision(value: &str) -> Result<(String, String), String> {
     Ok((name.to_owned(), value.to_owned()))
 }
 
-/// REQ-LOCALRUN-217: the `--source-revision` values, each name at most once, `commit`
-/// required and the workflow pair given together, as the revision every admission of the
-/// run sets; none without the option.
+/// The `--source-revision` values, each name at most once, `commit` required and the
+/// workflow pair given together, as the revision every admission of the run sets; none
+/// without the option.
 fn source_revision(
     entries: &[(String, String)],
 ) -> anyhow::Result<Option<SourceRevisionProvenance>> {
@@ -2483,8 +2471,8 @@ fn required_agent_harnesses(
     node_harnesses.chain(recovery_harnesses)
 }
 
-/// REQ-AGENT-66: called only after admission succeeds, so a rejection leaves stderr to the
-/// rejection report, and before the attempt starts the terminal interface. The advisory is
+/// Called only after admission succeeds, so a rejection leaves stderr to the rejection
+/// report, and before the attempt starts the terminal interface. The advisory is
 /// nonblocking, so a failed write does not stop the run.
 pub(super) fn write_untested_advisories(advisories: &[UntestedHarnessAdvisory]) {
     let _ = write_untested_harness_advisories(&mut io::stderr(), advisories);
@@ -2512,7 +2500,7 @@ pub(super) fn execution_context_for_workflow(
 
 /// The admission context of a continuation, every missing harness collected: the launching
 /// environment is the host's, or for a child's repair continuation `environment`, its
-/// parent's admitted environment (REQ-WFEXEC-89).
+/// parent's admitted environment.
 pub(super) fn continuation_execution_context(
     workflow: &ResolvedWorkflow,
     root: PathBuf,
@@ -2538,8 +2526,7 @@ fn execution_context_with_profile_failures(
     collect_all: bool,
     environment: EnvironmentSnapshot,
 ) -> (ExecutionContext, Vec<AgentHarnessInstallationFailure>) {
-    // REQ-WFEXEC-93, REQ-WFEXEC-125: an `external` wait admits on a condition this CLI
-    // evaluates.
+    // An `external` wait admits on a condition this CLI evaluates.
     let mut context = ExecutionContext::new(
         root,
         default_execution_policy_limits(maximum_parallel_steps),
@@ -2601,18 +2588,17 @@ fn execution_context_with_profile_failures(
     (context, failures)
 }
 
-/// A workflow with `workflow` steps is edge-scheduled (REQ-WFFORMAT-93), and only such a
-/// workflow runs children.
+/// A workflow with `workflow` steps is edge-scheduled, and only such a workflow runs
+/// children.
 pub(super) fn has_workflow_steps(workflow: &ResolvedWorkflow) -> bool {
     matches!(workflow.definition.scheduling, Scheduling::Edges { .. })
 }
 
-/// How a child attempt that ran to its result ended, for the parent's step
-/// (REQ-WFEXEC-60): a cancelled child is `Cancelled`; any other child exited with the
-/// outcome it records and its available `text` and `json` exports, with the
-/// interruption that failed it when its primary issue is an `interrupted` step
-/// (REQ-WFEXEC-70), and with that primary issue when its result is `failed`
-/// (REQ-WFEXEC-77).
+/// How a child attempt that ran to its result ended, for the parent's step: a
+/// cancelled child is `Cancelled`; any other child exited with the outcome it records
+/// and its available `text` and `json` exports, with the interruption that failed it
+/// when its primary issue is an `interrupted` step, and with that primary issue when
+/// its result is `failed`.
 fn child_run_outcome(
     outcome: &str,
     execution: &WorkflowExecutionResult<ExecutionInstant>,
@@ -2641,17 +2627,16 @@ fn child_run_outcome(
 }
 
 /// The child run a parent's continuation takes over rather than starting another: from an
-/// abandoned attempt (REQ-CONTINUE-112) one that exited is adopted, one left running gets a
-/// new attempt in place, and an element whose child was never created runs afresh; a repair
-/// retry adopts the child an independent repair completed after its wait began
-/// (REQ-CONTINUE-107), and otherwise, for a repair wait's retry (REQ-CONTINUE-81), the failed
-/// child the wait names continues with the partition its preflight admitted. A wait the root
-/// carries from a nested run continues that nested run in place from the nested step that
-/// waited, with the stage recovery its repair names (REQ-CONTINUE-92). An abandoned root's
-/// nested run that reads `running` continues in place the same way, from its running step or
-/// recorded edge, and one that reads `waiting` is carried as the wait it recorded without
-/// starting anything (REQ-CONTINUE-91). `item` is the fan-out element, at which the
-/// continuation resumes the step (REQ-WFEXEC-96).
+/// abandoned attempt one that exited is adopted, one left running gets a new attempt in
+/// place, and an element whose child was never created runs afresh; a repair retry adopts the
+/// child an independent repair completed after its wait began, and otherwise, for a repair
+/// wait's retry, the failed child the wait names continues with the partition its preflight
+/// admitted. A wait the root carries from a nested run continues that nested run in place
+/// from the nested step that waited, with the stage recovery its repair names. An abandoned
+/// root's nested run that reads `running` continues in place the same way, from its running
+/// step or recorded edge, and one that reads `waiting` is carried as the wait it recorded
+/// without starting anything. `item` is the fan-out element, at which the continuation
+/// resumes the step.
 pub(super) enum ChildRecovery {
     Fresh {
         step: String,
@@ -2699,12 +2684,11 @@ impl ChildRecovery {
     }
 }
 
-/// The record of the wait an attempt ended on (REQ-WFEXEC-61, REQ-WFEXEC-62): the payload
-/// from the waiting step's outputs and child directory or, for a stop, from the stop control
-/// in force before the step, for an interrupted `repair` wait with the `control.interrupt`
-/// the signal observer acted on (REQ-WFEXEC-70, REQ-WFDEF-6), and for an `external` wait its
-/// rule's run-value operands resolved from the run's `inputs` and step outputs
-/// (REQ-WFEXEC-65).
+/// The record of the wait an attempt ended on: the payload from the waiting step's outputs
+/// and child directory or, for a stop, from the stop control in force before the step, for
+/// an interrupted `repair` wait with the `control.interrupt` the signal observer acted on,
+/// and for an `external` wait its rule's run-value operands resolved from the run's `inputs`
+/// and step outputs.
 fn entered_wait_record(
     wait: &EnteredWait,
     inputs: &useful_execution::ResolvedInputs,
@@ -2713,14 +2697,13 @@ fn entered_wait_record(
     run_directory: &Path,
     dispatcher: Option<&LocalChildRunDispatcher>,
 ) -> anyhow::Result<WaitRecord> {
-    // REQ-WFEXEC-109: the wait a step's nested run entered is the root's, built from the
-    // nested record when the step's child returned it.
+    // The wait a step's nested run entered is the root's, built from the nested record
+    // when the step's child returned it.
     if let Some(carried) = dispatcher.and_then(|dispatcher| dispatcher.carried_wait(wait.step())) {
         return Ok(carried);
     }
-    // REQ-WFDEF-6: an interrupted wait's payload names the `control.interrupt` whose
-    // interruption the signal observer requested. A nested run's stop is in the root's
-    // controls (REQ-WFEXEC-76).
+    // An interrupted wait's payload names the `control.interrupt` whose interruption
+    // the signal observer requested. A nested run's stop is in the root's controls.
     let control = if wait.kind() == WaitKind::Stop {
         let controls_directory = dispatcher.map_or(run_directory, |dispatcher| {
             &dispatcher.parent.root.run_directory
@@ -2732,8 +2715,7 @@ fn entered_wait_record(
     } else {
         None
     };
-    // REQ-WFEXEC-61, REQ-WFEXEC-68: the waiting step's latest child and, for a fan-out, the
-    // element it ran for.
+    // The waiting step's latest child and, for a fan-out, the element it ran for.
     let (child, item) = dispatcher
         .and_then(|dispatcher| dispatcher.started_child(wait.step()))
         .map_or((None, None), |(child, item)| {
@@ -2746,7 +2728,7 @@ fn entered_wait_record(
                 item,
             )
         });
-    // REQ-WFEXEC-77: the waiting step's failed child, when it recorded one.
+    // The waiting step's failed child, when it recorded one.
     let payload = wait_payload(
         wait,
         steps,
@@ -2767,9 +2749,9 @@ fn entered_wait_record(
 }
 
 /// The root run a run belongs to and the path from the root to that run, as a position names
-/// it (INV-ENGINE-40). A nested run is driven by its parent's step and owned by its root,
-/// whose run directory holds what a person or Cloud addresses; `onStage` names a child, a
-/// nested run's stage included, by its path, through the root's mirror (REQ-LOCALRUN-191).
+/// it. A nested run is driven by its parent's step and owned by its root, whose run
+/// directory holds what a person or Cloud addresses; `onStage` names a child, a nested run's
+/// stage included, by its path, through the root's mirror.
 #[derive(Clone)]
 struct RunRoot {
     /// The root's record, rewritten under the lock the root's attempt holds.
@@ -2777,7 +2759,7 @@ struct RunRoot {
     run_directory: PathBuf,
     path: Vec<serde_json::Value>,
     /// The root attempt's mirror, which writes `onStage` as each child of the root or of a
-    /// nested run under it exits; a nested run has none of its own (REQ-LOCALRUN-191).
+    /// nested run under it exits; a nested run has none of its own.
     mirror: Option<Arc<Mirror>>,
 }
 
@@ -2797,7 +2779,7 @@ impl RunRoot {
 
     /// The root and path of the child a `workflow` step of this run starts for `step` and,
     /// for a fan-out, element `item`: the same root, the path followed by `<step>` and
-    /// `{item: n}` (REQ-WFEXEC-68).
+    /// `{item: n}`.
     fn descend(&self, step: &str, item: Option<u64>) -> Self {
         let mut path = self.path.clone();
         path.push(serde_json::Value::String(step.to_owned()));
@@ -2812,7 +2794,7 @@ impl RunRoot {
 }
 
 /// Runs a parent's `workflow` steps as child runs of files in the parent's pinned tree
-/// copy, in this process and awaited (REQ-WFEXEC-59, REQ-LOCALRUN-177).
+/// copy, in this process and awaited.
 #[derive(Clone)]
 struct LocalChildRunDispatcher {
     parent: Arc<LocalChildRunParent>,
@@ -2820,9 +2802,9 @@ struct LocalChildRunDispatcher {
 
 struct LocalChildRunParent {
     run: ChildRunParent,
-    /// The root run the dispatching run belongs to and the path from the root to it
-    /// (INV-ENGINE-40): the run itself and no path for a root's dispatcher, the root and
-    /// `[<step>]` or `[<step>, {item: n}]` for a nested run's (REQ-WFEXEC-74).
+    /// The root run the dispatching run belongs to and the path from the root to it: the
+    /// run itself and no path for a root's dispatcher, the root and `[<step>]` or
+    /// `[<step>, {item: n}]` for a nested run's.
     root: RunRoot,
     copy_root: PathBuf,
     execution_root: PathBuf,
@@ -2832,28 +2814,28 @@ struct LocalChildRunParent {
     /// selects among the names the root admitted.
     environment: EnvironmentSnapshot,
     /// The parent's source revision, which each child's admission sets again since it
-    /// drops the parent's `USEFUL_` names (REQ-LOCALRUN-217).
+    /// drops the parent's `USEFUL_` names.
     source_revision: Option<SourceRevisionProvenance>,
     /// The step a `control.retry` continues at and the agent-profile replacement its child
-    /// resolves with (REQ-CONTINUE-105).
+    /// resolves with.
     replacement: Option<(String, AgentProfileReplacementDocument)>,
     /// Taken by the first child run of its step and element: an abandoned parent's child
-    /// (REQ-CONTINUE-112) or the repaired child a repair retry adopts (REQ-CONTINUE-107).
+    /// or the repaired child a repair retry adopts.
     recovery: std::sync::Mutex<Option<ChildRecovery>>,
     /// The latest child run directory each step started and the fan-out element it ran
-    /// for, for a wait's payload and step (REQ-WFEXEC-61).
+    /// for, for a wait's payload and step.
     started: std::sync::Mutex<BTreeMap<String, (PathBuf, Option<u64>)>>,
     /// The root's record of the wait each step's nested run entered in this attempt, which
-    /// the root writes as its own when the step's walk ends on it (REQ-WFEXEC-75).
+    /// the root writes as its own when the step's walk ends on it.
     carried: std::sync::Mutex<BTreeMap<String, WaitRecord>>,
     /// The journals the command's signal observer reads, which each child's run directory
-    /// joins while its attempt runs (REQ-LOCALRUN-135).
+    /// joins while its attempt runs.
     journals: ControlJournals,
-    /// The root's progress stream, which carries each child's step state records
-    /// (REQ-LOCALRUN-200); none when the root presents through the terminal interface.
+    /// The root's progress stream, which carries each child's step state records; none
+    /// when the root presents through the terminal interface.
     presentation: Option<ParentPresentation>,
     /// The parent's commit-port latch, set by a child whose own state commit failed so the
-    /// parent commits nothing after it (REQ-LOCALRUN-207, INV-ENGINE-57).
+    /// parent commits nothing after it.
     child_failure: Arc<OnceLock<ChildCommitFailure>>,
 }
 
@@ -2921,7 +2903,7 @@ impl LocalChildRunDispatcher {
     }
 }
 
-/// The replacement document a `control.retry`'s `payload.agentProfiles` names (REQ-AGENT-59).
+/// The replacement document a `control.retry`'s `payload.agentProfiles` names.
 pub(super) fn control_replacement_document(
     profiles: serde_json::Value,
 ) -> serde_json::Result<AgentProfileReplacementDocument> {
@@ -2945,7 +2927,7 @@ impl LocalChildRunParent {
         control.report_started(directory.to_owned());
     }
 
-    /// Keeps the root's record of the wait `step`'s nested run entered (REQ-WFEXEC-75).
+    /// Keeps the root's record of the wait `step`'s nested run entered.
     fn record_carried(&self, step: &str, wait: WaitRecord) -> bool {
         self.carried
             .lock()
@@ -2983,9 +2965,8 @@ impl ChildRunDispatcher for LocalChildRunDispatcher {
         child
     }
 
-    /// REQ-WFEXEC-62, REQ-WFEXEC-76: a stop control in force for `step` in the root's
-    /// controls, which are a nested run's too. A controls directory that cannot be read stops
-    /// nothing.
+    /// A stop control in force for `step` in the root's controls, which are a nested run's
+    /// too. A controls directory that cannot be read stops nothing.
     async fn stop_before(&self, step: &str) -> bool {
         let run_directory = self.parent.root.run_directory.clone();
         let step = step.to_owned();
@@ -2996,9 +2977,9 @@ impl ChildRunDispatcher for LocalChildRunDispatcher {
         .unwrap_or(false)
     }
 
-    /// REQ-WFEXEC-73, REQ-WFEXEC-76: a withdrawal recorded for the root while it is live, read
-    /// under the run lock the root's attempt holds, for a nested run's step as for the root's.
-    /// Controls that cannot be read withdraw nothing.
+    /// A withdrawal recorded for the root while it is live, read under the run lock the root's
+    /// attempt holds, for a nested run's step as for the root's. Controls that cannot be read
+    /// withdraw nothing.
     async fn withdrawal_pending(&self) -> bool {
         let parent = Arc::clone(&self.parent);
         blocking_operation(move || parent.root.run.withdrawal_pending())
@@ -3021,8 +3002,8 @@ async fn run_local_child(
     }
     let recovery = parent.take_recovery(&request.step, request.item);
     if let Some(ChildRecovery::Adopt { directory, .. }) = recovery {
-        // REQ-CONTINUE-112: a child that exited settles the step from its record and
-        // published exports without running again.
+        // A child that exited settles the step from its record and published exports
+        // without running again.
         let adopted = directory.clone();
         let outcome = blocking_operation(move || {
             Ok::<_, std::convert::Infallible>(adopted_child_outcome(&adopted))
@@ -3036,8 +3017,8 @@ async fn run_local_child(
         directory, wait, ..
     }) = recovery
     {
-        // REQ-CONTINUE-91: a nested run an abandoned root left waiting is carried as the wait
-        // it recorded; nothing starts.
+        // A nested run an abandoned root left waiting is carried as the wait it recorded;
+        // nothing starts.
         parent.record_started(&request, &directory, &mut control);
         let root = parent.root.descend(&request.step, request.item);
         let waiting = ChildRunOutcome::Waiting {
@@ -3046,16 +3027,16 @@ async fn run_local_child(
         };
         return carried_outcome(&parent, &request.step, &directory, &root, waiting);
     }
-    // REQ-WFEXEC-103, REQ-WFEXEC-128: a child whose preparation an interruption precedes is not
-    // created and gets no attempt; the driver settles the step as an unstarted child, and the
-    // dropped recovery releases what it held. An exited child is adopted above as before, and a
-    // cancellation prepares the child as before.
+    // A child whose preparation an interruption precedes is not created and gets no attempt;
+    // the driver settles the step as an unstarted child, and the dropped recovery releases what
+    // it held. An exited child is adopted above as before, and a cancellation prepares the
+    // child as before.
     if cancellation.interruption_requested() {
         return ChildRunOutcome::Interrupted;
     }
-    // REQ-WFEXEC-98: a nested run's stage moves the root's position to the stage's full path
-    // under the root's run lock before the stage is created; the nested run's own record
-    // names the stage alone.
+    // A nested run's stage moves the root's position to the stage's full path under the
+    // root's run lock before the stage is created; the nested run's own record names the
+    // stage alone.
     if !parent.root.path.is_empty() {
         let RunRoot { run, path, .. } = parent.root.descend(&request.step, request.item);
         if blocking_operation(move || run.rewrite_position(path))
@@ -3070,10 +3051,9 @@ async fn run_local_child(
     let preparation_parent = Arc::clone(&parent);
     let preparation_request = request.clone();
     let preparation_cancellation = cancellation.clone();
-    // REQ-CONTINUE-81, INV-ENGINE-53: the failed child the repair wait named, whose
-    // continuation its preflight admitted and still holds locked; REQ-CONTINUE-92: likewise
-    // the nested run the root's carried wait named, whose first attempt takes over the
-    // recovery of its stage.
+    // The failed child the repair wait named, whose continuation its preflight admitted and
+    // still holds locked: likewise the nested run the root's carried wait named, whose
+    // first attempt takes over the recovery of its stage.
     let mut stage = None;
     let (recovery, continuation) = match recovery {
         Some(ChildRecovery::Continue { continuation, .. }) => (None, Some(continuation)),
@@ -3138,9 +3118,9 @@ async fn run_local_child(
     let directory = prepared.2.run_directory().to_owned();
     parent.record_started(&request, &directory, &mut control);
     let root = parent.root.descend(&request.step, request.item);
-    // REQ-WFEXEC-105, REQ-WFEXEC-64: the step drives its child, so a nested run's attempt that
-    // ends `continued` is chained here, its next attempt begun in the same run directory, until
-    // the nested run ends; no other child ends `continued`.
+    // The step drives its child, so a nested run's attempt that ends `continued` is chained
+    // here, its next attempt begun in the same run directory, until the nested run ends; no
+    // other child ends `continued`.
     let outcome = loop {
         let (workflow, admitted, owned_run) = prepared;
         let copy_root = owned_run.tree_copy_directory();
@@ -3150,9 +3130,9 @@ async fn run_local_child(
             attempt.teardown().await;
             return ChildRunOutcome::Interrupted;
         };
-        // REQ-LOCALRUN-200: a fresh, retried or continued child's steps reach the root's
-        // progress stream under the parent's path, step and element. A child file whose
-        // definition the stream cannot describe stays silent rather than failing the child.
+        // A fresh, retried or continued child's steps reach the root's progress stream
+        // under the parent's path, step and element. A child file whose definition the
+        // stream cannot describe stays silent rather than failing the child.
         let presentation = parent
             .presentation
             .as_ref()
@@ -3179,9 +3159,8 @@ async fn run_local_child(
         )
         .await;
         if let Err(error) = result {
-            // REQ-LOCALRUN-207, INV-ENGINE-57: a child whose state commit failed latches the
-            // failure and its text on the parent's commit port before the parent's step can
-            // settle from it.
+            // A child whose state commit failed latches the failure and its text on the
+            // parent's commit port before the parent's step can settle from it.
             if let Some(StateCommitFailed { failure, text, .. }) =
                 error.downcast_ref::<StateCommitFailed>()
             {
@@ -3193,8 +3172,8 @@ async fn run_local_child(
             attempt.teardown().await;
             return ChildRunOutcome::Interrupted;
         }
-        // REQ-LOCALRUN-135: an interruption holds the next attempt back, as it does a root's,
-        // and the nested run stays `running`.
+        // An interruption holds the next attempt back, as it does a root's, and the nested
+        // run stays `running`.
         match attempt.continued.take() {
             Some(edge) if !cancellation.interruption_requested() => {
                 let continuation_parent = Arc::clone(&parent);
@@ -3224,9 +3203,9 @@ async fn run_local_child(
         }
     };
     let outcome = carried_outcome(&parent, &request.step, &directory, &root, outcome);
-    // REQ-LOCALRUN-191: the stage transition's `onStage`, before the parent routes it, through
-    // the root's mirror and named by the child's path from the root, so a nested run's stage
-    // is `<step>[n].<stage>`.
+    // The stage transition's `onStage`, before the parent routes it, through the root's mirror
+    // and named by the child's path from the root, so a nested run's stage is
+    // `<step>[n].<stage>`.
     if let ChildRunOutcome::Exited {
         outcome, exports, ..
     } = &outcome
@@ -3248,9 +3227,9 @@ async fn run_local_child(
     outcome
 }
 
-/// REQ-WFEXEC-75: a nested run at `directory` that waits leaves the root its record of the
-/// wait, which the root writes once `step`'s walk ends on it; a wait it cannot carry is a child
-/// that ended without a result. Any other outcome is the step's as it is.
+/// A nested run at `directory` that waits leaves the root its record of the wait, which the
+/// root writes once `step`'s walk ends on it; a wait it cannot carry is a child that ended
+/// without a result. Any other outcome is the step's as it is.
 fn carried_outcome(
     parent: &LocalChildRunParent,
     step: &str,
@@ -3273,8 +3252,8 @@ fn carried_outcome(
 }
 
 /// The root's record of the wait `nested` the nested run at `directory` entered, which the
-/// root's `step` carries at the nested run's path `root.path` (REQ-WFEXEC-75): its `child`
-/// made relative to the root's run directory.
+/// root's `step` carries at the nested run's path `root.path`: its `child` made relative
+/// to the root's run directory.
 fn carried_wait_record(
     nested: &WaitRecord,
     directory: &Path,
@@ -3296,11 +3275,11 @@ fn carried_wait_record(
 }
 
 /// The next attempt of the nested run at `directory`, whose latest attempt ended `continued`
-/// on `edge` (REQ-WFEXEC-105): begun in the same run directory from the edge's target as
-/// `useful workflow run resume` begins a root's (REQ-WFEXEC-64, REQ-CONTINUE-78), with reason
-/// `edge`, its own definition and retained inputs and its unchanged tree copy, admitted under
-/// the parent's execution root, limits and environment. A limited edge is counted in the
-/// nested run's own `run.json` as the attempt begins. A refusal is the child's code.
+/// on `edge`: begun in the same run directory from the edge's target as `useful workflow run
+/// resume` begins a root's, with reason `edge`, its own definition and retained inputs and
+/// its unchanged tree copy, admitted under the parent's execution root, limits and
+/// environment. A limited edge is counted in the nested run's own `run.json` as the attempt
+/// begins. A refusal is the child's code.
 fn begin_nested_continuation(
     parent: &LocalChildRunParent,
     directory: &Path,
@@ -3434,7 +3413,7 @@ fn prepare_local_child(
     let context = child_execution_context(parent, &workflow, tree, cancellation)?;
     let admitted = admit_local_workflow(workflow.clone(), inputs, context)
         .map_err(|failure| child_admission_code(&failure))?;
-    // REQ-LOCALRUN-177: a fan-out element's child nests under its element.
+    // A fan-out element's child nests under its element.
     let record = WorkflowRunRecord::child_of(
         parent.run.record(),
         &request.step,
@@ -3467,10 +3446,10 @@ pub(super) fn child_request_inputs(request: &ChildRunRequest) -> Result<Resolved
     Ok(ResolvedInputs::new(inputs))
 }
 
-/// A new attempt of the child run at `directory` the parent's abandoned attempt left
-/// running (REQ-CONTINUE-112), as `useful workflow run retry` on it would start: its own retry
-/// settles the abandoned attempt, and it runs its retained definition and inputs from its
-/// unchanged tree copy under the parent's execution root, limits and environment.
+/// A new attempt of the child run at `directory` the parent's abandoned attempt left running,
+/// as `useful workflow run retry` on it would start: its own retry settles the abandoned
+/// attempt, and it runs its retained definition and inputs from its unchanged tree copy under
+/// the parent's execution root, limits and environment.
 fn prepare_child_retry(
     parent: &LocalChildRunParent,
     directory: &Path,
@@ -3660,8 +3639,8 @@ fn claim_standard_input(path: &Path, reserved: &mut bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// The `--input-text NAME TEXT` pairs as given (REQ-LOCALRUN-80): an odd count, a name or
-/// value that is not UTF-8 or a name outside the input-name form is a usage error.
+/// The `--input-text NAME TEXT` pairs as given: an odd count, a name or value that is not
+/// UTF-8 or a name outside the input-name form is a usage error.
 pub(super) fn text_bindings(values: &[OsString]) -> anyhow::Result<Vec<(&str, &str)>> {
     let pairs = values.chunks_exact(2);
     if !pairs.remainder().is_empty() {
@@ -4043,7 +4022,7 @@ pub(super) enum SignalEvent {
     /// SIGINT (`UserRequest`) or SIGTERM (`TerminationRequest`).
     Signal(CancellationReason),
     /// SIGURG, which carries no request of its own: the observer reads the watched control
-    /// journals for a new `control.interrupt` (REQ-WFDEF-6).
+    /// journals for a new `control.interrupt`.
     WakeUp,
 }
 
@@ -4067,10 +4046,10 @@ impl SignalEvents for UnixSignals {
 }
 
 /// The run directories whose control journals the observer reads, a signal for a new
-/// `control.cancel` (REQ-LOCALRUN-135) and a wake-up for a new `control.interrupt`
-/// (REQ-WFDEF-6): the run the command owns once its directory is known, and each child run
-/// an attempt of it is executing. Empty before the run directory exists. It also holds the
-/// `control.interrupt` whose interruption the observer requested, for the wait payload.
+/// `control.cancel` and a wake-up for a new `control.interrupt`: the run the command owns
+/// once its directory is known, and each child run an attempt of it is executing. Empty
+/// before the run directory exists. It also holds the `control.interrupt` whose
+/// interruption the observer requested, for the wait payload.
 #[derive(Clone, Default)]
 pub(super) struct ControlJournals(Arc<std::sync::Mutex<JournalSlot>>);
 
@@ -4120,9 +4099,9 @@ impl ControlJournals {
             .unwrap_or_default()
     }
 
-    /// Requests the interruption `control` asks for (REQ-WFDEF-6) and, when it is accepted
-    /// as an interruption, keeps `control` for the wait payload. Under the slot's lock, so
-    /// that a wait entered on the interruption finds it.
+    /// Requests the interruption `control` asks for and, when it is accepted as an
+    /// interruption, keeps `control` for the wait payload. Under the slot's lock, so that
+    /// a wait entered on the interruption finds it.
     fn interrupt(&self, cancellation: &CancellationSource, control: ControlEvent) {
         let Ok(mut slot) = self.0.lock() else {
             return;
@@ -4182,7 +4161,7 @@ enum SignalRequest {
     /// No run exists yet, or the run's or its live child's journal holds a `control.cancel`
     /// recorded since this process took that run.
     Cancel,
-    /// Any other signal to a process that owns a run (REQ-LOCALRUN-135, REQ-WFEXEC-69).
+    /// Any other signal to a process that owns a run.
     Interrupt,
 }
 
@@ -4201,8 +4180,8 @@ pub(super) fn start_signal_observation(
                         return;
                     }
                 }
-                // REQ-WFDEF-6: a wake-up acts only on the journal; a second one, or one that
-                // finds no new `control.interrupt`, changes nothing.
+                // A wake-up acts only on the journal; a second one, or one that finds no new
+                // `control.interrupt`, changes nothing.
                 SignalEvent::WakeUp => {
                     if let Some(control) = recorded_interrupt(&observed).await {
                         observed.interrupt(&cancellation, control);
@@ -4215,8 +4194,8 @@ pub(super) fn start_signal_observation(
 }
 
 /// A cancel when no run directory is known yet or a watched journal holds a new
-/// `control.cancel`, which `useful workflow run cancel` appends before it signals
-/// (REQ-LOCALRUN-186); otherwise an interruption (REQ-LOCALRUN-135).
+/// `control.cancel`, which `useful workflow run cancel` appends before it
+/// signals; otherwise an interruption.
 async fn signal_request(journals: &ControlJournals) -> SignalRequest {
     let watched = journals.watched();
     if watched.is_empty() || recorded_since(watched, CONTROL_CANCEL).await.is_some() {
@@ -4226,15 +4205,15 @@ async fn signal_request(journals: &ControlJournals) -> SignalRequest {
     }
 }
 
-/// The new `control.interrupt` a wake-up acts on (REQ-WFDEF-6).
+/// The new `control.interrupt` a wake-up acts on.
 async fn recorded_interrupt(journals: &ControlJournals) -> Option<ControlEvent> {
     recorded_since(journals.watched(), CONTROL_INTERRUPT).await
 }
 
 /// The first `event` control one of the `watched` journals holds above the ordinal it held
 /// when it was watched. A control recorded before this process took the run was an earlier
-/// attempt's, acted on or ignored then, and never cancels or interrupts this one
-/// (REQ-LOCALRUN-135, REQ-WFDEF-6). A journal that cannot be read holds none.
+/// attempt's, acted on or ignored then, and never cancels or interrupts this one. A
+/// journal that cannot be read holds none.
 async fn recorded_since(watched: Vec<Watched>, event: &'static str) -> Option<ControlEvent> {
     blocking_operation(move || {
         Ok::<_, std::convert::Infallible>(watched.into_iter().find_map(|watched| {
@@ -4251,7 +4230,7 @@ async fn recorded_since(watched: Vec<Watched>, event: &'static str) -> Option<Co
 }
 
 /// Requests the stop `request` names; a signal that changes nothing then force-aborts a
-/// cancelling finalization (REQ-WFFINALIZE-15), which ends the observation.
+/// cancelling finalization, which ends the observation.
 fn handle_observed_signal(
     cancellation: &CancellationSource,
     reason: CancellationReason,
@@ -4322,9 +4301,8 @@ impl CoordinatorClock for SystemExecutionClock {
 type SystemPresentation = WorkflowRunPresentation<io::Stdout, io::Stderr, SystemObservationClock>;
 type SystemChildPresentation = ChildRunPresentation<io::Stdout, io::Stderr, SystemObservationClock>;
 
-/// Where a dispatcher's children present (REQ-LOCALRUN-200): a root's progress stream, or the
-/// scope a nested run has in its root's, which its stages extend by the nested step
-/// (REQ-WFEXEC-74, INV-ENGINE-40).
+/// Where a dispatcher's children present: a root's progress stream, or the scope a nested run
+/// has in its root's, which its stages extend by the nested step.
 #[derive(Clone)]
 enum ParentPresentation {
     Root(SystemPresentation),
@@ -4362,9 +4340,9 @@ impl RunExecutionObserver {
     }
 }
 
-/// The presentation of a child run (REQ-WFEXEC-59): silent under a parent that presents
-/// through the terminal interface, otherwise forwarding the child's step state records into
-/// the parent's progress stream (REQ-LOCALRUN-200, INV-ENGINE-28).
+/// The presentation of a child run: silent under a parent that presents through the
+/// terminal interface, otherwise forwarding the child's step state records into the
+/// parent's progress stream.
 #[derive(Clone)]
 enum ChildPresentation {
     Silent,
@@ -4389,8 +4367,7 @@ impl ExecutionObserver<ExecutionInstant> for ChildPresentation {
 }
 
 /// A child never fails on its parent's stream by itself: the parent's failure watcher
-/// cancels the parent with `caller_output_failure`, and that cancels the child
-/// (REQ-LOCALRUN-137).
+/// cancels the parent with `caller_output_failure`, and that cancels the child.
 impl PresentationFailureState for ChildPresentation {
     fn presentation_failed(&self) -> bool {
         false
@@ -4398,7 +4375,7 @@ impl PresentationFailureState for ChildPresentation {
 }
 
 /// A child run's host: it presents nothing and keeps how the child ended for the parent's
-/// step, which a failed publication turns into an interrupted child (REQ-WFEXEC-60).
+/// step, which a failed publication turns into an interrupted child.
 #[derive(Default)]
 struct QuietRunHost {
     outcome: Option<ChildRunOutcome>,
@@ -4884,7 +4861,7 @@ fn build_run_result(
         .map_err(|_| invalid_terminal_result_error())?;
     let timing = &evidence.timing;
     // A walk an interrupted `workflow` step's child ended on its edge, a wait, a continuation
-    // or an exit, after the interruption was accepted carries no cancellation (REQ-WFEXEC-70).
+    // or an exit, after the interruption was accepted carries no cancellation.
     let interrupted_walk = match &execution.outcome {
         RunOutcome::Waiting { .. } | RunOutcome::Continued { .. } => true,
         RunOutcome::Succeeded => admitted
@@ -4927,8 +4904,8 @@ fn build_run_result(
         let state = states
             .remove(id)
             .ok_or_else(invalid_terminal_result_error)?;
-        // A step a stop kept from starting (REQ-WFEXEC-62) reached `starting` only to be
-        // settled `not_run`, which records no timing.
+        // A step a stop kept from starting reached `starting` only to be settled
+        // `not_run`, which records no timing.
         let timing = match timing.steps.get(id) {
             _ if matches!(state, useful_execution::StepState::NotRun { .. }) => None,
             None => None,
@@ -5560,7 +5537,6 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-135, REQ-WFEXEC-40, REQ-LOCALRUN-136
     #[tokio::test]
     async fn an_interruption_before_any_step_starts_publishes_the_failed_step_with_timing() {
         let temporary = tempfile::tempdir().unwrap();
@@ -5655,10 +5631,10 @@ mod tests {
         assert_eq!(step("second")["state"], "cancelled");
     }
 
-    // REQ-LOCALRUN-205, REQ-LOCALRUN-206, INV-ENGINE-56: a failed state commit is named in the
-    // command's error and recorded as a `state_persistence_failure` diagnostic with its class and
-    // OS error number, and the attempt it leaves unsettled leaves the run record `running`. Any
-    // other execution failure leaves the record `running` and records nothing.
+    // A failed state commit is named in the command's error and recorded as a
+    // `state_persistence_failure` diagnostic with its class and OS error number, and the attempt
+    // it leaves unsettled leaves the run record `running`. Any other execution failure leaves the
+    // record `running` and records nothing.
     #[tokio::test]
     async fn an_execution_failure_over_an_unsettled_attempt_leaves_the_run_running() {
         let commit_failure = useful_execution::CommitFailure {
@@ -5741,9 +5717,9 @@ mod tests {
             );
             let diagnostics = state["diagnostics"].as_array().unwrap();
             if recorded {
-                // REQ-LOCALRUN-143: no port ran, so the diagnostic line names the write and
-                // its error number from the failure; the class is a field and the remedy,
-                // last, resumes the run.
+                // No port ran, so the diagnostic line names the write and its error number
+                // from the failure; the class is a field and the remedy, last, resumes the
+                // run.
                 let rendered = format!("{:#}", failure.error());
                 let lines = rendered.lines().collect::<Vec<_>>();
                 assert!(lines.contains(&"class: storage_full"), "{rendered}");
@@ -5848,7 +5824,7 @@ mod tests {
     }
 
     /// The failure of a creation a signal refused, which left no run under the destination
-    /// and the subject's slot free (REQ-LOCALRUN-135).
+    /// and the subject's slot free.
     fn refused_creation(
         created: Result<(InitialLocalRun, WatchedJournal), CreationFailure>,
         home: &WorkflowHome,
@@ -5872,7 +5848,6 @@ mod tests {
         failure
     }
 
-    // REQ-LOCALRUN-135, REQ-WFEXEC-40
     #[test]
     fn a_signal_before_the_run_directory_exists_creates_no_run() {
         for (reason, exit) in [
@@ -5900,11 +5875,11 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-135, REQ-WFEXEC-40: from the moment `create` begins to make the run
-    // directory a signal is an interruption, never a cancel, so a run the creation still
-    // makes cannot end `canceled`; one the creation meets before the directory exists
-    // refuses it and writes no subject slot. The creation is held at the subject index's
-    // lock, as a concurrent create of the subject holds it.
+    // From the moment `create` begins to make the run directory a signal is an
+    // interruption, never a cancel, so a run the creation still makes cannot end
+    // `canceled`; one the creation meets before the directory exists refuses it and
+    // writes no subject slot. The creation is held at the subject index's lock, as a
+    // concurrent create of the subject holds it.
     #[tokio::test]
     async fn a_signal_while_the_run_directory_is_created_interrupts() {
         let temporary = tempfile::tempdir().unwrap();
@@ -5971,7 +5946,6 @@ mod tests {
         assert_eq!(fcntl_getfl(&input).unwrap(), original);
     }
 
-    // REQ-LOCALRUN-83
     #[test]
     fn named_input_planning_rejects_conflicts_before_source_io() {
         let missing = "/path/that/must/not/be/read";
@@ -6024,7 +5998,6 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-88
     #[test]
     fn named_input_planning_enforces_inclusive_name_and_member_bounds() {
         let mut text = Vec::new();
@@ -6054,7 +6027,6 @@ mod tests {
         assert!(plan_inputs(&[], &[], &[], &[], &[], &attachments, &[]).is_err());
     }
 
-    // REQ-LOCALRUN-82, REQ-LOCALRUN-84
     #[tokio::test]
     async fn named_input_acquisition_preserves_empty_values_and_member_order() {
         let temporary = tempfile::tempdir().unwrap();
@@ -6116,7 +6088,6 @@ mod tests {
         ));
     }
 
-    // REQ-LOCALRUN-84
     #[tokio::test]
     async fn named_json_acquisition_rejects_duplicate_keys_without_a_fallback() {
         for source in ["{\"safe\":1,\"safe\":2}", "", "null true"] {
@@ -6138,7 +6109,6 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-85
     #[test]
     fn named_input_paths_follow_regular_symlinks_and_reject_nonregular_files() {
         let temporary = tempfile::tempdir().unwrap();
@@ -6164,7 +6134,6 @@ mod tests {
         );
     }
 
-    // REQ-LOCALRUN-88
     #[tokio::test]
     async fn json_file_acquisition_accepts_exact_source_bound_and_rejects_one_over() {
         let temporary = tempfile::tempdir().unwrap();
@@ -6217,7 +6186,6 @@ mod tests {
         );
     }
 
-    // REQ-LOCALRUN-88
     #[test]
     fn input_reader_accepts_exact_limit_and_rejects_one_over() {
         let cancellation = CancellationSource::new();
@@ -6295,7 +6263,6 @@ mod tests {
         );
     }
 
-    // REQ-WFFINALIZE-15, REQ-LOCALRUN-135
     #[test]
     fn repeated_signals_only_force_abort_a_cancelling_finalization() {
         for request in [SignalRequest::Cancel, SignalRequest::Interrupt] {
@@ -6393,11 +6360,11 @@ mod tests {
         journals.interrupting_control()
     }
 
-    // REQ-WFDEF-6, REQ-LOCALRUN-135: a wake-up reads the journal and interrupts, with
-    // `termination_request`, for a `control.interrupt` recorded since the process took the
-    // run, which it reports for the wait payload; one that finds no such control, a second
-    // one, and one while finalization is cancelling request nothing more. A signal still
-    // reads `control.cancel` as a cancellation.
+    // A wake-up reads the journal and interrupts, with `termination_request`, for a
+    // `control.interrupt` recorded since the process took the run, which it reports for
+    // the wait payload; one that finds no such control, a second one, and one while
+    // finalization is cancelling request nothing more. A signal still reads
+    // `control.cancel` as a cancellation.
     #[tokio::test]
     async fn a_wake_up_interrupts_only_for_a_control_interrupt_recorded_since_the_run_was_taken() {
         const INTERRUPT: &str = "control.interrupt";
@@ -6459,7 +6426,7 @@ mod tests {
         );
         assert!(finalization.request_force_abort());
 
-        // SIGTERM with `control.cancel` recorded cancels (REQ-LOCALRUN-186).
+        // SIGTERM with `control.cancel` recorded cancels.
         let cancellation = CancellationSource::new();
         let root = control_journal();
         let reported = observe_journal(
@@ -6476,8 +6443,8 @@ mod tests {
         );
         assert!(!cancellation.interruption_requested());
 
-        // REQ-LOCALRUN-135: a `control.cancel` recorded before the process took the run is
-        // an earlier attempt's, so the signal interrupts.
+        // A `control.cancel` recorded before the process took the run is an earlier
+        // attempt's, so the signal interrupts.
         let cancellation = CancellationSource::new();
         let root = control_journal();
         let reported = observe_journal(
@@ -6495,8 +6462,8 @@ mod tests {
         assert!(cancellation.interruption_requested());
     }
 
-    // REQ-LOCALRUN-135: before the run directory is known a signal cancels; once a watched
-    // journal holds no `control.cancel`, it interrupts.
+    // Before the run directory is known a signal cancels; once a watched journal holds no
+    // `control.cancel`, it interrupts.
     #[tokio::test]
     async fn a_signal_interrupts_once_a_run_directory_is_watched() {
         let temporary = tempfile::tempdir().unwrap();
@@ -6658,7 +6625,6 @@ mod tests {
         assert_eq!(available, expected);
     }
 
-    // REQ-LOCALRUN-138
     #[tokio::test]
     async fn execution_handoff_does_not_wait_for_a_blocked_plain_header() {
         let temporary = tempfile::tempdir().unwrap();

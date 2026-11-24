@@ -37,8 +37,8 @@ impl Command {
         self.run(deployment).map_err(Into::into)
     }
 
-    /// Reports the sign-in status, whose state alone decides the exit status (REQ-AUTH-35),
-    /// and for an authenticated caller the organization and the project in effect (REQ-ORG-88).
+    /// Reports the sign-in status, whose state alone decides the exit status, and for an
+    /// authenticated caller the organization and the project in effect.
     fn run(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
         let Self {
             org,
@@ -96,7 +96,7 @@ type InEffectPair = (Option<InEffect>, Option<ProjectInEffect>);
 
 /// Resolves the organization and the project in effect. A source that names something
 /// unusable and a failed read are said on standard error and leave none in effect; neither
-/// changes the exit status (REQ-ORG-88).
+/// changes the exit status.
 fn in_effect(
     org: OrgArgs,
     project: ProjectArgs,
@@ -187,7 +187,7 @@ enum StatusBody<'a> {
         principal: PrincipalResult<'a>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actions: Option<&'a [serde_json::Value]>,
-        // Only `account show` reports these (REQ-ORG-88); the login's status omits them.
+        // Only `account show` reports these; the login's status omits them.
         #[serde(skip_serializing_if = "Option::is_none")]
         organization_in_effect: Option<&'a InEffect>,
         #[serde(skip_serializing_if = "Option::is_none")]

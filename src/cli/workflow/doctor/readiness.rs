@@ -1,10 +1,9 @@
-//! The connection reads of `useful workflow doctor` (REQ-CREDREADY-13 to REQ-CREDREADY-17,
-//! REQ-CREDREADY-21). They live in the command because `useful-runner` reaches neither the API nor
-//! the human session. One `Session` serves every read of an invocation; a connection family
-//! supplies its API, its failure as a `FamilyFailure` and a pure function from what it lists to
-//! the requirement's code, and `read_for` names the read of each kind. The project in
-//! effect's repository is read first, since it names a kind, and `Repository::code` combines it with
-//! that kind's read.
+//! The connection reads of `useful workflow doctor`. They live in the command because
+//! `useful-runner` reaches neither the API nor the human session. One `Session` serves every read
+//! of an invocation; a connection family supplies its API, its failure as a `FamilyFailure` and a
+//! pure function from what it lists to the requirement's code, and `read_for` names the read of
+//! each kind. The project in effect's repository is read first, since it names a kind, and
+//! `Repository::code` combines it with that kind's read.
 
 use std::fmt::{Debug, Display};
 
@@ -13,7 +12,7 @@ use serde_json::Value;
 use useful_api::{
     CommonOrganizationFailure, GitHubApi, GitHubFailure, GitHubInstallationState, GitLabApi,
     GitLabFailure, HttpClient, HttpTransportPolicy, LinearApi, LinearConnection, LinearFailure,
-    ProjectApi, ProjectFailure, UnreachableCategory, linear_connection,
+    MemberGrantFailure, ProjectApi, ProjectFailure, UnreachableCategory, linear_connection,
 };
 use useful_human_auth::Deployment;
 use useful_runner::{CredentialKind, ReadinessCode};
@@ -49,7 +48,8 @@ pub(super) const fn read_for(kind: CredentialKind) -> Option<Read> {
         CredentialKind::ClaudeCode
         | CredentialKind::Codex
         | CredentialKind::Mergify
-        | CredentialKind::Buildkite => None,
+        | CredentialKind::Buildkite
+        | CredentialKind::Cloudflare => None,
     }
 }
 
@@ -78,7 +78,7 @@ impl<'a> Session<'a> {
 
     /// Asks the organization with `operation` through the family's API, which `api` builds and
     /// `networking` names when it cannot be built, and returns Cloud's answer as it is.
-    fn call<A, N, T, E: FamilyFailure>(
+    pub(super) fn call<A, N, T, E: FamilyFailure>(
         &self,
         api: impl Fn(&str, &str, HttpTransportPolicy) -> Result<A, N>,
         networking: &'static str,
@@ -109,7 +109,7 @@ impl<'a> Session<'a> {
     }
 
     /// Lists with `list` as `call` does and maps the answer with `code`. A read Cloud refuses
-    /// the caller gives `not_permitted` (REQ-CREDREADY-14); any other failure ends the command.
+    /// the caller gives `not_permitted`; any other failure ends the command.
     fn read<A, N, T, E: FamilyFailure>(
         &self,
         api: impl Fn(&str, &str, HttpTransportPolicy) -> Result<A, N>,
@@ -128,9 +128,9 @@ impl<'a> Session<'a> {
         })
     }
 
-    /// The repository of `project`, the project in effect, or `None` when it has none
-    /// (REQ-CREDREADY-21). Without the project the repository's provider is not known, so every
-    /// failure ends the command, a refused read included.
+    /// The repository of `project`, the project in effect, or `None` when it has none. Without
+    /// the project the repository's provider is not known, so every failure ends the command, a
+    /// refused read included.
     pub(super) fn read_project(
         &self,
         project: &str,
@@ -154,7 +154,7 @@ impl<'a> Session<'a> {
     }
 }
 
-/// What the project in effect shows of its repository (REQ-CREDREADY-21).
+/// What the project in effect shows of its repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Repository {
     pub(super) kind: CredentialKind,
@@ -165,7 +165,7 @@ pub(super) struct Repository {
 enum Availability {
     Active,
     Unavailable,
-    /// Unavailable because the deployment's GitLab admission is closed (REQ-PROJECT-70).
+    /// Unavailable because the deployment's GitLab admission is closed.
     AdmissionClosed,
 }
 
@@ -206,7 +206,7 @@ impl Repository {
 }
 
 /// A connection family's failure as the reads see it.
-trait FamilyFailure: Sized {
+pub(super) trait FamilyFailure: Sized {
     fn unauthenticated() -> Self;
     fn unreachable(category: UnreachableCategory) -> Self;
     /// A response outside the public contract, such as a cursor that does not advance.
@@ -216,7 +216,7 @@ trait FamilyFailure: Sized {
     fn ending(&self) -> Option<Ending>;
 }
 
-/// A failure that ends the command with no report (REQ-CREDREADY-14).
+/// A failure that ends the command with no report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Ending {
     Unauthenticated,
@@ -437,8 +437,8 @@ impl FamilyFailure for GitHubFailure {
         Self::credential_rejected(self)
     }
 
-    /// Only an owner may list installations (REQ-CONNECTION-12), so `Forbidden` is an ordinary
-    /// member's answer and leaves the requirement `not_permitted`.
+    /// Only an owner may list installations, so `Forbidden` is an ordinary member's answer and
+    /// leaves the requirement `not_permitted`.
     fn ending(&self) -> Option<Ending> {
         Some(match self {
             Self::Forbidden => return None,
@@ -446,8 +446,70 @@ impl FamilyFailure for GitHubFailure {
             Self::NotFound => Ending::NotFound,
             Self::InvalidInput => Ending::InvalidInput,
             Self::Unreachable(category) => Ending::Unreachable(*category),
-            // A list answers no conflict.
-            Self::SourceConnectionConflict | Self::Protocol { .. } => Ending::InvalidResponse,
+            Self::RateLimited { retry_after } => Ending::RateLimited {
+                retry_after: *retry_after,
+            },
+            // A list answers no conflict and no completion's refusal.
+            Self::SourceConnectionConflict | Self::AuthorityUnproven | Self::Protocol { .. } => {
+                Ending::InvalidResponse
+            }
+        })
+    }
+}
+
+impl FamilyFailure for MemberGrantFailure {
+    fn unauthenticated() -> Self {
+        Self::Unauthenticated
+    }
+
+    fn unreachable(category: UnreachableCategory) -> Self {
+        Self::Unreachable { category }
+    }
+
+    fn invalid_response() -> Self {
+        Self::InvalidResponse {
+            credential_rejected: false,
+        }
+    }
+
+    fn credential_rejected(&self) -> bool {
+        Self::credential_rejected(self)
+    }
+
+    /// The connection authorization read. Only an active human owner may list
+    /// authorizations. Pass over a refused read, a concealed organization and a server
+    /// failure.
+    fn ending(&self) -> Option<Ending> {
+        Some(match self {
+            Self::Forbidden
+            | Self::OrganizationNotFound
+            | Self::ProviderUnavailable
+            | Self::Unreachable {
+                category: UnreachableCategory::Server,
+            } => return None,
+            Self::Unauthenticated => Ending::Unauthenticated,
+            Self::InvalidInput => Ending::InvalidInput,
+            Self::Unreachable { category } => Ending::Unreachable(*category),
+            Self::RateLimited { retry_after } => Ending::RateLimited {
+                retry_after: *retry_after,
+            },
+            // A list answers no conflict, grant, token or authorization refusal.
+            Self::IdempotencyConflict
+            | Self::GrantNotFound
+            | Self::MaterialInvalid
+            | Self::LimitReached
+            | Self::RunnerNotFound
+            | Self::RunnerHoldsLogin
+            | Self::AlreadyAuthorized
+            | Self::AuthorizationNotFound
+            | Self::IntegrationTokenInvalid
+            | Self::IntegrationTokenExists
+            | Self::IntegrationTokenNotFound
+            | Self::IntegrationTokenRunnerNotFound
+            | Self::IntegrationTokenAlreadyAuthorized
+            | Self::IntegrationTokenAuthorizationNotFound
+            | Self::ConnectionAuthorizationRefused(_)
+            | Self::InvalidResponse { .. } => Ending::InvalidResponse,
         })
     }
 }
@@ -509,10 +571,10 @@ fn read_github(session: &Session<'_>) -> anyhow::Result<Result<ReadinessCode, En
     )
 }
 
-/// The code the organization's GitHub App installations give the `github` requirement
-/// (REQ-CREDREADY-20, REQ-CREDREADY-16): an active installation is held ready, else a
-/// disconnected or revoked one is inactive, else none is connected. A suspension changes no
-/// installation's state (REQ-CONNECTION-10), so it does not show here.
+/// The code the organization's GitHub App installations give the `github` requirement: an
+/// active installation is held ready, else a disconnected or revoked one is inactive, else
+/// none is connected. A suspension changes no installation's state, so it does not show
+/// here.
 fn github_code(states: impl IntoIterator<Item = GitHubInstallationState>) -> ReadinessCode {
     let mut code = ReadinessCode::NotConnected;
     for state in states {
@@ -545,10 +607,10 @@ fn read_gitlab(session: &Session<'_>) -> anyhow::Result<Result<ReadinessCode, En
 }
 
 /// The code the organization's GitLab connections, as listed documents, give the `gitlab`
-/// requirement (REQ-CREDREADY-19, REQ-CREDREADY-16), by the first that holds: an active
-/// connection is held ready; a credential that expired needs replacing; a credential GitLab
-/// rejected, or a disconnected connection, is inactive; otherwise, with none or only ones never
-/// given a credential (`not-configured`), none is connected.
+/// requirement, by the first that holds: an active connection is held ready; a credential that
+/// expired needs replacing; a credential GitLab rejected, or a disconnected connection, is
+/// inactive; otherwise, with none or only ones never given a credential (`not-configured`),
+/// none is connected.
 fn gitlab_code(connections: &[Value]) -> ReadinessCode {
     let any = |state: &str, reasons: &[&str]| {
         connections.iter().any(|connection| {
@@ -589,12 +651,11 @@ fn read_linear(session: &Session<'_>) -> anyhow::Result<Result<ReadinessCode, En
     )
 }
 
-/// The code the organization's Linear connections give the `linear` requirement
-/// (REQ-CREDREADY-15, REQ-CREDREADY-16), by the first that holds: an active connection
-/// granted every scope it requires is held ready; an active one lacks a scope; a
-/// `recovery_required` or `disconnected` one is inactive; otherwise, with none or
-/// only deleted ones, none is connected. `stateUpdatesConsented` is retained consent, not
-/// current authority (REQ-CONNECTION-85), and is not read.
+/// The code the organization's Linear connections give the `linear` requirement, by the
+/// first that holds: an active connection granted every scope it requires is held ready;
+/// an active one lacks a scope; a `recovery_required` or `disconnected` one is inactive;
+/// otherwise, with none or only deleted ones, none is connected. `stateUpdatesConsented`
+/// is retained consent, not current authority, and is not read.
 fn linear_code(connections: &[LinearConnection]) -> ReadinessCode {
     use linear_connection::Status;
 
@@ -654,7 +715,6 @@ mod tests {
         }
     }
 
-    // REQ-CREDREADY-15
     #[test]
     fn linear_connections_give_the_code_of_the_best_connection() {
         let ready = || connection(Status::Active, &["read"]);
@@ -688,7 +748,6 @@ mod tests {
         json!({"state": state, "credentialReason": credential_reason})
     }
 
-    // REQ-CREDREADY-19
     #[test]
     fn gitlab_connections_give_the_code_of_the_best_connection() {
         let active = || gitlab("active", None);
@@ -726,7 +785,6 @@ mod tests {
         }
     }
 
-    // REQ-CREDREADY-20
     #[test]
     fn github_installations_give_the_code_of_the_best_installation() {
         use GitHubInstallationState::{Active, Disconnected, Revoked};
@@ -747,7 +805,6 @@ mod tests {
         }
     }
 
-    // REQ-CREDREADY-21
     #[test]
     fn a_project_repository_changes_only_a_code_its_connection_read_does_not_fail() {
         let repository = |availability| Repository {

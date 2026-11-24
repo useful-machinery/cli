@@ -1,6 +1,6 @@
-//! The login check (INV-HARNESS-18): one invocation of a coding agent's adapter outside any
-//! workflow, which asks the provider through the agent's own program whether the login the
-//! caller passes is accepted. The runner's agent-login setup calls it.
+//! The login check: one invocation of a coding agent's adapter outside any workflow, which
+//! asks the provider through the agent's own program whether the login the caller passes is
+//! accepted. The runner's agent-login setup calls it.
 
 use std::ffi::OsStr;
 use std::io;
@@ -63,13 +63,13 @@ const CHECK_DIAGNOSTIC_BYTES: NonZeroU64 = match NonZeroU64::new(64 * 1024) {
 /// step's cancellation grace allows at its shortest.
 const FORCE_GRACE: Duration = MINIMUM_CANCELLATION_GRACE;
 
-/// What a login check found (INV-HARNESS-18): the provider accepted or refused the login,
-/// or the check gave no answer, which says nothing of the login.
+/// What a login check found: the provider accepted or refused the login, or the check
+/// gave no answer, which says nothing of the login.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessLoginCheck {
     /// The turn completed.
     Accepted,
-    /// The turn failed with the harness error `unauthorized` (REQ-AGENT-45).
+    /// The turn failed with the harness error `unauthorized`.
     Refused,
     /// Anything else, with why.
     NoAnswer(HarnessLoginCheckCause),
@@ -89,7 +89,7 @@ pub enum HarnessLoginCheckCause {
     StartFailed { stage: &'static str },
     /// No end within the bound; the program was stopped.
     TimedOut,
-    /// The turn ended with this harness error class (REQ-AGENT-45), never `unauthorized`.
+    /// The turn ended with this harness error class, never `unauthorized`.
     HarnessError { class: &'static str },
     /// The invocation failed without a harness error class: the closed name of the failure.
     HarnessFailed { failure: &'static str },
@@ -108,9 +108,9 @@ pub enum HarnessLoginCheckStage {
     Adapter,
 }
 
-/// Checks the Claude Code login that `environment` carries in `CLAUDE_CODE_OAUTH_TOKEN`
-/// (INV-HARNESS-18). It runs the installation once through its adapter with a fixed
-/// prompt, in an empty directory of its own that it removes. At `bound` after the
+/// Checks the Claude Code login that `environment` carries in
+/// `CLAUDE_CODE_OAUTH_TOKEN`. It runs the installation once through its adapter with a
+/// fixed prompt, in an empty directory of its own that it removes. At `bound` after the
 /// invocation begins it stops the program, allowing it the shortest step cancellation
 /// grace to exit before forcing it, and answers `TimedOut`.
 pub async fn check_claude_code_login<Clock>(
@@ -140,9 +140,9 @@ where
     check_login(launch, bound, clock, "").await
 }
 
-/// Checks the Codex login whose home `environment` carries in `CODEX_HOME`
-/// (INV-HARNESS-18), as `check_claude_code_login` does; `client_version` is the version
-/// the adapter introduces itself with to the App Server.
+/// Checks the Codex login whose home `environment` carries in `CODEX_HOME`, as
+/// `check_claude_code_login` does; `client_version` is the version the adapter
+/// introduces itself with to the App Server.
 pub async fn check_codex_login<Clock>(
     installation: &ValidatedCodexInstallation,
     environment: EnvironmentSnapshot,
@@ -278,7 +278,7 @@ where
     invocation.await
 }
 
-/// The step runtime's judgment of an invocation (INV-ENGINE-36), with a cause for the rest.
+/// The step runtime's judgment of an invocation, with a cause for the rest.
 fn judge(outcome: &AgentOutcome) -> HarnessLoginCheck {
     match outcome.harness_login_outcome() {
         Some(HarnessLoginOutcome::Accepted) => HarnessLoginCheck::Accepted,

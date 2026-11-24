@@ -1,9 +1,9 @@
-//! The runner's command fence (INV-RUNNER-53): every `useful` command a tree run starts
-//! enters it once its run's activity lets it start, and a single-workflow run's execution
-//! enters it for the whole of its engine's execution. A holder takes it only while nothing
-//! is in it, and while it is held nothing enters: an entry that asks marks the hold wanted
-//! and waits until the hold is dropped. It gives the exclusion agent-login setup's write
-//! level gives (INV-RUNNER-15) without the assignment manager's lock.
+//! The runner's command fence: every `useful` command a tree run starts enters it once its
+//! run's activity lets it start, and a single-workflow run's execution enters it for the
+//! whole of its engine's execution. A holder takes it only while nothing is in it, and
+//! while it is held nothing enters: an entry that asks marks the hold wanted and waits
+//! until the hold is dropped. It gives the exclusion agent-login setup's write level gives
+//! without the assignment manager's lock.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -109,7 +109,7 @@ mod tests {
     use crate::service::test_support::with_watchdog;
     use crate::service::{Sleeper as _, TokioSleeper};
 
-    // INV-RUNNER-53: the fence is held only while nothing is in it.
+    // The fence is held only while nothing is in it.
     #[test]
     fn the_fence_is_held_only_while_nothing_is_in_it() {
         let fence = CommandFence::new();
@@ -119,7 +119,7 @@ mod tests {
         assert!(fence.try_hold().is_some());
     }
 
-    // INV-RUNNER-53: one holder holds the fence at a time.
+    // One holder holds the fence at a time.
     #[test]
     fn a_held_fence_is_not_held_again() {
         let fence = CommandFence::new();
@@ -127,8 +127,8 @@ mod tests {
         assert!(fence.try_hold().is_none());
     }
 
-    // INV-RUNNER-53: an entry that asks while the fence is held marks the hold wanted and
-    // enters only once the hold is dropped; a later hold starts unwanted.
+    // An entry that asks while the fence is held marks the hold wanted and enters only
+    // once the hold is dropped; a later hold starts unwanted.
     #[tokio::test]
     async fn an_entry_waits_for_the_hold_and_marks_it_wanted() {
         let fence = CommandFence::new();

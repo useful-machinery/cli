@@ -38,8 +38,7 @@ const RUN_LOG_RECORD_BUDGET: usize = 262_144;
 
 /// The bounds on what a model keeps of its steps' output: each step keeps at most
 /// `step_records` records of at most `step_bytes` payload bytes, and the run at most
-/// `run_records` and `run_bytes` over its steps and finalizers (REQ-LOCALRUN-38,
-/// REQ-LOCALRUN-39, REQ-RUNNERENROLL-147).
+/// `run_records` and `run_bytes` over its steps and finalizers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RunLogBudget {
     pub step_bytes: usize,
@@ -130,7 +129,7 @@ const AGENT_OBSERVATION_KINDS: [AgentPresentationObservationKind; 10] = [
 
 impl WorkflowRunLogSource {
     /// The source's word: `stdout` or `stderr` for a command's record and the kind's word for
-    /// an agent's (REQ-RUNNERENROLL-145).
+    /// an agent's.
     pub(crate) const fn word(self) -> &'static str {
         match self {
             Self::Command(CommandOutputSource::StandardOutput) => "stdout",
@@ -182,7 +181,7 @@ pub(crate) enum WorkflowRunOutputUnavailableReason {
     NotRun,
     Cancelled,
     /// The step succeeded without committing the output, as a `workflow` step leaves an
-    /// export its child left unavailable (REQ-WFEXEC-60).
+    /// export its child left unavailable.
     NotCommitted,
 }
 
@@ -211,13 +210,13 @@ pub(crate) struct WorkflowRunStepView {
     pub(crate) timing: Option<WorkflowRunElapsed>,
     pub(crate) outputs: BTreeMap<String, WorkflowRunOutputDisposition>,
     pub(crate) log: WorkflowRunStepLog,
-    /// The failed child a `workflow` step succeeded on (REQ-WFEXEC-77); `None` for any
-    /// other step. The step's `state` stays `Succeeded`.
+    /// The failed child a `workflow` step succeeded on; `None` for any other step. The
+    /// step's `state` stays `Succeeded`.
     pub(crate) failed_child: Option<FailedChild>,
 }
 
 impl WorkflowRunStepView {
-    /// The state the interface presents the step with (REQ-LOCALRUN-221).
+    /// The state the interface presents the step with.
     pub(crate) fn presented_state(&self) -> StepStateKind {
         presented_step_state(self.state, self.failed_child.as_ref())
     }
@@ -335,7 +334,7 @@ where
         )
     }
 
-    /// A model whose steps keep their output within `budget` (REQ-RUNNERENROLL-147).
+    /// A model whose steps keep their output within `budget`.
     pub fn with_log_budget(
         workflow: &ResolvedWorkflow,
         maximum_parallel_steps: usize,
@@ -451,7 +450,7 @@ where
     }
 
     /// The IDs and states of the first `maximum` steps in flight in presentation order, and
-    /// the number of the others, copied in one hold of the lock (REQ-RUNNERENROLL-134).
+    /// the number of the others, copied in one hold of the lock.
     pub(crate) fn steps_in_flight(&self, maximum: usize) -> (Vec<(String, StepStateKind)>, usize) {
         let state = lock_state(&self.inner);
         let mut steps = Vec::new();
@@ -742,7 +741,7 @@ impl WorkflowRunViewState {
                     self.log_capacity,
                 );
             }
-            // A held start is presented by the progress stream alone (REQ-LOCALRUN-222).
+            // A held start is presented by the progress stream alone.
             PresentationRecordKind::StartHeld(_) => {}
         }
     }
@@ -911,6 +910,22 @@ impl WorkflowRunStepViewState {
     }
 
     fn apply_transition(&mut self, state: StepStateKind, detail: Option<ObservedStepTransition>) {
+        if let (
+            StepStateKind::Inherited,
+            Some(ObservedStepTransition::Inherited {
+                detail,
+                disposition,
+                outputs,
+            }),
+        ) = (state, &detail)
+        {
+            self.inherit(&InheritedStepFacts {
+                detail,
+                disposition: *disposition,
+                outputs: outputs.iter().map(String::as_str).collect(),
+            });
+            return;
+        }
         self.state = state;
         self.fact = match &detail {
             Some(ObservedStepTransition::OutputsCommitted { .. }) | None => None,
@@ -1200,7 +1215,7 @@ fn node_count(workflow: &ResolvedWorkflow) -> usize {
         + workflow.definition.finalizer_presentation_order.len()
 }
 
-/// Whether a step in `state` has started and not settled (REQ-RUNNERENROLL-134).
+/// Whether a step in `state` has started and not settled.
 const fn is_in_flight(state: StepStateKind) -> bool {
     matches!(
         state,
@@ -1251,7 +1266,7 @@ fn terminal_step_is_valid(
 ) -> bool {
     match &terminal.state {
         // A `workflow` step commits the exports its child left available, a subset of the
-        // ones it declares (REQ-WFEXEC-60); any other step commits every declared output.
+        // ones it declares; any other step commits every declared output.
         StepState::Succeeded { outputs } => match view.definition {
             WorkflowPresentationStep::Workflow { .. } => outputs
                 .keys()

@@ -5,14 +5,14 @@ use serde_json::Value;
 
 use super::document::{
     Agent, AgentMessage, AgentNode, AgentProfile, Binding, BindingKind, BindingValue, BusyBehavior,
-    CommandNode, CommonNode, ConditionOperand, ConditionPredicate, ConditionSelector, EdgeTarget,
-    ExportDefinition, ExportPresentation, FailurePolicy, FinalizationTrigger, FinalizerDefinition,
-    ForEach, InputDeclaration, Integration, IntegrationAs, IntegrationBinding, IntegrationProvider,
-    JsonDefault, MessageSource, NodeBody, OutcomeDeclaration, Output, OutputReference,
-    OwnerDeclaration, OwnerSource, PresentationSource, RecoveryHandler, RootBlocks, RootRequires,
-    SourceReference, StartRule, StepDefinition, StepRecovery, StopBefore, Trigger,
-    TriggerControlAction, TriggerRule, ValueReference, WaitKind, WaitRule, WorkflowDocument,
-    WorkflowNode,
+    CommandNode, CommonNode, ConditionOperand, ConditionPredicate, ConditionSelector,
+    DeclaredWorkspace, EdgeTarget, ExportDefinition, ExportPresentation, FailurePolicy,
+    FinalizationTrigger, FinalizerDefinition, ForEach, InputDeclaration, Integration,
+    IntegrationAs, IntegrationBinding, IntegrationProvider, JsonDefault, MessageSource, NodeBody,
+    OutcomeDeclaration, Output, OutputReference, OwnerDeclaration, OwnerSource, PresentationSource,
+    RecoveryHandler, RootBlocks, RootRequires, SourceReference, StartRule, StepDefinition,
+    StepRecovery, StopBefore, Trigger, TriggerControlAction, TriggerRule, ValueReference, WaitKind,
+    WaitRule, WorkflowDocument, WorkflowNode,
 };
 use super::mirror::{MirrorBlock, MirrorState};
 use super::validated::ValidatedHarness;
@@ -423,6 +423,15 @@ impl InputDeclarationDto {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WorkspaceDto {
+    New,
+    Write,
+    Read,
+    None,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "kind")]
 enum StepDto {
     #[serde(rename = "cmd")]
@@ -431,6 +440,7 @@ enum StepDto {
         body: CommandNodeDto,
         #[serde(rename = "dependsOn", default)]
         control_dependencies: Vec<String>,
+        workspace: Option<WorkspaceDto>,
         recovery: Option<RecoveryDto>,
         #[serde(rename = "infrastructureExitCodes", default)]
         infrastructure_exit_codes: Vec<u8>,
@@ -441,6 +451,7 @@ enum StepDto {
         body: AgentNodeDto,
         #[serde(rename = "dependsOn", default)]
         control_dependencies: Vec<String>,
+        workspace: Option<WorkspaceDto>,
         recovery: Option<RecoveryDto>,
     },
     #[serde(rename = "workflow")]
@@ -455,7 +466,7 @@ enum StepDto {
 }
 
 /// `forEach` is a reference string like `outcome.from`, not a `{ref}` object, or the
-/// object `{items, empty}` (REQ-WFFORMAT-98).
+/// object `{items, empty}`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ForEachDto {
@@ -496,8 +507,8 @@ enum EdgeTargetDto {
     Target(String),
 }
 
-/// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111); validation requires `limit` and
-/// `else`, which the schema leaves optional.
+/// `{wait: host, then, limit, else}`; validation requires `limit` and `else`, which the
+/// schema leaves optional.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostWaitTargetDto {
@@ -724,8 +735,8 @@ enum MessageSourceDto {
         #[serde(rename = "ref")]
         reference: String,
     },
-    /// The structural schema admits it only in an ordinary step's message
-    /// (REQ-WFFORMAT-105).
+    /// The structural schema admits it only in an ordinary step's
+    /// message.
     FirstOf {
         #[serde(rename = "firstOf")]
         sources: Vec<String>,
@@ -891,7 +902,7 @@ struct ReferenceDto {
 }
 
 /// A command node's input: a `{ref}`, or a `{firstOf}`, which the structural schema admits
-/// only in an ordinary step's `inputs` (REQ-WFFORMAT-105).
+/// only in an ordinary step's `inputs`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum InputBindingDto {
@@ -930,7 +941,7 @@ where
 }
 
 /// A node's `environmentPassthrough`, under the root list's name rules; present as
-/// `Some` even when empty, so an absent list stays distinct (REQ-WFFORMAT-102).
+/// `Some` even when empty, so an absent list stays distinct.
 fn deserialize_node_environment_passthrough<'de, D>(
     deserializer: D,
 ) -> Result<Option<BTreeSet<String>>, D::Error>
@@ -940,8 +951,8 @@ where
     deserialize_environment_passthrough(deserializer).map(Some)
 }
 
-/// An export: the structural schema requires exactly one of `ref` and `firstOf`
-/// (REQ-WFFORMAT-107).
+/// An export: the structural schema requires exactly one of `ref` and
+/// `firstOf`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExportDto {
@@ -962,7 +973,7 @@ struct OutcomeDto {
     on_infrastructure: Option<String>,
 }
 
-/// `outcome.from`: an output reference string, or a `{firstOf}` (REQ-WFFORMAT-108).
+/// `outcome.from`: an output reference string, or a `{firstOf}`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum OutcomeSourceDto {
@@ -1167,54 +1178,66 @@ impl WorkflowDto {
 
 impl StepDto {
     fn into_step(self) -> Option<StepDefinition> {
-        let (body, control_dependencies, recovery, infrastructure_exit_codes) = match self {
-            Self::Command {
-                body,
-                control_dependencies,
-                recovery,
-                infrastructure_exit_codes,
-            } => (
-                body.into_body()?,
-                control_dependencies,
-                recovery,
-                infrastructure_exit_codes,
-            ),
-            Self::Agent {
-                body,
-                control_dependencies,
-                recovery,
-            } => (
-                body.into_body()?,
-                control_dependencies,
-                recovery,
-                Vec::new(),
-            ),
-            Self::Workflow {
-                workflow,
-                inputs,
-                on,
-                for_each,
-            } => (
-                NodeBody::Workflow(WorkflowNode {
+        let (body, control_dependencies, workspace, recovery, infrastructure_exit_codes) =
+            match self {
+                Self::Command {
+                    body,
+                    control_dependencies,
+                    workspace,
+                    recovery,
+                    infrastructure_exit_codes,
+                } => (
+                    body.into_body()?,
+                    control_dependencies,
+                    workspace,
+                    recovery,
+                    infrastructure_exit_codes,
+                ),
+                Self::Agent {
+                    body,
+                    control_dependencies,
+                    workspace,
+                    recovery,
+                } => (
+                    body.into_body()?,
+                    control_dependencies,
+                    workspace,
+                    recovery,
+                    Vec::new(),
+                ),
+                Self::Workflow {
                     workflow,
-                    inputs: parse_references(inputs, parse_workflow_step_reference)?,
-                    edges: on
-                        .into_iter()
-                        .map(|(outcome, target)| (outcome, target.into_target()))
-                        .collect(),
-                    for_each: match for_each {
-                        Some(for_each) => Some(for_each.into_for_each()?),
-                        None => None,
-                    },
-                }),
-                Vec::new(),
-                None,
-                Vec::new(),
-            ),
-        };
+                    inputs,
+                    on,
+                    for_each,
+                } => (
+                    NodeBody::Workflow(WorkflowNode {
+                        workflow,
+                        inputs: parse_references(inputs, parse_workflow_step_reference)?,
+                        edges: on
+                            .into_iter()
+                            .map(|(outcome, target)| (outcome, target.into_target()))
+                            .collect(),
+                        for_each: match for_each {
+                            Some(for_each) => Some(for_each.into_for_each()?),
+                            None => None,
+                        },
+                    }),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            };
         Some(StepDefinition {
             body,
             control_dependencies,
+            workspace: workspace.map(|value| match value {
+                WorkspaceDto::New => DeclaredWorkspace::New,
+                WorkspaceDto::Write => DeclaredWorkspace::Write,
+                WorkspaceDto::Read => DeclaredWorkspace::Read,
+                WorkspaceDto::None => DeclaredWorkspace::None,
+            }),
             recovery: recovery.map(RecoveryDto::into_recovery),
             infrastructure_exit_codes,
         })
@@ -1499,9 +1522,8 @@ fn parse_output_references(sources: &[String]) -> Option<Vec<OutputReference>> {
 }
 
 /// A `workflow` step's inputs also read the control that resolved a wait and the
-/// answers recorded for the step (REQ-WFFORMAT-95), and the element a `forEach` step's
-/// child runs for (REQ-WFFORMAT-99); the structural schema admits these forms nowhere
-/// else.
+/// answers recorded for the step, and the element a `forEach` step's child runs for;
+/// the structural schema admits these forms nowhere else.
 fn parse_workflow_step_reference(reference: &str) -> Option<ValueReference> {
     if reference == "controls.answers" {
         return Some(ValueReference::ControlsAnswers);

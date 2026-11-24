@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -15,7 +15,7 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// Grant : A member's grant of either kind; it never carries the grant's material (REQ-GRANT-4, REQ-GRANT-14). The members after `authorizations` are those its kind adds.
+/// Grant : A member's grant of either kind; it never carries the grant's material. The members after `authorizations` are those its kind adds.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Grant {
     /// The grant's opaque, stable identifier, `pgr_` for an OAuth grant and `agl_` for a native grant.
@@ -75,7 +75,7 @@ pub struct Grant {
     /// For a native grant, when it was revoked or erased, omitted while it is active.
     #[serde(rename = "revokedAt", skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<String>,
-    /// For a native grant, for each runner whose authorization of it has ended, the authorization that ended last, whether or not that runner is authorized again, in the order they ended (REQ-GRANT-13). The server always sends it for a native grant, empty when there is none.
+    /// For a native grant, for each runner whose authorization of it has ended, the authorization that ended last, whether or not that runner is authorized again, in the order they ended. The server always sends it for a native grant, empty when there is none.
     #[serde(
         rename = "endedAuthorizations",
         skip_serializing_if = "Option::is_none"
@@ -84,7 +84,7 @@ pub struct Grant {
 }
 
 impl Grant {
-    /// A member's grant of either kind; it never carries the grant's material (REQ-GRANT-4, REQ-GRANT-14). The members after `authorizations` are those its kind adds.
+    /// A member's grant of either kind; it never carries the grant's material. The members after `authorizations` are those its kind adds.
     pub fn new(
         id: String,
         kind: Kind,

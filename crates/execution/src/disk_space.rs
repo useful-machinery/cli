@@ -1,11 +1,11 @@
-//! The disk rule (REQ-RUNNERENROLL-152): how much space a filesystem has, read in one
-//! `statvfs`, when that is low against a minimum, and how a size is written for a person.
-//! The serving runner's monitor, `useful runner doctor`'s check and the engine's gate all
-//! judge a disk through these, so a reading means the same thing everywhere it is read.
+//! The disk rule: how much space a filesystem has, read in one `statvfs`, when that is
+//! low against a minimum, and how a size is written for a person. The serving runner's
+//! monitor, `useful runner doctor`'s check and the engine's gate all judge a disk through
+//! these, so a reading means the same thing everywhere it is read.
 //!
 //! It also holds the gate a `useful workflow run` process builds from the runner's internal
-//! variable (INV-ENGINE-46): the runner writes the variable through `RunnerDiskGate` and the
-//! attempt reads it back through the same type, so the two ends cannot drift.
+//! variable: the runner writes the variable through `RunnerDiskGate` and the attempt reads
+//! it back through the same type, so the two ends cannot drift.
 
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -75,8 +75,8 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 /// The variable through which the runner names the disk a tree run's `useful workflow run`
-/// processes hold their steps by (INV-ENGINE-46). It is engine-reserved: like every
-/// `USEFUL_*` name it never reaches a step, an agent or a child (INV-ENGINE-43).
+/// processes hold their steps by. It is engine-reserved: like every `USEFUL_*` name it
+/// never reaches a step, an agent or a child.
 pub const RUNNER_DISK_GATE_ENVIRONMENT: &str = "USEFUL_RUNNER_DISK_GATE";
 
 /// The disk a run's steps are held by and the minimum free space they wait for, as the
@@ -177,9 +177,9 @@ impl RunnerDiskGate {
 /// What reads a filesystem's space: `read_disk_space` in production, a script in tests.
 type DiskReader = Box<dyn Fn(&Path) -> io::Result<DiskSpace> + Send + Sync>;
 
-/// The start gate over a `RunnerDiskGate` (INV-ENGINE-46): each read judges the disk by
-/// `DiskSpace::is_low`. A failed read keeps the last good reading, and with none the gate is
-/// open, so a disk that cannot be read never holds a run.
+/// The start gate over a `RunnerDiskGate`: each read judges the disk by `DiskSpace::is_low`.
+/// A failed read keeps the last good reading, and with none the gate is open, so a disk that
+/// cannot be read never holds a run.
 pub struct RunnerDiskStartGate {
     gate: RunnerDiskGate,
     reader: DiskReader,
@@ -221,8 +221,8 @@ impl StepStartGate for RunnerDiskStartGate {
 mod tests {
     use super::*;
 
-    // REQ-RUNNERENROLL-152: the disk is low while the available space is below the minimum,
-    // and a minimum of 0 is never reached from below.
+    // The disk is low while the available space is below the minimum, and a minimum of 0 is
+    // never reached from below.
     #[test]
     fn a_disk_is_low_only_below_its_minimum() {
         let space = DiskSpace {
@@ -239,8 +239,8 @@ mod tests {
         assert!(full.is_low(1));
     }
 
-    // REQ-RUNNERENROLL-152: a reading gives the filesystem's size and no more available
-    // than that; a path that does not exist is not read.
+    // A reading gives the filesystem's size and no more available than that; a path
+    // that does not exist is not read.
     #[test]
     fn a_directory_reads_its_filesystem_and_a_missing_path_does_not() {
         let directory = tempfile::tempdir().unwrap();
@@ -252,8 +252,8 @@ mod tests {
         assert_eq!(missing.kind(), io::ErrorKind::NotFound);
     }
 
-    // REQ-RUNNERENROLL-152: sizes are written in binary units, floored, with one decimal
-    // below 10, so a size a byte under a unit's boundary never reads as the boundary.
+    // Sizes are written in binary units, floored, with one decimal below 10, so a size a
+    // byte under a unit's boundary never reads as the boundary.
     #[test]
     fn sizes_are_floored_binary_units() {
         for (bytes, written) in [
@@ -272,8 +272,8 @@ mod tests {
         }
     }
 
-    // INV-ENGINE-46: a value is the decimal minimum, the first `:`, then the absolute path,
-    // which may hold `:`, and it round-trips.
+    // A value is the decimal minimum, the first `:`, then the absolute path, which may hold
+    // `:`, and it round-trips.
     #[test]
     fn the_runner_variable_names_a_minimum_and_an_absolute_path() {
         let read = |value: &str| RunnerDiskGate::from_environment_value(OsStr::new(value));
@@ -301,8 +301,8 @@ mod tests {
         assert_eq!(gate.environment_value(), not_utf8);
     }
 
-    // INV-ENGINE-46: a value that is empty, has no decimal minimum within the maximum or names
-    // a relative path is refused, and so is a gate built from either.
+    // A value that is empty, has no decimal minimum within the maximum or names a relative
+    // path is refused, and so is a gate built from either.
     #[test]
     fn a_malformed_runner_variable_is_refused() {
         let read = |value: &str| RunnerDiskGate::from_environment_value(OsStr::new(value));
@@ -337,8 +337,8 @@ mod tests {
         );
     }
 
-    // INV-ENGINE-46: the gate holds below the minimum with the reading's figures and is open
-    // at or above it; a failed read keeps the last good answer, and with none is open.
+    // The gate holds below the minimum with the reading's figures and is open at or above
+    // it; a failed read keeps the last good answer, and with none is open.
     #[test]
     fn the_disk_gate_judges_each_reading_and_keeps_the_last_good_one() {
         let answers = std::sync::Arc::new(Mutex::new(std::collections::VecDeque::<

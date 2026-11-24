@@ -1,8 +1,7 @@
-//! `useful workflow run pause` and `useful workflow run unpause` (REQ-LOCALRUN-185): hold the
-//! run `RUN` names before a step and release the hold, the run found under the `useful` home
-//! and then in Cloud (REQ-LOCALRUN-180). A run under the home records the `control.stop` or
-//! `control.lift` the run reads; a Cloud run's control is carried to its runner instead
-//! (REQ-LOCALRUN-210).
+//! `useful workflow run pause` and `useful workflow run unpause`: hold the run `RUN` names
+//! before a step and release the hold, the run found under the `useful` home and then in
+//! Cloud. A run under the home records the `control.stop` or `control.lift` the run reads; a
+//! Cloud run's control is carried to its runner instead.
 
 use std::collections::BTreeSet;
 
@@ -193,7 +192,7 @@ fn unpause(target: &ControlTarget, before: Option<&str>) -> Result<Acted, Contro
     };
     // The run's `stop` wait for this step, when it is in one, is the wait the lift acts on:
     // the root's own before the step, or the one it carries from a nested run, whose `step`
-    // path ends in the nested step (REQ-WFEXEC-76).
+    // path ends in the nested step.
     let wait = target
         .wait()
         .filter(|wait| {

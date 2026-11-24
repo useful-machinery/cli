@@ -1,5 +1,5 @@
 //! Running a provider's own program for a sign-in or a consent: finding it on `PATH` only and
-//! waiting for it while a signal that would stop `useful` is passed to it instead (INV-CLI-13).
+//! waiting for it while a signal that would stop `useful` is passed to it instead.
 
 use std::ffi::OsStr;
 use std::io;
@@ -36,8 +36,8 @@ pub(super) enum End {
     Interrupted(Stop),
 }
 
-/// A signal that asked for a sign-in to stop, which stops several sign-ins with its status
-/// (REQ-GRANT-183): an interrupt, or a request to terminate.
+/// A signal that asked for a sign-in to stop, which stops several sign-ins with its
+/// status: an interrupt, or a request to terminate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::cli) enum Stop {
     Interrupt,
@@ -147,7 +147,6 @@ mod tests {
         up.join(directory.strip_prefix("/").unwrap())
     }
 
-    // INV-CLI-13
     #[test]
     fn the_first_executable_regular_file_in_an_absolute_directory_is_taken() {
         let first = tempfile::tempdir().unwrap();
@@ -160,7 +159,6 @@ mod tests {
         assert_eq!(super::find(None, PROGRAM), None);
     }
 
-    // INV-CLI-13
     #[test]
     fn a_relative_directory_a_directory_of_the_name_and_a_non_executable_file_are_skipped() {
         let in_relative = tempfile::tempdir().unwrap();

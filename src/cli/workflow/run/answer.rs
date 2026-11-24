@@ -1,7 +1,7 @@
-//! `useful workflow run answer` (REQ-LOCALRUN-182): answers the run `RUN` names, found under
-//! the `useful` home and then in Cloud (REQ-LOCALRUN-180). A run under the home records the
-//! answer and, once the answers complete the wait, continues in this command; a Cloud run's
-//! answer is carried to its runner instead (REQ-LOCALRUN-210).
+//! `useful workflow run answer`: answers the run `RUN` names, found under the `useful` home
+//! and then in Cloud. A run under the home records the answer and, once the answers complete
+//! the wait, continues in this command; a Cloud run's answer is carried to its runner
+//! instead.
 
 use clap::Args;
 use serde_json::{Map, Value};

@@ -62,6 +62,7 @@ mod schema_common;
 pub(crate) mod socket_alias;
 pub(crate) mod start_gate;
 pub(crate) mod step_runtime;
+pub(crate) mod step_workspace;
 mod strict_yaml;
 pub(crate) mod structure;
 pub(crate) mod subject_index;
@@ -132,7 +133,7 @@ const MAXIMUM_WORKFLOW_FILE_BYTES: usize = 1024 * 1024;
 pub(crate) struct DecodeFailure {
     kind: DecodeFailureKind,
     diagnostic: &'static str,
-    /// The field and the rule of a structural failure (REQ-WFFORMAT-103).
+    /// The field and the rule of a structural failure.
     violation: Option<StructureViolation>,
 }
 

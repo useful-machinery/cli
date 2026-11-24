@@ -232,6 +232,9 @@ pub(in crate::workflow) fn live_step_detail(step: &WorkflowRunStepView) -> Optio
         Some(ObservedStepTransition::OutputsCommitted { outputs, .. }) => {
             Some(output_count_detail(outputs.len()))
         }
+        Some(ObservedStepTransition::Inherited { detail, .. }) => {
+            Some(crate::workflow::render_style::inherited_detail(detail))
+        }
         Some(ObservedStepTransition::Failed { detail, .. }) => Some(issue_detail_for_step(
             canonical_failure_detail(detail),
             &step.definition,
@@ -262,8 +265,8 @@ pub(in crate::workflow) fn live_step_detail(step: &WorkflowRunStepView) -> Optio
     }
 }
 
-/// The failed child of a stage whose child failed, with the outputs it committed
-/// (REQ-LOCALRUN-221); `None` for any other step. A failed stage is not an advisory issue.
+/// The failed child of a stage whose child failed, with the outputs it committed; `None`
+/// for any other step. A failed stage is not an advisory issue.
 pub(super) fn live_failed_stage_detail(step: &WorkflowRunStepView) -> Option<String> {
     step.failed_child.as_ref().map(|failed_child| {
         crate::workflow::presentation::failed_stage_detail(

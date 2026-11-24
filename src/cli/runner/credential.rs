@@ -69,7 +69,7 @@ struct RevokeCommand {
     options: CloudOptions,
 }
 
-/// The grace of a scheduled retirement, which Cloud fixes at one hour (REQ-RUNNERENROLL-53).
+/// The grace of a scheduled retirement, which Cloud fixes at one hour.
 #[derive(Clone, Copy, Debug)]
 struct RetirementGrace;
 
@@ -190,8 +190,8 @@ impl RevokeCommand {
             org,
             options,
         } = self;
-        // With `--after`, the revocation is the retirement Cloud schedules one hour out
-        // (REQ-RUNNERENROLL-53); without it, the revocation is immediate (REQ-RUNNERENROLL-54).
+        // With `--after`, the revocation is the retirement Cloud schedules one hour out;
+        // without it, the revocation is immediate.
         let retire = after.is_some();
         super::execute_in(org, options, deployment, |options, organization| {
             let key = generate_idempotency_key().context(if retire {

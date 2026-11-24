@@ -1,13 +1,13 @@
-//! Reading the root's text exports a tree run's finish lists (REQ-RUNNERENROLL-131): the
-//! result the run's current attempt published, found through `state.json`, lists each
-//! export in `result.json`'s `exports`, in the order of the names by their bytes, which is
-//! the order the engine wrote them. Each export that result lists `available` with kind
-//! `text` is listed, the first `MAXIMUM_TREE_EXPORTS` that can be, with its text when it is
-//! within the one-text bound and the texts carried with it within the finish's total, and
-//! otherwise by the size its result records, its carrier unread. A carrier is read through
-//! the engine's reader of a run directory, never past the one-text bound. What cannot be
-//! read is left out, and the class of the first fault is kept for the run event; nothing of
-//! a path, an operating-system message or an export's name or text goes into the class.
+//! Reading the root's text exports a tree run's finish lists: the result the run's current
+//! attempt published, found through `state.json`, lists each export in `result.json`'s
+//! `exports`, in the order of the names by their bytes, which is the order the engine wrote
+//! them. Each export that result lists `available` with kind `text` is listed, the first
+//! `MAXIMUM_TREE_EXPORTS` that can be, with its text when it is within the one-text bound
+//! and the texts carried with it within the finish's total, and otherwise by the size its
+//! result records, its carrier unread. A carrier is read through the engine's reader of a
+//! run directory, never past the one-text bound. What cannot be read is left out, and the
+//! class of the first fault is kept for the run event; nothing of a path, an
+//! operating-system message or an export's name or text goes into the class.
 
 use std::path::Path;
 

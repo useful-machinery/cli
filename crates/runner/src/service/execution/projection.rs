@@ -258,7 +258,8 @@ pub(super) fn workflow_event(
                         }
                         event.insert("recoveryProgress".to_owned(), Value::Object(progress));
                     }
-                    ObservedStepTransition::OutputsCommitted { .. } => {}
+                    ObservedStepTransition::OutputsCommitted { .. }
+                    | ObservedStepTransition::Inherited { .. } => {}
                     // The frame carries no failure class; Cloud reads none.
                     ObservedStepTransition::Failed { detail, .. } => {
                         event.insert("detail".to_owned(), json!(detail));

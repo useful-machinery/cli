@@ -1,8 +1,8 @@
-//! The run record `run.json` (REQ-WFDEF-4, REQ-LOCALRUN-175): the shape published as
+//! The run record `run.json`: the shape published as
 //! `contracts/jsonschema/workflow-run-v1.schema.json`. A run admitted from a tree holds one
-//! beside the engine's identity record `local-run.json`; `local_run` writes it into the
-//! staging root and rewrites its `state`, `attempts` and `outcome` as attempts start and settle,
-//! and its `edges` as a counted edge starts an attempt (REQ-WFEXEC-64).
+//! beside the engine's identity record `local-run.json`; `local_run` writes it into the staging
+//! root and rewrites its `state`, `attempts` and `outcome` as attempts start and settle, and its
+//! `edges` as a counted edge starts an attempt.
 
 use std::collections::BTreeMap;
 
@@ -54,9 +54,8 @@ pub struct WorkflowRunRecord {
     #[serde(deserialize_with = "Option::deserialize")]
     pub successor: Option<String>,
     pub external: BTreeMap<String, String>,
-    /// The continuations each limited edge started, by `<step>.<outcome>` (REQ-WFDEF-50,
-    /// REQ-WFEXEC-64); empty for a run that took none. A record written before the field
-    /// existed reads as empty.
+    /// The continuations each limited edge started, by `<step>.<outcome>`; empty for a
+    /// run that took none. A record written before the field existed reads as empty.
     #[serde(default)]
     pub edges: BTreeMap<String, u64>,
 }
@@ -112,10 +111,10 @@ impl WorkflowRunRecord {
         }
     }
 
-    /// A fresh record for the child run a `workflow` step of `parent` starts
-    /// (REQ-LOCALRUN-177): as `new`, with the parent's `definition`, `revision`, `tree`,
-    /// `owner` and `subject`, `workflow` the child file, and `parent` naming the parent run,
-    /// `step` and, for a fan-out child, `item`, the one-based element it runs for.
+    /// A fresh record for the child run a `workflow` step of `parent` starts: as `new`, with
+    /// the parent's `definition`, `revision`, `tree`, `owner` and `subject`, `workflow` the
+    /// child file, and `parent` naming the parent run, `step` and, for a fan-out child,
+    /// `item`, the one-based element it runs for.
     pub fn child_of(parent: &Self, step: &str, workflow: &str, item: Option<u64>) -> Self {
         let mut child = Self::new(None, &parent.tree, workflow, &parent.owner);
         child.definition.clone_from(&parent.definition);
@@ -130,7 +129,7 @@ impl WorkflowRunRecord {
     }
 
     /// Whether `name` may name an `external` reference `useful workflow run create --external`
-    /// records (REQ-LOCALRUN-209): a lowercase letter, then letters, digits and dots.
+    /// records: a lowercase letter, then letters, digits and dots.
     pub fn is_external_name(name: &str) -> bool {
         let mut characters = name.chars();
         characters
@@ -141,9 +140,9 @@ impl WorkflowRunRecord {
 
     /// The facts this crate writes and relies on: the ids, the definition and revision
     /// present together, the tree digest, a tree-relative workflow, a subject of the subject
-    /// form (REQ-WFDEF-28), a parent naming a run, a step and an element of at least 1, a
-    /// position of step identifiers and elements of at least 1, an owner, a start time, at
-    /// least one attempt and positive edge counts under `<step>.<outcome>` keys.
+    /// form, a parent naming a run, a step and an element of at least 1, a position of step
+    /// identifiers and elements of at least 1, an owner, a start time, at least one attempt
+    /// and positive edge counts under `<step>.<outcome>` keys.
     pub fn is_valid(&self) -> bool {
         self.schema_version == SCHEMA_VERSION
             && is_prefixed_ulid(&self.id, RUN_ID_PREFIX)
@@ -174,8 +173,8 @@ impl WorkflowRunRecord {
     }
 }
 
-/// A position element (REQ-WFDEF-48): a step identifier, or `{"item": n}` naming the
-/// one-based element of a fan-out.
+/// A position element: a step identifier, or `{"item": n}` naming the one-based
+/// element of a fan-out.
 pub(crate) fn is_position_element(element: &Value) -> bool {
     match element {
         Value::String(step) => is_identifier(step),
@@ -212,7 +211,6 @@ mod tests {
         record
     }
 
-    // REQ-LOCALRUN-177
     #[test]
     fn a_child_carries_its_parents_subject() {
         let parent = root();
@@ -221,7 +219,6 @@ mod tests {
         assert!(child.is_valid());
     }
 
-    // REQ-LOCALRUN-175, REQ-WFDEF-28
     #[test]
     fn a_subject_outside_the_subject_form_is_invalid() {
         let mut record = root();

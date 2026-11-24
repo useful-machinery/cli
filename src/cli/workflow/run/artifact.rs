@@ -1,7 +1,7 @@
-//! `useful workflow run artifact` (REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-29): a Cloud run's
-//! Artifact Set, which `list` and `download` find by `RUN` in Cloud alone in the organization in
-//! effect (REQ-LOCALRUN-180), reading nothing under the `useful` home, and the offline check of a
-//! downloaded artifact directory, which reads no credential and sends no request.
+//! `useful workflow run artifact`: a Cloud run's Artifact Set, which `list` and `download` find
+//! by `RUN` in Cloud alone in the organization in effect, reading nothing under the `useful`
+//! home, and the offline check of a downloaded artifact directory, which reads no credential and
+//! sends no request.
 
 mod assembly;
 mod download;

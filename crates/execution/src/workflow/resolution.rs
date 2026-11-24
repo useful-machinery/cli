@@ -141,7 +141,7 @@ impl ResolutionFailure {
     }
 
     /// The field and the rule of an `invalid_workflow_structure` or a structural
-    /// `invalid_replacement_document` failure (REQ-WFFORMAT-52).
+    /// `invalid_replacement_document` failure.
     pub(crate) fn structure_violation(&self) -> Option<&StructureViolation> {
         self.violation.as_deref()
     }
@@ -238,8 +238,8 @@ pub struct ResolvedWorkflow {
 }
 
 impl ResolvedWorkflow {
-    /// The declared inputs a run must supply: neither optional nor defaulted
-    /// (REQ-WFFORMAT-31).
+    /// The declared inputs a run must supply: neither optional nor
+    /// defaulted.
     pub fn required_inputs(&self) -> DeclaredInputs {
         self.definition
             .declared_inputs
@@ -525,17 +525,17 @@ fn resolve_decoded_workflow(
 type ChildExportSchemas = BTreeMap<String, BTreeMap<String, RetainedJsonSchema>>;
 
 /// How many `workflow` steps below the file being validated a child is a stage: one there
-/// that itself declares a `workflow` step is past the bound (REQ-WFFORMAT-104).
+/// that itself declares a `workflow` step is past the bound.
 const STAGE_DEPTH: usize = 2;
 
 /// Resolve each child workflow file a `workflow` step of the document `depth` steps below
-/// the file being validated names (REQ-WFFORMAT-89): check its path, read it through the
-/// same sources, resolve it as its own workflow one level deeper, fold its closure into the
-/// parent's so the parent's digest covers it, and summarize it for validation. A child at
-/// the stage depth that itself declares a `workflow` step is summarized as past the bound
-/// without resolving it, so resolution never recurses past two levels and a chain of files
-/// that name each other ends there (REQ-WFFORMAT-104). The schemas of a resolved child's
-/// `json` exports are kept for the `workflow` steps that run it.
+/// the file being validated names: check its path, read it through the same sources,
+/// resolve it as its own workflow one level deeper, fold its closure into the parent's so
+/// the parent's digest covers it, and summarize it for validation. A child at the stage
+/// depth that itself declares a `workflow` step is summarized as past the bound without
+/// resolving it, so resolution never recurses past two levels and a chain of files that
+/// name each other ends there. The schemas of a resolved child's `json` exports are kept
+/// for the `workflow` steps that run it.
 fn resolve_children(
     document: &WorkflowDocument,
     workflow_path: &str,
@@ -584,7 +584,7 @@ fn resolve_children(
         let child_path = loaded.canonical_path.clone();
         let invalid = |cause: ResolutionFailure| {
             // A nested workflow whose own child is past the bound makes this step's chain
-            // too deep, which is this step's failure (REQ-WFFORMAT-104).
+            // too deep, which is this step's failure.
             let kind = if cause.kind
                 == ResolutionFailureKind::InvalidWorkflowDefinition(
                     ValidationFailureKind::ChildWorkflowNested,
@@ -621,8 +621,8 @@ fn resolve_children(
                     .definition
                     .exports
                     .iter()
-                    // Every source of a `firstOf` declares the same `schema` path
-                    // (REQ-WFFORMAT-106), so the first source's schema is the export's.
+                    // Every source of a `firstOf` declares the same `schema` path, so
+                    // the first source's schema is the export's.
                     .filter_map(|(export, sources)| {
                         let source = sources.first();
                         child
@@ -668,7 +668,7 @@ fn workflow_step_export_schemas(
         .collect()
 }
 
-/// A child is a workflow file beside the root (REQ-WFDEF-8) other than the file naming it.
+/// A child is a workflow file beside the root other than the file naming it.
 fn is_child_workflow_path(path: &str, workflow_path: &str) -> bool {
     super::tree::is_workflow_file_beside_root(path) && path != workflow_path
 }
@@ -955,7 +955,7 @@ impl SourceResolver {
     /// Add a child's closure to this one; a path both read holds the same bytes. Only the
     /// paths the child's resolution reached are reached here: the rest of its closure is
     /// what this resolver had read before the fork, which a nested workflow's step must not
-    /// count as its child's (REQ-WFFORMAT-122).
+    /// count as its child's.
     fn fold(
         &mut self,
         closure: &BTreeMap<String, Arc<[u8]>>,

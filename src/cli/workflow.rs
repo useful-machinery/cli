@@ -45,10 +45,10 @@ pub(super) struct PresentationOptions {
     pub(super) color: ColorArgument,
 }
 
-/// The run directory `run` names under the `useful` home (REQ-LOCALRUN-180): a single
-/// component of a run id's form is the run with that id under the `useful` home; a single
-/// component of a subject's form that names no existing path is the run the home's subject
-/// index holds for it; anything else is the directory itself.
+/// The run directory `run` names under the `useful` home: a single component of a run id's
+/// form is the run with that id under the `useful` home; a single component of a subject's
+/// form that names no existing path is the run the home's subject index holds for it;
+/// anything else is the directory itself.
 pub(super) fn resolve_under_home(run: &Path) -> Result<PathBuf, RunAddressError> {
     let Some(value) = run.to_str() else {
         return Ok(run.to_path_buf());
@@ -125,8 +125,8 @@ pub(super) const RUN_NOT_FOUND: &str = "run_not_found";
 const RUN_DIRECTORY_UNAVAILABLE: &str = "run_directory_unavailable";
 pub(super) const SUBJECT_AMBIGUOUS: &str = "subject_ambiguous";
 
-/// A run id or subject `RUN` the `useful` home does not answer (REQ-LOCALRUN-180): `code` is
-/// `run_not_found`, `subject_ambiguous` (the message names the runs), `home_unavailable`, or
+/// A run id or subject `RUN` the `useful` home does not answer: `code` is `run_not_found`,
+/// `subject_ambiguous` (the message names the runs), `home_unavailable`, or
 /// `run_directory_unavailable` when the home's runs cannot be read, with that failure as its
 /// source.
 #[derive(Debug)]
@@ -241,8 +241,7 @@ pub(super) const fn state_name(state: useful_execution::RunState) -> &'static st
     }
 }
 
-/// The invoking user's login name: `USER`, then `LOGNAME`, else `unknown` (REQ-WFDEF-22,
-/// REQ-LOCALRUN-175).
+/// The invoking user's login name: `USER`, then `LOGNAME`, else `unknown`.
 pub(super) fn login_name() -> String {
     ["USER", "LOGNAME"]
         .into_iter()
@@ -309,7 +308,7 @@ pub(super) async fn first_view_signal(
 }
 
 /// A viewer's exit status for its ending: 0 for `q`, 130 and 143 for an interrupt and a
-/// termination (REQ-LOCALRUN-70).
+/// termination.
 pub(super) fn viewer_exit_code(exit: ArchivedTerminalHostExit) -> ExitCode {
     match exit {
         ArchivedTerminalHostExit::Quit => OutcomeClass::Success,
@@ -319,8 +318,8 @@ pub(super) fn viewer_exit_code(exit: ArchivedTerminalHostExit) -> ExitCode {
     .exit_code()
 }
 
-/// The diagnostic of a viewer whose terminal failed (REQ-LOCALRUN-72); `command` names
-/// the viewer, `workflow view` or `runner watch`.
+/// The diagnostic of a viewer whose terminal failed; `command` names the viewer,
+/// `workflow view` or `runner watch`.
 pub(super) fn terminal_failure(command: &str, failure: &PresentationFailure) -> anyhow::Error {
     if failure.panic_message.is_some() {
         return anyhow::anyhow!("{failure}");

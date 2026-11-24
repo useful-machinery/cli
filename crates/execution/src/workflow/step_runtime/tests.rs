@@ -636,7 +636,6 @@ async fn cancelled_stalled_launch_cleans_worker_fixture() {
     .await;
 }
 
-// REQ-WFEXEC-19, REQ-WFEXEC-22
 #[tokio::test]
 async fn command_uses_contained_cwd_literal_argv_and_isolates_parent_environment() {
     with_watchdog(async {
@@ -679,7 +678,6 @@ async fn command_uses_contained_cwd_literal_argv_and_isolates_parent_environment
     .await;
 }
 
-// REQ-WFEXEC-22, REQ-WFEXEC-25
 #[tokio::test]
 async fn concurrent_consumers_receive_private_inputs_and_reserved_environment() {
     with_watchdog(async {
@@ -798,7 +796,6 @@ async fn concurrent_consumers_receive_private_inputs_and_reserved_environment() 
     .await;
 }
 
-// REQ-WFEXEC-25
 #[tokio::test]
 async fn concurrent_consumers_copy_one_committed_file_without_shared_mutation() {
     with_watchdog(async {
@@ -886,7 +883,6 @@ async fn concurrent_consumers_copy_one_committed_file_without_shared_mutation() 
     .await;
 }
 
-// REQ-WFCOND-45, INV-ENGINE-44
 #[tokio::test]
 async fn a_first_of_input_materializes_the_chosen_file_output() {
     with_watchdog(async {
@@ -1376,7 +1372,6 @@ steps:
     .await;
 }
 
-// REQ-WFEXEC-46
 #[tokio::test]
 async fn cancel_first_rejects_a_ready_candidate_and_commit_first_retains_it() {
     with_watchdog(async {
@@ -1509,7 +1504,6 @@ fn assert_interrupted(state: &StepState<CapturedValue>, phase: runtime::FailureP
     );
 }
 
-// REQ-WFEXEC-134
 #[tokio::test]
 async fn a_command_that_exits_zero_after_an_interruption_fails_interrupted_without_outputs() {
     with_watchdog(async {
@@ -1617,7 +1611,6 @@ exports:
     .await;
 }
 
-// REQ-WFEXEC-134
 #[tokio::test]
 async fn an_agent_cancelled_under_an_interruption_fails_interrupted() {
     with_watchdog(async {
@@ -1830,13 +1823,11 @@ steps:
     .await;
 }
 
-// INV-ENGINE-9
 #[tokio::test]
 async fn workflow_execution_rejects_artifact_staging_bound_to_another_execution() {
     assert_staging_binding_guard(StagingBindingMismatch::Artifact).await;
 }
 
-// INV-ENGINE-9
 #[tokio::test]
 async fn workflow_execution_rejects_input_staging_bound_to_another_execution() {
     assert_staging_binding_guard(StagingBindingMismatch::Input).await;
@@ -1950,7 +1941,6 @@ async fn workflow_execution_rejects_input_staging_with_a_different_live_limit() 
     assert!(commits.try_recv().is_err());
 }
 
-// REQ-OUTPUTS-1
 #[tokio::test]
 async fn workflow_execution_captures_declared_outputs_before_success() {
     with_watchdog(async {
@@ -2001,8 +1991,6 @@ async fn workflow_execution_captures_declared_outputs_before_success() {
     .await;
 }
 
-// REQ-OUTPUTS-9, REQ-EXPORTS-2
-// INV-ENGINE-12
 #[tokio::test]
 async fn multi_file_capture_emits_one_complete_typed_set_and_complete_exports() {
     let temporary = tempfile::tempdir().unwrap();
@@ -2211,8 +2199,6 @@ steps:
     ));
 }
 
-// REQ-OUTPUTS-2
-// INV-ENGINE-12
 #[tokio::test]
 async fn failed_set_rolls_back_without_removing_a_prior_steps_export() {
     let temporary = tempfile::tempdir().unwrap();
@@ -2380,8 +2366,6 @@ exports:
     ));
 }
 
-// REQ-WFEXEC-56
-// INV-ENGINE-17
 #[tokio::test]
 async fn outcome_source_outside_declared_outcomes_fails_capture() {
     let temporary = tempfile::tempdir().unwrap();
@@ -2483,8 +2467,6 @@ steps:
     ));
 }
 
-// REQ-WFEXEC-56
-// INV-ENGINE-17
 #[tokio::test]
 async fn every_first_of_outcome_source_is_checked_at_capture() {
     let temporary = tempfile::tempdir().unwrap();
@@ -2781,7 +2763,6 @@ async fn reducer_action_order_deterministically_allocates_contended_capture_budg
     );
 }
 
-// REQ-WFEXEC-20
 #[tokio::test]
 async fn bare_program_search_skips_a_candidate_inaccessible_to_the_caller() {
     with_watchdog(async {
@@ -2851,7 +2832,6 @@ async fn bare_program_search_skips_a_candidate_inaccessible_to_the_caller() {
     .await;
 }
 
-// REQ-WFEXEC-9, REQ-WFEXEC-20
 #[tokio::test]
 async fn cwd_and_launch_failures_are_typed_start_occurrences() {
     with_watchdog(async {
@@ -2908,7 +2888,6 @@ enum RebindingCommand {
     AbsolutePath,
 }
 
-// REQ-WFEXEC-48
 #[tokio::test]
 async fn execution_root_rebinding_at_the_prelaunch_boundary_fails_before_spawn() {
     assert_execution_root_rebinding_fails_before_spawn(RebindingCommand::Absolute).await;
@@ -3053,7 +3032,6 @@ async fn panicked_spawned_step_task_fails_the_named_step() {
     .await;
 }
 
-// REQ-WFEXEC-21
 #[tokio::test]
 async fn nonzero_exit_is_a_typed_execution_occurrence_with_the_start_action() {
     with_watchdog(async {
@@ -3718,7 +3696,6 @@ async fn cancellation_during_diagnostic_join_waits_for_readers() {
     .await;
 }
 
-// REQ-WFEXEC-19
 #[tokio::test]
 async fn concurrent_commands_receive_distinct_process_groups() {
     with_watchdog(async {
@@ -3962,7 +3939,6 @@ async fn sixty_second_local_grace_allows_clean_exit_after_thirty_seconds() {
     .await;
 }
 
-// REQ-WFEXEC-47
 #[tokio::test]
 async fn admitted_deadline_forces_the_stubborn_process_group_without_wall_clock_waiting() {
     with_watchdog(async {
@@ -4148,7 +4124,6 @@ async fn natural_exit_before_cancel_delivery_has_no_late_lifecycle_or_cleanup_wo
     .await;
 }
 
-// REQ-WFEXEC-47
 #[tokio::test]
 async fn cancellation_after_the_owned_child_exits_still_terminates_its_descendant() {
     with_watchdog(async {
@@ -5060,7 +5035,6 @@ async fn send_fixture_control(stream: &TcpStream, control: u8) -> bool {
     }
 }
 
-// REQ-WFRECOVERY-62
 #[test]
 fn recovery_handler_launch_refusal_keeps_its_cause() {
     assert_eq!(
@@ -5200,7 +5174,7 @@ struct ScriptedChildDispatcher {
     outcomes: Arc<std::sync::Mutex<std::collections::VecDeque<ChildRunOutcome>>>,
     started: bool,
     await_cancellation: bool,
-    /// The steps a stop control is in force for (REQ-WFEXEC-62).
+    /// The steps a stop control is in force for.
     stopped: Vec<String>,
     await_force_abort: bool,
     requests: mpsc::UnboundedSender<ChildReport>,
@@ -5268,7 +5242,7 @@ fn scripted_children(
 }
 
 /// A parent whose two steps run one child file that takes the control values as optional
-/// inputs (REQ-WFFORMAT-95).
+/// inputs.
 const CONTROL_PARENT_WORKFLOW: &str = "schemaVersion: 1
 outcomes: [landed]
 steps:
@@ -5405,7 +5379,7 @@ fn assert_step_failed_with(
     ));
 }
 
-// REQ-WFEXEC-60: a child that exits commits `outcome` and its available exports.
+// A child that exits commits `outcome` and its available exports.
 #[tokio::test]
 async fn an_exited_child_commits_its_outcome_and_available_exports() {
     with_watchdog(async {
@@ -5460,9 +5434,9 @@ async fn an_exited_child_commits_its_outcome_and_available_exports() {
     .await;
 }
 
-// REQ-WFEXEC-77, REQ-WFEXEC-112, REQ-WFEXEC-114, INV-ENGINE-42: a child that exits with a failure
-// settles its step `succeeded` on its outcome's edge with the failure recorded as the step's failed
-// child; one that exits with the outcome `failed` and no failure records none.
+// A child that exits with a failure settles its step `succeeded` on its outcome's edge with the
+// failure recorded as the step's failed child; one that exits with the outcome `failed` and no
+// failure records none.
 #[tokio::test]
 async fn an_exited_childs_failure_is_recorded_as_its_steps_failed_child() {
     with_watchdog(async {
@@ -5509,8 +5483,8 @@ async fn an_exited_childs_failure_is_recorded_as_its_steps_failed_child() {
     .await;
 }
 
-/// A parent whose `build` step fans out over `design`'s `parts` (REQ-WFFORMAT-98) and lands
-/// through a later step; `{for_each}` is the step's `forEach` value.
+/// A parent whose `build` step fans out over `design`'s `parts` and lands through a later
+/// step; `{for_each}` is the step's `forEach` value.
 const FAN_OUT_PARENT_WORKFLOW: &str = "schemaVersion: 1
 outcomes: [landed, failed]
 steps:
@@ -5747,9 +5721,9 @@ fn parts_abc() -> serde_json::Value {
     serde_json::json!([{"name": "a"}, {"name": "b"}, {"name": "c"}])
 }
 
-// REQ-WFEXEC-66, REQ-WFEXEC-94, REQ-WFEXEC-67: a fan-out runs one child per element in order with
-// `item` bound per element and every other input the same, goes on past an element whose outcome
-// routes to a later step, and commits the last element's outcome once.
+// A fan-out runs one child per element in order with `item` bound per element and every other
+// input the same, goes on past an element whose outcome routes to a later step, and commits the
+// last element's outcome once.
 #[tokio::test]
 async fn a_fan_out_runs_one_child_per_element_and_commits_the_last_outcome() {
     with_watchdog(async {
@@ -5794,8 +5768,8 @@ async fn a_fan_out_runs_one_child_per_element_and_commits_the_last_outcome() {
     .await;
 }
 
-// REQ-WFEXEC-94: an element whose outcome routes to a wait or an exit ends the step there;
-// the elements after it do not run.
+// An element whose outcome routes to a wait or an exit ends the step there; the elements
+// after it do not run.
 #[tokio::test]
 async fn a_fan_out_ends_at_an_element_that_waits_or_exits() {
     with_watchdog(async {
@@ -5845,8 +5819,7 @@ async fn a_fan_out_ends_at_an_element_that_waits_or_exits() {
     .await;
 }
 
-// REQ-WFEXEC-96: a continuation at the waiting step starts the fan-out at the element the
-// wait recorded.
+// A continuation at the waiting step starts the fan-out at the element the wait recorded.
 #[tokio::test]
 async fn a_fan_out_resumes_at_the_element_its_wait_recorded() {
     with_watchdog(async {
@@ -5876,8 +5849,8 @@ async fn a_fan_out_resumes_at_the_element_its_wait_recorded() {
     .await;
 }
 
-// REQ-WFEXEC-95: an empty list fails the step at `start` unless `empty` names its outcome,
-// which the step commits without running a child.
+// An empty list fails the step at `start` unless `empty` names its outcome, which the step
+// commits without running a child.
 #[tokio::test]
 async fn an_empty_fan_out_fails_at_start_or_commits_its_empty_outcome() {
     with_watchdog(async {
@@ -5920,9 +5893,8 @@ async fn an_empty_fan_out_fails_at_start_or_commits_its_empty_outcome() {
     .await;
 }
 
-// REQ-WFEXEC-67: a list that is not an array, or an element whose `item.<field>` is no
-// string for a required `text` input, fails the step at `start`; an optional input goes
-// without it.
+// A list that is not an array, or an element whose `item.<field>` is no string for a
+// required `text` input, fails the step at `start`; an optional input goes without it.
 #[tokio::test]
 async fn fan_out_values_are_checked_when_the_step_starts() {
     with_watchdog(async {
@@ -5978,7 +5950,7 @@ async fn fan_out_values_are_checked_when_the_step_starts() {
     .await;
 }
 
-// REQ-WFEXEC-60: a child that cannot be admitted fails the step at `start`.
+// A child that cannot be admitted fails the step at `start`.
 #[tokio::test]
 async fn a_rejected_child_fails_the_step_at_start() {
     with_watchdog(async {
@@ -6006,8 +5978,7 @@ async fn a_rejected_child_fails_the_step_at_start() {
     .await;
 }
 
-// REQ-WFEXEC-60: a child that ends without a published result fails the step at
-// `execution`.
+// A child that ends without a published result fails the step at `execution`.
 #[tokio::test]
 async fn an_interrupted_child_fails_the_step_at_execution() {
     with_watchdog(async {
@@ -6030,7 +6001,7 @@ async fn an_interrupted_child_fails_the_step_at_execution() {
     .await;
 }
 
-// REQ-WFEXEC-59: the runner runs no child, so its `workflow` step fails at `start`.
+// The runner runs no child, so its `workflow` step fails at `start`.
 #[tokio::test]
 async fn disabled_child_runs_fail_a_workflow_step_at_start() {
     with_watchdog(async {
@@ -6045,8 +6016,7 @@ async fn disabled_child_runs_fail_a_workflow_step_at_start() {
     .await;
 }
 
-// REQ-WFEXEC-90: a cancellation of the parent reaches the child, and the step ends
-// `cancelled`.
+// A cancellation of the parent reaches the child, and the step ends `cancelled`.
 #[tokio::test]
 async fn parent_cancellation_reaches_the_child_and_cancels_the_step() {
     with_watchdog(async {
@@ -6080,8 +6050,8 @@ async fn parent_cancellation_reaches_the_child_and_cancels_the_step() {
     .await;
 }
 
-/// A root whose `design` and `build` steps run `design.yaml` (REQ-WFEXEC-70): `{planned}` is
-/// `design`'s edge for its child's `planned` and `{failed}` its edge for `failed`.
+/// A root whose `design` and `build` steps run `design.yaml`: `{planned}` is `design`'s edge
+/// for its child's `planned` and `{failed}` its edge for `failed`.
 const INTERRUPTED_PARENT_WORKFLOW: &str = "schemaVersion: 1
 inputs:
   ticket:
@@ -6203,8 +6173,8 @@ impl ChildRunDispatcher for HeldChildDispatcher {
 
 /// Runs `fixture` with `endings` scripted, interrupts the run with `user_request` once the
 /// child at call `held` runs and, when `running` names it, its step is `running`, passes the
-/// parent's force-stop deadline while that child holds and then releases it
-/// (REQ-WFEXEC-70). A child whose step is not named never reports that it started.
+/// parent's force-stop deadline while that child holds and then releases it. A child whose
+/// step is not named never reports that it started.
 async fn interrupt_held_child(
     fixture: &ChildFixture,
     endings: Vec<ChildRunOutcome>,
@@ -6308,9 +6278,9 @@ fn not_reached_step(
     )
 }
 
-// REQ-WFEXEC-70, REQ-WFEXEC-99: an interruption reaches the running child as an interruption, never
-// forced at the parent's deadline, and the child it failed routes the step to its `repair` wait,
-// whose payload names the interruption.
+// An interruption reaches the running child as an interruption, never forced at the parent's
+// deadline, and the child it failed routes the step to its `repair` wait, whose payload names the
+// interruption.
 #[tokio::test]
 async fn an_interrupted_child_routes_its_step_to_the_repair_wait() {
     with_watchdog(async {
@@ -6380,8 +6350,8 @@ async fn an_interrupted_child_routes_its_step_to_the_repair_wait() {
     .await;
 }
 
-// REQ-WFEXEC-99: an interrupted child whose failure edge is a step, an exit, a limited edge
-// or an `answer` wait takes no edge: its step fails `interrupted` and the run fails.
+// An interrupted child whose failure edge is a step, an exit, a limited edge or an `answer`
+// wait takes no edge: its step fails `interrupted` and the run fails.
 #[tokio::test]
 async fn an_interrupted_child_takes_no_edge_but_a_repair_wait() {
     with_watchdog(async {
@@ -6429,9 +6399,9 @@ async fn an_interrupted_child_takes_no_edge_but_a_repair_wait() {
     .await;
 }
 
-// REQ-WFEXEC-101, REQ-WFEXEC-64: a child that exits on its own under an interruption settles
-// its step; an edge that would start a step ends the attempt `continued`, uncounted, with
-// nothing started, and a wait or an exit edge is taken as without the interruption.
+// A child that exits on its own under an interruption settles its step; an edge that would
+// start a step ends the attempt `continued`, uncounted, with nothing started, and a wait or
+// an exit edge is taken as without the interruption.
 #[tokio::test]
 async fn a_child_exiting_on_its_own_under_an_interruption_starts_no_step() {
     with_watchdog(async {
@@ -6478,9 +6448,8 @@ async fn a_child_exiting_on_its_own_under_an_interruption_starts_no_step() {
     .await;
 }
 
-// REQ-WFEXEC-102: a child that ends cancelled or without a result under an interruption
-// fails its step `interrupted` at `execution`, and a step whose child had not started fails
-// at `start`.
+// A child that ends cancelled or without a result under an interruption fails its step
+// `interrupted` at `execution`, and a step whose child had not started fails at `start`.
 #[tokio::test]
 async fn a_child_ending_without_an_outcome_under_an_interruption_fails_its_step() {
     with_watchdog(async {
@@ -6514,9 +6483,8 @@ async fn a_child_ending_without_an_outcome_under_an_interruption_fails_its_step(
     .await;
 }
 
-// REQ-WFEXEC-72, REQ-WFEXEC-128, REQ-WFEXEC-103: a continuation of a wait whose entry `workflow`
-// step the interruption reaches before its child started keeps that wait, with the step `not_run`
-// and no step failed.
+// A continuation of a wait whose entry `workflow` step the interruption reaches before its child
+// started keeps that wait, with the step `not_run` and no step failed.
 #[tokio::test]
 async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
     with_watchdog(async {
@@ -6560,8 +6528,7 @@ async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
     .await;
 }
 
-// REQ-WFEXEC-104, REQ-WFEXEC-66, REQ-WFEXEC-116: a fan-out interrupted at element 2 ends there
-// on its `repair` wait and runs no element 3.
+// A fan-out interrupted at element 2 ends there on its `repair` wait and runs no element 3.
 #[tokio::test]
 async fn an_interrupted_fan_out_element_ends_the_step_on_its_repair_wait() {
     with_watchdog(async {
@@ -6606,8 +6573,8 @@ async fn an_interrupted_fan_out_element_ends_the_step_on_its_repair_wait() {
     .await;
 }
 
-// REQ-WFEXEC-62: a stop control in force for a `workflow` step enters a `stop` wait at it
-// instead of starting its child.
+// A stop control in force for a `workflow` step enters a `stop` wait at it instead of
+// starting its child.
 #[tokio::test]
 async fn a_stop_in_force_enters_a_stop_wait_and_runs_no_child() {
     with_watchdog(async {
@@ -6714,8 +6681,8 @@ fn design_cancellation(sequence: u64, force: bool) -> TestRequestedAction {
     }
 }
 
-// REQ-WFEXEC-90: a force abort of the parent's step that follows its cancellation reaches
-// the running child, and the driver settles the step's cancellation.
+// A force abort of the parent's step that follows its cancellation reaches the running
+// child, and the driver settles the step's cancellation.
 #[tokio::test]
 async fn a_force_abort_after_cancellation_reaches_the_running_child() {
     with_watchdog(async {
@@ -6758,9 +6725,9 @@ async fn a_force_abort_after_cancellation_reaches_the_running_child() {
     .await;
 }
 
-// REQ-WFEXEC-63: a mapped `wait.<field>` is the resolving control's field when the wait
-// continues at the step and is omitted for any other step; `controls.answers` is the step's
-// recorded answers.
+// A mapped `wait.<field>` is the resolving control's field when the wait continues at the
+// step and is omitted for any other step; `controls.answers` is the step's recorded
+// answers.
 #[tokio::test]
 async fn control_values_reach_only_the_step_they_name() {
     with_watchdog(async {
@@ -6812,8 +6779,8 @@ async fn control_values_reach_only_the_step_they_name() {
     .await;
 }
 
-// REQ-WFEXEC-90: quiescing the driver for a runner shutdown revokes the running child with
-// the shutdown reason.
+// Quiescing the driver for a runner shutdown revokes the running child with the shutdown
+// reason.
 #[tokio::test]
 async fn runner_shutdown_revocation_reaches_the_running_child() {
     with_watchdog(async {
@@ -6912,9 +6879,9 @@ fn admit_marker_fixture(temporary: &Path) -> (AdmittedWorkflow, PathBuf) {
     (admitted, execution_root.join("marker"))
 }
 
-// INV-ENGINE-46: a command step waits at the start gate, still `starting` and unprepared, is
-// reported held once for its start, reads the gate again each 30 seconds of the runtime's
-// clock, and starts once the gate is open.
+// A command step waits at the start gate, still `starting` and unprepared, is reported held
+// once for its start, reads the gate again each 30 seconds of the runtime's clock, and
+// starts once the gate is open.
 #[tokio::test]
 async fn a_low_disk_holds_a_command_step_before_it_is_prepared_until_the_gate_opens() {
     with_watchdog(async {
@@ -6974,8 +6941,7 @@ async fn a_low_disk_holds_a_command_step_before_it_is_prepared_until_the_gate_op
     .await;
 }
 
-// INV-ENGINE-46: a held step's wake ends it as any unlaunched start ends, with nothing
-// launched.
+// A held step's wake ends it as any unlaunched start ends, with nothing launched.
 #[tokio::test]
 async fn a_held_step_cancelled_at_the_start_gate_quiesces_unlaunched() {
     with_watchdog(async {
@@ -7036,8 +7002,8 @@ steps:
       argv: ["/bin/false"]
 "#;
 
-// INV-ENGINE-46: the gate stands before a command or agent step of the workflow's own steps
-// alone; a `workflow` step, a finalizer and a recovery handler start without reading it.
+// The gate stands before a command or agent step of the workflow's own steps alone; a
+// `workflow` step, a finalizer and a recovery handler start without reading it.
 #[tokio::test]
 async fn the_start_gate_holds_no_workflow_step_finalizer_or_recovery_handler() {
     with_watchdog(async {

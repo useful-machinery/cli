@@ -128,7 +128,6 @@ fn stable_releases_in_range_with_every_capability_construct_pinned_installations
     }
 }
 
-// INV-HARNESS-2
 #[test]
 fn fixture_version_matches_the_qualification_version() {
     let installation = ValidatedClaudeCodeInstallation::fixture(PathBuf::from("/claude"));
@@ -140,8 +139,6 @@ fn fixture_version_matches_the_qualification_version() {
     assert_eq!(installation.version().numeric(), (2, 1, 321));
 }
 
-// REQ-AGENT-2, REQ-AGENT-5, REQ-AGENT-7
-// INV-HARNESS-1
 #[test]
 fn malformed_incompatible_and_missing_capability_outputs_are_distinct() {
     let executable = std::env::current_exe().unwrap();
@@ -237,8 +234,6 @@ fn validate_with(
     (result, invocations)
 }
 
-// REQ-AGENT-2, REQ-AGENT-4, REQ-AGENT-65
-// INV-HARNESS-1, INV-HARNESS-12
 #[test]
 fn stable_releases_newer_than_the_qualification_release_are_admitted_untested() {
     let both_probes = [vec!["--version".to_owned()], vec!["--help".to_owned()]];

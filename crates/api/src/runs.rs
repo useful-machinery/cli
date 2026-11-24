@@ -34,7 +34,7 @@ const MAX_PAGE_ITEMS: usize = 100;
 pub type Run = models::Run;
 pub type RunList = models::RunList;
 pub type RunObservation = models::RunObservation;
-/// Whether another run its runner holds is working or waiting (REQ-RUN-120).
+/// Whether another run its runner holds is working or waiting.
 pub type RunHeldRunState = models::run_held_run::State;
 pub type RunLinearLifecycle = models::RunLinearLifecycle;
 pub type RunLinearLifecycleUpdate = models::RunLinearLifecycleUpdate;
@@ -47,7 +47,7 @@ pub type RunArtifactDelivery = models::RunArtifactDelivery;
 /// A violation a refused continuation names, as `useful` reports it: a code of the
 /// contract's `ContinuationAdmissionViolation` list, or a definition-backed run's
 /// refusal, which Cloud answers under a problem type of its own and `useful` reports by
-/// the code of the same name (REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-43).
+/// the code of the same name.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinuationAdmissionViolation {
@@ -73,7 +73,7 @@ fn listed_violation_code(code: models::continuation_admission_violation::Code) -
 }
 
 /// The code `useful` reports a definition-backed run's refusal by, keyed by the
-/// problem type Cloud answers it under (REQ-CONTINUE-83, REQ-CONTINUE-84).
+/// problem type Cloud answers it under.
 fn definition_run_refusal_code(problem_type: &str) -> Option<&'static str> {
     match problem_type {
         "https://api.usefulmachinery.com/problems/definition-run-not-continuable" => {
@@ -117,9 +117,8 @@ pub type RunControlKind = models::RunControlKind;
 pub type RunControlWait = models::RunControlWait;
 pub type RunControlAnswer = models::RunControlAnswer;
 
-/// What an owner's release of a run's subject claim answered (REQ-CLOUDDEF-91,
-/// REQ-CLOUDDEF-92): the claim released, or the conflict that refused the release and changed
-/// nothing.
+/// What an owner's release of a run's subject claim answered: the claim released, or the
+/// conflict that refused the release and changed nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunClaimRelease {
     Released(Box<RunSubjectClaim>),
@@ -131,8 +130,8 @@ pub enum RunClaimRelease {
     IdempotencyConflict,
 }
 
-/// What a member's control for a definition-backed run answered (REQ-RUN-91): the control
-/// Cloud accepted, or the refusal that recorded nothing.
+/// What a member's control for a definition-backed run answered: the control Cloud
+/// accepted, or the refusal that recorded nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunControlSubmission {
     Accepted(Box<RunControl>),
@@ -176,7 +175,7 @@ pub enum RunRead {
 
 pub struct CreateRunInput<'a> {
     pub project_id: &'a str,
-    /// The definition of the project the run executes (REQ-CLOUDDEF-16).
+    /// The definition of the project the run executes.
     pub definition: RunDefinitionSelection,
     pub source_branch: Option<&'a str>,
     pub workspace_branch: Option<&'a str>,
@@ -186,7 +185,7 @@ pub struct CreateRunInput<'a> {
     pub integration_context: Option<&'a BTreeMap<String, String>>,
     pub maximum_parallel_steps: Option<u8>,
     /// Starts the run with no owner (`owner` `none`); otherwise the request names no owner
-    /// and a human member's run is that member's (REQ-RUN-99).
+    /// and a human member's run is that member's.
     pub unowned: bool,
 }
 
@@ -633,8 +632,8 @@ impl<'a> RunApi<'a> {
     }
 
     /// One page of the control trigger deliveries pinned to the definition-backed run
-    /// `run_id`, newest first, with the next page's cursor (REQ-TRIGGER-138); `limit` and
-    /// `cursor` select the page.
+    /// `run_id`, newest first, with the next page's cursor; `limit` and `cursor` select
+    /// the page.
     pub fn list_trigger_deliveries(
         &self,
         organization: &str,
@@ -660,9 +659,9 @@ impl<'a> RunApi<'a> {
     }
 
     /// One page of the controls accepted for the definition-backed run `run_id`, newest
-    /// first, with the next page's cursor (REQ-RUN-92); `limit` and `cursor` select the page.
-    /// Each control is the JSON object Cloud sent, read only for its id, so a kind or state
-    /// this release does not name is kept as sent (REQ-COMPAT-20).
+    /// first, with the next page's cursor; `limit` and `cursor` select the page. Each control
+    /// is the JSON object Cloud sent, read only for its id, so a kind or state this release
+    /// does not name is kept as sent.
     pub fn list_run_controls(
         &self,
         organization: &str,
@@ -734,8 +733,8 @@ impl<'a> RunApi<'a> {
     }
 
     /// Releases the subject claim the definition-backed run `run_id` currently holds, as an
-    /// owner, under `key` (REQ-CLOUDDEF-91, REQ-CLOUDDEF-98); the request is sent again under
-    /// the same key when its response is lost.
+    /// owner, under `key`; the request is sent again under the same key when its response is
+    /// lost.
     pub fn release_claim(
         &self,
         organization: &str,
@@ -773,7 +772,7 @@ impl<'a> RunApi<'a> {
                 "https://api.usefulmachinery.com/problems/idempotency-conflict" => {
                     Ok(RunClaimRelease::IdempotencyConflict)
                 }
-                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-42).
+                // A refusal a later Cloud release names stays a conflict.
                 _ => Err(RunFailure::Conflict),
             };
         }
@@ -794,8 +793,8 @@ impl<'a> RunApi<'a> {
     }
 
     /// Asks Cloud to carry `request` to the runner executing the definition-backed run
-    /// `run_id` (REQ-RUN-91), under `key` (the `requestRunControl` operation); the request is
-    /// sent again under the same key when its response is lost.
+    /// `run_id`, under `key` (the `requestRunControl` operation); the request is sent again
+    /// under the same key when its response is lost.
     pub fn request_control(
         &self,
         organization: &str,
@@ -848,7 +847,7 @@ impl<'a> RunApi<'a> {
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "https://api.usefulmachinery.com/problems/control-too-large",
                 ) => Ok(RunControlSubmission::TooLarge),
-                // A refusal a later Cloud release names stays a conflict (REQ-COMPAT-42).
+                // A refusal a later Cloud release names stays a conflict.
                 (StatusCode::CONFLICT, _) => Err(RunFailure::Conflict),
                 _ => Err(RunFailure::protocol(false)),
             };
@@ -1097,8 +1096,8 @@ pub enum RunFailure {
     /// Reviewed source-admission problem fields only; never carry server prose.
     /// `request_id` is the response's `X-Request-ID` when it is a `req_` typed id.
     /// `blockers` holds a `project-not-ready` problem's readiness blockers in Cloud's
-    /// order when they are a non-empty ordered selection from the readiness vocabulary
-    /// (REQ-PROJECT-71); it is empty for every other type and for any other list.
+    /// order when they are a non-empty ordered selection from the readiness
+    /// vocabulary; it is empty for every other type and for any other list.
     AdmissionRejected {
         status: u16,
         problem_type: &'static str,
@@ -1114,8 +1113,7 @@ pub enum RunFailure {
     ContinuationAcceptanceUnknown,
     ContinuationAdmissionInvalid(Vec<ContinuationAdmissionViolation>),
     /// A `path-run-retired` answer, `409` to a retry and `410` to a continuation: Cloud
-    /// no longer retries or continues a run created by workflow path (REQ-RETRY-35,
-    /// REQ-RETRY-52, REQ-CONTINUE-87).
+    /// no longer retries or continues a run created by workflow path.
     PathRunRetired,
     Gone,
     Unreachable(UnreachableCategory),
@@ -1149,12 +1147,12 @@ impl RunFailure {
     }
 }
 
-/// A retry the Gateway refused with 409 (REQ-RETRY-35).
+/// A retry the Gateway refused with 409.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RetryConflict {
     Pending,
     Idempotency,
-    /// `subject-busy`: a live run of the definition holds the subject (REQ-CLOUDDEF-18).
+    /// `subject-busy`: a live run of the definition holds the subject.
     SubjectBusy {
         holder_run_id: String,
     },
@@ -1182,7 +1180,7 @@ fn path_run_retired(response: &ReceivedResponse, status: StatusCode) -> bool {
 }
 
 fn classify_retry_failure(response: &ReceivedResponse) -> RunFailure {
-    // Cloud refuses a retry of a run by workflow path 409 (REQ-RETRY-52).
+    // Cloud refuses a retry of a run by workflow path 409.
     if path_run_retired(response, StatusCode::CONFLICT) {
         return RunFailure::PathRunRetired;
     }
@@ -1532,6 +1530,11 @@ pub(super) fn classify_failure(response: &ReceivedResponse, operation: RunOperat
                         .unwrap_or(RunFailure::Conflict)
                 }
                 Ok(_) => RunFailure::Conflict,
+                Err(_) if operation == RunOperation::Create => {
+                    project_not_ready_with_unknown_blockers(response)
+                        .and_then(|problem| source_admission_rejection(response, problem))
+                        .unwrap_or_else(|| RunFailure::protocol(false))
+                }
                 Err(_) => RunFailure::protocol(false),
             }
         }
@@ -1630,6 +1633,23 @@ fn input_admission_rejection(
     })
 }
 
+// An unrecognized blocker invalidates the entire list, while the rest of a
+// project-not-ready problem must still decode normally before we report the rejection.
+fn project_not_ready_with_unknown_blockers(response: &ReceivedResponse) -> Option<models::Problem> {
+    #[derive(serde::Deserialize)]
+    struct WithoutBlockers {
+        #[serde(rename = "blockers")]
+        _blockers: Vec<String>,
+        #[serde(flatten)]
+        problem: models::Problem,
+    }
+    require_media_type(response, problem::PROBLEM_MEDIA_TYPE, false).ok()?;
+    let WithoutBlockers { problem, .. } = serde_json::from_slice(&response.body).ok()?;
+    (problem.status == i32::from(response.status.as_u16())
+        && problem.r#type == "https://api.usefulmachinery.com/problems/project-not-ready")
+        .then_some(problem)
+}
+
 // A definite admission rejection names only its reviewed type, the response's
 // typed request id and, for `project-not-ready`, its reviewed readiness blockers.
 // Server detail and title are never used.
@@ -1683,13 +1703,12 @@ fn source_admission_rejection(
     })
 }
 
-// REQ-PROJECT-71: a `project-not-ready` problem's blockers, kept only when every one is a
-// readiness blocker and the list is a non-empty selection in the readiness order; any
-// other list is dropped whole.
+// A `project-not-ready` problem's blockers, kept only when every one is a readiness
+// blocker and the list is a non-empty selection in the readiness order; any other list is
+// dropped whole.
 fn readiness_blockers(blockers: Vec<models::ProblemBlocker>) -> Vec<ProjectReadinessBlocker> {
-    const ORDER: [ProjectReadinessBlocker; 3] = [
+    const ORDER: [ProjectReadinessBlocker; 2] = [
         ProjectReadinessBlocker::RunnerPoolUnassigned,
-        ProjectReadinessBlocker::RepositoryDetached,
         ProjectReadinessBlocker::RepositoryUnavailable,
     ];
     let readiness = blockers
@@ -1697,9 +1716,6 @@ fn readiness_blockers(blockers: Vec<models::ProblemBlocker>) -> Vec<ProjectReadi
         .map(|blocker| match blocker {
             models::ProblemBlocker::RunnerPoolUnassigned => {
                 Some(ProjectReadinessBlocker::RunnerPoolUnassigned)
-            }
-            models::ProblemBlocker::RepositoryDetached => {
-                Some(ProjectReadinessBlocker::RepositoryDetached)
             }
             models::ProblemBlocker::RepositoryUnavailable => {
                 Some(ProjectReadinessBlocker::RepositoryUnavailable)
@@ -1818,8 +1834,6 @@ fn terminal_run(state: RunState) -> bool {
 }
 
 fn validate_run(run: Run, requested_run_id: &str) -> Result<Run, RunFailure> {
-    let workflow_source = &run.workflow_definition_source;
-    let workspace_source = &run.primary_workspace_source;
     let inputs = &run.inputs;
     let valid = run.id == requested_run_id
         && useful_support::valid_typed_id(&run.id, "run_")
@@ -1829,11 +1843,75 @@ fn validate_run(run: Run, requested_run_id: &str) -> Result<Run, RunFailure> {
         && useful_support::valid_typed_id(&run.current_attempt_id, "atm_")
         && run.version >= 1
         && run.current_attempt_number >= 1
-        && valid_bounded_string(&run.source_branch, 1, 1024)
         && run
             .display_name
             .as_deref()
             .is_none_or(|name| valid_bounded_string(name, 1, 200))
+        && valid_run_sources(&run)
+        && inputs
+            .input_set_id
+            .as_deref()
+            .is_none_or(|id| useful_support::valid_typed_id(id, "ris_"))
+        && (0..=256).contains(&inputs.attachment_count)
+        && (0..=268_435_456).contains(&inputs.aggregate_bytes)
+        && valid_integration_context(
+            run.integration_context.len(),
+            run.integration_context
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+        && valid_cancellation(run.cancellation.as_deref())
+        && (run.state != models::run::State::Cancelling || run.cancellation.is_some())
+        && valid_interruption(run.state, run.interruption.as_deref())
+        && valid_artifact_delivery(run.artifact_delivery.as_deref())
+        && valid_portable_result(&run)
+        && valid_staged_continuation(&run)
+        && run
+            .linear_lifecycle
+            .as_deref()
+            .is_none_or(validate_linear_lifecycle)
+        && run.publication.as_deref().is_none_or(|handoff| {
+            handoff.target.as_deref().is_none_or(|target| {
+                target.number > 0
+                    && target.number <= 9_007_199_254_740_991
+                    && target
+                        .provider_change_request_id
+                        .parse::<i64>()
+                        .is_ok_and(|id| {
+                            id > 0 && id.to_string() == target.provider_change_request_id
+                        })
+                    && !target.source_ref.is_empty()
+                    && target.source_ref.len() <= 1024
+                    && lowercase_hex(&target.expected_head_oid, 40)
+            })
+        })
+        && valid_run_actor(&run.actor)
+        && valid_timestamp(&run.created_at)
+        && valid_timestamp(&run.updated_at);
+    if valid {
+        Ok(run)
+    } else {
+        Err(RunFailure::protocol(false))
+    }
+}
+
+fn valid_run_sources(run: &Run) -> bool {
+    let (source_branch, workflow_source, workspace_source) = match (
+        run.source_branch.as_deref(),
+        run.workflow_definition_source.as_deref(),
+        run.primary_workspace_source.as_deref(),
+    ) {
+        (Some(branch), Some(workflow), Some(workspace)) => (branch, workflow, workspace),
+        (None, None, None) => {
+            return matches!(run.definition, Some(Some(_)))
+                && run.workspace_source.is_none()
+                && run.workspace_branch.is_none()
+                && run.workspace_membership.is_none()
+                && valid_source_display_snapshot(run.source_display_snapshot.as_deref(), None);
+        }
+        _ => return false,
+    };
+    valid_bounded_string(source_branch, 1, 1024)
         && useful_support::valid_typed_id(&workflow_source.repository_connection_id, "rpc_")
         && lowercase_hex(&workflow_source.commit_oid, 40)
         && valid_canonical_workflow_path(&workflow_source.workflow_path)
@@ -1890,57 +1968,12 @@ fn validate_run(run: Run, requested_run_id: &str) -> Result<Run, RunFailure> {
         })
         && valid_source_display_snapshot(
             run.source_display_snapshot.as_deref(),
-            workspace_source.provider_kind,
+            Some(workspace_source.provider_kind),
         )
-        && inputs
-            .input_set_id
-            .as_deref()
-            .is_none_or(|id| useful_support::valid_typed_id(id, "ris_"))
-        && (0..=256).contains(&inputs.attachment_count)
-        && (0..=268_435_456).contains(&inputs.aggregate_bytes)
-        && valid_integration_context(
-            run.integration_context.len(),
-            run.integration_context
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        && valid_cancellation(run.cancellation.as_deref())
-        && (run.state != models::run::State::Cancelling || run.cancellation.is_some())
-        && valid_interruption(run.state, run.interruption.as_deref())
-        && valid_artifact_delivery(run.artifact_delivery.as_deref())
-        && valid_portable_result(&run)
-        && valid_staged_continuation(&run)
-        && run
-            .linear_lifecycle
-            .as_deref()
-            .is_none_or(validate_linear_lifecycle)
-        && run.publication.as_deref().is_none_or(|handoff| {
-            handoff.target.as_deref().is_none_or(|target| {
-                target.number > 0
-                    && target.number <= 9_007_199_254_740_991
-                    && target
-                        .provider_change_request_id
-                        .parse::<i64>()
-                        .is_ok_and(|id| {
-                            id > 0 && id.to_string() == target.provider_change_request_id
-                        })
-                    && !target.source_ref.is_empty()
-                    && target.source_ref.len() <= 1024
-                    && lowercase_hex(&target.expected_head_oid, 40)
-            })
-        })
-        && valid_run_actor(&run.actor)
-        && valid_timestamp(&run.created_at)
-        && valid_timestamp(&run.updated_at);
-    if valid {
-        Ok(run)
-    } else {
-        Err(RunFailure::protocol(false))
-    }
 }
 
-// REQ-RUN-82: an app run names no requester; a member's run names the
-// requester's principal.
+// An app run names no requester; a member's run names the requester's
+// principal.
 fn valid_run_actor(actor: &models::RunActor) -> bool {
     match actor.kind {
         models::run_actor::Kind::App => actor.requester_principal_id.is_none(),
@@ -1953,13 +1986,12 @@ fn valid_run_actor(actor: &models::RunActor) -> bool {
 
 fn valid_source_display_snapshot(
     snapshot: Option<&models::SourceDisplaySnapshot>,
-    provider: models::primary_workspace_source::ProviderKind,
+    provider: Option<models::primary_workspace_source::ProviderKind>,
 ) -> bool {
     let Some(snapshot) = snapshot else {
         // GitHub execution-1 records predate immutable display snapshots.
-        return provider == models::primary_workspace_source::ProviderKind::Github;
+        return provider == Some(models::primary_workspace_source::ProviderKind::Github);
     };
-    let repository = &snapshot.repository;
     let name = snapshot.project_name.as_bytes();
     let project_name_valid = (1..=63).contains(&name.len())
         && name.first().is_some_and(u8::is_ascii_alphanumeric)
@@ -1977,9 +2009,12 @@ fn valid_source_display_snapshot(
     {
         return false;
     }
+    let Some(repository) = snapshot.repository.as_deref() else {
+        return provider.is_none();
+    };
     match (provider, repository.provider_kind) {
         (
-            models::primary_workspace_source::ProviderKind::Github,
+            Some(models::primary_workspace_source::ProviderKind::Github),
             models::source_display_repository::ProviderKind::Github,
         ) => {
             repository.instance_url.is_none()
@@ -1999,7 +2034,7 @@ fn valid_source_display_snapshot(
                     })
         }
         (
-            models::primary_workspace_source::ProviderKind::Gitlab,
+            Some(models::primary_workspace_source::ProviderKind::Gitlab),
             models::source_display_repository::ProviderKind::Gitlab,
         ) => {
             repository.instance_url
@@ -2414,7 +2449,52 @@ fn validate_linear_lifecycle(view: &RunLinearLifecycle) -> bool {
 mod run_client_tests {
     use super::*;
 
-    // REQ-WORKSPACE-11, REQ-WORKSPACE-31
+    #[test]
+    fn run_reader_requires_consistent_source_and_definition_fields() {
+        let with_source = pending_fixture_run();
+        let mut no_source = with_source.clone();
+        for field in [
+            "sourceBranch",
+            "workflowDefinitionSource",
+            "primaryWorkspaceSource",
+        ] {
+            no_source[field] = serde_json::Value::Null;
+        }
+        no_source["sourceDisplaySnapshot"]["repository"] = serde_json::Value::Null;
+        no_source["definition"] = serde_json::json!({
+            "definitionId": "def_01k0z6r1w8f4jy2m7q9v3x5abc", "revision": 3,
+            "treeDigest": "sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+            "workflowPath": "workflows/build.yaml"
+        });
+        assert!(matches!(
+            read_fixture_run(&no_source),
+            Ok(RunRead::Materialized(_))
+        ));
+
+        for (base, pointer, value) in [
+            (&no_source, "/sourceBranch", &with_source["sourceBranch"]),
+            (&with_source, "/sourceBranch", &serde_json::Value::Null),
+            (&no_source, "/definition", &serde_json::Value::Null),
+            (
+                &no_source,
+                "/sourceDisplaySnapshot/repository",
+                &with_source["sourceDisplaySnapshot"]["repository"],
+            ),
+            (
+                &with_source,
+                "/sourceDisplaySnapshot/repository",
+                &serde_json::Value::Null,
+            ),
+        ] {
+            let mut invalid = base.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value.clone();
+            assert!(
+                matches!(read_fixture_run(&invalid), Err(RunFailure::Protocol { .. })),
+                "{pointer}"
+            );
+        }
+    }
+
     #[test]
     fn run_reader_preserves_closed_gitlab_snapshot_and_github_history() {
         let mut run: serde_json::Value = serde_json::from_str(include_str!(
@@ -2518,8 +2598,8 @@ mod run_client_tests {
         });
     }
 
-    // REQ-CONTINUE-84: a newer Gateway may refuse with a code this release
-    // does not name; that is still a refusal, not a protocol failure.
+    // A newer Gateway may refuse with a code this release does not name;
+    // that is still a refusal, not a protocol failure.
     #[test]
     fn continuation_violation_code_unknown_to_this_release_is_a_conflict() {
         let response = |code: &str| BufferedBlockingResponse {
@@ -2559,9 +2639,8 @@ mod run_client_tests {
         ));
     }
 
-    // REQ-CONTINUE-83, REQ-CONTINUE-84, REQ-COMPAT-43: Cloud answers a
-    // definition-backed run's refusal under a problem type of its own, which
-    // this release reports by the code of the same name.
+    // Cloud answers a definition-backed run's refusal under a problem type
+    // of its own, which this release reports by the code of the same name.
     #[test]
     fn a_definition_run_continuation_refusal_type_is_reported_by_its_code() {
         for (slug, code) in [
@@ -2601,7 +2680,6 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUNINPUT-59
     #[test]
     fn gone_input_content_is_a_create_admission_rejection_and_a_gone_continuation() {
         let response = BufferedBlockingResponse {
@@ -2666,7 +2744,7 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUN-106: the run reader takes a run's credential sources, null or reported, and
+    // The run reader takes a run's credential sources, null or reported, and
     // re-serializes them as received; an entry without its member is not Cloud's.
     #[test]
     fn run_reader_keeps_credential_sources_as_received() {
@@ -2698,10 +2776,10 @@ mod run_client_tests {
         ));
     }
 
-    // REQ-RUN-108: the run reader takes a run's integration sources and re-serializes them
-    // as received, with every member of an entry, including a provider, source and acting
-    // identity Cloud does not record yet; a run without them re-serializes without them, and
-    // an entry without one of its members is not Cloud's.
+    // The run reader takes a run's integration sources and re-serializes them as received,
+    // with every member of an entry, including a provider, source and acting identity Cloud
+    // does not record yet; a run without them re-serializes without them, and an entry
+    // without one of its members is not Cloud's.
     #[test]
     fn run_reader_keeps_integration_sources_as_received() {
         let mut run = pending_fixture_run();
@@ -2856,24 +2934,30 @@ mod run_client_tests {
         response
     }
 
-    // REQ-RUN-80, REQ-RUN-163, REQ-PROJECT-71
     #[test]
     fn project_not_ready_on_create_is_a_definite_rejection_with_its_ordered_blockers() {
-        use models::ProjectReadinessBlocker::{RepositoryDetached, RunnerPoolUnassigned};
+        use models::ProjectReadinessBlocker::{RepositoryUnavailable, RunnerPoolUnassigned};
         let request_id = "req_01m622k6qsf09npetkmdkdj51j";
         for (blockers, expected) in [
             (
                 Some(serde_json::json!([
                     "runner_pool_unassigned",
+                    "repository_unavailable"
+                ])),
+                vec![RunnerPoolUnassigned, RepositoryUnavailable],
+            ),
+            (
+                Some(serde_json::json!([
+                    "runner_pool_unassigned",
                     "repository_detached"
                 ])),
-                vec![RunnerPoolUnassigned, RepositoryDetached],
+                vec![],
             ),
             (None, vec![]),
             (Some(serde_json::json!([])), vec![]),
             (
                 Some(serde_json::json!([
-                    "repository_detached",
+                    "repository_unavailable",
                     "runner_pool_unassigned"
                 ])),
                 vec![],
@@ -2911,7 +2995,6 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUN-80
     #[test]
     fn source_admission_problem_on_create_is_a_definite_rejection_with_request_id() {
         let request_id = "req_01m622k6qsf09npetkmdkdj51j";
@@ -2933,7 +3016,6 @@ mod run_client_tests {
         );
     }
 
-    // REQ-RUN-84, REQ-RUN-99
     #[test]
     fn create_sends_the_parallel_step_limit_and_no_owner_only_when_asked() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -2988,7 +3070,6 @@ mod run_client_tests {
         assert!(bodies[1].get("owner").is_none());
     }
 
-    // REQ-RUN-80
     #[test]
     fn source_admission_rejection_omits_an_absent_or_untyped_request_id() {
         for request_ids in [&["not-an-id"][..], &[]] {
@@ -3011,7 +3092,6 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUN-80
     #[test]
     fn reviewed_admission_problems_on_create_are_definite_rejections() {
         for (status, problem_type) in [
@@ -3037,10 +3117,9 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RETRY-52, REQ-COMPAT-43: Cloud refuses a retry of a run by workflow
-    // path as a 409 conflict, which this release names and an earlier one
-    // reports as a conflict; a 409 of a type this release does not name stays
-    // a conflict.
+    // Cloud refuses a retry of a run by workflow path as a 409 conflict,
+    // which this release names and an earlier one reports as a conflict; a
+    // 409 of a type this release does not name stays a conflict.
     #[test]
     fn path_run_retired_retry_conflict_is_named_and_an_unknown_conflict_stays_one() {
         assert_eq!(
@@ -3084,8 +3163,8 @@ mod run_client_tests {
         (server, storage)
     }
 
-    // REQ-COMPAT-42: a refusal of a claim release the released vocabulary does not
-    // name is a conflict, not a protocol failure.
+    // A refusal of a claim release the released vocabulary does not name is a
+    // conflict, not a protocol failure.
     #[test]
     fn release_claim_reports_an_unnamed_conflict_as_a_conflict() {
         let (server, storage) = unnamed_conflict_server();
@@ -3103,8 +3182,8 @@ mod run_client_tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-COMPAT-42: a refusal of a run control the released vocabulary does not
-    // name is a conflict, not a protocol failure.
+    // A refusal of a run control the released vocabulary does not name is a
+    // conflict, not a protocol failure.
     #[test]
     fn request_control_reports_an_unnamed_conflict_as_a_conflict() {
         let (server, storage) = unnamed_conflict_server();
@@ -3127,8 +3206,8 @@ mod run_client_tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-RUN-157, REQ-LOCALRUN-218: Cloud refuses a control the runner executing the run does
-    // not apply as `control-unsupported`, which this release names.
+    // Cloud refuses a control the runner executing the run does not apply as
+    // `control-unsupported`, which this release names.
     #[test]
     fn request_control_reports_control_unsupported_as_its_refusal() {
         let (server, storage) = conflict_server("control-unsupported");
@@ -3151,8 +3230,8 @@ mod run_client_tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-COMPAT-20: a page longer than the 100-item `limit` maximum this release requests
-    // is still an answer it reads.
+    // A page longer than the 100-item `limit` maximum this release requests is still an
+    // answer it reads.
     #[test]
     fn a_trigger_delivery_page_of_any_length_decodes() {
         let length = 101;
@@ -3230,8 +3309,8 @@ mod run_client_tests {
         (listed, request.lines().next().unwrap().to_owned())
     }
 
-    // REQ-RUN-92, REQ-COMPAT-20: a page of controls is its items as Cloud sent them and its
-    // cursor, an item of a kind and state this release does not name included.
+    // A page of controls is its items as Cloud sent them and its cursor, an item of a kind
+    // and state this release does not name included.
     #[test]
     fn list_run_controls_returns_a_pages_items_as_sent_and_its_cursor() {
         let control = |id: &str, kind: &str, state: &str| {
@@ -3263,8 +3342,8 @@ mod run_client_tests {
         assert_eq!(listed, Ok((vec![], None)));
     }
 
-    // REQ-RUN-92: a page whose items are not objects with a control id, or whose cursor is
-    // not a bounded string, is not an answer this release reads.
+    // A page whose items are not objects with a control id, or whose cursor is not a
+    // bounded string, is not an answer this release reads.
     #[test]
     fn list_run_controls_refuses_a_page_that_is_not_a_list_of_controls() {
         let control = serde_json::json!({"id": "rct_01k0z6r1w8f4jy2m7q9v3x5abc", "kind": "stop"});
@@ -3285,7 +3364,6 @@ mod run_client_tests {
         }
     }
 
-    // REQ-RUN-80, REQ-COMPAT-42
     #[test]
     fn unlisted_create_conflict_stays_a_conflict() {
         assert_eq!(
@@ -3301,7 +3379,6 @@ mod run_client_tests {
         );
     }
 
-    // REQ-RUN-57
     #[test]
     fn source_resolution_outage_on_create_stays_unconfirmed() {
         assert_eq!(
@@ -3542,7 +3619,6 @@ mod linear_lifecycle_tests {
             .is_ok_and(|view| validate_linear_lifecycle(&view))
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_accepts_exactly_the_reason_and_state_table() {
         for state in STATES {
@@ -3565,7 +3641,6 @@ mod linear_lifecycle_tests {
         assert!(!accepted(&view("released", None)));
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_refuses_half_attempts_stray_nodes_and_bad_identities() {
         let event = serde_json::json!({
@@ -3682,7 +3757,6 @@ mod linear_lifecycle_tests {
         view
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_update_accepts_exactly_the_reason_and_state_table() {
         for state in UPDATE_STATES {
@@ -3705,7 +3779,6 @@ mod linear_lifecycle_tests {
         assert!(!accepted(&with_update("queued", None)));
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_update_refuses_stray_members() {
         let mut complete = with_update("retry_waiting", Some("outcome_unresolved"));
@@ -3761,7 +3834,6 @@ mod linear_lifecycle_tests {
         );
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_update_refuses_an_empty_diagnostic() {
         let mut exhausted = with_update("failed", Some("retry_exhausted"));
@@ -3806,7 +3878,6 @@ mod linear_lifecycle_tests {
         }
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_history_accepts_only_valid_pages() {
         let update =
@@ -3855,7 +3926,6 @@ mod linear_lifecycle_tests {
         }));
     }
 
-    // REQ-TRIGGER-145
     #[test]
     fn linear_lifecycle_invalid_view_makes_the_run_read_invalid() {
         let mut document: serde_json::Value = serde_json::from_str(include_str!(

@@ -21,15 +21,15 @@ static DISPATCHES_WORKER_ROLES: AtomicBool = AtomicBool::new(false);
 
 /// Records that the running executable dispatches the internal worker roles. Only the three
 /// `internal_worker_requested` predicates, of the child-guard, result-validation and Claude Code
-/// result-tool roles, call this; a test never does, because the record is process-wide and
-/// would make the whole harness its own worker (INV-TESTING-20).
+/// result-tool roles, call this; a test never does, because the record is process-wide and would
+/// make the whole harness its own worker.
 pub(crate) fn record_internal_worker_dispatch() {
     DISPATCHES_WORKER_ROLES.store(true, Ordering::Relaxed);
 }
 
 /// The executable launched in the child-guard, result-validation and Claude Code result-tool
-/// worker roles. A shipped build is its own worker. A test build resolves it by INV-TESTING-20,
-/// see [`test_build_internal_worker_executable`].
+/// worker roles. A shipped build is its own worker. A test build resolves it with
+/// [`test_build_internal_worker_executable`].
 pub(crate) fn internal_worker_executable() -> io::Result<PathBuf> {
     if cfg!(any(test, feature = "test-fixtures")) {
         return test_build_internal_worker_executable(
@@ -60,7 +60,7 @@ fn dispatches_internal_worker_roles() -> bool {
 /// A test build takes a supplied worker when it is a file. Unsupplied, an executable that
 /// dispatches the worker roles at startup (the `useful` binary or the `internal-worker` example)
 /// is its own worker; any other executable is a test harness, which would run its suite in a
-/// worker role and launch itself again, so it takes the example beside it (INV-TESTING-20).
+/// worker role and launch itself again, so it takes the example beside it.
 fn test_build_internal_worker_executable(
     supplied: Option<OsString>,
     dispatches_worker_roles: bool,
@@ -412,7 +412,6 @@ mod tests {
         }
     }
 
-    // INV-TESTING-20, INV-TESTING-36
     #[test]
     fn an_unsupplied_test_harness_takes_the_worker_example_and_never_itself() {
         let layout = worker_layout(true);
@@ -428,7 +427,6 @@ mod tests {
         }
     }
 
-    // INV-TESTING-20
     #[test]
     fn an_unsupplied_executable_that_dispatches_the_worker_roles_is_its_own_worker() {
         let layout = worker_layout(true);
@@ -438,7 +436,6 @@ mod tests {
         );
     }
 
-    // INV-TESTING-20, INV-TESTING-36
     #[test]
     fn a_supplied_worker_file_wins_and_a_supplied_non_file_is_refused() {
         let layout = worker_layout(true);

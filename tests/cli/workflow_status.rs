@@ -98,7 +98,6 @@ pub(super) fn status_schema() -> jsonschema::Validator {
     jsonschema::draft202012::new(&schema).unwrap()
 }
 
-// REQ-EVIDENCE-29, REQ-LOCALRUN-145
 #[test]
 fn plain_status_lists_the_sources_the_current_attempt_took() {
     let bundle = RunBundle::new(FIRST_OF_WORKFLOW);
@@ -131,7 +130,6 @@ fn plain_status_lists_the_sources_the_current_attempt_took() {
     assert!(!plain.contains("outputs."), "{plain}");
 }
 
-// REQ-WFRECOVERY-46, REQ-LOCALRUN-145
 #[test]
 fn settled_command_recovery_status_retains_terminal_evidence() {
     let bundle = RunBundle::new(
@@ -223,7 +221,6 @@ steps:
     }
 }
 
-// REQ-WFFINALIZE-19, REQ-WFEXEC-50, REQ-LOCALRUN-146, REQ-LOCALRUN-175
 #[test]
 fn live_finalization_status_is_incomplete_role_aware_and_retry_ineligible() {
     // A closure run has no run record; a tree run's names no outcome while it is live.
@@ -376,7 +373,6 @@ fn status_schema_bounds_result_publication_invariants() {
     assert!(!status_schema().is_valid(&interrupted));
 }
 
-// REQ-LOCALRUN-198
 #[test]
 fn status_schema_admits_a_closed_diagnostic_only_on_a_failed_node() {
     let bundle = RunBundle::new(
@@ -408,7 +404,6 @@ fn status_schema_admits_a_closed_diagnostic_only_on_a_failed_node() {
     assert!(!status_schema().is_valid(&succeeded));
 }
 
-// REQ-LOCALRUN-201
 #[test]
 fn status_json_records_when_a_step_that_ran_started() {
     let bundle = RunBundle::new(
@@ -449,8 +444,8 @@ fn status_json_records_when_a_step_that_ran_started() {
     assert!(!status_schema().is_valid(&pending), "{pending}");
 }
 
-// REQ-WFRECOVERY-62: `valid/recovery-handler-launch-diagnostic.json` carries a recovery
-// handler's `command_launch_failed` diagnostic, and
+// `valid/recovery-handler-launch-diagnostic.json` carries a recovery handler's
+// `command_launch_failed` diagnostic, and
 // `invalid/recovery-handler-launch-diagnostic-slug.json` is refused for its `launchFailure`
 // that is no slug.
 #[test]
@@ -477,7 +472,6 @@ fn closed_status_schema_accepts_positive_and_rejects_negative_fixtures() {
     }
 }
 
-// REQ-LOCALRUN-149, REQ-LOCALRUN-150
 #[test]
 fn status_json_records_committed_pending_result_with_skipped_nodes() {
     let bundle = RunBundle::new(include_str!(
@@ -511,7 +505,6 @@ fn status_json_records_committed_pending_result_with_skipped_nodes() {
     );
 }
 
-// REQ-LOCALRUN-150, REQ-LOCALRUN-165
 #[test]
 fn status_json_reports_invalid_committed_pending_result() {
     let (_bundle, run_directory) = completed_run("invalid-pending-result");
@@ -538,7 +531,6 @@ fn status_json_reports_invalid_committed_pending_result() {
     assert_eq!(read_state(&run_directory), state);
 }
 
-// REQ-CONTINUE-30, REQ-LOCALRUN-121, REQ-LOCALRUN-144, REQ-LOCALRUN-145, REQ-LOCALRUN-146, REQ-LOCALRUN-149
 #[test]
 fn status_json_and_plain_are_closed_read_only_snapshots() {
     let (_bundle, run_directory) = completed_run("settled");
@@ -605,7 +597,7 @@ fn status_json_and_plain_are_closed_read_only_snapshots() {
     assert_eq!(lock_after.len(), lock_before.len());
 }
 
-/// The members of `show`'s `shown` document (REQ-LOCALRUN-189), sorted.
+/// The members of `show`'s `shown` document, sorted.
 const SHOWN_MEMBERS: [&str; 18] = [
     "attempts",
     "children",
@@ -636,9 +628,9 @@ fn members(document: &serde_json::Value) -> Vec<&str> {
         .collect()
 }
 
-// REQ-LOCALRUN-189: `show` prints one `shown` document holding the run's status and its
-// records, for a run of a tree and for a run of a closure, which has no run record, and the
-// `error` document for a run directory it cannot read.
+// `show` prints one `shown` document holding the run's status and its records, for a run of
+// a tree and for a run of a closure, which has no run record, and the `error` document for
+// a run directory it cannot read.
 #[test]
 fn show_prints_the_status_and_the_records_of_a_run_in_one_document() {
     let bundle = child_tree(super::workflow_run::CHILD_TREE_DECIDE);
@@ -682,8 +674,8 @@ fn show_prints_the_status_and_the_records_of_a_run_in_one_document() {
     assert!(status_schema().is_valid(&error), "{error}");
 }
 
-/// The `error` document `show --json` prints, exit 1, for a run it cannot read
-/// (REQ-LOCALRUN-165), its code `code`.
+/// The `error` document `show --json` prints, exit 1, for a run it cannot read,
+/// its code `code`.
 pub(super) fn show_error(output: &std::process::Output, code: &str) -> serde_json::Value {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -698,7 +690,6 @@ pub(super) fn show_error(output: &std::process::Output, code: &str) -> serde_jso
     document
 }
 
-// REQ-LOCALRUN-147, REQ-LOCALRUN-149
 #[test]
 fn active_owner_has_retry_precedence_and_status_does_not_signal_work() {
     let bundle = signal_bundle();
@@ -842,7 +833,6 @@ fn orphaned_guarded_cancellation_is_reaped_and_retry_eligible() {
     assert_eq!(result["retry"], serde_json::json!({"eligible": true}));
 }
 
-// REQ-LOCALRUN-147, REQ-LOCALRUN-148
 #[test]
 fn status_distinguishes_interrupted_abandoned_and_unproven_ownership() {
     let (_bundle, run_directory) = completed_run("recoverable");
@@ -920,7 +910,6 @@ fn status_distinguishes_interrupted_abandoned_and_unproven_ownership() {
     assert!(!plain.stdout.is_empty());
 }
 
-// REQ-LOCALRUN-151
 #[test]
 fn signals_interrupt_blocked_status_output_without_a_valid_object() {
     let (_bundle, run_directory) = completed_run("signal");
@@ -972,7 +961,6 @@ fn signals_interrupt_blocked_status_output_without_a_valid_object() {
     }
 }
 
-// REQ-LOCALRUN-80
 #[test]
 fn show_usage_errors_return_two_without_a_document() {
     for args in [
@@ -996,7 +984,6 @@ fn show_usage_errors_return_two_without_a_document() {
     }
 }
 
-// REQ-LOCALRUN-148, REQ-LOCALRUN-149, REQ-LOCALRUN-165
 #[test]
 fn invalid_run_directory_is_structured_and_missing_lock_is_not_created() {
     let (_bundle, run_directory) = completed_run("missing-lock");
@@ -1026,12 +1013,11 @@ fn invalid_run_directory_is_structured_and_missing_lock_is_not_created() {
     assert!(unavailable.get("runDirectory").is_none());
 }
 
-// REQ-LOCALRUN-118, REQ-LOCALRUN-145, REQ-LOCALRUN-95
 #[test]
 fn plain_status_and_run_diagnostics_escape_host_run_directory_names() {
     // A doubled ESC abandons the first sequence, so the name keeps a visible
-    // `\x1b` (REQ-LOCALRUN-115) and its override shows as `\u{202e}`
-    // (REQ-LOCALRUN-116); raw, the second ESC would still colour the terminal.
+    // `\x1b` and its override shows as `\u{202e}`; raw, the second ESC would
+    // still colour the terminal.
     let hostile = "\u{1b}\u{1b}[31m-\u{202e}";
     let escaped = "\\x1b\\x1b[31m-\\u{202e}";
     let (bundle, run_directory) = completed_run(&format!("run-{hostile}"));
@@ -1068,8 +1054,8 @@ fn plain_status_and_run_diagnostics_escape_host_run_directory_names() {
     );
 }
 
-// REQ-LOCALRUN-281, REQ-WFEXEC-50: a parent with `workflow` steps and each child read on
-// their own, the steps reported as kind `workflow`.
+// A parent with `workflow` steps and each child read on their own, the steps reported as
+// kind `workflow`.
 #[test]
 fn status_and_view_read_a_parent_and_its_child_runs() {
     let bundle = child_tree(super::workflow_run::HOLDING_CHILD_DECIDE);
@@ -1108,8 +1094,8 @@ fn status_and_view_read_a_parent_and_its_child_runs() {
     assert_eq!(run_record(&child)["state"], "exited");
 }
 
-// REQ-LOCALRUN-281, REQ-LOCALRUN-147: a parent killed while its child runs leaves the
-// child `running` with an abandoned attempt.
+// A parent killed while its child runs leaves the child `running` with an abandoned
+// attempt.
 #[test]
 fn a_child_whose_parent_was_killed_reports_an_abandoned_attempt() {
     let (_bundle, destination, mut parent) = spawn_held_child_tree("killed-parent");
@@ -1128,9 +1114,9 @@ fn a_child_whose_parent_was_killed_reports_an_abandoned_attempt() {
     assert!(status_schema().is_valid(&result), "{result}");
 }
 
-// REQ-LOCALRUN-179, REQ-LOCALRUN-146, REQ-LOCALRUN-145: a run whose attempt ended in a wait
-// reports the attempt `waiting`, its wait record and an eligible continuation, and the
-// archived view marks the outcome `waiting` and carries the attempt's wait record.
+// A run whose attempt ended in a wait reports the attempt `waiting`, its wait record and an
+// eligible continuation, and the archived view marks the outcome `waiting` and carries the
+// attempt's wait record.
 #[test]
 fn status_and_view_report_a_waiting_run() {
     let bundle = child_tree(super::workflow_run::CHILD_TREE_DECIDE);
@@ -1234,7 +1220,6 @@ fn run_under_home(home: &Home, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-// REQ-LOCALRUN-180, REQ-LOCALRUN-227, REQ-LOCALRUN-224
 #[test]
 fn show_addresses_a_run_under_the_home_by_its_id() {
     let tree = Tree::engineering();

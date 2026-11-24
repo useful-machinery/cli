@@ -1,5 +1,5 @@
-//! How a Claude Code step ends (REQ-AGENT-86, INV-HARNESS-5, INV-HARNESS-22): a pure function
-//! of what the adapter holds once the process has exited and its group is gone.
+//! How a Claude Code step ends: a pure function of what the adapter holds once the process
+//! has exited and its group is gone.
 
 use super::reader::{DecidingResult, ResultText};
 use crate::workflow::admission::CancellationReason;
@@ -14,7 +14,7 @@ pub(super) enum Ending {
     Exited {
         success: bool,
     },
-    /// The adapter stopped it at the quiet bound; how it exited is not read (REQ-AGENT-88).
+    /// The adapter stopped it at the quiet bound; how it exited is not read.
     StoppedAtBound,
 }
 
@@ -175,9 +175,6 @@ mod tests {
         ))
     }
 
-    // REQ-AGENT-86, REQ-AGENT-96, REQ-AGENT-97, REQ-AGENT-98, REQ-AGENT-99, REQ-AGENT-26,
-    // REQ-AGENT-27, REQ-AGENT-28, REQ-AGENT-70, REQ-AGENT-88,
-    // INV-HARNESS-5
     #[test]
     fn the_rule_decides_every_combination() {
         let own_failure = AgentFailureCause::HarnessSetupFailed {

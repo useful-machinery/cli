@@ -1,6 +1,6 @@
-//! The agent-login models a native grant carries unchanged (REQ-GRANT-13): its runner's
-//! exchange with Cloud and its ended authorizations, with the checks `MemberGrantApi` makes of
-//! them. Responses decode leniently into the generated models, which name no material.
+//! The agent-login models a native grant carries unchanged: its runner's exchange with Cloud
+//! and its ended authorizations, with the checks `MemberGrantApi` makes of them. Responses
+//! decode leniently into the generated models, which name no material.
 use super::generated::models;
 
 pub type AgentLoginReportState = models::agent_login_report::State;
@@ -13,7 +13,7 @@ type AgentLoginReportLastUse = models::agent_login_report::LastUse;
 type AgentLoginStop = models::AgentLoginStop;
 
 impl AgentLoginRemovalState {
-    /// The removal state's wire name (REQ-GRANT-47).
+    /// The removal state's wire name.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentLoginRemovalStateNotDelivered => "not_delivered",
@@ -24,7 +24,7 @@ impl AgentLoginRemovalState {
 }
 
 impl AgentLoginReportLastUse {
-    /// The last use's wire name (REQ-GRANT-113).
+    /// The last use's wire name.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentLoginReportLastUseAccepted => "accepted",
@@ -33,8 +33,8 @@ impl AgentLoginReportLastUse {
     }
 }
 
-/// An ended authorization of an agent login, the native grant it is (REQ-GRANT-13), whose
-/// removal and stop are well formed.
+/// An ended authorization of an agent login, the native grant it is, whose removal and
+/// stop are well formed.
 pub(crate) fn valid_ended_authorization(value: &AgentLoginEndedAuthorization) -> bool {
     valid_authorization_record(
         "aga_",
@@ -48,8 +48,8 @@ pub(crate) fn valid_ended_authorization(value: &AgentLoginEndedAuthorization) ->
         && value.stop.as_deref().is_none_or(valid_stop)
 }
 
-// A stop names the run asked to stop and the cancellation request made of it
-// (REQ-GRANT-132).
+// A stop names the run asked to stop and the cancellation request made of
+// it.
 fn valid_stop(value: &AgentLoginStop) -> bool {
     useful_support::valid_typed_id(&value.run_id, "run_")
         && useful_support::valid_typed_id(&value.cancellation_request_id, "cmd_")
@@ -74,7 +74,7 @@ pub(crate) fn valid_authorization_record(
         && report.is_none_or(|report| {
             report.generation.is_none_or(|generation| generation >= 1)
                 && !report.reported_at.is_empty()
-                // The time of a last use comes only with it (REQ-GRANT-114).
+                // The time of a last use comes only with it.
                 && report
                     .last_use_at
                     .as_deref()
@@ -116,8 +116,6 @@ mod tests {
         })
     }
 
-    // REQ-GRANT-13
-    // REQ-GRANT-47
     #[test]
     fn an_ended_authorization_is_checked_and_a_removal_time_comes_only_with_confirmed() {
         const RUNNER: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -157,8 +155,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-13
-    // REQ-GRANT-132
     #[test]
     fn an_ended_authorizations_stop_names_a_run_and_a_cancellation_request() {
         const RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";

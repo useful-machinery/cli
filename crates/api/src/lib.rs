@@ -31,6 +31,7 @@ mod provider_http;
 mod publications;
 mod resource;
 mod run_inputs;
+mod run_records;
 mod runners;
 mod runs;
 mod service_principals;
@@ -80,9 +81,9 @@ pub use artifacts::{
 pub use artifacts::{ArtifactCapabilities, DownloadedMember};
 pub use connection_authorizations::{
     ConnectionAuthorization, ConnectionAuthorizationFilter, ConnectionAuthorizationList,
-    ConnectionAuthorizationRefusal, ConnectionAuthorizationRequest, ConnectionAuthorizationScope,
-    ConnectionAuthorizationState, GitHubInstallationPermission, GitHubInstallationScope,
-    GitHubRepositorySelection,
+    ConnectionAuthorizationRefusal, ConnectionAuthorizationRequest, ConnectionAuthorizationRuns,
+    ConnectionAuthorizationScope, ConnectionAuthorizationState, GitHubInstallationPermission,
+    GitHubInstallationScope, GitHubRepositorySelection,
 };
 pub use current_principal::{
     AuthenticatedPrincipal, CurrentPrincipalError, CurrentPrincipalOutcome, UnreachableCategory,
@@ -106,7 +107,9 @@ pub use generated::models::{
 };
 pub use github::{
     GitHubAccountType, GitHubApi, GitHubFailure, GitHubInstallation, GitHubInstallationState,
-    GitHubRepository, GitHubRepositoryList, GitHubSetupSession,
+    GitHubRepository, GitHubRepositoryList, GitHubSetupInstallation, GitHubSetupPendingRequest,
+    GitHubSetupPendingRequests, GitHubSetupSession, GitHubSetupState, GitHubSetupVerification,
+    GitHubSetupVerificationState,
 };
 pub use gitlab::{
     GitLabApi, GitLabFailure, GitLabRepositoryQuery, GitLabSelection, GitLabSubmission,
@@ -187,6 +190,7 @@ pub use run_inputs::{
     RunInputUploadOutcome, capability_batches, digest_bytes, input_set_is_open,
     input_set_state_name, retained_manifest, transfer_capability_batch,
 };
+pub use run_records::{RecordDownloadCapability, RunRecordFacts, RunRecordRead};
 pub use runners::{
     RunnerActivation, RunnerActivationIssuance, RunnerActivationState, RunnerApi, RunnerCredential,
     RunnerCredentialEffectiveState, RunnerCredentialStoredState, RunnerCurrentAssignment,

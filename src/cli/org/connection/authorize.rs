@@ -1,16 +1,15 @@
 //! `useful org integration authorize`: authorizes a runner of the organization to be issued the
-//! organization's token of a token service, or every token of it (REQ-INTEGRATION-20), or, with
-//! `--project`, to use one of the organization's connections for the app runs of that project
-//! (REQ-INTEGRATION-33). `deauthorize` ends either, through the same dispatch.
+//! organization's token of a token service, or every token of it, or, with `--project`, to use
+//! one of the organization's connections for the runs of that project `--runs` names, offering
+//! the guided setup of a GitHub installation that is not ready. `deauthorize` ends either,
+//! through the same dispatch.
 
 use anyhow::{Context as _, anyhow};
-use clap::Args;
-use useful_api::MemberGrantApi;
+use clap::{Args, ValueEnum};
+use useful_api::{ConnectionAuthorizationRuns, MemberGrantApi};
 use useful_human_auth::Deployment;
 
-use super::authorization::{
-    self, CONNECTION_AUTHORIZE, CONNECTION_DEAUTHORIZE, RouteFailure, Scope,
-};
+use super::authorization::{self, CONNECTION_DEAUTHORIZE, Reaching, RouteFailure, Scope, Unready};
 use super::list::Options;
 use super::target::{Integration, Target, VALUE_NAME};
 use super::token::{GROUP, ORG_TOKEN_AUTHORIZE, OrgTokens, member_session};
@@ -31,7 +30,7 @@ use useful_api::{ConnectionAuthorizationRefusal, MemberGrantFailure};
 pub(super) const ABOUT: &str =
     "Authorize a runner to use the organization's token, or one of its connections in a project";
 pub(super) const PROJECT_HELP: &str =
-    "Project ID or exact name whose app runs may use the connection; required for a connection";
+    "Project ID or exact name whose runs may use the connection; required for a connection";
 
 #[derive(Debug, Args)]
 #[group(id = "target", args = ["integration", "all"], required = true, multiple = false)]
@@ -52,6 +51,15 @@ pub(super) struct Command {
     #[arg(long, value_name = ProjectRef::VALUE_NAME, help = PROJECT_HELP)]
     project: Option<ProjectRef>,
 
+    #[arg(
+        long,
+        value_enum,
+        value_name = "RUNS",
+        requires = "project",
+        help = "With --project, the runs of the project on the runner the authorization covers: app, its app runs, or all, every run, each acting as the organization's connection; omit for app"
+    )]
+    runs: Option<Runs>,
+
     #[command(flatten)]
     confirmation: Confirmation<Self>,
 
@@ -62,15 +70,28 @@ pub(super) struct Command {
     options: Options,
 }
 
-/// Who can use the organization's token once the runner is authorized for it
-/// (REQ-INTEGRATION-20), and what authorizing a runner for a connection in a project permits
-/// (REQ-INTEGRATION-33).
+/// The value of `--runs`.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Runs {
+    App,
+    All,
+}
+
+impl From<Runs> for ConnectionAuthorizationRuns {
+    fn from(runs: Runs) -> Self {
+        match runs {
+            Runs::App => Self::App,
+            Runs::All => Self::All,
+        }
+    }
+}
+
+/// Who can use the organization's token once the runner is authorized for it. What
+/// authorizing a runner for a connection in a project reaches is stated once the command
+/// has read it.
 impl Stated for Command {
     const COMMAND: &'static str = "useful org integration authorize";
-    const STATEMENT: Statement = Statement(&[
-        (Kind::OrgToken, ORG_TOKEN_AUTHORIZE),
-        (Kind::Connection, CONNECTION_AUTHORIZE),
-    ]);
+    const STATEMENT: Statement = Statement(&[(Kind::OrgToken, ORG_TOKEN_AUTHORIZE)]);
     const ACTION: &'static str = "to authorize the runner";
     const ASKS: bool = true;
 }
@@ -87,6 +108,9 @@ impl Command {
                 target,
                 runner: self.runner,
                 project: self.project,
+                runs: self
+                    .runs
+                    .map_or(ConnectionAuthorizationRuns::App, Into::into),
                 yes: self.confirmation.yes,
                 org: self.org,
                 options: self.options,
@@ -97,13 +121,14 @@ impl Command {
 }
 
 /// `useful org integration deauthorize`: ends a runner's authorization for the organization's
-/// token of a token service (REQ-INTEGRATION-20), or, with `--project`, for one of its
-/// connections in that project (REQ-INTEGRATION-33).
+/// token of a token service, or, with `--project`, for one of its connections in that
+/// project.
 pub(super) mod deauthorize {
     use super::{
-        Arguments, CONNECTION_DEAUTHORIZE, CommandResult, Confirmation, Deployment, Integration,
-        Kind, Leaf, Options, OrgArgs, PROJECT_HELP_ENDING, ProjectRef, RUNNER_HELP, Stated,
-        Statement, TOKEN_DEAUTHORIZE, VALUE_NAME, run,
+        Arguments, CONNECTION_DEAUTHORIZE, CommandResult, Confirmation,
+        ConnectionAuthorizationRuns, Deployment, Integration, Kind, Leaf, Options, OrgArgs,
+        PROJECT_HELP_ENDING, ProjectRef, RUNNER_HELP, Stated, Statement, TOKEN_DEAUTHORIZE,
+        VALUE_NAME, run,
     };
     use clap::Args;
 
@@ -130,8 +155,8 @@ pub(super) mod deauthorize {
         options: Options,
     }
 
-    /// What ending the authorization does: the token is issued to the runner no more
-    /// (REQ-INTEGRATION-20), and the connection's permission ends (REQ-INTEGRATION-29).
+    /// What ending the authorization does: the token is issued to the runner no more,
+    /// and the connection's permission ends.
     impl Stated for Command {
         const COMMAND: &'static str = "useful org integration deauthorize";
         const STATEMENT: Statement = Statement(&[
@@ -153,6 +178,8 @@ pub(super) mod deauthorize {
                     target: Some(self.integration),
                     runner: self.runner,
                     project: self.project,
+                    // Ending names no runs: the one authorization in force is ended.
+                    runs: ConnectionAuthorizationRuns::App,
                     yes: self.confirmation.yes,
                     org: self.org,
                     options: self.options,
@@ -187,21 +214,24 @@ struct Arguments {
     target: Option<Integration>,
     runner: Option<String>,
     project: Option<ProjectRef>,
+    runs: ConnectionAuthorizationRuns,
     yes: bool,
     org: OrgArgs,
     options: Options,
 }
 
-/// Refuses with exit 2 before any request what the command line cannot act on: `--project` for
-/// a token, and no `--project` for a connection, naming the form that authorizes a runner for it
-/// in one project (REQ-INTEGRATION-33), and a service API key, which reaches none of this; asks
-/// before acting where `--runner` is given without `--yes` and the command can ask, and refuses
-/// a missing `--yes` elsewhere (REQ-GRANT-82); then acts in the organization in effect.
+/// Refuses with exit 2 before any request what the command line cannot act on: `--project` for a
+/// token, and no `--project` for a connection, naming the form that authorizes a runner for it
+/// in one project, and a service API key, which reaches none of this; asks before acting where
+/// `--runner` is given without `--yes` and the command can ask, and refuses a missing `--yes`
+/// elsewhere, `authorize` of a connection once it has read and stated what the authorization
+/// reaches; then acts in the organization in effect.
 fn run<C: Stated>(leaf: Leaf, arguments: Arguments, deployment: &Deployment) -> CommandResult {
     let Arguments {
         target,
         runner,
         project,
+        runs,
         yes,
         org,
         options,
@@ -240,7 +270,11 @@ fn run<C: Stated>(leaf: Leaf, arguments: Arguments, deployment: &Deployment) -> 
         &options.authentication,
         "the organization's tokens or connection authorizations",
     )?;
+    // Authorizing for a connection states what it reaches once it has read it, so a missing
+    // `--yes` is asked for or refused after that statement.
+    let deferred = matches!((leaf, &acting), (Leaf::Authorize, Acting::Connection(..)));
     let asks = match runner {
+        Some(_) if deferred => !yes,
         Some(_) => match confirmation::asks::<C>(yes, options.json)? {
             Ok(asks) => asks,
             Err(exit) => return Ok(exit),
@@ -251,8 +285,8 @@ fn run<C: Stated>(leaf: Leaf, arguments: Arguments, deployment: &Deployment) -> 
     let service = match acting {
         Acting::Connection(target, project) => {
             return connection(
-                (leaf, C::COMMAND),
-                (target, project),
+                (leaf, C::COMMAND, C::ACTION),
+                (target, project, runs),
                 (runner, asks),
                 org,
                 options,
@@ -278,16 +312,16 @@ fn run<C: Stated>(leaf: Leaf, arguments: Arguments, deployment: &Deployment) -> 
 }
 
 /// Runs `leaf` on the connection `target` names in the project `project` names, both in the
-/// organization in effect.
+/// organization in effect, for the runs `runs` names.
 fn connection(
-    (leaf, command): (Leaf, &'static str),
-    (target, project): (Target, ProjectRef),
+    (leaf, command, action): (Leaf, &'static str, &'static str),
+    (target, project, runs): (Target, ProjectRef, ConnectionAuthorizationRuns),
     (runner, asks): (Option<&str>, bool),
     org: OrgArgs,
     options: Options,
     deployment: &Deployment,
 ) -> CommandResult {
-    context::execute_in_project(
+    context::execute_in_project_keeping_exit(
         org,
         ProjectSubject::Named(project),
         options,
@@ -299,11 +333,15 @@ fn connection(
                 organization,
                 project_id,
                 target: &target,
+                runs,
             };
             match leaf {
-                Leaf::Authorize => authorize_connection(deployment, &options, &scope, runner, asks),
+                Leaf::Authorize => {
+                    authorize_connection(deployment, &options, &scope, (runner, asks), action)
+                }
                 Leaf::Deauthorize => {
                     end_connection_authorization(deployment, &options, &scope, runner, asks)
+                        .map_err(Into::into)
                 }
             }
         },
@@ -351,26 +389,66 @@ fn write_context_failure(
     }
 }
 
-/// Authorizes the runner for the connection `scope` names, in its project (REQ-INTEGRATION-33):
-/// reads the organization's connections at the provider and takes the one it acts on, then the
-/// runner `--runner` names, an ID or a name among the organization's runners; given none, names
-/// those that hold no authorization in force for the project and the provider and exits 2
-/// (REQ-GRANT-81). It states what the authorization permits, asks where `asks`, and sends the
-/// authorization under one key, once more under it when the answer was lost.
+/// Authorizes the runner for the connection `scope` names, in its project, for the runs it
+/// names: reads what it acts on, for `github` the project and the installation that holds its
+/// repository, and refuses with nothing sent where it cannot be authorized, unless that
+/// installation is not ready and the member, on a terminal and without `--json`, accepts to set
+/// it up first and the setup completes it; then authorizes as [`authorize_reached`] does.
 fn authorize_connection(
     deployment: &Deployment,
     options: &Options,
     scope: &Scope<'_>,
-    runner: Option<&str>,
-    asks: bool,
+    runner: (Option<&str>, bool),
+    action: &str,
+) -> CommandResult {
+    let api_url = deployment.fingerprint().api_url();
+    let json = options.json;
+    let reached = match scope.reached(deployment, options, runner.0)? {
+        Reaching::Reached(reached) => reached,
+        Reaching::Ended(exit) => return Ok(exit),
+        Reaching::Unready(unready) => {
+            // Offered whatever `--yes` says: it confirms the authorization, and the setup needs
+            // the member at GitHub anyway.
+            if json || !confirmation::can_ask() || !offer_setup(scope, &unready)? {
+                return Ok(scope.unready(&unready).write(api_url, json)?);
+            }
+            match scope.set_up(deployment, options, unready)? {
+                Ok(reached) => reached,
+                Err(exit) => return Ok(exit),
+            }
+        }
+    };
+    Ok(authorize_reached(
+        deployment, options, scope, &reached, runner, action,
+    )?)
+}
+
+/// Says that the installation `unready` names is not ready and what setting it up does, then
+/// asks whether to set it up now: whether the answer is yes.
+fn offer_setup(scope: &Scope<'_>, unready: &Unready) -> anyhow::Result<bool> {
+    let offer = scope.setup_offer(unready);
+    confirmation::state(format_args!("{}", offer.finding), &offer.lines)?;
+    Ok(confirmation::ask(format_args!("{}", offer.question))?)
+}
+
+/// Authorizes the runner for `reached`, the connection [`authorize_connection`] read: the runner
+/// `--runner` names, an ID or a name among the organization's runners; given none, names those
+/// that hold no authorization in force for the project and the provider and exits 2. It states
+/// what the authorization reaches, asks where `asks` on a terminal and without `--json` and
+/// refuses with exit 2 elsewhere, and sends the authorization under one key, once more under it
+/// when the answer was lost.
+fn authorize_reached(
+    deployment: &Deployment,
+    options: &Options,
+    scope: &Scope<'_>,
+    reached: &authorization::Reached,
+    (runner, asks): (Option<&str>, bool),
+    action: &str,
 ) -> anyhow::Result<ExitCode> {
     let api_url = deployment.fingerprint().api_url();
     let json = options.json;
     let policy = options.http.transport_policy();
-    let connection = match scope.connection(deployment, options, runner)? {
-        Ok(connection) => connection,
-        Err(exit) => return Ok(exit),
-    };
+    let connection = &reached.connection;
     let holder = Some(Holder::Connection(connection.id()));
     let example = |runner_id: &str| scope.command_line(runner_id, Some(connection.id()));
     let in_organization = || runner_choice::in_organization(deployment, policy, scope.organization);
@@ -415,10 +493,12 @@ fn authorize_connection(
         Err(exit) => return Ok(exit),
     };
     confirmation::state(
-        format_args!("{}", scope.heading(&runner.named, &connection)),
-        CONNECTION_AUTHORIZE,
+        format_args!("{}", scope.heading(&runner.named, connection)),
+        &scope.statement(reached),
     )?;
-    if let Err(exit) = confirmation::go_on(asks)? {
+    if let Err(exit) =
+        confirmation::go_on_or_refuse(asks, json, action, &scope.command_line(&runner.id, None))?
+    {
         return Ok(exit);
     }
     let key = useful_support::generate_idempotency_key()
@@ -428,17 +508,19 @@ fn authorize_connection(
     })?;
     match RouteFailure::answered(made) {
         Ok(made) => authorization::write_authorized(api_url, &made, json),
-        Err(failure) => scope.report(api_url, &failure).write(api_url, json),
+        Err(failure) => scope
+            .refused_authorization(api_url, &failure)
+            .write(api_url, json),
     }
 }
 
-/// Ends the runner's authorization for the connection `scope` names, in its project
-/// (REQ-INTEGRATION-29, REQ-INTEGRATION-33): finds it among the organization's authorizations in
-/// force for the project and the provider, of the connection `INTEGRATION` names by ID where it
-/// names one, and of the runner `--runner` names, an ID or a name among the runners that hold
-/// one; given none, names those runners and exits 2 (REQ-GRANT-81). None is reported
-/// `authorization_not_found`, with nothing more sent. It states that the permission ends, asks
-/// where `asks`, and ends it under one key, once more under it when the answer was lost.
+/// Ends the runner's authorization for the connection `scope` names, in its project: finds it
+/// among the organization's authorizations in force for the project and the provider, of the
+/// connection `INTEGRATION` names by ID where it names one, and of the runner `--runner` names,
+/// an ID or a name among the runners that hold one; given none, names those runners and exits 2.
+/// None is reported `authorization_not_found`, with nothing more sent. It states that the
+/// permission ends, asks where `asks`, and ends it under one key, once more under it when the
+/// answer was lost.
 fn end_connection_authorization(
     deployment: &Deployment,
     options: &Options,

@@ -27,7 +27,7 @@ mod otlp;
 pub(crate) mod attribute {
     /// A `runner.agent_login_setup` record names each provider whose
     /// readiness changed in the attribute's key, so one record can carry
-    /// every provider a pass changed (REQ-TELEMETRY-45).
+    /// every provider a pass changed.
     pub(crate) const AGENT_LOGIN_CODEX_STATE: &str = "um.agent_login.codex.state";
     pub(crate) const AGENT_LOGIN_CODEX_GENERATION: &str = "um.agent_login.codex.generation";
     pub(crate) const AGENT_LOGIN_CLAUDE_CODE_STATE: &str = "um.agent_login.claude_code.state";
@@ -44,11 +44,10 @@ pub(crate) mod attribute {
         "um.agent_login.claude_code.failure_cause";
     pub(crate) const AGENT_LOGIN_CLAUDE_CODE_HTTP_STATUS: &str =
         "um.agent_login.claude_code.http_status";
-    /// A `runner.grant_token` record names one OAuth provider, the phase
-    /// the runner asked in (`admission` or `refresh`), the provider's new
-    /// state and the generation of the token it keeps, and for a failure
-    /// its stage, closed cause and Cloud's HTTP status when the cause is one
-    /// (REQ-TELEMETRY-46).
+    /// A `runner.grant_token` record names one OAuth provider, the phase the
+    /// runner asked in (`admission` or `refresh`), the provider's new state
+    /// and the generation of the token it keeps, and for a failure its
+    /// stage, closed cause and Cloud's HTTP status when the cause is one.
     pub(crate) const GRANT_TOKEN_PROVIDER: &str = "um.grant_token.provider";
     pub(crate) const GRANT_TOKEN_PHASE: &str = "um.grant_token.phase";
     pub(crate) const GRANT_TOKEN_STATE: &str = "um.grant_token.state";
@@ -58,7 +57,7 @@ pub(crate) mod attribute {
     pub(crate) const GRANT_TOKEN_HTTP_STATUS: &str = "um.grant_token.http_status";
     /// A `runner.credential_sources` record names the assignment whose
     /// credential-source report Cloud did not take, the closed cause, and
-    /// Cloud's HTTP status when the cause is one (REQ-TELEMETRY-48).
+    /// Cloud's HTTP status when the cause is one.
     pub(crate) const CREDENTIAL_SOURCES_FAILURE_CAUSE: &str = "um.credential_sources.failure_cause";
     pub(crate) const CREDENTIAL_SOURCES_HTTP_STATUS: &str = "um.credential_sources.http_status";
     pub(crate) const BACKOFF_MS: &str = "um.connection.backoff_ms";
@@ -82,6 +81,9 @@ pub(crate) mod attribute {
     pub(crate) const RUN_ID: &str = "um.run.id";
     pub(crate) const RUN_RESULT: &str = "um.run.result";
     pub(crate) const STEP_REPORT_REFUSAL: &str = "um.run.step_report_refusal";
+    pub(crate) const RECORD_DELIVERY: &str = "um.run.record_delivery";
+    pub(crate) const RECORD_FAILURE: &str = "um.run.record_failure";
+    pub(crate) const RECORD_SEQUENCE: &str = "um.run.record_sequence";
     pub(crate) const MIRROR_READ_FAILURE: &str = "um.run.mirror_read_failure";
     pub(crate) const EXPORT_READ_FAILURE: &str = "um.run.export_read_failure";
     pub(crate) const FAILURE_PHASE: &str = "um.failure.phase";
@@ -129,7 +131,7 @@ pub(crate) mod attribute {
     pub(crate) const BUILD_CACHE_REMAINING_BYTES: &str = "um.build_cache.remaining_bytes";
     pub(crate) const BUILD_CACHE_FAILED_FILES: &str = "um.build_cache.failed_files";
     /// A `runner.disk_space` record gives the state the work root's disk turned to, `low`
-    /// or `ok`, with the reading that turned it (REQ-TELEMETRY-55).
+    /// or `ok`, with the reading that turned it.
     pub(crate) const DISK_STATE: &str = "um.disk.state";
     pub(crate) const DISK_AVAILABLE_BYTES: &str = "um.disk.available_bytes";
     pub(crate) const DISK_TOTAL_BYTES: &str = "um.disk.total_bytes";
@@ -138,9 +140,9 @@ pub(crate) mod attribute {
     pub(crate) const PROTOCOL_ACKNOWLEDGED_SEQUENCE: &str = "um.protocol.acknowledged_sequence";
     pub(crate) const PROTOCOL_CLOSE_CODE: &str = "um.protocol.close_code";
     pub(crate) const PROTOCOL_CLOSE_INITIATOR: &str = "um.protocol.close_initiator";
-    /// A `runner.run` that ends `rejected` names the cause of a diagnosed
-    /// decline and, for a refused workflow tree, the validation code and the
-    /// location's kind, never the path or the step (REQ-TELEMETRY-47, REQ-TELEMETRY-79).
+    /// A `runner.run` that ends `rejected` names the cause of a diagnosed decline and,
+    /// for a refused workflow tree, the validation code and the location's kind, never
+    /// the path or the step.
     pub(crate) const PROTOCOL_DECLINE_CAUSE: &str = "um.protocol.decline_cause";
     pub(crate) const WORKFLOW_VALIDATION_CODE: &str = "um.workflow.validation_code";
     pub(crate) const WORKFLOW_VALIDATION_LOCATION: &str = "um.workflow.validation_location";
@@ -199,7 +201,7 @@ pub(crate) enum Outcome {
     Timeout,
     Disconnected,
     // An offer the runner took and then rejected: not an error, as the
-    // gateway treats a 4xx response (REQ-TELEMETRY-6).
+    // gateway treats a 4xx response.
     Rejected,
 }
 
@@ -221,16 +223,15 @@ impl Outcome {
 }
 
 /// The wall clock a local record's `time` is read from when the record is
-/// serialized (REQ-TELEMETRY-51). Production passes the service's
-/// `Sleeper::utc_now`.
+/// serialized. Production passes the service's `Sleeper::utc_now`.
 pub(crate) type RecordClock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
 pub(crate) trait EventWriter: Send + Sync {
     fn write(&self, event: &Map<String, Value>) -> io::Result<()>;
 }
 
-/// Told of each runner record the telemetry writer drops (REQ-TELEMETRY-14). It is told
-/// outside every lock this module holds and must write no telemetry.
+/// Told of each runner record the telemetry writer drops. It is told outside every lock
+/// this module holds and must write no telemetry.
 pub(crate) trait DroppedRecordObserver: Send + Sync {
     /// One more record was dropped.
     fn record_dropped(&self);
@@ -265,7 +266,7 @@ impl Drops {
 
 /// One serialized record as a local output's queue holds it. Every output
 /// the record is offered to holds the same bytes and the same tally of the
-/// outputs that may still take it (REQ-TELEMETRY-14).
+/// outputs that may still take it.
 #[derive(Clone)]
 struct QueuedRecord {
     bytes: Arc<[u8]>,
@@ -275,10 +276,9 @@ struct QueuedRecord {
 
 impl QueuedRecord {
     // serialize frames one local record as a JSON line stamped with `time`,
-    // the UTC time it was written (REQ-TELEMETRY-51), to be offered to
-    // `outputs` outputs. The stamp is added here, once per record, so every
-    // output carries the same bytes and the stamp never reaches an exported
-    // span.
+    // the UTC time it was written, to be offered to `outputs` outputs. The
+    // stamp is added here, once per record, so every output carries the
+    // same bytes and the stamp never reaches an exported span.
     fn serialize(
         event: &Map<String, Value>,
         written_at: OffsetDateTime,
@@ -455,9 +455,9 @@ impl Drop for QueuedWriter {
 }
 
 /// The runner's local outputs behind its one `EventWriter`: standard error
-/// and, when it opened, the log file (REQ-TELEMETRY-14, INV-TELEMETRY-17).
-/// A record is serialized and stamped once and the same bytes are offered
-/// to each output without waiting on any.
+/// and, when it opened, the log file. A record is serialized and stamped
+/// once and the same bytes are offered to each output without waiting on
+/// any.
 struct LocalOutputs {
     outputs: Vec<QueuedWriter>,
     clock: RecordClock,
@@ -569,11 +569,10 @@ impl fmt::Debug for Recorder {
 
 impl Recorder {
     /// The serving runner's recorder, whose local outputs are standard error
-    /// and, given `log_directory`, the log file `runner.log` in it
-    /// (REQ-TELEMETRY-52). It waits for the log's thread to answer whether
-    /// the log opened; a log that did not open leaves standard error the
-    /// only local output, is reported as `open_failed` and never fails the
-    /// recorder (REQ-TELEMETRY-54).
+    /// and, given `log_directory`, the log file `runner.log` in it. It waits
+    /// for the log's thread to answer whether the log opened; a log that did
+    /// not open leaves standard error the only local output, is reported as
+    /// `open_failed` and never fails the recorder.
     pub(crate) fn open(
         service_instance_id: &str,
         service_version: &str,
@@ -694,9 +693,8 @@ impl Recorder {
         &self.source.service_instance_id
     }
 
-    /// The path of the log file the recorder writes, when it opened one
-    /// (REQ-TELEMETRY-52); none when it was given no log directory or the
-    /// log did not open (REQ-TELEMETRY-54).
+    /// The path of the log file the recorder writes, when it opened one;
+    /// none when it was given no log directory or the log did not open.
     pub(crate) fn log_path(&self) -> Option<&Path> {
         self.log_path.as_deref()
     }
@@ -1150,7 +1148,6 @@ mod tests {
         Some((record.bytes.to_vec(), line))
     }
 
-    // REQ-TELEMETRY-2
     #[test]
     fn projects_scalar_attributes_to_one_json_event_and_span() {
         let (recorder, capture) = test_recorder("rbt_fixture");
@@ -1211,7 +1208,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-24
     #[test]
     fn a_child_event_is_linked_to_its_parent_on_both_sinks() {
         let (recorder, capture) = test_recorder("rbt_fixture");
@@ -1313,7 +1309,6 @@ mod tests {
         ));
     }
 
-    // REQ-TELEMETRY-14
     #[test]
     fn writer_failure_is_nonfatal_and_reported_by_the_next_event() {
         #[derive(Debug)]
@@ -1348,9 +1343,9 @@ mod tests {
         assert_eq!(events[0][DROPPED_COUNT], 1);
     }
 
-    // REQ-TELEMETRY-14, REQ-RUNNERENROLL-138: the observer is told of each record the
-    // writer refuses, once, never of the count a refused record carried; the pending count
-    // and the record that reports it are what they are without one.
+    // The observer is told of each record the writer refuses, once, never of the count a
+    // refused record carried; the pending count and the record that reports it are what
+    // they are without one.
     #[test]
     fn each_refused_record_tells_the_observer_once_and_the_count_is_unchanged() {
         #[derive(Debug, Default)]
@@ -1428,7 +1423,6 @@ mod tests {
         assert_eq!(reported(&unobserved, &unobserved_writer), [3, 3]);
     }
 
-    // REQ-TELEMETRY-14
     #[test]
     fn a_full_output_queue_drops_without_waiting() {
         let (sender, _receiver) = sync_channel(1);
@@ -1443,7 +1437,6 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
     }
 
-    // REQ-TELEMETRY-51
     #[test]
     fn every_local_record_carries_the_utc_time_it_was_written() {
         // The clock reads the instant 2026-11-19T04:54:24.993Z with a finer
@@ -1493,7 +1486,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-14, INV-TELEMETRY-17
     #[test]
     fn a_record_is_dropped_only_when_no_output_takes_it() {
         let (first_sender, first) = sync_channel(1);
@@ -1624,7 +1616,6 @@ mod tests {
             .collect()
     }
 
-    // REQ-TELEMETRY-54, REQ-TELEMETRY-13
     #[test]
     fn a_log_that_cannot_open_is_reported_once_and_the_recorder_serves() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -1693,7 +1684,6 @@ mod tests {
         assert_eq!(entries, ["logs"]);
     }
 
-    // REQ-TELEMETRY-54, REQ-TELEMETRY-14
     #[test]
     fn a_log_whose_writes_fail_is_reported_once_and_drops_nothing() {
         // The log's output: every write fails, and tells the test it did.

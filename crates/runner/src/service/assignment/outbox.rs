@@ -21,7 +21,7 @@ pub(in crate::service) struct ObservationOutbox {
     state: Arc<Mutex<ObservationOutboxState>>,
     changed: Arc<Notify>,
     pub(super) maximum_encoded_bytes: u64,
-    /// The log a refusal of a full outbox is recorded in (REQ-RUNNERENROLL-138).
+    /// The log a refusal of a full outbox is recorded in.
     pub(super) events: Arc<EventLog>,
 }
 
@@ -39,7 +39,7 @@ impl ObservationOutbox {
         }
     }
 
-    /// Records each refusal of a full outbox in `events` (REQ-RUNNERENROLL-138).
+    /// Records each refusal of a full outbox in `events`.
     pub(super) fn with_events(mut self, events: Arc<EventLog>) -> Self {
         self.events = events;
         self

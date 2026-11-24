@@ -29,7 +29,6 @@ fn command_path(root: &clap::Command, words: &[String]) -> String {
     path.join(" ")
 }
 
-// INV-CLI-21, INV-CLI-20, REQ-MEMBER-48, REQ-MEMBER-50
 #[test]
 fn every_scenario_step_parses_against_the_command_tree() {
     let scenarios = scenarios().expect("scenario fixture");

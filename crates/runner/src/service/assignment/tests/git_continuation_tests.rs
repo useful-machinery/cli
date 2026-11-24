@@ -57,7 +57,6 @@ async fn exercise_retained_cloud_git_continuation(v3: bool) {
     assert!(run_fixture_git(&workspace, &["status", "--porcelain"]).is_empty());
 }
 
-// REQ-CONTINUE-48
 #[tokio::test]
 async fn continuation_of_a_removed_kept_workspace_is_declined_retained_workspace_unavailable() {
     let (_temporary, mut manager, initial, workspace, _baseline) =
@@ -77,7 +76,6 @@ async fn continuation_of_a_removed_kept_workspace_is_declined_retained_workspace
     );
 }
 
-// REQ-TELEMETRY-68
 #[tokio::test]
 async fn execution_lost_before_the_engine_starts_ends_the_execution_phase_failed() {
     let (_temporary, mut manager, initial, workspace, _baseline) =
@@ -166,11 +164,19 @@ exports:
         fs::write(source.join("workflow.yaml"), "not: a workflow\n").unwrap();
         run_fixture_git(&source, &["add", "workflow.yaml"]);
         run_fixture_git(&source, &["commit", "--quiet", "-m", "workspace revision"]);
-        initial.execution_spec.primary_workspace_source.commit_oid =
-            run_fixture_git(&source, &["rev-parse", "HEAD"]);
+        initial
+            .execution_spec
+            .source
+            .as_mut()
+            .unwrap()
+            .primary_workspace_source
+            .commit_oid = run_fixture_git(&source, &["rev-parse", "HEAD"]);
     }
     let baseline = initial
         .execution_spec
+        .source
+        .as_ref()
+        .unwrap()
         .primary_workspace_source
         .commit_oid
         .clone();
@@ -179,12 +185,26 @@ exports:
         let mut membership = spec.workspace_membership.unwrap();
         membership.workspace_commit_oid = baseline.clone();
         membership.witness.tip_oid = baseline.clone();
-        membership.witness.reference =
-            format!("refs/heads/{}", initial.execution_spec.source_branch);
+        membership.witness.reference = format!(
+            "refs/heads/{}",
+            initial
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .source_branch
+        );
         initial.execution_spec.schema_version = 3;
         initial.execution_spec.source_display_snapshot = spec.source_display_snapshot;
-        initial.execution_spec.workspace_branch =
-            Some(initial.execution_spec.source_branch.clone());
+        initial.execution_spec.workspace_branch = Some(
+            initial
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .source_branch
+                .clone(),
+        );
         initial.execution_spec.workspace_membership = Some(membership);
     }
     manager.handle_offer(initial.clone()).unwrap();
@@ -227,10 +247,21 @@ pub(super) fn continuation_successor(
         prior_attempt_id: initial.attempt_id.clone(),
         required_runner_boot_id: manager.work_root.boot_id().unwrap().to_owned(),
         execution_root: workspace.to_str().unwrap().to_owned(),
-        definition_source: successor.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(
+            successor
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .workflow_definition_source
+                .clone(),
+        ),
         effective_capacity: successor.execution_spec.capacity.clone(),
         prior_manifest_digest: initial
             .execution_spec
+            .source
+            .as_ref()
+            .unwrap()
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),

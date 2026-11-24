@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -350,7 +350,7 @@ pub enum UpdateRunnerRegistrationModeError {
     UnknownValue(serde_json::Value),
 }
 
-/// The activation bearer authenticates only this operation. The request carries the SHA-256 verifier of a host-generated secret, never the complete rrc_ bearer. Exact successful replay is retained without a time-based expiry and returns the original non-secret credential ID even after activation expiry. A runner in a member's personal pool is answered `409` `runner-pool-member-inactive` while that member is not an active member of the organization with an active account; the refusal consumes nothing, so the same activation enrolls once the member is active again.
+/// The activation bearer authenticates only this operation. The request carries the SHA-256 verifier of a host-generated secret, never the complete rrc_ bearer. Exact successful replay is retained without a time-based expiry and returns the original non-secret credential ID even after activation expiry. A runner in a member's personal pool is answered `409` `runner-pool-member-inactive` while that member is not an active member of the organization with an active account; the refusal consumes nothing, so the same activation enrolls once the member is active again.  Problem types: 409 `runner-credential-limit-reached`.
 pub fn activate_runner_enrollment(
     configuration: &configuration::Configuration,
     activation_id: &str,
@@ -417,7 +417,7 @@ pub fn activate_runner_enrollment(
     }
 }
 
-/// Atomically revokes any prior issued activation and creates a fixed one-hour activation when an effective credential slot remains. The secret-bearing artifact is present only on the first completed response and is omitted from an exact principal idempotency replay. An owner may issue for any registration; a member only for one in their own personal pool, and is answered 403 for any other.
+/// Atomically revokes any prior issued activation and creates a fixed one-hour activation when an effective credential slot remains. The secret-bearing artifact is present only on the first completed response and is omitted from an exact principal idempotency replay. An owner may issue for any registration; a member only for one in their own personal pool, and is answered 403 for any other.  Problem types: 409 `runner-credential-limit-reached`.
 pub fn create_runner_activation(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -487,7 +487,7 @@ pub fn create_runner_activation(
     }
 }
 
-/// Creates one active runner pool with an organization-scoped canonical name. A service may name an active human-service delegation for audit attribution, but the service must independently hold an active owner membership. Exact idempotency replay returns the original pool and appends no second audit record.
+/// Creates one active runner pool with an organization-scoped canonical name. A service may name an active human-service delegation for audit attribution, but the service must independently hold an active owner membership. Exact idempotency replay returns the original pool and appends no second audit record.  Problem types: 409 `runner-name-unavailable`.
 pub fn create_runner_pool(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -554,7 +554,7 @@ pub fn create_runner_pool(
     }
 }
 
-/// Creates an enabled registration in one exact same-organization pool, named by runnerPoolId, or in the personal pool of the human member named by memberId, or, when the body names neither, in the caller's own personal pool; a body naming both is refused with 400, and a memberId naming no human member of the organization with 404. An owner may create in any pool; a member only in their own personal pool, and is answered 403 for any other. A caller with no personal pool, a service, that names neither is answered `409` `runner-pool-personal-unavailable`. When name is omitted, Cloud generates a non-sensitive unique name using only the newly allocated opaque runner ID. This operation creates no activation, credential, or host connectivity.
+/// Creates an enabled registration in one exact same-organization pool, named by runnerPoolId, or in the personal pool of the human member named by memberId, or, when the body names neither, in the caller's own personal pool; a body naming both is refused with 400, and a memberId naming no human member of the organization with 404. An owner may create in any pool; a member only in their own personal pool, and is answered 403 for any other. A caller with no personal pool, a service, that names neither is answered `409` `runner-pool-personal-unavailable`. When name is omitted, Cloud generates a non-sensitive unique name using only the newly allocated opaque runner ID. This operation creates no activation, credential, or host connectivity.  Problem types: 409 `runner-name-unavailable`.
 pub fn create_runner_registration(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -621,7 +621,7 @@ pub fn create_runner_registration(
     }
 }
 
-/// Permanently tombstones one pool only when it has no active runner registrations, current project assignments, or nonterminal runs. The request has no body, accepts no delegation attribution or reason, and never cascades to child resources. Exact completed replay reauthorizes the original principal, authenticator, organization, and owner role. A member's personal pool is answered `403` `forbidden` with `reason` `runner-pool-personal` while its member has an active or suspended membership of the organization; once the membership has ended, the pool is deleted as any other.
+/// Permanently tombstones one pool only when it has no active runner registrations, current project assignments, or nonterminal runs. The request has no body, accepts no delegation attribution or reason, and never cascades to child resources. Exact completed replay reauthorizes the original principal, authenticator, organization, and owner role. A member's personal pool is answered `403` `forbidden` with `reason` `runner-pool-personal` while its member has an active or suspended membership of the organization; once the membership has ended, the pool is deleted as any other.  Problem types: 409 `runner-pool-delete-unavailable`.
 pub fn delete_runner_pool(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -669,7 +669,7 @@ pub fn delete_runner_pool(
     }
 }
 
-/// Permanently tombstones one registration only when it has no reserved capacity or nonterminal assignment. The request has no body, accepts no delegation attribution or reason, and erases all live runner authority without deleting retained history. An owner may delete any registration; a member only one in their own personal pool, and is answered 403 for any other. Exact completed replay reauthorizes the original principal, authenticator, organization, and that authority.
+/// Permanently tombstones one registration only when it has no reserved capacity or nonterminal assignment. The request has no body, accepts no delegation attribution or reason, and erases all live runner authority without deleting retained history. An owner may delete any registration; a member only one in their own personal pool, and is answered 403 for any other. Exact completed replay reauthorizes the original principal, authenticator, organization, and that authority.  Problem types: 409 `runner-registration-delete-unavailable`.
 pub fn delete_runner_registration(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1394,7 +1394,7 @@ pub fn list_runner_registrations(
     }
 }
 
-/// Moves a draining or disabled registration to one active destination pool in the same organization. The move conflicts while capacity is reserved or any nonterminal assignment targets the runner. Placement and movement serialize on the registration, and historical assignments retain their original pool identity. An equivalent target is an exact no-op. Inaccessible and cross-organization pools are not distinguished from absent resources. Only an owner moves a registration, including into or out of a personal pool; a member is answered 403.
+/// Moves a draining or disabled registration to one active destination pool in the same organization. The move conflicts while capacity is reserved or any nonterminal assignment targets the runner. Placement and movement serialize on the registration, and historical assignments retain their original pool identity. An equivalent target is an exact no-op. Inaccessible and cross-organization pools are not distinguished from absent resources. Only an owner moves a registration, including into or out of a personal pool; a member is answered 403.  Problem types: 409 `runner-pool-move-unavailable`.
 pub fn move_runner_registration(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1462,7 +1462,7 @@ pub fn move_runner_registration(
     }
 }
 
-/// Replaces only the canonical name. An equivalent rename is a no-op that changes neither updatedAt nor audit history. Missing, cross-organization, inactive, and inaccessible resources share the not-found representation. A member's personal pool keeps the name the service chose: renaming it is answered `403` `forbidden` with `reason` `runner-pool-personal`.
+/// Replaces only the canonical name. An equivalent rename is a no-op that changes neither updatedAt nor audit history. Missing, cross-organization, inactive, and inaccessible resources share the not-found representation. A member's personal pool keeps the name the service chose: renaming it is answered `403` `forbidden` with `reason` `runner-pool-personal`.  Problem types: 409 `runner-name-unavailable`.
 pub fn rename_runner_pool(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1537,7 +1537,7 @@ pub fn rename_runner_pool(
     }
 }
 
-/// Replaces only the registration name. Equivalent renames are no-ops. An owner may rename any registration; a member only one in their own personal pool, and is answered 403 for any other. Administrative mode and pool association cannot be changed through this operation and no premature mode or pool mutation operation is exposed.
+/// Replaces only the registration name. Equivalent renames are no-ops. An owner may rename any registration; a member only one in their own personal pool, and is answered 403 for any other. Administrative mode and pool association cannot be changed through this operation and no premature mode or pool mutation operation is exposed.  Problem types: 409 `runner-name-unavailable`.
 pub fn rename_runner_registration(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1614,7 +1614,7 @@ pub fn rename_runner_registration(
     }
 }
 
-/// Irreversibly schedules the deployment's fixed one-hour retirement grace. Exact principal idempotency replay appends no duplicate audit record. An owner may retire the credentials of any registration; a member only of one in their own personal pool, and is answered 403 for any other.
+/// Irreversibly schedules the deployment's fixed one-hour retirement grace. Exact principal idempotency replay appends no duplicate audit record. An owner may retire the credentials of any registration; a member only of one in their own personal pool, and is answered 403 for any other.  Problem types: 409 `runner-credential-transition-unavailable`.
 pub fn retire_runner_credential(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1687,7 +1687,7 @@ pub fn retire_runner_credential(
     }
 }
 
-/// An owner may revoke the activations of any registration; a member only of one in their own personal pool, and is answered 403 for any other.
+/// An owner may revoke the activations of any registration; a member only of one in their own personal pool, and is answered 403 for any other.  Problem types: 409 `runner-activation-unavailable`.
 pub fn revoke_runner_activation(
     configuration: &configuration::Configuration,
     organization_ref: &str,

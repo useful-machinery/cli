@@ -1,5 +1,5 @@
 //! `useful org integration team`: the Linear teams a Linear connection reaches and their
-//! workflow states (REQ-CONNECTION-87).
+//! workflow states.
 use clap::{Args, Subcommand};
 use useful_human_auth::Deployment;
 
@@ -112,7 +112,7 @@ struct Show {
 }
 
 /// Runs `discover` on the Linear connection `connection` names, refusing one of another
-/// provider before any request (REQ-CONNECTION-106).
+/// provider before any request.
 fn read(
     command: &str,
     connection: Target,

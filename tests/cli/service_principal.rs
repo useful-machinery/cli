@@ -83,7 +83,6 @@ fn run_with_failing_key_file(args: &[&str], environment: &[(&str, &str)]) -> Out
     command.output().expect("useful should run")
 }
 
-// REQ-SERVICEPRINCIPAL-3
 #[test]
 fn rejected_display_name_reports_invalid_display_name_and_removes_the_reserved_file() {
     let server = ScriptedServer::respond(vec![problem_http_response(
@@ -122,7 +121,6 @@ fn rejected_display_name_reports_invalid_display_name_and_removes_the_reserved_f
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-SERVICEPRINCIPAL-10
 #[test]
 fn json_with_standard_output_key_destination_is_refused_before_any_request() {
     let directory = private_credential_directory();
@@ -155,7 +153,6 @@ fn json_with_standard_output_key_destination_is_refused_before_any_request() {
     }
 }
 
-// REQ-SERVICEPRINCIPAL-13
 #[test]
 fn failed_key_delivery_keeps_the_credential_and_names_the_recovery() {
     let directory = private_credential_directory();
@@ -211,7 +208,6 @@ fn failed_key_delivery_keeps_the_credential_and_names_the_recovery() {
     }
 }
 
-// REQ-SERVICEPRINCIPAL-14
 #[test]
 fn credential_management_requires_an_explicit_service_key() {
     let output = run(&["account", "service", "key", "list"]);
@@ -220,7 +216,6 @@ fn credential_management_requires_an_explicit_service_key() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("--api-key-file <PATH|->"));
 }
 
-// REQ-SERVICEPRINCIPAL-1, REQ-SERVICEPRINCIPAL-5, REQ-SERVICEPRINCIPAL-8, REQ-SERVICEPRINCIPAL-29
 #[test]
 fn service_principal_creation_writes_the_key_only_to_the_protected_destination() {
     let server = ScriptedServer::respond(vec![created_service_response()]);
@@ -276,7 +271,6 @@ fn service_principal_creation_writes_the_key_only_to_the_protected_destination()
     );
 }
 
-// REQ-SERVICEPRINCIPAL-9, REQ-SERVICEPRINCIPAL-29
 #[test]
 fn issuance_to_stdout_emits_only_the_api_key_on_stdout() {
     let server = ScriptedServer::respond(vec![issued_credential_response()]);
@@ -306,7 +300,6 @@ fn issuance_to_stdout_emits_only_the_api_key_on_stdout() {
     server.finish();
 }
 
-// REQ-SERVICEPRINCIPAL-11, REQ-SERVICEPRINCIPAL-17
 #[test]
 fn issuance_delivers_the_committed_key_when_interrupted_after_dispatch() {
     let mut server =
@@ -368,7 +361,6 @@ fn issuance_delivers_the_committed_key_when_interrupted_after_dispatch() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-SERVICEPRINCIPAL-7
 #[test]
 fn issuance_replay_reports_unrecoverable_secret_and_removes_the_reserved_file() {
     let response = http_response_with_headers(
@@ -427,8 +419,6 @@ fn issuance_replay_reports_unrecoverable_secret_and_removes_the_reserved_file() 
     );
 }
 
-// REQ-AUTH-49, REQ-AUTH-54
-// REQ-SERVICEPRINCIPAL-27
 #[test]
 fn rejected_service_key_uses_the_authentication_exit_and_structured_outcome() {
     let response = problem_http_response(
@@ -467,8 +457,6 @@ fn rejected_service_key_uses_the_authentication_exit_and_structured_outcome() {
     server.finish();
 }
 
-// REQ-AUTH-48
-// REQ-SERVICEPRINCIPAL-25, REQ-SERVICEPRINCIPAL-29
 #[test]
 fn service_credential_list_is_non_secret_and_rejects_public_key_files_locally() {
     let response = json_http_response(
@@ -526,8 +514,6 @@ fn service_credential_list_is_non_secret_and_rejects_public_key_files_locally() 
     assert!(!String::from_utf8_lossy(&output.stderr).contains(API_KEY));
 }
 
-// REQ-SERVICEPRINCIPAL-14, REQ-SERVICEPRINCIPAL-19, REQ-SERVICEPRINCIPAL-20,
-// REQ-SERVICEPRINCIPAL-21, REQ-SERVICEPRINCIPAL-22
 #[test]
 fn revoke_uses_only_the_service_key_and_reports_the_target_outcome() {
     const OTHER: &str = "crd_01k0z6r1w8f4jy2m7q9v3x5abd";

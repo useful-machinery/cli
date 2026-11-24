@@ -44,7 +44,7 @@ use super::recovery::{
     RECOVERY_DECISION_SCHEMA_JSON, recovery_handler_cwd,
 };
 use super::result_validation::RetainedJsonSchema;
-use super::step_runtime::{WorkingDirectoryFailure, resolve_working_directory};
+use super::step_runtime::{WorkingDirectoryFailure, resolve_step_working_directory};
 use super::validated::{
     ResolvedOutputSource, ResolvedValueSource, ValidatedAgentStep, ValidatedMessageSource,
     ValidatedRecoveryHandler, WorkflowValueType,
@@ -218,8 +218,8 @@ impl MaterializedAgentInvocation {
     }
 
     /// The login variable of the invocation's harness when the environment the invocation
-    /// starts from carries it: the one the step runtime reports the outcome for
-    /// (INV-ENGINE-36). Only the name is compared; no value is read.
+    /// starts from carries it: the one the step runtime reports the outcome for. Only the
+    /// name is compared; no value is read.
     pub(crate) fn login_variable(&self) -> Option<&'static str> {
         self.login_variable
     }
@@ -577,11 +577,9 @@ where
         return Err(start_error(AgentInputStartFailure::AgentStagingMismatch));
     }
 
-    let working_directory = resolve_working_directory(
-        admitted.execution().root_identity(),
-        step.common.cwd.as_deref(),
-    )
-    .map_err(|failure| start_error(AgentInputStartFailure::WorkingDirectory(failure)))?;
+    let working_directory =
+        resolve_step_working_directory(admitted, step_name, step.common.cwd.as_deref())
+            .map_err(|failure| start_error(AgentInputStartFailure::WorkingDirectory(failure)))?;
     let plan = build_plan(
         admitted,
         step_name,
@@ -616,7 +614,7 @@ where
         return Err(abort_view(
             view,
             start_error(AgentInputStartFailure::WorkingDirectory(
-                WorkingDirectoryFailure::ExecutionRootRebound,
+                working_directory.rebound_failure().into(),
             )),
         ));
     }
@@ -654,7 +652,7 @@ where
     })
 }
 
-/// `harness`'s login variable when `environment` carries it (INV-ENGINE-36).
+/// `harness`'s login variable when `environment` carries it.
 fn carried_login_variable(
     harness: &AdmittedHarness,
     environment: &EnvironmentSnapshot,
@@ -706,7 +704,7 @@ where
     }
     let cwd = recovery_handler_cwd(admitted, step_name, cwd.as_deref())
         .map_err(|()| start_error(AgentInputStartFailure::StepUnavailable))?;
-    let working_directory = resolve_working_directory(admitted.execution().root_identity(), cwd)
+    let working_directory = resolve_step_working_directory(admitted, step_name, cwd)
         .map_err(|failure| start_error(AgentInputStartFailure::WorkingDirectory(failure)))?;
     let trusted_prompt = retained_bytes(admitted, prompt)?;
     let trusted_prompt = std::str::from_utf8(trusted_prompt).map_err(|_| {

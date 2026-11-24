@@ -215,8 +215,8 @@ fn assert_enrolled_and_connected(host: &JoinHost, connection: &str, stderr: &str
     assert!(record.get("enrolledAt").is_some(), "{record}");
 }
 
-// REQ-RUNNERENROLL-116, REQ-RUNNERENROLL-305, REQ-RUNNERENROLL-115: `--org` names the organization the
-// registration is sent under, with no request before the registration's own.
+// `--org` names the organization the registration is sent under, with no request before the
+// registration's own.
 #[test]
 fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
     let cloud = SignedInCloud::new(vec![
@@ -244,7 +244,7 @@ fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
     assert_activation_and_enrollment(&requests[2], &enrollment);
 }
 
-// REQ-RUNNERENROLL-115: `USEFUL_ORG` names the organization when `--org` does not.
+// `USEFUL_ORG` names the organization when `--org` does not.
 #[test]
 fn pool_resolves_the_named_pool_once_and_registers_in_it() {
     let cloud = SignedInCloud::new(vec![
@@ -278,8 +278,8 @@ fn pool_resolves_the_named_pool_once_and_registers_in_it() {
     assert_activation_and_enrollment(&requests[3], &enrollment);
 }
 
-// REQ-RUNNERENROLL-115: with no `--org` and no `USEFUL_ORG` the registration is sent in
-// the person's only active organization, by its ID, which the record names.
+// With no `--org` and no `USEFUL_ORG` the registration is sent in the person's only
+// active organization, by its ID, which the record names.
 #[test]
 fn a_registration_with_no_organization_named_acts_in_the_only_membership() {
     let cloud = SignedInCloud::new(vec![
@@ -306,8 +306,8 @@ fn a_registration_with_no_organization_named_acts_in_the_only_membership() {
     assert_activation_and_enrollment_in(&requests[3], &enrollment, ORGANIZATION_ID);
 }
 
-// REQ-RUNNERENROLL-115: several memberships and no organization named are a usage
-// error after the membership read, naming `--org` and the person's organizations.
+// Several memberships and no organization named are a usage error after the
+// membership read, naming `--org` and the person's organizations.
 #[test]
 fn a_registration_with_several_memberships_and_no_organization_exits_2_writing_nothing() {
     let (server, _credentials, credential_path) = prepared_runner(vec![active_memberships(&[
@@ -337,7 +337,6 @@ fn a_registration_with_several_memberships_and_no_organization_exits_2_writing_n
     );
 }
 
-// REQ-RUNNERENROLL-306
 #[test]
 fn a_start_with_no_sign_in_exits_3_having_registered_and_written_nothing() {
     let cloud = SilentCloud::new();
@@ -372,8 +371,8 @@ fn a_start_with_no_sign_in_exits_3_having_registered_and_written_nothing() {
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-308: without --allow-insecure-http the registration's
-// requests refuse a plain-HTTP API address, so the sign-in is sent nowhere.
+// Without --allow-insecure-http the registration's requests refuse a plain-HTTP
+// API address, so the sign-in is sent nowhere.
 #[test]
 fn a_plain_http_api_address_is_refused_without_allow_insecure_http() {
     let cloud = SignedInSilentCloud::new();
@@ -389,7 +388,6 @@ fn a_plain_http_api_address_is_refused_without_allow_insecure_http() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-303
 #[test]
 fn conflicting_or_incomplete_registration_modes_are_usage_errors_that_send_nothing() {
     let cloud = SilentCloud::new();
@@ -439,7 +437,6 @@ fn conflicting_or_incomplete_registration_modes_are_usage_errors_that_send_nothi
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-304
 #[test]
 fn a_host_without_a_work_root_fails_with_its_configuration_before_registering() {
     let cloud = SilentCloud::new();
@@ -469,7 +466,6 @@ fn a_host_without_a_work_root_fails_with_its_configuration_before_registering() 
     cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-251, REQ-RUNNERENROLL-253
 #[test]
 fn an_ambiguous_registration_is_resent_with_the_same_key_and_completes() {
     let cloud = SignedInCloud::new(vec![
@@ -515,7 +511,6 @@ fn an_ambiguous_registration_is_resent_with_the_same_key_and_completes() {
     assert_activation_and_enrollment(&requests[4], &enrollment);
 }
 
-// REQ-RUNNERENROLL-307
 #[test]
 fn a_refused_registration_exits_with_forbidden_and_leaves_nothing() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -635,7 +630,6 @@ fn assert_code(stderr: &str, code: &str) {
 
 const PERSONAL: [&str; 4] = ["--personal", "--org", ORGANIZATION, "--allow-insecure-http"];
 
-// REQ-RUNNERENROLL-118, INV-RUNNER-27
 #[test]
 fn a_registered_host_starts_again_with_its_options_and_no_sign_in_as_the_same_runner() {
     let cloud = SignedInCloud::new(vec![
@@ -663,7 +657,6 @@ fn a_registered_host_starts_again_with_its_options_and_no_sign_in_as_the_same_ru
     assert_eq!(requests.len(), 3, "{requests:?}");
 }
 
-// REQ-RUNNERENROLL-260, REQ-RUNNERENROLL-261
 #[test]
 fn a_registered_host_started_with_another_target_fails_and_sends_nothing() {
     let witness = ConnectionWitness::new();
@@ -697,8 +690,8 @@ fn a_registered_host_started_with_another_target_fails_and_sends_nothing() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-261: a start that names no organization compares the mode and
-// the pool alone, so it resolves none, reads no sign-in and sends the API nothing.
+// A start that names no organization compares the mode and the pool alone, so it
+// resolves none, reads no sign-in and sends the API nothing.
 #[test]
 fn a_registered_host_started_with_its_mode_and_no_organization_serves_as_the_same_runner() {
     let witness = ConnectionWitness::new();
@@ -722,7 +715,6 @@ fn a_registered_host_started_with_its_mode_and_no_organization_serves_as_the_sam
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-261
 #[test]
 fn a_host_enrolled_with_an_activation_refuses_a_signed_in_mode() {
     let witness = ConnectionWitness::new();
@@ -739,7 +731,6 @@ fn a_host_enrolled_with_an_activation_refuses_a_signed_in_mode() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-259
 #[test]
 fn a_registered_host_whose_credential_is_rejected_registers_nothing() {
     let witness = ConnectionWitness::rejecting();
@@ -756,7 +747,6 @@ fn a_registered_host_whose_credential_is_rejected_registers_nothing() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-262
 #[test]
 fn a_signed_in_start_beside_a_staged_join_and_a_join_beside_a_record_are_unresolved() {
     let join = SilentCloud::new();
@@ -794,7 +784,6 @@ fn a_signed_in_start_beside_a_staged_join_and_a_join_beside_a_record_are_unresol
     join.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-263
 #[test]
 fn a_complete_record_without_state_fails_and_sends_nothing() {
     let host = registration_host();
@@ -812,7 +801,6 @@ fn a_complete_record_without_state_fails_and_sends_nothing() {
     cloud.cloud.assert_untouched();
 }
 
-// REQ-RUNNERENROLL-118
 #[test]
 fn an_enrolled_host_completes_its_record_and_removes_the_consumed_activation() {
     let witness = ConnectionWitness::new();

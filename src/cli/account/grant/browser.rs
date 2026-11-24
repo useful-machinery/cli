@@ -1,8 +1,8 @@
-//! Whether this machine has a browser to open a consent URL in, and opening it there
-//! (REQ-GRANT-69). The answer comes from the environment alone, so a remote shell and a test
-//! get the same answer a member's terminal would: no SSH session, on Linux a display, and the
-//! platform's opener on `PATH`. Opening is a convenience: the URL is always printed, so an
-//! opener that fails is ignored, and nothing waits for it.
+//! Whether this machine has a browser to open a consent URL in, and opening it there. The
+//! answer comes from the environment alone, so a remote shell and a test get the same answer
+//! a member's terminal would: no SSH session, on Linux a display, and the platform's opener
+//! on `PATH`. Opening is a convenience: the URL is always printed, so an opener that fails is
+//! ignored, and nothing waits for it.
 
 use std::ffi::OsString;
 use std::process::{Command, Stdio};
@@ -20,7 +20,7 @@ const DISPLAYS: [&str; 2] = ["DISPLAY", "WAYLAND_DISPLAY"];
 
 /// Whether the environment `env` reads says this machine has a browser. A variable set to the
 /// empty string counts as unset.
-pub(super) fn available(env: impl Fn(&str) -> Option<OsString>) -> bool {
+pub(in crate::cli) fn available(env: impl Fn(&str) -> Option<OsString>) -> bool {
     let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
     !REMOTE.into_iter().any(set)
         && (!cfg!(target_os = "linux") || DISPLAYS.into_iter().any(set))
@@ -30,7 +30,7 @@ pub(super) fn available(env: impl Fn(&str) -> Option<OsString>) -> bool {
 /// Starts the opener with `url` as its one argument, discarding its output and ignoring its
 /// failure, and reaps it on a thread of its own: an opener such as `xdg-open` may run the
 /// browser in the foreground until it quits, and the consent must not wait for that.
-pub(super) fn open(url: &str) {
+pub(in crate::cli) fn open(url: &str) {
     let Some(opener) = program::find(std::env::var_os("PATH").as_deref(), OPENER) else {
         return;
     };
@@ -54,7 +54,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
 
-    // REQ-GRANT-69
     #[test]
     fn a_remote_session_or_a_linux_session_without_a_display_has_no_browser() {
         let opener = tempfile::tempdir().unwrap();

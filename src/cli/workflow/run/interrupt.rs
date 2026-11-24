@@ -1,5 +1,5 @@
-//! `useful workflow run interrupt` (REQ-LOCALRUN-202): interrupts a running run under the
-//! `useful` home, looked up there alone, since Cloud carries no interrupt (REQ-LOCALRUN-180).
+//! `useful workflow run interrupt`: interrupts a running run under the `useful` home, looked
+//! up there alone, since Cloud carries no interrupt.
 
 use clap::Args;
 use rustix::process::{Pid, Signal};
@@ -15,7 +15,7 @@ pub(super) const AFTER_HELP: &str = "RUN is a run directory, a run ID or a subje
 
 The command applies to a running run that a live process holds; in any other state it changes nothing and names the commands that apply.";
 const COMMAND: &str = "useful workflow run interrupt";
-/// What a `RUN` the home does not hold is told (REQ-LOCALRUN-202).
+/// What a `RUN` the home does not hold is told.
 const ELSEWHERE: &str =
     "Cloud carries no interrupt; end a Cloud run with useful workflow run cancel.";
 

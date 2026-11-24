@@ -19,7 +19,7 @@ use super::{
 pub(super) const ABOUT: &str = "End a runner's authorization for one of your grants or tokens";
 
 /// `useful account integration deauthorize INTEGRATION [--runner RUNNER]`; given no `--runner` it
-/// names the runners the grant or token is authorized for instead (REQ-GRANT-81).
+/// names the runners the grant or token is authorized for instead.
 #[derive(Debug, Args)]
 pub(in crate::cli) struct Command {
     #[arg(value_name = "INTEGRATION", value_parser = super::parse_grant, help = GRANT_HELP)]
@@ -36,8 +36,8 @@ pub(in crate::cli) struct Command {
 }
 
 /// What ending the authorization does: for a native grant, the stop Cloud requests of the
-/// runner's run (REQ-GRANT-48); for an OAuth grant, no further token, and no stop
-/// (REQ-GRANT-56); for a token, no further delivery of it (REQ-INTEGRATION-20).
+/// runner's run; for an OAuth grant, no further token, and no stop; for a token, no
+/// further delivery of it.
 impl Stated for Command {
     const COMMAND: &'static str = "useful account integration deauthorize";
     const STATEMENT: Statement = Statement(&[
@@ -120,7 +120,7 @@ pub(in crate::cli) fn deauthorize(
     runner_id: &str,
     key: &str,
 ) -> Result<Ended, MemberGrantFailure> {
-    // A grant lists only its authorizations in force (REQ-GRANT-58), and so does a token.
+    // A grant lists only its authorizations in force, and so does a token.
     let authorization_id = subject
         .in_force()
         .iter()

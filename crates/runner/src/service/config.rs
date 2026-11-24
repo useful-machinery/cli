@@ -34,8 +34,8 @@ impl RepositoryUrlPolicy {
     }
 }
 
-/// The kept-run bounds the operator configuration's `keptRuns` resolves to
-/// (REQ-RUNNERENROLL-157): `None` sets no bound of that kind.
+/// The kept-run bounds the operator configuration's `keptRuns` resolves
+/// to: `None` sets no bound of that kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct KeptRunBounds {
     pub(crate) maximum_age: Option<Duration>,
@@ -53,8 +53,8 @@ impl Default for KeptRunBounds {
     }
 }
 
-/// A build cache the operator configuration's `buildCaches` names
-/// (REQ-RUNNERENROLL-160): the directory as written and its bound.
+/// A build cache the operator configuration's `buildCaches` names:
+/// the directory as written and its bound.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BuildCache {
     pub(crate) path: PathBuf,
@@ -110,7 +110,7 @@ pub struct Config {
     control_socket_path: Option<PathBuf>,
     log_directory: Option<PathBuf>,
     assignment: AssignmentConfig,
-    /// The free space kept on the work root's disk (REQ-RUNNERENROLL-152).
+    /// The free space kept on the work root's disk.
     minimum_free_disk_bytes: u64,
     repository_url_policy: RepositoryUrlPolicy,
     pi_installation: Option<ValidatedPiInstallation>,
@@ -292,8 +292,8 @@ impl Config {
     }
 
     /// The directory the serving runner keeps its log in, `logs` beside its
-    /// state file (REQ-TELEMETRY-52); none for a configuration that names no
-    /// state, so it writes no log.
+    /// state file; none for a configuration that names no state, so it
+    /// writes no log.
     pub(crate) fn log_directory(&self) -> Option<&Path> {
         self.log_directory.as_deref()
     }
@@ -315,7 +315,7 @@ impl Config {
     }
 
     /// The free space the serving runner keeps on its work root's disk: the operator
-    /// configuration's `minimumFreeDiskBytes`, or the default (REQ-RUNNERENROLL-152).
+    /// configuration's `minimumFreeDiskBytes`, or the default.
     pub(crate) fn minimum_free_disk_bytes(&self) -> u64 {
         self.minimum_free_disk_bytes
     }
@@ -425,7 +425,6 @@ mod tests {
         AssignmentConfig::new(&work).unwrap()
     }
 
-    // REQ-RUNNERENROLL-30, REQ-RUNNERENROLL-31
     #[test]
     fn permits_wss_and_explicit_loopback_ws_only() {
         let temporary = tempfile::tempdir().unwrap();
@@ -473,7 +472,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-30
     #[test]
     fn requires_an_existing_work_root() {
         let temporary = tempfile::tempdir().unwrap();
@@ -558,7 +556,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-157
     #[test]
     fn a_loaded_configuration_carries_its_kept_run_bounds_to_assignments() {
         let bounded = Host::with_kept_runs(serde_json::json!({
@@ -591,7 +588,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-160
     #[test]
     fn a_loaded_configuration_carries_its_build_caches_to_assignments() {
         let directory = tempfile::tempdir().unwrap();
@@ -623,7 +619,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-104
     #[test]
     fn a_host_holds_enrolled_state_when_its_state_file_is_present() {
         let unenrolled = Host::new();
@@ -649,7 +644,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-104
     #[test]
     fn a_host_whose_operator_configuration_does_not_parse_holds_no_answer() {
         let host = Host::new();
@@ -660,7 +654,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-105
     #[test]
     fn a_host_is_checked_before_it_joins_for_a_work_root_that_is_a_directory() {
         let host = Host::new();

@@ -1,10 +1,9 @@
 //! The runners `useful account integration authorize` and `useful account integration deauthorize`
-//! read for a grant or the member's token (REQ-INTEGRATION-20): those
-//! they name when given no `--runner` (REQ-GRANT-81), in the order they name them, and the outcome
-//! when there is none to name; and the one runner `--runner` names, by its ID or by its exact name
-//! among them (REQ-GRANT-65), as it names the runner of `useful account integration connect --workflow`
-//! (REQ-GRANT-76) and of `useful workflow doctor` (REQ-CREDREADY-23). No grant command shows a
-//! list to choose from (INV-CLI-16).
+//! read for a grant or the member's token: those they name when given no `--runner`, in the order
+//! they name them, and the outcome when there is none to name; and the one runner `--runner` names,
+//! by its ID or by its exact name among them, as it names the runner of `useful account integration
+//! connect --workflow` and of `useful workflow doctor`. No grant command shows a list to choose
+//! from.
 
 use std::collections::BTreeSet;
 
@@ -106,8 +105,7 @@ pub(in crate::cli) enum Nothing {
     RunnerNotFound,
     /// The grant, token or connection is authorized for every runner of those organizations.
     AlreadyAuthorized,
-    /// A Codex grant, which serves one runner at a time (REQ-GRANT-59), has an authorization in
-    /// force.
+    /// A Codex grant, which serves one runner at a time, has an authorization in force.
     AuthorizedElsewhere,
     /// The grant, token or connection is authorized for no runner.
     AuthorizationNotFound,
@@ -133,8 +131,8 @@ pub(in crate::cli) enum Offer {
 
 /// The runners `authorize INTEGRATION` can name `--runner` among: those of the grant's or the
 /// token's organization for a native grant and an organization's token, of every organization
-/// the member is an active member of for an OAuth grant and for the member's token
-/// (REQ-INTEGRATION-20), the runners it is authorized for already included.
+/// the member is an active member of for an OAuth grant and for the member's token, the
+/// runners it is authorized for already included.
 pub(in crate::cli) fn authorizable(
     deployment: &Deployment,
     policy: HttpTransportPolicy,
@@ -204,8 +202,7 @@ pub(in crate::cli) fn in_active_organizations(
 }
 
 /// The runners of the organization `organization` names, by ID or slug, which a command acting
-/// on the organization's token or connection names `--runner` among (REQ-INTEGRATION-20,
-/// REQ-INTEGRATION-33).
+/// on the organization's token or connection names `--runner` among.
 pub(in crate::cli) fn in_organization(
     deployment: &Deployment,
     policy: HttpTransportPolicy,
@@ -282,14 +279,14 @@ pub(in crate::cli) struct Acting {
     pub(in crate::cli) named: String,
 }
 
-/// The runner `runner`, the value of `--runner`, names (REQ-GRANT-65, REQ-RUNNERPOOL-47). An
-/// exact `rnr_` ID is taken as given and nothing is read. Any other value is a name, as the
-/// `useful runner` commands take it, looked up once among the runners `read` reads, before
-/// anything is sent: the one runner of that name; none is reported `runner_not_found` with exit
-/// 1, and several, which runners of different organizations can be, are refused with exit 2,
-/// each named with its ID and organization, ending with the command line `example` makes for
-/// one runner ID (`runner_required` under `--json`, with `holder`'s ID). A failed read is reported
-/// as the read's failure. Each is printed as `family` prints a refusal.
+/// The runner `runner`, the value of `--runner`, names. An exact `rnr_` ID is taken as given and
+/// nothing is read. Any other value is a name, as the `useful runner` commands take it, looked up
+/// once among the runners `read` reads, before anything is sent: the one runner of that name; none
+/// is reported `runner_not_found` with exit 1, and several, which runners of different
+/// organizations can be, are refused with exit 2, each named with its ID and organization, ending
+/// with the command line `example` makes for one runner ID (`runner_required` under `--json`, with
+/// `holder`'s ID). A failed read is reported as the read's failure. Each is printed as `family`
+/// prints a refusal.
 pub(in crate::cli) fn resolve(
     deployment: &Deployment,
     json: bool,
@@ -360,10 +357,10 @@ pub(in crate::cli) fn resolve(
     }
 }
 
-/// Refuses a command given no `--runner` (REQ-GRANT-81): with exit 2, naming each runner `offer`
-/// holds under a diagnostic that names the runner `purpose` asks for and ending with the
-/// command line `example` makes for one runner ID, or with the outcome of having none to name
-/// or of a failed read. It asks nothing, on a terminal or not (INV-CLI-16).
+/// Refuses a command given no `--runner`: with exit 2, naming each runner `offer` holds under a
+/// diagnostic that names the runner `purpose` asks for and ending with the command line
+/// `example` makes for one runner ID, or with the outcome of having none to name or of a failed
+/// read. It asks nothing, on a terminal or not.
 pub(in crate::cli) fn refuse(
     deployment: &Deployment,
     json: bool,
@@ -456,7 +453,7 @@ fn active_organizations(
 }
 
 /// Every runner registered in `organizations`, each read to its last page with the member's
-/// human session (REQ-RUNNERPOOL-38).
+/// human session.
 fn registered(
     deployment: &Deployment,
     policy: HttpTransportPolicy,

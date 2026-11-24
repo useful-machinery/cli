@@ -303,6 +303,8 @@
         },
         "reason": {"enum": ["resume", "retry", "host", "edge", "restart"]},
         "edge": {"$ref": "#/$defs/ContinuationEdge"},
+        "rebuiltWorkspaces": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "revalidatedSteps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "fromSteps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "reexecutedSteps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "inheritedSteps": {"type": "array", "items": {"type": "object", "additionalProperties": false,
@@ -622,7 +624,7 @@
       "pattern": "^[a-z][a-z0-9_]{0,63}$"
     },
     "FailedChild": {
-      "description": "The failure of the child a succeeded workflow step ran (REQ-WFEXEC-77): the outcome the child recorded, the one-based fan-out element whose child ended the step, omitted for a plain step, and the primaryIssue of the child's failed result.",
+      "description": "The failure of the child a succeeded workflow step ran: the outcome the child recorded, the one-based fan-out element whose child ended the step, omitted for a plain step, and the primaryIssue of the child's failed result.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -644,7 +646,7 @@
       }
     },
     "InputSource": {
-      "description": "The output one firstOf of a step's body took when the step started (REQ-EVIDENCE-28): a command step's input by name, or an agent message entry by list and zero-based index, with the outputs.<step>.<output> reference the value was taken from.",
+      "description": "The output one firstOf of a step's body took when the step started: a command step's input by name, or an agent message entry by list and zero-based index, with the outputs.<step>.<output> reference the value was taken from.",
       "oneOf": [
         {
           "type": "object",
@@ -1408,8 +1410,7 @@
         "handlerKind": {
           "enum": [
             "cmd",
-            "agent",
-            "workflow"
+            "agent"
           ]
         },
         "rounds": {

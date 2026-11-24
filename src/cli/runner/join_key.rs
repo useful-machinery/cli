@@ -1,6 +1,4 @@
-//! `useful runner join-key`: a pool's join keys and the runners' single-runner keys
-//! (REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-11, REQ-RUNNERENROLL-93,
-//! REQ-RUNNERENROLL-94).
+//! `useful runner join-key`: a pool's join keys and the runners' single-runner keys.
 
 mod single;
 
@@ -259,7 +257,7 @@ impl IssueCommand {
     }
 }
 
-/// A pool's join key to issue (REQ-RUNNERENROLL-93).
+/// A pool's join key to issue.
 struct PoolKey {
     pool: Option<PoolArg>,
     expires_in: i32,
@@ -462,8 +460,7 @@ fn every_activation(
 }
 
 /// The single-runner keys of each runner of `organization`, of the pool `pool_id` names when
-/// one is given; a runner whose keys the caller may not read is passed over
-/// (REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-12).
+/// one is given; a runner whose keys the caller may not read is passed over.
 fn readable_keys(
     api: &RunnerApi,
     organization: &str,
@@ -482,8 +479,7 @@ fn readable_keys(
 
 /// The runner that holds the single-runner key `activation_id`: the runners read in order,
 /// each runner's keys to their last page, stopping at the first that holds it; a runner whose
-/// keys the caller may not read is passed over, and a key none holds is `NotFound`
-/// (REQ-RUNNERENROLL-11).
+/// keys the caller may not read is passed over, and a key none holds is `NotFound`.
 fn holder_of(
     api: &RunnerApi,
     organization: &str,
@@ -616,9 +612,9 @@ fn revoke_single_runner_key(
     Ok(ExitCode::Success)
 }
 
-/// Prepares where an issued key goes (REQ-RUNNERENROLL-5, REQ-RUNNERENROLL-62,
-/// REQ-RUNNERENROLL-93): no `--key-file`, like `-`, means standard output, which structured
-/// output never shares with a token; a path is a new file only its owner can read.
+/// Prepares where an issued key goes: no `--key-file`, like `-`, means standard output,
+/// which structured output never shares with a token; a path is a new file only its owner
+/// can read.
 fn prepare_destination(
     destination: Option<&str>,
     json: bool,
@@ -696,7 +692,6 @@ fn duration_text(seconds: i32) -> String {
 mod tests {
     use super::*;
 
-    // REQ-RUNNERENROLL-228
     #[test]
     fn join_key_durations_read_minutes_hours_and_days_within_their_bounds() {
         assert_eq!(parse_expiry("1m"), Ok(60));

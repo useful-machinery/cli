@@ -1,0 +1,9 @@
+schemaVersion: 1
+outcomes: [done]
+steps:
+  child:
+    kind: workflow
+    workflow: child.yaml
+    workspace: new
+    on:
+      done: exit.done

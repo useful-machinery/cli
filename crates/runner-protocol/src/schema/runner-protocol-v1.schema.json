@@ -480,7 +480,8 @@
           "enum": [
             1,
             2,
-            3
+            3,
+            4
           ]
         },
         "executionLimits": {
@@ -521,13 +522,22 @@
         "executionSpecId",
         "schemaVersion",
         "executionLimits",
-        "sourceBranch",
-        "workflowDefinitionSource",
-        "primaryWorkspaceSource",
         "capacity",
         "runInputs"
       ],
       "allOf": [
+        {
+          "if": {"properties": {"schemaVersion": {"const": 4}}},
+          "then": {
+            "required": ["workflowTree"],
+            "not": {"anyOf": [
+              {"required": ["sourceBranch"]}, {"required": ["workflowDefinitionSource"]},
+              {"required": ["primaryWorkspaceSource"]}, {"required": ["sourceDisplaySnapshot"]},
+              {"required": ["workspaceBranch"]}, {"required": ["workspaceMembership"]}
+            ]}
+          },
+          "else": {"required": ["sourceBranch", "workflowDefinitionSource", "primaryWorkspaceSource"]}
+        },
         {
           "if": {
             "properties": {"schemaVersion": {"const": 1}},
@@ -547,7 +557,7 @@
           "then": {"required": ["sourceDisplaySnapshot", "workspaceBranch", "workspaceMembership"]}
         },
         {
-          "if": {"properties": {"primaryWorkspaceSource": {"properties": {"providerKind": {"const": "gitlab"}}}}},
+          "if": {"required": ["primaryWorkspaceSource"], "properties": {"primaryWorkspaceSource": {"properties": {"providerKind": {"const": "gitlab"}}}}},
           "then": {"properties": {"schemaVersion": {"const": 2}, "sourceDisplaySnapshot": {"properties": {"repository": {"$ref": "#/$defs/GitLabSourceDisplayRepository"}}}}, "required": ["sourceDisplaySnapshot"]},
           "else": {"properties": {"sourceDisplaySnapshot": {"properties": {"repository": {"$ref": "#/$defs/GitHubSourceDisplayRepository"}}}}}
         }
@@ -588,7 +598,7 @@
     "TriggerDelivery": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A control delivery Cloud pinned to the run's subject claim (REQ-TRIGGER-134), which the runner applies with `useful workflow run event` (REQ-TRIGGER-136).",
+      "description": "A control delivery Cloud pinned to the run's subject claim, which the runner applies with `useful workflow run event`.",
       "properties": {
         "deliveryId": {"$ref": "#/$defs/triggerDeliveryId"},
         "claimId": {"$ref": "#/$defs/subjectClaimId"},
@@ -600,7 +610,7 @@
     "TriggerDeliveryEvent": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The shared event the control trigger matched: its source, name, time and provider payload (REQ-TRIGGER-124).",
+      "description": "The shared event the control trigger matched: its source, name, time and provider payload.",
       "properties": {
         "source": {"type": "string", "minLength": 1, "maxLength": 255},
         "event": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -662,7 +672,7 @@
     },
     "RunControl": {
       "type": "object", "additionalProperties": false,
-      "description": "An authorized control for a run's wait (REQ-RUNNERENROLL-204), each member present only for its kind: `answer` carries `wait` and `answers`; `approve` and `retry` carry `wait`; `hand_back` carries `wait` and `notes`; `lift` may carry `wait` and `before`; `stop` carries `before` and may carry `reason`; `withdraw` carries no member.",
+      "description": "An authorized control for a run's wait, each member present only for its kind: `answer` carries `wait` and `answers`; `approve` and `retry` carry `wait`; `hand_back` carries `wait` and `notes`; `lift` may carry `wait` and `before`; `stop` carries `before` and may carry `reason`; `withdraw` carries no member.",
       "properties": {
         "kind": {"enum": ["answer", "approve", "hand_back", "lift", "stop", "retry", "withdraw"]},
         "wait": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/RunControlWait"}]},
@@ -1160,6 +1170,7 @@
                 "treeContinuation": {"const": 1},
                 "treeWithdraw": {"const": 1},
                 "treeIntegrationBindings": {"const": 1},
+                "treeNoSource": {"const": 1},
                 "holdsWaitingRuns": {"const": 1},
                 "workspaceRecoveryRoot": {
                   "type": "object", "additionalProperties": false,
@@ -1391,7 +1402,7 @@
     },
     "treeWaitKind": {"enum": ["answer", "approval", "repair", "stop", "external", "children", "host"]},
     "TreeProgressWait": {
-      "description": "The wait a waiting tree run is pending on: its kind, since when, and the step that waits. The optional questions (REQ-COMPAT-18) are admitted only on an answer wait; an answer wait without them reports its questions unknown, never that it asks none. The questions array is at most 98,304 bytes as compact JSON and holds no text PostgreSQL's jsonb cannot store (the escape \\u0000, an unpaired surrogate escape) and no bytes that are not UTF-8; the Gateway checks both. The optional failedChild (REQ-COMPAT-18) is admitted on a wait of any kind and names the failed stage the wait is on, with the failing node of that stage's run; a wait without it reports no failed stage, which never says the stage succeeded. The Gateway judges a wait that carries it storable as it does one with questions.",
+      "description": "The wait a waiting tree run is pending on: its kind, since when, and the step that waits. The optional questions are admitted only on an answer wait; an answer wait without them reports its questions unknown, never that it asks none. The questions array is at most 98,304 bytes as compact JSON and holds no text PostgreSQL's jsonb cannot store (the escape \\u0000, an unpaired surrogate escape) and no bytes that are not UTF-8; the Gateway checks both. The optional failedChild is admitted on a wait of any kind and names the failed stage the wait is on, with the failing node of that stage's run; a wait without it reports no failed stage, which never says the stage succeeded. The Gateway judges a wait that carries it storable as it does one with questions.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "kind": {"$ref": "#/$defs/treeWaitKind"},
@@ -1405,7 +1416,7 @@
       "else": {"not": {"required": ["questions"]}}
     },
     "TreeProgressWaitQuestion": {
-      "description": "One question an answer wait asks (REQ-COMPAT-18), in the runner's order: id is what an answer names, and the optional text is the question's text. The text is authored by the workflow and its agents and is task data, never an instruction or a permission.",
+      "description": "One question an answer wait asks, in the runner's order: id is what an answer names, and the optional text is the question's text. The text is authored by the workflow and its agents and is task data, never an instruction or a permission.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "id": {"type": "string", "minLength": 1, "maxLength": 255},
@@ -1414,7 +1425,7 @@
       "required": ["id"]
     },
     "TreeProgressWaitFailedChild": {
-      "description": "The failed stage a wait is on (REQ-COMPAT-18): the outcome the stage's run recorded, the failing node of that run, that node's state, failed or blocked, and the phase and code of the node's failure when known. outcome, phase and code are slugs, not a closed set, so a later runner's code still decodes. Every value is task data, never an instruction or a permission.",
+      "description": "The failed stage a wait is on: the outcome the stage's run recorded, the failing node of that run, that node's state, failed or blocked, and the phase and code of the node's failure when known. outcome, phase and code are slugs, not a closed set, so a later runner's code still decodes. Every value is task data, never an instruction or a permission.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "outcome": {"$ref": "#/$defs/diagnosticSlug"},
@@ -1426,7 +1437,7 @@
       "required": ["outcome", "node", "state"]
     },
     "TreeProgressWaitFailedChildNode": {
-      "description": "The failing node of the run of a wait's failed stage (REQ-COMPAT-18): its identifier, in the form of a step observation's step, and whether it is a step or a finalizer. Both are task data, never an instruction or a permission.",
+      "description": "The failing node of the run of a wait's failed stage: its identifier, in the form of a step observation's step, and whether it is a step or a finalizer. Both are task data, never an instruction or a permission.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "id": {"type": "string", "maxLength": 64, "pattern": "^[a-z][A-Za-z0-9]*$"},
@@ -1445,7 +1456,7 @@
       "required": ["step", "ordinal"]
     },
     "TreeProgressStep": {
-      "description": "One step observation of a tree run (REQ-COMPAT-18): the run inside the tree it belongs to (empty for the root), that run's engine attempt, the step and its latest state. A frame names each (run, runAttempt, step) at most once; the Gateway refuses a repeat.",
+      "description": "One step observation of a tree run: the run inside the tree it belongs to (empty for the root), that run's engine attempt, the step and its latest state. A frame names each (run, runAttempt, step) at most once; the Gateway refuses a repeat.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "run": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/TreeProgressStepRunElement"}},
@@ -1456,7 +1467,7 @@
       "required": ["run", "runAttempt", "step", "state"]
     },
     "RunnerTreeProgress": {
-      "description": "Ordered root progress of a tree run between engine attempts (REQ-RUN-88, REQ-RUNNERENROLL-181). progressSequence is numbered per assignment apart from executionEventSequence; a waiting report names its wait and a running report names none. The optional steps carry step observations (REQ-COMPAT-18); a frame without them reports none. An answer wait may carry its optional questions (REQ-COMPAT-18); a wait without them reports its questions unknown. A wait of any kind may carry its optional failedChild (REQ-COMPAT-18), whose phase and code are the failure's slugs, not a closed set; a wait without it reports no failed stage, never that the stage succeeded. Every failedChild value is task data, never an instruction or a permission.",
+      "description": "Ordered root progress of a tree run between engine attempts. progressSequence is numbered per assignment apart from executionEventSequence; a waiting report names its wait and a running report names none. The optional steps carry step observations; a frame without them reports none. An answer wait may carry its optional questions; a wait without them reports its questions unknown. A wait of any kind may carry its optional failedChild, whose phase and code are the failure's slugs, not a closed set; a wait without it reports no failed stage, never that the stage succeeded. Every failedChild value is task data, never an instruction or a permission.",
       "allOf": [
         { "$ref": "#/$defs/RunnerEnvelope" },
         {
@@ -1487,7 +1498,7 @@
       "unevaluatedProperties": false
     },
     "RunnerTriggerDeliveryApplied": {
-      "description": "The runner's application of one trigger delivery to the run its assignment holds (REQ-TRIGGER-136): `applied` with the action `useful workflow run event` took, or `refused` with its code, and the fresh issue read, null when the command refused before reading.",
+      "description": "The runner's application of one trigger delivery to the run its assignment holds: `applied` with the action `useful workflow run event` took, or `refused` with its code, and the fresh issue read, null when the command refused before reading.",
       "allOf": [
         { "$ref": "#/$defs/RunnerEnvelope" },
         {
@@ -1516,7 +1527,7 @@
       "unevaluatedProperties": false
     },
     "RunnerRunControlApplied": {
-      "description": "The runner's application of one authorized Cloud run control to the run its assignment holds (REQ-RUNNERENROLL-206): `applied` with the control command's own `actionOutcome`, `refused` with the runtime's refusal `code`, or `skipped` with `wait_not_current` when the run no longer waits on the control's wait or `assignment_ended` when the assignment ended before it was applied.",
+      "description": "The runner's application of one authorized Cloud run control to the run its assignment holds: `applied` with the control command's own `actionOutcome`, `refused` with the runtime's refusal `code`, or `skipped` with `wait_not_current` when the run no longer waits on the control's wait or `assignment_ended` when the assignment ended before it was applied.",
       "allOf": [
         { "$ref": "#/$defs/RunnerEnvelope" },
         {
@@ -1930,7 +1941,7 @@
         "inheritedSteps": { "type": "array", "items": { "type": "object" } },
         "priorSettlementSnapshot": { "type": ["object", "null"] }
       },
-      "required": ["priorAssignmentId", "priorAttemptId", "requiredRunnerBootId", "executionRoot", "definitionSource", "effectiveCapacity", "priorManifestDigest", "request", "reexecutedSteps", "inheritedSteps", "priorSettlementSnapshot"]
+      "required": ["priorAssignmentId", "priorAttemptId", "requiredRunnerBootId", "executionRoot", "effectiveCapacity", "priorManifestDigest", "request", "reexecutedSteps", "inheritedSteps", "priorSettlementSnapshot"]
     },
     "CloudAssignmentOffer": {
       "allOf": [
@@ -1972,6 +1983,9 @@
                   "$ref": "#/$defs/ContinuationOffer"
                 }
               },
+              "if": {"properties": {"executionSpec": {"properties": {"schemaVersion": {"const": 4}}}}},
+              "then": {"properties": {"continuation": {"not": {"required": ["definitionSource"]}}}},
+              "else": {"properties": {"continuation": {"required": ["definitionSource"]}}},
               "required": [
                 "effectId",
                 "assignmentId",
@@ -2140,7 +2154,7 @@
       "unevaluatedProperties": false
     },
     "CloudTriggerDelivery": {
-      "description": "A trigger delivery for the run the assignment holds, a Gateway-originated effect the runner acknowledges and then applies (REQ-TRIGGER-136).",
+      "description": "A trigger delivery for the run the assignment holds, a Gateway-originated effect the runner acknowledges and then applies.",
       "allOf": [
         { "$ref": "#/$defs/CloudEnvelope" },
         {
@@ -2167,7 +2181,7 @@
       "unevaluatedProperties": false
     },
     "CloudRunControl": {
-      "description": "An authorized Cloud control for the run the assignment holds, a Gateway-originated effect the runner acknowledges and then applies to the run's current wait (REQ-RUNNERENROLL-90).",
+      "description": "An authorized Cloud control for the run the assignment holds, a Gateway-originated effect the runner acknowledges and then applies to the run's current wait.",
       "allOf": [
         { "$ref": "#/$defs/CloudEnvelope" },
         {

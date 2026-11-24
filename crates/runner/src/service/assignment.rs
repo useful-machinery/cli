@@ -1,3 +1,4 @@
+use crate::runner_http::ServingTarget;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -23,7 +24,9 @@ use super::history::{EventLog, LoggedEvent, RECENT_ASSIGNMENTS, Ring};
 use super::lease_clock::{LeaseClock, LeaseClockError, LeaseInstant, LeaseWaitCancellation};
 use super::run_inputs::{HttpRunInputBroker, PreparationDeadline, RunInputBroker, RunInputFailure};
 use super::source::{HttpSourceCredentialBroker, MaterializationFailure, SourceCredentialBroker};
-use super::tree_run::{HeldRuns, HttpTreeBroker, RunActivity, TreeRunDependencies};
+use super::tree_run::{
+    HeldRuns, HttpRecordBroker, HttpTreeBroker, RunActivity, TreeRunDependencies,
+};
 use super::workflow_git::{WorkflowGitAuthority, WorkflowGitInstall};
 use super::workspace::{
     AssignmentRoot, AssignmentRootCreationError, CleanupResult, ProcessQuiescence, RetentionReason,
@@ -79,8 +82,8 @@ use root_preparation::*;
 use spec_validation::*;
 const MAXIMUM_RETAINED_DECISIONS: usize = 256;
 /// The most assignments the runner holds at once; an offer past it is declined
-/// `capacity_unavailable` (REQ-RUNNERENROLL-315). Half the retained decisions, so each held
-/// assignment's decision is kept with room for as many settled ones.
+/// `capacity_unavailable`. Half the retained decisions, so each held assignment's decision
+/// is kept with room for as many settled ones.
 pub(super) const MAXIMUM_HELD_ASSIGNMENTS: usize = MAXIMUM_RETAINED_DECISIONS / 2;
 pub(super) const MAXIMUM_SERVICE_OBSERVATIONS: usize = 1_344;
 pub(super) const OBSERVATION_RESERVE_BASE: usize = 64;
@@ -156,11 +159,8 @@ struct AssignmentIdentity {
     project_id: String,
     attempt_id: String,
     execution_spec_id: String,
-    source_branch: String,
     source_display_snapshot: Option<SourceDisplaySnapshotV1RunnerProjection>,
-    repository_connection_id: String,
-    source_object_format: String,
-    source_commit_oid: String,
+    primary_source: Option<useful_runner_protocol::PrimaryWorkspaceSourceV1RunnerProjection>,
 }
 
 impl AssignmentIdentity {
@@ -171,23 +171,12 @@ impl AssignmentIdentity {
             project_id: offer.project_id.clone(),
             attempt_id: offer.attempt_id.clone(),
             execution_spec_id: offer.execution_spec.execution_spec_id.clone(),
-            source_branch: offer.execution_spec.source_branch.clone(),
             source_display_snapshot: offer.execution_spec.source_display_snapshot.clone(),
-            repository_connection_id: offer
+            primary_source: offer
                 .execution_spec
-                .primary_workspace_source
-                .repository_connection_id
-                .clone(),
-            source_object_format: offer
-                .execution_spec
-                .primary_workspace_source
-                .object_format
-                .clone(),
-            source_commit_oid: offer
-                .execution_spec
-                .primary_workspace_source
-                .commit_oid
-                .clone(),
+                .source
+                .as_ref()
+                .map(|source| source.primary_workspace_source.clone()),
         }
     }
 }
@@ -202,17 +191,17 @@ pub(super) struct AcceptedAssignment {
     pub(super) execution_version: Arc<str>,
     pub(super) process_guards: AssignmentProcessGuards,
     pub(super) guard_processes: bool,
-    /// The runner's Git relay for the workspace (REQ-WORKSPACE-19); a tree run on a GitLab
-    /// project uses the host's own Git access and has none (REQ-WORKSPACE-42).
+    /// The runner's Git relay for the workspace; a tree run on a GitLab project uses the
+    /// host's own Git access and has none.
     pub(super) workflow_git: Option<WorkflowGitAuthority>,
     /// The assignment's grant token files, which the manager holds with the
     /// assignment until it ends, their only holder once the admission's worker
-    /// handed them over (INV-RUNNER-28).
+    /// handed them over.
     pub(super) grant_tokens: Option<AssignmentGrantTokens>,
 }
 
 /// What an accepted assignment executes: an admitted workflow on the embedded engine,
-/// or a published tree through the `useful` commands (REQ-RUNNERENROLL-91).
+/// or a published tree through the `useful` commands.
 #[derive(Clone)]
 pub(super) enum AcceptedExecution {
     Engine(Box<AdmittedWorkflow>),
@@ -245,16 +234,10 @@ impl AcceptedAssignment {
         &self.identity.project_id
     }
 
-    pub(super) fn repository_connection_id(&self) -> &str {
-        &self.identity.repository_connection_id
-    }
-
-    pub(super) fn source_object_format(&self) -> &str {
-        &self.identity.source_object_format
-    }
-
-    pub(super) fn source_commit_oid(&self) -> &str {
-        &self.identity.source_commit_oid
+    pub(super) fn primary_source(
+        &self,
+    ) -> Option<&useful_runner_protocol::PrimaryWorkspaceSourceV1RunnerProjection> {
+        self.identity.primary_source.as_ref()
     }
 
     pub(super) fn source_display_snapshot(
@@ -274,7 +257,7 @@ struct RunEventState {
     event: Option<TelemetryEvent>,
     result: Option<&'static str>,
     // What the run's end gives beside its result, kept where each is set on `event`, and
-    // whether or not `event` was started (REQ-RUNNERENROLL-137).
+    // whether or not `event` was started.
     failure_code: Option<String>,
     interruption_cause: Option<String>,
     chosen_outcome: Option<String>,
@@ -287,8 +270,8 @@ struct RunEventState {
     recorder: Option<Arc<crate::telemetry::Recorder>>,
 }
 
-// The phases of a run, each recorded as a child of `runner.run`
-// (REQ-TELEMETRY-67).
+// The phases of a run, each recorded as a child of
+// `runner.run`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunPhase {
     Checkout,
@@ -310,7 +293,7 @@ impl RunPhase {
     }
 }
 
-// How a run phase ended, as its record states it (REQ-TELEMETRY-68).
+// How a run phase ended, as its record states it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PhaseEnd {
     Succeeded,
@@ -410,19 +393,15 @@ impl RunEvent {
             project_id: String::new(),
             attempt_id: attempt_id.to_owned(),
             execution_spec_id: String::new(),
-            source_branch: String::new(),
             source_display_snapshot: None,
-            repository_connection_id: String::new(),
-            source_object_format: String::new(),
-            source_commit_oid: String::new(),
+            primary_source: None,
         };
         event.start(recorder, &identity, "rnr_fixture");
         event
     }
 
     // Starts one root `runner.step_execution` record carrying the run's IDs
-    // and `attributes` (REQ-TELEMETRY-41, REQ-TELEMETRY-42); `None` when the
-    // run never began or has ended.
+    // and `attributes`; `None` when the run never began or has ended.
     pub(super) fn step_execution(
         &self,
         attributes: impl IntoIterator<Item = KeyValue>,
@@ -494,8 +473,8 @@ impl RunEvent {
     }
 
     // Names the decline the runner sends for this run: its type and reason, a
-    // diagnosed decline's stage and cause, and a refused tree's validation code
-    // and location kind, never its path or step (REQ-TELEMETRY-47, REQ-TELEMETRY-79).
+    // diagnosed decline's stage and cause, and a refused tree's validation code and
+    // location kind, never its path or step.
     fn decline(&self, decline: &AssignmentDecline) {
         use crate::telemetry::attribute;
         let (decline_type, reason) = decline.protocol_type_and_reason();
@@ -618,21 +597,19 @@ struct RunningAssignment {
     run_event: RunEvent,
     /// The assignment's grant token files, held only to be dropped: they are
     /// removed when the manager lets go of the running assignment, whatever
-    /// ends it (INV-RUNNER-28).
+    /// ends it.
     _grant_tokens: Option<AssignmentGrantTokens>,
     /// Whether a tree run is working, as its loop last reported it, which agent-login setup
-    /// and the offer rule read (INV-RUNNER-15, INV-RUNNER-40); none for a run on the
-    /// embedded engine, which always works.
+    /// and the offer rule read; none for a run on the embedded engine, which always works.
     activity: Option<Arc<RunActivity>>,
     /// The view of a run on the embedded engine, which the manager's reads take its steps
-    /// in flight from and hand to the control socket (REQ-RUNNERENROLL-134,
-    /// REQ-RUNNERENROLL-144); none for a tree run.
+    /// in flight from and hand to the control socket; none for a tree run.
     view: Option<AssignmentRunView>,
 }
 
 impl RunningAssignment {
-    /// Whether the run reported a wait, which its end carries on (INV-RUNNER-63); never for
-    /// a run on the embedded engine.
+    /// Whether the run reported a wait, which its end carries on; never for a run on the
+    /// embedded engine.
     fn reported_wait(&self) -> bool {
         self.activity
             .as_ref()
@@ -715,7 +692,7 @@ struct FinishingAssignment {
     final_observation_id: u64,
     root: Option<AssignmentRoot>,
     workspace_disposition: WorkspaceDisposition,
-    /// Whether the assignment's run reported a wait before it ended (INV-RUNNER-63).
+    /// Whether the assignment's run reported a wait before it ended.
     reported_wait: bool,
 }
 
@@ -723,7 +700,7 @@ struct FinishingAssignment {
 struct ReportingAssignment {
     identity: AssignmentIdentity,
     /// Whether the assignment's run reported a wait before it ended, so that a successor's
-    /// offer does not prove Cloud has settled it (INV-RUNNER-63).
+    /// offer does not prove Cloud has settled it.
     reported_wait: bool,
 }
 
@@ -748,7 +725,7 @@ struct ReleasingAssignment {
 }
 
 /// An assignment the runner holds, in the state it has reached; the manager keys each by
-/// its assignment ID (INV-RUNNER-62).
+/// its assignment ID.
 enum HeldAssignment {
     Preparing(Box<PreparingAssignment>),
     Accepted(Box<AcceptedAssignment>),
@@ -803,10 +780,10 @@ impl HeldAssignment {
         }
     }
 
-    /// Whether the assignment is working, which keeps the runner from taking another offer
-    /// (INV-RUNNER-40): it is being prepared or is accepted, or it runs on the embedded
-    /// engine or as a tree run whose loop did not last report a wait. One that is finishing
-    /// or releasing has ended and works no longer.
+    /// Whether the assignment is working, which keeps the runner from taking another offer:
+    /// it is being prepared or is accepted, or it runs on the embedded engine or as a tree
+    /// run whose loop did not last report a wait. One that is finishing or releasing has
+    /// ended and works no longer.
     fn is_working(&self) -> bool {
         match self {
             Self::Preparing(_) | Self::Accepted(_) => true,
@@ -888,11 +865,10 @@ struct AdmissionRuntime {
     codex_installation: Option<ValidatedCodexInstallation>,
     environment: EnvironmentSnapshot,
     /// What each `useful` command of the admission's tree run builds its environment from
-    /// when it starts (REQ-GRANT-136): the process environment until the admission's offer
-    /// replaces it.
+    /// when it starts: the process environment until the admission's offer replaces it.
     command_environment: crate::agent_login::CommandEnvironment,
     /// What notes how the provider answered each use of a login the
-    /// admission's offer added (REQ-GRANT-52).
+    /// admission's offer added.
     harness_login_observer: Option<Arc<dyn HarnessLoginObserver>>,
     execution_version: Arc<str>,
     outbox: ObservationOutbox,
@@ -1011,9 +987,9 @@ impl AdmissionRuntime {
         )
     }
 
-    /// Accepts a prepared tree run (REQ-RUNNERENROLL-91): no workflow admission, the outbox
-    /// reserved as for any run of the spec's capacity, and the Git relay preparation
-    /// installed, of which a tree run on a GitLab project has none (REQ-RUNNERENROLL-121).
+    /// Accepts a prepared tree run: no workflow admission, the outbox reserved as for any
+    /// run of the spec's capacity, and the Git relay preparation installed, of which a tree
+    /// run on a GitLab project has none.
     fn finish_tree(
         &self,
         offer: &AssignmentOffer,
@@ -1071,7 +1047,7 @@ impl AdmissionRuntime {
             guard_processes: self.guard_processes,
             workflow_git,
             // The admission's worker hands its hold over as it publishes
-            // the outcome (INV-RUNNER-28).
+            // the outcome.
             grant_tokens: None,
         })
     }
@@ -1089,11 +1065,11 @@ pub(super) struct AssignmentDependencies {
     execution_version: Arc<str>,
     recorder: Option<Arc<crate::telemetry::Recorder>>,
     guard_processes: bool,
-    /// The log the manager and its outbox record the runner's events in
-    /// (REQ-RUNNERENROLL-138).
+    /// The log the manager and its outbox record the runner's events
+    /// in.
     events: Arc<EventLog>,
     /// The disk monitor's published reading, which the offer rule declines a new run on
-    /// while it is low (INV-RUNNER-50); empty, and so never low, without a monitor.
+    /// while it is low; empty, and so never low, without a monitor.
     disk: DiskReadingHandle,
 }
 
@@ -1123,19 +1099,18 @@ impl AssignmentDependencies {
         }
     }
 
-    /// Records the runner's events in `events`, the log the live status lists
-    /// (REQ-RUNNERENROLL-138).
+    /// Records the runner's events in `events`, the log the live status
+    /// lists.
     pub(super) fn with_events(mut self, events: Arc<EventLog>) -> Self {
         self.events = events;
         self
     }
 
-    /// Declines offers of new runs while the reading `disk` publishes is low
-    /// (REQ-RUNNERENROLL-154, INV-RUNNER-50), and holds a running run's next step while it
-    /// is (REQ-RUNNERENROLL-155): a single-workflow run's engine consults `disk`, and a tree
-    /// run's `useful` commands are given `tree_gate`, the same disk and minimum, which they
-    /// read themselves; none, when the minimum is 0, gives them nothing to hold by. Call it
-    /// after `with_tree_run`, whose dependencies carry the tree run's gate.
+    /// Declines offers of new runs while the reading `disk` publishes is low, and holds a
+    /// running run's next step while it is: a single-workflow run's engine consults `disk`,
+    /// and a tree run's `useful` commands are given `tree_gate`, the same disk and minimum,
+    /// which they read themselves; none, when the minimum is 0, gives them nothing to hold
+    /// by. Call it after `with_tree_run`, whose dependencies carry the tree run's gate.
     pub(super) fn with_disk(
         mut self,
         disk: DiskReadingHandle,
@@ -1148,31 +1123,31 @@ impl AssignmentDependencies {
         self
     }
 
-    /// Executes published trees with `tree_run` (REQ-RUNNERENROLL-91).
+    /// Executes published trees with `tree_run`.
     pub(super) fn with_tree_run(mut self, tree_run: TreeRunDependencies) -> Self {
         self.tree_run = tree_run;
         self
     }
 
     pub(super) fn production(
-        config: &Config,
+        target: ServingTarget,
+        repository_url_policy: super::config::RepositoryUrlPolicy,
         boot_id: &str,
         sleeper: Arc<dyn Sleeper>,
         work_root: Arc<WorkRootLease>,
         recorder: Arc<crate::telemetry::Recorder>,
         source_override: Option<Arc<dyn SourceCredentialBroker>>,
-    ) -> Result<Self, super::ServiceError> {
+    ) -> Self {
         let (source_broker, input_broker) = Self::production_brokers(
-            config.endpoint(),
-            config.credential(),
+            target.clone(),
             boot_id,
-            config.repository_url_policy(),
+            repository_url_policy,
             recorder.clone(),
             source_override,
-        )?;
-        let tree_broker = HttpTreeBroker::new(config.endpoint(), config.credential(), boot_id)
-            .map_err(|_| super::ServiceError::TreeBrokerConfiguration(config.endpoint().clone()))?;
-        Ok(Self::new(
+        );
+        let tree_broker = HttpTreeBroker::new(target.clone(), boot_id);
+        let record_broker = HttpRecordBroker::new(target, boot_id);
+        Self::new(
             work_root,
             sleeper,
             Some(source_broker),
@@ -1181,35 +1156,28 @@ impl AssignmentDependencies {
             Some(recorder),
             true,
         )
-        .with_tree_run(TreeRunDependencies::new(Some(Arc::new(tree_broker)))))
+        .with_tree_run(
+            TreeRunDependencies::new(Some(Arc::new(tree_broker)))
+                .with_record_broker(Arc::new(record_broker)),
+        )
     }
 
     fn production_brokers(
-        endpoint: &url::Url,
-        credential: &crate::credential::Credential,
+        target: ServingTarget,
         boot_id: &str,
         repository_url_policy: super::config::RepositoryUrlPolicy,
         recorder: Arc<crate::telemetry::Recorder>,
         source_override: Option<Arc<dyn SourceCredentialBroker>>,
-    ) -> Result<ProductionBrokers, super::ServiceError> {
+    ) -> ProductionBrokers {
         let source_broker = match source_override {
             Some(source) => source,
             None => Arc::new(
-                HttpSourceCredentialBroker::new(
-                    endpoint,
-                    credential,
-                    boot_id,
-                    repository_url_policy,
-                )
-                .map_err(|_| super::ServiceError::SourceBrokerConfiguration(endpoint.clone()))?
-                .with_recorder(recorder),
+                HttpSourceCredentialBroker::new(target.clone(), boot_id, repository_url_policy)
+                    .with_recorder(recorder),
             ),
         };
-        let input_broker = Arc::new(
-            HttpRunInputBroker::new(endpoint, credential, boot_id)
-                .map_err(|_| super::ServiceError::InputBrokerConfiguration(endpoint.clone()))?,
-        );
-        Ok((source_broker, input_broker))
+        let input_broker = Arc::new(HttpRunInputBroker::new(target, boot_id));
+        (source_broker, input_broker)
     }
 }
 
@@ -1223,17 +1191,16 @@ pub(super) struct AssignmentManager {
     /// The process environment, taken once when the manager is built.
     environment: EnvironmentSnapshot,
     /// Where the runner keeps the agent logins it is delivered, which each
-    /// admission offers to the environment its steps draw from
-    /// (REQ-GRANT-37, REQ-GRANT-44); `None` for a runner without
-    /// protected state.
+    /// admission offers to the environment its steps draw from; `None` for
+    /// a runner without protected state.
     agent_login_directory: Option<crate::agent_login::directory::LoginDirectory>,
     /// The agent-login setup each admission makes for itself before it
-    /// offers the runner's logins (REQ-GRANT-49); given once the setup
-    /// exists, and `None` for a runner without protected state.
+    /// offers the runner's logins; given once the setup exists, and
+    /// `None` for a runner without protected state.
     agent_login_setup: Option<super::control::AdmissionAgentLogins>,
     /// What each admission keeps its grant token files current with while
-    /// its assignment runs (REQ-GRANT-89); given with the setup, and `None`
-    /// for a runner without protected state.
+    /// its assignment runs; given with the setup, and `None` for a runner
+    /// without protected state.
     grant_token_refresh: Option<GrantTokenRefreshing>,
     execution_version: Arc<str>,
     lease_clock: LeaseClock,
@@ -1243,21 +1210,21 @@ pub(super) struct AssignmentManager {
     tree_run: TreeRunDependencies,
     recorder: Option<Arc<crate::telemetry::Recorder>>,
     /// The log of the runner's own events the manager records a lost grant of time and an
-    /// accepted continuation in (REQ-RUNNERENROLL-138); its outbox records in it too.
+    /// accepted continuation in; its outbox records in it too.
     pub(in crate::service) runner_events: Arc<EventLog>,
     runner_id: String,
     /// The disk monitor's published reading, copied by the offer rule and never read from
-    /// the filesystem under the manager's lock (INV-RUNNER-50).
+    /// the filesystem under the manager's lock.
     disk_reading: DiskReadingHandle,
     run_events: BTreeMap<String, RunEvent>,
     /// What each held or reporting assignment's offer said, by assignment ID, which the
-    /// overview gives (REQ-RUNNERENROLL-134).
+    /// overview gives.
     offer_facts: BTreeMap<String, OfferFacts>,
     /// The assignments whose `runner.run` record ended most recently, which the overview
-    /// lists once they are held no longer (REQ-RUNNERENROLL-137, INV-RUNNER-46).
+    /// lists once they are held no longer.
     recent_assignments: Ring<OverviewRecentAssignment>,
     lease_policy: Option<ExecutionLeasePolicy>,
-    /// The assignments the runner holds, by assignment ID (INV-RUNNER-62).
+    /// The assignments the runner holds, by assignment ID.
     held: BTreeMap<String, HeldAssignment>,
     /// The assignments that have ended and whose last report Cloud has yet to acknowledge,
     /// by assignment ID; an assignment is held or reporting, never both.
@@ -1282,7 +1249,7 @@ pub(super) struct AssignmentManager {
     guard_processes: bool,
     /// Notified, keeping one notice for the next waiter, whenever an assignment stops being
     /// held or reporting, which is when a run may have stopped working; the kept-run
-    /// schedule waits on it (REQ-RUNNERENROLL-158).
+    /// schedule waits on it.
     run_ended: Arc<Notify>,
 }
 
@@ -1297,8 +1264,8 @@ struct GrantTokenRefreshing {
 
 impl GrantTokenRefreshing {
     /// Publishes in the live status each readiness `tokens` records, its
-    /// end's included whether or not it holds a token (REQ-GRANT-157), and
-    /// starts keeping the token files it holds current (REQ-GRANT-89).
+    /// end's included whether or not it holds a token, and starts keeping
+    /// the token files it holds current.
     fn start(&self, tokens: &mut AssignmentGrantTokens) {
         let status = Arc::clone(&self.status);
         tokens.publish_with(Arc::new(move |document| {
@@ -1312,19 +1279,19 @@ impl GrantTokenRefreshing {
 
 impl AssignmentManager {
     /// The work-root lease the manager's assignment roots are made in, whose kept
-    /// directories the kept-run pass prunes (REQ-RUNNERENROLL-158).
+    /// directories the kept-run pass prunes.
     pub(in crate::service) fn work_root(&self) -> Arc<WorkRootLease> {
         Arc::clone(&self.work_root)
     }
 
     /// The command fence every `useful` command of the manager's tree runs, and every
-    /// single-workflow execution it starts, enters (INV-RUNNER-53).
+    /// single-workflow execution it starts, enters.
     pub(in crate::service) fn command_fence(&self) -> Arc<CommandFence> {
         Arc::clone(self.tree_run.fence())
     }
 
     /// What is notified, with `notify_one`, whenever an assignment stops being held or
-    /// reporting (REQ-RUNNERENROLL-158).
+    /// reporting.
     pub(in crate::service) fn run_ended(&self) -> Arc<Notify> {
         Arc::clone(&self.run_ended)
     }
@@ -1441,27 +1408,24 @@ pub(super) mod test_support {
     ) -> AssignmentManager {
         let work_root = WorkRootLease::acquire_for_test(config.assignment().work_root(), &boot_id)
             .unwrap_or_else(|error| panic!("acquire isolated test work root: {error}"));
-        let default_source_broker = HttpSourceCredentialBroker::new(
-            config.endpoint(),
-            config.credential(),
-            &boot_id,
-            config.repository_url_policy(),
-        )
-        .ok()
-        .map(|broker| match &recorder {
-            Some(recorder) => broker.with_recorder(Arc::clone(recorder)),
-            None => broker,
-        })
-        .map(|broker| Arc::new(broker) as Arc<dyn SourceCredentialBroker>);
-        let input_broker =
-            HttpRunInputBroker::new(config.endpoint(), config.credential(), &boot_id)
-                .ok()
-                .map(|broker| Arc::new(broker) as Arc<dyn RunInputBroker>);
+        let target = super::super::serving_target(config).unwrap();
+        let source_broker = source_broker.unwrap_or_else(|| {
+            let broker = HttpSourceCredentialBroker::new(
+                target.clone(),
+                &boot_id,
+                config.repository_url_policy(),
+            );
+            Arc::new(match &recorder {
+                Some(recorder) => broker.with_recorder(Arc::clone(recorder)),
+                None => broker,
+            })
+        });
+        let input_broker = HttpRunInputBroker::new(target, &boot_id);
         let dependencies = AssignmentDependencies::new(
             work_root,
             sleeper,
-            source_broker.or(default_source_broker),
-            input_broker,
+            Some(source_broker),
+            Some(Arc::new(input_broker)),
             Arc::from(crate::telemetry::TEST_SERVICE_VERSION),
             recorder,
             guard_processes,
@@ -1603,7 +1567,7 @@ pub(super) mod test_support {
 
     /// Installs `offer` as a running assignment beside the one `beside` installed, on the
     /// same controlled lease clock and with the same lease timing, so a test can hold two
-    /// running assignments on one manager (INV-RUNNER-62).
+    /// running assignments on one manager.
     pub(in crate::service) fn install_running_renewal_fixture_beside(
         manager: &mut AssignmentManager,
         offer: AssignmentOffer,
@@ -1972,9 +1936,11 @@ pub(super) mod test_support {
                 algorithm: digest.algorithm.as_str().to_owned(),
                 value: digest.value.clone(),
             };
-        execution_spec
-            .workflow_definition_source
-            .workflow_source_closure_digest = projected_digest.clone();
+        if let Some(source) = &mut execution_spec.source {
+            source
+                .workflow_definition_source
+                .workflow_source_closure_digest = projected_digest.clone();
+        }
         execution_spec.capacity = useful_runner_protocol::ExecutionCapacityV1RunnerProjection {
             execution_contract: "workflow_v1_cloud_inputs_artifacts@1".to_owned(),
             source_closure_digest: projected_digest,
@@ -2098,18 +2064,25 @@ pub(super) mod test_support {
 
     /// The workspace and private roots of the assignment `manager` has accepted.
     pub(in crate::service) fn accepted_roots(manager: &AssignmentManager) -> (PathBuf, PathBuf) {
+        let accepted = accepted_assignment(manager);
+        (
+            accepted.root.workspace.path().to_owned(),
+            accepted.root.private.path().to_owned(),
+        )
+    }
+
+    pub(in crate::service) fn accepted_assignment(
+        manager: &AssignmentManager,
+    ) -> &AcceptedAssignment {
         match held_assignment(manager) {
-            Some(HeldAssignment::Accepted(accepted)) => (
-                accepted.root.workspace.path().to_owned(),
-                accepted.root.private.path().to_owned(),
-            ),
+            Some(HeldAssignment::Accepted(accepted)) => accepted,
             _ => panic!("the manager holds no accepted assignment"),
         }
     }
 
     /// Asserts that the runner left no Git wiring of its own: no workflow Git
     /// credential or source askpass helper in `private`, and no `credential.*`
-    /// configuration in the repository at `workspace` (REQ-WORKSPACE-34).
+    /// configuration in the repository at `workspace`.
     pub(in crate::service) fn assert_no_runner_git_wiring(workspace: &Path, private: &Path) {
         assert!(!private.join("workflow-git-credential").exists());
         assert!(fs::read_dir(private).unwrap().all(|entry| {
@@ -2127,10 +2100,10 @@ pub(super) mod test_support {
         assert!(!credential_config.status.success());
     }
 
-    /// A manager executing published trees with `tree_run` (REQ-RUNNERENROLL-91): its
-    /// sources come from `source_broker`, `environment` stands for the daemon's, and it
-    /// guards each assignment's processes in a durable journal as the production runner
-    /// does, which a continuation's retained claim recovers.
+    /// A manager executing published trees with `tree_run`: its sources come from
+    /// `source_broker`, `environment` stands for the daemon's, and it guards each
+    /// assignment's processes in a durable journal as the production runner does, which
+    /// a continuation's retained claim recovers.
     pub(in crate::service) fn tree_run_manager(
         config: &Config,
         source_broker: Arc<dyn SourceCredentialBroker>,
@@ -2173,7 +2146,7 @@ pub(super) mod test_support {
     }
 
     /// Has `manager` keep its agent logins in `directory`, as a runner with
-    /// protected state does (REQ-GRANT-36).
+    /// protected state does.
     pub(in crate::service) fn keep_agent_logins_in(
         manager: &mut AssignmentManager,
         directory: crate::agent_login::directory::LoginDirectory,
@@ -2603,10 +2576,12 @@ fn validate_carried_capacity(
     let digest = &workflow.capacity.source_closure_digest;
     if carried.source_closure_digest.algorithm != digest.algorithm.as_str()
         || carried.source_closure_digest.value != digest.value
-        || carried.source_closure_digest
-            != execution_spec
-                .workflow_definition_source
-                .workflow_source_closure_digest
+        || execution_spec.source.as_ref().is_none_or(|source| {
+            carried.source_closure_digest
+                != source
+                    .workflow_definition_source
+                    .workflow_source_closure_digest
+        })
     {
         return Err(AssignmentDecline::ExecutionSpecInvalid(
             ExecutionSpecInvalidReason::WorkflowSourceDigestMismatch,
@@ -2638,33 +2613,31 @@ fn capacity_binding_invalid() -> AssignmentDecline {
     AssignmentDecline::ExecutionSpecInvalid(ExecutionSpecInvalidReason::WorkflowAdmissionInvalid)
 }
 
-/// The pinned source a Cloud run's steps see (REQ-WORKSPACE-16), for the engine's context
-/// and a tree run's `create` alike (REQ-RUNNERENROLL-120): the workspace commit, and on a
-/// schema-2 spec the source branch as its branch; on a schema-3 spec the workspace branch
-/// when one is selected and the definition pin as the source branch and definition commit.
+/// The pinned source a Cloud run's steps see, for the engine's context and a tree run's
+/// `create` alike: the workspace commit, and on a schema-2 spec the source branch as its
+/// branch; on a schema-3 spec the workspace branch when one is selected and the definition
+/// pin as the source branch and definition commit.
 pub(super) fn source_revision(
     execution_spec: &ExecutionSpecV1RunnerProjection,
-) -> SourceRevisionProvenance {
-    let commit_oid = execution_spec.primary_workspace_source.commit_oid.as_str();
-    if execution_spec.schema_version == 3 {
+) -> Option<SourceRevisionProvenance> {
+    let source = execution_spec.source.as_ref()?;
+    let commit_oid = source.primary_workspace_source.commit_oid.as_str();
+    Some(if execution_spec.schema_version == 3 {
         SourceRevisionProvenance::from_parts(
             commit_oid,
             execution_spec.workspace_branch.as_deref(),
             Some((
-                execution_spec.source_branch.as_str(),
-                execution_spec
-                    .workflow_definition_source
-                    .commit_oid
-                    .as_str(),
+                source.source_branch.as_str(),
+                source.workflow_definition_source.commit_oid.as_str(),
             )),
         )
     } else {
         SourceRevisionProvenance::from_parts(
             commit_oid,
-            Some(execution_spec.source_branch.as_str()),
+            Some(source.source_branch.as_str()),
             None::<(&str, &str)>,
         )
-    }
+    })
 }
 
 fn build_execution_context(
@@ -2688,7 +2661,6 @@ fn build_execution_context(
         environment.without_managed_runner_credentials_and_helpers(),
         CancellationPolicy::new(CancellationSource::new(), cancellation_grace),
     )
-    .with_source_revision(source_revision(execution_spec))
     .with_capacity_budget(WorkflowCapacityBudget {
         maximum_invocations: capacity.maximum_invocations,
         diagnostic_retention_bytes: capacity.diagnostic_retention_bytes,
@@ -2696,6 +2668,10 @@ fn build_execution_context(
         aggregate_retention_bytes: capacity.aggregate_retention_bytes,
         encoded_outbox_bytes: capacity.encoded_outbox_bytes,
     });
+    let context = match source_revision(execution_spec) {
+        Some(source) => context.with_source_revision(source),
+        None => context,
+    };
     let context = match git_capture {
         Some(projection) => context.with_cloud_git_capture(projection),
         None => context,
@@ -2894,7 +2870,7 @@ fn environment_unavailable() -> AssignmentDecline {
     AssignmentDecline::RunnerUnable(RunnerUnableReason::ExecutionEnvironmentUnavailable)
 }
 
-/// The decline of an offer of a new run while the work root's disk is low (REQ-DIAG-44).
+/// The decline of an offer of a new run while the work root's disk is low.
 fn disk_space_low() -> AssignmentDecline {
     AssignmentDecline::CapacityUnavailable.diagnosed("host_disk", "disk_space_low")
 }

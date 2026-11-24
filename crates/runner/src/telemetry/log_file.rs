@@ -1,10 +1,9 @@
 //! The runner's log file, `runner.log` in the `logs` directory beside its
-//! state (REQ-TELEMETRY-52), and the rotated files `runner.log.<n>` it is
-//! kept within its limits by (REQ-TELEMETRY-53). Only the log output's
-//! thread opens, writes, renames or removes them (INV-TELEMETRY-18), so no
-//! file operation here runs on the runner's executor. A log the runner
-//! cannot use is reported once for each kind of failure and never stops it
-//! (REQ-TELEMETRY-54).
+//! state, and the rotated files `runner.log.<n>` it is kept within its
+//! limits by. Only the log output's thread opens, writes, renames or
+//! removes them, so no file operation here runs on the runner's executor.
+//! A log the runner cannot use is reported once for each kind of failure
+//! and never stops it.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -27,8 +26,8 @@ const FILE_MODE: u32 = 0o600;
 const DIAGNOSTIC_NAME: &str = "runner.telemetry_log";
 const DIAGNOSTIC_CLASSIFICATION_FIELD: &str = "diagnostic.classification";
 
-/// A kind of failure of the log, each reported at most once a process
-/// (REQ-TELEMETRY-54).
+/// A kind of failure of the log, each reported at most once a
+/// process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LogFailure {
     Open,
@@ -55,10 +54,10 @@ impl LogFailure {
 /// Reports the log's failures as `runner.telemetry_log` records through the
 /// recorder, so they reach standard error and, while it takes writes, the
 /// log. Each kind is reported once a process, with only its classification
-/// and the closed class of its I/O error, never the error's text or a path
-/// (REQ-TELEMETRY-54, REQ-TELEMETRY-13). The recorder owns the log's queue,
-/// whose thread holds this reporter, so the reporter holds the recorder
-/// weakly; a failure reported before `attach` is held until then.
+/// and the closed class of its I/O error, never the error's text or a path.
+/// The recorder owns the log's queue, whose thread holds this reporter, so
+/// the reporter holds the recorder weakly; a failure reported before
+/// `attach` is held until then.
 #[derive(Clone, Default)]
 pub(super) struct LogReporter {
     state: Arc<Mutex<ReporterState>>,
@@ -118,7 +117,7 @@ fn record_failure(recorder: &Recorder, failure: LogFailure, kind: io::ErrorKind)
 
 /// The log output's sink: a record it fails to write is reported as
 /// `write_failed` and answered failed, so the queue's thread releases the
-/// record from the log alone (REQ-TELEMETRY-14).
+/// record from the log alone.
 pub(super) struct ReportedWrites<S> {
     sink: S,
     reporter: LogReporter,
@@ -180,7 +179,7 @@ impl std::error::Error for OpenError {
     }
 }
 
-/// The bounds a log is kept within (REQ-TELEMETRY-53).
+/// The bounds a log is kept within.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LogLimits {
     pub(super) file_bytes: u64,
@@ -204,7 +203,7 @@ const LIMITS_INTERVAL: Duration = Duration::hours(1);
 /// The open `runner.log`, appended to one record at a time with one
 /// `write_all` on the bare file: no user-space buffer and no `fsync`. It is
 /// rotated before a record that would take it past the file limit, and the
-/// rotated files are kept within the count and age limits (REQ-TELEMETRY-53).
+/// rotated files are kept within the count and age limits.
 pub(super) struct LogFile {
     directory: PathBuf,
     limits: LogLimits,
@@ -545,7 +544,6 @@ mod tests {
         .into_bytes()
     }
 
-    // REQ-TELEMETRY-53
     #[test]
     fn records_past_the_file_limit_rotate_whole_into_numbered_files() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -591,7 +589,6 @@ mod tests {
         assert_eq!(read_back, records.concat());
     }
 
-    // REQ-TELEMETRY-53
     #[test]
     fn a_rotation_past_the_kept_number_removes_the_highest_and_shifts_the_rest() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -623,7 +620,6 @@ mod tests {
         assert_eq!(mode(&path_in(&directory)), 0o600);
     }
 
-    // REQ-TELEMETRY-53
     #[test]
     fn rotated_files_past_the_age_are_removed_at_open_and_hourly() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -670,7 +666,6 @@ mod tests {
         assert_eq!(fs::read(rotated(&directory, 1)).expect(".1"), b"recent\n");
     }
 
-    // REQ-TELEMETRY-53
     #[test]
     fn nothing_but_rotated_files_is_removed() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -718,7 +713,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-54
     #[test]
     fn a_failed_rotation_is_reported_once_and_records_stay_in_runner_log() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -761,7 +755,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-52
     #[test]
     fn opening_creates_a_private_directory_and_file() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -780,7 +773,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-52
     #[test]
     fn opening_keeps_earlier_lines_and_ends_an_unfinished_one() {
         let root = tempfile::tempdir().expect("temporary directory");
@@ -802,7 +794,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-52, INV-TELEMETRY-18
     #[test]
     fn a_linked_directory_or_file_is_not_followed() {
         let root = tempfile::tempdir().expect("temporary directory");

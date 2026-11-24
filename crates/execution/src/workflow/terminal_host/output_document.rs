@@ -1,6 +1,6 @@
 //! A document of rows drawn full-screen, each row on one line with panning, which the
-//! archived viewer's retained output (REQ-LOCALRUN-69) and the runner viewer's log
-//! (REQ-RUNNERENROLL-146) share: its rows, its viewport and its renderer.
+//! archived viewer's retained output and the runner viewer's log share: its rows, its
+//! viewport and its renderer.
 
 use super::*;
 
@@ -112,8 +112,8 @@ impl<Key: Copy + Ord> OutputViewport<Key> {
         self.top = self.top.min(bottom);
     }
 
-    /// Moves the view; any movement pauses it, one that cannot move included
-    /// (REQ-LOCALRUN-46).
+    /// Moves the view; any movement pauses it, one that cannot move
+    /// included.
     pub(super) fn navigate<Rows: KeyedRows<Key = Key> + ?Sized>(
         &mut self,
         rows: &Rows,

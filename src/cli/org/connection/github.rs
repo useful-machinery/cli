@@ -1,13 +1,19 @@
-//! GitHub through `useful org integration`: the setup sessions `create github` and `reconnect`
-//! complete, and the reads and removal of an installation binding.
+//! GitHub through `useful org integration`: the guided, verified setup `connect github` and
+//! `reconnect` run, a setup session `show ghs_SESSION` reads, and the reads and removal of an
+//! installation binding.
 mod output;
+mod setup;
 
-pub(in crate::cli) use output::{installation_state, write_list_failure};
+pub(in crate::cli) use output::{authority, installation_state, write_list_failure};
+pub(super) use setup::{Guidance, guide, show as show_setup_session};
 
-use super::authorization::InForce;
+use std::time::Duration;
+
 use anyhow::{Context, anyhow};
 
-use crate::cli::{CommonArgs, JsonOutputKind, PrincipalAuthenticationArgs};
+use super::authorization::InForce;
+use super::linear::Options;
+use crate::cli::{CommandResult, CommonArgs, JsonOutputKind, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
 use useful_api::{
     GitHubApi, GitHubFailure, GitHubInstallation, GitHubInstallationState, HttpClient,
@@ -18,7 +24,7 @@ use useful_human_auth::Deployment;
 use super::list::Record;
 use super::target::Resolved;
 
-/// The value of `create github --installation`: a decimal GitHub installation ID, checked
+/// The value of `connect github --installation`: a decimal GitHub installation ID, checked
 /// before any request.
 pub(super) fn installation_id(value: &str) -> Result<String, String> {
     if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -28,134 +34,86 @@ pub(super) fn installation_id(value: &str) -> Result<String, String> {
     }
 }
 
-/// Begins a setup session in `organization` and prints the page to open and the command to run
-/// once GitHub has installed the App (REQ-CONNECTION-17).
-pub(super) fn begin<F: JsonOutputKind>(
+/// Connects the organization at GitHub through the guided, verified setup: with
+/// `installation`, `--installation`, that installation whatever the session lists. The binding
+/// a completed setup answered is reported already; the status alone is the command's.
+pub(super) fn connect(
     deployment: &Deployment,
-    options: &CommonArgs<F, PrincipalAuthenticationArgs>,
+    options: Options,
     organization: &str,
-) -> anyhow::Result<ExitCode> {
-    let result = with_api(
-        deployment,
-        options.http.transport_policy(),
-        &options.authentication,
-        |api| api.begin_setup(organization),
-    )?;
-    output::write_setup_begin(
-        deployment.fingerprint().api_url(),
-        organization,
-        &result,
-        options.authentication.kind(),
-        options.json,
-    )
-}
-
-/// Begins a setup session of its own in `organization` and completes it at once for the GitHub
-/// installation `provider_installation_id`, so nothing is carried over from an earlier
-/// invocation (REQ-CONNECTION-17, REQ-CONNECTION-19).
-pub(super) fn complete<F: JsonOutputKind>(
-    deployment: &Deployment,
-    options: &CommonArgs<F, PrincipalAuthenticationArgs>,
-    organization: &str,
-    provider_installation_id: &str,
-) -> anyhow::Result<ExitCode> {
-    complete_for(
+    installation: Option<&str>,
+    (no_wait, timeout): (bool, Option<Duration>),
+) -> CommandResult {
+    setup::guide(
         deployment,
         options,
-        organization,
-        provider_installation_id,
-        None,
+        Guidance {
+            organization,
+            installation,
+            binding: None,
+            listed: None,
+            no_wait,
+            timeout,
+        },
     )
+    .map(|guided| guided.status)
 }
 
-/// Renews the binding `resolved` names by completing a new setup session for its own
-/// installation, which keeps its ID; a binding GitHub revoked is refused before any session is
-/// begun (REQ-CONNECTION-108).
-pub(super) fn reconnect<F: JsonOutputKind>(
+/// Renews the binding `resolved` names through the guided setup for its own installation, which
+/// keeps its ID, completing it only once the session is verified; a binding GitHub revoked is
+/// refused before any session is begun.
+pub(super) fn reconnect(
     deployment: &Deployment,
-    options: &CommonArgs<F, PrincipalAuthenticationArgs>,
+    options: Options,
     organization: &str,
     resolved: Resolved,
-) -> anyhow::Result<ExitCode> {
-    let installation = match resolved {
-        Resolved::Listed(Record::Github(installation)) => installation,
-        resolved => match find_binding(deployment, options, organization, resolved.id())? {
-            Ok(installation) => installation,
-            Err(failure) => {
-                return write_list_failure(
-                    deployment.fingerprint().api_url(),
-                    organization,
-                    &failure,
-                    options.authentication.kind(),
-                    options.json,
-                );
+    (no_wait, timeout): (bool, Option<Duration>),
+) -> CommandResult {
+    let (installation, listed) = match resolved {
+        Resolved::Listed(Record::Github(installation)) => (installation, None),
+        resolved => {
+            match list_bindings(deployment, &options, organization)?.and_then(|installations| {
+                let installation = held(&installations, resolved.id())?.clone();
+                Ok((installation, Some(installations)))
+            }) {
+                Ok(found) => found,
+                Err(failure) => {
+                    return Ok(write_list_failure(
+                        deployment.fingerprint().api_url(),
+                        organization,
+                        &failure,
+                        options.authentication.kind(),
+                        options.json,
+                    )?);
+                }
             }
-        },
+        }
     };
     if matches!(installation.state, GitHubInstallationState::Revoked) {
-        return output::write_revoked(
+        return Ok(output::write_revoked(
             deployment.fingerprint().api_url(),
             organization,
             options.authentication.kind(),
             options.json,
-        );
+        )?);
     }
-    complete_for(
+    setup::guide(
         deployment,
         options,
-        organization,
-        &installation.provider_installation_id,
-        Some(&installation.id),
+        Guidance {
+            organization,
+            installation: Some(&installation.provider_installation_id),
+            binding: Some(&installation.id),
+            listed,
+            no_wait,
+            timeout,
+        },
     )
-}
-
-/// Begins a setup session and completes it for `provider_installation_id`. When `binding` is
-/// given, a completion that names another binding is a protocol failure, since a reconnection
-/// never makes a new connection.
-fn complete_for<F: JsonOutputKind>(
-    deployment: &Deployment,
-    options: &CommonArgs<F, PrincipalAuthenticationArgs>,
-    organization: &str,
-    provider_installation_id: &str,
-    binding: Option<&str>,
-) -> anyhow::Result<ExitCode> {
-    let api_url = deployment.fingerprint().api_url();
-    let policy = options.http.transport_policy();
-    let session = match with_api(deployment, policy, &options.authentication, |api| {
-        api.begin_setup(organization)
-    })? {
-        Ok(session) => session,
-        failed @ Err(_) => {
-            return output::write_setup_begin(
-                api_url,
-                organization,
-                &failed,
-                options.authentication.kind(),
-                options.json,
-            );
-        }
-    };
-    let result = with_api(deployment, policy, &options.authentication, |api| {
-        api.complete_setup(organization, &session.id, provider_installation_id)
-    })?
-    .and_then(|installation| match binding {
-        Some(binding) if installation.id != binding => Err(GitHubFailure::Protocol {
-            credential_rejected: false,
-        }),
-        _ => Ok(installation),
-    });
-    output::write_installation(
-        api_url,
-        organization,
-        &result,
-        output::InstallationAction::SetupCompleted,
-        options.authentication.kind(),
-        options.json,
-    )
+    .map(|guided| guided.status)
 }
 
 /// Disconnects the binding `id`, repeating the request once after an ambiguous transport
-/// failure (REQ-CONNECTION-16, REQ-CONNECTION-19).
+/// failure.
 pub(super) fn remove(
     deployment: &Deployment,
     options: &super::list::Options,
@@ -178,7 +136,7 @@ pub(super) fn remove(
     )
 }
 
-/// Lists every repository the installation of the binding `id` grants (REQ-CONNECTION-73).
+/// Lists every repository the installation of the binding `id` grants.
 pub(super) fn list_repositories(
     deployment: &Deployment,
     options: &super::list::Options,
@@ -201,7 +159,7 @@ pub(super) fn list_repositories(
 }
 
 /// Shows the binding `id` as the organization's list of bindings holds it, since the route
-/// reads no single binding; an ID the list does not hold is not found (REQ-CONNECTION-105).
+/// reads no single binding; an ID the list does not hold is not found.
 pub(super) fn show_binding(
     deployment: &Deployment,
     options: &super::list::Options,
@@ -227,6 +185,32 @@ pub(super) fn show_binding(
     }
 }
 
+/// The organization's list of installation bindings.
+fn list_bindings<F: JsonOutputKind>(
+    deployment: &Deployment,
+    options: &CommonArgs<F, PrincipalAuthenticationArgs>,
+    organization: &str,
+) -> anyhow::Result<Result<Vec<GitHubInstallation>, GitHubFailure>> {
+    with_api(
+        deployment,
+        options.http.transport_policy(),
+        &options.authentication,
+        |api| api.list_installations(organization),
+    )
+}
+
+/// The binding `id` as `installations`, the organization's list, holds it; an ID the list does
+/// not hold is not found.
+fn held<'a>(
+    installations: &'a [GitHubInstallation],
+    id: &str,
+) -> Result<&'a GitHubInstallation, GitHubFailure> {
+    installations
+        .iter()
+        .find(|installation| installation.id == id)
+        .ok_or(GitHubFailure::NotFound)
+}
+
 /// The binding `id` as the organization's list of bindings holds it; an ID the list does not
 /// hold is not found.
 fn find_binding<F: JsonOutputKind>(
@@ -235,18 +219,8 @@ fn find_binding<F: JsonOutputKind>(
     organization: &str,
     id: &str,
 ) -> anyhow::Result<Result<GitHubInstallation, GitHubFailure>> {
-    Ok(with_api(
-        deployment,
-        options.http.transport_policy(),
-        &options.authentication,
-        |api| api.list_installations(organization),
-    )?
-    .and_then(|installations| {
-        installations
-            .into_iter()
-            .find(|installation| installation.id == id)
-            .ok_or(GitHubFailure::NotFound)
-    }))
+    Ok(list_bindings(deployment, options, organization)?
+        .and_then(|installations| held(&installations, id).cloned()))
 }
 
 /// Shows `installation` with, when it is active, the repositories it grants, read from GitHub.

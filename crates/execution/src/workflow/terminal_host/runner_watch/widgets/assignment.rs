@@ -1,6 +1,5 @@
-//! An opened assignment's surface (REQ-RUNNERENROLL-146): the status, facts and URL rows
-//! above the run interface's split view, whose header names the open run, and the log
-//! pane's preview.
+//! An opened assignment's surface: the status, facts and URL rows above the run
+//! interface's split view, whose header names the open run, and the log pane's preview.
 
 use super::super::assignment::{AssignmentScreen, OpenAssignment, ShownLog};
 use super::super::log_document::LogDocument;

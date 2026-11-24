@@ -1,6 +1,6 @@
-//! `useful workflow run upgrade RUN [--from STEP]` (REQ-LOCALRUN-194, REQ-LOCALRUN-197): a
-//! successor of a waiting run under the `useful` home on its definition's current revision,
-//! keeping the run's wait or, with `--from`, running `STEP` and its dependents again.
+//! `useful workflow run upgrade RUN [--from STEP]`: a successor of a waiting run under the
+//! `useful` home on its definition's current revision, keeping the run's wait or, with
+//! `--from`, running `STEP` and its dependents again.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -68,7 +68,7 @@ impl Command {
             },
             None => SuccessorRequest::Upgrade,
         };
-        // REQ-LOCALRUN-180: Cloud carries no upgrade, so the home is the one place looked in.
+        // Cloud carries no upgrade, so the home is the one place looked in.
         let run_directory = self
             .run
             .home_only()

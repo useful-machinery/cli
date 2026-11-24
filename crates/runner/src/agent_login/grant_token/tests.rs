@@ -11,7 +11,8 @@ use super::*;
 use crate::agent_login::check::LoginCheck;
 use crate::agent_login::cloud::{
     AgentLoginCloud, CloudFailure, GrantProvidersFailure, GrantProvidersRequest, GrantTokenFailure,
-    GrantTokenRefusal, ListedProvider, ReportedTokenService, TokenServiceSource,
+    GrantTokenRefusal, Issuer, ListedProvider, ReportedSource, ReportedTokenService,
+    TokenServiceSource,
 };
 use crate::agent_login::readiness::{ReadinessDocument, readiness_path};
 use crate::agent_login::setup::{
@@ -367,7 +368,6 @@ fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
 }
 
-// INV-ENGINE-64
 #[test]
 fn a_declared_integration_names_exactly_the_variables_the_runner_offers_it_under() {
     use useful_execution::IntegrationProvider;
@@ -399,7 +399,6 @@ fn a_declared_integration_names_exactly_the_variables_the_runner_offers_it_under
     );
 }
 
-// INV-ENGINE-65
 #[test]
 fn a_declared_token_service_names_exactly_the_variables_cloud_lists_for_it() {
     use useful_execution::IntegrationProvider;
@@ -428,7 +427,6 @@ fn a_declared_token_service_names_exactly_the_variables_cloud_lists_for_it() {
     assert_eq!(ids, ["mergify", "buildkite"]);
 }
 
-// REQ-GRANT-86, REQ-GRANT-149, REQ-GRANT-88
 #[test]
 fn an_admission_asks_for_each_provider_and_keeps_each_issued_token_in_its_own_private_file() {
     let fixture = Fixture::new();
@@ -479,7 +477,7 @@ fn an_admission_asks_for_each_provider_and_keeps_each_issued_token_in_its_own_pr
                 state: AgentLoginState::Ready,
                 checked_at: Some(now()),
                 issued: Some(IssuedGrant {
-                    grant_id: FAKE_GRANT_ID.to_owned(),
+                    issuer: Issuer::Grant(FAKE_GRANT_ID.to_owned()),
                     generation,
                     expires_at: expiry(),
                 }),
@@ -510,7 +508,6 @@ fn an_admission_asks_for_each_provider_and_keeps_each_issued_token_in_its_own_pr
     assert_eq!(admitted.agent_logins, None);
 }
 
-// REQ-GRANT-153, REQ-GRANT-86, REQ-GRANT-88
 #[test]
 fn an_admission_asks_for_no_token_of_a_provider_the_host_provides() {
     // Either of a provider's two names is the host's providing it.
@@ -593,7 +590,6 @@ fn an_admission_asks_for_no_token_of_a_provider_the_host_provides() {
     );
 }
 
-// REQ-GRANT-86, REQ-GRANT-148, REQ-GRANT-88, REQ-TELEMETRY-46
 #[test]
 fn an_admission_lists_the_assignments_providers_first_and_asks_for_the_token_of_each_listed() {
     let fixture = Fixture::new();
@@ -651,7 +647,6 @@ fn an_admission_lists_the_assignments_providers_first_and_asks_for_the_token_of_
     }
 }
 
-// REQ-GRANT-148, REQ-GRANT-88, REQ-TELEMETRY-73, REQ-TELEMETRY-77
 #[test]
 fn a_list_cloud_did_not_answer_usefully_asks_for_no_token_and_is_a_failure_of_stage_list() {
     for (failure, cause, status) in [
@@ -732,7 +727,6 @@ fn a_list_cloud_did_not_answer_usefully_asks_for_no_token_and_is_a_failure_of_st
     }
 }
 
-// REQ-GRANT-148
 #[test]
 fn a_cloud_without_the_list_is_asked_for_each_of_the_three_as_before() {
     let fixture = Fixture::new();
@@ -747,7 +741,6 @@ fn a_cloud_without_the_list_is_asked_for_each_of_the_three_as_before() {
     }
 }
 
-// REQ-GRANT-92, REQ-GRANT-87, REQ-GRANT-88, INV-RUNNER-31
 #[test]
 fn an_admission_records_each_oauth_providers_source_with_its_run() {
     let service = [("GH_TOKEN", "service-github-token")];
@@ -823,7 +816,6 @@ fn an_admission_records_each_oauth_providers_source_with_its_run() {
     );
 }
 
-// REQ-GRANT-86, REQ-GRANT-88
 #[test]
 fn each_answer_without_a_token_writes_no_file_and_records_its_state() {
     let unavailable = |failure| FakeGrantToken::Fail(GrantTokenFailure::Cloud(failure));
@@ -898,7 +890,6 @@ fn each_answer_without_a_token_writes_no_file_and_records_its_state() {
     }
 }
 
-// REQ-GRANT-150, INV-RUNNER-28
 #[test]
 fn a_file_an_earlier_assignment_left_is_gone_before_any_answer_is_used() {
     for answer in [
@@ -950,7 +941,6 @@ fn a_file_an_earlier_assignment_left_is_gone_before_any_answer_is_used() {
     }
 }
 
-// REQ-GRANT-150, REQ-GRANT-157, INV-RUNNER-28
 #[test]
 fn when_the_assignment_ends_its_files_are_gone_and_its_entries_stay() {
     let fixture = Fixture::new();
@@ -988,7 +978,6 @@ fn when_the_assignment_ends_its_files_are_gone_and_its_entries_stay() {
     }
 }
 
-// REQ-GRANT-88, REQ-GRANT-157, INV-RUNNER-30, REQ-TELEMETRY-72
 #[test]
 fn an_admissions_entries_name_its_run_and_are_marked_ended_when_its_assignment_ends() {
     let refused = |refusal| FakeGrantToken::Fail(GrantTokenFailure::Refused(refusal));
@@ -1064,7 +1053,6 @@ fn an_admissions_entries_name_its_run_and_are_marked_ended_when_its_assignment_e
     }
 }
 
-// REQ-GRANT-150, INV-RUNNER-28
 #[test]
 fn an_idle_pass_removes_a_leftover_token_file_and_asks_cloud_for_none() {
     let fixture = Fixture::new();
@@ -1092,7 +1080,6 @@ fn an_idle_pass_removes_a_leftover_token_file_and_asks_cloud_for_none() {
     assert_eq!(fixture.records(), []);
 }
 
-// REQ-GRANT-157, INV-RUNNER-30
 #[test]
 fn an_idle_pass_marks_ended_each_entry_an_interrupted_runner_left_and_asks_cloud_for_none() {
     let fixture = Fixture::new();
@@ -1135,7 +1122,6 @@ fn an_idle_pass_marks_ended_each_entry_an_interrupted_runner_left_and_asks_cloud
     assert_eq!(fixture.records(), []);
 }
 
-// INV-RUNNER-28, INV-RUNNER-30
 #[test]
 fn a_setup_while_an_assignment_is_held_removes_what_no_held_assignment_owns_and_keeps_its_own() {
     let fixture = Fixture::new();
@@ -1179,7 +1165,6 @@ fn a_setup_while_an_assignment_is_held_removes_what_no_held_assignment_owns_and_
     drop(held.tokens);
 }
 
-// REQ-GRANT-150, INV-RUNNER-28
 #[test]
 fn an_admission_removes_what_no_held_assignment_owns_before_it_asks_cloud() {
     let fixture = Fixture::new();
@@ -1229,7 +1214,6 @@ fn an_admission_removes_what_no_held_assignment_owns_before_it_asks_cloud() {
     drop(held.tokens);
 }
 
-// REQ-GRANT-151, REQ-TELEMETRY-76, INV-RUNNER-32
 #[test]
 fn no_token_is_in_the_readiness_document_its_report_or_any_record() {
     let fixture = Fixture::new();
@@ -1285,7 +1269,6 @@ fn grant_attributes(
         .collect()
 }
 
-// REQ-TELEMETRY-46, REQ-TELEMETRY-72
 #[test]
 fn one_record_is_written_per_changed_state_or_failed_request() {
     let fixture = Fixture::new();
@@ -1366,7 +1349,6 @@ fn one_record_is_written_per_changed_state_or_failed_request() {
     assert!(linear.contains_key("um.grant_token.failure_cause"));
 }
 
-// REQ-GRANT-153, INV-RUNNER-17
 #[test]
 fn a_kept_token_never_replaces_a_name_the_offers_own_environment_carries() {
     // The setup's service environment carries none of the names, so the
@@ -1402,7 +1384,6 @@ fn a_kept_token_never_replaces_a_name_the_offers_own_environment_carries() {
     );
 }
 
-// REQ-GRANT-154
 #[test]
 fn a_kept_token_whose_file_no_longer_holds_one_is_not_offered() {
     let fixture = Fixture::new();
@@ -1427,7 +1408,6 @@ fn a_kept_token_whose_file_no_longer_holds_one_is_not_offered() {
     assert_eq!(variable("OTHER_NAME"), Some(std::ffi::OsStr::new("kept")));
 }
 
-// REQ-GRANT-149, REQ-GRANT-154, INV-RUNNER-28, INV-RUNNER-32
 #[test]
 fn a_listed_configured_providers_token_is_kept_in_a_file_of_its_own_and_offered_under_its_names() {
     let fixture = Fixture::new();
@@ -1520,7 +1500,6 @@ fn a_listed_configured_providers_token_is_kept_in_a_file_of_its_own_and_offered_
     );
 }
 
-// REQ-GRANT-153, INV-RUNNER-17, INV-RUNNER-32
 #[test]
 fn a_configured_provider_the_host_provides_is_asked_for_nothing_and_keeps_the_services_names() {
     let service = [("EXAMPLE_ACCESS_TOKEN_FILE", "/srv/example-token")];
@@ -1546,7 +1525,6 @@ fn a_configured_provider_the_host_provides_is_asked_for_nothing_and_keeps_the_se
     assert_eq!(variable(&offered, "EXAMPLE_ACCESS_TOKEN"), None);
 }
 
-// REQ-GRANT-153, INV-RUNNER-17, INV-RUNNER-32
 #[test]
 fn a_kept_configured_token_never_replaces_a_name_the_offers_own_environment_carries() {
     // The setup's service environment carries neither name, so the
@@ -1585,7 +1563,6 @@ fn a_kept_configured_token_never_replaces_a_name_the_offers_own_environment_carr
     }
 }
 
-// REQ-GRANT-152, INV-RUNNER-32, REQ-TELEMETRY-77
 #[test]
 fn a_listed_entry_whose_names_the_runner_does_not_use_is_asked_for_nothing_and_recorded() {
     let refused = |token, token_file| vec![GITHUB_ENTRY, ("example", token, token_file)];
@@ -1671,7 +1648,6 @@ fn a_listed_entry_whose_names_the_runner_does_not_use_is_asked_for_nothing_and_r
     }
 }
 
-// REQ-GRANT-87, INV-RUNNER-32
 #[test]
 fn the_runners_own_providers_keep_their_names_whatever_the_list_gives_them() {
     let fixture = Fixture::new();
@@ -1699,7 +1675,6 @@ fn the_runners_own_providers_keep_their_names_whatever_the_list_gives_them() {
     }
 }
 
-// REQ-GRANT-86, REQ-GRANT-87, INV-RUNNER-32
 #[test]
 fn a_listed_gitlab_is_a_configured_provider_apart_from_the_runners_gitlab() {
     let fixture = Fixture::new();
@@ -1739,7 +1714,6 @@ fn a_listed_gitlab_is_a_configured_provider_apart_from_the_runners_gitlab() {
     }
 }
 
-// REQ-GRANT-150, INV-RUNNER-28
 #[test]
 fn a_configured_file_an_earlier_assignment_left_is_gone_before_any_answer_is_used() {
     let fixture = Fixture::new();
@@ -1788,7 +1762,6 @@ fn a_configured_file_an_earlier_assignment_left_is_gone_before_any_answer_is_use
     assert!(!fixture.assignment_directory(ASSIGNMENT).exists());
 }
 
-// REQ-GRANT-150, INV-RUNNER-28
 #[test]
 fn an_idle_pass_removes_a_leftover_configured_token_file_and_asks_cloud_for_none() {
     let fixture = Fixture::new();
@@ -1816,7 +1789,6 @@ fn an_idle_pass_removes_a_leftover_configured_token_file_and_asks_cloud_for_none
     assert_eq!(fixture.records(), []);
 }
 
-// REQ-GRANT-150, REQ-GRANT-88, REQ-TELEMETRY-74, REQ-TELEMETRY-75, INV-RUNNER-28
 #[test]
 fn an_assignments_directory_that_cannot_be_cleared_asks_for_none_of_its_providers() {
     let fixture = Fixture::new();
@@ -1926,7 +1898,6 @@ fn sorted_records(fixture: &Fixture) -> Vec<serde_json::Map<String, serde_json::
     records
 }
 
-// REQ-INTEGRATION-12, REQ-GRANT-86, REQ-TELEMETRY-46
 #[test]
 fn a_listed_token_services_token_is_asked_for_beside_the_others_kept_and_offered_under_its_names() {
     let fixture = Fixture::new();
@@ -1992,7 +1963,6 @@ fn a_listed_token_services_token_is_asked_for_beside_the_others_kept_and_offered
     assert_eq!(entries, ["github", "gitlab", "linear"], "{document}");
 }
 
-// REQ-INTEGRATION-49, INV-RUNNER-61
 #[test]
 fn a_token_services_source_is_the_token_while_its_kept_file_reads_back_and_none_after() {
     const ISSUED_FROM: &str = "itk_01k0z6r1w8f4jy2m7q9v3x5abe";
@@ -2025,7 +1995,6 @@ fn a_token_services_source_is_the_token_while_its_kept_file_reads_back_and_none_
     assert_eq!(token_service_sources(&nothing, Some(&admitted.tokens)), []);
 }
 
-// REQ-INTEGRATION-12, REQ-GRANT-153, INV-RUNNER-17
 #[test]
 fn a_token_service_the_host_provides_is_asked_for_nothing_and_keeps_no_file() {
     let service = [("MERGIFY_TOKEN_FILE", "/srv/mergify-token")];
@@ -2050,7 +2019,6 @@ fn a_token_service_the_host_provides_is_asked_for_nothing_and_keeps_no_file() {
     assert_eq!(variable(&offered, "MERGIFY_TOKEN"), None);
 }
 
-// REQ-INTEGRATION-48
 #[test]
 fn a_cloud_without_the_token_service_list_is_asked_and_recorded_exactly_as_before() {
     let fixture = Fixture::new();
@@ -2112,7 +2080,6 @@ fn a_cloud_without_the_token_service_list_is_asked_and_recorded_exactly_as_befor
     );
 }
 
-// REQ-INTEGRATION-48, REQ-TELEMETRY-78
 #[test]
 fn a_token_service_list_cloud_did_not_answer_asks_for_none_and_is_recorded_once_with_no_provider() {
     let admit_with = |services: Result<Vec<ListedProvider>, GrantProvidersFailure>| {
@@ -2179,7 +2146,6 @@ fn a_token_service_list_cloud_did_not_answer_asks_for_none_and_is_recorded_once_
     }
 }
 
-// REQ-INTEGRATION-48
 #[test]
 fn a_failed_oauth_list_still_asks_for_and_keeps_a_listed_token_services_token() {
     let fixture = Fixture::new();
@@ -2214,7 +2180,6 @@ fn a_failed_oauth_list_still_asks_for_and_keeps_a_listed_token_services_token() 
     );
 }
 
-// REQ-INTEGRATION-46, INV-RUNNER-32, REQ-TELEMETRY-77
 #[test]
 fn a_token_service_entry_sharing_a_name_or_an_id_with_another_is_asked_for_nothing_and_recorded() {
     for (oauth, services) in [
@@ -2283,7 +2248,6 @@ fn a_token_service_entry_sharing_a_name_or_an_id_with_another_is_asked_for_nothi
     }
 }
 
-// REQ-INTEGRATION-12, REQ-TELEMETRY-76
 #[test]
 fn no_token_services_token_is_in_the_readiness_document_or_any_record() {
     let fixture = Fixture::new();
@@ -2510,7 +2474,7 @@ fn ready(generation: u64, expires_at: OffsetDateTime) -> GrantReadiness {
         state: AgentLoginState::Ready,
         checked_at: Some(now()),
         issued: Some(IssuedGrant {
-            grant_id: FAKE_GRANT_ID.to_owned(),
+            issuer: Issuer::Grant(FAKE_GRANT_ID.to_owned()),
             generation,
             expires_at,
         }),
@@ -2592,7 +2556,6 @@ fn git_credential_password(environment: &EnvironmentSnapshot) -> String {
         .to_owned()
 }
 
-// REQ-GRANT-89, REQ-GRANT-155
 #[tokio::test]
 async fn when_the_wait_passes_the_file_is_replaced_in_place_with_the_newer_generation() {
     let mut run = Refreshing::started();
@@ -2648,7 +2611,6 @@ async fn when_the_wait_passes_the_file_is_replaced_in_place_with_the_newer_gener
     assert_eq!(run.refresh_records()[0]["um.grant_token.generation"], 2);
 }
 
-// REQ-GRANT-89, REQ-GRANT-86
 #[tokio::test]
 async fn a_refresh_asks_cloud_for_no_list() {
     let mut run = Refreshing::started();
@@ -2660,7 +2622,6 @@ async fn a_refresh_asks_cloud_for_no_list() {
     run.fixture.assert_listed_once_first();
 }
 
-// REQ-GRANT-160
 #[tokio::test]
 async fn an_answer_of_the_held_generation_changes_nothing_and_its_wait_is_followed() {
     let mut run = Refreshing::started();
@@ -2693,7 +2654,6 @@ async fn an_answer_of_the_held_generation_changes_nothing_and_its_wait_is_follow
     assert_eq!(run.refresh_requests().len(), 3);
 }
 
-// REQ-GRANT-161, REQ-GRANT-88, REQ-TELEMETRY-46, REQ-TELEMETRY-73
 #[tokio::test]
 async fn a_failed_refresh_keeps_the_file_is_recorded_and_retried_with_backoff() {
     for (failure, cause, status) in [
@@ -2775,7 +2735,6 @@ async fn a_failed_refresh_keeps_the_file_is_recorded_and_retried_with_backoff() 
     }
 }
 
-// REQ-GRANT-161
 #[tokio::test]
 async fn once_the_held_token_expires_unrefreshed_its_file_is_removed_and_the_asking_goes_on() {
     // The token expires 70 seconds after the start: the refresh at 60
@@ -2799,7 +2758,6 @@ async fn once_the_held_token_expires_unrefreshed_its_file_is_removed_and_the_ask
     assert_eq!(run.token(), fake_grant_token(AgentLoginProvider::Github, 2));
 }
 
-// REQ-GRANT-162, REQ-GRANT-88
 #[tokio::test]
 async fn a_refusal_removes_the_file_at_once_and_ends_the_asking() {
     let refused = GrantTokenFailure::Refused;
@@ -2843,7 +2801,6 @@ async fn a_refusal_removes_the_file_at_once_and_ends_the_asking() {
     }
 }
 
-// REQ-GRANT-89, INV-RUNNER-28
 #[tokio::test]
 async fn when_the_assignment_ends_nothing_more_is_asked() {
     let mut run = Refreshing::started();
@@ -2862,7 +2819,6 @@ async fn when_the_assignment_ends_nothing_more_is_asked() {
 const UNANSWERED: FakeGrantToken =
     FakeGrantToken::Fail(GrantTokenFailure::Cloud(CloudFailure::Transport));
 
-// REQ-GRANT-89, REQ-TELEMETRY-46
 #[tokio::test]
 async fn a_configured_providers_file_is_replaced_in_place_when_the_wait_passes() {
     let mut run = Refreshing::example(time::Duration::days(1));
@@ -2911,7 +2867,6 @@ async fn a_configured_providers_file_is_replaced_in_place_when_the_wait_passes()
     );
 }
 
-// REQ-GRANT-160, REQ-TELEMETRY-72
 #[tokio::test]
 async fn an_answer_of_a_configured_providers_held_generation_writes_no_record() {
     let mut run = Refreshing::example(time::Duration::days(1));
@@ -2932,7 +2887,6 @@ async fn an_answer_of_a_configured_providers_held_generation_writes_no_record() 
     assert_eq!(run.refresh_requests().len(), 2);
 }
 
-// REQ-GRANT-161, REQ-TELEMETRY-46
 #[tokio::test]
 async fn a_configured_provider_cloud_does_not_answer_keeps_its_file_is_recorded_and_retried() {
     let mut run = Refreshing::example(time::Duration::days(1));
@@ -2971,7 +2925,6 @@ async fn a_configured_provider_cloud_does_not_answer_keeps_its_file_is_recorded_
     assert_eq!(run.pass(UNANSWERED).await, Some(Duration::from_secs(5)));
 }
 
-// REQ-GRANT-161
 #[tokio::test]
 async fn once_a_configured_providers_token_expires_unrefreshed_its_file_is_removed() {
     // The token expires 70 seconds after the start: the refresh at 60
@@ -2990,7 +2943,6 @@ async fn once_a_configured_providers_token_expires_unrefreshed_its_file_is_remov
     assert_eq!(run.token(), fake_grant_token(configured("example"), 1));
 }
 
-// REQ-GRANT-162, REQ-TELEMETRY-46
 #[tokio::test]
 async fn a_refusal_removes_a_configured_providers_file_and_ends_its_asking_alone() {
     let mut run = Refreshing::listing(
@@ -3031,7 +2983,6 @@ async fn a_refusal_removes_a_configured_providers_file_and_ends_its_asking_alone
     );
 }
 
-// REQ-GRANT-89, REQ-GRANT-88
 #[tokio::test]
 async fn no_refresh_of_a_configured_provider_writes_or_publishes_the_readiness_document() {
     let mut run = Refreshing::example(time::Duration::days(1));
@@ -3053,7 +3004,6 @@ async fn no_refresh_of_a_configured_provider_writes_or_publishes_the_readiness_d
     assert!(run.published.lock().unwrap().is_empty());
 }
 
-// REQ-GRANT-89, INV-RUNNER-28
 #[tokio::test]
 async fn when_the_assignment_ends_a_configured_provider_is_asked_no_more() {
     let mut run = Refreshing::example(time::Duration::days(1));
@@ -3073,7 +3023,6 @@ fn end_hold(tokens: AssignmentGrantTokens) {
     std::thread::spawn(move || drop(tokens)).join().unwrap();
 }
 
-// REQ-GRANT-150, REQ-GRANT-157, INV-RUNNER-28, INV-RUNNER-30
 #[tokio::test]
 async fn each_held_assignments_tokens_are_its_own_until_it_ends() {
     // Assignment A holds GitHub's token of generation 1 and keeps it current.
@@ -3136,7 +3085,6 @@ async fn each_held_assignments_tokens_are_its_own_until_it_ends() {
     }
 }
 
-// REQ-INTEGRATION-12, REQ-GRANT-89, REQ-GRANT-162, REQ-TELEMETRY-46
 #[tokio::test]
 async fn a_token_services_file_is_replaced_by_a_newer_version_and_removed_at_a_refusal() {
     let mut run = Refreshing::mergify(time::Duration::days(1));
@@ -3208,7 +3156,6 @@ const OTHER_INTEGRATION_TOKEN_ID: &str = "itk_01k0z6r1w8f4jy2m7q9v3x5abd";
 /// created again, say.
 const OTHER_GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abd";
 
-// REQ-GRANT-160, REQ-INTEGRATION-47
 #[tokio::test]
 async fn each_answer_for_the_held_token_renews_the_expiry_its_file_stands_until() {
     // Admitted at version 1 with a token that expires an hour ahead.
@@ -3252,7 +3199,6 @@ fn inode(path: &Path) -> u64 {
     std::os::unix::fs::MetadataExt::ino(&fs::metadata(path).unwrap())
 }
 
-// REQ-GRANT-160
 #[tokio::test]
 async fn an_answer_from_another_grant_or_token_replaces_the_file_whatever_its_generation() {
     let github = GrantProvider::try_from(AgentLoginProvider::Github).unwrap();
@@ -3316,7 +3262,7 @@ async fn an_answer_from_another_grant_or_token_replaces_the_file_whatever_its_ge
                 run.github(),
                 GrantReadiness {
                     issued: Some(IssuedGrant {
-                        grant_id: OTHER_GRANT_ID.to_owned(),
+                        issuer: Issuer::Grant(OTHER_GRANT_ID.to_owned()),
                         generation: 1,
                         expires_at,
                     }),
@@ -3338,5 +3284,203 @@ async fn an_answer_from_another_grant_or_token_replaces_the_file_whatever_its_ge
         assert_eq!(inode(&file), written, "{provider:?}");
         assert_eq!(run.refresh_records().len(), 1, "{provider:?}");
         assert_eq!(run.fixture.recorded(), recorded, "{provider:?}");
+    }
+}
+
+/// A connection authorization Cloud issues `github`'s tokens under: the
+/// organization's GitHub App installation an owner authorized for the run.
+const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+/// `github`'s token issued under the fake connection authorization.
+fn under_authorization(generation: u64) -> FakeGrantToken {
+    FakeGrantToken::IssueFrom(CONNECTION_AUTHORIZATION_ID, generation)
+}
+
+#[test]
+fn githubs_token_issued_under_a_connection_authorization_is_kept_offered_recorded_and_reported() {
+    let fixture = Fixture::new();
+    fixture
+        .cloud
+        .answer_grant_token(AgentLoginProvider::Github, under_authorization(3));
+
+    let admitted = fixture.admit(ASSIGNMENT);
+
+    // It is kept as a grant's token is, in the runner's own `github` file.
+    let path = fixture.token_file(AgentLoginProvider::Github);
+    let token = fake_grant_token(AgentLoginProvider::Github, 3);
+    assert_eq!(fs::read_to_string(&path).unwrap(), token);
+    assert_eq!(mode(&path), 0o600);
+    // And offered under both of `github`'s names.
+    let offered = offered_alone(&admitted.tokens);
+    assert_eq!(
+        variable(&offered, "GH_TOKEN"),
+        Some(std::ffi::OsStr::new(&token))
+    );
+    assert_eq!(variable(&offered, "GH_TOKEN_FILE"), Some(path.as_os_str()));
+    // The entry names the authorization, and the source is the
+    // organization's installation.
+    let authorization = Issuer::ConnectionAuthorization(CONNECTION_AUTHORIZATION_ID.to_owned());
+    assert_eq!(
+        fixture
+            .recorded()
+            .grant(AgentLoginProvider::Github)
+            .cloned(),
+        Some(GrantReadiness {
+            issued: Some(IssuedGrant {
+                issuer: authorization,
+                generation: 3,
+                expires_at: expiry(),
+            }),
+            source: Some(CredentialSource::OrgConnection),
+            ..ready(3, expiry())
+        })
+    );
+    let reported = admitted.grants.clone().unwrap().reported().unwrap();
+    assert_eq!(
+        reported.providers[0].connection_authorization_id.as_deref(),
+        Some(CONNECTION_AUTHORIZATION_ID)
+    );
+    assert_eq!(reported.providers[0].grant_id, None);
+    // The report names the authorization and no grant.
+    let offer = crate::agent_login::offer_with_grant_tokens(
+        &EnvironmentSnapshot::new(Vec::<(OsString, OsString)>::new()),
+        Some(&LoginDirectory::beside(&fixture.state_path())),
+        Some(&admitted.tokens),
+    );
+    assert_eq!(
+        offer.sources,
+        [ProviderSource {
+            provider: AgentLoginProvider::Github,
+            source: CredentialSource::OrgConnection,
+        }]
+    );
+    let report = crate::agent_login::reported_sources(&offer, Some(&admitted.tokens));
+    assert_eq!(
+        report.sources,
+        [ReportedSource {
+            provider: AgentLoginProvider::Github,
+            source: CredentialSource::OrgConnection,
+            grant_id: None,
+            connection_authorization_id: Some(CONNECTION_AUTHORIZATION_ID.to_owned()),
+            agent_login_id: None,
+        }]
+    );
+    // The token's bytes are in its file alone.
+    for (name, text) in [
+        (
+            "readiness document",
+            fs::read_to_string(readiness_path(&fixture.state_path())).unwrap(),
+        ),
+        (
+            "reported readiness",
+            serde_json::to_string(&reported).unwrap(),
+        ),
+        (
+            "telemetry",
+            serde_json::to_string(&fixture.capture.events()).unwrap(),
+        ),
+        ("report", format!("{report:?}")),
+    ] {
+        assert!(!text.contains(FAKE_GRANT_TOKEN_SENTINEL), "{name}: {text}");
+    }
+}
+
+#[test]
+fn a_host_that_provides_github_settles_host_whatever_an_authorization_would_issue() {
+    let fixture = Fixture::serving(&[("GH_TOKEN", "service-github-token")]);
+    fixture
+        .cloud
+        .answer_grant_token(AgentLoginProvider::Github, under_authorization(1));
+
+    let _admitted = fixture.admit(ASSIGNMENT);
+
+    assert!(!fixture.asked().contains(&AgentLoginProvider::Github));
+    assert!(!fixture.token_file(AgentLoginProvider::Github).exists());
+    assert_eq!(
+        fixture
+            .recorded()
+            .grant(AgentLoginProvider::Github)
+            .cloned(),
+        Some(GrantReadiness {
+            source: Some(CredentialSource::Host),
+            ..not_ready(AgentLoginState::NotDelivered)
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_switch_between_a_grant_and_an_authorization_replaces_the_file_and_keeps_the_source() {
+    let github = GrantProvider::try_from(AgentLoginProvider::Github).unwrap();
+    let authorization = Issuer::ConnectionAuthorization(CONNECTION_AUTHORIZATION_ID.to_owned());
+    let grant = Issuer::Grant(FAKE_GRANT_ID.to_owned());
+    for (admitted, source, switched, issuer) in [
+        (
+            under_authorization as fn(u64) -> FakeGrantToken,
+            CredentialSource::OrgConnection,
+            FakeGrantToken::Issue(1),
+            grant,
+        ),
+        (
+            FakeGrantToken::Issue,
+            CredentialSource::Grant,
+            under_authorization(1),
+            authorization,
+        ),
+    ] {
+        // The generation held is a later one, or the one the switch answers
+        // at.
+        for held in [3, 1] {
+            let mut run = Refreshing::admitted(
+                time::Duration::days(1),
+                github.clone(),
+                admitted(held),
+                |_| {},
+            );
+            assert_eq!(run.github().source, Some(source), "{source:?} {held}");
+            let file = run.file();
+            let kept = inode(&file);
+            let expires_at = run.started + time::Duration::days(2);
+            run.fixture.cloud.issue_grant_tokens_with(WAIT, expires_at);
+
+            assert_eq!(run.pass(switched).await, Some(WAIT), "{source:?} {held}");
+
+            assert_ne!(inode(&file), kept, "{source:?} {held}");
+            assert_eq!(
+                run.token(),
+                fake_grant_token(AgentLoginProvider::Github, 1),
+                "{source:?} {held}"
+            );
+            assert_eq!(mode(&file), 0o600, "{source:?} {held}");
+            // The entry names what now issued the token, beside the source
+            // the admission settled.
+            assert_eq!(
+                run.github(),
+                GrantReadiness {
+                    issued: Some(IssuedGrant {
+                        issuer: issuer.clone(),
+                        generation: 1,
+                        expires_at,
+                    }),
+                    source: Some(source),
+                    ..ready(1, expires_at)
+                },
+                "{source:?} {held}"
+            );
+
+            // A refusal removes the file, and the source stays.
+            let refused = FakeGrantToken::Fail(GrantTokenFailure::Refused(
+                GrantTokenRefusal::ReconnectRequired,
+            ));
+            assert_eq!(run.pass(refused).await, None, "{source:?} {held}");
+            assert!(!file.exists(), "{source:?} {held}");
+            assert_eq!(
+                run.github(),
+                GrantReadiness {
+                    source: Some(source),
+                    ..not_ready(AgentLoginState::ReconnectRequired)
+                },
+                "{source:?} {held}"
+            );
+        }
     }
 }

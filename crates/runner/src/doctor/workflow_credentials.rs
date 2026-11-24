@@ -1,13 +1,11 @@
-//! The credentials a workflow tree declares it needs, read offline from its definitions and
-//! the source root's `origin` remote or, when a project is in effect, the provider of the
-//! project's repository (REQ-CREDREADY-1 to REQ-CREDREADY-12, REQ-CREDREADY-21), and the report
-//! that follows a named file's declared integrations in their place (REQ-CREDREADY-27), with
-//! where those integrations and the inference disagree (REQ-CREDREADY-28). Nothing here
-//! runs a node, starts a harness or reads the process environment; the one process started is
-//! the bounded `git remote get-url origin` (INV-CLI-24). The derivation gives every requirement
-//! its offline code; the command, which alone may ask Cloud, replaces a provider's code with
-//! what the organization's connections show (REQ-CREDREADY-13), and the state, the `cloud`
-//! value and the next action follow from the code.
+//! The credentials a workflow tree declares it needs, read offline from its definitions and the
+//! source root's `origin` remote or, when a project is in effect, the provider of the project's
+//! repository, and the report that follows a named file's declared integrations in their place,
+//! with where those integrations and the inference disagree. Nothing here runs a node, starts a
+//! harness or reads the process environment; the one process started is the bounded
+//! `git remote get-url origin`. The derivation gives every requirement its offline code; the
+//! command, which alone may ask Cloud, replaces a provider's code with what the organization's
+//! connections show, and the state, the `cloud` value and the next action follow from the code.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -21,7 +19,7 @@ use useful_execution::{
 use super::git::origin_remote_host;
 
 /// A provider, harness or declared token service whose credential a workflow needs, in report
-/// order (REQ-CREDREADY-3).
+/// order.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CredentialKind {
     Github,
@@ -29,10 +27,12 @@ pub enum CredentialKind {
     Linear,
     ClaudeCode,
     Codex,
-    /// A token service, which only a declared integration calls for (REQ-CREDREADY-29).
+    /// A token service, which only a declared integration calls for.
     Mergify,
-    /// A token service, which only a declared integration calls for (REQ-CREDREADY-29).
+    /// A token service, which only a declared integration calls for.
     Buildkite,
+    /// A token service, which only a declared integration calls for.
+    Cloudflare,
 }
 
 impl CredentialKind {
@@ -45,6 +45,7 @@ impl CredentialKind {
             Self::Codex => "codex",
             Self::Mergify => "mergify",
             Self::Buildkite => "buildkite",
+            Self::Cloudflare => "cloudflare",
         }
     }
 
@@ -58,26 +59,29 @@ impl CredentialKind {
             Self::Codex => "Codex",
             Self::Mergify => "Mergify",
             Self::Buildkite => "Buildkite",
+            Self::Cloudflare => "Cloudflare",
         }
     }
 
-    /// Whether Cloud holds the organization's connections for this kind (REQ-CREDREADY-16);
-    /// a harness is signed in on the runner host, which nothing reads, and nothing about a
-    /// token service is verified (REQ-CREDREADY-29).
+    /// Whether Cloud holds the organization's connections for this kind; a harness is
+    /// signed in on the runner host, which nothing reads, and nothing about a token service
+    /// is verified.
     const fn held_by_cloud(self) -> bool {
         match self {
             Self::Github | Self::Gitlab | Self::Linear => true,
-            Self::ClaudeCode | Self::Codex | Self::Mergify | Self::Buildkite => false,
+            Self::ClaudeCode | Self::Codex | Self::Mergify | Self::Buildkite | Self::Cloudflare => {
+                false
+            }
         }
     }
 
-    /// Whether the kind is a token service, which a declared integration alone calls for
-    /// (REQ-CREDREADY-29).
+    /// Whether the kind is a token service, which a declared integration alone calls
+    /// for.
     pub const fn is_token_service(self) -> bool {
-        matches!(self, Self::Mergify | Self::Buildkite)
+        matches!(self, Self::Mergify | Self::Buildkite | Self::Cloudflare)
     }
 
-    /// The kind a declared integration's provider id names (REQ-CREDREADY-27).
+    /// The kind a declared integration's provider id names.
     const fn of_integration(provider: IntegrationProvider) -> Self {
         match provider {
             IntegrationProvider::Github => Self::Github,
@@ -87,11 +91,12 @@ impl CredentialKind {
             IntegrationProvider::Codex => Self::Codex,
             IntegrationProvider::Mergify => Self::Mergify,
             IntegrationProvider::Buildkite => Self::Buildkite,
+            IntegrationProvider::Cloudflare => Self::Cloudflare,
         }
     }
 
-    /// The provider id that declares this kind, the inverse of `of_integration`
-    /// (REQ-CREDREADY-28).
+    /// The provider id that declares this kind, the inverse of
+    /// `of_integration`.
     const fn integration(self) -> IntegrationProvider {
         match self {
             Self::Github => IntegrationProvider::Github,
@@ -101,10 +106,11 @@ impl CredentialKind {
             Self::Codex => IntegrationProvider::Codex,
             Self::Mergify => IntegrationProvider::Mergify,
             Self::Buildkite => IntegrationProvider::Buildkite,
+            Self::Cloudflare => IntegrationProvider::Cloudflare,
         }
     }
 
-    /// The code a requirement carries when no readiness check has run (REQ-CREDREADY-7).
+    /// The code a requirement carries when no readiness check has run.
     const fn offline_code(self) -> ReadinessCode {
         if self.held_by_cloud() {
             ReadinessCode::NotChecked
@@ -121,7 +127,7 @@ pub enum ReadinessCode {
     /// No organization connection was read for a provider.
     NotChecked,
     /// The credential reaches a runner only on the runner host or, for a provider, only for a
-    /// run: a harness sign-in, or a connection Cloud holds ready (REQ-CREDREADY-16).
+    /// run: a harness sign-in, or a connection Cloud holds ready.
     RunnerUnverified,
     /// The organization has no connection of the kind other than deleted ones.
     NotConnected,
@@ -131,12 +137,12 @@ pub enum ReadinessCode {
     ScopeMissing,
     /// No connection of the kind is active and a connection's credential expired.
     CredentialExpired,
-    /// Cloud refused the caller the read (REQ-CREDREADY-14).
+    /// Cloud refused the caller the read.
     NotPermitted,
-    /// The named project's repository is unavailable (REQ-CREDREADY-21).
+    /// The named project's repository is unavailable.
     RepositoryUnavailable,
     /// The named project reports its repository provider's admission closed on the deployment,
-    /// which no reconnection fixes (REQ-CREDREADY-21).
+    /// which no reconnection fixes.
     ProviderUnavailable,
 }
 
@@ -169,7 +175,7 @@ impl ReadinessCode {
         }
     }
 
-    /// Whether a requirement with this code fails a readiness check (REQ-CREDREADY-17).
+    /// Whether a requirement with this code fails a readiness check.
     pub fn fails(self) -> bool {
         self.state() != UNVERIFIED
     }
@@ -207,8 +213,8 @@ pub struct Node {
 /// A declaration that calls for a requirement.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum OriginDeclaration {
-    /// A named file's `requires.integrations` entry; `name` is the provider id as written
-    /// (REQ-CREDREADY-27). First, so a file's declared integration sorts before its other origins.
+    /// A named file's `requires.integrations` entry; `name` is the provider id as written. First,
+    /// so a file's declared integration sorts before its other origins.
     Integration,
     /// An agent node's profile selects a harness; `name` is the profile.
     AgentProfile,
@@ -301,9 +307,9 @@ impl CredentialRequirement {
     }
 
     /// What Cloud showed of the organization's connections for a kind it holds, and `None` for
-    /// a harness (REQ-CREDREADY-16): `not_checked` without a read, `ready` for a connection
-    /// it holds ready, and otherwise the state, which is `unverified` for a refused read or a
-    /// closed provider admission.
+    /// a harness: `not_checked` without a read, `ready` for a connection it holds ready, and
+    /// otherwise the state, which is `unverified` for a refused read or a closed provider
+    /// admission.
     pub const fn cloud(&self) -> Option<&'static str> {
         if !self.kind.held_by_cloud() {
             return None;
@@ -315,16 +321,15 @@ impl CredentialRequirement {
         })
     }
 
-    /// Whether the requirement fails a readiness check (REQ-CREDREADY-17).
+    /// Whether the requirement fails a readiness check.
     pub fn fails(&self) -> bool {
         self.code.fails()
     }
 
-    /// What the operator can do about the requirement (REQ-CREDREADY-7, REQ-CREDREADY-14 to
-    /// REQ-CREDREADY-16, REQ-CREDREADY-19 to REQ-CREDREADY-21), for `organization` and
-    /// `project` when they were named. It names commands, never a credential; for a token
-    /// service it names the variable a step reads the token from and the commands that
-    /// connect the service and authorize a runner for it (REQ-CREDREADY-29).
+    /// What the operator can do about the requirement, for `organization` and `project`
+    /// when they were named. It names commands, never a credential; for a token service it
+    /// names the variable a step reads the token from and the commands that connect the
+    /// service and authorize a runner for it.
     pub fn next_action(&self, organization: Option<&str>, project: Option<&str>) -> String {
         // The organization option of a `useful org integration` command, which acts in the
         // organization in effect when none was named.
@@ -345,7 +350,7 @@ impl CredentialRequirement {
         );
         let remedy = match self.kind {
             CredentialKind::Github => format!(
-                "Install the GitHub App for the organization with useful org integration connect github{org_option}."
+                "Connect the organization's GitHub App installation with useful org integration connect github{org_option}."
             ),
             CredentialKind::Gitlab if missing => format!(
                 "Connect GitLab.com with useful org integration connect gitlab --token-file PATH --kind KIND{org_option}."
@@ -359,7 +364,7 @@ impl CredentialRequirement {
             CredentialKind::Linear => format!(
                 "Reauthorize the Linear connection with useful org integration reconnect INTEGRATION{org_option}; {list} shows its ID."
             ),
-            CredentialKind::Mergify | CredentialKind::Buildkite => {
+            CredentialKind::Mergify | CredentialKind::Buildkite | CredentialKind::Cloudflare => {
                 let id = self.kind.as_str();
                 return format!(
                     "Nothing verifies the {title} token; a step reads it from {} when the runner offers one. Connect your own with useful account integration connect {id} and authorize a runner for it with useful account integration authorize {id} --runner RUNNER --yes, or the organization's with useful org integration connect {id}{org_option} and useful org integration authorize {id} --runner RUNNER{org_option} --yes.",
@@ -376,6 +381,12 @@ impl CredentialRequirement {
         match self.code {
             ReadinessCode::NotChecked => format!(
                 "Sign in with useful account login to have this check read the organization's {title} connections from Cloud, or list them with {list}."
+            ),
+            // A runner uses the GitHub App installation only through a connection
+            // authorization.
+            ReadinessCode::RunnerUnverified if self.kind == CredentialKind::Github => format!(
+                "Cloud holds a ready {title} connection. A runner uses it only for runs covered by a connection authorization. Authorize the runner with useful org integration authorize github --runner RUNNER --project {}{org_option} --yes.",
+                project.unwrap_or("PROJECT")
             ),
             ReadinessCode::RunnerUnverified => format!(
                 "Cloud holds a ready {title} connection and issues its credential to a runner only for a run."
@@ -408,8 +419,7 @@ pub struct WorkflowCredentials {
     pub unknown: Vec<UnknownCredential>,
 }
 
-/// The recognition rules, kept in one table (REQ-CREDREADY-5, REQ-CREDREADY-11,
-/// REQ-CREDREADY-12).
+/// The recognition rules, kept in one table.
 struct Recognition {
     /// A forwarded name holding one of these words reads as a credential.
     credential_words: &'static [&'static str],
@@ -494,21 +504,20 @@ fn classify_forwarded_variable(name: &str) -> ForwardedVariable {
 
 /// Where the derivation learns the provider of the source root's repository.
 pub enum RepositorySource {
-    /// The host of the source root's `origin` remote, asked of `git` through the runner
-    /// (REQ-CREDREADY-12).
+    /// The host of the source root's `origin` remote, asked of `git` through the
+    /// runner.
     OriginRemote(Arc<dyn CommandRunner>),
     /// The provider of the named project's repository, which the command read from Cloud, or
-    /// `None` for a project with no repository; Git is not asked (REQ-CREDREADY-21).
+    /// `None` for a project with no repository; Git is not asked.
     Project(Option<CredentialKind>),
 }
 
 /// What the derivation yields for the named files. `inferred` reads every covered file's
-/// declarations and the repository's (REQ-CREDREADY-3 to REQ-CREDREADY-12), as the grant flow
-/// selects by them (REQ-GRANT-76); `reported` is what the doctor reports and asks Cloud about,
-/// in which a named file that declares its integrations is reported by them (REQ-CREDREADY-27).
-/// The two are equal when no named file carries the block. `differences` is present, and empty
-/// when every declaration agrees, exactly when a named file declares its integrations
-/// (REQ-CREDREADY-28).
+/// declarations and the repository's, as the grant flow selects by them; `reported` is what the
+/// doctor reports and asks Cloud about, in which a named file that declares its integrations is
+/// reported by them. The two are equal when no named file carries the block. `differences` is
+/// present, and empty when every declaration agrees, exactly when a named file declares its
+/// integrations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DerivedCredentials {
     pub inferred: WorkflowCredentials,
@@ -535,9 +544,9 @@ impl Difference {
 }
 
 /// One kind on which a named file's `requires.integrations` and the inference over the files it
-/// covers and the repository disagree (REQ-CREDREADY-28). `integration` is the provider id to
-/// declare or the one declared; `origins` are the inferred declarations that call for the kind,
-/// and empty for `DeclaredNotInferred`.
+/// covers and the repository disagree. `integration` is the provider id to declare or the one
+/// declared; `origins` are the inferred declarations that call for the kind, and empty for
+/// `DeclaredNotInferred`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrationDifference {
     pub difference: Difference,
@@ -564,7 +573,7 @@ impl Named {
 
     /// Where its integrations and a reading of the files it covers and the repository disagree,
     /// in kind order. The reading's unknown entries are not differences, and a declared token
-    /// service, which no reading derives, is compared with nothing (REQ-CREDREADY-29).
+    /// service, which no reading derives, is compared with nothing.
     fn differences(
         &self,
         resolved: &BTreeMap<String, ResolvedWorkflow>,
@@ -619,8 +628,8 @@ impl Named {
     }
 }
 
-/// The source root's repository provider, asked once per derivation and given to each reading
-/// (INV-CLI-24); `name` is `origin` or `project`.
+/// The source root's repository provider, asked once per derivation and given to each
+/// reading; `name` is `origin` or `project`.
 struct Repository {
     kind: Option<CredentialKind>,
     name: &'static str,
@@ -644,7 +653,7 @@ impl RepositorySource {
 /// Resolves each named workflow file and every file its `workflow` steps name, one level
 /// deep, each once, and reads the credentials they declare, then names the repository's
 /// provider from `repository`, asking it once. The first file that does not resolve ends the
-/// read with its resolution failure (REQ-CREDREADY-2), before Git is asked.
+/// read with its resolution failure, before Git is asked.
 pub fn read_workflow_credentials(
     source_root: &Path,
     workflow_files: &[PathBuf],
@@ -814,8 +823,8 @@ impl Reading {
         }
     }
 
-    /// The root-only blocks, which only a tree's root file carries (REQ-CREDREADY-11).
-    /// Triggers add nothing: a trigger's source is a binding already read.
+    /// The root-only blocks, which only a tree's root file carries. Triggers add
+    /// nothing: a trigger's source is a binding already read.
     fn read_root_blocks(&mut self, path: &str, root: &RootBlocks) {
         for (key, binding) in &root.bindings {
             let kind = match binding.kind {
@@ -858,7 +867,7 @@ impl Reading {
     }
 
     /// The repository's provider as `name`, the remote or the project, names it; no provider
-    /// is an unknown repository (REQ-CREDREADY-12, REQ-CREDREADY-21).
+    /// is an unknown repository.
     fn read_repository(&mut self, repository: &Repository) {
         match repository.kind {
             Some(kind) => {
@@ -975,8 +984,8 @@ const ORIGIN_REMOTE: &str = "origin";
 /// The name of the repository's declaration when a project names its provider.
 const PROJECT: &str = "project";
 
-/// The kind a remote's host calls for, by the host alone (REQ-CREDREADY-12); no host, or one
-/// of no known provider, calls for none.
+/// The kind a remote's host calls for, by the host alone; no host, or one of no known
+/// provider, calls for none.
 fn remote_host_kind(host: Option<&str>) -> Option<CredentialKind> {
     let host = host?;
     RECOGNITION
@@ -1127,7 +1136,6 @@ steps:
         )
     }
 
-    // REQ-CREDREADY-3
     #[test]
     fn a_file_reached_from_two_named_files_is_read_once() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1194,7 +1202,6 @@ steps:
         }
     }
 
-    // REQ-CREDREADY-11, REQ-CREDREADY-3
     #[test]
     fn a_root_workflow_calls_for_providers_by_bindings_mirror_and_tools() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1267,7 +1274,6 @@ steps:
         }
     }
 
-    // REQ-CREDREADY-12, INV-CLI-24
     #[test]
     fn the_origin_remote_names_the_repository_provider_by_host_alone() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1473,7 +1479,6 @@ steps:
             .collect()
     }
 
-    // REQ-CREDREADY-27, REQ-CREDREADY-36
     #[test]
     fn a_declaring_workflow_is_reported_by_its_integrations_beside_the_inference() {
         let declaring = declaring();
@@ -1518,7 +1523,6 @@ steps:
         assert_eq!(derived.inferred, undeclared.reported);
     }
 
-    // REQ-CREDREADY-37
     #[test]
     fn a_workflow_without_the_block_keeps_its_inferred_origins_and_unknown_entries() {
         let derived = derive_files(
@@ -1575,7 +1579,6 @@ steps:
         );
     }
 
-    // REQ-CREDREADY-27
     #[test]
     fn a_named_stage_file_is_reported_by_its_override() {
         let derived = derive_files(
@@ -1597,7 +1600,6 @@ steps:
         );
     }
 
-    // REQ-CREDREADY-38
     #[test]
     fn the_override_of_a_file_a_workflow_step_names_is_not_read() {
         let parent = parent("LINEAR_API_KEY");
@@ -1639,7 +1641,6 @@ steps:
         declared
     }
 
-    // REQ-CREDREADY-28
     #[test]
     fn a_declaring_workflow_differs_where_its_integrations_and_the_inference_disagree() {
         let derived = derive_files_from(
@@ -1677,7 +1678,6 @@ steps:
         );
     }
 
-    // REQ-CREDREADY-40
     #[test]
     fn a_declaration_that_agrees_differs_in_nothing_and_no_declaration_is_not_compared() {
         let agreeing = declaring_tools(&["linear", "github"]);
@@ -1704,7 +1704,6 @@ steps:
         assert_eq!(beside.differences, Some(Vec::new()));
     }
 
-    // REQ-CREDREADY-29, REQ-CREDREADY-42
     #[test]
     fn a_declared_token_service_is_an_unverified_requirement_nothing_infers() {
         let declaring = PLAIN.replacen(
@@ -1801,7 +1800,6 @@ steps:
         }
     }
 
-    // REQ-CREDREADY-7
     #[test]
     fn a_coding_agents_next_action_names_the_grant_commands() {
         for kind in [CredentialKind::ClaudeCode, CredentialKind::Codex] {
@@ -1826,7 +1824,45 @@ steps:
         }
     }
 
-    // REQ-CREDREADY-5
+    #[test]
+    fn a_github_next_action_names_the_integration_commands() {
+        let github = |code| CredentialRequirement {
+            kind: CredentialKind::Github,
+            code,
+            origins: Vec::new(),
+        };
+        for code in [
+            ReadinessCode::NotConnected,
+            ReadinessCode::ConnectionInactive,
+        ] {
+            let next_action = github(code).next_action(Some("acme"), None);
+            assert!(
+                next_action.contains("useful org integration connect github --org acme"),
+                "{next_action}"
+            );
+        }
+        for (project, named) in [(Some("prj_1"), "prj_1"), (None, "PROJECT")] {
+            let next_action =
+                github(ReadinessCode::RunnerUnverified).next_action(Some("acme"), project);
+            assert!(
+                next_action.contains(&format!(
+                    "useful org integration authorize github --runner RUNNER --project {named} --org acme --yes"
+                )),
+                "{next_action}"
+            );
+        }
+        // A ready GitLab or Linear connection names no authorization.
+        for kind in [CredentialKind::Gitlab, CredentialKind::Linear] {
+            let next_action = CredentialRequirement {
+                kind,
+                code: ReadinessCode::RunnerUnverified,
+                origins: Vec::new(),
+            }
+            .next_action(Some("acme"), None);
+            assert!(!next_action.contains("authorize"), "{next_action}");
+        }
+    }
+
     #[test]
     fn forwarded_variables_read_by_the_recognition_table() {
         for (name, reading) in [

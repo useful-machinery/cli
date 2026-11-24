@@ -1,8 +1,7 @@
-//! `useful workflow input-set` (REQ-RUNINPUT-61): a Cloud run's inputs, staged by hand before
-//! the run exists, in the organization in effect and, for `create`, the project in effect
-//! (REQ-ORG-87, REQ-PROJECT-100, INV-CLI-20). The leaves share the Cloud run helpers of
-//! `src/cli/workflow/run/cloud_api.rs`, and `useful workflow run create` stages its named
-//! inputs through [`stage_and_seal`].
+//! `useful workflow input-set`: a Cloud run's inputs, staged by hand before the run exists,
+//! in the organization in effect and, for `create`, the project in effect. The leaves share
+//! the Cloud run helpers of `src/cli/workflow/run/cloud_api.rs`, and `useful workflow run
+//! create` stages its named inputs through [`stage_and_seal`].
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -110,9 +109,9 @@ struct InputSetArgs {
 }
 
 impl InputSetArgs {
-    /// Runs `run` with `options` and the set in the organization in effect (REQ-ORG-87): the
-    /// organization is resolved before the leaf's first request and its signal handling, and a
-    /// refused read of the memberships is written as this family's failure.
+    /// Runs `run` with `options` and the set in the organization in effect: the organization
+    /// is resolved before the leaf's first request and its signal handling, and a refused read
+    /// of the memberships is written as this family's failure.
     fn execute_in(
         self,
         options: Options,

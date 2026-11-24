@@ -1,0 +1,12 @@
+schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: ["true"]}
+  capture:
+    kind: cmd
+    dependsOn: [candidate]
+    command: {argv: ["true"]}
+    outputs:
+      changes: {kind: git_branch, from: workspace}

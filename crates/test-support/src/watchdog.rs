@@ -1,5 +1,5 @@
-//! The host-scaled watchdog that bounds a test's real-time waits (INV-TESTING-18): a case's
-//! idle-host base multiplied by the host's load factor, re-evaluated when the bound expires.
+//! The host-scaled watchdog that bounds a test's real-time waits: a case's idle-host base
+//! multiplied by the host's load factor, re-evaluated when the bound expires.
 
 use std::fmt;
 use std::fs;
@@ -387,7 +387,6 @@ mod host_scaled_watchdog_tests {
         HostLoad { one_minute, cores }
     }
 
-    // INV-TESTING-18
     #[test]
     fn watchdog_scale_is_the_rounded_up_load_per_core_within_the_ceiling() {
         assert_eq!(watchdog_scale(None), 1);
@@ -398,7 +397,6 @@ mod host_scaled_watchdog_tests {
         assert_eq!(MAX_WATCHDOG_SCALE, 4);
     }
 
-    // INV-TESTING-33
     #[test]
     fn repo_check_concurrent_steps_are_the_unfinished_other_steps_in_start_order() {
         assert_eq!(
@@ -407,7 +405,6 @@ mod host_scaled_watchdog_tests {
         );
     }
 
-    // INV-TESTING-33
     #[test]
     fn watchdog_expiry_message_names_the_bound_load_and_concurrent_steps() {
         let message = watchdog_expiry_message(&WatchdogExpiry {
@@ -456,7 +453,6 @@ mod host_scaled_watchdog_tests {
         }
     }
 
-    // INV-TESTING-33
     #[tokio::test]
     async fn host_scaled_watchdog_expiry_panics_with_the_expiry_message() {
         let expired = tokio::spawn(host_scaled_watchdog(
@@ -473,7 +469,6 @@ mod host_scaled_watchdog_tests {
         );
     }
 
-    // INV-TESTING-34
     #[tokio::test]
     async fn host_scaled_watchdog_expiry_carries_the_diagnosis_taken_at_expiry() {
         let expired = tokio::spawn(host_scaled_watchdog_with_diagnosis(
@@ -492,7 +487,6 @@ mod host_scaled_watchdog_tests {
         );
     }
 
-    // INV-TESTING-35
     #[tokio::test]
     async fn host_scaled_timeout_returns_the_expiry_as_an_error_or_the_ready_output() {
         let expired = host_scaled_timeout(
@@ -511,7 +505,6 @@ mod host_scaled_watchdog_tests {
         assert_eq!(ready.unwrap(), 7);
     }
 
-    // INV-TESTING-35
     #[test]
     fn host_scaled_recv_expires_while_the_sender_is_silent() {
         let (_sender, receiver) = mpsc::channel::<u32>();
@@ -525,7 +518,6 @@ mod host_scaled_watchdog_tests {
         }
     }
 
-    // INV-TESTING-35
     #[test]
     fn host_scaled_recv_gives_a_sent_value_and_a_disconnect_without_waiting_out_the_bound() {
         let (sender, receiver) = mpsc::channel();

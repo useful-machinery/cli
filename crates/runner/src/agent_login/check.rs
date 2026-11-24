@@ -1,8 +1,8 @@
-//! The runner's check of a login it holds (REQ-GRANT-90): the coding
-//! agent's own program, run once through the execution component's login
-//! check (INV-HARNESS-18) with the environment an admission would be offered
-//! for that login. The check writes nothing; setup notes what it found as
-//! the login's last use and a pass records it (INV-RUNNER-29).
+//! The runner's check of a login it holds: the coding agent's own program,
+//! run once through the execution component's login check with the
+//! environment an admission would be offered for that login. The check
+//! writes nothing; setup notes what it found as the login's last use and a
+//! pass records it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -21,7 +21,7 @@ use super::readiness::{Installation, UseOutcome};
 use super::{ServiceEnvironment, claude_code, codex};
 use crate::control_protocol::{AgentLoginCheckCause, AgentLoginProvider};
 
-/// How long a check waits for the program to end its turn (REQ-GRANT-144).
+/// How long a check waits for the program to end its turn.
 pub(crate) const CHECK_BOUND: Duration = Duration::from_secs(60);
 
 /// The longest a check takes: its bound, and the grace a program stopped at
@@ -46,9 +46,8 @@ pub(crate) trait LoginCheck: Send + Sync {
 
 /// The serving runner's check: the `claude` and `codex` installations it
 /// validated when it started, run with the process environment and the
-/// login's variable as the offer sets it from the runner's directory
-/// (REQ-GRANT-36, REQ-GRANT-44). A provider whose program it has none of
-/// answers `program_unavailable`.
+/// login's variable as the offer sets it from the runner's directory. A
+/// provider whose program it has none of answers `program_unavailable`.
 pub(crate) struct ProgramLoginCheck<Clock> {
     claude_code: Option<ValidatedClaudeCodeInstallation>,
     codex: Option<ValidatedCodexInstallation>,
@@ -129,7 +128,7 @@ impl<Clock: CoordinatorClock> LoginCheck for ProgramLoginCheck<Clock> {
                 ))
             }
             // The runner's Codex home itself, so a login Codex refreshes
-            // during the check is kept (REQ-GRANT-116).
+            // during the check is kept.
             AgentLoginProvider::Codex => {
                 let Some(installation) = &self.codex else {
                     return LoginCheckOutcome::NoAnswer(AgentLoginCheckCause::ProgramUnavailable);

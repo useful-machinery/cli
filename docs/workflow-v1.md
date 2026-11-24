@@ -38,8 +38,7 @@ repository changes.
   kinds, references, and enum values are invalid.
 - The source root bounds validation and holds the YAML and retained static files:
   `--source-root`, or the YAML's Git repository root when `workflow validate` gets none.
-- The execution root is separate. Commands, agents, working directories, and runtime
-  outputs operate below it when a run is separately authorized.
+- The execution root is a run's starting workspace.
 - Ordinary steps form a DAG. After all ordinary steps are terminal, matching finalizers
   form a second DAG. A workflow whose steps run child workflows is instead walked along
   the edges its steps declare (see [Child workflows and edges](#child-workflows-and-edges)).
@@ -75,7 +74,7 @@ multiple YAML documents, `%YAML` and unknown directives, and floating-point numb
 
 Root `requires` holds at least one of `tools`, `check`, `as`, and `integrations`, which declares
 needed services by provider id: `github`, `gitlab.com`, `linear`, `claude_code`, `codex`,
-`mergify`, or `buildkite`. `as` is `member` or `org`; an entry's own `as` overrides
+`mergify`, `buildkite`, or `cloudflare`. `as` is `member` or `org`; an entry's own `as` overrides
 `requires.as`. An entry's `bindings` map names to `{kind, default?}`: `team` or `state`
 under `linear`, `repository` under `github`, none elsewhere; `default` is text. Reference
 one as `$<id>.<name>` (`$linear.done`; a `linear` `state` can be a mirror state) and name
@@ -86,10 +85,10 @@ publish's `--bindings` file gives an integration's values under its id,
 declared integrations; `useful workflow run show` prints where a Cloud run got each
 credential. Every step, finalizer, and recovery handler gets each declared integration's
 variables, whatever `environmentPassthrough` says (missing ones are unset): `GH_TOKEN`,
-`GITLAB_TOKEN`, `USEFUL_LINEAR_ACCESS_TOKEN`, `MERGIFY_TOKEN`, and `BUILDKITE_API_TOKEN`,
+`GITLAB_TOKEN`, `USEFUL_LINEAR_ACCESS_TOKEN`, `MERGIFY_TOKEN`, `BUILDKITE_API_TOKEN`, and `CLOUDFLARE_API_TOKEN`,
 each with a `_FILE` twin, `CLAUDE_CODE_OAUTH_TOKEN`, and `CODEX_HOME`. A tree's root
 declaration covers every file. Unless its host sets them, a Cloud run gets the
-organization's `mergify` or `buildkite` token with `as: org`, else its member's. Runs read
+organization's `mergify`, `buildkite` or `cloudflare` token with `as: org`, else its member's. Runs read
 no other `as` or `bindings`; only `tools` is probed at admission. `check: {argv: [host-check]}`
 is one command whose `argv[0]` is a program name without `/`, found on `programs` and `PATH`;
 only `useful workflow run resume` runs it, for a run waiting on a host wait (below). Another
@@ -121,11 +120,11 @@ step, finalizer, or recovery handler may list root names in `environmentPassthro
 without one gets its step's. Guard and recovery scratch use `TMPDIR` when set, else the
 system temporary directory; the guard's launch manifest records no environment values.
 
-The `cmd` and `agent` node kinds may declare `failurePolicy`, `recovery`, `dependsOn`,
-`cwd`, `outputs`, and `environmentPassthrough`. `failurePolicy` is `required` by default
-or may be `advisory`. `recovery.retries` is 1 through 10. It either omits `handler` for
-an immediate unchanged target recheck, names one closed command handler, or names one
-fresh-agent handler with an existing profile and retained prompt. A command handler
+Ordinary `cmd` and `agent` steps accept `failurePolicy` (`required` by default or
+`advisory`), `recovery`, `dependsOn`, `cwd`, `workspace`, `outputs`, and
+`environmentPassthrough`. `recovery.retries` is 1 through 10. Omit `handler` for an
+immediate unchanged target recheck, or name one closed command handler or fresh-agent
+handler with an existing profile and retained prompt. A command handler
 reads the bounded private Recovery Context Schema 1 path from `USEFUL_RECOVERY_CONTEXT` and
 writes exactly one closed, at-most-16-KiB `recheck`, `gave_up` or `infrastructure`
 decision document to the fresh private `USEFUL_RECOVERY_RESULT` path. An agent handler's
@@ -135,9 +134,27 @@ even when recovery never activates. An ordinary `cmd` step may also list
 `recovery`: an execution that exits with one fails classified `infrastructure`, the host's
 failure, and starts no recovery round.
 
-- `dependsOn` names unique ordinary steps and creates control-only ordering.
-- An `outputs.<step>.<output>` reference creates a direct inferred data edge. Naming
-  the same producer in `dependsOn` is valid and retains both data and control origins.
+`workspace: new` and `none` always start in an empty `workspaces/<step>/` in the run
+directory. Only `new` establishes a workspace. `write` (default) and `read` inherit.
+Dependents cannot rely on a reader's edits.
+
+Inherit prerequisites' common workspace (`dependsOn`, body and condition references,
+including `firstOf`), or the execution root if none. If workspaces differ,
+use the one shared by `dependsOn` or fail with `workspace_ambiguous`. `none` passes
+it on, or none if ambiguous. A missing inherited directory fails at `start` with
+`working_directory_unavailable`. Continuations rebuild needed lost workspaces with
+`new`, usually keeping `none` and `read` results if inputs match and the reader's
+prior writers didn't rerun. Handlers use their step's directory. Finalizers and child
+runs start in the execution root.
+
+`cwd` on `new` gives `new_workspace_cwd`, on `none` gives `none_workspace_cwd`.
+A `git_branch` output on `none` or in an established workspace gives
+`established_workspace_git_branch`. Other values and `workspace` on a `workflow`
+step, finalizer or handler give `invalid_workflow_structure`.
+
+- `dependsOn` names unique ordinary steps for control ordering.
+- An `outputs.<step>.<output>` reference infers a direct data edge. Naming its producer
+  in `dependsOn` retains both origins.
 - The combined graph must be acyclic. Workflow inputs and exports do not create graph edges.
 - A required failure stops new ordinary starts and fails the ordinary outcome. An
   advisory failure remains visible, permits control-only dependents, and does not fail
@@ -147,7 +164,7 @@ failure, and starts no recovery round.
 - A recovery handler is not a node and has no inputs, outputs, dependencies, failure
   policy, or nested recovery. Only terminal target success commits outputs; finalizers
   cannot declare recovery and wait for ordinary recovery quiescence.
-- Rechecks and handlers are fresh physical invocations in the same execution root.
+- Rechecks and handlers are fresh physical invocations in the same workspace.
   `gave_up`, `infrastructure` or handler failure stops recovery. `infrastructure` ends
   recovery as `gave_up` does and says that the failure was the host's: no change to the
   workspace repairs it. Recovery has no condition-specific retry, delay/backoff, handler
@@ -163,11 +180,17 @@ To call GitHub, GitLab.com, or Linear as the person who started the run, declare
 either name of a provider itself keeps both; the run acts as the host. Otherwise the token
 is the run's member's, issued only if they hold a grant and authorized the runner (`useful
 account integration connect`, then `authorize`); a run acting for nobody (a service
-principal's or a schedule's) gets none. A local run uses its environment. The
+principal's or a schedule's) gets none. For GitHub, where an owner's connection
+authorization covers the run (its app runs, or every run if the owner chose), the token is
+instead the organization's GitHub App installation's, for the run's one repository, and the
+run acts at GitHub as the App; never a fallback for a missing grant. `useful workflow run
+show` prints each source (`host`, `grant of` a member, `the organization's GitHub App
+installation`). A local run uses its environment. The
 variable is fixed when the runner takes the run; the file stays current. Tokens live about 8 hours
 (GitHub), 2 (GitLab.com), or 24 (Linear) and are replaced a fifth of that before expiry,
-ending the old one, so a long step rereads the file. For Git (user `oauth2` and
-`$GITLAB_TOKEN_FILE` for GitLab.com):
+ending the old one, so a long step rereads the file; an installation token lives an hour, is
+replaced about twelve minutes before expiry, and works until its hour ends. For Git, with
+either GitHub token (user `oauth2` and `$GITLAB_TOKEN_FILE` for GitLab.com):
 
 ```sh
 git -c credential.helper= \
@@ -176,7 +199,7 @@ git -c credential.helper= \
 ```
 
 A revoked grant or authorization, or one needing reconnection, removes the file when the
-runner next asks.
+runner next asks, as does a refused installation.
 
 ## Conditional steps and finalizers
 
@@ -223,8 +246,8 @@ must resolve inside it.
 | `agent.systemPrompt` or recovery-agent `handler.prompt` | YAML directory; retained UTF-8 file inside the source root. |
 | Message `{ file: ... }` | YAML directory; retained file inside the source root; text files are UTF-8. |
 | JSON output `schema` | YAML directory; retained, self-contained Draft 2020-12 schema inside the source root. |
-| Node `cwd` | Execution root; defaults to that root and cannot contain `..`. |
-| Path output `path` | Execution root, not node `cwd`; cannot contain `..`. |
+| Node `cwd` | Step's workspace root (default). No `..`. |
+| Path output `path` | Step's workspace root, even with `cwd`. No `..`. |
 
 Static paths may use `..` only when normalization and symbolic-link resolution remain
 inside the source root. Runtime paths may not use parent traversal. Static source bytes
@@ -596,7 +619,7 @@ after every ordinary outcome.
   tools, secrets, credentials, or repositories.
 
 Workflow V1 has no workflow-declared retry, timeout, loop, matrix, fan-out, concurrency,
-secret, environment-setting, or workspace field.
+secret, or environment-setting field.
 
 ## Schema retrieval and authoritative validation
 

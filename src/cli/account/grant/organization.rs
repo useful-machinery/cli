@@ -1,10 +1,9 @@
-//! The one organization a native grant `useful account integration connect` makes is for (REQ-GRANT-72):
-//! the organization in effect, resolved as `cli::context` resolves it (REQ-ORG-87, INV-CLI-20).
-//! The organization `--org` or `USEFUL_ORG` named, or the organization in effect whose coding
-//! agent grants `useful workflow doctor` keeps, is read through the member grant API, and
-//! otherwise the checkout and the member's only active membership name it through
-//! `cli::context`, with the member's human session. The runner choice of `authorize` and
-//! `deauthorize` reads the member's active organizations here too (REQ-GRANT-81).
+//! The one organization a native grant `useful account integration connect` makes is for: the
+//! organization in effect, resolved as `cli::context` resolves it. The organization `--org` or
+//! `USEFUL_ORG` named, or the organization in effect whose coding agent grants `useful workflow
+//! doctor` keeps, is read through the member grant API, and otherwise the checkout and the member's
+//! only active membership name it through `cli::context`, with the member's human session. The
+//! runner choice of `authorize` and `deauthorize` reads the member's active organizations here too.
 
 use useful_api::{CommonOrganizationFailure, MemberGrantApi, MemberGrantFailure};
 use useful_human_auth::Deployment;

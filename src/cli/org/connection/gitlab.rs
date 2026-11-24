@@ -31,13 +31,13 @@ use crate::exit_code::ExitCode;
 /// The GitLab setup guide, which the help of every leaf that takes a GitLab connection names.
 pub(super) const GUIDE: &str = "https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 const MAX_TOKEN: u64 = 16 * 1024;
-/// The longest request key of a single request (REQ-CONNECTION-74).
+/// The longest request key of a single request.
 const KEY: usize = 255;
 /// The longest request key of `create gitlab` and `reconnect`, whose requests each send it with
-/// the suffix of their step (REQ-CONNECTION-74).
+/// the suffix of their step.
 const STEPPED_KEY: usize = 240;
 /// How long `create gitlab` and `reconnect` wait for a candidate's verification unless
-/// `--timeout` says otherwise: its review window (REQ-CONNECTION-56).
+/// `--timeout` says otherwise: its review window.
 const VERIFICATION_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Args)]
@@ -69,7 +69,7 @@ impl Key {
     }
 }
 /// `--expected-version`, which a GitLab connection's `remove`, `reconnect`, `repository add` and
-/// `repository remove` take (REQ-CONNECTION-74).
+/// `repository remove` take.
 #[derive(Debug, Args)]
 pub(super) struct ExpectedVersion {
     #[arg(
@@ -104,8 +104,8 @@ struct Attribution {
     )]
     delegator_principal_id: Option<String>,
 }
-/// The options of a `useful org integration` mutation that only a GitLab connection takes
-/// (REQ-CONNECTION-74, REQ-CONNECTION-106).
+/// The options of a `useful org integration` mutation that only a GitLab connection
+/// takes.
 #[derive(Debug, Args)]
 pub(super) struct Mutation {
     #[command(flatten)]
@@ -122,8 +122,8 @@ pub(super) struct Checked {
     delegator: Option<String>,
     key: String,
 }
-/// The options of `useful org integration repository list` that only a GitLab connection takes
-/// (REQ-CONNECTION-73, REQ-CONNECTION-106).
+/// The options of `useful org integration repository list` that only a GitLab connection
+/// takes.
 #[derive(Debug, Args)]
 pub(super) struct RepositoryQuery {
     #[command(flatten)]
@@ -150,7 +150,7 @@ enum CredentialKind {
     DedicatedUser,
 }
 impl CredentialKind {
-    /// The token declaration a submission of this kind sends (REQ-CONNECTION-57).
+    /// The token declaration a submission of this kind sends.
     const fn declaration(self) -> (GitLabTokenKind, Option<GitLabAccountUse>) {
         match self {
             Self::GroupAccessToken => (GitLabTokenKind::GroupAccessToken, None),
@@ -165,7 +165,7 @@ impl CredentialKind {
         }
     }
 }
-/// `--instance-url`, which only `create gitlab` takes (REQ-CONNECTION-56).
+/// `--instance-url`, which only `create gitlab` takes.
 #[derive(Debug, Args)]
 pub(super) struct Instance {
     #[arg(
@@ -182,8 +182,7 @@ impl Instance {
     }
 }
 /// The options of `create gitlab` and `reconnect` that only a GitLab connection takes: the token
-/// to stage, how its identity is confirmed and the requests' key (REQ-CONNECTION-57,
-/// REQ-CONNECTION-58, REQ-CONNECTION-74).
+/// to stage, how its identity is confirmed and the requests' key.
 #[derive(Debug, Args)]
 pub(super) struct Credential {
     #[arg(
@@ -217,7 +216,7 @@ pub(super) struct Credential {
     #[command(flatten)]
     key: Key,
 }
-/// How the identity a candidate verified as is confirmed (REQ-CONNECTION-58).
+/// How the identity a candidate verified as is confirmed.
 enum Confirmation {
     /// By `--expected-provider-user-id` with `--dedicated-automation`.
     Given(String),
@@ -279,7 +278,7 @@ fn repository_id(value: &str) -> anyhow::Result<&str> {
     }
     Ok(value)
 }
-// Results and failures share one JSON envelope (REQ-CONNECTION-75, REQ-CONNECTION-77).
+// Results and failures share one JSON envelope.
 fn envelope(d: &Deployment, organization: &str, outcome: &str, key: Option<&str>) -> Value {
     json!({"schemaVersion":1,"deployment":d.fingerprint().api_url(),"organizationRef":organization,"outcome":outcome,"idempotencyKey":key})
 }
@@ -441,7 +440,7 @@ impl Report {
         }
     }
 }
-/// What the refusal of a GitLab request reports (REQ-CONNECTION-77).
+/// What the refusal of a GitLab request reports.
 fn report(refusal: GitLabFailure) -> Report {
     match refusal {
         GitLabFailure::Unauthenticated => Report::new(
@@ -512,7 +511,7 @@ fn report(refusal: GitLabFailure) -> Report {
         ),
     }
 }
-/// A refused GitLab request in `organization`, written as REQ-CONNECTION-77 has it.
+/// A refused GitLab request in `organization`, with the exit status its refusal maps to.
 pub(super) fn failure(
     d: &Deployment,
     organization: &str,
@@ -555,8 +554,8 @@ fn write_refusal(
     writeln!(error, "{GUIDE}")?;
     Ok(())
 }
-/// Sends `call`, and once more after an ambiguous transport failure, with the same key and body
-/// (REQ-CONNECTION-74).
+/// Sends `call`, and once more after an ambiguous transport failure, with the same key and
+/// body.
 fn repeat_if_lost<T>(
     mut call: impl FnMut() -> Result<T, GitLabFailure>,
 ) -> Result<T, GitLabFailure> {
@@ -571,7 +570,7 @@ fn repeat_if_lost<T>(
     }
 }
 /// Sends `call` with `key` in `organization`, once more with the same key after an ambiguous
-/// transport failure, and writes its answer as `outcome` (REQ-CONNECTION-74).
+/// transport failure, and writes its answer as `outcome`.
 fn mutate<F: JsonOutputKind + Send + 'static>(
     d: Deployment,
     organization: String,
@@ -627,7 +626,7 @@ impl RepositoryQuery {
     }
 }
 /// Lists one page of the repositories the GitLab connection `connection` of `organization`
-/// reaches (REQ-CONNECTION-73).
+/// reaches.
 pub(super) fn list_repositories<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -693,8 +692,8 @@ pub(super) fn check_repositories(repositories: &[String]) -> Result<(), CommandF
     Ok(())
 }
 /// The version a mutation of the connection `resolved` sends: the one given, else the one the
-/// resolver read from the connection list, else the one read now (REQ-CONNECTION-74). The read
-/// is not part of the mutation: it carries no request key and is not repeated.
+/// resolver read from the connection list, else the one read now. The read is not part of the
+/// mutation: it carries no request key and is not repeated.
 fn current_version<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -716,7 +715,7 @@ fn current_version<F: JsonOutputKind>(
             .and_then(|connection| read_version(&connection).ok_or(GitLabFailure::Protocol)),
     )
 }
-/// Disconnects the GitLab connection `resolved` of `organization` (REQ-CONNECTION-56).
+/// Disconnects the GitLab connection `resolved` of `organization`.
 pub(super) fn remove<F: JsonOutputKind + Send + 'static>(
     d: &Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -745,7 +744,7 @@ pub(super) fn remove<F: JsonOutputKind + Send + 'static>(
     )
 }
 /// Adds `repositories` to the selection of the GitLab connection `resolved` of `organization`,
-/// or with `link` false removes them (REQ-CONNECTION-73).
+/// or with `link` false removes them.
 pub(super) fn select<F: JsonOutputKind + Send + 'static>(
     d: &Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -787,7 +786,7 @@ pub(super) fn select<F: JsonOutputKind + Send + 'static>(
         },
     )
 }
-/// Shows the GitLab connection `connection` of `organization` (REQ-CONNECTION-105).
+/// Shows the GitLab connection `connection` of `organization`.
 pub(super) fn show<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -816,7 +815,7 @@ pub(super) fn show<F: JsonOutputKind>(
     }
 }
 impl Credential {
-    /// The first of these options given, which another provider refuses (REQ-CONNECTION-106).
+    /// The first of these options given, which another provider refuses.
     pub(super) fn given(&self) -> Option<&'static str> {
         [
             ("--token-file", self.token_file.is_some()),
@@ -837,7 +836,7 @@ impl Credential {
     }
 
     /// Checks the options before any request: makes the request key, decides how the verified
-    /// identity will be confirmed and reads the token (REQ-CONNECTION-57, REQ-CONNECTION-58).
+    /// identity will be confirmed and reads the token.
     pub(super) fn check<F: JsonOutputKind>(
         self,
         options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -883,7 +882,7 @@ impl Credential {
 }
 
 /// Creates a GitLab connection in `organization` for the instance `instance` names, GitLab.com
-/// by default, and gives it the staged token (REQ-CONNECTION-56).
+/// by default, and gives it the staged token.
 pub(super) fn create<F: JsonOutputKind + Send + 'static>(
     d: &Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -906,7 +905,7 @@ pub(super) fn create<F: JsonOutputKind + Send + 'static>(
 }
 
 /// Gives the GitLab connection `resolved` of `organization` the staged token, at the version
-/// given or else its current one (REQ-CONNECTION-108).
+/// given or else its current one.
 pub(super) fn reconnect<F: JsonOutputKind + Send + 'static>(
     d: &Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -997,8 +996,7 @@ impl Writer {
     }
 
     /// Writes how a command ended short of activation: `report`, the connection and candidate it
-    /// held, the candidate's failure code and whether its cancellation was acknowledged
-    /// (REQ-CONNECTION-56, REQ-CONNECTION-77).
+    /// held, the candidate's failure code and whether its cancellation was acknowledged.
     fn ending(
         &self,
         report: &Report,
@@ -1070,8 +1068,7 @@ fn interrupted(signal: ExitCode) -> Report {
 }
 
 /// Stages the token, waits up to `timeout` for its verification, has the identity confirmed and
-/// activates it, from `start`; every other ending cancels a candidate still open
-/// (REQ-CONNECTION-56, REQ-CONNECTION-58, REQ-CONNECTION-74).
+/// activates it, from `start`; every other ending cancels a candidate still open.
 fn connect<F: JsonOutputKind + Send + 'static>(
     d: &Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -1131,7 +1128,7 @@ struct Flow<'a, F: JsonOutputKind> {
 
 impl<F: JsonOutputKind> Flow<'_, F> {
     /// Sends the mutation of `step` with the command's key suffixed by the step, once more with it
-    /// after an ambiguous transport failure (REQ-CONNECTION-74).
+    /// after an ambiguous transport failure.
     fn mutation(
         &self,
         step: &str,
@@ -1317,7 +1314,7 @@ impl<F: JsonOutputKind> Flow<'_, F> {
                     self.open = false;
                     return Ok(Ending::Activated(active));
                 }
-                // A recheck GitLab could not complete changed nothing (REQ-CONNECTION-89).
+                // A recheck GitLab could not complete changed nothing.
                 Err(GitLabFailure::ProviderUnavailable) if !self.remaining(deadline).is_zero() => {
                     let wait = ceremony_poll_interval().min(self.remaining(deadline));
                     if !wait_for_poll(self.control, wait, &self.clock) {

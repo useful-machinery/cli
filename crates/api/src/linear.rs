@@ -355,7 +355,6 @@ mod tests {
         classify_response(status, body, None, &LINEAR)
     }
 
-    // REQ-API-7
     #[test]
     fn linear_conflicts_classify_with_the_linear_vocabulary() {
         for kind in [

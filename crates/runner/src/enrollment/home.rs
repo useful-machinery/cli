@@ -1,7 +1,6 @@
 //! The runner home: the directory `runner/` under the `useful` home, which holds the
-//! operator configuration, the enrolled state, the control socket and the work
-//! root a `useful runner` command uses when it is given no `--config`
-//! (REQ-RUNNERENROLL-109).
+//! operator configuration, the enrolled state, the control socket and the work root
+//! a `useful runner` command uses when it is given no `--config`.
 
 use std::error::Error;
 use std::fmt;
@@ -76,15 +75,14 @@ impl RunnerHome {
     }
 
     /// Creates what the home lacks and answers the path of its operator
-    /// configuration, loaded and checked (REQ-RUNNERENROLL-110,
-    /// REQ-RUNNERENROLL-111). The `useful` home, `runner/` and `runner/work/` are
-    /// created `0700` when absent, and a generated configuration is published
-    /// at `runner/config.json` when nothing is there. Nothing that exists is
-    /// replaced, rewritten or re-moded (INV-RUNNER-25): an existing `runner/`
-    /// must already be a private directory of the effective user, an existing
-    /// work root is left to `useful runner serve`'s own checks, and an existing
-    /// configuration is used as written. No state, journal, lock or socket is
-    /// written.
+    /// configuration, loaded and checked. The `useful` home, `runner/` and
+    /// `runner/work/` are created `0700` when absent, and a generated
+    /// configuration is published at `runner/config.json` when nothing is there.
+    /// Nothing that exists is replaced, rewritten or re-moded: an existing
+    /// `runner/` must already be a private directory of the effective user, an
+    /// existing work root is left to `useful runner serve`'s own checks, and an
+    /// existing configuration is used as written. No state, journal, lock or
+    /// socket is written.
     pub fn initialize(&self) -> Result<PathBuf, RunnerHomeError> {
         DirBuilder::new()
             .recursive(true)
@@ -142,7 +140,7 @@ impl RunnerHome {
 
     /// The control socket a command that only reads the home asks: the one
     /// its configuration names, or `runner/control.sock` when it holds none.
-    /// Creates nothing (REQ-RUNNERENROLL-112).
+    /// Creates nothing.
     pub fn configured_control_socket_path(&self) -> Result<PathBuf, RunnerHomeError> {
         match self.existing_configuration()? {
             Some(path) => load_control_socket_path(&path)
@@ -503,7 +501,6 @@ mod tests {
         home
     }
 
-    // REQ-RUNNERENROLL-110
     #[test]
     fn initializing_an_empty_useful_home_creates_a_private_layout_and_a_generated_configuration() {
         let temporary = tempfile::tempdir().unwrap();
@@ -547,7 +544,6 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-25, REQ-RUNNERENROLL-110
     #[test]
     fn initialization_keeps_every_name_mode_inode_and_byte_that_exists() {
         let temporary = tempfile::tempdir().unwrap();
@@ -580,7 +576,6 @@ mod tests {
         assert_eq!(snapshot(temporary.path()), before);
     }
 
-    // REQ-RUNNERENROLL-110, INV-RUNNER-25
     #[test]
     fn concurrent_initializations_of_one_home_all_read_the_one_published_configuration() {
         const STARTS: usize = 8;
@@ -611,7 +606,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-111
     #[test]
     fn a_runner_directory_that_is_not_private_is_refused_and_left_as_it_is() {
         type Prepare = fn(&Path);
@@ -652,7 +646,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-111
     #[test]
     fn a_configuration_that_is_not_an_operator_configuration_is_refused_and_kept() {
         type Prepare = fn(&RunnerHome);
@@ -692,7 +685,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-111
     #[test]
     fn a_configuration_naming_another_state_while_the_homes_state_exists_is_a_conflict() {
         let temporary = tempfile::tempdir().unwrap();
@@ -734,7 +726,6 @@ mod tests {
         assert_eq!(home.initialize().unwrap(), home.config_path());
     }
 
-    // REQ-RUNNERENROLL-109, REQ-RUNNERENROLL-112
     #[test]
     fn reading_a_home_answers_its_configured_socket_or_its_layouts_and_creates_nothing() {
         let temporary = tempfile::tempdir().unwrap();

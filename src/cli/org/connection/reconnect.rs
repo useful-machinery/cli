@@ -1,6 +1,6 @@
-//! `useful org integration reconnect`: renews a connection's access, keeping its ID
-//! (REQ-CONNECTION-108), or stores the next version of the organization's token of a token
-//! service, keeping its ID and authorizations (REQ-INTEGRATION-18).
+//! `useful org integration reconnect`: renews a connection's access, keeping its ID, a
+//! GitHub binding's once its setup session is verified, or stores the next version of the
+//! organization's token of a token service, keeping its ID and authorizations.
 use std::path::PathBuf;
 
 use anyhow::anyhow;
@@ -18,7 +18,7 @@ use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str =
     "Renew the access of one of the organization's connections, or store its token's next version";
-const AFTER_HELP: &str = "Providers:\n  A GitHub binding is renewed for its own installation, with no page to open: a disconnected\n  binding becomes active again and an active one has its repositories refreshed. A binding\n  GitHub revoked cannot be reconnected; make a new connection instead:\n    useful org integration connect github\n  A GitLab connection is given the token --token-file names: the command stages it, waits\n  for GitLab to verify it, asks for the verified identity to be confirmed and activates it.\n  Without a terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  A Linear connection is reauthorized: the command prints the URL to open and waits for the\n  approval unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
+const AFTER_HELP: &str = "Providers:\n  A GitHub binding is renewed for its own installation once you prove at GitHub that you\n  administer it: the command prints the URL to open, opens it where this machine has a\n  browser and waits for the proof unless --no-wait is given. A disconnected binding becomes\n  active again and an active one has its repositories refreshed. A binding GitHub revoked cannot be reconnected; make a new connection instead:\n    useful org integration connect github\n  A GitLab connection is given the token --token-file names: the command stages it, waits\n  for GitLab to verify it, asks for the verified identity to be confirmed and activates it.\n  Without a terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  A Linear connection is reauthorized: the command prints the URL to open and waits for the\n  approval unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -109,25 +109,34 @@ impl Command {
             &[
                 (version.given(), &[Provider::Gitlab]),
                 (gitlab.given(), &[Provider::Gitlab]),
-                (linear.given(), &[Provider::Linear]),
+                (linear.state_updates_given(), &[Provider::Linear]),
                 (
-                    wait.timeout.is_some().then_some("--timeout"),
-                    &[Provider::Gitlab, Provider::Linear],
+                    linear.no_wait().then_some("--no-wait"),
+                    &[Provider::Github, Provider::Linear],
                 ),
             ],
         ) {
             return refused;
         }
         match given {
-            Provider::Github => target::execute(
-                connection,
-                org,
-                options,
-                deployment,
-                |options, organization, resolved| {
-                    github::reconnect(deployment, &options, organization, resolved)
-                },
-            ),
+            Provider::Github => {
+                let no_wait = linear.no_wait();
+                target::execute(
+                    connection,
+                    org,
+                    options,
+                    deployment,
+                    |options, organization, resolved| {
+                        github::reconnect(
+                            deployment,
+                            options,
+                            organization,
+                            resolved,
+                            (no_wait, wait.timeout),
+                        )
+                    },
+                )
+            }
             Provider::Gitlab => {
                 let version = version.check()?;
                 let staged = gitlab.check(&options)?;

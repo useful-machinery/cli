@@ -14,12 +14,12 @@ fn prepared(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile::TempDir, Stri
     write_credential_fixture(&path, &server.api_url, TOKEN, "2999-01-01T00:00:00Z");
     (server, directory, path.to_str().unwrap().to_owned())
 }
-/// The organization's connection authorizations in force: none (REQ-INTEGRATION-34).
+/// The organization's connection authorizations in force: none.
 pub(super) fn no_authorizations() -> Vec<u8> {
     json_http_response("200 OK", serde_json::json!({"items": []}))
 }
 /// The answer of a deployment that predates the served-providers read, which serves no token
-/// service (REQ-INTEGRATION-19).
+/// service.
 pub(super) fn serving_nothing() -> Vec<u8> {
     problem_http_response(
         "404 Not Found",
@@ -65,7 +65,6 @@ fn lines(output: &Output) -> Vec<serde_json::Value> {
         .collect()
 }
 
-// REQ-CONNECTION-40, REQ-CONNECTION-87, REQ-INTEGRATION-59
 #[test]
 fn create_linear_with_state_updates_connects_and_waits_for_the_session() {
     let mut pending = session("pending");
@@ -132,7 +131,6 @@ fn create_linear_with_state_updates_connects_and_waits_for_the_session() {
     assert!(requests[1].contains(&format!("/authorization-sessions/{SESSION} ")));
 }
 
-// REQ-CONNECTION-87
 #[test]
 fn team_list_and_show_page_discovery_and_print_full_set_suggestions() {
     let (server, _dir, credential) = prepared(vec![
@@ -260,7 +258,6 @@ fn discovery_rejects_open_or_inconsistent_suggestion_records() {
     }
 }
 
-// REQ-CONNECTION-105
 #[test]
 fn consent_handoff_and_later_authorization_inspection_are_nonsecret() {
     let (server, _dir, credential) = prepared(vec![
@@ -329,7 +326,6 @@ fn consent_handoff_and_later_authorization_inspection_are_nonsecret() {
     assert!(requests[1].contains(&format!("/authorization-sessions/{SESSION} ")));
 }
 
-// REQ-CONNECTION-41, REQ-CONNECTION-42
 #[test]
 fn polling_completion_uses_the_same_session_and_shows_connection_metadata() {
     let (server, _dir, credential) = prepared(vec![
@@ -399,7 +395,6 @@ fn request_body(request: &str) -> serde_json::Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
 }
 
-// REQ-CONNECTION-108
 #[test]
 fn reauthorization_targets_only_the_requested_connection() {
     let (server, _dir, credential) = prepared(vec![json_http_response(
@@ -421,7 +416,6 @@ fn reauthorization_targets_only_the_requested_connection() {
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
 }
 
-// REQ-CONNECTION-107, REQ-CONNECTION-108
 #[test]
 fn reconnect_of_the_provider_reauthorizes_the_connection_its_list_names() {
     let (server, _dir, credential) = prepared(vec![
@@ -445,7 +439,6 @@ fn reconnect_of_the_provider_reauthorizes_the_connection_its_list_names() {
     assert_eq!(request_body(&requests[1])["connectionId"], CONNECTION);
 }
 
-// REQ-CONNECTION-106
 #[test]
 fn reconnect_of_a_linear_connection_refuses_gitlab_token_options_without_contacting_the_deployment()
 {
@@ -530,7 +523,6 @@ fn reauthorization_conflict_and_role_loss_have_distinct_outcomes() {
     );
 }
 
-// REQ-CONNECTION-43
 #[test]
 fn lost_start_response_reuses_one_key_and_does_not_create_second_session() {
     let (server, _dir, credential) = prepared(vec![
@@ -708,7 +700,6 @@ fn rejected_service_credential_does_not_expose_a_token() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-CONNECTION-39
 #[test]
 fn remove_of_a_linear_connection_requires_confirmation() {
     for release in [&[][..], &["--release-workspace"]] {
@@ -719,7 +710,6 @@ fn remove_of_a_linear_connection_requires_confirmation() {
     }
 }
 
-// REQ-CONNECTION-41, REQ-CONNECTION-42
 #[test]
 fn polling_respects_rate_limit_and_reports_recovery_required() {
     let mut recovered = session("recovery_required");
@@ -808,7 +798,6 @@ fn ambiguous_disconnect_reuses_exact_key_and_target() {
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
 }
 
-// REQ-CONNECTION-39, REQ-CONNECTION-104, REQ-CONNECTION-105
 #[test]
 fn list_show_disconnect_and_delete_use_nonsecret_projections() {
     let (server, _dir, credential) = prepared(vec![
@@ -1062,7 +1051,8 @@ const SECOND_CONNECTION: &str = "lcn_01k0z6r1w8f4jy2m7q9v3x5abd";
 pub(super) fn installation() -> serde_json::Value {
     serde_json::json!({"id":INSTALLATION,"providerInstallationId":"713","providerAccountId":"829",
         "providerAccountLogin":"acme","providerAccountType":"Organization","state":"active",
-        "createdAt":"2026-09-05T12:00:00Z","updatedAt":"2026-09-05T12:01:00Z"})
+        "createdAt":"2026-09-05T12:00:00Z","updatedAt":"2026-09-05T12:01:00Z",
+        "authorityVerifiedAt":"2026-09-05T12:01:00Z"})
 }
 pub(super) fn gitlab_connection() -> serde_json::Value {
     serde_json::json!({"id":GITLAB_CONNECTION,"organizationId":ORG_ID,
@@ -1085,8 +1075,6 @@ fn list_connections(server: &ScriptedServer, credential: &str, args: &[&str]) ->
     env_run(server, credential, &command)
 }
 
-// REQ-CONNECTION-104
-// REQ-INTEGRATION-64
 #[test]
 fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
     let mut second = connection();
@@ -1175,8 +1163,6 @@ fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
     );
 }
 
-// REQ-CONNECTION-104
-// REQ-INTEGRATION-62
 #[test]
 fn org_connection_list_of_one_provider_reads_that_provider_alone() {
     let (server, _dir, credential) = prepared(vec![
@@ -1194,7 +1180,7 @@ fn org_connection_list_of_one_provider_reads_that_provider_alone() {
     assert_eq!(document["items"][0]["provider"], "gitlab");
     assert_eq!(document["items"].as_array().unwrap().len(), 1);
     assert_eq!(document["unlisted"], serde_json::json!([]));
-    // `--provider` keeps one provider's connections, and no token (REQ-INTEGRATION-19).
+    // `--provider` keeps one provider's connections, and no token.
     assert_eq!(document["tokens"], serde_json::json!([]));
     let requests = server.finish();
     assert_eq!(requests.len(), 2);
@@ -1203,7 +1189,6 @@ fn org_connection_list_of_one_provider_reads_that_provider_alone() {
     )));
 }
 
-// REQ-CONNECTION-104
 #[test]
 fn org_connection_list_takes_no_limit() {
     let (server, _dir, credential) = prepared(Vec::new());
@@ -1215,8 +1200,6 @@ fn org_connection_list_takes_no_limit() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-104
-// REQ-INTEGRATION-63
 #[test]
 fn org_connection_list_names_the_providers_it_could_not_list() {
     let (server, _dir, credential) = prepared(vec![
@@ -1249,7 +1232,6 @@ fn org_connection_list_names_the_providers_it_could_not_list() {
     assert_eq!(server.finish().len(), 5);
 }
 
-// REQ-CONNECTION-104
 #[test]
 fn org_connection_list_with_every_provider_refused_ends_with_the_first_failure() {
     let (server, _dir, credential) = prepared(vec![
@@ -1300,7 +1282,6 @@ fn linear_list_request(request: &str) -> bool {
     ))
 }
 
-// REQ-CONNECTION-107, REQ-CONNECTION-105, REQ-INTEGRATION-65
 #[test]
 fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
     let (server, _dir, credential) = prepared(vec![
@@ -1329,7 +1310,6 @@ fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
     )));
 }
 
-// REQ-CONNECTION-107
 #[test]
 fn org_connection_show_of_a_provider_with_one_removed_connection_shows_it() {
     let (server, _dir, credential) = prepared(vec![
@@ -1350,7 +1330,6 @@ fn org_connection_show_of_a_provider_with_one_removed_connection_shows_it() {
     assert!(requests[2].contains(&format!("/connections/linear/{SECOND_CONNECTION} ")));
 }
 
-// REQ-CONNECTION-107
 #[test]
 fn org_connection_show_of_a_provider_naming_several_connections_names_them_and_sends_nothing_more()
 {
@@ -1372,7 +1351,6 @@ fn org_connection_show_of_a_provider_naming_several_connections_names_them_and_s
     assert!(linear_list_request(&requests[0]), "{}", requests[0]);
 }
 
-// REQ-CONNECTION-107
 #[test]
 fn org_connection_show_of_a_provider_with_no_connection_names_create() {
     let (server, _dir, credential) = prepared(vec![linear_list(&[])]);
@@ -1388,7 +1366,6 @@ fn org_connection_show_of_a_provider_with_no_connection_names_create() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-CONNECTION-107, REQ-CONNECTION-105, REQ-INTEGRATION-65, REQ-INTEGRATION-78
 #[test]
 fn org_connection_show_of_an_id_sends_that_connection_request_alone() {
     let (server, _dir, credential) = prepared(vec![
@@ -1400,7 +1377,7 @@ fn org_connection_show_of_an_id_sends_that_connection_request_alone() {
 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(lines(&output)[0]["connectionId"], CONNECTION);
-    // The connection's authorizations in force are read first (REQ-INTEGRATION-34).
+    // The connection's authorizations in force are read first.
     assert_eq!(lines(&output)[0]["authorizations"], serde_json::json!([]));
     let requests = server.finish();
     assert_eq!(requests.len(), 2);
@@ -1412,7 +1389,6 @@ fn org_connection_show_of_an_id_sends_that_connection_request_alone() {
     )));
 }
 
-// REQ-CONNECTION-107
 #[test]
 fn org_connection_show_refuses_a_malformed_connection_without_contacting_the_deployment() {
     let (server, _dir, credential) = prepared(Vec::new());
@@ -1427,7 +1403,7 @@ fn org_connection_show_refuses_a_malformed_connection_without_contacting_the_dep
 
     // A lowercase word may name a token service, so what the deployment serves is read first;
     // one it serves as none, a typo of a provider among them, is refused naming the providers,
-    // and no token is read (REQ-INTEGRATION-17).
+    // and no token is read.
     let (server, _dir, credential) = prepared(vec![serving_nothing()]);
     let output = show_connection(&server, &credential, "gihub");
     assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -1445,7 +1421,6 @@ fn org_connection_show_refuses_a_malformed_connection_without_contacting_the_dep
     );
 }
 
-// REQ-CONNECTION-106
 #[test]
 fn org_connection_reads_refuse_another_providers_connection_or_option_without_contacting_the_deployment()
  {
@@ -1490,7 +1465,6 @@ fn org_connection_reads_refuse_another_providers_connection_or_option_without_co
     assert!(server.finish().is_empty());
 }
 
-// REQ-CONNECTION-39
 #[test]
 fn org_connection_remove_disconnects_a_linear_connection_or_with_release_workspace_deletes_it() {
     let mut disconnected = connection();
@@ -1534,7 +1508,6 @@ fn org_connection_remove_disconnects_a_linear_connection_or_with_release_workspa
     );
 }
 
-// REQ-CONNECTION-106
 #[test]
 fn org_connection_mutations_refuse_another_providers_connection_or_option_without_contacting_the_deployment()
  {

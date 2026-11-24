@@ -364,8 +364,8 @@ where
         })
     }
 
-    /// A stopped start that never launched its command, agent or child run quiesced
-    /// (REQ-WFEXEC-69).
+    /// A stopped start that never launched its command, agent or child run
+    /// quiesced.
     pub(crate) fn step_quiesced_unlaunched(step: String, action: ActionId) -> Self {
         Self::new(Occurrence::StepQuiesced {
             step,
@@ -985,7 +985,7 @@ pub trait CommitPort<Commit> {
 }
 
 /// A commit port's error names its own cause as a [`CommitFailure`], which
-/// [`CoordinationError::CommitFailed`] carries out of the coordinator (INV-ENGINE-54).
+/// [`CoordinationError::CommitFailed`] carries out of the coordinator.
 pub trait ClassifiedCommitError {
     fn commit_failure(&self) -> CommitFailure;
 }
@@ -1085,8 +1085,7 @@ pub enum CoordinationError {
     TransitionCapacityExceeded,
 }
 
-/// A failed commit names its [`CommitFailure`] (INV-ENGINE-33); every other error names its
-/// variant.
+/// A failed commit names its [`CommitFailure`]; every other error names its variant.
 impl fmt::Display for CoordinationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

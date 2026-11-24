@@ -692,9 +692,8 @@ async fn run_reconnect_scenario() -> Vec<String> {
         "source preparation must retain its deadline fence"
     );
     events.retain(|event| event != preparation_deadline);
-    // The kept-run schedule arms its hour from its own task once its startup pass has run
-    // (REQ-RUNNERENROLL-158), independently of connection writes, so its position is not
-    // protocol either.
+    // The kept-run schedule arms its hour from its own task once its startup pass has
+    // run, independently of connection writes, so its position is not protocol either.
     let kept_run_hour = format!(
         "sleep.requested:{}ms",
         super::KEPT_RUN_PASS_INTERVAL.as_millis()
@@ -982,6 +981,7 @@ fn deterministic_connection_loop_dependencies(
     let boot_id = frame_source.public_id("rbt_");
     let (recorder, _capture) = test_recorder(&boot_id);
     ConnectionLoopDependencies {
+        target: super::serving_target(&config).unwrap(),
         config,
         frame_source,
         sleeper,

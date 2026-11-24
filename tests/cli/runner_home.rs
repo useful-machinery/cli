@@ -206,7 +206,6 @@ fn bearer_of(state: &serde_json::Value) -> String {
     )
 }
 
-// REQ-RUNNERENROLL-109, REQ-RUNNERENROLL-110, REQ-RUNNERENROLL-30
 #[test]
 fn serve_on_an_empty_home_initializes_it_and_says_the_host_is_not_enrolled() {
     let empty_path = tempfile::tempdir().unwrap();
@@ -264,7 +263,6 @@ fn serve_on_an_empty_home_initializes_it_and_says_the_host_is_not_enrolled() {
     assert!(names(working_directory.path()).is_empty());
 }
 
-// REQ-RUNNERENROLL-109
 #[test]
 fn serve_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
     let witness = ConnectionWitness::new();
@@ -289,7 +287,6 @@ fn serve_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
     assert!(names(useful_home.path()).is_empty());
 }
 
-// REQ-RUNNERENROLL-110
 #[test]
 fn serve_without_a_configuration_connects_with_the_homes_enrolled_state() {
     let witness = ConnectionWitness::new();
@@ -337,7 +334,6 @@ fn wait_for_logged_connection(
     );
 }
 
-// REQ-TELEMETRY-52, REQ-TELEMETRY-1, REQ-RUNNERENROLL-109
 #[test]
 fn serve_appends_its_records_to_the_homes_log_whatever_happens_to_standard_error() {
     let witness = ConnectionWitness::new();
@@ -392,9 +388,8 @@ fn wait_for_logged_record(
     .unwrap()
 }
 
-// REQ-TELEMETRY-55, REQ-RUNNERENROLL-14: a runner whose configuration names a minimum no
-// disk reaches writes the `low` record of its first reading, with that minimum, as it
-// starts.
+// A runner whose configuration names a minimum no disk reaches writes the `low` record
+// of its first reading, with that minimum, as it starts.
 #[test]
 fn serve_records_its_disk_low_against_the_configured_minimum_as_it_starts() {
     const MINIMUM: u64 = 9_007_199_254_740_991;
@@ -411,7 +406,6 @@ fn serve_records_its_disk_low_against_the_configured_minimum_as_it_starts() {
     assert_eq!(record["um.disk.minimum_free_bytes"], MINIMUM, "{record}");
 }
 
-// REQ-RUNNERENROLL-42, REQ-TELEMETRY-52
 #[test]
 fn status_shows_the_log_the_serving_runner_writes() {
     let witness = ConnectionWitness::new();
@@ -459,8 +453,8 @@ fn wait_for_status_disk(home: &ServeHome, serve: &mut ServeProcess) -> Vec<Strin
     .collect()
 }
 
-// REQ-RUNNERENROLL-42: the status of a runner whose configuration names a minimum no disk
-// reaches gives the reading of its work root and, directly after it, the low warning.
+// The status of a runner whose configuration names a minimum no disk reaches gives the
+// reading of its work root and, directly after it, the low warning.
 #[test]
 fn status_shows_the_work_roots_disk_and_a_warning_while_it_is_low() {
     let witness = ConnectionWitness::new();
@@ -492,7 +486,6 @@ fn status_shows_the_work_roots_disk_and_a_warning_while_it_is_low() {
     );
 }
 
-// REQ-RUNNERENROLL-97
 #[test]
 fn serve_without_a_configuration_joins_and_writes_the_homes_state() {
     let witness = ConnectionWitness::new();
@@ -513,7 +506,6 @@ fn serve_without_a_configuration_joins_and_writes_the_homes_state() {
     server.finish_one();
 }
 
-// REQ-RUNNERENROLL-243
 #[test]
 fn serve_without_a_configuration_rejoins_a_key_joined_home_whose_credential_is_refused() {
     let rejecting = ConnectionWitness::rejecting();
@@ -547,7 +539,6 @@ fn serve_without_a_configuration_rejoins_a_key_joined_home_whose_credential_is_r
     );
 }
 
-// REQ-RUNNERENROLL-65, REQ-RUNNERENROLL-34
 #[test]
 fn two_homes_serve_at_once_and_a_second_serve_on_one_home_is_refused() {
     let homes = [ServeHome::new(), ServeHome::new()];
@@ -576,7 +567,6 @@ fn two_homes_serve_at_once_and_a_second_serve_on_one_home_is_refused() {
     }
 }
 
-// REQ-RUNNERENROLL-111
 #[test]
 fn serve_with_a_join_key_on_a_home_whose_configuration_names_another_state_sends_no_join() {
     let cloud = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -650,7 +640,6 @@ fn enrolled_answer(connection_url: &str) -> Vec<u8> {
     json_http_response("201 Created", body)
 }
 
-// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-110
 #[test]
 fn serve_with_a_key_on_an_empty_home_initializes_it_and_its_production_configuration_refuses_loopback()
  {
@@ -674,7 +663,6 @@ fn serve_with_a_key_on_an_empty_home_initializes_it_and_its_production_configura
     assert_no_connection(&cloud);
 }
 
-// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-20
 #[test]
 fn serve_with_a_key_and_no_configuration_writes_the_homes_state_once() {
     let witness = ConnectionWitness::new();
@@ -706,7 +694,6 @@ fn serve_with_a_key_and_no_configuration_writes_the_homes_state_once() {
     assert_no_connection(&cloud);
 }
 
-// REQ-RUNNERENROLL-22
 #[test]
 fn serve_without_a_key_or_a_configuration_resends_the_homes_staged_journal() {
     let witness = ConnectionWitness::new();
@@ -740,7 +727,6 @@ fn serve_without_a_key_or_a_configuration_resends_the_homes_staged_journal() {
     assert_eq!(state["currentCredential"]["secret"], STAGED_SECRET);
 }
 
-// REQ-RUNNERENROLL-109
 #[test]
 fn serve_with_a_key_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
     let witness = ConnectionWitness::new();
@@ -772,7 +758,6 @@ fn serve_with_a_key_given_a_configuration_neither_reads_nor_creates_the_runner_h
     assert!(names(useful_home.path()).is_empty());
 }
 
-// REQ-RUNNERENROLL-48, REQ-RUNNERENROLL-109
 #[test]
 fn serve_replace_credential_without_a_configuration_asks_the_homes_control_socket() {
     let server = api_test_support::ScriptedHttpServer::respond(json_http_response(
@@ -832,7 +817,6 @@ fn reading_commands() -> [(&'static [&'static str], &'static [u8], Vec<u8>); 2] 
     ]
 }
 
-// REQ-RUNNERENROLL-112, REQ-RUNNERENROLL-44, REQ-GRANT-41, REQ-INTEGRATION-14
 #[test]
 fn reading_commands_on_an_absent_or_empty_home_find_no_runner_and_create_nothing() {
     for (command, _, _) in reading_commands() {
@@ -853,7 +837,6 @@ fn reading_commands_on_an_absent_or_empty_home_find_no_runner_and_create_nothing
     }
 }
 
-// REQ-RUNNERENROLL-112, REQ-GRANT-41, REQ-INTEGRATION-14
 #[test]
 fn reading_commands_ask_the_homes_default_socket_when_it_holds_no_configuration() {
     for (command, request, response) in reading_commands() {
@@ -875,7 +858,6 @@ fn reading_commands_ask_the_homes_default_socket_when_it_holds_no_configuration(
     }
 }
 
-// REQ-RUNNERENROLL-112, REQ-RUNNERENROLL-41
 #[test]
 fn status_asks_the_socket_the_homes_configuration_names() {
     let home = ServeHome::new();
@@ -898,7 +880,6 @@ fn status_asks_the_socket_the_homes_configuration_names() {
     assert_eq!(fs::read(&config).unwrap(), before);
 }
 
-// REQ-RUNNERENROLL-112
 #[test]
 fn status_fails_on_a_homes_configuration_that_does_not_parse_and_keeps_its_bytes() {
     let home = ServeHome::new();
@@ -917,7 +898,6 @@ fn status_fails_on_a_homes_configuration_that_does_not_parse_and_keeps_its_bytes
     );
 }
 
-// REQ-RUNNERENROLL-109, REQ-RUNNERENROLL-41
 #[test]
 fn status_given_a_configuration_neither_reads_nor_creates_the_runner_home() {
     let fixture = ServeHome::new();
@@ -972,7 +952,6 @@ fn only_check(output: &Output) -> serde_json::Value {
     check
 }
 
-// REQ-RUNNERENROLL-310
 #[test]
 fn doctor_agent_logins_on_an_empty_home_is_readiness_unknown_and_creates_nothing() {
     let home = ServeHome::new();
@@ -985,7 +964,6 @@ fn doctor_agent_logins_on_an_empty_home_is_readiness_unknown_and_creates_nothing
     assert!(names(&home.useful_home()).is_empty());
 }
 
-// REQ-RUNNERENROLL-86
 #[test]
 fn doctor_agent_logins_reads_the_readiness_beside_the_state_the_homes_configuration_names() {
     let home = ServeHome::new();
@@ -1014,7 +992,6 @@ fn doctor_agent_logins_reads_the_readiness_beside_the_state_the_homes_configurat
     );
 }
 
-// REQ-RUNNERENROLL-310
 #[test]
 fn doctor_agent_logins_without_a_useful_home_or_configuration_is_config_required() {
     let output = doctor_with_homes(&AGENT_LOGINS, None, None);
@@ -1032,7 +1009,6 @@ fn doctor_agent_logins_without_a_useful_home_or_configuration_is_config_required
     assert!(names(useful_home.path()).is_empty());
 }
 
-// REQ-RUNNERENROLL-45, REQ-RUNNERENROLL-47
 #[test]
 fn doctor_default_checks_and_their_report_need_no_useful_home_and_create_none() {
     let root = tempfile::tempdir().unwrap();

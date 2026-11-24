@@ -1,8 +1,7 @@
 //! The condition sources `useful workflow run resume` evaluates an `external` wait's rule
-//! against (REQ-WFEXEC-65, REQ-CONTINUE-74): each `(source, event)` pair this CLI observes
-//! and how. Admission refuses an `external` wait on any other pair (REQ-WFEXEC-93). A `host`
-//! wait is evaluated by the execution crate's host condition (REQ-WFEXEC-81), from this
-//! process's environment.
+//! against: each `(source, event)` pair this CLI observes and how. Admission refuses an
+//! `external` wait on any other pair. A `host` wait is evaluated by the execution crate's
+//! host condition, from this process's environment.
 
 mod github;
 

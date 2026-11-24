@@ -1,7 +1,7 @@
 //! Bounded requests against a third-party provider's API: a `GET` with a bearer token for the
-//! CLI's workflow wait conditions (REQ-WFEXEC-65) and a JSON `POST` with a caller-composed
-//! `Authorization` value for the run mirror's Linear writes (REQ-LOCALRUN-192). The caller
-//! names the URL and the credential, and this package owns the HTTP client (INV-CLI-3).
+//! CLI's workflow wait conditions and a JSON `POST` with a caller-composed `Authorization`
+//! value for the run mirror's Linear writes. The caller names the URL and the credential, and
+//! this package owns the HTTP client.
 
 use std::fmt;
 use std::time::Duration;
@@ -136,8 +136,8 @@ mod tests {
         .into_bytes()
     }
 
-    // REQ-LOCALRUN-192: the JSON `POST` carries the caller's `Authorization` value whole, the
-    // JSON media types and the body, and answers the status and body.
+    // The JSON `POST` carries the caller's `Authorization` value whole, the JSON media types
+    // and the body, and answers the status and body.
     #[test]
     fn provider_post_json_sends_the_body_with_the_authorization_given_whole() {
         let server = ScriptedHttpServer::respond(answer("200 OK", r#"{"data":{}}"#));
@@ -167,8 +167,8 @@ mod tests {
         );
     }
 
-    // REQ-LOCALRUN-192: only the development override admits `http`; the refusal names the
-    // URL and never the credential.
+    // Only the development override admits `http`; the refusal names the URL and never the
+    // credential.
     #[test]
     fn provider_post_json_refuses_http_unless_admitted() {
         let error = provider_post_json(

@@ -150,7 +150,6 @@ fn runner_startup_discovers_claude_before_rejecting_invalid_operator_configurati
     assert_eq!(fixture.recorded_probes(), CLOSED_PROBES);
 }
 
-// REQ-AGENT-2, REQ-AGENT-4, REQ-AGENT-13, REQ-AGENT-48, REQ-AGENT-49
 // SC-AGENT-1
 #[test]
 fn doctor_reports_the_qualified_claude_code_snapshot_without_ambient_values() {
@@ -214,7 +213,6 @@ fn doctor_reports_the_qualified_claude_code_snapshot_without_ambient_values() {
     assert_eq!(fixture.recorded_probes(), CLOSED_PROBES);
 }
 
-// REQ-AGENT-49
 #[test]
 fn human_doctor_reports_claude_code_policy_when_missing() {
     let missing = tempfile::tempdir().expect("missing Claude Code directory should be created");
@@ -233,7 +231,6 @@ fn human_doctor_reports_claude_code_policy_when_missing() {
     }
 }
 
-// REQ-AGENT-7
 #[test]
 fn doctor_rejects_missing_explicit_session_capability() {
     let help = COMPLETE_HELP.replace("  --session-id <uuid> Use session\n", "");
@@ -245,8 +242,6 @@ fn doctor_rejects_missing_explicit_session_capability() {
     assert_eq!(report_code(&output), "unsupported_claude_code_capability");
 }
 
-// REQ-AGENT-2, REQ-AGENT-4, REQ-AGENT-5, REQ-AGENT-6, REQ-AGENT-7, REQ-AGENT-50
-// INV-HARNESS-11
 #[test]
 fn doctor_reports_each_claude_code_installation_failure_without_fallback() {
     let missing = tempfile::tempdir().unwrap();
@@ -326,8 +321,6 @@ fn doctor_reports_each_claude_code_installation_failure_without_fallback() {
     assert!(compatible.recorded_probes().is_empty());
 }
 
-// REQ-AGENT-2, REQ-AGENT-4, REQ-AGENT-7, REQ-AGENT-65, REQ-AGENT-68
-// INV-HARNESS-11
 // SC-AGENT-1
 #[test]
 fn doctor_passes_a_newer_claude_code_as_untested_and_reports_qualification() {
@@ -384,7 +377,6 @@ fn doctor_passes_a_newer_claude_code_as_untested_and_reports_qualification() {
     );
 }
 
-// REQ-AGENT-47, REQ-AGENT-51
 #[test]
 fn doctor_reports_pi_and_claude_code_independently_for_every_installation_combination() {
     let pi = PiFixture::new("0.84.2", PI_COMPLETE_HELP, true);

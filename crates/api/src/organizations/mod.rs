@@ -608,10 +608,10 @@ pub fn list_organization_membership_history(
     }
 }
 
-/// The audit vocabulary this release decodes (REQ-AUDIT-65): its subject and change tables
-/// hold every action, subject kind and change field the contract lists. A listing that named
-/// none would be shown in the vocabulary of releases before the parameter existed.
-const AUDIT_VOCABULARY: &str = "6";
+/// The audit vocabulary this release decodes: its subject and change tables hold every
+/// action, subject kind and change field the contract lists. A listing that named none would
+/// be shown in the vocabulary of releases before the parameter existed.
+const AUDIT_VOCABULARY: &str = "7";
 
 pub fn list_organization_audit_records(
     client: &HttpClient,

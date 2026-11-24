@@ -1,6 +1,5 @@
 //! The single-runner key of `useful runner join-key issue --runner`: a runner the organization
-//! holds gets a new key, and a name no runner has registers the runner and issues its first
-//! (REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-2, REQ-RUNNERENROLL-8, REQ-RUNNERPOOL-86).
+//! holds gets a new key, and a name no runner has registers the runner and issues its first.
 
 use std::io::{self, Write};
 
@@ -33,7 +32,7 @@ struct SingleRunnerKeyResult<'a> {
 }
 
 /// A member as `--member` names one: a principal ID, sent as it is, or a membership ID or a
-/// verified email address, which the organization's directory resolves (REQ-MEMBER-48).
+/// verified email address, which the organization's directory resolves.
 #[derive(Clone, Debug)]
 pub(super) enum MemberArg {
     Principal(String),
@@ -338,7 +337,7 @@ struct Keys<'a> {
 }
 
 /// Issues the first key of a runner the command registered; a failure is reported with the
-/// runner, which stays registered (REQ-RUNNERENROLL-8).
+/// runner, which stays registered.
 fn activate_registered(
     api: &RunnerApi,
     organization: &str,
@@ -356,7 +355,7 @@ fn activate_registered(
 }
 
 /// The usage refusal of `--pool` or `--member` for a runner in another pool: nothing is issued,
-/// and the runner is moved with `useful runner update` (REQ-RUNNERENROLL-2).
+/// and the runner is moved with `useful runner update`.
 fn other_pool(reference: &str, runner: &RunnerRegistration) -> CommandFailure {
     CommandFailure::with_exit_code(
         anyhow!(

@@ -80,7 +80,6 @@ fn record(kind: WaitKind, step: &str, then: &str, on_hand_back: Option<&str>) ->
     .unwrap()
 }
 
-// REQ-WFDEF-5, REQ-LOCALRUN-178, REQ-WFEXEC-116, REQ-WFEXEC-118, REQ-WFEXEC-62
 #[test]
 fn an_entered_wait_derives_its_rule_from_the_kind_and_writes_the_published_record() {
     let validator = validator("workflow-run-wait-v1.schema.json");
@@ -154,7 +153,6 @@ fn an_entered_wait_derives_its_rule_from_the_kind_and_writes_the_published_recor
     }
 }
 
-// REQ-WFDEF-5
 #[test]
 fn a_wait_entered_at_a_fan_out_element_names_the_element_in_its_step() {
     let validator = validator("workflow-run-wait-v1.schema.json");
@@ -193,7 +191,6 @@ fn a_wait_entered_at_a_fan_out_element_names_the_element_in_its_step() {
     }
 }
 
-// REQ-WFDEF-5, REQ-WFEXEC-68, REQ-LOCALRUN-199
 #[test]
 fn a_position_names_a_fan_out_element_only_as_its_step_and_one_item() {
     let mut record = record(WaitKind::Answer, "build", "build", None);
@@ -251,7 +248,6 @@ fn resolved_run(wait: &WaitRecord, event: &str, payload: Value) -> tempfile::Tem
     root
 }
 
-// REQ-WFEXEC-63, REQ-WFEXEC-122, REQ-CONTINUE-104, REQ-CONTINUE-105, REQ-AGENT-59
 #[test]
 fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait() {
     let wait = record(WaitKind::Answer, "review", "build", None);
@@ -283,7 +279,7 @@ fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait()
         Some(json!({"q1": "yes"}))
     );
     // The agent-profile replacement a `control.retry` carried is retained for every later
-    // attempt (REQ-AGENT-59), however many attempts back the wait it resolved is.
+    // attempt, however many attempts back the wait it resolved is.
     let wait = record(WaitKind::Repair, "build", "build", None);
     let profiles = json!({"builder": "claude-code"});
     let run = resolved_run(
@@ -297,7 +293,6 @@ fn attempt_controls_supply_wait_fields_only_to_the_attempt_continuing_the_wait()
     assert_eq!(resolved.replacement, Some(("build".to_owned(), profiles)));
 }
 
-// REQ-WFDEF-5, REQ-CONTINUE-106, REQ-WFEXEC-96
 #[test]
 fn attempt_controls_resume_the_element_of_a_wait_continuing_at_the_waiting_step() {
     for (then, item, expected) in [
@@ -326,7 +321,7 @@ fn attempt_controls_resume_the_element_of_a_wait_continuing_at_the_waiting_step(
     }
     // Only the attempt that continues the wait resumes at its element: an attempt that
     // reaches the step after a later attempt ended without a wait (a backward edge, an
-    // abandoned attempt) starts at the first element (REQ-WFEXEC-97).
+    // abandoned attempt) starts at the first element.
     let wait = WaitRecord::entered(
         &entered(WaitKind::Answer, "build", "build", None),
         Some(2),
@@ -344,9 +339,9 @@ fn attempt_controls_resume_the_element_of_a_wait_continuing_at_the_waiting_step(
     assert_eq!(controls.resume_item, None);
 }
 
-// REQ-WFEXEC-122, REQ-WFEXEC-96, REQ-WFEXEC-130: an attempt that kept the wait it continued from
-// holds a second copy of that wait, so the attempt the still-resolved wait starts next reads
-// the same control fields and resumes the same fan-out element.
+// An attempt that kept the wait it continued from holds a second copy of that wait, so the
+// attempt the still-resolved wait starts next reads the same control fields and resumes the same
+// fan-out element.
 #[test]
 fn attempt_controls_carry_a_kept_wait_to_the_attempt_it_starts_next() {
     let wait = WaitRecord::entered(
@@ -452,11 +447,11 @@ fn handed_back_then(wait: &WaitRecord, event: &str, payload: Option<Value>) -> t
     run
 }
 
-// REQ-WFEXEC-123, REQ-WFEXEC-111: a `control.retry` of a repair wait entered at the step it
-// continues at keeps, for that step, the `wait.<field>` values the attempt that entered the
-// wait had there, through retries in a row and a kept wait's second copy, under the retry's
-// own string fields; any other wait or control, or an attempt without a wait between, keeps
-// nothing. A nested run reads the same from the wait copies its root carried.
+// A `control.retry` of a repair wait entered at the step it continues at keeps, for that
+// step, the `wait.<field>` values the attempt that entered the wait had there, through
+// retries in a row and a kept wait's second copy, under the retry's own string fields; any
+// other wait or control, or an attempt without a wait between, keeps nothing. A nested run
+// reads the same from the wait copies its root carried.
 #[test]
 fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     let fields = |notes: Option<&str>| {
@@ -481,8 +476,8 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     resolve_wait(run.path(), &again, "control.retry", None);
     assert_eq!(wait_of(&run, 4), at_fix(Some("tighten it")));
 
-    // An interrupted attempt 3 that kept the retried wait holds its second copy
-    // (REQ-WFEXEC-130): attempt 4 still reads the hand-back's notes.
+    // An interrupted attempt 3 that kept the retried wait holds its second
+    // copy: attempt 4 still reads the hand-back's notes.
     let run = handed_back_then(&repair, "control.retry", None);
     write_attempt_wait(run.path(), 3, Some(&repair));
     assert_eq!(wait_of(&run, 4), at_fix(Some("tighten it")));
@@ -548,7 +543,6 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     assert_eq!(controls.wait, at_fix(Some("tighten it")));
 }
 
-// REQ-WFDEF-5, REQ-WFEXEC-92
 #[test]
 fn a_wait_without_a_derived_rule_or_continuing_at_an_exit_has_no_record() {
     // A `children` wait, and an `external` wait without its authored rule, have no rule.
@@ -579,8 +573,8 @@ fn a_wait_without_a_derived_rule_or_continuing_at_an_exit_has_no_record() {
 
 const PULL_REQUEST: &str = "https://github.com/useful-machinery/platform/pull/3958";
 
-// REQ-WFEXEC-100: a `repair` wait an interrupted child routed to carries the interruption,
-// and the engine's `summary`, which begins `interrupted`, replaces one the step committed.
+// A `repair` wait an interrupted child routed to carries the interruption, and the
+// engine's `summary`, which begins `interrupted`, replaces one the step committed.
 #[test]
 fn an_interrupted_repair_wait_payload_names_the_interruption_over_a_committed_summary() {
     let wait = EnteredWait {
@@ -617,8 +611,8 @@ fn an_interrupted_repair_wait_payload_names_the_interruption_over_a_committed_su
     assert_eq!(summary.split_whitespace().next(), Some("interrupted"));
     assert_ne!(summary, "the child's own summary");
 
-    // REQ-WFDEF-6: an interruption a `control.interrupt` requested carries that control's
-    // `by`, `at` and `payload`, and the summary names its reason.
+    // An interruption a `control.interrupt` requested carries that control's `by`, `at`
+    // and `payload`, and the summary names its reason.
     let interrupt = control(
         "control.interrupt",
         RUN,
@@ -653,9 +647,8 @@ fn an_interrupted_repair_wait_payload_names_the_interruption_over_a_committed_su
     assert!(!plain.contains_key("interrupted"));
 }
 
-// REQ-WFEXEC-117, REQ-WFEXEC-115: the waiting step's failed child is the payload's
-// `failedChild`, which replaces an export of that name as `child` does; a `stop` wait's
-// payload names only its control.
+// The waiting step's failed child is the payload's `failedChild`, which replaces an
+// export of that name as `child` does; a `stop` wait's payload names only its control.
 #[test]
 fn a_wait_payload_carries_the_steps_failed_child_over_an_export_of_its_name() {
     let record = FailedChild {
@@ -716,8 +709,8 @@ fn a_wait_payload_carries_the_steps_failed_child_over_an_export_of_its_name() {
     assert_eq!(wait.failed_child(), Some(record));
 }
 
-// REQ-WFEXEC-117: a payload without `failedChild`, or whose `failedChild` does not read as the
-// record, has no failed child.
+// A payload without `failedChild`, or whose `failedChild` does not read as the record, has no
+// failed child.
 #[test]
 fn a_wait_payload_without_a_failed_child_record_reads_none() {
     let mut wait = record(WaitKind::Repair, "build", "build", None);
@@ -775,8 +768,8 @@ fn queue_settled(pull_request: &str, state: &str) -> ExternalEvent {
     }
 }
 
-// REQ-WFEXEC-124, REQ-WFDEF-5: an `external` wait's record carries the authored rule with its
-// run-value operands resolved to quoted literals, so the matcher reads the rule alone.
+// An `external` wait's record carries the authored rule with its run-value operands resolved
+// to quoted literals, so the matcher reads the rule alone.
 #[test]
 fn an_external_wait_writes_its_authored_rule_with_run_values_resolved() {
     let record = external_record(
@@ -821,8 +814,8 @@ fn an_external_wait_writes_its_authored_rule_with_run_values_resolved() {
     }
 }
 
-// REQ-CONTINUE-74, REQ-CONTINUE-101, INV-ENGINE-21: the one matcher resolves an `external` wait
-// against the events its condition observed, as it resolves a local wait against the controls.
+// The one matcher resolves an `external` wait against the events its condition observed, as it
+// resolves a local wait against the controls.
 #[test]
 fn evaluate_matches_observed_external_events_through_the_rule() {
     let record = external_record(
@@ -871,7 +864,6 @@ fn assert_control_invalid(root: &Path, name: &str) {
     }
 }
 
-// REQ-WFDEF-6, REQ-LOCALRUN-178
 #[test]
 fn append_control_writes_ordinal_files_that_read_controls_returns_in_order() {
     let validator = validator("workflow-run-control-v1.schema.json");
@@ -952,7 +944,7 @@ fn append_control_writes_ordinal_files_that_read_controls_returns_in_order() {
     assert_control_invalid(root.path(), "notes.txt");
 }
 
-// REQ-WFDEF-6: `control.interrupt` is a control event of the published schema, written as
+// `control.interrupt` is a control event of the published schema, written as
 // `controls/<NNNN>-interrupt.json`, and no wait's rule resolves on it.
 #[test]
 fn an_interrupt_is_a_recorded_control_that_resolves_no_wait() {
@@ -1005,7 +997,6 @@ fn an_interrupt_is_a_recorded_control_that_resolves_no_wait() {
     }
 }
 
-// REQ-LOCALRUN-178, REQ-CONTINUE-101, INV-ENGINE-21
 #[test]
 fn evaluate_resolves_a_wait_only_through_its_rule() {
     let approval = record(WaitKind::Approval, "review", "merge", Some("fix"));
@@ -1113,7 +1104,6 @@ fn evaluate_resolves_a_wait_only_through_its_rule() {
     }
 }
 
-// REQ-WFFORMAT-97
 #[test]
 fn run_value_operands_parse_and_an_unresolved_one_never_matches() {
     let conjuncts = parse_where(
@@ -1168,7 +1158,6 @@ fn run_value_operands_parse_and_an_unresolved_one_never_matches() {
     }
 }
 
-// REQ-CONTINUE-101, REQ-WFEXEC-118, REQ-WFEXEC-62, INV-ENGINE-21
 #[test]
 fn an_answer_resolves_only_when_complete_and_a_lift_only_for_the_stop_in_force() {
     let answer = record(WaitKind::Answer, "design", "design", None);
@@ -1264,7 +1253,6 @@ fn an_answer_resolves_only_when_complete_and_a_lift_only_for_the_stop_in_force()
     );
 }
 
-// REQ-WFEXEC-62, INV-ENGINE-21
 #[test]
 fn a_stop_is_in_force_until_a_later_lift_for_the_same_step() {
     let stop = |before: &str| {
@@ -1290,8 +1278,8 @@ fn a_stop_is_in_force_until_a_later_lift_for_the_same_step() {
     assert_eq!(stop_in_force(&build, "build"), Some(&build[0]));
 }
 
-// REQ-LOCALRUN-182, REQ-RUNNERENROLL-321, REQ-RUNNERENROLL-322: the questions `useful workflow
-// run answer` accepts and the runner reports are one derivation over the wait's payload.
+// The questions `useful workflow run answer` accepts and the runner reports are one derivation
+// over the wait's payload.
 #[test]
 fn a_wait_payload_lists_its_questions_by_id_and_text_or_asks_one() {
     let listed = |questions: &[(&str, Option<&str>)]| {

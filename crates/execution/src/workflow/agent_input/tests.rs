@@ -415,7 +415,6 @@ fn identity() -> AgentInvocationIdentity {
     )
 }
 
-// REQ-WFFORMAT-50, REQ-WFEXEC-26, REQ-WFEXEC-27, REQ-WFEXEC-52
 #[test]
 fn retained_named_and_upstream_values_materialize_exactly_in_declared_order() {
     let fixture = Fixture::new(ConsumerValueMode::Result);
@@ -501,7 +500,6 @@ fn retained_named_and_upstream_values_materialize_exactly_in_declared_order() {
     );
 }
 
-// REQ-WFEXEC-26, REQ-WFEXEC-71
 #[test]
 fn agent_step_environment_passthrough_narrows_the_harness_environment() {
     let environment_names = |fixture: Fixture| {
@@ -624,7 +622,6 @@ fn materialization_preserves_each_profiles_native_configuration_and_limits() {
     );
 }
 
-// REQ-AGENT-20
 #[test]
 fn expanded_attachment_splices_are_bounded_before_staging() {
     let fixture = Fixture::with_attachment_splices(ConsumerValueMode::None, 127);
@@ -980,7 +977,6 @@ fn staging_creation_error(
         Err(error) => error,
     }
 }
-// REQ-WFEXEC-35
 #[test]
 fn finalization_context_bytes_are_shared_by_command_and_agent() {
     let fixture = Fixture::new(ConsumerValueMode::None);
@@ -1037,7 +1033,6 @@ fn finalization_context_bytes_are_shared_by_command_and_agent() {
     );
 }
 
-// REQ-WFCOND-45, INV-ENGINE-44
 #[test]
 fn a_first_of_message_entry_reads_the_chosen_source() {
     let fixture = Fixture::new(ConsumerValueMode::None);

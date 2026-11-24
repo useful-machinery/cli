@@ -274,7 +274,7 @@ pub(in crate::cli) fn write_cloud(
 }
 
 /// The automatic Publication a run's hand-off started, as `publication` was read, and after a
-/// failed Publication or a failed hand-off what to do next (REQ-PUBLISH-63).
+/// failed Publication or a failed hand-off what to do next.
 pub(in crate::cli) fn write_automatic_publication(
     out: &mut impl Write,
     run: Option<&Run>,
@@ -472,7 +472,7 @@ fn write_delivery_failure(
 }
 
 /// The lines naming a Cloud run's owner, or that it has none, the rule that routed it and
-/// the pools it may use (REQ-RUN-101). A field a Cloud does not send prints no line.
+/// the pools it may use. A field a Cloud does not send prints no line.
 pub(crate) fn write_route(out: &mut impl Write, run: &Run) -> io::Result<()> {
     match &run.owner {
         Some(Some(owner)) => writeln!(out, "owner: {}", visible_text(owner))?,
@@ -507,9 +507,13 @@ pub(crate) fn write_route(out: &mut impl Write, run: &Run) -> io::Result<()> {
     Ok(())
 }
 
-/// One line for each provider of a Cloud run's credential sources, where the runner took
-/// its credential: the host, a grant of a member or a grant Cloud recorded no member of
-/// (REQ-RUN-107). A run that records none prints no line.
+/// How `useful workflow run show` names an `org_connection` credential or integration
+/// source.
+const ORG_CONNECTION_WORDS: &str = "the organization's GitHub App installation";
+
+/// One line for each provider of a Cloud run's credential sources, where the runner took its
+/// credential: the host, a grant of a member, a grant Cloud recorded no member of or the
+/// organization's GitHub App installation. A run that records none prints no line.
 pub(super) fn write_credential_sources(out: &mut impl Write, run: &Run) -> anyhow::Result<()> {
     let Some(Some(sources)) = &run.credential_sources else {
         return Ok(());
@@ -517,12 +521,15 @@ pub(super) fn write_credential_sources(out: &mut impl Write, run: &Run) -> anyho
     for entry in &sources.sources {
         let provider = visible_text(&super::enum_text(&entry.provider)?);
         let source = super::enum_text(&entry.source)?;
-        match entry.principal_id.as_deref() {
-            Some(principal) if source == "grant" => writeln!(
+        match (source.as_str(), entry.principal_id.as_deref()) {
+            ("grant", Some(principal)) => writeln!(
                 out,
                 "credential {provider}: grant of {}",
                 visible_text(principal)
             )?,
+            ("org_connection", _) => {
+                writeln!(out, "credential {provider}: {ORG_CONNECTION_WORDS}")?
+            }
             _ => writeln!(out, "credential {provider}: {}", visible_text(&source))?,
         }
     }
@@ -530,10 +537,11 @@ pub(super) fn write_credential_sources(out: &mut impl Write, run: &Run) -> anyho
 }
 
 /// One line for each integration a Cloud run's workflow declares, in the API's order, saying
-/// where its credential came from: the host, the member who connected it, the organization
-/// or a member Cloud names no principal of, or that nothing provided one, with the token
-/// version where there is one (REQ-RUN-109). A run without integration sources prints no
-/// line; a source this release has no words for prints as given.
+/// where its credential came from: the host, the organization's GitHub App installation and
+/// the member who authorized it where Cloud names one, the member who connected it, the
+/// organization or a member Cloud names no principal of, or that nothing provided one, with
+/// the token version where there is one. A run without integration sources prints no line; a
+/// source this release has no words for prints as given.
 pub(super) fn write_integration_sources(out: &mut impl Write, run: &Run) -> anyhow::Result<()> {
     let Some(entries) = &run.integration_sources else {
         return Ok(());
@@ -545,6 +553,11 @@ pub(super) fn write_integration_sources(out: &mut impl Write, run: &Run) -> anyh
         let what = match (source.as_deref(), entry.connected_by.as_deref()) {
             (None, _) => "not provided".to_owned(),
             (Some("host"), _) => "host".to_owned(),
+            (Some("org_connection"), Some(principal)) => format!(
+                "{ORG_CONNECTION_WORDS}, authorized by {}",
+                visible_text(principal)
+            ),
+            (Some("org_connection"), None) => ORG_CONNECTION_WORDS.to_owned(),
             (Some(_), Some(principal)) => format!("connected by {}", visible_text(principal)),
             (Some(source), None) => match acted_as.as_deref() {
                 Some("org") => "connected by the organization".to_owned(),
@@ -561,7 +574,7 @@ pub(super) fn write_integration_sources(out: &mut impl Write, run: &Run) -> anyh
 }
 
 /// The line saying what a queued run waits for, its reason in words and an unrecognized
-/// reason as given (REQ-RUN-100, REQ-RUN-101); nothing when it waits for nothing.
+/// reason as given; nothing when it waits for nothing.
 pub(crate) fn write_waiting(out: &mut impl Write, observation: &RunObservation) -> io::Result<()> {
     let Some(Some(waiting)) = &observation.waiting else {
         return Ok(());
@@ -580,8 +593,8 @@ pub(crate) fn write_waiting(out: &mut impl Write, observation: &RunObservation) 
     }
 }
 
-/// The other runs the run's runner holds, in Cloud's order, each with whether it is working
-/// or waiting (REQ-RUN-120); nothing when the runner holds no other run or Cloud does not say.
+/// The other runs the run's runner holds, in Cloud's order, each with whether it is working or
+/// waiting; nothing when the runner holds no other run or Cloud does not say.
 pub(crate) fn write_held_with(
     out: &mut impl Write,
     observation: &RunObservation,
@@ -606,8 +619,8 @@ pub(crate) fn write_held_with(
 
 /// The block saying why Cloud rejected a run, nothing when it did not: its reason, under it
 /// each validation fact its runner diagnostic holds, in the order code, location, path and
-/// step (REQ-DIAG-29, REQ-DIAG-42). It prints no other diagnostic member and escapes every
-/// value: a fact is untrusted runner text.
+/// step. It prints no other diagnostic member and escapes every value: a fact is untrusted
+/// runner text.
 pub(crate) fn write_rejection(out: &mut impl Write, run: &Run) -> io::Result<()> {
     let Some(rejection) = run.rejection.as_deref() else {
         return Ok(());
@@ -664,9 +677,9 @@ pub(crate) fn step_path(elements: &Value) -> String {
     )
 }
 
-/// A workflow wait's wire document as `<kind> at <step> since <since>`, the one rendering
-/// that `useful workflow run show` of a Cloud run, `useful workflow run list` of a Cloud run and
-/// the `--wait` observation line share (REQ-RUN-88, REQ-RUN-116, REQ-RUN-113).
+/// A workflow wait's wire document as `<kind> at <step> since <since>`, the one rendering that
+/// `useful workflow run show` of a Cloud run, `useful workflow run list` of a Cloud run and the
+/// `--wait` observation line share.
 pub(crate) fn wait_phrase(wait: &Value) -> String {
     format!(
         "{} at {} since {}",
@@ -703,7 +716,7 @@ pub(super) fn read_wait(run: &Run) -> io::Result<Option<Option<String>>> {
 }
 
 /// The line naming a run's workflow state, nothing when its read carries none, and under it
-/// while it waits the wait's kind, step and since (REQ-RUN-116).
+/// while it waits the wait's kind, step and since.
 pub(in crate::cli) fn write_workflow_state(out: &mut impl Write, run: &Run) -> io::Result<()> {
     let Some(state) = run.workflow_state.flatten() else {
         return Ok(());

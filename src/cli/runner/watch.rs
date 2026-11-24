@@ -1,7 +1,7 @@
-//! `useful runner watch`: the live process's overview in a full-screen terminal interface
-//! (REQ-RUNNERENROLL-139). This leaf checks the terminal, asks the serving process once and
-//! opens the viewer's host over a source that reads the control socket; the mapping below is
-//! where the protocol's words become the screen's.
+//! `useful runner watch`: the live process's overview in a full-screen terminal interface.
+//! This leaf checks the terminal, asks the serving process once and opens the viewer's host
+//! over a source that reads the control socket; the mapping below is where the protocol's
+//! words become the screen's.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -53,7 +53,7 @@ pub(super) struct Command {
 
 impl Command {
     pub(super) fn execute(self) -> CommandResult {
-        // REQ-RUNNERENROLL-139: the terminal is checked before anything is read or asked.
+        // The terminal is checked before anything is read or asked.
         let presentation = PresentationConfig {
             requested_mode: RequestedPresentationMode::Automatic,
             color: ColorChoice::Auto,
@@ -108,9 +108,9 @@ async fn watch(socket_path: PathBuf, color: bool) -> CommandResult {
     }
 }
 
-/// The first answer, which decides whether the viewer opens (REQ-RUNNERENROLL-139): a
-/// runner that does not answer is unreachable, one of an earlier release says so, and any
-/// other answer that is not an overview is a protocol failure.
+/// The first answer, which decides whether the viewer opens: a runner that does not
+/// answer is unreachable, one of an earlier release says so, and any other answer that is
+/// not an overview is a protocol failure.
 fn first_view(
     answer: Result<OverviewAnswer, RequestFailure>,
 ) -> Result<RunnerWatchOverview, CommandFailure> {
@@ -180,7 +180,7 @@ impl RunnerWatchSource for ControlSocketSource {
     }
 }
 
-/// A later answer, as the banner tells the three failures apart (REQ-RUNNERENROLL-141).
+/// A later answer, as the banner tells the three failures apart.
 fn overview_view(
     answer: Result<OverviewAnswer, RequestFailure>,
 ) -> Result<RunnerWatchOverview, RunnerWatchSourceError> {
@@ -198,7 +198,7 @@ fn overview_view(
     }
 }
 
-/// The view's query as the protocol's (REQ-RUNNERENROLL-144).
+/// The view's query as the protocol's.
 fn assignment_query(query: &RunnerWatchAssignmentQuery) -> AssignmentQuery {
     AssignmentQuery {
         assignment_id: query.assignment_id.clone(),
@@ -215,8 +215,7 @@ fn assignment_query(query: &RunnerWatchAssignmentQuery) -> AssignmentQuery {
     }
 }
 
-/// An assignment read's answer, its failures told apart as the overview's are
-/// (REQ-RUNNERENROLL-141, REQ-RUNNERENROLL-144).
+/// An assignment read's answer, its failures told apart as the overview's are.
 fn assignment_view(
     answer: Result<AssignmentAnswer, RequestFailure>,
 ) -> Result<RunnerWatchAssignmentAnswer, RunnerWatchSourceError> {
@@ -236,7 +235,7 @@ fn assignment_view(
 }
 
 /// An assignment as the viewer draws it: the entry as the overview's, and the run's and
-/// the log's engine words passed on as received (REQ-RUNNERENROLL-135).
+/// the log's engine words passed on as received.
 fn held_assignment(detail: AssignmentDetail) -> RunnerWatchHeldAssignment {
     let AssignmentDetail { entry, run, log } = detail;
     RunnerWatchHeldAssignment {
@@ -388,7 +387,7 @@ fn assignment_log(log: AssignmentLog) -> RunnerWatchLog {
     }
 }
 
-/// How a credential reload was answered (REQ-RUNNERENROLL-142).
+/// How a credential reload was answered.
 fn reload_outcome(answer: Result<Response, RequestFailure>) -> RunnerWatchOutcome {
     match answer {
         Ok(Response::Reloaded { credential_id }) => {
@@ -399,7 +398,7 @@ fn reload_outcome(answer: Result<Response, RequestFailure>) -> RunnerWatchOutcom
 }
 
 /// How an agent-login setup was answered: each provider's readiness, and each check that
-/// gave no answer with its cause (REQ-RUNNERENROLL-142, REQ-GRANT-41).
+/// gave no answer with its cause.
 fn setup_outcome(answer: Result<Response, RequestFailure>) -> RunnerWatchOutcome {
     match answer {
         Ok(Response::AgentLoginsSynced(synced)) => {
@@ -437,7 +436,7 @@ fn refusal(answer: Result<Response, RequestFailure>) -> RunnerWatchOutcome {
     })
 }
 
-/// A closed error (REQ-RUNNERENROLL-82) as short facts, the first ending in its code.
+/// A closed error as short facts, the first ending in its code.
 fn control_refusal(error: ControlError) -> Vec<String> {
     let code = known_word(error);
     let (what, remedy) = match error {
@@ -462,8 +461,8 @@ fn control_refusal(error: ControlError) -> Vec<String> {
     facts
 }
 
-/// The overview as the viewer draws it (REQ-RUNNERENROLL-140): every word passed on as
-/// received (REQ-RUNNERENROLL-135). `None` when a time the reader validated does not parse.
+/// The overview as the viewer draws it: every word passed on as received. `None` when a
+/// time the reader validated does not parse.
 fn view(overview: Overview) -> Option<RunnerWatchOverview> {
     let Overview {
         runner,
@@ -704,8 +703,8 @@ fn event(entry: &OverviewEvent) -> Option<RunnerWatchEvent> {
     })
 }
 
-/// One event in words, naming its facts and keeping each code as the code
-/// (REQ-RUNNERENROLL-138); a kind this release does not know is its own word.
+/// One event in words, naming its facts and keeping each code as the code; a
+/// kind this release does not know is its own word.
 fn event_text(entry: &OverviewEvent) -> (String, RunnerWatchMark) {
     let run = |what: &str| {
         entry
@@ -864,8 +863,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-135: an answer's entry, run and log map as
-    // received, each engine word passed on as the word.
+    // An answer's entry, run and log map as received, each engine word passed on as the
+    // word.
     #[test]
     fn the_fixture_assignment_maps_to_its_entry_run_and_step_output() {
         let document = fixture_named("assignment-response.json");
@@ -946,8 +945,8 @@ mod tests {
         assert_eq!(log.streams.len(), 2);
     }
 
-    // REQ-RUNNERENROLL-144: the run log is one unnamed stream with the bytes left out, and
-    // an entry alone has neither run nor log.
+    // The run log is one unnamed stream with the bytes left out, and an entry alone has
+    // neither run nor log.
     #[test]
     fn a_run_log_and_an_entry_alone_map_as_given() {
         let run_log = held_view(&fixture_named("assignment-run-log-response.json"));
@@ -971,8 +970,8 @@ mod tests {
         assert_eq!((entry.run, entry.log), (None, None));
     }
 
-    // REQ-RUNNERENROLL-146: a step's records map to the view's records log with the step,
-    // the records in order and both counts, and no streams.
+    // A step's records map to the view's records log with the step, the records in order
+    // and both counts, and no streams.
     #[test]
     fn a_step_records_log_maps_with_its_step_records_and_counts() {
         let held = held_view(&fixture_named("assignment-step-records-response.json"));
@@ -999,8 +998,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-146: a records log of `source` alone, of a run that has no run log,
-    // maps to a records log with no step and no records.
+    // A records log of `source` alone, of a run that has no run log, maps to a records log
+    // with no step and no records.
     #[test]
     fn a_step_records_log_of_its_source_alone_maps_with_no_step() {
         let held = held_view(&fixture_named("assignment-step-records-none-response.json"));
@@ -1018,8 +1017,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-141, REQ-RUNNERENROLL-144: not held, an earlier release, an
-    // unreadable answer and no answer are told apart.
+    // Not held, an earlier release, an unreadable answer and no answer are told
+    // apart.
     #[test]
     fn assignment_failures_map_to_the_three_errors() {
         assert_eq!(
@@ -1040,9 +1039,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-135: a state and a kind this release does not know arrive as the
-    // words, a step with no work member runs nothing known, and a start that does not parse
-    // is left out.
+    // A state and a kind this release does not know arrive as the words, a step with no
+    // work member runs nothing known, and a start that does not parse is left out.
     #[test]
     fn a_step_this_release_does_not_know_keeps_its_words() {
         let mut document = fixture_named("assignment-response.json");
@@ -1062,7 +1060,7 @@ mod tests {
         assert_eq!(step.started_at, None);
     }
 
-    // REQ-RUNNERENROLL-144: the view's query is the protocol's, member for member.
+    // The view's query is the protocol's, member for member.
     #[test]
     fn a_query_maps_to_the_protocol_query() {
         let query = RunnerWatchAssignmentQuery {
@@ -1116,9 +1114,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-140: one entry per assignment, titled by its subject or else its run
-    // ID, with a waiting run's wait, a running run's step path and an event of each kind in
-    // words naming its facts.
+    // One entry per assignment, titled by its subject or else its run ID, with a waiting
+    // run's wait, a running run's step path and an event of each kind in words naming its
+    // facts.
     #[test]
     fn the_fixture_overview_maps_to_what_the_viewer_draws() {
         let view = mapped(&fixture_document());
@@ -1233,9 +1231,8 @@ mod tests {
         assert_eq!(view.events_omitted, 2);
     }
 
-    // REQ-RUNNERENROLL-138: the disk's three events are drawn in words naming their sizes
-    // or their run, the turn to low and the declined offer as failures and the recovery as
-    // a success.
+    // The disk's three events are drawn in words naming their sizes or their run, the turn
+    // to low and the declined offer as failures and the recovery as a success.
     #[test]
     fn the_disk_events_map_to_words_naming_their_sizes() {
         let view = mapped(&fixture_named("overview-disk-events-response.json"));
@@ -1260,8 +1257,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-140: the overview's disk reading maps with its sizes, minimum and low
-    // state, the member this release does not know left behind.
+    // The overview's disk reading maps with its sizes, minimum and low state, the member
+    // this release does not know left behind.
     #[test]
     fn the_disk_reading_maps_with_its_sizes_minimum_and_state() {
         let view = mapped(&fixture_named("overview-disk-response.json"));
@@ -1277,8 +1274,8 @@ mod tests {
         assert_eq!(mapped(&fixture_document()).disk, None);
     }
 
-    // REQ-RUNNERENROLL-135: a phase, a result and an event kind this release does not know
-    // arrive as the word received, and a provider entry it cannot read keeps its two words.
+    // A phase, a result and an event kind this release does not know arrive as the word
+    // received, and a provider entry it cannot read keeps its two words.
     #[test]
     fn words_this_release_does_not_know_arrive_as_received() {
         let mut document = fixture_document();
@@ -1308,8 +1305,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-142: each operation's answer becomes an outcome that names what the
-    // runner did or the code it refused with.
+    // Each operation's answer becomes an outcome that names what the runner did or the
+    // code it refused with.
     #[test]
     fn operation_answers_map_to_outcomes_that_name_their_facts() {
         let reloaded = reload_outcome(Ok(Response::Reloaded {
@@ -1364,8 +1361,8 @@ mod tests {
         assert!(matches!(unreachable, RunnerWatchOutcome::Refused(ref facts) if !facts.is_empty()));
     }
 
-    // REQ-RUNNERENROLL-142: every closed error is a fact the viewer can draw whole on its
-    // minimum width, which it would otherwise count rather than show.
+    // Every closed error is a fact the viewer can draw whole on its minimum width, which
+    // it would otherwise count rather than show.
     #[test]
     fn every_closed_error_fits_the_notice_whole() {
         for error in [

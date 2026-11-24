@@ -45,8 +45,8 @@ const METADATA_CLEANUP_IDENTITY_VARIABLE: &str = "USEFUL_TEST_METADATA_CLEANUP_I
 const BOOT_MARKER: &[u8] = b"useful-runner-serve/boot-root/v1\n";
 const ASSIGNMENT_MARKER: &[u8] = b"useful-runner-serve/assignment-root/v1\n";
 // Historical boots are read for the startup report and removed only by the
-// kept-run pass (INV-RUNNER-52). Never rewrite their evidence or use this
-// descriptor to authorize a current-boot claim.
+// kept-run pass. Never rewrite their evidence or use this descriptor to
+// authorize a current-boot claim.
 #[derive(Clone, Copy)]
 struct RetainedFormat {
     marker_name: &'static str,
@@ -1320,7 +1320,7 @@ fn safe_private_file(metadata: &Metadata) -> bool {
 
 /// Reports the kept directories of an earlier boot and records each one whose markers
 /// verify in the boot's format in the kept-run inventory. Anything else the boot holds
-/// keeps the boot's directory (INV-RUNNER-52).
+/// keeps the boot's directory.
 fn discover_retained_workspaces(
     boot: &OwnedTree,
     format: RetainedFormat,
@@ -1481,7 +1481,7 @@ pub(super) struct WorkRootLease {
     retained: Arc<AtomicBool>,
     /// The kept directories the kept-run pass may remove, shared with every
     /// assignment root so that a kept attempt registers itself and a claim is
-    /// fenced against a withdrawal (INV-RUNNER-52).
+    /// fenced against a withdrawal.
     kept_runs: Arc<Mutex<KeptRuns>>,
     startup_retained: Vec<RetainedWorkspace>,
     workspace_release_spawner: Arc<dyn WorkspaceReleaseSpawner>,
@@ -1837,7 +1837,7 @@ impl WorkRootLease {
             .map_err(|_| AssignmentRootCreationError::OwnershipUnproven)?;
         // The kept-run pass withdraws a group under this lock before it removes any of
         // it and only while none of its directories holds a claim file, so the claim
-        // file exists before a withdrawal or is never created (INV-RUNNER-52).
+        // file exists before a withdrawal or is never created.
         let mut kept = self
             .kept_runs
             .lock()
@@ -2826,9 +2826,9 @@ fn read_cleanup_targets(authority: &WorkRootAuthority, names: &[String]) -> Opti
         .collect()
 }
 
-/// The kept-run inventory (INV-RUNNER-52): the kept assignment directories of the work
-/// root that the kept-run pass may remove, recorded by identity and never by an open
-/// descriptor, and the lease's steps of the pass over them.
+/// The kept-run inventory: the kept assignment directories of the work root that the
+/// kept-run pass may remove, recorded by identity and never by an open descriptor, and
+/// the lease's steps of the pass over them.
 mod kept_inventory {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::MutexGuard;
@@ -3247,7 +3247,7 @@ mod kept_inventory {
             })
         }
 
-        /// Each directory whose removal failed, a member of its own (REQ-WORKSPACE-45).
+        /// Each directory whose removal failed, a member of its own.
         pub(in crate::service) fn failed_kept_members(&self) -> Vec<KeptMember> {
             let kept = self.kept();
             let work_root = self.engine.authority.work_root();
@@ -3863,7 +3863,6 @@ mod tests {
         assert!(previous_path.is_dir());
     }
 
-    // REQ-CONTINUE-49
     #[test]
     fn retained_claim_requires_exact_identity_and_excludes_a_second_owner() {
         let directory = private_work_root();
@@ -3979,7 +3978,7 @@ mod tests {
         assert!(previous_path.is_dir());
     }
 
-    // REQ-CONTINUE-48: a kept directory that is gone is no longer kept, not unproven.
+    // A kept directory that is gone is no longer kept, not unproven.
     #[test]
     fn retained_claim_of_a_missing_kept_directory_is_unavailable() {
         const RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -4061,7 +4060,6 @@ mod tests {
         ));
     }
 
-    // REQ-WORKSPACE-43, INV-RUNNER-43
     #[test]
     fn an_earlier_releases_recovery_root_record_changes_no_cleanup_or_claim() {
         for record in [
@@ -4123,7 +4121,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-65
     #[test]
     fn contention_precedes_enumeration_and_independent_roots_remain_usable() {
         let shared = private_work_root();
@@ -4167,7 +4164,6 @@ mod tests {
         assert_eq!(first.boot_path(), shared.path().join(BOOT_A));
     }
 
-    // REQ-RUNNERENROLL-65
     #[test]
     fn replacing_the_locked_file_cannot_create_a_second_owner() {
         let root = private_work_root();
@@ -4181,7 +4177,6 @@ mod tests {
         assert!(first_boot.exists());
     }
 
-    // REQ-RUNNERENROLL-65
     #[test]
     fn shared_work_root_fails_before_lock_creation_or_child_inspection() {
         let root = private_work_root();
@@ -4280,7 +4275,6 @@ mod tests {
         }
     }
 
-    // REQ-COMPAT-51
     #[test]
     fn unsafe_or_mixed_legacy_evidence_remains_unknown_and_untouched() {
         #[derive(Clone, Copy, Debug)]
@@ -4375,8 +4369,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-69
-    // REQ-RUNNERENROLL-66
     #[test]
     fn startup_retains_old_boots_and_creates_a_fresh_root() {
         let root = private_work_root();
@@ -4535,7 +4527,6 @@ mod tests {
         assert_eq!(failed_remover.calls.load(Ordering::Relaxed), 6);
     }
 
-    // REQ-RUNNERENROLL-69, REQ-WORKSPACE-43, REQ-COMPAT-51
     #[test]
     fn retained_attempt_survives_restart_with_identity_and_original_bytes() {
         for legacy in [false, true] {
@@ -4571,8 +4562,8 @@ mod tests {
             first.release_boot_root_pending().wait(),
             CleanupResult::Retained
         );
-        // REQ-WORKSPACE-43: an earlier release's recovery records in a retained
-        // run's `private` directory are left as they are.
+        // An earlier release's recovery records in a retained run's `private`
+        // directory are left as they are.
         let private = root.path().join(BOOT_A).join(ASSIGNMENT).join("private");
         let earlier_records = [
             private.join(".useful-recovery-manifest-v1.json"),
@@ -4795,7 +4786,6 @@ mod tests {
         assert!(external_assignment_path.join(ATTEMPT_RECORD_NAME).exists());
     }
 
-    // REQ-RUNNERENROLL-68
     #[test]
     fn process_stop_failure_retains_without_invoking_the_remover() {
         let root = private_work_root();
@@ -5236,7 +5226,6 @@ mod tests {
             .collect()
     }
 
-    // REQ-WORKSPACE-44, INV-RUNNER-52
     #[test]
     fn kept_run_pass_removes_an_earlier_boots_aged_directories_and_its_emptied_boot() {
         let root = private_work_root();
@@ -5287,7 +5276,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-45, INV-RUNNER-52
     #[test]
     fn kept_run_pass_leaves_a_claimed_workspace_and_a_removed_one_is_unavailable() {
         let root = private_work_root();
@@ -5318,7 +5306,6 @@ mod tests {
         ));
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn kept_run_pass_removes_the_oldest_beyond_the_size_bound_and_keeps_the_newest() {
         const PAYLOAD_BYTES: u64 = 1 << 20;
@@ -5364,7 +5351,6 @@ mod tests {
         }
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn kept_run_pass_ages_and_removes_a_continuation_chain_together() {
         let now = fixed_now();
@@ -5411,7 +5397,6 @@ mod tests {
         }
     }
 
-    // REQ-WORKSPACE-45, INV-RUNNER-52
     #[test]
     fn kept_run_pass_never_removes_what_it_cannot_prove_or_an_interrupted_removal() {
         let root = private_work_root();
@@ -5480,7 +5465,6 @@ mod tests {
         assert!(root.path().join(BOOT_C).is_dir());
     }
 
-    // REQ-WORKSPACE-45
     #[test]
     fn a_failed_kept_run_removal_is_reported_once_and_not_tried_again() {
         let root = private_work_root();
@@ -5501,7 +5485,6 @@ mod tests {
         owner.create_assignment(ASSIGNMENT).unwrap();
     }
 
-    // REQ-WORKSPACE-45, INV-RUNNER-52
     #[test]
     fn a_continuation_of_a_withdrawn_kept_workspace_is_unavailable() {
         let root = private_work_root();
@@ -5529,8 +5512,8 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-44: a workspace ages from the end of the last attempt that continued
-    // it, so a pass does not take one on what it read before that attempt.
+    // A workspace ages from the end of the last attempt that continued it, so a pass
+    // does not take one on what it read before that attempt.
     #[test]
     fn a_kept_workspace_continued_since_a_pass_read_it_is_not_withdrawn() {
         let root = private_work_root();
@@ -5564,7 +5547,6 @@ mod tests {
         assert!(owner.withdraw_kept_group(group));
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn a_stopped_kept_run_pass_leaves_the_rest_untouched() {
         let now = fixed_now();

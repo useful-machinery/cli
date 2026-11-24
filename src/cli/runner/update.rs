@@ -1,5 +1,4 @@
-//! `useful runner update`: moves a runner to another pool, renames it, or both
-//! (REQ-RUNNERPOOL-57).
+//! `useful runner update`: moves a runner to another pool, renames it, or both.
 
 use anyhow::Context;
 use clap::{ArgGroup, Args};

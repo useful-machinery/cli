@@ -23,9 +23,8 @@ pub(in crate::cli) struct Command {
     options: Options,
 }
 
-/// What revoking does (REQ-GRANT-68): an OAuth grant is erased and revoked at the provider,
-/// a native grant's runners' runs are asked to stop (REQ-GRANT-48), and a token is erased from
-/// Cloud alone (REQ-INTEGRATION-20).
+/// What revoking does: an OAuth grant is erased and revoked at the provider, a native grant's
+/// runners' runs are asked to stop, and a token is erased from Cloud alone.
 impl Stated for Command {
     const COMMAND: &'static str = "useful account integration disconnect";
     const STATEMENT: Statement = Statement(&[
@@ -43,8 +42,8 @@ impl Stated for Command {
 }
 
 impl Command {
-    /// Revokes what `INTEGRATION` names: a grant, or the member's token of a token service
-    /// (REQ-INTEGRATION-20).
+    /// Revokes what `INTEGRATION` names: a grant, or the member's token of a token
+    /// service.
     pub(super) fn run(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
         let key = useful_support::generate_idempotency_key()
             .context("generate grant revocation request key")?;
@@ -56,9 +55,9 @@ impl Command {
             |api, subject| match subject {
                 Subject::Grant(grant) => {
                     replayed(|| api.revoke(&grant.id, &key))?;
-                    // A revoked native grant is still read back (REQ-GRANT-13). The read only
-                    // reports each runner's removal and stop; its failure leaves the revocation
-                    // done. An OAuth grant's runners kept no copy.
+                    // A revoked native grant is still read back. The read only reports each
+                    // runner's removal and stop; its failure leaves the revocation done. An
+                    // OAuth grant's runners kept no copy.
                     Ok((grant.kind == MemberGrantKind::GrantKindNative)
                         .then(|| api.get(&grant.id).ok()))
                 }

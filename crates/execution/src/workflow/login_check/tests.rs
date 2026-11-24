@@ -1,6 +1,6 @@
-// INV-HARNESS-18, REQ-AGENT-45: a login check launches the coding agent's program through
-// its adapter, in an empty directory of its own that it removes, and answers by the step
-// runtime's judgment. The scripted stand-ins record what the program received.
+// A login check launches the coding agent's program through its adapter, in an empty
+// directory of its own that it removes, and answers by the step runtime's judgment. The
+// scripted stand-ins record what the program received.
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
@@ -322,7 +322,7 @@ async fn a_claude_code_turn_that_completes_is_accepted() {
         assert_eq!(check, HarnessLoginCheck::Accepted);
         stand_in.assert_contained_launch(CLAUDE_CODE_LOGIN_VARIABLE, CLAUDE_CODE_TOKEN.as_ref());
         // The check leaves the service's Claude Code configuration directory
-        // as it found it (REQ-GRANT-37, REQ-GRANT-90).
+        // as it found it.
         let config = stand_in.root().join("claude-config");
         assert_eq!(std::fs::read_dir(config).unwrap().count(), 0);
     })

@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -19,12 +19,18 @@ use serde::{Deserialize, Serialize};
 pub struct GitHubSetupSession {
     #[serde(rename = "id")]
     pub id: String,
+    /// Begin always answers `pending`; a read answers a pending session past its expiry as `expired`.
     #[serde(rename = "state")]
     pub state: State,
     #[serde(rename = "expiresAt")]
     pub expires_at: String,
     #[serde(rename = "setupUrl")]
     pub setup_url: String,
+    /// GitHub's user authorization of the GitHub App for this session; approving it returns the browser to the grant callback, which verifies the session. Begin always answers it; a read answers it only while the session is pending and GitHub's user authorization has not yet answered.
+    #[serde(rename = "authorizationUrl", skip_serializing_if = "Option::is_none")]
+    pub authorization_url: Option<String>,
+    #[serde(rename = "verification")]
+    pub verification: Box<models::GitHubSetupVerification>,
 }
 
 impl GitHubSetupSession {
@@ -33,19 +39,27 @@ impl GitHubSetupSession {
         state: State,
         expires_at: String,
         setup_url: String,
+        verification: models::GitHubSetupVerification,
     ) -> GitHubSetupSession {
         GitHubSetupSession {
             id,
             state,
             expires_at,
             setup_url,
+            authorization_url: None,
+            verification: Box::new(verification),
         }
     }
 }
+/// Begin always answers `pending`; a read answers a pending session past its expiry as `expired`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum State {
     #[serde(rename = "pending")]
     Pending,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "expired")]
+    Expired,
 }
 
 impl Default for State {

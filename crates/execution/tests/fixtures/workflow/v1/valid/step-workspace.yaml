@@ -1,0 +1,33 @@
+schemaVersion: 1
+steps:
+  seed:
+    kind: cmd
+    command: {argv: ["true"]}
+    outputs:
+      value: {kind: text, from: path, path: value}
+  candidate:
+    kind: cmd
+    workspace: new
+    inputs:
+      value: {ref: outputs.seed.value}
+    command: {argv: ["true"]}
+  check:
+    kind: cmd
+    workspace: write
+    dependsOn: [candidate]
+    command: {argv: ["true"]}
+  again:
+    kind: cmd
+    workspace: new
+    dependsOn: [check]
+    command: {argv: ["true"]}
+  inspect:
+    kind: cmd
+    workspace: read
+    dependsOn: [check]
+    command: {argv: ["true"]}
+  report:
+    kind: cmd
+    workspace: none
+    dependsOn: [inspect]
+    command: {argv: ["true"]}

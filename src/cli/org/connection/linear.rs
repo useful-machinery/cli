@@ -25,8 +25,8 @@ use super::super::super::{
 pub(super) type Options =
     CommonArgs<super::super::super::StreamingJson, PrincipalAuthenticationArgs>;
 
-/// How `create linear` and `reconnect` of a Linear connection authorize and whether they wait
-/// (REQ-CONNECTION-41, REQ-CONNECTION-87); the command's `--timeout` bounds the wait.
+/// How `create linear` and `reconnect` of a Linear connection authorize and whether they
+/// wait; the command's `--timeout` bounds the wait.
 #[derive(Debug, Args)]
 pub(super) struct Authorization {
     #[arg(long, help = "Request Linear state-update write permission")]
@@ -40,15 +40,21 @@ pub(super) struct Authorization {
 }
 
 impl Authorization {
-    /// The first of these options given, which a connection of another provider refuses
-    /// (REQ-CONNECTION-106).
+    /// The first of these options given, which a connection of another provider
+    /// refuses.
     pub(super) fn given(&self) -> Option<&'static str> {
-        [
-            ("--state-updates", self.state_updates),
-            ("--no-wait", self.no_wait),
-        ]
-        .into_iter()
-        .find_map(|(option, given)| given.then_some(option))
+        self.state_updates_given()
+            .or_else(|| self.no_wait.then_some("--no-wait"))
+    }
+
+    /// `--state-updates`, where given, which Linear alone takes.
+    pub(super) fn state_updates_given(&self) -> Option<&'static str> {
+        self.state_updates.then_some("--state-updates")
+    }
+
+    /// Whether `--no-wait` was given, which GitHub's setup takes too.
+    pub(super) const fn no_wait(&self) -> bool {
+        self.no_wait
     }
 }
 
@@ -91,7 +97,7 @@ struct Recovery {
 
 /// Starts a Linear authorization session in `organization`, connecting a new workspace, or with
 /// `connection` reauthorizing that connection, and waits for it up to `timeout` unless
-/// `--no-wait` was given (REQ-CONNECTION-40 to REQ-CONNECTION-43, REQ-CONNECTION-108).
+/// `--no-wait` was given.
 pub(super) fn authorize(
     deployment: Deployment,
     options: Options,
@@ -321,7 +327,7 @@ mod tests {
 }
 
 /// Shows the Linear authorization session `session` of `organization` to the owner who started
-/// it (REQ-CONNECTION-105).
+/// it.
 pub(super) fn show_session<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -341,7 +347,7 @@ pub(super) fn show_session<F: JsonOutputKind>(
         ),
     }
 }
-/// Shows the Linear connection `connection` of `organization` (REQ-CONNECTION-105).
+/// Shows the Linear connection `connection` of `organization`.
 pub(super) fn show<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -369,7 +375,7 @@ pub(super) fn show<F: JsonOutputKind>(
         ),
     }
 }
-/// What `useful org integration disconnect` does to a Linear connection (REQ-CONNECTION-39).
+/// What `useful org integration disconnect` does to a Linear connection.
 #[derive(Clone, Copy)]
 pub(super) enum Action {
     /// Disconnects it and keeps its workspace held.
@@ -386,7 +392,7 @@ impl Action {
     }
 }
 /// Disconnects or deletes the Linear connection `connection` of `organization`, repeating the
-/// request once with the same key after an ambiguous transport failure (REQ-CONNECTION-39).
+/// request once with the same key after an ambiguous transport failure.
 pub(super) fn remove<F: JsonOutputKind + Send + 'static>(
     d: Deployment,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -455,8 +461,8 @@ pub(super) fn remove<F: JsonOutputKind + Send + 'static>(
         },
     )
 }
-/// Lists one page of the teams the Linear connection `connection` of `organization` reaches
-/// (REQ-CONNECTION-87).
+/// Lists one page of the teams the Linear connection `connection` of `organization`
+/// reaches.
 pub(super) fn list_teams<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -489,8 +495,7 @@ pub(super) fn list_teams<F: JsonOutputKind>(
     })
 }
 /// Lists one page of the workflow states of the Linear team `team` that the connection
-/// `connection` of `organization` reaches, with the states suggested for each preset
-/// (REQ-CONNECTION-87).
+/// `connection` of `organization` reaches, with the states suggested for each preset.
 pub(super) fn list_states<F: JsonOutputKind>(
     d: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -719,7 +724,7 @@ fn connection_output(
     id: &str,
     connection: Option<&LinearConnection>,
     // The outcome, and the runners' authorizations in force for the connection where `show`
-    // read them (REQ-INTEGRATION-34).
+    // read them.
     (outcome, authorizations): (&str, Option<&InForce>),
     json: bool,
 ) -> anyhow::Result<ExitCode> {

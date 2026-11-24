@@ -48,7 +48,6 @@ fn tree_digest(root: &Path) -> String {
         .value
 }
 
-// REQ-WFDEF-11
 #[test]
 fn tree_digest_depends_on_paths_and_bytes_not_modes_or_times() {
     let first = engineering_like_tree();
@@ -78,7 +77,6 @@ fn tree_digest_depends_on_paths_and_bytes_not_modes_or_times() {
     assert_ne!(digest, tree_digest(second.path()));
 }
 
-// REQ-WFDEF-12
 #[test]
 fn excluded_files_do_not_contribute_to_the_tree_digest() {
     let tree = engineering_like_tree();
@@ -93,7 +91,7 @@ fn excluded_files_do_not_contribute_to_the_tree_digest() {
     assert_eq!(validated.workflow_files, ["workflow.yaml"]);
 }
 
-// REQ-WFDEF-11: the framing Gateway reproduces.
+// The framing Gateway reproduces.
 #[test]
 fn tree_digest_is_the_documented_framing_over_sorted_paths() {
     let temporary = tempfile::tempdir().expect("temporary tree should be created");
@@ -126,7 +124,6 @@ fn tree_digest_is_the_documented_framing_over_sorted_paths() {
     assert_eq!(validated.digest.value, expected);
 }
 
-// REQ-WFDEF-12
 #[test]
 fn exclude_patterns_follow_the_documented_grammar() {
     let matches = |pattern: &str, path: &str| {
@@ -151,7 +148,6 @@ fn exclude_patterns_follow_the_documented_grammar() {
     }
 }
 
-// REQ-WFDEF-12
 #[test]
 fn an_exclude_that_matches_the_root_or_a_bad_pattern_is_rejected() {
     let temporary = tempfile::tempdir().expect("temporary tree should be created");
@@ -205,8 +201,6 @@ finalizers:
       argv: ["/usr/bin/true"]
 "#;
 
-// REQ-WFDEF-16
-// REQ-WFEXEC-54
 #[test]
 fn a_path_argv_anywhere_in_the_tree_is_command_program_is_path() {
     let tree = engineering_like_tree();
@@ -252,7 +246,7 @@ fn a_path_argv_anywhere_in_the_tree_is_command_program_is_path() {
     );
 }
 
-// REQ-WFDEF-16: the walk keeps each kept file's bytes and owner execute bit for the run copy.
+// The walk keeps each kept file's bytes and owner execute bit for the run copy.
 #[test]
 fn a_valid_tree_keeps_its_files_with_their_executable_bit() {
     let tree = engineering_like_tree();
@@ -290,8 +284,8 @@ const MEMBER_BINDINGS: &str = r#"bindings:
   backupOwner: {kind: member, default: "prn_c"}
 "#;
 
-// REQ-WFDEF-29: `member` and `members` bindings validate with their defaults as declared,
-// and each kind's default has its own type.
+// `member` and `members` bindings validate with their defaults as declared, and each
+// kind's default has its own type.
 #[test]
 fn member_kinds_validate_with_typed_defaults() {
     let tree = engineering_like_tree();
@@ -431,9 +425,9 @@ fn single_trigger_rejection(from: &str, to: &str) -> (&'static str, Option<&'sta
     (code, *key)
 }
 
-// REQ-WFDEF-51, REQ-WFDEF-54, REQ-WFDEF-55, REQ-WFDEF-56, REQ-WFDEF-14, REQ-WFDEF-30, REQ-WFDEF-31: a boolean operand, `stopBefore`, a
-// filtered `owner` and a schedule trigger validate, and the tree keeps them, each rule's
-// `where` and each start trigger's `subject` and `inputs` as written for the report.
+// A boolean operand, `stopBefore`, a filtered `owner` and a schedule trigger validate, and the tree
+// keeps them, each rule's `where` and each start trigger's `subject` and `inputs` as written for
+// the report.
 #[test]
 fn start_trigger_declarations_and_a_schedule_trigger_validate() {
     let tree = trigger_tree(TRIGGER_ROOT);
@@ -498,7 +492,7 @@ fn start_trigger_declarations_and_a_schedule_trigger_validate() {
     );
 }
 
-// REQ-WFDEF-51: `true` and `false` are operands; a quoted literal is still refused.
+// `true` and `false` are operands; a quoted literal is still refused.
 #[test]
 fn a_boolean_operand_passes_and_a_quoted_literal_does_not() {
     let (code, key) = single_trigger_rejection(
@@ -519,9 +513,37 @@ const CONTROL_TRIGGER: &str = r#"  release:
       action: {when: "event.to == $linearTeam", then: cancel, else: withdraw}
 "#;
 
-// REQ-WFDEF-52, REQ-WFDEF-51: a start `where` and a control `on.where` outside the grammar Cloud evaluates
-// them with, and a control `when` the wait's evaluator cannot parse, are
-// `trigger_rule_invalid`; a quoted literal and an undeclared `$key` keep their own codes.
+#[test]
+fn validated_tree_keeps_the_declared_control_action() {
+    use crate::workflow::document::TriggerControlAction;
+
+    let conditional = r#"{when: "event.to == $linearTeam", then: cancel, else: withdraw}"#;
+    for (declaration, expected) in [
+        (
+            conditional,
+            TriggerControlAction::Conditional {
+                when: "event.to == $linearTeam".to_owned(),
+                then: "cancel".to_owned(),
+                otherwise: "withdraw".to_owned(),
+            },
+        ),
+        ("release", TriggerControlAction::Named("release".to_owned())),
+    ] {
+        let root = format!(
+            "{TRIGGER_ROOT}{}",
+            CONTROL_TRIGGER.replace(conditional, declaration)
+        );
+        let tree = trigger_tree(&root);
+        let validated = validate_workflow_tree(tree.path()).expect("tree should validate");
+        assert_eq!(validated.triggers["release"].action, Some(expected));
+        assert_eq!(validated.triggers["start"].action, None);
+        assert_eq!(validated.triggers["nightly"].action, None);
+    }
+}
+
+// A start `where` and a control `on.where` outside the grammar Cloud evaluates them with, and a
+// control `when` the wait's evaluator cannot parse, are `trigger_rule_invalid`; a quoted literal
+// and an undeclared `$key` keep their own codes.
 #[test]
 fn a_trigger_rule_outside_its_grammar_is_refused() {
     let start_where = "\"event.team == $linearTeam and event.issue.blocked == false\"";
@@ -604,8 +626,8 @@ fn a_trigger_rule_outside_its_grammar_is_refused() {
     assert_eq!((code, key), ("literal_where_binding_expected", None));
 }
 
-// REQ-WFDEF-52: the validator accepts exactly the `where` rules the shared corpus accepts,
-// which the Gateway's `workflowtrigger.ParseRule` test reads too, so the two cannot drift.
+// The validator accepts exactly the `where` rules the shared corpus accepts, which the
+// Gateway's `workflowtrigger.ParseRule` test reads too, so the two cannot drift.
 #[test]
 fn the_where_grammar_accepts_exactly_the_shared_corpus() {
     let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
@@ -631,8 +653,8 @@ fn the_where_grammar_accepts_exactly_the_shared_corpus() {
     }
 }
 
-// REQ-WFDEF-54, REQ-WFDEF-30: `owner` names a `member` binding, and its filters `members`
-// bindings beside an event owner only.
+// `owner` names a `member` binding, and its filters `members` bindings beside an event
+// owner only.
 #[test]
 fn owner_bindings_and_filters_are_checked() {
     let owner = "owner: {from: [event.issue.assignee, event.issue.creator], only: $includedOwners, except: $excludedOwners}";
@@ -690,7 +712,6 @@ fn owner_bindings_and_filters_are_checked() {
     );
 }
 
-// REQ-WFDEF-55, REQ-WFDEF-30
 #[test]
 fn stop_before_labels_must_be_an_event_path() {
     let (code, key) = single_trigger_rejection("labels: event.issue.labels", "labels: \"x\"");
@@ -700,8 +721,7 @@ fn stop_before_labels_must_be_an_event_path() {
     );
 }
 
-// REQ-WFDEF-56, REQ-WFDEF-57, REQ-WFDEF-14, REQ-WFDEF-31: a schedule trigger reads no event, and its
-// timetable has the cron and zone shape.
+// A schedule trigger reads no event, and its timetable has the cron and zone shape.
 #[test]
 fn a_schedule_trigger_reads_no_event_and_has_a_timetable_of_the_right_shape() {
     let schedule = "    on: {schedule: \"0 6 * * *\", timezone: \"UTC\"}\n";
@@ -735,8 +755,8 @@ fn a_schedule_trigger_reads_no_event_and_has_a_timetable_of_the_right_shape() {
         )),
         [nightly("schedule_trigger_invalid", "owner")]
     );
-    // A literal subject keeps one live run at a time; the tree keeps it for the report
-    // (REQ-WFDEF-14).
+    // A literal subject keeps one live run at a time; the tree keeps it for the
+    // report.
     let tree = trigger_tree(&with("    subject: nightly\n"));
     let validated = validate_workflow_tree(tree.path())
         .unwrap_or_else(|diagnostics| panic!("tree should be valid: {diagnostics:?}"));
@@ -834,9 +854,9 @@ fn located(
     )
 }
 
-// REQ-WFDEF-58, REQ-WFDEF-39: a definition trigger names a declared `definition` binding,
-// and its subject, inputs and owner read only what a finished run's event holds: the run's
-// members and `event.exports.<name>`, an export name. It declares no `stopBefore`.
+// A definition trigger names a declared `definition` binding, and its subject, inputs and
+// owner read only what a finished run's event holds: the run's members and
+// `event.exports.<name>`, an export name. It declares no `stopBefore`.
 #[test]
 fn a_definition_trigger_names_a_definition_binding_and_reads_only_a_runs_event() {
     let on = "{definition: $verify, outcome: broken}";
@@ -953,8 +973,8 @@ fn a_definition_trigger_names_a_definition_binding_and_reads_only_a_runs_event()
     );
 }
 
-// REQ-WFDEF-33, REQ-WFDEF-53: a definition trigger is a start trigger: `queueLatest` needs
-// the root's subject slot, and it binds every required root input.
+// A definition trigger is a start trigger: `queueLatest` needs the root's subject slot,
+// and it binds every required root input.
 #[test]
 fn a_definition_trigger_queues_on_the_subject_slot_and_binds_required_inputs() {
     let on = "{definition: $verify, outcome: [broken, failed]}";
@@ -989,8 +1009,8 @@ fn a_definition_trigger_queues_on_the_subject_slot_and_binds_required_inputs() {
     );
 }
 
-// REQ-WFDEF-33: `queueLatest` needs the root's subject slot, on an event or a schedule
-// trigger; `skip` needs none; the tree keeps a declared setting and none when undeclared.
+// `queueLatest` needs the root's subject slot, on an event or a schedule trigger; `skip`
+// needs none; the tree keeps a declared setting and none when undeclared.
 #[test]
 fn queue_latest_needs_a_root_subject_and_the_tree_keeps_the_busy_behavior() {
     let declare = |root: &str, trigger: &str, behavior: &str| {
@@ -1117,9 +1137,9 @@ fn trigger_reference(
     )]
 }
 
-// REQ-WFDEF-37, REQ-WFDEF-38, REQ-WFDEF-10: a root whose bindings are declared under its
-// integrations validates with its triggers on `linear` itself, the source kept as written, and
-// a root that references one integration binding beside its flat block validates too.
+// A root whose bindings are declared under its integrations validates with its triggers on
+// `linear` itself, the source kept as written, and a root that references one integration
+// binding beside its flat block validates too.
 #[test]
 fn integration_bindings_and_an_integration_source_validate() {
     let tree = reference_tree(NESTED_ROOT);
@@ -1134,7 +1154,7 @@ fn integration_bindings_and_an_integration_source_validate() {
         Some("linear")
     );
     assert!(validated.bindings.is_empty());
-    // REQ-WFDEF-61: each integration keeps its bindings as declared for what reads the tree.
+    // Each integration keeps its bindings as declared for what reads the tree.
     assert_eq!(
         validated.required_integrations[&IntegrationProvider::Linear].bindings["ownedState"],
         IntegrationBinding {
@@ -1153,9 +1173,9 @@ fn integration_bindings_and_an_integration_source_validate() {
     );
 }
 
-// REQ-WFDEF-63, REQ-WFDEF-38, REQ-WFDEF-10: an integration reference that names no declared
-// binding, of a kind the place does not take, or a source naming an undeclared integration
-// is refused, located with the integration and the binding as written.
+// An integration reference that names no declared binding, of a kind the place does not
+// take, or a source naming an undeclared integration is refused, located with the
+// integration and the binding as written.
 #[test]
 fn integration_references_and_sources_are_checked() {
     const START_WHERE: &str = "event.state == $linear.ownedState\"}";
@@ -1243,9 +1263,8 @@ fn integration_references_and_sources_are_checked() {
     );
 }
 
-// REQ-WFDEF-64: a flat key that is also a name an integration declares, or the id of an
-// integration that declares bindings, is declared twice; the id of one that declares none is
-// not.
+// A flat key that is also a name an integration declares, or the id of an integration that
+// declares bindings, is declared twice; the id of one that declares none is not.
 #[test]
 fn a_binding_declared_twice_is_refused() {
     let flat = |block: &str| {
@@ -1285,8 +1304,8 @@ fn a_binding_declared_twice_is_refused() {
         .unwrap_or_else(|diagnostics| panic!("tree should be valid: {diagnostics:?}"));
 }
 
-// REQ-WFDEF-37, REQ-WFDEF-63: a control's `when` takes a `$<id>.<name>` operand, the integration before
-// the last `.`, and refuses one with no integration or no identifier after it.
+// A control's `when` takes a `$<id>.<name>` operand, the integration before the last `.`, and
+// refuses one with no integration or no identifier after it.
 #[test]
 fn a_control_when_takes_an_integration_reference() {
     use crate::workflow::wait::control_when_parses;

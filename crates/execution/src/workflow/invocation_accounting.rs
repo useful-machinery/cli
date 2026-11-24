@@ -202,7 +202,6 @@ mod tests {
         )
     }
 
-    // REQ-AGENT-36
     #[test]
     fn cumulative_usage_updates_are_not_double_counted() {
         let log = InvocationAccountingLog::default();
@@ -230,7 +229,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-36
     #[test]
     fn message_snapshots_accumulate_once_across_model_calls() {
         let log = InvocationAccountingLog::default();

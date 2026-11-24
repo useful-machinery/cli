@@ -139,7 +139,6 @@ fn prepared_identity_command(
     (server, credential_directory, credential_path)
 }
 
-// REQ-ACCOUNT-41
 #[test]
 fn list_returns_one_exact_page_with_current_and_provenance_fields() {
     let server = ScriptedServer::respond(vec![identity_page(
@@ -215,7 +214,6 @@ fn list_returns_one_exact_page_with_current_and_provenance_fields() {
     );
 }
 
-// REQ-ACCOUNT-41
 #[test]
 fn list_passes_through_an_identity_grant_and_prints_its_state_and_id() {
     let grant = serde_json::json!({
@@ -266,7 +264,6 @@ fn list_passes_through_an_identity_grant_and_prints_its_state_and_id() {
     }
 }
 
-// REQ-GRANT-96
 #[test]
 fn list_passes_through_an_identity_grant_of_any_provider() {
     let grant = serde_json::json!({
@@ -305,7 +302,6 @@ fn list_passes_through_an_identity_grant_of_any_provider() {
     );
 }
 
-// REQ-ACCOUNT-44
 #[test]
 fn list_presents_only_exact_auth0_human_namespaces_without_changing_api_fields() {
     let mut gitlab = observed_gitlab_identity();
@@ -481,7 +477,6 @@ fn service_list_does_not_label_a_workload_subject() {
     }
 }
 
-// REQ-ACCOUNT-45, REQ-ACCOUNT-61
 #[test]
 fn unknown_identity_remains_removable_by_opaque_id() {
     let unknown = identity(
@@ -551,7 +546,6 @@ fn unknown_identity_remains_removable_by_opaque_id() {
     )));
 }
 
-// REQ-ACCOUNT-44, REQ-ACCOUNT-53
 #[test]
 fn successful_link_presents_human_provider_but_not_workload_provider() {
     // Link and list share one provider presentation; the list test covers every
@@ -693,7 +687,6 @@ fn service_link_reports_the_committed_result_when_interrupted_after_dispatch() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-ACCOUNT-51, REQ-ACCOUNT-52, REQ-ACCOUNT-53
 #[test]
 fn link_uses_fresh_separate_browser_proof_and_keeps_the_local_session() {
     let linked = identity(
@@ -782,7 +775,6 @@ fn link_uses_fresh_separate_browser_proof_and_keeps_the_local_session() {
     }
 }
 
-// REQ-ACCOUNT-52
 #[test]
 fn link_keeps_the_preflight_acting_session_across_browser_proof() {
     use std::io::{BufRead as _, BufReader};
@@ -881,7 +873,6 @@ fn link_keeps_the_preflight_acting_session_across_browser_proof() {
     );
 }
 
-// REQ-ACCOUNT-48, REQ-ACCOUNT-53
 #[test]
 fn link_reports_identity_unavailable_without_exposing_or_replacing_credentials() {
     assert_link_refusal_leaves_credentials_unchanged(
@@ -890,7 +881,6 @@ fn link_reports_identity_unavailable_without_exposing_or_replacing_credentials()
     );
 }
 
-// REQ-ACCOUNT-67, REQ-ACCOUNT-53
 #[test]
 fn link_reports_quantity_limit_reached_without_exposing_or_replacing_credentials() {
     assert_link_refusal_leaves_credentials_unchanged(
@@ -938,7 +928,6 @@ fn assert_link_refusal_leaves_credentials_unchanged(problem_type: &str, expected
     assert!(!combined.contains("unique-proposed-identity-access-token"));
 }
 
-// REQ-SERVICEPRINCIPAL-23, REQ-SERVICEPRINCIPAL-33
 #[test]
 fn service_link_reports_workload_policy_and_quantity_failures() {
     let directory = private_credential_directory();
@@ -1006,7 +995,6 @@ fn service_link_reports_workload_policy_and_quantity_failures() {
     }
 }
 
-// REQ-ACCOUNT-54
 #[test]
 fn link_does_not_report_an_unchanged_session_after_rejected_credential_cleanup() {
     let rejected = identity_problem(
@@ -1054,7 +1042,6 @@ fn link_does_not_report_an_unchanged_session_after_rejected_credential_cleanup()
     assert_eq!(server.finish().len(), 5);
 }
 
-// REQ-ACCOUNT-55
 #[test]
 fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link() {
     let original_principal = serde_json::json!({
@@ -1173,7 +1160,6 @@ fn stored_unclaimed_login_requires_forced_original_sign_in_before_separate_link(
     );
 }
 
-// REQ-ACCOUNT-61
 #[test]
 fn removing_the_former_session_identity_keeps_the_forced_login_session() {
     let removal = http_response_with_headers(
@@ -1276,7 +1262,6 @@ fn removing_the_former_session_identity_keeps_the_forced_login_session() {
     assert_eq!(requests[3].split_once("\r\n\r\n").unwrap().1, "");
 }
 
-// REQ-ACCOUNT-62
 #[test]
 fn remove_reports_freshness_and_retention_outcomes() {
     let cases = [
@@ -1327,7 +1312,6 @@ fn remove_reports_freshness_and_retention_outcomes() {
     }
 }
 
-// REQ-SERVICEPRINCIPAL-33
 #[test]
 fn service_remove_reports_disabled_workload_identity_linking() {
     let server = ScriptedServer::respond(vec![identity_problem(
@@ -1379,7 +1363,6 @@ fn service_remove_reports_disabled_workload_identity_linking() {
     );
 }
 
-// REQ-SERVICEPRINCIPAL-34
 #[test]
 fn service_link_refuses_ambiguous_secret_sources_before_any_request() {
     let directory = private_credential_directory();
@@ -1459,7 +1442,6 @@ fn service_link_human_does_not_label_a_workload_subject() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-SERVICEPRINCIPAL-23, REQ-SERVICEPRINCIPAL-29, REQ-SERVICEPRINCIPAL-32
 #[test]
 fn service_identity_link_uses_explicit_private_key_and_workload_token_files() {
     const SERVICE_KEY: &str =

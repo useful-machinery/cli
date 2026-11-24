@@ -75,10 +75,10 @@ pub(crate) struct RecoveryFailedExecution {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryCause {
     pub(crate) kind: String,
-    /// The failed agent execution's closed failure code (REQ-AGENT-39), never harness text.
+    /// The failed agent execution's closed failure code, never harness text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) code: Option<String>,
-    /// The adapter's closed protocol rejection reason (REQ-AGENT-42), never stream text.
+    /// The adapter's closed protocol rejection reason, never stream text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rejection_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +90,7 @@ pub(crate) struct RecoveryCause {
     pub(crate) harness_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) http_status: Option<u16>,
-    /// The provider's reset time for a usage-limit class, RFC 3339 UTC (REQ-AGENT-72).
+    /// The provider's reset time for a usage-limit class, RFC 3339 UTC.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) resets_at: Option<String>,
 }

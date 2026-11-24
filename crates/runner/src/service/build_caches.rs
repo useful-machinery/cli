@@ -1,9 +1,8 @@
-//! Build-cache eviction (REQ-RUNNERENROLL-161, REQ-RUNNERENROLL-165, INV-RUNNER-52): each
-//! cache the operator configuration names (REQ-RUNNERENROLL-160) that occupies more than its
-//! bound loses its least recently used files down to nine tenths of it, or under an
+//! Build-cache eviction: each cache the operator configuration names that occupies more than
+//! its bound loses its least recently used files down to nine tenths of it, or under an
 //! operator's `all` every file but its `CACHEDIR.TAG`, through
 //! `useful_execution::evict_least_recently_used`, with one record per cache. The measure
-//! (REQ-RUNNERENROLL-164) states what an eviction would find and removes nothing.
+//! states what an eviction would find and removes nothing.
 
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -56,9 +55,9 @@ pub(super) enum CacheState {
 
 /// Evicts from each cache in turn and answers one entry for each cache it opened and
 /// walked, writing one `runner.build_cache_evicted` record for each from which it removed
-/// a file or failed to remove one (REQ-RUNNERENROLL-161). Under `PruneScope::Bounds` a
-/// cache over its bound loses files down to nine tenths of it; under `All` every cache
-/// loses every file but its `CACHEDIR.TAG` (REQ-RUNNERENROLL-165).
+/// a file or failed to remove one. Under `PruneScope::Bounds` a cache over its bound
+/// loses files down to nine tenths of it; under `All` every cache loses every file but
+/// its `CACHEDIR.TAG`.
 ///
 /// A `path` at which nothing exists, or a symbolic link or anything but a directory is,
 /// is left as it is. `protected` names the work root and the directories that hold the
@@ -101,8 +100,8 @@ pub(super) fn evict_build_caches(
     evictions
 }
 
-/// The cache half of a kept-run pass (REQ-RUNNERENROLL-162, INV-RUNNER-53): evicts as
-/// `evict_build_caches` does while holding `fence`, and answers its evictions.
+/// The cache half of a kept-run pass: evicts as `evict_build_caches` does while
+/// holding `fence`, and answers its evictions.
 ///
 /// It evicts nothing, and answers none, when the fence cannot be held because a command is
 /// in it. Holding it, it continues while `may_continue` answers true and no command has
@@ -342,7 +341,6 @@ mod tests {
             .sum()
     }
 
-    // REQ-RUNNERENROLL-161
     #[test]
     fn eviction_records_each_cache_it_removed_from_and_follows_no_link() {
         let temporary = tempfile::tempdir().unwrap();
@@ -412,8 +410,8 @@ mod tests {
         assert!(fs::symlink_metadata(&missing).is_err());
     }
 
-    // REQ-RUNNERENROLL-164: the measure states each configured cache, in order, as an
-    // eviction would start from it, and removes nothing.
+    // The measure states each configured cache, in order, as an eviction would start
+    // from it, and removes nothing.
     #[test]
     fn the_measure_states_each_cache_as_an_eviction_would_find_it_and_removes_nothing() {
         let temporary = tempfile::tempdir().unwrap();
@@ -529,8 +527,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-165: an operator's eviction removes every file of a cache within
-    // its bound but its tag.
+    // An operator's eviction removes every file of a cache within its bound but its
+    // tag.
     #[test]
     fn an_operator_eviction_leaves_only_the_cache_and_its_tag() {
         let temporary = tempfile::tempdir().unwrap();
@@ -554,8 +552,8 @@ mod tests {
         let [eviction] = evictions.as_slice() else {
             panic!("one eviction: {evictions:?}");
         };
-        // REQ-RUNNERENROLL-164: what the report says is due is what the eviction frees,
-        // the tag it keeps left out.
+        // What the report says is due is what the eviction frees, the tag it keeps left
+        // out.
         let [
             CacheMeasure {
                 state: CacheState::Measured { bytes, due_bytes },
@@ -615,10 +613,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-162, INV-RUNNER-53: a command that asks while the cache half holds
-    // the command fence ends the eviction before its next removal and starts only once the
-    // eviction has returned, and while a command is in the fence the cache half removes
-    // nothing.
+    // A command that asks while the cache half holds the command fence ends the eviction
+    // before its next removal and starts only once the eviction has returned, and while a
+    // command is in the fence the cache half removes nothing.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_command_that_asks_during_an_eviction_ends_it_and_starts_after_it() {
         let temporary = tempfile::tempdir().unwrap();

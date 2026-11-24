@@ -68,7 +68,7 @@ const FIXTURE_TEST_NAME: &str = "workflow::step_runtime::tests::command_fixture_
 const STDIN_FIXTURE_TEST_NAME: &str = "workflow::execution::tests::command_stdin_fixture_process";
 const FIXTURE_ARGUMENT: &str = "literal * $HOME; [not-a-glob]";
 /// The idle-host base of every scenario's anti-hang watchdog; `with_watchdog` scales it
-/// by the host's load (INV-TESTING-18).
+/// by the host's load.
 const TEST_WATCHDOG: Duration = Duration::from_secs(10);
 
 thread_local! {
@@ -251,6 +251,12 @@ struct ExecutionFixture {
     inputs: InputStaging,
     agent_inputs: AgentInputStaging,
     diagnostic_sessions: AgentDiagnosticSessionStore,
+}
+
+impl ExecutionFixture {
+    fn run_directory(&self) -> PathBuf {
+        self._temporary.path().join("run")
+    }
 }
 
 fn execution_fixture(
@@ -717,7 +723,6 @@ fn describe_transition(event: &TransitionEvent<TestInstant>) -> String {
     }
 }
 
-// INV-TESTING-34
 #[tokio::test]
 async fn watchdog_expiry_names_the_last_observed_transition() {
     let (observer, _entries, _observed) = RecordingObserver::new();
@@ -814,7 +819,6 @@ async fn executed_definition(
     (definition, result)
 }
 
-// REQ-WFEXEC-57
 #[tokio::test]
 async fn chosen_outcome_names_the_declared_implicit_or_engine_outcome() {
     with_watchdog(async {
@@ -875,7 +879,6 @@ fn first_of_outcome_source(pick: &str, status: u8) -> String {
     )
 }
 
-// REQ-WFEXEC-57, REQ-WFFORMAT-108
 #[tokio::test]
 async fn chosen_outcome_takes_the_first_succeeded_source_of_a_first_of() {
     with_watchdog(async {
@@ -949,7 +952,6 @@ fn edge_child(outcomes: &str) -> String {
     )
 }
 
-// REQ-WFEXEC-57, REQ-WFEXEC-83
 #[tokio::test]
 async fn chosen_outcome_of_an_edge_scheduled_run_is_its_exit_outcome() {
     with_watchdog(async {

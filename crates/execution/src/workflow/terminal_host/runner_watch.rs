@@ -1,10 +1,9 @@
-//! The runner viewer's host: it draws a serving runner's overview, asks its source for a
-//! new one once a second off the thread that draws and reads keys, and keeps the last one
-//! it was given while the runner does not answer (REQ-RUNNERENROLL-140, REQ-RUNNERENROLL-141,
-//! REQ-RUNNERENROLL-143). Two keys send the runner an operation, also off that thread, and
-//! the screen shows its outcome (REQ-RUNNERENROLL-142). Enter opens an assignment, which the
-//! host asks for once a second and at once when the run or the step wanted changes, one read
-//! at a time (REQ-RUNNERENROLL-146).
+//! The runner viewer's host: it draws a serving runner's overview, asks its source for a new
+//! one once a second off the thread that draws and reads keys, and keeps the last one it was
+//! given while the runner does not answer. Two keys send the runner an operation, also off
+//! that thread, and the screen shows its outcome. Enter opens an assignment, which the host
+//! asks for once a second and at once when the run or the step wanted changes, one read at a
+//! time.
 
 use std::fmt;
 
@@ -40,8 +39,8 @@ use self::widgets::render_runner_watch;
 /// How long the host waits after one request of a kind starts before it starts the next.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Why the newest request did not answer, as the last-known banner tells it
-/// (REQ-RUNNERENROLL-141).
+/// Why the newest request did not answer, as the last-known banner tells
+/// it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunnerWatchSourceError {
     /// The runner did not answer.
@@ -71,7 +70,7 @@ pub trait RunnerWatchSource: Send + Sync + 'static {
     fn overview(&self) -> Result<RunnerWatchOverview, RunnerWatchSourceError>;
 
     /// Asks the runner for one assignment, the run and the step `query` names, blocking
-    /// until it answers or fails (REQ-RUNNERENROLL-144).
+    /// until it answers or fails.
     fn assignment(
         &self,
         query: &RunnerWatchAssignmentQuery,
@@ -444,7 +443,7 @@ where
     }
 
     /// Takes an assignment read's answer against the query it answered: a failure sets the
-    /// banner and changes nothing else (REQ-RUNNERENROLL-141).
+    /// banner and changes nothing else.
     fn assignment_answered(&mut self, read: Result<AssignmentRead, tokio::task::JoinError>) {
         let now = self.clock.sample();
         self.screen.now = now;

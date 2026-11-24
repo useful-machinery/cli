@@ -7,8 +7,7 @@ use useful_support::{Availability, CredentialStatus, NextAction, is_identifier};
 pub(crate) const REQUEST_LIMIT: usize = 4_096;
 pub(crate) const RESPONSE_LIMIT: usize = 65_536;
 /// The bound of the four large answers, the open `overview` and `assignment` and the closed
-/// `kept` and `pruned`, including the LF (REQ-RUNNERENROLL-136, REQ-RUNNERENROLL-164,
-/// REQ-RUNNERENROLL-165); every other answer keeps `RESPONSE_LIMIT`.
+/// `kept` and `pruned`, including the LF; every other answer keeps `RESPONSE_LIMIT`.
 pub(crate) const OVERVIEW_RESPONSE_LIMIT: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,7 +19,7 @@ pub enum Operation {
 
 /// A request the serving process reads: one of the operations `request` sends, or the
 /// `overview`, the `assignment`, the `kept` report or the `prune` pass a client asks for by
-/// name (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165).
+/// name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ControlRequest {
     Operation(Operation),
@@ -79,9 +78,9 @@ pub struct AssignmentCounts {
     pub accepted: u64,
     pub running: u64,
     /// The held tree runs whose loops last reported a wait, which are not counted
-    /// `running` (REQ-RUNNERENROLL-80). Omitted when zero, so a `useful runner status`
-    /// that predates it reads a serving process that holds no waiting run, and absent
-    /// from the answer of a serving process that predates it.
+    /// `running`. Omitted when zero, so a `useful runner status` that predates it
+    /// reads a serving process that holds no waiting run, and absent from the answer
+    /// of a serving process that predates it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub waiting: u64,
     pub finishing: u64,
@@ -108,7 +107,7 @@ fn is_false(flag: &bool) -> bool {
 }
 
 /// Whether a held run is working or waiting, the two words Cloud's reads of a runner's
-/// runs use (REQ-RUNNERENROLL-42).
+/// runs use.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeldRunState {
@@ -116,7 +115,7 @@ pub enum HeldRunState {
     Waiting,
 }
 
-/// A run the runner holds that has not ended (REQ-RUNNERENROLL-42).
+/// A run the runner holds that has not ended.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HeldRun {
@@ -131,15 +130,13 @@ pub struct StatusSnapshot {
     pub boot_id: String,
     pub uptime_milliseconds: u64,
     /// The absolute path of the log file `runner.log` the process appends its records
-    /// to, present exactly when the process opened its log (REQ-RUNNERENROLL-42,
-    /// REQ-TELEMETRY-52).
+    /// to, present exactly when the process opened its log.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
     /// The serving process's newest reading of the work root's disk, present exactly when
-    /// its monitor has published one (REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-152). A
-    /// `useful runner status` older than it refuses the answer of a process that has one,
-    /// the replaced-binary case chapter 11 documents (REQ-RUNNERENROLL-135). Boxed so the
-    /// reading does not grow every `Response` by its size.
+    /// its monitor has published one. A `useful runner status` older than it refuses the
+    /// answer of a process that has one, since the status answer admits no unknown field.
+    /// Boxed so the reading does not grow every `Response` by its size.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk: Option<Box<StatusDisk>>,
     pub connection_state: ConnectionState,
@@ -152,23 +149,22 @@ pub struct StatusSnapshot {
     pub assignment_counts: AssignmentCounts,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_connection_failure: Option<ConnectionFailure>,
-    /// Each provider's readiness, once the runner has set up agent logins
-    /// (REQ-RUNNERENROLL-42). Absent until the first pass records it, seconds
-    /// after the runner starts; from then on a `useful runner show` older than
-    /// agent logins refuses the answer, the replaced-binary case chapter 11
-    /// documents.
+    /// Each provider's readiness, once the runner has set up agent logins.
+    /// Absent until the first pass records it, seconds after the runner
+    /// starts; from then on a `useful runner show` older than agent logins
+    /// refuses the answer, since the status answer admits no unknown field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_logins: Option<AgentLoginReadiness>,
     /// Each run the runner holds that has not ended, the working ones first and then in
-    /// the order the runner took them (REQ-RUNNERENROLL-42). Omitted when empty, so a
-    /// `useful runner status` that predates it reads a serving process that holds no run,
-    /// and absent from the answer of a serving process that predates it.
+    /// the order the runner took them. Omitted when empty, so a `useful runner status`
+    /// that predates it reads a serving process that holds no run, and absent from the
+    /// answer of a serving process that predates it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held_runs: Vec<HeldRun>,
 }
 
-/// A reading of the work root's disk as the serving process's monitor judged it
-/// (REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-152). Closed like the snapshot that carries it.
+/// A reading of the work root's disk as the serving process's monitor judged it. Closed
+/// like the snapshot that carries it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatusDisk {
@@ -215,7 +211,7 @@ impl AgentLoginProvider {
 
     /// An OAuth provider, whose token Cloud issues for each assignment
     /// rather than once to the runner: its entry records one assignment's
-    /// outcome (REQ-GRANT-88).
+    /// outcome.
     pub const fn is_brokered(self) -> bool {
         matches!(self, Self::Github | Self::Gitlab | Self::Linear)
     }
@@ -244,7 +240,7 @@ impl AgentLoginProvider {
     }
 }
 
-/// A provider's readiness state (REQ-GRANT-38).
+/// A provider's readiness state.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginState {
@@ -258,7 +254,7 @@ pub enum AgentLoginState {
     InstallFailed,
     NotDelivered,
     /// Cloud refused an OAuth provider's token because its grant needs the
-    /// member's consent again (REQ-GRANT-88); never an agent login's state.
+    /// member's consent again; never an agent login's state.
     ReconnectRequired,
 }
 
@@ -268,8 +264,8 @@ impl AgentLoginState {
     /// two Cloud answers that no login is authorized, and the brokered
     /// providers' `not_delivered`. `cloud_unavailable` counts: a runner
     /// records it only for a provider it last knew as authorized or
-    /// installed (REQ-GRANT-38). `foreign_login` counts too, though it fails
-    /// nothing (`fails_readiness`).
+    /// installed. `foreign_login` counts too, though it fails nothing
+    /// (`fails_readiness`).
     pub const fn authorized_not_ready(self) -> bool {
         !matches!(
             self,
@@ -277,22 +273,21 @@ impl AgentLoginState {
         )
     }
 
-    /// Whether an agent login's provider in the state fails readiness
-    /// (REQ-GRANT-128, REQ-RUNNERENROLL-86): it is authorized and not ready,
-    /// and not in `foreign_login`, where the host's own login is in use
-    /// (REQ-GRANT-51).
+    /// Whether an agent login's provider in the state fails readiness: it is
+    /// authorized and not ready, and not in `foreign_login`, where the
+    /// host's own login is in use.
     pub const fn fails_readiness(self) -> bool {
         self.authorized_not_ready() && !matches!(self, Self::ForeignLogin)
     }
 
-    /// Whether an OAuth provider's entry may hold the state (REQ-GRANT-88):
-    /// every state but the two only an installed agent login has.
+    /// Whether an OAuth provider's entry may hold the state: every state
+    /// but the two only an installed agent login has.
     pub const fn held_by_grant(self) -> bool {
         !matches!(self, Self::ForeignLogin | Self::StaleGeneration)
     }
 
-    /// Whether an agent login's entry may hold the state (REQ-GRANT-38):
-    /// every state but the two only an OAuth provider has.
+    /// Whether an agent login's entry may hold the state: every state
+    /// but the two only an OAuth provider has.
     pub const fn held_by_login(self) -> bool {
         !matches!(self, Self::NotDelivered | Self::ReconnectRequired)
     }
@@ -314,7 +309,7 @@ impl AgentLoginState {
     }
 }
 
-/// Where a provider's credential comes from on the runner (REQ-GRANT-92).
+/// Where a provider's credential comes from on the runner.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialSource {
@@ -325,6 +320,10 @@ pub enum CredentialSource {
     /// A member's grant provides it: the token an assignment was issued and
     /// holds, or the agent login the runner keeps and offers.
     Grant,
+    /// For `github`, the organization's GitHub App installation, under a
+    /// connection authorization an owner made for the run: the token an
+    /// assignment was issued under that authorization and holds.
+    OrgConnection,
 }
 
 impl CredentialSource {
@@ -333,12 +332,13 @@ impl CredentialSource {
         match self {
             Self::Host => "host",
             Self::Grant => "grant",
+            Self::OrgConnection => "org_connection",
         }
     }
 }
 
-/// How the provider answered the last use of an installed login
-/// (REQ-GRANT-52).
+/// How the provider answered the last use of an installed
+/// login.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginUse {
@@ -351,11 +351,11 @@ pub enum AgentLoginUse {
 }
 
 /// One provider's readiness as the control socket returns it: the readiness
-/// document's entry without the path of the install (REQ-RUNNERENROLL-63).
-/// An OAuth provider's entry carries, while `ready`, the grant, generation
-/// and expiry of the token issued, and the run of its assignment and when
-/// that ended where the document records them (REQ-GRANT-158), never the
-/// token.
+/// document's entry without the path of the install. An OAuth provider's
+/// entry carries, while `ready`, the grant, or for `github` the connection
+/// authorization, the generation and expiry of the token issued, and the run
+/// of its assignment and when that ended where the document records them,
+/// never the token.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProviderReadiness {
@@ -372,45 +372,48 @@ pub struct ProviderReadiness {
     /// The grant an OAuth provider's `ready` token was issued from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_id: Option<String>,
+    /// The connection authorization `github`'s `ready` token was issued
+    /// under, in place of a grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_authorization_id: Option<String>,
     /// When an OAuth provider's `ready` token expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
-    /// Whether an earlier release recorded the provider as selected
-    /// (REQ-GRANT-118): accepted from a serving process of that release, and
-    /// never written.
+    /// Whether an earlier release recorded the provider as selected:
+    /// accepted from a serving process of that release, and never written.
     #[serde(default, rename = "selected", skip_serializing)]
     pub(crate) earlier_selection: EarlierSelection,
-    /// How the provider answered the last use of the login installed
-    /// (REQ-GRANT-52); only ever beside an install.
+    /// How the provider answered the last use of the login
+    /// installed; only ever beside an install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_use: Option<AgentLoginUse>,
-    /// When that last use was (REQ-GRANT-129); only ever beside a last use,
-    /// and absent where a serving process that predates it answers.
+    /// When that last use was; only ever beside a last use, and absent
+    /// where a serving process that predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_use_at: Option<String>,
-    /// The run of the assignment an OAuth provider's entry was recorded for
-    /// (REQ-GRANT-158); only beside a check time, and absent where a serving
-    /// process that predates it answers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
-    /// When that assignment ended on the runner (REQ-GRANT-158); only beside
-    /// a check time, absent while it runs and where a serving process that
+    /// The run of the assignment an OAuth provider's entry was recorded for;
+    /// only beside a check time, and absent where a serving process that
     /// predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// When that assignment ended on the runner; only beside a check time,
+    /// absent while it runs and where a serving process that predates it
+    /// answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
-    /// Where the provider's credential comes from (REQ-GRANT-92), as the
-    /// readiness document records it: a coding agent's as of the last setup
-    /// pass, an OAuth provider's for the run of `run_id`, beside which alone
-    /// it is recorded; absent for a provider neither the host nor a grant
+    /// Where the provider's credential comes from, as the readiness document
+    /// records it: a coding agent's as of the last setup pass, an OAuth
+    /// provider's for the run of `run_id`, beside which alone it is
+    /// recorded; absent for a provider neither the host nor a grant
     /// provides, and where a serving process that predates it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CredentialSource>,
 }
 
-/// The `selected` member an earlier release wrote on a provider's entry
-/// (REQ-GRANT-118): read as a boolean so what that release wrote still
-/// parses, and holding nothing of it, since no provider is selected
-/// (REQ-GRANT-51). Nothing writes it.
+/// The `selected` member an earlier release wrote on a provider's
+/// entry: read as a boolean so what that release wrote still parses,
+/// and holding nothing of it, since no provider is selected. Nothing
+/// writes it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct EarlierSelection;
 
@@ -421,12 +424,11 @@ impl<'de> Deserialize<'de> for EarlierSelection {
 }
 
 impl ProviderReadiness {
-    /// The provider's availability and next action on the runner
-    /// (REQ-GRANT-140). An OAuth provider's `ready` is `available` while its
-    /// assignment runs, since no use of a grant token is recorded, and
-    /// `unverified` once that has ended, which says nothing of the next one
-    /// (REQ-GRANT-88); any other state of its entry is projected as an agent
-    /// login's is.
+    /// The provider's availability and next action on the runner. An OAuth
+    /// provider's `ready` is `available` while its assignment runs, since no
+    /// use of a grant token is recorded, and `unverified` once that has
+    /// ended, which says nothing of the next one; any other state of its
+    /// entry is projected as an agent login's is.
     pub const fn credential_status(&self) -> CredentialStatus {
         let (availability, next_action) = match self.state {
             AgentLoginState::Ready if self.provider.is_brokered() && self.ended_at.is_some() => {
@@ -468,13 +470,11 @@ impl ProviderReadiness {
     }
 
     /// The failure code of a provider Cloud authorized for the runner whose
-    /// login is not ready to use (REQ-GRANT-128, REQ-RUNNERENROLL-86):
-    /// its state when that fails readiness; `reconnect_required` for a
-    /// `ready` login refused at its last use; and `None` otherwise:
-    /// `foreign_login`, where the host's own login is in use
-    /// (REQ-GRANT-51), `not_authorized` and an OAuth provider's entry
-    /// included, which records one assignment's outcome and not the
-    /// runner's (REQ-GRANT-159).
+    /// login is not ready to use: its state when that fails readiness;
+    /// `reconnect_required` for a `ready` login refused at its last use;
+    /// and `None` otherwise: `foreign_login`, where the host's own login is
+    /// in use, `not_authorized` and an OAuth provider's entry included,
+    /// which records one assignment's outcome and not the runner's.
     pub const fn failure_code(&self) -> Option<&'static str> {
         if self.provider.is_brokered() {
             None
@@ -503,7 +503,7 @@ pub struct AgentLoginReadiness {
     pub providers: Vec<ProviderReadiness>,
 }
 
-/// Why a check of an installed login gave no answer (REQ-GRANT-144).
+/// Why a check of an installed login gave no answer.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginCheckCause {
@@ -530,8 +530,8 @@ impl AgentLoginCheckCause {
     }
 }
 
-/// An installed login whose check in the setup gave no answer, with why
-/// (REQ-GRANT-130, REQ-GRANT-90).
+/// An installed login whose check in the setup gave no answer, with
+/// why.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UnansweredCheck {
@@ -626,13 +626,12 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<ControlRequest, ControlErro
         Some("reload_credential") => Ok(ControlRequest::Operation(Operation::ReloadCredential)),
         Some("sync_agent_logins") => Ok(ControlRequest::Operation(Operation::SyncAgentLogins)),
         Some("overview") => Ok(ControlRequest::Overview),
-        // An `assignment` request with a member it does not admit is `invalid_request`
-        // (REQ-RUNNERENROLL-144).
+        // An `assignment` request with a member it does not admit is
+        // `invalid_request`.
         Some("assignment") => assignment_query(&request)
             .map(ControlRequest::Assignment)
             .ok_or(ControlError::InvalidRequest),
-        // `all` is a JSON boolean, and nothing else is admitted (REQ-RUNNERENROLL-164,
-        // REQ-RUNNERENROLL-165).
+        // `all` is a JSON boolean, and nothing else is admitted.
         Some("kept") => prune_scope(&request).map(ControlRequest::Kept),
         Some("prune") => prune_scope(&request).map(ControlRequest::Prune),
         _ => Err(ControlError::InvalidRequest),
@@ -748,8 +747,8 @@ pub(crate) fn encode_request(operation: Operation) -> Vec<u8> {
     })
 }
 
-/// The `overview` request (REQ-RUNNERENROLL-135), which a client asks for by name and
-/// `Operation` does not carry.
+/// The `overview` request, which a client asks for by name and `Operation` does not
+/// carry.
 pub(crate) fn encode_overview_request() -> Vec<u8> {
     encode_operation("overview")
 }
@@ -916,11 +915,14 @@ fn valid_provider_readiness(entry: &ProviderReadiness) -> bool {
     if entry.provider.is_brokered() {
         return valid_grant_readiness(entry);
     }
+    // A coding agent's source is `host` or `grant`.
     entry.state.held_by_login()
         && entry.grant_id.is_none()
+        && entry.connection_authorization_id.is_none()
         && entry.expires_at.is_none()
         && entry.run_id.is_none()
         && entry.ended_at.is_none()
+        && entry.source != Some(CredentialSource::OrgConnection)
         && entry
             .agent_login_id
             .as_deref()
@@ -935,14 +937,34 @@ fn valid_provider_readiness(entry: &ProviderReadiness) -> bool {
         && entry.installed_at.as_deref().is_none_or(valid_timestamp)
 }
 
-/// An OAuth provider's entry (REQ-GRANT-88): a state such an entry holds,
-/// with the grant, generation and expiry exactly when `ready`, a run and an
-/// end only beside a check time, and none of an agent login's members.
+/// An OAuth provider's entry: a state such an entry holds, with the
+/// generation, the expiry and exactly one of the grant and, on `github`'s
+/// entry alone, the connection authorization exactly when `ready`, a run and
+/// an end only beside a check time, `source` `org_connection` on `github`'s
+/// entry alone, and none of an agent login's members. The source and the
+/// kind of the ID are not tied: a switch during the run records the new ID
+/// beside the admission's source.
 fn valid_grant_readiness(entry: &ProviderReadiness) -> bool {
-    let issued = match (&entry.grant_id, entry.generation, &entry.expires_at) {
-        (None, None, None) => false,
-        (Some(grant_id), Some(generation), Some(expires_at)) => {
+    let github = entry.provider == AgentLoginProvider::Github;
+    let issued = match (
+        &entry.grant_id,
+        &entry.connection_authorization_id,
+        entry.generation,
+        &entry.expires_at,
+    ) {
+        (None, None, None, None) => false,
+        (Some(grant_id), None, Some(generation), Some(expires_at)) => {
             if !super::validation::valid_typed_id(grant_id, "pgr_")
+                || generation == 0
+                || !valid_timestamp(expires_at)
+            {
+                return false;
+            }
+            true
+        }
+        (None, Some(authorization_id), Some(generation), Some(expires_at)) => {
+            if !github
+                || !super::validation::valid_typed_id(authorization_id, "cna_")
                 || generation == 0
                 || !valid_timestamp(expires_at)
             {
@@ -966,14 +988,15 @@ fn valid_grant_readiness(entry: &ProviderReadiness) -> bool {
         && entry.ended_at.as_deref().is_none_or(valid_timestamp)
         && (entry.checked_at.is_some() || (entry.run_id.is_none() && entry.ended_at.is_none()))
         && (entry.source.is_none() || entry.run_id.is_some())
+        && (github || entry.source != Some(CredentialSource::OrgConnection))
 }
 
 fn valid_timestamp(value: &str) -> bool {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).is_ok()
 }
 
-/// A vocabulary word of the open `overview` answer (REQ-RUNNERENROLL-135): the word this
-/// release knows, or the string as received. Either is written as the plain word.
+/// A vocabulary word of the open `overview` answer: the word this release knows, or the
+/// string as received. Either is written as the plain word.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpenWord<T> {
     Known(T),
@@ -1005,7 +1028,7 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for OpenWord<T> {
     }
 }
 
-/// An overview entry's phase, as the assignment counts name it (REQ-RUNNERENROLL-80).
+/// An overview entry's phase, as the assignment counts name it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssignmentPhase {
@@ -1029,7 +1052,7 @@ pub enum LeaseHealth {
     Revoked,
 }
 
-/// The state of a step running now (REQ-LOCALRUN-177).
+/// The state of a step running now.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveStepState {
@@ -1041,15 +1064,14 @@ pub enum LiveStepState {
     Cancelling,
 }
 
-/// What the serving process is doing, from what it holds in memory
-/// (REQ-RUNNERENROLL-133). Open at every level: a member this release does not know is
-/// dropped (REQ-RUNNERENROLL-135).
+/// What the serving process is doing, from what it holds in memory. Open at every
+/// level: a member this release does not know is dropped.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {
     pub runner: OverviewRunner,
-    /// The serving process's newest disk reading, absent while it has none
-    /// (REQ-RUNNERENROLL-133).
+    /// The serving process's newest disk reading, absent while it has
+    /// none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk: Option<OverviewDisk>,
     pub connection: OverviewConnection,
@@ -1063,26 +1085,26 @@ pub struct Overview {
     /// The runner's reports Cloud has not yet acknowledged.
     pub unacknowledged_reports: u64,
     pub assignments: Vec<OverviewAssignment>,
-    /// The entries left out past the bound (REQ-RUNNERENROLL-136).
+    /// The entries left out past the bound.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub assignments_omitted: u64,
     /// The assignments that ended in this process and that the runner holds no longer,
-    /// newest first (REQ-RUNNERENROLL-137).
+    /// newest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_assignments: Vec<OverviewRecentAssignment>,
-    /// The recent assignments left out past the bound (REQ-RUNNERENROLL-136).
+    /// The recent assignments left out past the bound.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub recent_assignments_omitted: u64,
-    /// The runner's own events, newest first (REQ-RUNNERENROLL-138).
+    /// The runner's own events, newest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<OverviewEvent>,
-    /// The events left out past the bound (REQ-RUNNERENROLL-136).
+    /// The events left out past the bound.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub events_omitted: u64,
 }
 
 /// How an assignment's run ended, the word its `runner.run` record ends with as
-/// `um.run.result` (REQ-RUNNERENROLL-137).
+/// `um.run.result`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunResult {
@@ -1095,8 +1117,8 @@ pub enum RunResult {
     Fenced,
 }
 
-/// An assignment that ended in this process and that the runner holds no longer
-/// (REQ-RUNNERENROLL-137).
+/// An assignment that ended in this process and that the runner holds no
+/// longer.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewRecentAssignment {
@@ -1119,7 +1141,7 @@ pub struct OverviewRecentAssignment {
     pub held_milliseconds: u64,
 }
 
-/// The kind of one of the runner's own events (REQ-RUNNERENROLL-138).
+/// The kind of one of the runner's own events.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunnerEventKind {
@@ -1139,7 +1161,7 @@ pub enum RunnerEventKind {
     Stopping,
 }
 
-/// What asked for an agent-login setup (REQ-RUNNERENROLL-138).
+/// What asked for an agent-login setup.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginSetupCause {
@@ -1148,7 +1170,7 @@ pub enum AgentLoginSetupCause {
     Admission,
 }
 
-/// How an agent-login setup ended (REQ-RUNNERENROLL-138).
+/// How an agent-login setup ended.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentLoginSetupResult {
@@ -1157,8 +1179,8 @@ pub enum AgentLoginSetupResult {
     Failed,
 }
 
-/// One of the runner's own events (REQ-RUNNERENROLL-138): one flat shape whose facts are
-/// optional members, so a reader keeps a kind it does not know with the members it knows.
+/// One of the runner's own events: one flat shape whose facts are optional members, so a
+/// reader keeps a kind it does not know with the members it knows.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewEvent {
@@ -1211,8 +1233,7 @@ pub struct OverviewRunner {
     pub stop_time_left_milliseconds: Option<u64>,
 }
 
-/// The disk reading as the status snapshot gives it (REQ-RUNNERENROLL-133), open like
-/// every overview type (REQ-RUNNERENROLL-135).
+/// The disk reading as the status snapshot gives it, open like every overview type.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewDisk {
@@ -1243,7 +1264,7 @@ pub struct OverviewConnection {
     pub next_attempt_in_milliseconds: Option<u64>,
 }
 
-/// Each provider's readiness with the members `status` gives (REQ-RUNNERENROLL-42).
+/// Each provider's readiness with the members `status` gives.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewAgentLogins {
@@ -1265,7 +1286,7 @@ impl From<AgentLoginReadiness> for OverviewAgentLogins {
 }
 
 /// A provider's entry in an overview: the entry this release reads as its own, or else
-/// the provider and state as received (REQ-RUNNERENROLL-135).
+/// the provider and state as received.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum OverviewProviderReadiness {
@@ -1294,7 +1315,7 @@ impl<'de> Deserialize<'de> for OverviewProviderReadiness {
     }
 }
 
-/// The six assignment counts (REQ-RUNNERENROLL-80); a count absent reads as zero.
+/// The six assignment counts; a count absent reads as zero.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewCounts {
@@ -1323,7 +1344,7 @@ impl OverviewCounts {
     }
 }
 
-/// One assignment the runner holds (REQ-RUNNERENROLL-134).
+/// One assignment the runner holds.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewAssignment {
@@ -1394,7 +1415,7 @@ pub struct OverviewRunningStep {
 }
 
 /// One level of a child run's path: the `workflow` step, its fan-out element and the
-/// child's ordinal (REQ-LOCALRUN-177).
+/// child's ordinal.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewRunElement {
@@ -1405,8 +1426,7 @@ pub struct OverviewRunElement {
 }
 
 /// What an `overview` request is answered: the overview, or the closed error the
-/// serving process refused it with, `invalid_request` from an earlier release
-/// (REQ-RUNNERENROLL-135).
+/// serving process refused it with, `invalid_request` from an earlier release.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OverviewAnswer {
     Overview(Box<Overview>),
@@ -1451,8 +1471,8 @@ fn open_answer_bytes(answer: &impl Serialize) -> Result<Vec<u8>, ProtocolFailure
     Ok(bytes)
 }
 
-/// Reads the answer to an `overview` request by its `outcome`
-/// (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-136).
+/// Reads the answer to an `overview` request by its
+/// `outcome`.
 pub(crate) fn decode_overview_response(bytes: &[u8]) -> Result<OverviewAnswer, ProtocolFailure> {
     let response: DecodedOverview =
         serde_json::from_slice(answer_json(bytes, OVERVIEW_RESPONSE_LIMIT)?)
@@ -1469,15 +1489,15 @@ pub(crate) fn decode_overview_response(bytes: &[u8]) -> Result<OverviewAnswer, P
     }
 }
 
-/// The most entries an overview lists (REQ-RUNNERENROLL-136): the 128 assignments a
-/// runner holds and the ended ones still reporting beside them.
+/// The most entries an overview lists: the 128 assignments a runner holds and the
+/// ended ones still reporting beside them.
 pub(crate) const MAXIMUM_OVERVIEW_ASSIGNMENTS: usize = 256;
 /// The most running steps an overview entry lists, which the writer cuts to and the reader
 /// refuses past.
 pub(crate) const MAXIMUM_RUNNING_STEPS: usize = 16;
-/// The most entries an overview's recent assignments and its events each list
-/// (REQ-RUNNERENROLL-137, REQ-RUNNERENROLL-138): more than the writer keeps, so a later
-/// change of what it keeps does not break this release's reader.
+/// The most entries an overview's recent assignments and its events each list: more
+/// than the writer keeps, so a later change of what it keeps does not break this
+/// release's reader.
 const MAXIMUM_OVERVIEW_HISTORY: usize = 256;
 
 fn valid_overview(overview: &Overview) -> bool {
@@ -1519,7 +1539,7 @@ fn valid_overview(overview: &Overview) -> bool {
         })
 }
 
-/// An entry an overview or an assignment answer may hold (REQ-RUNNERENROLL-134).
+/// An entry an overview or an assignment answer may hold.
 fn valid_overview_entry(entry: &OverviewAssignment) -> bool {
     super::validation::valid_typed_id(&entry.assignment_id, "asn_")
         && super::validation::valid_typed_id(&entry.run_id, "run_")
@@ -1544,12 +1564,12 @@ pub(crate) const MAXIMUM_LOG_RECORDS: usize = 16_384;
 pub(crate) const WRITTEN_CHILD_RUNS: usize = 64;
 /// The most child runs of one step the reader admits.
 pub(crate) const MAXIMUM_CHILD_RUNS: usize = 256;
-/// The most bytes of a retained output or of the run log an assignment answer gives
-/// (REQ-RUNNERENROLL-145).
+/// The most bytes of a retained output or of the run log an assignment answer
+/// gives.
 pub(crate) const LOG_WINDOW_BYTES: u64 = 262_144;
 
-/// What an `assignment` request asks for (REQ-RUNNERENROLL-144): one held assignment, the
-/// child run `run` names, the root when it is empty, and the step whose output is wanted.
+/// What an `assignment` request asks for: one held assignment, the child run `run` names,
+/// the root when it is empty, and the step whose output is wanted.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignmentQuery {
@@ -1560,9 +1580,9 @@ pub struct AssignmentQuery {
     pub step: Option<String>,
 }
 
-/// One assignment the runner holds, its run as the run directory says and the output of
-/// a step or the end of the run log (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145). Open at
-/// every level: a member this release does not know is dropped (REQ-RUNNERENROLL-135).
+/// One assignment the runner holds, its run as the run directory says and the output of a
+/// step or the end of the run log. Open at every level: a member this release does not
+/// know is dropped.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignmentDetail {
@@ -1693,7 +1713,7 @@ pub struct AssignmentChildRun {
     pub outcome: Option<String>,
 }
 
-/// Where an assignment answer's log comes from (REQ-RUNNERENROLL-145).
+/// Where an assignment answer's log comes from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssignmentLogSource {
@@ -1706,10 +1726,10 @@ pub enum AssignmentLogSource {
 }
 
 /// The output of a named settled step, the end of the run log, or a single-workflow
-/// assignment's named step's newest records (REQ-RUNNERENROLL-145). A `step` log carries
-/// `step`, and the invocation's ID and streams when it retained output; a `run_log` log
-/// carries `text` and `omittedBytes`; a `step_records` log carries `step`, `records` and
-/// the older records' count and bytes when it names a step of the run.
+/// assignment's named step's newest records. A `step` log carries `step`, and the
+/// invocation's ID and streams when it retained output; a `run_log` log carries `text`
+/// and `omittedBytes`; a `step_records` log carries `step`, `records` and the older
+/// records' count and bytes when it names a step of the run.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignmentLog {
@@ -1763,8 +1783,7 @@ pub struct AssignmentLogStream {
 
 /// What an `assignment` request is answered: the assignment, `assignment_not_held` for an
 /// assignment the runner neither holds nor still reports, or the closed error the serving
-/// process refused it with, `invalid_request` from an earlier release
-/// (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-144).
+/// process refused it with, `invalid_request` from an earlier release.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AssignmentAnswer {
     Assignment(Box<AssignmentDetail>),
@@ -1841,8 +1860,7 @@ struct DecodedAssignment {
     error: Option<String>,
 }
 
-/// Reads the answer to an `assignment` request by its `outcome`
-/// (REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-136, REQ-RUNNERENROLL-144).
+/// Reads the answer to an `assignment` request by its `outcome`.
 pub(crate) fn decode_assignment_response(
     bytes: &[u8],
 ) -> Result<AssignmentAnswer, ProtocolFailure> {
@@ -1889,9 +1907,8 @@ fn valid_assignment(detail: &AssignmentDetail) -> bool {
             .is_none_or(|log| log.records.len() <= MAXIMUM_LOG_RECORDS)
 }
 
-/// What a `kept` or a `prune` request covers (REQ-RUNNERENROLL-164,
-/// REQ-RUNNERENROLL-165): the kept-run bounds in force, or every kept workspace and every
-/// cache file, its request's `all`.
+/// What a `kept` or a `prune` request covers: the kept-run bounds in force, or every kept
+/// workspace and every cache file, its request's `all`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PruneScope {
     Bounds,
@@ -1916,12 +1933,12 @@ fn prune_scope(
     }
 }
 
-/// The `kept` request for `scope` (REQ-RUNNERENROLL-164).
+/// The `kept` request for `scope`.
 pub(crate) fn encode_kept_request(scope: PruneScope) -> Vec<u8> {
     encode_scoped_operation("kept", scope)
 }
 
-/// The `prune` request for `scope` (REQ-RUNNERENROLL-165).
+/// The `prune` request for `scope`.
 pub(crate) fn encode_prune_request(scope: PruneScope) -> Vec<u8> {
     encode_scoped_operation("prune", scope)
 }
@@ -1934,8 +1951,8 @@ fn encode_scoped_operation(operation: &str, scope: PruneScope) -> Vec<u8> {
     request
 }
 
-/// The kept-run bounds in force, each `None` when that bound is off (REQ-RUNNERENROLL-157).
-/// Both members are required, null where the bound is off.
+/// The kept-run bounds in force, each `None` when that bound is off. Both members are
+/// required, null where the bound is off.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct KeptRunsBounds {
@@ -1945,8 +1962,7 @@ pub struct KeptRunsBounds {
     pub maximum_total_bytes: Option<u64>,
 }
 
-/// Why a workspace was kept (REQ-RUNNERENROLL-68), the words of the service's retention
-/// reason.
+/// Why a workspace was kept, the words of the service's retention reason.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeptReason {
@@ -1960,7 +1976,7 @@ pub enum KeptReason {
     ReleaseWorkerUnavailable,
 }
 
-/// What a prune would do with a kept workspace now (REQ-RUNNERENROLL-164).
+/// What a prune would do with a kept workspace now.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeptWorkspaceState {
@@ -1971,7 +1987,7 @@ pub enum KeptWorkspaceState {
 }
 
 /// The bound that chooses a kept directory: its age, the kept total, or an operator's
-/// `all` (REQ-RUNNERENROLL-159).
+/// `all`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeptBound {
@@ -2002,8 +2018,8 @@ pub struct KeptWorkspace {
     pub bound: Option<KeptBound>,
 }
 
-/// What lies at a build cache's `path` (REQ-RUNNERENROLL-164): a directory measured, or
-/// why nothing there can be evicted.
+/// What lies at a build cache's `path`: a directory measured, or why nothing there can
+/// be evicted.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeptCacheState {
@@ -2028,9 +2044,9 @@ pub struct KeptCache {
     pub due_bytes: Option<u64>,
 }
 
-/// The `kept` report (REQ-RUNNERENROLL-164): the bounds in force, the kept workspaces with
-/// the ones cut counted in `workspacesOmitted`, the build caches, and the bytes a prune
-/// would free in all, the omitted workspaces included.
+/// The `kept` report: the bounds in force, the kept workspaces with the ones cut counted
+/// in `workspacesOmitted`, the build caches, and the bytes a prune would free in all, the
+/// omitted workspaces included.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct KeptReport {
@@ -2080,9 +2096,9 @@ pub struct PrunedCache {
     pub bytes: u64,
 }
 
-/// The `pruned` result (REQ-RUNNERENROLL-165): whether the pass finished, the directories
-/// with the ones cut counted in `directoriesOmitted`, `failedDirectories` counting every
-/// failed one, the omitted ones included, the caches, and the bytes removed in all.
+/// The `pruned` result: whether the pass finished, the directories with the ones cut
+/// counted in `directoriesOmitted`, `failedDirectories` counting every failed one, the
+/// omitted ones included, the caches, and the bytes removed in all.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PruneReport {
@@ -2104,8 +2120,8 @@ pub enum KeptAnswer {
 }
 
 /// What a `prune` request is answered: the result, or the closed error the serving
-/// process refused it with, `runner_busy` while a held run is working
-/// (REQ-RUNNERENROLL-82) or `invalid_request` from an earlier release.
+/// process refused it with, `runner_busy` while a held run is working or
+/// `invalid_request` from an earlier release.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PruneAnswer {
     Pruned(Box<PruneReport>),
@@ -2115,8 +2131,8 @@ pub enum PruneAnswer {
 /// The most workspaces a `kept` report and directories a `pruned` result list to a
 /// reader, the rest counted as omitted.
 pub(crate) const MAXIMUM_KEPT_ENTRIES: usize = 4_096;
-/// The most build caches either lists, the most a configuration names
-/// (REQ-RUNNERENROLL-160).
+/// The most build caches either lists, the most a configuration
+/// names.
 const MAXIMUM_KEPT_CACHES: usize = 16;
 
 #[derive(Serialize)]
@@ -2175,7 +2191,7 @@ struct DecodedPruned {
     error: Option<ControlError>,
 }
 
-/// Reads the answer to a `kept` request by its `outcome` (REQ-RUNNERENROLL-164).
+/// Reads the answer to a `kept` request by its `outcome`.
 pub(crate) fn decode_kept_response(bytes: &[u8]) -> Result<KeptAnswer, ProtocolFailure> {
     let response: DecodedKept =
         serde_json::from_slice(answer_json(bytes, OVERVIEW_RESPONSE_LIMIT)?)
@@ -2194,7 +2210,7 @@ pub(crate) fn decode_kept_response(bytes: &[u8]) -> Result<KeptAnswer, ProtocolF
     }
 }
 
-/// Reads the answer to a `prune` request by its `outcome` (REQ-RUNNERENROLL-165).
+/// Reads the answer to a `prune` request by its `outcome`.
 pub(crate) fn decode_prune_response(bytes: &[u8]) -> Result<PruneAnswer, ProtocolFailure> {
     let response: DecodedPruned =
         serde_json::from_slice(answer_json(bytes, OVERVIEW_RESPONSE_LIMIT)?)
@@ -2356,7 +2372,6 @@ mod tests {
         assert_eq!(decode_response(&encoded), Err(ProtocolFailure::Invalid));
     }
 
-    // REQ-RUNNERENROLL-43
     #[test]
     fn canonical_schema_accepts_only_valid_control_fixtures() {
         let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2372,9 +2387,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-80: a snapshot of several held runs, one
-    // waiting, decodes with each nonzero count and each run's state; a run in a state
-    // other than working or waiting is refused.
+    // A snapshot of several held runs, one waiting, decodes with each nonzero count
+    // and each run's state; a run in a state other than working or waiting is
+    // refused.
     #[test]
     fn status_with_held_runs_decodes_and_an_unknown_held_run_state_is_refused() {
         let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2428,8 +2443,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-42: the path of the log the process writes travels as an absolute
-    // path; a status whose log path is relative or empty is refused.
+    // The path of the log the process writes travels as an absolute path; a status whose
+    // log path is relative or empty is refused.
     #[test]
     fn status_with_a_log_path_decodes_and_a_relative_or_empty_one_is_refused() {
         let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2471,9 +2486,9 @@ mod tests {
         )
     }
 
-    // REQ-RUNNERENROLL-42, REQ-RUNNERENROLL-135: the status snapshot's disk reading decodes
-    // and encodes back to its bytes; the snapshot stays closed inside the reading, which
-    // carries an absolute path, and a snapshot without one decodes with none.
+    // The status snapshot's disk reading decodes and encodes back to its bytes; the
+    // snapshot stays closed inside the reading, which carries an absolute path, and a
+    // snapshot without one decodes with none.
     #[test]
     fn status_with_a_disk_reading_decodes_and_an_unknown_member_or_relative_path_is_refused() {
         let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2528,8 +2543,8 @@ mod tests {
         assert_eq!(idle.disk, None);
     }
 
-    // REQ-RUNNERENROLL-133, REQ-RUNNERENROLL-135: the overview's disk reading decodes with
-    // what it states, a member of it this release does not know dropped.
+    // The overview's disk reading decodes with what it states, a member of it this release
+    // does not know dropped.
     #[test]
     fn an_overview_disk_reading_decodes_and_drops_a_member_it_does_not_know() {
         let overview = decoded_overview(&overview_fixture("valid/overview-disk-response.json"));
@@ -2558,6 +2573,7 @@ mod tests {
             checked_at: None,
             installed_at: None,
             grant_id: None,
+            connection_authorization_id: None,
             expires_at: None,
             earlier_selection: EarlierSelection,
             last_use: None,
@@ -2577,6 +2593,7 @@ mod tests {
                     checked_at: Some("2026-11-12T01:00:00Z".to_owned()),
                     installed_at: Some("2026-11-12T00:55:00Z".to_owned()),
                     grant_id: None,
+                    connection_authorization_id: None,
                     expires_at: None,
                     earlier_selection: EarlierSelection,
                     last_use: None,
@@ -2609,7 +2626,6 @@ mod tests {
         jsonschema::validator_for(&schema).unwrap()
     }
 
-    // REQ-RUNNERENROLL-63, REQ-RUNNERENROLL-82
     #[test]
     fn sync_request_decodes_and_its_answer_is_closed_and_pathless() {
         let request = encode_request(Operation::SyncAgentLogins);
@@ -2645,7 +2661,6 @@ mod tests {
         assert_eq!(decode_response(&with_path), Err(ProtocolFailure::Invalid));
     }
 
-    // REQ-GRANT-130, REQ-GRANT-144
     #[test]
     fn a_synced_answer_names_each_unanswered_check_by_provider_and_closed_cause() {
         let response = Response::AgentLoginsSynced(SyncedAgentLogins {
@@ -2690,7 +2705,7 @@ mod tests {
     }
 
     /// An OAuth provider's entry in `state`, holding the grant issued when
-    /// it is `ready` (REQ-GRANT-88).
+    /// it is `ready`.
     fn grant_entry(state: AgentLoginState) -> ProviderReadiness {
         let ready = state == AgentLoginState::Ready;
         ProviderReadiness {
@@ -2701,6 +2716,7 @@ mod tests {
             checked_at: Some("2026-11-12T01:00:00Z".to_owned()),
             installed_at: None,
             grant_id: ready.then(|| "pgr_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned()),
+            connection_authorization_id: None,
             expires_at: ready.then(|| "2026-11-12T09:00:00Z".to_owned()),
             earlier_selection: EarlierSelection,
             last_use: None,
@@ -2711,7 +2727,7 @@ mod tests {
         }
     }
 
-    /// Every state an OAuth provider's entry may hold (REQ-GRANT-88).
+    /// Every state an OAuth provider's entry may hold.
     const GRANT_STATES: [AgentLoginState; 8] = [
         AgentLoginState::NotDelivered,
         AgentLoginState::Ready,
@@ -2723,7 +2739,6 @@ mod tests {
         AgentLoginState::InstallFailed,
     ];
 
-    // REQ-GRANT-88
     #[test]
     fn readiness_carries_each_oauth_entry_and_only_as_the_schema_admits_it() {
         let validator = control_validator();
@@ -2740,7 +2755,6 @@ mod tests {
 
     const RUN_ID: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
 
-    // REQ-GRANT-158
     #[test]
     fn an_oauth_entry_carries_its_run_and_end_and_only_well_formed() {
         let validator = control_validator();
@@ -2794,8 +2808,8 @@ mod tests {
                     ..ended.clone()
                 },
             ),
-            // A source is an assignment's, so one with no run is refused
-            // (REQ-GRANT-92).
+            // A source is an assignment's, so one with no run is
+            // refused.
             (
                 1,
                 ProviderReadiness {
@@ -2827,6 +2841,180 @@ mod tests {
                 decode_response(&encoded),
                 Err(ProtocolFailure::Invalid),
                 "{invalid:?}"
+            );
+        }
+    }
+
+    const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+    /// `github` ready for the run `RUN_ID` with a token issued under the
+    /// connection authorization, with `source`.
+    fn github_under_authorization(source: CredentialSource) -> ProviderReadiness {
+        ProviderReadiness {
+            grant_id: None,
+            connection_authorization_id: Some(CONNECTION_AUTHORIZATION_ID.to_owned()),
+            run_id: Some(RUN_ID.to_owned()),
+            source: Some(source),
+            ..grant_entry(AgentLoginState::Ready)
+        }
+    }
+
+    #[test]
+    fn githubs_entry_carries_its_connection_authorization_and_either_source() {
+        let validator = control_validator();
+        // The source and the ID's kind are the admission's and the token's
+        // now, which a switch during the run sets apart.
+        for github in [
+            github_under_authorization(CredentialSource::OrgConnection),
+            github_under_authorization(CredentialSource::Grant),
+            ProviderReadiness {
+                run_id: Some(RUN_ID.to_owned()),
+                source: Some(CredentialSource::OrgConnection),
+                ..grant_entry(AgentLoginState::Ready)
+            },
+        ] {
+            let mut carrying = readiness();
+            carrying.providers[1] = github.clone();
+            let response = synced(carrying);
+            let encoded = encode_response(&response).unwrap();
+            assert_eq!(decode_response(&encoded), Ok(response), "{github:?}");
+            let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            assert!(validator.is_valid(&value), "{value}");
+        }
+
+        let github = github_under_authorization(CredentialSource::OrgConnection);
+        let codex = readiness().providers[0].clone();
+        for (index, invalid) in [
+            (
+                1,
+                ProviderReadiness {
+                    provider: AgentLoginProvider::Gitlab,
+                    source: Some(CredentialSource::Grant),
+                    ..github.clone()
+                },
+            ),
+            (
+                1,
+                ProviderReadiness {
+                    provider: AgentLoginProvider::Linear,
+                    source: Some(CredentialSource::Grant),
+                    ..github.clone()
+                },
+            ),
+            (
+                1,
+                ProviderReadiness {
+                    grant_id: Some("pgr_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned()),
+                    ..github.clone()
+                },
+            ),
+            (
+                1,
+                ProviderReadiness {
+                    state: AgentLoginState::Revoked,
+                    generation: None,
+                    expires_at: None,
+                    ..github.clone()
+                },
+            ),
+            (
+                1,
+                ProviderReadiness {
+                    connection_authorization_id: Some("pgr_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned()),
+                    ..github.clone()
+                },
+            ),
+            (
+                1,
+                ProviderReadiness {
+                    provider: AgentLoginProvider::Linear,
+                    ..ProviderReadiness {
+                        run_id: Some(RUN_ID.to_owned()),
+                        source: Some(CredentialSource::OrgConnection),
+                        ..grant_entry(AgentLoginState::NotDelivered)
+                    }
+                },
+            ),
+            (
+                0,
+                ProviderReadiness {
+                    source: Some(CredentialSource::OrgConnection),
+                    ..codex.clone()
+                },
+            ),
+            (
+                0,
+                ProviderReadiness {
+                    connection_authorization_id: Some(CONNECTION_AUTHORIZATION_ID.to_owned()),
+                    ..codex.clone()
+                },
+            ),
+        ] {
+            let mut readiness = readiness();
+            readiness.providers[index] = invalid.clone();
+            let encoded = encode_response(&synced(readiness)).unwrap();
+            assert_eq!(
+                decode_response(&encoded),
+                Err(ProtocolFailure::Invalid),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_runner_reads_only_the_pinned_answers_the_schema_admits_of_an_authorization() {
+        let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixtures = cli_root.join("tests/fixtures/runner-control/v1");
+        let validator = control_validator();
+        let read = |path: &str| std::fs::read(fixtures.join(path)).unwrap();
+
+        let valid = read("valid/status-org-connection-response.json");
+        let Ok(Response::Status(status)) = decode_response(&valid) else {
+            panic!("the org-connection snapshot did not decode");
+        };
+        let github = status
+            .agent_logins
+            .as_ref()
+            .and_then(|readiness| {
+                readiness
+                    .providers
+                    .iter()
+                    .find(|entry| entry.provider == AgentLoginProvider::Github)
+            })
+            .unwrap();
+        assert_eq!(
+            (
+                github.connection_authorization_id.as_deref(),
+                github.grant_id.as_deref(),
+                github.source,
+            ),
+            (
+                Some(CONNECTION_AUTHORIZATION_ID),
+                None,
+                Some(CredentialSource::OrgConnection),
+            )
+        );
+        // What the runner writes back, the schema accepts.
+        let encoded = encode_response(&Response::Status(status)).unwrap();
+        assert!(validator.is_valid(&serde_json::from_slice(&encoded).unwrap()));
+
+        for invalid in [
+            "invalid/brokered-agent-login-connection-authorization-on-gitlab.json",
+            "invalid/brokered-agent-login-connection-authorization-on-linear.json",
+            "invalid/brokered-agent-login-grant-and-connection-authorization.json",
+            "invalid/brokered-agent-login-connection-authorization-not-ready.json",
+            "invalid/brokered-agent-login-org-connection-on-linear.json",
+            "invalid/agent-login-org-connection-on-codex.json",
+        ] {
+            let bytes = read(invalid);
+            assert!(
+                !validator.is_valid(&serde_json::from_slice(&bytes).unwrap()),
+                "{invalid}"
+            );
+            assert_eq!(
+                decode_response(&bytes),
+                Err(ProtocolFailure::Invalid),
+                "{invalid}"
             );
         }
     }
@@ -2882,7 +3070,7 @@ mod tests {
             last_use: Some(AgentLoginUse::Refused),
             ..last_use_without_install.providers[0].clone()
         };
-        // A time is stated only with the last use it dates (REQ-GRANT-129).
+        // A time is stated only with the last use it dates.
         let mut last_use_at_without_last_use = readiness();
         last_use_at_without_last_use.providers[0].last_use_at =
             Some("2026-11-12T00:58:00Z".to_owned());
@@ -2906,7 +3094,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-140, REQ-GRANT-142, REQ-GRANT-88
     #[test]
     fn an_oauth_entry_projects_like_an_agent_login_and_never_fails_readiness() {
         use AgentLoginState as S;
@@ -2930,8 +3117,8 @@ mod tests {
                 },
                 "{state:?}"
             );
-            // One assignment's outcome, never the runner's
-            // (REQ-GRANT-159).
+            // One assignment's outcome, never the
+            // runner's.
             assert_eq!(entry.failure_code(), None, "{state:?}");
             assert!(!entry.fails_readiness(), "{state:?}");
         }
@@ -2945,7 +3132,6 @@ mod tests {
         );
     }
 
-    // REQ-GRANT-140, REQ-GRANT-88
     #[test]
     fn an_ended_oauth_entry_that_was_ready_is_unverified_and_no_other_state_changes() {
         use useful_support::{Availability as A, CredentialStatus, NextAction as N};
@@ -2982,11 +3168,10 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-128, REQ-GRANT-119
     #[test]
     fn only_an_authorized_provider_that_is_not_ready_fails_readiness() {
         // `foreign_login` is authorized, or may be, and not ready, but the
-        // host's own login is in use: it fails nothing (REQ-GRANT-51).
+        // host's own login is in use: it fails nothing.
         for (state, authorized_not_ready, fails) in [
             (AgentLoginState::Ready, false, false),
             (AgentLoginState::NotAuthorized, false, false),
@@ -3008,7 +3193,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-53, REQ-GRANT-140, REQ-GRANT-141, REQ-GRANT-142, REQ-GRANT-143
     #[test]
     fn each_readiness_maps_to_one_availability_and_next_action() {
         use AgentLoginState as S;
@@ -3046,6 +3230,7 @@ mod tests {
                 checked_at: None,
                 installed_at: None,
                 grant_id: None,
+                connection_authorization_id: None,
                 expires_at: None,
                 earlier_selection: EarlierSelection,
                 last_use,
@@ -3072,7 +3257,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-128, REQ-RUNNERENROLL-86
     #[test]
     fn a_ready_login_refused_at_its_last_use_fails_readiness() {
         let mut entry = readiness().providers[0].clone();
@@ -3089,7 +3273,6 @@ mod tests {
         assert_eq!(entry.failure_code(), Some("install_failed"));
     }
 
-    // REQ-GRANT-128, REQ-GRANT-53, REQ-GRANT-119, REQ-RUNNERENROLL-86
     #[test]
     fn a_provider_cloud_refuses_or_the_host_logs_in_for_never_fails_readiness() {
         use useful_support::{Availability as A, CredentialStatus, NextAction as N};
@@ -3122,7 +3305,7 @@ mod tests {
             assert_eq!(refused.failure_code(), None, "{selected:?}");
             assert!(!refused.fails_readiness(), "{selected:?}");
 
-            // The host's own login is in use (REQ-GRANT-51).
+            // The host's own login is in use.
             let host = entry("foreign_login", selected);
             assert_eq!(
                 host.credential_status(),
@@ -3137,7 +3320,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-42
     #[test]
     fn status_reads_without_readiness_and_round_trips_with_it() {
         let without = b"{\"schemaVersion\":1,\"outcome\":\"ok\",\"status\":{\"processState\":\"running\",\"bootId\":\"rbt_01k0z6r1w8f4jy2m7q9v3x5abc\",\"uptimeMilliseconds\":10,\"connectionState\":\"connected\",\"assignmentCounts\":{\"preparing\":0,\"accepted\":0,\"running\":0,\"finishing\":0,\"reporting\":0}}}\n";
@@ -3164,7 +3346,7 @@ mod tests {
         );
 
         // The last use, with its time, travels beside the state where the
-        // document records it (REQ-GRANT-129, REQ-GRANT-53).
+        // document records it.
         let mut with_last_use = readiness();
         with_last_use.providers[0].last_use = Some(AgentLoginUse::Refused);
         with_last_use.providers[0].last_use_at = Some("2026-11-12T00:58:00Z".to_owned());
@@ -3181,7 +3363,7 @@ mod tests {
 
         // A serving process of an earlier release still says whether the
         // provider was selected: its answer decodes, and the member is
-        // written on none (REQ-GRANT-118).
+        // written on none.
         assert!(
             value["agentLogins"]["providers"][0]
                 .get("selected")
@@ -3195,7 +3377,6 @@ mod tests {
         assert_eq!(encode_response(&response).unwrap(), encoded);
     }
 
-    // REQ-RUNNERENROLL-82
     #[test]
     fn error_responses_carry_only_the_closed_control_error_set() {
         let closed = [
@@ -3234,7 +3415,7 @@ mod tests {
             .map(|code| code.as_str().unwrap())
             .collect::<Vec<_>>();
         // `assignment_not_held` answers only an `assignment` request, whose reader alone
-        // knows it (REQ-RUNNERENROLL-144).
+        // knows it.
         assert_eq!(
             schema_codes,
             closed
@@ -3327,6 +3508,7 @@ mod tests {
                         checked_at: Some("2026-11-19T14:00:00Z".to_owned()),
                         installed_at: Some("2026-11-19T13:55:00Z".to_owned()),
                         grant_id: None,
+                        connection_authorization_id: None,
                         expires_at: None,
                         earlier_selection: EarlierSelection,
                         last_use: None,
@@ -3527,10 +3709,9 @@ mod tests {
         bytes
     }
 
-    // REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-137, REQ-RUNNERENROLL-138: the overview
-    // answer, with its recent assignments and its events, decodes to what it states and
-    // encodes back to its bytes; the idle answer carries only the required members, and
-    // neither list nor its count.
+    // The overview answer, with its recent assignments and its events, decodes to what
+    // it states and encodes back to its bytes; the idle answer carries only the
+    // required members, and neither list nor its count.
     #[test]
     fn an_overview_decodes_to_what_it_states_and_encodes_to_its_bytes() {
         let bytes = overview_fixture("valid/overview-response.json");
@@ -3565,9 +3746,9 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-138: the disk's three events decode with their kinds and their
-    // facts, the space available and, of the turn to low, the minimum, and of the declined
-    // offer, its run and assignment, and encode back to their bytes.
+    // The disk's three events decode with their kinds and their facts, the space available
+    // and, of the turn to low, the minimum, and of the declined offer, its run and
+    // assignment, and encode back to their bytes.
     #[test]
     fn the_disk_events_decode_with_their_facts_and_encode_to_their_bytes() {
         let bytes = overview_fixture("valid/overview-disk-events-response.json");
@@ -3618,10 +3799,9 @@ mod tests {
         assert_eq!(encode_overview_response(&overview).unwrap(), bytes);
     }
 
-    // REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-137, REQ-RUNNERENROLL-138: a member this
-    // release does not know is dropped at every level, a vocabulary word it does not know
-    // is kept as received, an agent-login entry it cannot read as its own is kept as its
-    // provider and state, and an event without its count happened once.
+    // A member this release does not know is dropped at every level, a vocabulary word it
+    // does not know is kept as received, an agent-login entry it cannot read as its own
+    // is kept as its provider and state, and an event without its count happened once.
     #[test]
     fn an_overview_keeps_unknown_words_and_drops_unknown_members() {
         let mut value: serde_json::Value =
@@ -3711,8 +3891,7 @@ mod tests {
         assert!(control_validator().is_valid(&value));
     }
 
-    // REQ-RUNNERENROLL-135, REQ-RUNNERENROLL-137, REQ-RUNNERENROLL-138: an overview the
-    // reader cannot read is a protocol failure, never a partial view.
+    // An overview the reader cannot read is a protocol failure, never a partial view.
     #[test]
     fn an_overview_the_reader_cannot_read_is_invalid() {
         let value: serde_json::Value =
@@ -3806,8 +3985,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-136: the overview answer's bound is 1048576 bytes including its
-    // LF, while every other answer keeps 65536.
+    // The overview answer's bound is 1048576 bytes including its LF, while every other
+    // answer keeps 65536.
     #[test]
     fn the_overview_bound_is_its_own_and_the_status_bound_is_unchanged() {
         let mut encoded = overview_fixture("valid/overview-response.json");
@@ -4018,9 +4197,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-144: the assignment answer decodes to what it states and encodes
-    // back to its bytes; an entry alone is an answer with no run and no log; an assignment
-    // the runner does not hold, and a request an earlier release refuses, are answers.
+    // The assignment answer decodes to what it states and encodes back to its bytes; an
+    // entry alone is an answer with no run and no log; an assignment the runner does not
+    // hold, and a request an earlier release refuses, are answers.
     #[test]
     fn an_assignment_decodes_to_what_it_states_and_encodes_to_its_bytes() {
         let bytes = overview_fixture("valid/assignment-response.json");
@@ -4054,9 +4233,9 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-144: an `assignment` request reads into the query it states, and
-    // admits exactly its ID, a bounded `run` path of identifiers and numbers and a step
-    // identifier; no other operation admits those members.
+    // An `assignment` request reads into the query it states, and admits exactly its
+    // ID, a bounded `run` path of identifiers and numbers and a step identifier; no
+    // other operation admits those members.
     #[test]
     fn an_assignment_request_reads_into_its_query_and_admits_nothing_else() {
         let request = overview_fixture("valid/assignment-request.json");
@@ -4131,9 +4310,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-135: a member this release does not know is dropped at every level
-    // of the assignment answer, and a step state, a kind and a log source it does not know
-    // are kept as received.
+    // A member this release does not know is dropped at every level of the assignment
+    // answer, and a step state, a kind and a log source it does not know are kept as
+    // received.
     #[test]
     fn an_assignment_keeps_unknown_words_and_drops_unknown_members() {
         let mut value: serde_json::Value =
@@ -4178,8 +4357,8 @@ mod tests {
         assert!(control_validator().is_valid(&value));
     }
 
-    // REQ-RUNNERENROLL-145: with no step output to give, the answer's log is the end of
-    // the run log with the bytes before it counted.
+    // With no step output to give, the answer's log is the end of the run log with the
+    // bytes before it counted.
     #[test]
     fn a_run_log_answer_carries_its_text_and_what_was_left_out() {
         let bytes = overview_fixture("valid/assignment-run-log-response.json");
@@ -4277,8 +4456,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-145: a single-workflow assignment's log is the named step's records
-    // with the older ones counted; with no step named it is its source alone.
+    // A single-workflow assignment's log is the named step's records with the older ones
+    // counted; with no step named it is its source alone.
     #[test]
     fn a_step_records_answer_carries_the_records_and_what_was_left_out() {
         let bytes = overview_fixture("valid/assignment-step-records-response.json");
@@ -4305,9 +4484,9 @@ mod tests {
         assert_eq!(encode_assignment_response(&detail).unwrap(), none);
     }
 
-    // REQ-RUNNERENROLL-135: a record source and a running step's state this release does
-    // not know are kept as received, a member it does not know inside a record is dropped,
-    // and `recovering` is a known running step's state.
+    // A record source and a running step's state this release does not know are kept as
+    // received, a member it does not know inside a record is dropped, and `recovering` is
+    // a known running step's state.
     #[test]
     fn a_step_records_answer_keeps_unknown_words() {
         let mut value: serde_json::Value = serde_json::from_slice(&overview_fixture(
@@ -4332,7 +4511,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-136: a log of 16384 records is read and one more is invalid.
+    // A log of 16384 records is read and one more is invalid.
     #[test]
     fn a_step_records_answer_past_the_record_bound_is_invalid() {
         let mut value: serde_json::Value = serde_json::from_slice(&overview_fixture(
@@ -4361,9 +4540,9 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-136: the assignment answer shares the overview's bound, and an
-    // answer the reader cannot read, or that passes the bounds it puts on a run, is a
-    // protocol failure, never a partial view.
+    // The assignment answer shares the overview's bound, and an answer the reader
+    // cannot read, or that passes the bounds it puts on a run, is a protocol failure,
+    // never a partial view.
     #[test]
     fn an_assignment_the_reader_cannot_read_is_invalid() {
         let mut encoded = overview_fixture("valid/assignment-response.json");
@@ -4655,8 +4834,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165: a `kept` or `prune` request carries
-    // exactly its scope, `all`, a JSON boolean, and no other operation carries it.
+    // A `kept` or `prune` request carries exactly its scope, `all`, a JSON boolean,
+    // and no other operation carries it.
     #[test]
     fn kept_and_prune_requests_carry_exactly_their_scope() {
         assert_eq!(
@@ -4729,9 +4908,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-164: the `kept` answer decodes to the report it states and the
-    // report encodes to its bytes; the idle answer has no workspace, no cache and both
-    // bounds off.
+    // The `kept` answer decodes to the report it states and the report encodes to its
+    // bytes; the idle answer has no workspace, no cache and both bounds off.
     #[test]
     fn a_kept_report_decodes_to_what_it_states_and_encodes_to_its_bytes() {
         for (path, report) in [
@@ -4748,8 +4926,8 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-165: the `pruned` answer decodes to the result it states, finished
-    // or not, and the result encodes to its bytes.
+    // The `pruned` answer decodes to the result it states, finished or not, and the
+    // result encodes to its bytes.
     #[test]
     fn a_prune_result_decodes_to_what_it_states_and_encodes_to_its_bytes() {
         for (path, report) in [
@@ -4769,9 +4947,9 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-82, REQ-RUNNERENROLL-165: a `prune` refused because a held run is
-    // working is `runner_busy`, and an earlier serving process's `invalid_request` is a
-    // refusal of either request; an error word outside the closed set is unreadable.
+    // A `prune` refused because a held run is working is `runner_busy`, and an earlier
+    // serving process's `invalid_request` is a refusal of either request; an error word
+    // outside the closed set is unreadable.
     #[test]
     fn a_refused_kept_or_prune_request_is_its_closed_error() {
         assert_eq!(
@@ -4808,9 +4986,8 @@ mod tests {
         serde_json::from_slice(&overview_fixture(path)).unwrap()
     }
 
-    // REQ-RUNNERENROLL-164: a `kept` answer whose members do not pair as the report
-    // states them, or that names a path, an ID or more entries than a reader admits, is
-    // invalid.
+    // A `kept` answer whose members do not pair as the report states them, or that
+    // names a path, an ID or more entries than a reader admits, is invalid.
     #[test]
     fn a_kept_report_the_reader_cannot_read_is_invalid() {
         for path in [
@@ -4908,8 +5085,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-165: a `pruned` answer with an unknown result or bound, a lone ID,
-    // a relative path or more entries than a reader admits is invalid.
+    // A `pruned` answer with an unknown result or bound, a lone ID, a relative path or
+    // more entries than a reader admits is invalid.
     #[test]
     fn a_prune_result_the_reader_cannot_read_is_invalid() {
         assert_eq!(
@@ -4973,8 +5150,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165: both answers are read within the
-    // 1048576-byte bound of the large answers, the LF included.
+    // Both answers are read within the 1048576-byte bound of the large answers,
+    // the LF included.
     #[test]
     fn kept_and_pruned_answers_share_the_large_answer_bound() {
         type Decode = fn(&[u8]) -> Result<bool, ProtocolFailure>;

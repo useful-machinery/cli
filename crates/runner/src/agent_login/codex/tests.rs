@@ -60,7 +60,6 @@ fn entries(directory: &Path) -> Vec<String> {
     names
 }
 
-// REQ-GRANT-36
 #[test]
 fn installs_the_exact_delivered_bytes_privately_in_the_runners_codex_home() {
     let (state, directory) = state();
@@ -94,7 +93,6 @@ fn installs_the_exact_delivered_bytes_privately_in_the_runners_codex_home() {
     assert_eq!(entries(state.path()), [".runner-agent-login"]);
 }
 
-// REQ-GRANT-116
 #[test]
 fn refuses_an_older_generation_than_it_installed() {
     let (_state, directory) = state();
@@ -137,7 +135,6 @@ fn refuses_an_older_generation_than_it_installed() {
     assert_eq!(entries(&directory.codex_home()), [AUTH_FILE, CONFIG_FILE]);
 }
 
-// REQ-GRANT-36
 #[test]
 fn what_is_in_the_runners_directory_is_its_own_to_replace() {
     let (_state, directory) = state();
@@ -185,7 +182,6 @@ fn what_is_in_the_runners_directory_is_its_own_to_replace() {
     assert_eq!(fs::read(&outside).unwrap(), b"{\"outside\":true}");
 }
 
-// REQ-GRANT-36
 #[test]
 fn a_directory_that_is_not_the_runners_own_is_an_install_failure() {
     let (linked_state, directory) = state();
@@ -210,7 +206,6 @@ fn a_directory_that_is_not_the_runners_own_is_an_install_failure() {
     );
 }
 
-// REQ-GRANT-37
 #[test]
 fn the_runners_codex_home_is_offered_only_when_it_keeps_a_login_and_the_service_sets_none() {
     let (_state, directory) = state();
@@ -241,7 +236,6 @@ fn service_at(home: &Path) -> ServiceEnvironment {
     ServiceEnvironment::from_variables([("HOME", home)])
 }
 
-// REQ-GRANT-137, REQ-GRANT-37
 #[test]
 fn a_codex_login_in_the_default_home_under_the_services_home_is_its_own() {
     let (state, directory) = state();

@@ -113,7 +113,7 @@ pub(crate) enum WorkflowPresentationStep {
         direct_dependencies: Vec<String>,
         outputs: BTreeMap<String, Output>,
     },
-    /// A step that runs the tree-relative workflow `file` as a child run (REQ-WFEXEC-60).
+    /// A step that runs the tree-relative workflow `file` as a child run.
     Workflow {
         file: String,
         failure_policy: FailurePolicy,
@@ -302,7 +302,7 @@ pub(crate) enum PresentationRecordKind {
     Transition(Box<PresentationTransition>),
     ChildOutput(NormalizedChildOutput),
     AgentObservation(NormalizedAgentObservation),
-    /// A step held at its start gate (REQ-LOCALRUN-222).
+    /// A step held at its start gate.
     StartHeld(StartHeldObservation),
 }
 

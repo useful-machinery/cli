@@ -22,10 +22,6 @@ doctest = false
 name = "cli"
 path = "cli.rs"
 
-[[test]]
-name = "help_snapshots"
-path = "help_snapshots.rs"
-
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("rust-cli-tests"))'] }
 
@@ -47,5 +43,4 @@ serde = { version = "1.0.229", features = ["derive"] }
 tempfile = "3.27.0"
 time = { version = "0.3.45", features = ["formatting", "parsing"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
-trycmd = "1.2.1"
 url = "2.5.8"

@@ -79,7 +79,6 @@ mod tests {
     use super::{ExitCode, OutcomeClass};
     use useful_execution::ExecutionOutcome;
 
-    // INV-CLI-11
     #[test]
     fn outcome_classes_map_to_registered_exit_codes() {
         let cases = [
@@ -102,7 +101,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-11
     #[test]
     fn execution_outcomes_map_to_registered_exit_codes() {
         let cases = [

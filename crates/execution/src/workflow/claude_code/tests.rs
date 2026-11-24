@@ -7,8 +7,6 @@ use super::*;
 
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
 
-// REQ-AGENT-16, REQ-AGENT-60
-// INV-HARNESS-3
 #[test]
 fn normal_mode_arguments_and_input_frame_are_exact() {
     let normal = [

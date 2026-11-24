@@ -127,10 +127,10 @@ pub enum RepositoryRootError {
 }
 
 /// The host of the `origin` remote of the repository holding `directory`, read with
-/// `git remote get-url origin` under the Git check's bounds (INV-CLI-24). The address
-/// can embed a credential, so it is dropped here once the host is read. A failed, missing,
-/// timed-out or truncated probe, or an address with no host, has no host to report and is
-/// `None`: every such repository is one unknown to the caller.
+/// `git remote get-url origin` under the Git check's bounds. The address can embed a
+/// credential, so it is dropped here once the host is read. A failed, missing, timed-out
+/// or truncated probe, or an address with no host, has no host to report and is `None`:
+/// every such repository is one unknown to the caller.
 pub(super) fn origin_remote_host(runner: &dyn CommandRunner, directory: &Path) -> Option<String> {
     let output = runner
         .run(CommandRequest {
@@ -372,7 +372,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-45
     #[test]
     fn git_check_accepts_the_minimum_version() {
         let outcome = check(Ok(output(

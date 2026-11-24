@@ -8,22 +8,22 @@ use super::condition::{
     ConditionValueKind, JsonPointer, ResolvedOperand, ResolvedPredicate, ResolvedSelector,
 };
 use super::document::{
-    Agent, AgentProfile, CommonNode, ConditionOperand, ConditionPredicate, EdgeTarget,
-    ExportPresentation, FailurePolicy, FinalizerDefinition, ForEach, InputDeclaration, JsonDefault,
-    MessageSource, NodeBody, Output, OutputReference, PresentationSource, RecoveryHandler,
-    RootBlocks, SourceReference, StepDefinition, StepRecovery, ValueReference, WaitKind, WaitRule,
-    WorkflowDocument,
+    Agent, AgentProfile, CommonNode, ConditionOperand, ConditionPredicate, DeclaredWorkspace,
+    EdgeTarget, ExportPresentation, FailurePolicy, FinalizerDefinition, ForEach, InputDeclaration,
+    JsonDefault, MessageSource, NodeBody, Output, OutputReference, PresentationSource,
+    RecoveryHandler, RootBlocks, SourceReference, StepDefinition, StepRecovery, ValueReference,
+    WaitKind, WaitRule, WorkflowDocument,
 };
 use super::evidence::{MAXIMUM_PREREQUISITES, Prerequisite};
 use super::export_presentation::{Field, resolve_text};
 use super::validated::{
     DeclaredInputs, OutputSources, ResolvedDirectPrerequisite, ResolvedOutputSource,
-    ResolvedValueReference, ResolvedValueSource, Scheduling, ValidatedAgent, ValidatedAgentMessage,
-    ValidatedAgentStep, ValidatedChildInput, ValidatedCommandStep, ValidatedCommonStep,
-    ValidatedEdgeTarget, ValidatedExportPresentation, ValidatedFinalizer, ValidatedForEach,
-    ValidatedHarness, ValidatedInputDefault, ValidatedMessageSource, ValidatedOutcome,
-    ValidatedOutput, ValidatedPresentationField, ValidatedRecoveryHandler, ValidatedStep,
-    ValidatedStepRecovery, ValidatedWorkflow, ValidatedWorkflowStep, WorkflowNode,
+    ResolvedValueReference, ResolvedValueSource, Scheduling, StepWorkspace, ValidatedAgent,
+    ValidatedAgentMessage, ValidatedAgentStep, ValidatedChildInput, ValidatedCommandStep,
+    ValidatedCommonStep, ValidatedEdgeTarget, ValidatedExportPresentation, ValidatedFinalizer,
+    ValidatedForEach, ValidatedHarness, ValidatedInputDefault, ValidatedMessageSource,
+    ValidatedOutcome, ValidatedOutput, ValidatedPresentationField, ValidatedRecoveryHandler,
+    ValidatedStep, ValidatedStepRecovery, ValidatedWorkflow, ValidatedWorkflowStep, WorkflowNode,
     WorkflowNodeRole, WorkflowValueType,
 };
 use super::wait::{Operand, parse_where};
@@ -52,6 +52,10 @@ pub(crate) enum ValidationFailureKind {
     ExcessAgentResultOutput,
     ConflictingAgentValueOutputs,
     ExcessWorkspaceOutput,
+    WorkspaceAmbiguous,
+    NewWorkspaceCwd,
+    NoneWorkspaceCwd,
+    EstablishedWorkspaceGitBranch,
     DuplicateOutputPath,
     AdvisoryDataDependency,
     InvalidExportTarget,
@@ -180,8 +184,8 @@ impl fmt::Display for ValidationFailure {
 
 impl std::error::Error for ValidationFailure {}
 
-/// What a parent's validation needs to know of a child workflow file (REQ-WFFORMAT-89 to
-/// REQ-WFFORMAT-92, REQ-WFFORMAT-104); resolution builds one per file a `workflow` step names.
+/// What a parent's validation needs to know of a child workflow file; resolution builds one
+/// per file a `workflow` step names.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ChildWorkflowSummary {
     /// The declared outcomes, or the implicit `succeeded` and `failed`.
@@ -196,8 +200,8 @@ pub(crate) struct ChildWorkflowSummary {
     pub(crate) paths: BTreeSet<String>,
 }
 
-/// Whether a child declares `workflow` steps and what its parent may make of it
-/// (REQ-WFFORMAT-104).
+/// Whether a child declares `workflow` steps and what its parent may make of
+/// it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ChildNesting {
     /// The child declares no `workflow` step.
@@ -218,7 +222,7 @@ pub(crate) struct UnsupportedNestedShape {
     pub(crate) shape: NestedShape,
 }
 
-/// The shapes a nested workflow may not hold (REQ-WFFORMAT-121).
+/// The shapes a nested workflow may not hold.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NestedShape {
     /// The step declares `forEach`.
@@ -231,8 +235,8 @@ pub(crate) enum NestedShape {
 
 impl ChildWorkflowSummary {
     /// `outcomes` is the child's `outcomes` list: the names its `outcome` block chooses
-    /// from, or for a nested workflow, which has none, the names its exits may take
-    /// (REQ-WFFORMAT-88); an empty list leaves the implicit `succeeded` and `failed`.
+    /// from, or for a nested workflow, which has none, the names its exits may take; an
+    /// empty list leaves the implicit `succeeded` and `failed`.
     pub(crate) fn of(
         child: &ValidatedWorkflow,
         outcomes: &[String],
@@ -285,9 +289,9 @@ impl ChildWorkflowSummary {
     }
 }
 
-/// A child with `workflow` steps is a nested workflow; its first step in source order
-/// that declares `forEach`, or whose edges reach a wait that is not an `answer`, `repair` or
-/// `host` wait continuing at the step, is the shape its parent refuses (REQ-WFFORMAT-121).
+/// A child with `workflow` steps is a nested workflow; its first step in source order that
+/// declares `forEach`, or whose edges reach a wait that is not an `answer`, `repair` or
+/// `host` wait continuing at the step, is the shape its parent refuses.
 fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
     let mut workflow_steps = child
         .source_order
@@ -502,8 +506,8 @@ pub(crate) fn validate_with_children(
                 &mut declared_inputs,
             )?,
         };
-        // The JSON schema admits `infrastructureExitCodes` on an ordinary `cmd` step only
-        // (REQ-WFFORMAT-109).
+        // The JSON schema admits `infrastructureExitCodes` on an ordinary `cmd` step
+        // only.
         if let ValidatedStep::Command(command) = &mut body {
             command
                 .infrastructure_exit_codes
@@ -517,6 +521,10 @@ pub(crate) fn validate_with_children(
         )?;
         steps.insert(step_name.clone(), body);
         recoveries.insert(step_name.clone(), recovery);
+    }
+
+    if scheduling == Scheduling::Dataflow {
+        resolve_step_workspaces(&document, &step_graph, &mut steps)?;
     }
 
     let mut finalizers = BTreeMap::new();
@@ -560,7 +568,7 @@ pub(crate) fn validate_with_children(
 
     let outcome = match scheduling {
         Scheduling::Dataflow => resolve_outcome(&document)?,
-        // The exit edge a run reaches chooses its outcome (REQ-WFFORMAT-88).
+        // The exit edge a run reaches chooses its outcome.
         Scheduling::Edges { .. } => None,
     };
     validate_reachability(&document, &scheduling)?;
@@ -593,7 +601,7 @@ pub(crate) fn validate_with_children(
     })
 }
 
-/// `subject` names a declared root input of kind `text` (REQ-WFFORMAT-100).
+/// `subject` names a declared root input of kind `text`.
 fn validate_subject(
     subject: Option<&str>,
     declared_inputs: &DeclaredInputs,
@@ -611,7 +619,7 @@ fn validate_subject(
 
 /// A workflow with a `workflow` step is edge-scheduled from its first step: every ordinary
 /// step is a `workflow` step and the exit edges, not an `outcome` block, choose the
-/// outcome (REQ-WFFORMAT-93, REQ-WFFORMAT-88).
+/// outcome.
 fn validate_scheduling(document: &WorkflowDocument) -> Result<Scheduling, ValidationFailure> {
     let is_workflow = |step: &str| matches!(document.steps[step].body, NodeBody::Workflow(_));
     if !document.step_order.iter().any(|step| is_workflow(step)) {
@@ -635,7 +643,7 @@ fn validate_scheduling(document: &WorkflowDocument) -> Result<Scheduling, Valida
 }
 
 /// The outputs of each `workflow` step whose child is summarized: the child's `text` and
-/// `json` exports and the implicit `outcome` (REQ-WFFORMAT-91).
+/// `json` exports and the implicit `outcome`.
 fn derive_child_outputs(
     document: &WorkflowDocument,
     children: &BTreeMap<String, ChildWorkflowSummary>,
@@ -672,7 +680,7 @@ fn derive_child_outputs(
         .collect()
 }
 
-/// The implicit output that carries a child's recorded outcome (REQ-WFFORMAT-91).
+/// The implicit output that carries a child's recorded outcome.
 pub(crate) const CHILD_OUTCOME_OUTPUT: &str = "outcome";
 
 fn validate_workflow_step(
@@ -738,7 +746,7 @@ fn validate_workflow_step(
             location.clone(),
         )?;
         // An element takes the child input's kind; the step checks the value when it
-        // starts (REQ-WFFORMAT-99).
+        // starts.
         if matches!(reference.source, ResolvedValueSource::Item { .. }) {
             if for_each.is_none() {
                 return Err(failure(ValidationFailureKind::ItemReferenceRequiresForEach));
@@ -748,7 +756,7 @@ fn validate_workflow_step(
         if reference.value_type != value_type {
             return Err(failure(ValidationFailureKind::ChildInputTypeMismatch));
         }
-        // A control value may be absent when the step starts (REQ-WFFORMAT-95).
+        // A control value may be absent when the step starts.
         if matches!(
             reference.source,
             ResolvedValueSource::Wait(_) | ResolvedValueSource::ControlsAnswers
@@ -802,6 +810,8 @@ fn validate_workflow_step(
         .collect();
     Ok(ValidatedWorkflowStep {
         common: ValidatedCommonStep {
+            workspace: StepWorkspace::Starting,
+            workspace_use: DeclaredWorkspace::Write,
             failure_policy: FailurePolicy::Required,
             condition: None,
             condition_values: BTreeMap::new(),
@@ -820,7 +830,7 @@ fn validate_workflow_step(
 }
 
 /// `forEach` names a `json` root input or a `json` export of an earlier `workflow` step,
-/// and `empty` one of the child's outcomes (REQ-WFFORMAT-98).
+/// and `empty` one of the child's outcomes.
 fn validate_for_each(
     step_name: &str,
     for_each: &ForEach,
@@ -860,7 +870,7 @@ fn validate_for_each(
 }
 
 /// A mapped child input reads a root input, an output of an earlier step, or a control
-/// value (REQ-WFFORMAT-95); it adds no dependency (REQ-WFFORMAT-90, REQ-WFFORMAT-93).
+/// value; it adds no dependency.
 fn resolve_child_input_reference(
     step_name: &str,
     reference: &ValueReference,
@@ -890,11 +900,10 @@ fn step_index(document: &WorkflowDocument, step: &str) -> Option<usize> {
 
 /// Every child outcome has exactly one edge, and each target is a step of the workflow
 /// (later, the step itself or earlier), a parent outcome, a limited edge whose `then` is a
-/// step and whose `else` is an unlimited target (REQ-WFFORMAT-96), a wait whose `then`
-/// is a step or an exit, whose `onHandBack`, present exactly for `approval`, is a step,
-/// and whose `rule`, present exactly for `external`, is checked (REQ-WFFORMAT-118,
-/// REQ-WFFORMAT-97), or a host wait whose `then` is `step_name` and which has a `limit` and
-/// an unlimited `else` (REQ-WFFORMAT-111).
+/// step and whose `else` is an unlimited target, a wait whose `then` is a step or an exit,
+/// whose `onHandBack`, present exactly for `approval`, is a step, and whose `rule`, present
+/// exactly for `external`, is checked, or a host wait whose `then` is `step_name` and which
+/// has a `limit` and an unlimited `else`.
 fn validate_edges(
     step_name: &str,
     node: &super::document::WorkflowNode,
@@ -1027,7 +1036,7 @@ fn validate_edge_target(
 }
 
 /// A step target names any step of the workflow: a later one starts in the attempt, the
-/// step itself or an earlier one continues the run (REQ-WFFORMAT-119).
+/// step itself or an earlier one continues the run.
 fn validate_step_target(
     step: &str,
     document: &WorkflowDocument,
@@ -1037,10 +1046,10 @@ fn validate_step_target(
         .ok_or(ValidationFailureKind::EdgeTargetUnknown)
 }
 
-/// An `external` wait's authored rule (REQ-WFFORMAT-97): a provider other than `useful`, at
-/// least one event, a `where` in the matcher's grammar, and each `inputs.<name>` a declared
-/// `text` input and each `outputs.<step>.<output>` a `text` export of a `workflow` step
-/// earlier than the waiting one, the values the wait record resolves.
+/// An `external` wait's authored rule: a provider other than `useful`, at least one event,
+/// a `where` in the matcher's grammar, and each `inputs.<name>` a declared `text` input and
+/// each `outputs.<step>.<output>` a `text` export of a `workflow` step earlier than the
+/// waiting one, the values the wait record resolves.
 fn validate_wait_rule(
     rule: &WaitRule,
     position: Option<usize>,
@@ -1082,10 +1091,9 @@ fn validate_wait_rule(
         .ok_or(ValidationFailureKind::WaitRuleReferenceInvalid)
 }
 
-/// In an edge-scheduled workflow every step but the entry is the step target of some
-/// other step's edge, through a wait's `then` or `onHandBack`, a limited edge's `then` or
-/// `else` or a host wait's `else` as well; an edge naming its own step reaches nothing new
-/// (REQ-WFFORMAT-119, REQ-WFFORMAT-93, REQ-WFFORMAT-96, REQ-WFFORMAT-111).
+/// In an edge-scheduled workflow every step but the entry is the step target of some other
+/// step's edge, through a wait's `then` or `onHandBack`, a limited edge's `then` or `else`
+/// or a host wait's `else` as well; an edge naming its own step reaches nothing new.
 fn validate_reachability(
     document: &WorkflowDocument,
     scheduling: &Scheduling,
@@ -1178,6 +1186,95 @@ fn validate_step_graph(document: &WorkflowDocument) -> Result<ValidatedGraph, Va
         &document.step_order,
         document.steps.len(),
     )
+}
+
+fn resolve_step_workspaces(
+    document: &WorkflowDocument,
+    graph: &ValidatedGraph,
+    steps: &mut BTreeMap<String, ValidatedStep>,
+) -> Result<(), ValidationFailure> {
+    let mut passed_on: BTreeMap<&str, Option<StepWorkspace>> = BTreeMap::new();
+    for name in &graph.presentation_order {
+        let workspace_use = document.steps[name]
+            .workspace
+            .unwrap_or(DeclaredWorkspace::Write);
+        // A control path selects the workspace even when data arrives from other paths.
+        let prerequisites = &graph.direct_prerequisites[name];
+        let has_control = prerequisites.iter().any(|source| source.control);
+        let mut candidates = prerequisites
+            .iter()
+            .filter(|source| !has_control || source.control)
+            .map(|source| {
+                passed_on
+                    .get(source.producer.as_str())
+                    .and_then(Option::as_ref)
+            });
+        let inherited = match candidates.next() {
+            None => Some(StepWorkspace::Starting),
+            Some(Some(first)) if candidates.all(|next| next == Some(first)) => Some(first.clone()),
+            _ => None,
+        };
+        let workspace = match workspace_use {
+            DeclaredWorkspace::New | DeclaredWorkspace::None => {
+                StepWorkspace::Established { by: name.clone() }
+            }
+            DeclaredWorkspace::Write | DeclaredWorkspace::Read => {
+                inherited.clone().ok_or_else(|| {
+                    ValidationFailure::new(
+                        ValidationFailureKind::WorkspaceAmbiguous,
+                        ValidationLocation::Step { step: name.clone() },
+                    )
+                })?
+            }
+        };
+        // A none step uses its own directory while dependents inherit through it.
+        let forwarded = if workspace_use == DeclaredWorkspace::None {
+            inherited
+        } else {
+            Some(workspace.clone())
+        };
+        passed_on.insert(name, forwarded);
+        let step = steps.get_mut(name).ok_or_else(|| {
+            ValidationFailure::new(
+                ValidationFailureKind::MissingDependency,
+                ValidationLocation::Step { step: name.clone() },
+            )
+        })?;
+        let common = step.common_mut();
+        common.workspace = workspace;
+        common.workspace_use = workspace_use;
+    }
+
+    for (name, step) in steps.iter() {
+        let common = step.common();
+        let cwd_failure = match common.workspace_use {
+            DeclaredWorkspace::New => Some(ValidationFailureKind::NewWorkspaceCwd),
+            DeclaredWorkspace::None => Some(ValidationFailureKind::NoneWorkspaceCwd),
+            DeclaredWorkspace::Write | DeclaredWorkspace::Read => None,
+        };
+        if common.cwd.is_some()
+            && let Some(kind) = cwd_failure
+        {
+            return Err(ValidationFailure::new(
+                kind,
+                ValidationLocation::Step { step: name.clone() },
+            ));
+        }
+        if matches!(common.workspace, StepWorkspace::Established { .. })
+            && let Some((output, _)) = common
+                .outputs
+                .iter()
+                .find(|(_, output)| matches!(output.definition, Output::GitBranchWorkspace))
+        {
+            return Err(output_failure(
+                ValidationFailureKind::EstablishedWorkspaceGitBranch,
+                name,
+                WorkflowNodeRole::Step,
+                output,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_finalizer_graph(
@@ -1693,7 +1790,7 @@ fn infer_body_prerequisites(
                 )?;
             }
         }
-        // References supply values and never order an edge-scheduled step (REQ-WFFORMAT-93).
+        // References supply values and never order an edge-scheduled step.
         NodeBody::Workflow(_) => {}
     }
     Ok(())
@@ -1749,8 +1846,8 @@ fn infer_reference_prerequisite(
                 mark_data_prerequisite(prerequisites, &reference.node, false);
             }
         }
-        // Each source is checked as a single reference in this place is (REQ-WFFORMAT-106)
-        // and orders the consumer, but may be skipped, so it is never a data prerequisite.
+        // Each source is checked as a single reference in this place is and orders the
+        // consumer, but may be skipped, so it is never a data prerequisite.
         ValueReference::FirstOf(sources) => {
             for source in sources {
                 let producer_role = check_output_reference(
@@ -1992,8 +2089,8 @@ fn validate_recovery(
         .transpose()
 }
 
-/// A node's own `environmentPassthrough` lists only names the root declares
-/// (REQ-WFFORMAT-102).
+/// A node's own `environmentPassthrough` lists only names the root
+/// declares.
 fn check_environment_passthrough(
     declared: Option<&BTreeSet<String>>,
     root_passthrough: &BTreeSet<String>,
@@ -2236,7 +2333,7 @@ fn resolve_condition_reference(
         ResolvedValueSource::ControlsAnswers => "controls.answers".to_owned(),
         ResolvedValueSource::Item { field: None } => "item".to_owned(),
         ResolvedValueSource::Item { field: Some(field) } => format!("item.{field}"),
-        // The structural schema admits a first-of in no condition (REQ-WFFORMAT-105).
+        // The structural schema admits a first-of in no condition.
         ResolvedValueSource::FirstOf(_) => {
             return Err(ValidationFailure::new(
                 ValidationFailureKind::InvalidConditionReference,
@@ -2344,7 +2441,7 @@ fn evidence_prerequisites(
         .filter_map(|prerequisite| Prerequisite::control(prerequisite.producer.clone()).ok())
         .collect::<Vec<_>>();
     retain_condition_descriptors(common_node(body).condition.as_ref(), &mut descriptors);
-    // Each source of a first-of is a body prerequisite of its own (REQ-WFCOND-15).
+    // Each source of a first-of is a body prerequisite of its own.
     let mut retain_reference = |reference: &ValueReference| {
         let outputs = match reference {
             ValueReference::Output(output) => std::slice::from_ref(output),
@@ -2462,6 +2559,8 @@ fn validate_common(
         .collect();
 
     ValidatedCommonStep {
+        workspace: StepWorkspace::Starting,
+        workspace_use: DeclaredWorkspace::Write,
         failure_policy: common.failure_policy,
         condition,
         condition_values,
@@ -2525,7 +2624,7 @@ fn resolve_value_reference(
             source: ResolvedValueSource::FinalizationContext,
             value_type: WorkflowValueType::Json,
         }),
-        // Only a `workflow` step's inputs decode these (REQ-WFFORMAT-95).
+        // Only a `workflow` step's inputs decode these.
         ValueReference::Wait { field } => Ok(ResolvedValueReference {
             source: ResolvedValueSource::Wait(field.clone()),
             value_type: WorkflowValueType::Text,
@@ -2534,8 +2633,8 @@ fn resolve_value_reference(
             source: ResolvedValueSource::ControlsAnswers,
             value_type: WorkflowValueType::Json,
         }),
-        // An element is any JSON value; the child input it maps onto gives it its kind
-        // (REQ-WFFORMAT-99).
+        // An element is any JSON value; the child input it maps onto gives it its
+        // kind.
         ValueReference::Item { field } => Ok(ResolvedValueReference {
             source: ResolvedValueSource::Item {
                 field: field.clone(),
@@ -2564,8 +2663,8 @@ fn resolve_output_source<'a>(
 
 /// Resolves a first-of whose sources passed the single-reference checks. A source is
 /// unreachable when an earlier one names its step or names a step without a `condition`,
-/// which is never skipped (REQ-WFCOND-29); the sources are incompatible unless they share
-/// a kind and, as written, a JSON `schema` or a file `mediaType` (REQ-WFFORMAT-106).
+/// which is never skipped; the sources are incompatible unless they share a kind and, as
+/// written, a JSON `schema` or a file `mediaType`.
 fn resolve_first_of(
     sources: &[OutputReference],
     document: &WorkflowDocument,
@@ -2739,7 +2838,7 @@ fn validate_message_source(
     let mismatch =
         || ValidationFailure::new(ValidationFailureKind::MessageTypeMismatch, location.clone());
     // Every source of a first-of meets the destination's rule before the sources are
-    // compared with each other (REQ-WFFORMAT-49).
+    // compared with each other.
     if let ValueReference::FirstOf(sources) = reference {
         for source in sources {
             let (_, _, output) = declared_output(document, source, location.clone())?;
@@ -2759,10 +2858,9 @@ fn validate_message_source(
     })
 }
 
-/// Resolve an export's source (REQ-WFFORMAT-65, REQ-WFFORMAT-107). Every source of a
-/// `firstOf` meets a single reference's rules, then is an output of an ordinary `cmd` or
-/// `agent` step that is not a `git_branch` output, before the sources are compared with
-/// each other at the export (REQ-WFFORMAT-106).
+/// Resolve an export's source. Every source of a `firstOf` meets a single reference's
+/// rules, then is an output of an ordinary `cmd` or `agent` step that is not a
+/// `git_branch` output, before the sources are compared with each other at the export.
 fn resolve_export(
     name: &str,
     source: &SourceReference,
@@ -2841,11 +2939,10 @@ fn resolve_export_source(
     })
 }
 
-/// Resolve `outcomes` and `outcome` (REQ-WFFORMAT-87, REQ-WFFORMAT-88, REQ-WFFORMAT-108,
-/// REQ-WFFORMAT-110). `onFailure` and a declared `onInfrastructure` are among `outcomes`.
-/// Each source must be a `text` output of a required ordinary step. A single reference's step
-/// declares no `condition`, so that a succeeded run always holds its value; the sources of a
-/// `firstOf` may, and then meet the reachability rule at the outcome (REQ-WFFORMAT-106).
+/// Resolve `outcomes` and `outcome`. `onFailure` and a declared `onInfrastructure` are among
+/// `outcomes`. Each source must be a `text` output of a required ordinary step. A single
+/// reference's step declares no `condition`, so that a succeeded run always holds its value;
+/// the sources of a `firstOf` may, and then meet the reachability rule at the outcome.
 fn resolve_outcome(
     document: &WorkflowDocument,
 ) -> Result<Option<ValidatedOutcome>, ValidationFailure> {

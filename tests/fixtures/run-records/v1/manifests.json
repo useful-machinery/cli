@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "directory and file",
+      "valid": true,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "empty record",
+      "valid": true,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "fractional UTC timestamp",
+      "valid": true,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00.00000001234Z\",\"entries\":[]}"
+    },
+    {
+      "name": "space as date separator",
+      "valid": true,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01 15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "leap second",
+      "valid": true,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2016-12-31T23:59:60Z\",\"entries\":[]}"
+    },
+    {
+      "name": "unknown member",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[],\"other\":7}"
+    },
+    {
+      "name": "wrong case for run",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"Run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "duplicate run",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "duplicate entry member",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"700\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "unsupported version",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":2,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "invalid run prefix",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"job_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "ULID overflow",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_81j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "ULID excluded letter",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j0000000000000000000000i\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "offset timestamp",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00+00:00\",\"entries\":[]}"
+    },
+    {
+      "name": "invalid day",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-02-31T15:00:00Z\",\"entries\":[]}"
+    },
+    {
+      "name": "comma fractional separator",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00,5Z\",\"entries\":[]}"
+    },
+    {
+      "name": "invalid leap second",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2016-12-30T23:59:60Z\",\"entries\":[]}"
+    },
+    {
+      "name": "unsorted paths",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"z\",\"mode\":\"755\"},{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "repeated path",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "parent segment",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"..\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "dot segment",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\".\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "empty segment",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data//file\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "absolute path",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"/data\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "trailing slash",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data/\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "empty path",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "NUL in path",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"x\\u0000y\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "unpaired surrogate",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"\\ud800\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "absent parent",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "file parent",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"file\",\"path\":\"data\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "invalid mode 0755",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"0755\"}]}"
+    },
+    {
+      "name": "invalid mode 79",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"79\"}]}"
+    },
+    {
+      "name": "uppercase digest",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}]}"
+    },
+    {
+      "name": "short digest",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":4,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "directory size",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\",\"sizeBytes\":0}]}"
+    },
+    {
+      "name": "null directory size",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\",\"sizeBytes\":null}]}"
+    },
+    {
+      "name": "negative file size",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sizeBytes\":-1,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "file without size",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\"},{\"kind\":\"file\",\"path\":\"data/file\",\"mode\":\"644\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}"
+    },
+    {
+      "name": "unknown kind",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"link\",\"path\":\"data\",\"mode\":\"755\"}]}"
+    },
+    {
+      "name": "unknown entry member",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[{\"kind\":\"directory\",\"path\":\"data\",\"mode\":\"755\",\"name\":\"other\"}]}"
+    },
+    {
+      "name": "missing entries",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\"}"
+    },
+    {
+      "name": "null entries",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":null}"
+    },
+    {
+      "name": "trailing JSON value",
+      "valid": false,
+      "manifest": "{\"schemaVersion\":1,\"run\":\"run_01j00000000000000000000000\",\"createdAt\":\"2026-06-01T15:00:00Z\",\"entries\":[]}{}"
+    }
+  ]
+}

@@ -1,13 +1,13 @@
-//! The run mirror's Linear target (REQ-LOCALRUN-192): `MirrorTarget` over Linear's GraphQL
-//! API with the Linear credential the environment holds when the target is made, through
+//! The run mirror's Linear target: `MirrorTarget` over Linear's GraphQL API with the Linear
+//! credential the environment holds when the target is made, through
 //! `useful_api::provider_post_json`. The credential is the first of the token in the file
 //! `USEFUL_LINEAR_ACCESS_TOKEN_FILE` names and `USEFUL_LINEAR_ACCESS_TOKEN`, a runner's grant token
-//! sent as `Bearer`, and the operator's `LINEAR_API_KEY`, sent bare in `Authorization` as
-//! Linear's personal keys are; a target is made for each hook, so each reads the credential
-//! anew. `USEFUL_LINEAR_API_URL` overrides the base URL for development and tests, and admits
-//! `http`. Every request is one attempt: a comment is not idempotent, and a failed write is
-//! recorded for a person to see. `useful workflow run event` reads an issue by its Linear id
-//! through the same target (REQ-LOCALRUN-208).
+//! sent as `Bearer`, and the operator's `LINEAR_API_KEY`, sent bare in `Authorization` as Linear's
+//! personal keys are; a target is made for each hook, so each reads the credential anew.
+//! `USEFUL_LINEAR_API_URL` overrides the base URL for development and tests, and admits `http`.
+//! Every request is one attempt: a comment is not idempotent, and a failed write is recorded for a
+//! person to see. `useful workflow run event` reads an issue by its Linear id through the same
+//! target.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -74,8 +74,8 @@ struct Issue {
     states: Vec<(String, String)>,
 }
 
-/// An issue as `useful workflow run event` reads it fresh (REQ-LOCALRUN-208): its team id, its
-/// state's id and name, and its `updatedAt`, none when Linear's answer lacks them.
+/// An issue as `useful workflow run event` reads it fresh: its team id, its state's id and
+/// name, and its `updatedAt`, none when Linear's answer lacks them.
 pub(in super::super) struct IssueObservation {
     pub(in super::super) team: Option<String>,
     pub(in super::super) state: String,
@@ -85,7 +85,7 @@ pub(in super::super) struct IssueObservation {
 
 /// Linear, reached at `endpoint` with `authorization`. Every write is keyed by the issue's id,
 /// which `issue(id:)` resolves from the identifier; the issue read is kept, so a hook reads the
-/// issue once however many writes it makes (REQ-LOCALRUN-192).
+/// issue once however many writes it makes.
 pub(in super::super) struct LinearTarget {
     endpoint: String,
     /// The whole `Authorization` value: `Bearer <token>` or the bare key.
@@ -141,8 +141,8 @@ impl LinearTarget {
     }
 
     /// Whether the target holds a credential: `mirror_credentials_unavailable` when the
-    /// environment offered none (REQ-LOCALRUN-192). Every request takes its `Authorization`
-    /// from here, so a check before a write and the write agree (REQ-LOCALRUN-204).
+    /// environment offered none. Every request takes its `Authorization` from here, so a
+    /// check before a write and the write agree.
     pub(super) fn credentials(&self) -> Result<(), MirrorFailure> {
         self.authorization().map(|_| ())
     }
@@ -227,8 +227,8 @@ impl LinearTarget {
         Ok(issue)
     }
 
-    /// The issue whose Linear id is `issue_id`, read fresh with one `IssueState`
-    /// (REQ-LOCALRUN-208); a null or different issue is `mirror_issue_unavailable`.
+    /// The issue whose Linear id is `issue_id`, read fresh with one `IssueState`; a
+    /// null or different issue is `mirror_issue_unavailable`.
     pub(in super::super) fn observe(
         &self,
         issue_id: &str,
@@ -325,9 +325,9 @@ impl LinearTarget {
     }
 }
 
-/// The `Authorization` value of the Linear credential the environment holds now
-/// (REQ-LOCALRUN-192): `Bearer` and the grant token `offered_token` reads from
-/// `USEFUL_LINEAR_ACCESS_TOKEN_FILE` and `USEFUL_LINEAR_ACCESS_TOKEN`, else `LINEAR_API_KEY` bare.
+/// The `Authorization` value of the Linear credential the environment holds now: `Bearer` and the
+/// grant token `offered_token` reads from `USEFUL_LINEAR_ACCESS_TOKEN_FILE` and
+/// `USEFUL_LINEAR_ACCESS_TOKEN`, else `LINEAR_API_KEY` bare.
 fn environment_authorization() -> Option<String> {
     match super::offered_token(TOKEN_FILE_VARIABLE, TOKEN_VARIABLE) {
         Some(token) => Some(format!("Bearer {}", token.as_str())),
@@ -358,8 +358,7 @@ impl MirrorTarget for LinearTarget {
     }
 
     /// One `IssueComments` by identifier, uncached, whose issue is kept as `IssueState`'s
-    /// is, so a comment after it reads nothing more; a failed read keeps nothing
-    /// (REQ-LOCALRUN-216).
+    /// is, so a comment after it reads nothing more; a failed read keeps nothing.
     fn comments(&self, issue: &str) -> Result<Vec<String>, MirrorFailure> {
         let (read, answer) = self.read_document(ISSUE_COMMENTS, issue, "identifier")?;
         let bodies = answer
@@ -407,7 +406,7 @@ impl MirrorTarget for LinearTarget {
     }
 
     /// The resolved id is sent as it stands: the team's states are not consulted, so a state
-    /// renamed since Cloud resolved it is still found (REQ-WFDEF-32).
+    /// renamed since Cloud resolved it is still found.
     fn set_state_id(&self, issue: &str, state_id: &str) -> Result<(), MirrorFailure> {
         let read = self.issue(issue)?;
         self.update_state(&read.id, state_id)
@@ -474,7 +473,7 @@ mod tests {
             .collect()
     }
 
-    // REQ-LOCALRUN-192: the issue is read by its identifier with the bare key.
+    // The issue is read by its identifier with the bare key.
     #[test]
     fn issue_state_reads_the_issue_by_its_identifier_with_the_bare_key() {
         let (target, seen) = linear(Some(KEY), vec![("IssueState", 200, issue("Engineering"))]);
@@ -488,7 +487,7 @@ mod tests {
         assert_eq!(body["variables"], json!({"id": "AUTO-143"}));
     }
 
-    // REQ-LOCALRUN-192: an issue Linear does not answer, or another one, is unavailable.
+    // An issue Linear does not answer, or another one, is unavailable.
     #[test]
     fn a_missing_or_other_issue_is_issue_unavailable() {
         let (target, _) = linear(
@@ -512,8 +511,8 @@ mod tests {
         assert_eq!(operations(&seen), ["IssueState"]);
     }
 
-    // REQ-LOCALRUN-192: a state write moves the issue to the team state of the bound name,
-    // reading the issue once even after the guard read it.
+    // A state write moves the issue to the team state of the bound name, reading the issue
+    // once even after the guard read it.
     #[test]
     fn set_state_updates_the_issue_to_the_team_state_of_that_name() {
         let success = json!({"data": {"issueUpdate": {"success": true}}});
@@ -550,8 +549,8 @@ mod tests {
         assert_eq!(operations(&seen), ["IssueState"]);
     }
 
-    // REQ-LOCALRUN-192, REQ-WFDEF-32: by id, the issue's state id is the one Linear answers
-    // and a state write sends the given id without matching any team state's name.
+    // By id, the issue's state id is the one Linear answers and a state write sends the
+    // given id without matching any team state's name.
     #[test]
     fn by_id_the_state_is_read_and_written_by_its_id() {
         let success = json!({"data": {"issueUpdate": {"success": true}}});
@@ -571,8 +570,8 @@ mod tests {
         );
     }
 
-    // REQ-LOCALRUN-208: `observe` reads the issue by its Linear id, answering its team,
-    // state and `updatedAt`, and an answer for another id is `mirror_issue_unavailable`.
+    // `observe` reads the issue by its Linear id, answering its team, state and
+    // `updatedAt`, and an answer for another id is `mirror_issue_unavailable`.
     #[test]
     fn observe_reads_the_issue_by_its_linear_id() {
         let mut answer = issue("Canceled");
@@ -594,8 +593,8 @@ mod tests {
         assert_eq!(failure.code, MirrorFailure::ISSUE_UNAVAILABLE);
     }
 
-    // REQ-LOCALRUN-192: a comment reads the issue once for its id and is one `commentCreate`
-    // keyed by that id, never the identifier, with the body; an earlier read serves it.
+    // A comment reads the issue once for its id and is one `commentCreate` keyed by that id,
+    // never the identifier, with the body; an earlier read serves it.
     #[test]
     fn comment_reads_the_issue_once_and_creates_one_comment_keyed_by_its_id() {
         let success = json!({"data": {"commentCreate": {"success": true}}});
@@ -641,8 +640,8 @@ mod tests {
         answer
     }
 
-    // REQ-LOCALRUN-216: the comments are one `IssueComments` by identifier, answered in
-    // Linear's order, and the issue it read keys the comment written after it.
+    // The comments are one `IssueComments` by identifier, answered in Linear's order,
+    // and the issue it read keys the comment written after it.
     #[test]
     fn comments_read_the_issue_with_its_newest_comments_and_serve_the_comment_after() {
         let (target, seen) = linear(
@@ -678,8 +677,8 @@ mod tests {
         );
     }
 
-    // REQ-LOCALRUN-216: a refused or failed read, or an answer without every comment's body,
-    // is an error that keeps no issue, so a comment after it reads the issue itself.
+    // A refused or failed read, or an answer without every comment's body, is an error that
+    // keeps no issue, so a comment after it reads the issue itself.
     #[test]
     fn a_failed_comments_read_keeps_nothing_for_the_comment_after() {
         let mut bodyless = issue_with_comments(&["kept"]);
@@ -715,8 +714,8 @@ mod tests {
         }
     }
 
-    // REQ-LOCALRUN-192: Linear's refusal is `mirror_write_rejected` with its message and
-    // never the key; an answer that cannot be read is `mirror_unavailable`.
+    // Linear's refusal is `mirror_write_rejected` with its message and never the key; an
+    // answer that cannot be read is `mirror_unavailable`.
     #[test]
     fn refusals_and_unreadable_answers_are_classified() {
         let refused = json!({"errors": [{"message": "Entity not found: Issue"}]});
@@ -784,8 +783,8 @@ mod tests {
         assert_eq!(failure.code, MirrorFailure::UNAVAILABLE);
     }
 
-    // REQ-LOCALRUN-192, REQ-LOCALRUN-204: without a key the check before a write and every
-    // write fail alike and nothing is sent; with one the check passes.
+    // Without a key the check before a write and every write fail alike and nothing is
+    // sent; with one the check passes.
     #[test]
     fn an_unset_or_empty_key_fails_before_any_request() {
         for key in [None, Some("")] {

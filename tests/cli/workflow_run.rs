@@ -41,8 +41,8 @@ const CODEX_TURN_ID: &str = "turn-fixture";
 const CODEX_CORRECTION_TURN_ID: &str = "turn-correction";
 const CODEX_PROVIDER: &str = "fixture-provider";
 
-/// The run record `run.json` of `run_directory`, checked against its published schema
-/// (REQ-LOCALRUN-175, REQ-WFDEF-4).
+/// The run record `run.json` of `run_directory`, checked against its published
+/// schema.
 pub(super) fn run_record(run_directory: &Path) -> serde_json::Value {
     let record = read_json(&run_directory.join("run.json"));
     assert!(
@@ -302,9 +302,9 @@ impl RunBundle {
     }
 }
 
-/// A source root that is a workflow tree: `workflow.yaml` sits directly under it
-/// (REQ-LOCALRUN-169). Dropping it restores write permission on the read-only run copies
-/// so the temporary directory can be removed.
+/// A source root that is a workflow tree: `workflow.yaml` sits directly under it.
+/// Dropping it restores write permission on the read-only run copies so the temporary
+/// directory can be removed.
 pub(super) struct TreeBundle {
     temporary: TempDir,
     source_root: PathBuf,
@@ -392,7 +392,7 @@ impl Drop for TreeBundle {
 }
 
 /// The operator's Linear credentials and endpoint never reach a test's `useful`: a mirrored run
-/// writes to Linear only through a stub the test points it at (REQ-LOCALRUN-192).
+/// writes to Linear only through a stub the test points it at.
 const MIRROR_VARIABLES: [&str; 4] = [
     "LINEAR_API_KEY",
     "USEFUL_LINEAR_ACCESS_TOKEN",
@@ -826,7 +826,6 @@ exports:
 "#
 }
 
-// REQ-AGENT-4, REQ-AGENT-26
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_codex_exports_the_loopback_response() {
@@ -839,7 +838,6 @@ fn pinned_real_codex_exports_the_loopback_response() {
     );
 }
 
-// REQ-AGENT-4, REQ-AGENT-26
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_claude_code_exports_the_loopback_response() {
@@ -1128,7 +1126,6 @@ exports:
 "#
 }
 
-// REQ-AGENT-8
 #[test]
 fn command_only_run_remains_harness_independent() {
     let bundle = RunBundle::new(
@@ -1157,7 +1154,6 @@ fn command_only_run_remains_harness_independent() {
     assert!(state["attempts"][0].get("finalization").is_none());
 }
 
-// REQ-WFCOND-19, REQ-WFCOND-26, REQ-WFCOND-29, REQ-WFCOND-30, REQ-WFCOND-32, REQ-WFCOND-35, REQ-WFCOND-36, REQ-WFCOND-41
 #[test]
 fn conditional_skips_persist_for_steps_and_finalizers() {
     let bundle = RunBundle::new(include_str!(
@@ -1240,7 +1236,6 @@ fn conditional_skips_persist_for_steps_and_finalizers() {
     );
 }
 
-// REQ-EVIDENCE-13, REQ-LOCALRUN-156, REQ-LOCALRUN-158, REQ-WFCOND-41
 #[test]
 fn conditional_skips_are_viewable_after_publication() {
     let bundle = RunBundle::new(include_str!(
@@ -1293,7 +1288,7 @@ fn conditional_skips_are_viewable_after_publication() {
 
 /// `a` runs when the input `branch` is `a` and `b` when it is `b`, each writing its name to
 /// its text output `result`, and `c` copies `{firstOf: [outputs.a.result, outputs.b.result]}`
-/// to `c.txt` in the execution root (REQ-WFCOND-45).
+/// to `c.txt` in the execution root.
 pub(super) const FIRST_OF_WORKFLOW: &str = r#"schemaVersion: 1
 inputs:
   branch: {kind: text}
@@ -1334,9 +1329,8 @@ pub(super) fn run_with_branch(bundle: &RunBundle, name: &str, branch: &str) -> (
     (run(&args), destination)
 }
 
-/// The `inputSources` of each step in `steps` that carries them, by step id
-/// (REQ-EVIDENCE-28): `steps` is a result's `steps` or an attempt's `progress.steps` in
-/// `state.json`.
+/// The `inputSources` of each step in `steps` that carries them, by step id: `steps` is
+/// a result's `steps` or an attempt's `progress.steps` in `state.json`.
 pub(super) fn input_sources(steps: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
     steps
         .as_array()
@@ -1349,7 +1343,7 @@ pub(super) fn input_sources(steps: &serde_json::Value) -> BTreeMap<String, serde
         .collect()
 }
 
-// REQ-WFCOND-45, REQ-WFCOND-46, REQ-EVIDENCE-28, SC-WFCOND-5
+// SC-WFCOND-5
 #[test]
 fn a_first_of_joins_the_branch_that_ran_or_blocks_when_none_did() {
     let bundle = RunBundle::new(FIRST_OF_WORKFLOW);
@@ -1434,7 +1428,7 @@ fn a_first_of_joins_the_branch_that_ran_or_blocks_when_none_did() {
 
 /// `a` runs when the input `branch` is `a` and `b` when it is `b`, each writing its name to
 /// its text output `result`; the export `result` takes the first of the two that succeeded
-/// and `direct` names `b`'s output alone (REQ-WFFORMAT-107).
+/// and `direct` names `b`'s output alone.
 pub(super) const FIRST_OF_EXPORT_WORKFLOW: &str = r#"schemaVersion: 1
 inputs:
   branch: {kind: text}
@@ -1456,7 +1450,7 @@ exports:
   direct: {ref: outputs.b.result}
 "#;
 
-/// Whether `useful workflow run view RUN --json` accepts the run directory (REQ-EVIDENCE-13).
+/// Whether `useful workflow run view RUN --json` accepts the run directory.
 pub(super) fn assert_run_view_accepts(destination: &Path) {
     let view = isolated_command(&[
         "workflow".to_owned(),
@@ -1475,7 +1469,6 @@ pub(super) fn assert_run_view_accepts(destination: &Path) {
     );
 }
 
-// REQ-WFFORMAT-107, REQ-EXPORTS-2, REQ-EXPORTS-3, REQ-ARTIFACTSET-4, REQ-EVIDENCE-13
 #[test]
 fn a_first_of_export_carries_the_branch_that_ran_or_is_skipped_when_none_did() {
     let bundle = RunBundle::new(FIRST_OF_EXPORT_WORKFLOW);
@@ -1522,7 +1515,6 @@ fn a_first_of_export_carries_the_branch_that_ran_or_is_skipped_when_none_did() {
     assert_eq!(exports["direct"], skipped);
 }
 
-// REQ-WFCOND-6, REQ-WFCOND-21, REQ-WFEXEC-24
 #[test]
 fn named_empty_inputs_reach_ordinary_and_finalizer_conditions() {
     let bundle = RunBundle::new(
@@ -1611,7 +1603,6 @@ finalizers:
     );
 }
 
-// REQ-WFCOND-6, REQ-WFCOND-24, REQ-WFCOND-25, REQ-EVIDENCE-1
 #[test]
 fn missing_json_input_pointer_fails_condition_before_step_starts() {
     let bundle = RunBundle::new(
@@ -1690,7 +1681,6 @@ steps:
     }
 }
 
-// REQ-WFEXEC-23, REQ-WFEXEC-24, REQ-LOCALRUN-81
 #[test]
 fn current_cli_black_box_accepts_all_seven_named_input_acquisition_forms() {
     let bundle = RunBundle::new(
@@ -1781,7 +1771,6 @@ steps:
     assert_eq!(terminal["result"]["steps"][0]["state"], "succeeded");
 }
 
-// REQ-WFEXEC-2, REQ-WFEXEC-8, REQ-WFEXEC-13, REQ-WFEXEC-14, REQ-WFEXEC-15, REQ-WFEXEC-38, REQ-WFEXEC-40, REQ-WFEXEC-41, REQ-WFEXEC-44, REQ-EVIDENCE-17, REQ-LOCALRUN-109
 #[test]
 fn advisory_failure_keeps_truthful_state_and_returns_success() {
     let bundle = RunBundle::new(
@@ -1875,7 +1864,6 @@ steps:
     assert_eq!(status["retry"]["reason"], "latest_attempt_succeeded");
 }
 
-// REQ-WFEXEC-28, REQ-WFEXEC-29, REQ-WFEXEC-38, REQ-WFEXEC-39, REQ-WFEXEC-40, REQ-WFFINALIZE-1, REQ-WFFINALIZE-6, REQ-WFFINALIZE-17, REQ-WFFINALIZE-21
 #[test]
 fn finalization_runs_after_ordinary_failure_and_is_durable_before_publication() {
     let bundle = RunBundle::new(include_str!(
@@ -1970,7 +1958,6 @@ fn finalization_runs_after_ordinary_failure_and_is_durable_before_publication() 
     assert_eq!(status["retry"]["eligible"], true);
 }
 
-// REQ-WFRECOVERY-1, REQ-WFRECOVERY-52, REQ-EVIDENCE-2, REQ-EVIDENCE-3, REQ-EVIDENCE-13, REQ-EXPORTS-1, REQ-EXPORTS-3, REQ-EXPORTS-4
 #[test]
 fn settled_failed_run_is_published_with_recovery_finalization_and_truthful_exports() {
     let bundle = RunBundle::new(include_str!(
@@ -2096,7 +2083,6 @@ fn settled_failed_run_is_published_with_recovery_finalization_and_truthful_expor
     assert_eq!(view["result"], *result);
 }
 
-// REQ-WFEXEC-31, REQ-WFEXEC-33, REQ-EVIDENCE-9, REQ-EVIDENCE-15, REQ-EXPORTS-3, REQ-EXPORTS-4, REQ-LOCALRUN-127
 #[test]
 fn finalizer_input_unavailability_is_preserved_in_summary_and_exports() {
     let bundle = RunBundle::new(
@@ -2202,7 +2188,6 @@ exports:
     assert_eq!(view["result"], *result);
 }
 
-// REQ-LOCALRUN-95
 #[test]
 fn existing_run_directory_diagnostic_names_requested_path() {
     let bundle = RunBundle::new(
@@ -2221,8 +2206,8 @@ fn existing_run_directory_diagnostic_names_requested_path() {
     );
 }
 
-// REQ-LOCALRUN-76, REQ-LOCALRUN-77: `--path` and `--run-dir` resolve from the initial working
-// directory; `--workflow` is relative to the `--path` directory.
+// `--path` and `--run-dir` resolve from the initial working directory; `--workflow` is
+// relative to the `--path` directory.
 #[test]
 fn path_and_run_directory_resolve_from_the_initial_working_directory() {
     let bundle = RunBundle::new(
@@ -2259,7 +2244,6 @@ fn path_and_run_directory_resolve_from_the_initial_working_directory() {
     assert_eq!(terminal["result"]["workflow"]["path"], WORKFLOW_PATH);
 }
 
-// REQ-LOCALRUN-77
 #[test]
 fn relative_named_input_paths_resolve_from_the_initial_working_directory() {
     let bundle = RunBundle::new(
@@ -2305,7 +2289,6 @@ steps:
     );
 }
 
-// REQ-OUTPUTS-18
 #[test]
 fn export_aliases_share_carriers_without_collapsing_equal_captures() {
     let bundle = RunBundle::new(
@@ -2375,7 +2358,6 @@ exports:
     );
 }
 
-// REQ-OUTPUTS-22, REQ-OUTPUTS-23, REQ-LOCALRUN-96
 #[test]
 fn git_context_rejection_occurs_before_any_step_starts() {
     let bundle = RunBundle::new(
@@ -2414,7 +2396,6 @@ exports:
     assert!(!destination.exists());
 }
 
-// REQ-EXPORTS-2, REQ-OUTPUTS-30, REQ-OUTPUTS-33
 #[test]
 fn semantic_outputs_workspace_command_mixed_success() {
     let bundle = RunBundle::new(
@@ -2600,7 +2581,6 @@ exports:
     assert!(checksum_codes.contains(&"git_pack_checksum_mismatch"));
 }
 
-// REQ-OUTPUTS-29, REQ-OUTPUTS-33
 #[test]
 fn zero_delta_git_branch_has_no_carrier_file_or_reservation_artifact() {
     let bundle = RunBundle::new(
@@ -2660,7 +2640,6 @@ exports:
     );
 }
 
-// REQ-AGENT-6, REQ-AGENT-9
 #[test]
 fn agent_installation_rejections_use_inherited_path_order_without_publication() {
     let missing_bundle = RunBundle::new(response_agent_source());
@@ -2711,7 +2690,6 @@ fn agent_installation_rejections_use_inherited_path_order_without_publication() 
     assert!(!incompatible_destination.exists());
 }
 
-// REQ-AGENT-10, REQ-AGENT-22, REQ-AGENT-24, REQ-AGENT-41, REQ-AGENT-63, REQ-GRANT-37
 #[test]
 fn claude_code_only_run_pins_the_validated_executable_without_pi_or_path_fallback() {
     let replacement =
@@ -2848,12 +2826,11 @@ fn claude_code_only_run_pins_the_validated_executable_without_pi_or_path_fallbac
     for (path, expected) in runner_resources {
         assert_eq!(fs::read(path).unwrap(), expected);
     }
-    // The configuration directory had no project path; the adapter removed
-    // the one it created with its links (REQ-GRANT-37).
+    // The configuration directory had no project path; the adapter removed the
+    // one it created with its links.
     assert!(!bundle.claude_config().join("projects").exists());
 }
 
-// REQ-AGENT-43, REQ-AGENT-44
 #[test]
 fn local_claude_execution_rejects_a_version_that_contradicts_the_validated_snapshot() {
     let claude = ClaudeCodeFixture::with_execution(
@@ -2933,7 +2910,6 @@ fn local_claude_execution_rejects_a_version_that_contradicts_the_validated_snaps
     assert!(!attempt_result(&destination).join("exports/0001").exists());
 }
 
-// REQ-AGENT-8, REQ-AGENT-9, REQ-AGENT-12
 #[test]
 fn local_admission_probes_only_the_harness_selected_by_the_workflow() {
     let pi = PiFixture::new("0.84.2", COMPLETE_HELP, true);
@@ -3068,7 +3044,6 @@ fn run_codex_scenario(
         .unwrap()
 }
 
-// REQ-AGENT-41
 #[test]
 fn codex_only_response_and_no_value_use_the_selected_production_dispatcher() {
     for (scenario, source) in [
@@ -3133,7 +3108,6 @@ fn codex_only_response_and_no_value_use_the_selected_production_dispatcher() {
     }
 }
 
-// REQ-OUTPUTS-10, REQ-AGENT-29
 #[test]
 fn codex_result_correction_publishes_only_the_schema_valid_value() {
     let fixture = CodexFixture::with_execution("0.147.0");
@@ -3163,7 +3137,6 @@ fn codex_result_correction_publishes_only_the_schema_valid_value() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("value_rejected"));
 }
 
-// REQ-OUTPUTS-10, REQ-EXPORTS-3, REQ-AGENT-40, REQ-EVIDENCE-27, REQ-LOCALRUN-198
 #[test]
 fn codex_native_failure_is_attributed_without_value_publication_or_fallback() {
     let fixture = CodexFixture::with_execution("0.147.0");
@@ -3233,8 +3206,8 @@ fn codex_native_failure_is_attributed_without_value_publication_or_fallback() {
     );
 }
 
-// REQ-AGENT-46, REQ-WFEXEC-134: an interrupted Codex step quiesces before the result
-// publishes, failed `interrupted`.
+// An interrupted Codex step quiesces before the result publishes, failed
+// `interrupted`.
 #[test]
 fn codex_cancellation_quiesces_before_atomic_publication() {
     let fixture = CodexFixture::with_execution("0.147.0");
@@ -3407,7 +3380,7 @@ fn run_two_pi_steps_and_claude(pi_version: &str) -> Output {
     output
 }
 
-// REQ-AGENT-66, SC-AGENT-6
+// SC-AGENT-6
 #[test]
 fn untested_harness_writes_one_stderr_advisory_per_selected_harness() {
     let untested = run_two_pi_steps_and_claude("1.4.0");
@@ -3437,7 +3410,7 @@ fn untested_advisory_lines(output: &Output) -> usize {
         .count()
 }
 
-// REQ-AGENT-66, SC-AGENT-6
+// SC-AGENT-6
 #[test]
 fn retry_of_an_untested_harness_run_writes_the_advisory_once_more() {
     let pi = PiFixture::with_execution("1.4.0", COMPLETE_HELP, true, &response_pi_execution());
@@ -3606,7 +3579,6 @@ fn mixed_pi_claude_and_codex_run_preserves_independent_dispatch_and_atomic_expor
     }
 }
 
-// REQ-AGENT-29
 #[test]
 fn local_claude_result_correction_publishes_only_the_authoritatively_valid_value() {
     let claude = ClaudeCodeFixture::with_execution(
@@ -3653,8 +3625,8 @@ fn local_claude_result_correction_publishes_only_the_authoritatively_valid_value
     );
 }
 
-// REQ-WFEXEC-69: a step's own failure and an interruption both publish only after the
-// harness group quiesces, each ending the run `failed`.
+// A step's own failure and an interruption both publish only after the harness group
+// quiesces, each ending the run `failed`.
 #[test]
 fn mixed_local_failure_and_cancellation_publish_only_after_quiescence() {
     for (mode, expected_status, expected_outcome, unavailable_reason) in [
@@ -3836,7 +3808,6 @@ fn interrupted_agent_can_be_abandoned_and_retried_without_an_active_ledger_entry
     );
 }
 
-// REQ-AGENT-10
 #[test]
 fn compatible_path_pi_is_validated_once_and_pinned_after_path_order_changes() {
     let replacement = PiFixture::new("0.84.2", COMPLETE_HELP, false);
@@ -4073,8 +4044,8 @@ fn running_agent_process_group_is_durably_guarded() {
     ));
 }
 
-// REQ-WFEXEC-134, REQ-LOCALRUN-135, REQ-LOCALRUN-137: a signal interrupts the agent step and
-// an output failure cancels it; either way the Pi group quiesces before publication.
+// A signal interrupts the agent step and an output failure cancels it; either way the Pi
+// group quiesces before publication.
 #[test]
 fn agent_signal_and_output_failure_cancel_and_quiesce_the_pi_group() {
     for (mode, expected_reason, expected_status, expected_outcome, expected_state) in [
@@ -4426,7 +4397,6 @@ fn pinned_real_pi_runs_the_complete_mixed_value_and_export_dag() {
     assert!(live.contains("event       tool_result"));
 }
 
-// REQ-WFEXEC-22, REQ-WFFORMAT-32, REQ-WFFORMAT-33
 #[test]
 fn local_run_forwards_only_declared_host_environment() {
     for (declaration, expected) in [
@@ -4463,7 +4433,7 @@ fn local_run_forwards_only_declared_host_environment() {
     }
 }
 
-// REQ-WFEXEC-78, REQ-WFEXEC-86, SC-WFEXEC-8, REQ-WFEXEC-71
+// SC-WFEXEC-8
 #[test]
 fn local_run_delivers_a_declared_integrations_names_to_every_step() {
     let observe = |name: &str, declaration: &str| {
@@ -4499,7 +4469,7 @@ fn local_run_delivers_a_declared_integrations_names_to_every_step() {
     }
 }
 
-// SC-WFEXEC-5, REQ-WFEXEC-71
+// SC-WFEXEC-5
 #[test]
 fn local_run_scopes_declared_host_environment_to_each_step() {
     let observe = |name: &str, declaration: &str| {
@@ -4536,7 +4506,6 @@ fn local_run_scopes_declared_host_environment_to_each_step() {
     }
 }
 
-// REQ-WFEXEC-5, REQ-WFEXEC-19, REQ-LOCALRUN-82, REQ-LOCALRUN-86, REQ-LOCALRUN-93, REQ-LOCALRUN-94, REQ-LOCALRUN-99, REQ-LOCALRUN-102, REQ-LOCALRUN-121, REQ-LOCALRUN-126, REQ-LOCALRUN-127, REQ-LOCALRUN-168
 #[test]
 fn json_run_executes_named_inputs_closed_stdin_publication_and_offline_boundaries() {
     let bundle = RunBundle::new(producer_consumer_source());
@@ -4676,7 +4645,6 @@ fn json_run_executes_named_inputs_closed_stdin_publication_and_offline_boundarie
 
 // Exercise the terminal-host seam from the CLI integration suite without a process-global
 // handshake variable or a readiness assertion on rendered terminal text.
-// REQ-LOCALRUN-3, REQ-LOCALRUN-57, REQ-LOCALRUN-58
 #[cfg(feature = "rust-cli-tests")]
 #[tokio::test]
 async fn injected_tui_boundary_handshakes_help_and_quit_lifecycle() {
@@ -4807,7 +4775,6 @@ async fn injected_tui_boundary_handshakes_help_and_quit_lifecycle() {
     assert_eq!(cancellation.cancellation_reason(), None);
 }
 
-// REQ-LOCALRUN-57, REQ-LOCALRUN-59, REQ-LOCALRUN-60
 #[cfg(target_os = "linux")]
 #[test]
 fn tui_releases_ownership_and_restores_before_summary_handoff() {
@@ -4911,10 +4878,10 @@ fn shown_once_settled(destination: &Path) -> serde_json::Value {
     status
 }
 
-// REQ-LOCALRUN-3, REQ-LOCALRUN-58: while its first step runs the interface already has the
-// terminal's input in raw mode, and its output entered the alternate screen and hid the
-// cursor. A `q` pressed then does nothing: the interface is still open after the run is
-// released, and the next `q` closes it.
+// While its first step runs the interface already has the terminal's input in raw mode,
+// and its output entered the alternate screen and hid the cursor. A `q` pressed then does
+// nothing: the interface is still open after the run is released, and the next `q` closes
+// it.
 #[cfg(target_os = "linux")]
 #[test]
 fn tui_holds_the_terminal_from_its_first_step_and_ignores_q_until_the_run_is_released() {
@@ -4951,7 +4918,7 @@ fn tui_holds_the_terminal_from_its_first_step_and_ignores_q_until_the_run_is_rel
     fs::remove_file(&hold).unwrap();
     shown_once_settled(&destination);
     // An interface that kept the early `q` would act on it as soon as it offers `q`, which
-    // it does by the time the run reads settled (REQ-LOCALRUN-59). Give it time to.
+    // it does by the time the run reads settled. Give it time to.
     crate::sleep(std::time::Duration::from_millis(300));
     assert!(process.child_mut().try_wait().unwrap().is_none());
 
@@ -5081,7 +5048,6 @@ fn resolution_rejection_diagnostic(bundle: &RunBundle, name: &str) -> serde_json
     rejection["diagnostics"][0].clone()
 }
 
-// REQ-LOCALRUN-128, REQ-WFFORMAT-126
 #[test]
 fn a_structural_rejection_names_the_field_and_the_rule() {
     let structural = RunBundle::new(
@@ -5114,7 +5080,6 @@ fn a_structural_rejection_names_the_field_and_the_rule() {
     assert_eq!(diagnostic["location"]["outcome"], "blocked");
 }
 
-// REQ-LOCALRUN-80, REQ-LOCALRUN-91, REQ-LOCALRUN-95, REQ-LOCALRUN-96, REQ-LOCALRUN-128, REQ-LOCALRUN-132, REQ-LOCALRUN-133
 #[test]
 fn failure_rejection_usage_and_result_preconditions_keep_their_outcome_precedence() {
     let failed = RunBundle::new(
@@ -5229,7 +5194,6 @@ fn failure_rejection_usage_and_result_preconditions_keep_their_outcome_precedenc
     assert!(String::from_utf8_lossy(&usage.stderr).contains("--result-dir"));
 }
 
-// REQ-LOCALRUN-86
 #[test]
 fn named_text_stdin_accepts_a_redirected_regular_file() {
     let bundle = RunBundle::new(
@@ -5286,7 +5250,6 @@ exports:
     );
 }
 
-// REQ-LOCALRUN-90
 #[cfg(target_os = "linux")]
 #[test]
 fn named_text_stdin_maps_signals_through_the_shared_interruption_outcomes() {
@@ -5349,7 +5312,6 @@ fn named_text_stdin_maps_signals_through_the_shared_interruption_outcomes() {
 }
 
 // Darwin filesystems reject non-UTF-8 names before the CLI can inspect them.
-// REQ-LOCALRUN-85
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn attachment_paths_accept_non_utf8_host_names() {
@@ -5405,7 +5367,6 @@ exports:
     );
 }
 
-// REQ-LOCALRUN-132
 #[test]
 fn initially_unwritable_result_parent_prevents_execution() {
     let bundle = RunBundle::new(
@@ -5432,7 +5393,6 @@ fn initially_unwritable_result_parent_prevents_execution() {
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-80
 #[test]
 fn removed_fixed_input_flags_are_usage_errors_before_source_io() {
     let bundle = RunBundle::new(
@@ -5459,7 +5419,6 @@ fn removed_fixed_input_flags_are_usage_errors_before_source_io() {
     }
 }
 
-// REQ-LOCALRUN-89, REQ-LOCALRUN-131
 #[test]
 fn invalid_local_input_fails_before_resolution_presentation_or_publication() {
     let bundle = RunBundle::new(
@@ -5486,7 +5445,6 @@ fn invalid_local_input_fails_before_resolution_presentation_or_publication() {
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-143
 #[test]
 fn exchange_failure_quiesces_already_running_steps() {
     let bundle = RunBundle::new(
@@ -5582,7 +5540,6 @@ steps:
     assert!(!late_side_effect.exists());
 }
 
-// REQ-LOCALRUN-134, REQ-LOCALRUN-142
 #[test]
 fn private_staging_cleanup_failure_is_recorded_in_durable_state() {
     let bundle = RunBundle::new(
@@ -5624,7 +5581,6 @@ steps:
     assert_eq!(state["diagnostics"][0]["code"], "private_cleanup_failure");
 }
 
-// REQ-LOCALRUN-95
 #[test]
 fn run_directory_may_have_a_nonexistent_parent_suffix() {
     let bundle = RunBundle::new(
@@ -5645,7 +5601,6 @@ fn run_directory_may_have_a_nonexistent_parent_suffix() {
     assert!(destination.join("local-run.json").is_file());
 }
 
-// REQ-LOCALRUN-4, REQ-LOCALRUN-100
 #[test]
 fn tui_setup_failure_prevents_execution_and_releases_the_attempt() {
     let bundle = RunBundle::new(
@@ -5671,7 +5626,6 @@ fn tui_setup_failure_prevents_execution_and_releases_the_attempt() {
     assert!(!stderr.contains("summary"));
 }
 
-// REQ-LOCALRUN-139
 #[test]
 fn presentation_setup_failure_settles_the_published_attempt() {
     let bundle = RunBundle::new(
@@ -5823,7 +5777,6 @@ pub(super) fn assert_executor_fault_before_execution(run_directory: &Path, attem
     );
 }
 
-// REQ-LOCALRUN-99, REQ-LOCALRUN-141
 #[test]
 fn plain_mode_reports_publication_failure_without_overwriting_the_racing_target() {
     let bundle = RunBundle::new(
@@ -5859,7 +5812,6 @@ fn plain_mode_reports_publication_failure_without_overwriting_the_racing_target(
     );
 }
 
-// REQ-LOCALRUN-136, REQ-LOCALRUN-138
 #[cfg(target_os = "linux")]
 #[test]
 fn cancellation_settles_with_a_full_unread_presentation_pipe() {
@@ -5961,7 +5913,7 @@ fn cancellation_settles_with_a_full_unread_presentation_pipe() {
 }
 
 /// Delays the late reader past the earlier 100 ms final-output wait and well inside the
-/// current one, so the reader is late in the sense REQ-LOCALRUN-138 names.
+/// current one, so the reader starts late but takes the final output within the wait.
 #[cfg(target_os = "linux")]
 #[expect(
     clippy::disallowed_methods,
@@ -5971,9 +5923,9 @@ fn read_after_the_former_output_wait() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
-// REQ-LOCALRUN-138, REQ-WFEXEC-40, INV-ENGINE-15: a destination that takes an interrupted
-// run's final output late, but within the final wait, is read, so the command keeps the
-// signal's exit status instead of reporting an output failure.
+// A destination that takes an interrupted run's final output late, but within the final
+// wait, is read, so the command keeps the signal's exit status instead of reporting an
+// output failure.
 #[cfg(target_os = "linux")]
 #[test]
 fn an_interrupted_run_keeps_its_signal_status_when_its_output_is_read_late() {
@@ -6032,9 +5984,9 @@ fn an_interrupted_run_keeps_its_signal_status_when_its_output_is_read_late() {
     assert_eq!(terminal["outcome"], "failed", "{terminal}");
 }
 
-// REQ-WFEXEC-40, REQ-WFEXEC-69, REQ-LOCALRUN-127, REQ-LOCALRUN-135, REQ-LOCALRUN-136: a signal
-// interrupts a `--path` run: its running step fails `interrupted`, the published result is
-// `failed` with the signal's reason as its cancellation, and the command exits by the signal.
+// A signal interrupts a `--path` run: its running step fails `interrupted`, the published
+// result is `failed` with the signal's reason as its cancellation, and the command exits by
+// the signal.
 #[test]
 fn a_signal_interrupts_the_run_with_its_reason_status_and_published_result() {
     for (signal, expected_status, expected_reason) in [
@@ -6082,10 +6034,9 @@ fn a_signal_interrupts_the_run_with_its_reason_status_and_published_result() {
     }
 }
 
-// SC-LOCALRUN-6, REQ-LOCALRUN-110, REQ-LOCALRUN-123, REQ-LOCALRUN-135, REQ-LOCALRUN-136:
-// SIGINT to a `--plain` run logs one `@workflow cancelling user_request` record before the
-// step's `cancelling` record, publishes the step `failed` `interrupted`, and the summary ends in
-// `cancellation: user_request`; the command exits 130.
+// SC-LOCALRUN-6: SIGINT to a `--plain` run logs one `@workflow cancelling user_request` record
+// before the step's `cancelling` record, publishes the step `failed` `interrupted`, and the
+// summary ends in `cancellation: user_request`; the command exits 130.
 #[test]
 fn an_interrupted_plain_run_logs_the_stop_and_ends_its_summary_in_the_reason() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6144,7 +6095,6 @@ fn an_interrupted_plain_run_logs_the_stop_and_ends_its_summary_in_the_reason() {
     assert_eq!(result["steps"][0]["detail"]["code"], "interrupted");
 }
 
-// REQ-WFFINALIZE-10, REQ-WFFINALIZE-11, REQ-WFFINALIZE-15, REQ-WFFINALIZE-16, REQ-WFFINALIZE-18
 #[test]
 fn signals_during_finalization_cancel_that_phase_with_signal_status() {
     for (signal, mode, expected_status, expected_reason) in [
@@ -6195,7 +6145,6 @@ fn signals_during_finalization_cancel_that_phase_with_signal_status() {
     }
 }
 
-// REQ-WFFINALIZE-12, REQ-WFFINALIZE-15, REQ-WFFINALIZE-16, REQ-WFFINALIZE-18, REQ-LOCALRUN-135
 #[test]
 fn second_interrupt_during_finalization_forces_abort_after_graceful_cancellation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6466,7 +6415,6 @@ fn guardian_loss_cannot_leave_a_descendant_running() {
     );
 }
 
-// REQ-LOCALRUN-134, REQ-WFEXEC-69
 #[test]
 fn output_failure_after_a_signal_keeps_the_first_reason_but_forces_status_one() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6508,7 +6456,6 @@ fn output_failure_after_a_signal_keeps_the_first_reason_but_forces_status_one() 
     assert!(stderr.contains(resolved_destination.to_str().unwrap()));
 }
 
-// REQ-WFEXEC-17
 #[test]
 fn failure_committed_before_a_signal_remains_the_primary_outcome() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6563,7 +6510,6 @@ fn failure_committed_before_a_signal_remains_the_primary_outcome() {
     assert_eq!(retained["cancellation"]["reason"], "user_request");
 }
 
-// REQ-LOCALRUN-137
 #[test]
 fn live_presentation_failure_cancels_quiesces_and_reports_the_published_path() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6598,7 +6544,6 @@ fn live_presentation_failure_cancels_quiesces_and_reports_the_published_path() {
     assert!(stderr.contains(resolved_destination.to_str().unwrap()));
 }
 
-// REQ-LOCALRUN-140
 #[test]
 fn terminal_json_failure_occurs_after_publication_and_forces_status_one() {
     let bundle = RunBundle::new(
@@ -7076,7 +7021,6 @@ fn run_with_agent_profiles(bundle: &RunBundle, destination: &Path, document: &Pa
     args
 }
 
-// REQ-AGENT-52, REQ-AGENT-53, REQ-AGENT-56
 #[test]
 fn agent_profile_replacement_pins_the_replacement_harness_and_records_provenance() {
     let claude = ClaudeCodeFixture::with_execution(
@@ -7169,7 +7113,6 @@ fn agent_profile_replacement_pins_the_replacement_harness_and_records_provenance
     );
 }
 
-// REQ-AGENT-54, REQ-AGENT-55, REQ-WFFORMAT-52
 #[test]
 fn agent_profile_replacement_rejections_are_typed_before_any_step_starts() {
     let bundle = RunBundle::new(response_agent_source());
@@ -7277,7 +7220,6 @@ fn agent_profile_replacement_rejections_are_typed_before_any_step_starts() {
     assert_eq!(terminal["diagnostics"][0]["location"]["kind"], "workflow");
 }
 
-// REQ-LOCALRUN-87
 #[test]
 fn dash_names_an_ordinary_file_for_file_and_attachment_inputs() {
     let bundle = RunBundle::new(
@@ -7344,7 +7286,6 @@ steps:
     assert_eq!(terminal["result"]["steps"][0]["state"], "succeeded");
 }
 
-// REQ-AGENT-58
 #[test]
 fn agent_profile_document_is_read_from_the_initial_directory_and_bounded() {
     // The replaced profile is unused, so no harness installation is required.
@@ -7413,7 +7354,6 @@ fn agent_profile_document_is_read_from_the_initial_directory_and_bounded() {
     }
 }
 
-// REQ-WFFORMAT-84, REQ-LOCALRUN-91
 #[test]
 fn omitted_optional_and_defaulted_inputs_reach_steps_completed() {
     let bundle = RunBundle::new(
@@ -7510,7 +7450,7 @@ pub(super) fn tree_rejection(output: &Output) -> serde_json::Value {
     rejection
 }
 
-// REQ-LOCALRUN-169, REQ-LOCALRUN-170, REQ-WFEXEC-53, SC-LOCALRUN-8
+// SC-LOCALRUN-8
 #[test]
 fn a_tree_run_executes_the_copys_programs_under_useful_workflow_root() {
     let bundle = TreeBundle::new(TREE_REPORT_WORKFLOW);
@@ -7643,7 +7583,6 @@ pub(super) fn tree_args_with(
     args
 }
 
-// REQ-LOCALRUN-217, REQ-WFEXEC-22
 #[test]
 fn a_run_given_a_source_revision_sets_the_source_variables_and_one_given_none_sets_none() {
     let recorded = serde_json::json!({
@@ -7695,7 +7634,6 @@ fn a_run_given_a_source_revision_sets_the_source_variables_and_one_given_none_se
     }
 }
 
-// REQ-WFEXEC-54, REQ-LOCALRUN-169, REQ-LOCALRUN-128
 #[test]
 fn a_path_argv_under_a_tree_root_is_rejected_at_phase_tree() {
     let bundle = TreeBundle::new(
@@ -7723,7 +7661,6 @@ fn a_path_argv_under_a_tree_root_is_rejected_at_phase_tree() {
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-128, REQ-LOCALRUN-169, REQ-WFFORMAT-126
 #[test]
 fn a_tree_rejection_names_a_structural_failures_field_and_rule_in_its_workflow_location() {
     let bundle = TreeBundle::new(
@@ -7755,7 +7692,6 @@ fn a_tree_rejection_names_a_structural_failures_field_and_rule_in_its_workflow_l
     assert!(!destination.exists());
 }
 
-// REQ-LOCALRUN-169
 #[test]
 fn a_workflow_file_outside_the_trees_workflow_files_is_rejected() {
     let bundle = TreeBundle::new(
@@ -7775,7 +7711,6 @@ fn a_workflow_file_outside_the_trees_workflow_files_is_rejected() {
     assert!(!destination.exists());
 }
 
-// REQ-WFEXEC-55
 #[test]
 fn a_missing_required_tool_rejects_the_run() {
     let bundle = TreeBundle::new(
@@ -7840,7 +7775,6 @@ pub(super) fn assert_usage_error(args: &[String]) {
     assert!(output.stdout.is_empty(), "{args:?}");
 }
 
-// REQ-LOCALRUN-172, REQ-LOCALRUN-224, REQ-LOCALRUN-226, REQ-LOCALRUN-80
 #[test]
 fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
     let bundle = RunBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -7886,7 +7820,7 @@ fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
         String::from_utf8_lossy(&group.stderr)
     );
     let help = String::from_utf8(group.stdout).unwrap();
-    // REQ-LOCALRUN-224: the control commands are leaves of the group.
+    // The control commands are leaves of the group.
     let expected = [
         "answer",
         "approve",
@@ -7911,9 +7845,9 @@ fn the_former_run_spellings_are_usage_errors_and_run_is_a_group() {
     assert_eq!(leaves, expected, "{help}");
 }
 
-// REQ-LOCALRUN-194: `upgrade --from` prints a completed attempt as `useful workflow run
-// upgrade`, and a result an earlier release retained under its `restart` leaf still validates
-// against the run result contract.
+// `upgrade --from` prints a completed attempt as `useful workflow run upgrade`, and a result
+// an earlier release retained under its `restart` leaf still validates against the run result
+// contract.
 #[test]
 fn a_completed_attempt_of_upgrade_or_a_retained_restart_validates() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -7925,7 +7859,6 @@ fn a_completed_attempt_of_upgrade_or_a_retained_restart_validates() {
     }
 }
 
-// REQ-LOCALRUN-174, REQ-LOCALRUN-175
 #[test]
 fn a_path_run_of_a_tree_records_itself_in_run_json() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -7986,7 +7919,6 @@ fn run_outcome_tree(verdict: &str) -> (TreeBundle, PathBuf, Output) {
     (bundle, destination, output)
 }
 
-// REQ-WFEXEC-56, REQ-WFEXEC-12
 #[test]
 fn an_outcome_value_outside_the_declared_outcomes_fails_the_run() {
     let (_bundle, _destination, output) = run_outcome_tree("shipped");
@@ -8026,7 +7958,6 @@ fn an_outcome_value_outside_the_declared_outcomes_fails_the_run() {
     assert_eq!(terminal["result"]["outcome"], "succeeded");
 }
 
-// REQ-LOCALRUN-279, REQ-WFEXEC-57
 #[test]
 fn the_run_record_carries_the_attempts_chosen_outcome_once_exited() {
     let exited = |destination: &Path| {
@@ -8121,7 +8052,6 @@ fn run_infrastructure_outcome_tree(
     (bundle, destination, output)
 }
 
-// REQ-WFEXEC-57, REQ-WFFORMAT-110
 #[test]
 fn a_failed_run_whose_failing_step_was_the_hosts_takes_the_on_infrastructure_outcome() {
     let declared = format!(
@@ -8142,7 +8072,6 @@ fn a_failed_run_whose_failing_step_was_the_hosts_takes_the_on_infrastructure_out
     }
 }
 
-// REQ-WFEXEC-57, REQ-WFEXEC-77
 #[test]
 fn a_parent_routes_its_childs_on_infrastructure_outcome() {
     let root = "schemaVersion: 1
@@ -8166,7 +8095,6 @@ steps:
     assert_eq!(step["failedChild"]["outcome"], "host_failed", "{terminal}");
 }
 
-// REQ-WFFORMAT-108, REQ-WFEXEC-57
 #[test]
 fn the_run_record_carries_the_outcome_of_the_first_of_branch_that_ran() {
     let bundle = TreeBundle::new(
@@ -8217,7 +8145,6 @@ steps:
     }
 }
 
-// REQ-LOCALRUN-174, REQ-LOCALRUN-175, REQ-LOCALRUN-169
 #[test]
 fn a_path_run_selects_a_tree_workflow_file_with_workflow() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8252,7 +8179,6 @@ fn a_path_run_selects_a_tree_workflow_file_with_workflow() {
     assert!(!missing.exists());
 }
 
-// REQ-LOCALRUN-174, REQ-LOCALRUN-175
 #[test]
 fn a_path_without_a_root_workflow_runs_the_closure_form() {
     let bundle = RunBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8302,7 +8228,6 @@ fn a_path_without_a_root_workflow_runs_the_closure_form() {
     assert!(!destination.join("run.json").exists());
 }
 
-// REQ-LOCALRUN-174, REQ-LOCALRUN-76, REQ-LOCALRUN-180, REQ-LOCALRUN-188
 #[test]
 fn a_tree_run_without_a_run_directory_is_recorded_under_the_home() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8381,7 +8306,6 @@ fn a_tree_run_without_a_run_directory_is_recorded_under_the_home() {
     assert_eq!(fs::read_dir(home.join("runs")).unwrap().count(), before);
 }
 
-// REQ-LOCALRUN-80, REQ-LOCALRUN-173, REQ-LOCALRUN-174, REQ-LOCALRUN-76
 #[test]
 fn run_create_argument_conflicts_are_usage_errors() {
     let bundle = TreeBundle::new(TREE_SUCCESS_WORKFLOW);
@@ -8518,8 +8442,8 @@ else
 fi
 ";
 
-/// A tree whose root runs `design.yaml` and then `build.yaml` as child runs
-/// (REQ-WFEXEC-58, REQ-WFEXEC-59), with `decide` as `bin/decide`.
+/// A tree whose root runs `design.yaml` and then `build.yaml` as child runs,
+/// with `decide` as `bin/decide`.
 pub(super) fn child_tree(decide: &str) -> TreeBundle {
     let bundle = TreeBundle::new(CHILD_TREE_ROOT);
     bundle.write_source("design.yaml", CHILD_TREE_DESIGN);
@@ -8572,7 +8496,6 @@ fn carrier_names(run_directory: &Path, step: &str) -> Vec<String> {
     names
 }
 
-// REQ-WFEXEC-82, REQ-WFEXEC-59, REQ-WFEXEC-60, REQ-LOCALRUN-177
 #[test]
 fn workflow_steps_run_child_runs_and_route_on_their_outcomes() {
     let (bundle, destination, output) = run_child_tree("planned");
@@ -8619,7 +8542,6 @@ fn workflow_steps_run_child_runs_and_route_on_their_outcomes() {
     assert!(!destination.join("children/build").exists());
 }
 
-// REQ-WFFORMAT-91, REQ-WFFORMAT-107
 #[test]
 fn a_childs_first_of_export_reaches_the_next_workflow_step_as_json() {
     let bundle = TreeBundle::new(
@@ -8713,8 +8635,8 @@ steps:
     }
 }
 
-// REQ-WFEXEC-112: a child whose run succeeded and chose the outcome `failed` is no failed
-// child; the step's entries in `result.json` and `state.json` record none.
+// A child whose run succeeded and chose the outcome `failed` is no failed child; the
+// step's entries in `result.json` and `state.json` record none.
 #[test]
 fn a_child_that_chose_the_outcome_failed_records_no_failed_child() {
     let (_bundle, destination, output) = run_child_tree("failed");
@@ -8736,8 +8658,8 @@ fn a_child_that_chose_the_outcome_failed_records_no_failed_child() {
     assert!(progress.get("failedChild").is_none(), "{progress}");
 }
 
-/// One progress stream record (REQ-LOCALRUN-106) split on whitespace: its scope, its token
-/// and the words of its detail.
+/// One progress stream record split on whitespace: its scope, its token and the words of
+/// its detail.
 pub(super) struct ProgressRecord {
     pub(super) scope: String,
     pub(super) token: String,
@@ -8775,9 +8697,9 @@ pub(super) fn progress_position(records: &[ProgressRecord], scope: &str, token: 
         })
 }
 
-// REQ-LOCALRUN-200, REQ-LOCALRUN-286: while each child runs, the parent's progress stream carries its step's
-// state records scoped `<step>.<child step>`, between the parent step's own `start` and
-// `done`, and none of the child's output records.
+// While each child runs, the parent's progress stream carries its step's state records scoped
+// `<step>.<child step>`, between the parent step's own `start` and `done`, and none of the child's
+// output records.
 #[test]
 fn a_running_childs_step_states_appear_in_the_parents_progress_stream() {
     let (_bundle, _destination, output) = run_child_tree("planned");
@@ -8808,8 +8730,8 @@ fn a_running_childs_step_states_appear_in_the_parents_progress_stream() {
     }
 }
 
-// REQ-WFEXEC-59: a child reads the parent's pinned tree copy, so a source file renamed
-// away after the run pinned its tree changes nothing.
+// A child reads the parent's pinned tree copy, so a source file renamed away after the
+// run pinned its tree changes nothing.
 #[test]
 fn a_child_run_reads_the_parents_tree_copy() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -8862,8 +8784,8 @@ pub(super) fn spawn_held_child_tree(name: &str) -> (TreeBundle, PathBuf, std::pr
     (bundle, destination, child)
 }
 
-// REQ-WFEXEC-90, REQ-LOCALRUN-244: a cancellation of the parent, `useful workflow run cancel`'s
-// recorded cancel, reaches the child, which records `canceled`, and the step ends `cancelled`.
+// A cancellation of the parent, `useful workflow run cancel`'s recorded cancel, reaches the
+// child, which records `canceled`, and the step ends `cancelled`.
 #[test]
 fn cancelling_the_parent_cancels_its_running_child() {
     let (_bundle, destination, child) = spawn_held_child_tree("cancelled");
@@ -8892,9 +8814,9 @@ fn cancelling_the_parent_cancels_its_running_child() {
     assert_eq!(run_record(&destination)["outcome"], "canceled");
 }
 
-// REQ-WFEXEC-99, REQ-WFEXEC-69, REQ-LOCALRUN-135: SIGINT interrupts the parent and its child;
-// the child's failure edge is an exit, not a `repair` wait, so the parent takes no edge: its
-// step fails `interrupted` and the run fails, exiting 130.
+// SIGINT interrupts the parent and its child; the child's failure edge is an exit, not a
+// `repair` wait, so the parent takes no edge: its step fails `interrupted` and the run fails,
+// exiting 130.
 #[test]
 fn interrupting_the_parent_fails_a_stage_without_a_repair_route() {
     let (_bundle, destination, child) = spawn_held_child_tree("interrupted");
@@ -8925,9 +8847,9 @@ fn interrupting_the_parent_fails_a_stage_without_a_repair_route() {
     assert_ne!(record["outcome"], "canceled");
 }
 
-// REQ-LOCALRUN-299, REQ-LOCALRUN-302, REQ-LOCALRUN-201: `show` reports a running child's current attempt, its
-// recovery status and its in-flight steps with their start times, read from the child's
-// records without changing the run directory; a child that is no longer running has none.
+// `show` reports a running child's current attempt, its recovery status and its in-flight steps
+// with their start times, read from the child's records without changing the run directory; a child
+// that is no longer running has none.
 #[test]
 fn show_reports_a_running_childs_attempt_and_in_flight_steps() {
     use super::workflow_run_control::run_control;
@@ -9038,9 +8960,9 @@ fn show_reports_a_running_childs_attempt_and_in_flight_steps() {
     assert_eq!(exited["progress"], serde_json::Value::Null, "{exited}");
 }
 
-// REQ-LOCALRUN-303, REQ-LOCALRUN-299: `show` reads a child whose record is `running` from the child's own
-// records: one whose attempt has settled has no in-flight step, and one whose state cannot
-// be read refuses the run `run_directory_invalid`, naming the child.
+// `show` reads a child whose record is `running` from the child's own records: one whose attempt
+// has settled has no in-flight step, and one whose state cannot be read refuses the run
+// `run_directory_invalid`, naming the child.
 #[test]
 fn show_refuses_a_run_whose_running_childs_state_is_unreadable() {
     use super::workflow_run_control::run_control;
@@ -9107,7 +9029,7 @@ pub(super) fn agent_child_tree() -> TreeBundle {
     bundle
 }
 
-// REQ-WFEXEC-60: a child that cannot be admitted fails the step at `start` with
+// A child that cannot be admitted fails the step at `start` with
 // `child_admission_rejected`, and the parent fails.
 #[test]
 fn a_child_that_cannot_be_admitted_fails_the_step_at_start() {
@@ -9136,9 +9058,8 @@ fn a_child_that_cannot_be_admitted_fails_the_step_at_start() {
     assert!(!destination.join("children/design").exists());
 }
 
-// REQ-WFEXEC-92, REQ-WFEXEC-61, REQ-WFEXEC-40, REQ-LOCALRUN-182: admission admits an
-// `answer` wait target, which the run enters and ends `waiting` with exit 0; the answer
-// continues the run under its own command.
+// Admission admits an `answer` wait target, which the run enters and ends `waiting`
+// with exit 0; the answer continues the run under its own command.
 #[test]
 fn admission_admits_an_answer_wait_target() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -9185,9 +9106,9 @@ fn admission_admits_an_answer_wait_target() {
     );
 }
 
-// REQ-WFEXEC-93, REQ-WFEXEC-125: admission admits an `external` wait on a condition the CLI
-// evaluates, whose record resolves the rule's input operand to its value, and refuses one
-// on any other pair with `wait_condition_unsupported`.
+// Admission admits an `external` wait on a condition the CLI evaluates, whose record
+// resolves the rule's input operand to its value, and refuses one on any other pair with
+// `wait_condition_unsupported`.
 #[test]
 fn admission_admits_an_external_wait_only_on_a_supported_condition() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -9227,8 +9148,8 @@ fn admission_admits_an_external_wait_only_on_a_supported_condition() {
     assert!(!destination.exists());
 }
 
-// REQ-WFEXEC-91, REQ-WFEXEC-92: admission refuses a wait target that continues at an exit, and a
-// workflow step run without a tree.
+// Admission refuses a wait target that continues at an exit, and a workflow step run without a
+// tree.
 #[test]
 fn admission_refuses_wait_targets_and_workflow_steps_outside_a_tree() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -9295,7 +9216,7 @@ const UNREACHABLE_MINIMUM_FREE_BYTES: u64 = 9_007_199_254_740_991;
 const UNREACHABLE_MINIMUM_FREE: &str = "7.9 PiB";
 
 /// The scope of each `held` record in a progress stream whose detail begins `disk space low`
-/// and gives the unreachable minimum in binary units (REQ-LOCALRUN-222).
+/// and gives the unreachable minimum in binary units.
 fn held_disk_scopes(stream: &str) -> Vec<String> {
     stream
         .lines()
@@ -9345,9 +9266,9 @@ fn interrupt_held_start(mut command: Command, disk: &Path, log: &Path, scope: &s
     output
 }
 
-// INV-ENGINE-46, REQ-LOCALRUN-222: with the runner's variable naming a disk below its minimum,
-// `useful workflow run create` holds its command step, writes one `held` record for it and
-// never runs the command; SIGINT ends it with 130 as for any starting step.
+// With the runner's variable naming a disk below its minimum, `useful workflow run create`
+// holds its command step, writes one `held` record for it and never runs the command; SIGINT
+// ends it with 130 as for any starting step.
 #[test]
 fn the_runner_disk_gate_holds_a_command_step_until_interrupted() {
     let bundle = RunBundle::new(
@@ -9369,8 +9290,8 @@ fn the_runner_disk_gate_holds_a_command_step_until_interrupted() {
     assert!(!bundle.execution_root().join("marker").exists());
 }
 
-// INV-ENGINE-46, REQ-LOCALRUN-222, REQ-LOCALRUN-200: a `workflow` step is not held, and its
-// child's command step is, under the scope `<step>.<child step>`.
+// A `workflow` step is not held, and its child's command step is, under the scope
+// `<step>.<child step>`.
 #[test]
 fn the_runner_disk_gate_holds_a_child_step_under_its_position_path() {
     let bundle = TreeBundle::new(
@@ -9392,8 +9313,8 @@ fn the_runner_disk_gate_holds_a_child_step_under_its_position_path() {
     assert!(!bundle.execution_root().join("marker").exists());
 }
 
-// INV-ENGINE-46: with minimum 0 the gate never holds, the run succeeds and the variable never
-// reaches the step's environment; a value the attempt cannot read fails it before any step.
+// With minimum 0 the gate never holds, the run succeeds and the variable never reaches the
+// step's environment; a value the attempt cannot read fails it before any step.
 #[test]
 fn the_runner_disk_gate_at_zero_holds_nothing_and_a_malformed_one_starts_nothing() {
     let bundle = RunBundle::new(
@@ -9430,4 +9351,100 @@ fn the_runner_disk_gate_at_zero_holds_nothing_and_a_malformed_one_starts_nothing
             .any(|line| line.starts_with("USEFUL_RUNNER_DISK_GATE=")),
         "{environment}"
     );
+}
+
+// SC-WFEXEC-9: declared inputs cross the workspace boundary, while files follow
+// the selected workspace.
+#[test]
+fn a_new_step_starts_from_its_declared_inputs_alone() {
+    let source = r#"schemaVersion: 1
+steps:
+  seed:
+    kind: cmd
+    command: {argv: [sh, -c, 'printf seeded > old.txt']}
+    outputs:
+      message: {kind: text, from: path, path: old.txt}
+  candidate:
+    kind: cmd
+    workspace: new
+    inputs:
+      message: {ref: outputs.seed.message}
+    command: {argv: [sh, -c, 'cat "$USEFUL_STEP_INPUTS/values/message" > candidate.txt']}
+  check:
+    kind: cmd
+    workspace: write
+    dependsOn: [candidate]
+    command: {argv: [sh, -c, 'test -f candidate.txt && test ! -e old.txt']}
+  again:
+    kind: cmd
+    workspace: new
+    dependsOn: [check]
+    command: {argv: [sh, -c, 'test -z "$(ls -A)"']}
+"#;
+    let shared = source
+        .replace("    workspace: new\n", "")
+        .replace("    workspace: write\n", "")
+        .replace("test ! -e old.txt", "test -f old.txt")
+        .replace(
+            "test -z \"$(ls -A)\"",
+            "test -f old.txt && test -f candidate.txt",
+        );
+    for (workflow, isolated) in [(source, true), (shared.as_str(), false)] {
+        let bundle = RunBundle::new(workflow);
+        let destination = bundle.result("walkthrough");
+        let mut args = bundle.args(&destination);
+        args.insert(args.len() - 1, "--json".to_owned());
+        let terminal = super::workflow_continue::completed(&run(&args));
+        assert_eq!(terminal["outcome"], "succeeded");
+        assert!(bundle.execution_root().join("old.txt").is_file());
+        let candidate = if isolated {
+            assert!(!bundle.execution_root().join("candidate.txt").exists());
+            destination.join("workspaces/candidate/candidate.txt")
+        } else {
+            assert!(!destination.join("workspaces").exists());
+            bundle.execution_root().join("candidate.txt")
+        };
+        assert_eq!(fs::read_to_string(candidate).unwrap(), "seeded");
+    }
+}
+
+// SC-WFEXEC-10
+#[test]
+fn a_none_step_runs_from_its_declared_inputs_and_a_read_step_shares_the_workspace() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'printf candidate > candidate.txt']}
+    outputs: {message: {kind: text, from: path, path: candidate.txt}}
+  check:
+    kind: cmd
+    workspace: read
+    dependsOn: [candidate]
+    command: {argv: [sh, -c, 'test -f candidate.txt']}
+  summary:
+    kind: cmd
+    workspace: none
+    inputs: {message: {ref: outputs.candidate.message}}
+    command: {argv: [sh, -c, 'test -z "$(ls -A)" && cat "$USEFUL_STEP_INPUTS/values/message" > summary.txt']}
+    outputs: {message: {kind: text, from: path, path: summary.txt}}
+  publish:
+    kind: cmd
+    inputs: {message: {ref: outputs.summary.message}}
+    command: {argv: [sh, -c, 'test -f candidate.txt && test ! -e summary.txt']}
+"#,
+    );
+    let destination = bundle.result("walkthrough");
+    let mut args = bundle.args(&destination);
+    args.insert(args.len() - 1, "--json".to_owned());
+    let terminal = super::workflow_continue::completed(&run(&args));
+    assert_eq!(terminal["outcome"], "succeeded");
+    for step in ["candidate", "summary"] {
+        let name = format!("{step}.txt");
+        let file = destination.join("workspaces").join(step).join(&name);
+        assert_eq!(fs::read_to_string(file).unwrap(), "candidate");
+        assert!(!bundle.execution_root().join(name).exists());
+    }
 }

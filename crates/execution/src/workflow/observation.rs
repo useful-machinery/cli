@@ -5,11 +5,11 @@ use super::admission::CancellationReason;
 use super::agent::AgentObservationEnvelope;
 use super::evidence::{
     BlockedDetail, CancellationDetail, ConditionFalseDetail, FailedChild, FailureClass,
-    FailureDetail, NonExecutionDetail,
+    FailureDetail, InheritedDetail, NonExecutionDetail,
 };
 use super::runtime::{
-    ActionId, ActiveStepInvocation, RecoveryDecisionKind, RecoveryHandlerActivity,
-    RecoveryHandlerKind, TransitionEvent,
+    ActionId, ActiveStepInvocation, InheritedDisposition, RecoveryDecisionKind,
+    RecoveryHandlerActivity, RecoveryHandlerKind, TransitionEvent,
 };
 use super::step_runtime::{RecoveryFailureKind, StepFailureKind};
 
@@ -53,8 +53,8 @@ pub struct CommandOutputClosedObservation {
     pub(crate) sequence: SourceSequence,
 }
 
-/// The driver held a start of `step` at its start gate because the disk is low
-/// (INV-ENGINE-46): sent once for that start, before it waits.
+/// The driver held a start of `step` at its start gate because the disk is
+/// low: sent once for that start, before it waits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartHeldObservation {
     pub(crate) step: String,
@@ -76,14 +76,19 @@ pub enum ObservedStepTransition {
     },
     OutputsCommitted {
         outputs: Vec<String>,
-        /// The failure of the child a `workflow` step succeeded on (REQ-WFEXEC-77), committed
-        /// with its outputs.
+        /// The failure of the child a `workflow` step succeeded on, committed with its
+        /// outputs.
         failed_child: Option<FailedChild>,
+    },
+    Inherited {
+        detail: InheritedDetail,
+        disposition: InheritedDisposition,
+        outputs: Vec<String>,
     },
     Failed {
         detail: FailureDetail,
-        /// The class of the failure (REQ-WFEXEC-79), when a recovery handler's decision or the
-        /// step's listed exit status gave it one.
+        /// The class of the failure, when a recovery handler's decision or the step's listed
+        /// exit status gave it one.
         failure_class: Option<FailureClass>,
     },
     Blocked {

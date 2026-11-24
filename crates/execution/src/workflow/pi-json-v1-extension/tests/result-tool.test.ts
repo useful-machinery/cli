@@ -182,7 +182,6 @@ test("validator feedback is returned as a tool error", async () => {
   );
 });
 
-// REQ-AGENT-83, REQ-AGENT-29, INV-HARNESS-16 (AUTO-263)
 test("validation submits the arguments the session records, not the ones Pi executes the tool with", async () => {
   const sessionArguments = {
     result: { summary: "fixed payload", note: null, count: "3" },
@@ -218,7 +217,6 @@ test("validation submits the arguments the session records, not the ones Pi exec
   assert.deepEqual(capturedRequest?.arguments, sessionArguments);
 });
 
-// INV-HARNESS-16 (AUTO-263)
 test("a result call the session does not record alone is refused before validation", async () => {
   let validations = 0;
   const { tool } = loadResultExtension(fixedConfig, async () => {

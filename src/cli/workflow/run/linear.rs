@@ -1,6 +1,6 @@
-//! `useful workflow run linear list` (REQ-TRIGGER-145): the Linear state updates a Cloud run
-//! made, which `RUN` names in Cloud alone in the organization in effect (REQ-LOCALRUN-180);
-//! nothing under the `useful` home is read.
+//! `useful workflow run linear list`: the Linear state updates a Cloud run made, which `RUN`
+//! names in Cloud alone in the organization in effect; nothing under the `useful` home is
+//! read.
 
 use std::io::{self, Write};
 

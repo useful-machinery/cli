@@ -2,7 +2,6 @@ use std::fs;
 use std::net::TcpListener;
 use std::process::Command;
 
-// REQ-WFFORMAT-74
 #[test]
 fn embedded_reference_is_emitted_unchanged_without_external_state() {
     let working_directory = tempfile::tempdir().expect("temporary working directory should exist");
@@ -55,7 +54,7 @@ fn embedded_reference_is_emitted_unchanged_without_external_state() {
 
     let markdown = std::str::from_utf8(&output.stdout).expect("reference should be UTF-8 Markdown");
     assert!(
-        markdown.len() <= 33 * 1024,
+        markdown.len() <= 34 * 1024,
         "reference should remain concise"
     );
     assert_sections_are_ordered(

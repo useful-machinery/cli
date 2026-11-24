@@ -1704,8 +1704,6 @@ async fn cancelled_stalled_guarded_launch_cleans_worker_fixture() {
     .await;
 }
 
-// REQ-AGENT-18, REQ-AGENT-23, REQ-AGENT-60
-// INV-HARNESS-3
 #[tokio::test]
 async fn launch_uses_exact_process_contract_and_delays_started_until_agent_start() {
     with_watchdog(async {
@@ -1901,7 +1899,6 @@ async fn authority_rejection_replaces_unreadable_harness_directory() {
     .await;
 }
 
-// REQ-AGENT-29
 #[tokio::test]
 async fn result_bridge_rejects_then_accepts_one_exactly_correlated_candidate() {
     with_watchdog(async {
@@ -2013,8 +2010,6 @@ async fn accepted_result_exits_and_quiesces_before_the_injected_settlement_deadl
     .await;
 }
 
-// REQ-AGENT-33
-// INV-HARNESS-7
 #[tokio::test]
 async fn settlement_expiry_terminates_the_process_group_and_discards_the_candidate() {
     with_watchdog(async {
@@ -2140,7 +2135,6 @@ async fn wrong_bridge_identity_is_fatal_without_authoritative_acceptance() {
     .await;
 }
 
-// REQ-AGENT-34
 #[tokio::test]
 async fn validation_exhaustion_returns_fatal_before_the_typed_failure() {
     with_watchdog(async {
@@ -2270,7 +2264,6 @@ async fn admitted_system_prompt_above_kernel_single_argument_limit_launches() {
     .await;
 }
 
-// REQ-AGENT-21
 #[tokio::test]
 async fn exact_input_limits_prepare_unchanged_and_one_excess_byte_never_launches() {
     with_watchdog(async {
@@ -2356,8 +2349,6 @@ async fn exact_input_limits_prepare_unchanged_and_one_excess_byte_never_launches
     .await;
 }
 
-// REQ-AGENT-40
-// INV-HARNESS-5
 #[tokio::test]
 async fn every_pre_agent_start_process_failure_is_a_start_failure_without_started() {
     with_watchdog(async {
@@ -2560,8 +2551,6 @@ async fn cancellation_keeps_the_admitted_deadline_when_observation_delivery_is_b
     .await;
 }
 
-// REQ-AGENT-46
-// INV-HARNESS-8
 #[tokio::test]
 async fn stubborn_descendant_is_forced_at_the_injected_deadline_before_terminal_report() {
     // Detached process startup is slower than the other fixtures, so this anti-hang

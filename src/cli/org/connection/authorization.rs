@@ -1,12 +1,14 @@
-//! A runner's authorization for one of the organization's connections in one project
-//! (REQ-INTEGRATION-26 to REQ-INTEGRATION-34): the connection `authorize INTEGRATION --project`
-//! chooses, the organization's authorizations in force for the project, read to name a runner
-//! or to find the one to end, the authorization made or ended, each through the member grant
-//! client's connection authorization routes under the member's session, and what `list` and
-//! `show` print of the authorizations in force under each connection. A generic `not-found` from
-//! one of those routes is resolved by one read of the organization, since a deployment that
-//! routes none of them answers it as it answers an organization the member cannot read; `list`
-//! and `show` pass it over with no such read.
+//! A runner's authorization for one of the organization's connections in one project: the
+//! connection `authorize INTEGRATION --project` chooses, for `github` the installation that
+//! holds the project's repository, read with the project and offered the guided setup where it
+//! needs it; the organization's authorizations in force for the project, read to name a runner
+//! or to find the one to end; the statement of what an authorization reaches; the authorization
+//! made, for the runs `--runs` names, or ended, each through the member grant client's
+//! connection authorization routes under the member's session; and what `list` and `show` print
+//! of the authorizations in force under each connection. A generic `not-found` from one of
+//! those routes is resolved by one read of the organization, since a deployment that routes
+//! none of them answers it as it answers an organization the member cannot read; `list` and
+//! `show` pass it over with no such read.
 
 use std::io::{self, Write};
 
@@ -14,41 +16,35 @@ use anyhow::Context as _;
 use serde::{Serialize, Serializer};
 use useful_api::{
     ConnectionAuthorization, ConnectionAuthorizationFilter, ConnectionAuthorizationRefusal,
-    ConnectionAuthorizationRequest, ConnectionAuthorizationScope, ConnectionAuthorizationState,
+    ConnectionAuthorizationRequest, ConnectionAuthorizationRuns, ConnectionAuthorizationScope,
+    ConnectionAuthorizationState, GitHubInstallation, GitHubInstallationState,
     GitHubRepositorySelection, HttpTransportPolicy, MemberGrantApi, MemberGrantFailure,
-    UnreachableCategory,
+    ProjectFailure, ProjectRepository, UnreachableCategory,
 };
 use useful_execution::visible_text;
 use useful_human_auth::Deployment;
 
+use super::github::{self, Guidance};
 use super::list::{self, Options, Provider, Record};
 use super::target::Target;
 use crate::cli::account::grant::{output as grant_output, replayed};
 use crate::cli::paging::every_page;
-use crate::cli::{ApiFailureReport, PrincipalAuthenticationKind, with_human_session_api};
+use crate::cli::{
+    ApiFailureReport, CommandFailure, CommonArgs, PrincipalAuthenticationArgs,
+    PrincipalAuthenticationKind, project, with_human_session_api,
+};
 use crate::exit_code::{ExitCode, OutcomeClass};
 
 // The largest page the connection authorization list serves.
 const PAGE: i32 = 200;
 
-/// What authorizing a runner for a connection in one project permits (REQ-INTEGRATION-33): a
-/// permission, which the authorization records and Cloud acts on for no run today
-/// (REQ-INTEGRATION-24).
-pub(super) const CONNECTION_AUTHORIZE: &[&str] = &[
-    "the permission covers every app run of the project on the runner, whoever or whatever \
-     caused the run",
-    "the permission reaches whatever the provider grants the connection; no authorization \
-     narrows that",
-    "Cloud delivers an organization's connection to no run today: the authorization records a \
-     permission and delivers nothing",
-];
-
-/// What ending a runner's authorization for a connection in one project does
-/// (REQ-INTEGRATION-29): the permission ends, and no run is touched.
+/// What ending a runner's authorization for a connection in one project does: the runner is
+/// issued the installation no more for the project's runs, a token issued already lives out
+/// its hour, and no run is touched.
 pub(super) const CONNECTION_DEAUTHORIZE: &[&str] = &[
-    "the runner's permission to use the connection for the project's app runs ends",
-    "no run is asked to stop and none loses anything: Cloud delivers an organization's \
-     connection to no run today",
+    "the runner is issued the connection no more for the project's runs",
+    "a token already issued stays valid until it expires, within the hour",
+    "no run is asked to stop",
 ];
 
 /// The state word of a connection a runner can be authorized for.
@@ -56,10 +52,10 @@ const ACTIVE: &str = "active";
 
 /// The connection authorizations in force of the organization `organization` names, of the
 /// connection `connection` alone where one is given, oldest first, read to the last page under
-/// the member's session (REQ-INTEGRATION-34). `None` where Cloud refused the read, as it refuses
-/// a member who is not an owner, answered the generic `not-found`, as a deployment that does not
-/// route it does, or answered that it cannot serve it: `list` and `show` pass those over. Any
-/// other failure is the inner error.
+/// the member's session. `None` where Cloud refused the read, as it refuses a member who is not
+/// an owner, answered the generic `not-found`, as a deployment that does not route it does, or
+/// answered that it cannot serve it: `list` and `show` pass those over. Any other failure is the
+/// inner error.
 pub(super) fn in_force(
     deployment: &Deployment,
     policy: HttpTransportPolicy,
@@ -89,10 +85,10 @@ pub(super) fn in_force(
     })
 }
 
-/// The authorizations in force of the connection `connection_id` that `show` prints under it
-/// (REQ-INTEGRATION-34): none under a service API key, which the member's routes do not admit,
-/// nor where the read was passed over. A read that fails otherwise is reported, and its exit
-/// status is the inner error.
+/// The authorizations in force of the connection `connection_id` that `show` prints under it:
+/// none under a service API key, which the member's routes do not admit, nor where the read
+/// was passed over. A read that fails otherwise is reported, and its exit status is the inner
+/// error.
 pub(super) fn of_connection(
     deployment: &Deployment,
     options: &Options,
@@ -144,15 +140,17 @@ impl Serialize for InForce {
     }
 }
 
-/// A runner's authorization for a connection in one project, as a command prints it
-/// (REQ-INTEGRATION-32, REQ-INTEGRATION-33): what names it, who made it and when, and its
-/// scope. Never a credential: an authorization holds none, and only these named fields are
-/// printed.
+/// A runner's authorization for a connection in one project, as a command prints it: what
+/// names it, its runs, its repository, null where Cloud answered none, who made it and when,
+/// and its scope. Never a credential: an authorization holds none, and only these named
+/// fields are printed.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthorizationView<'a> {
     #[serde(flatten)]
     named: NamedView<'a>,
+    runs: &'static str,
+    repository: Option<&'a str>,
     authorized_by: &'a str,
     created_at: &'a str,
     scope: ScopeView<'a>,
@@ -173,8 +171,8 @@ struct NamedView<'a> {
     connection_account: &'a str,
 }
 
-/// What the provider grants the authorization's connection (REQ-INTEGRATION-32): its state, and
-/// for a `current` GitHub scope the installation's repository selection and permissions.
+/// What the provider grants the authorization's connection: its state, and for a `current`
+/// GitHub scope the App it acts as and the installation's repository selection and permissions.
 #[derive(Serialize)]
 struct ScopeView<'a> {
     state: &'static str,
@@ -185,6 +183,7 @@ struct ScopeView<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GitHubScopeView<'a> {
+    app_slug: &'a str,
     repository_selection: &'static str,
     permissions: Vec<PermissionView<'a>>,
 }
@@ -209,6 +208,7 @@ impl<'a> ScopeView<'a> {
                 .as_deref()
                 .filter(|_| current)
                 .map(|github| GitHubScopeView {
+                    app_slug: &github.app_slug,
                     repository_selection: match github.repository_selection {
                         GitHubRepositorySelection::GitHubInstallationScopeRepositorySelectionAll => {
                             "all"
@@ -229,12 +229,14 @@ impl<'a> ScopeView<'a> {
         }
     }
 
-    /// Writes the scope's lines of a human report: the repository selection and one line for
-    /// each permission, which are GitHub's text and printed visibly; that the provider could not
-    /// be read; or, for a `current` scope this release knows no member of, `current` alone.
+    /// Writes the scope's lines of a human report: the App the authorization acts as, the
+    /// repository selection and one line for each permission, which are GitHub's text and
+    /// printed visibly; that the provider could not be read; or, for a `current` scope this
+    /// release knows no member of, `current` alone.
     fn write_human(&self, output: &mut impl Write, indent: &str) -> io::Result<()> {
         match (&self.github, self.state) {
             (Some(github), _) => {
+                writeln!(output, "{indent}acts as: {}", visible_text(github.app_slug))?;
                 writeln!(
                     output,
                     "{indent}scope: {} repositories",
@@ -263,16 +265,29 @@ impl<'a> AuthorizationView<'a> {
     fn new(authorization: &'a ConnectionAuthorization) -> Self {
         Self {
             named: NamedView::new(authorization),
+            runs: ConnectionAuthorizationRuns::of(authorization.runs).name(),
+            repository: authorization.repository.as_deref(),
             authorized_by: &authorization.authorized_by,
             created_at: &authorization.created_at,
             scope: ScopeView::new(&authorization.scope),
         }
     }
 
-    /// Writes the view's lines of a human report: what names the authorization, then who made
-    /// it and when, and its scope.
+    /// Writes the view's lines of a human report: what names the authorization, its runs and
+    /// its repository, another party's text, or why it has none, then who made it and when, and
+    /// its scope.
     fn write_human(&self, output: &mut impl Write, indent: &str) -> io::Result<()> {
         self.named.write_human(output, indent)?;
+        writeln!(output, "{indent}runs: {}", self.runs)?;
+        match self.repository {
+            Some(repository) => {
+                writeln!(output, "{indent}repository: {}", visible_text(repository))?;
+            }
+            None => writeln!(
+                output,
+                "{indent}repository: none, the project has no active repository of this connection"
+            )?,
+        }
         writeln!(output, "{indent}authorized by: {}", self.authorized_by)?;
         writeln!(output, "{indent}authorized at: {}", self.created_at)?;
         self.scope.write_human(output, indent)
@@ -341,12 +356,136 @@ impl RouteFailure {
 /// The organization's connection authorizations at one provider in one project, which
 /// `authorize` and `deauthorize` given `--project` act on: the organization by the reference in
 /// effect, the project by its ID, the connection `INTEGRATION` names, by its provider or its ID,
-/// and the leaf's command path.
+/// the leaf's command path and the runs `authorize` makes one for.
 pub(super) struct Scope<'a> {
     pub(super) command: &'static str,
     pub(super) organization: &'a str,
     pub(super) project_id: &'a str,
     pub(super) target: &'a Target,
+    /// The runs `--runs` names, `app` where it names none.
+    pub(super) runs: ConnectionAuthorizationRuns,
+}
+
+/// What `authorize` acts on, read before it names a runner: the connection, and for `github` the
+/// full name of the project's repository, the one repository a token of the installation reaches
+/// for the project's runs.
+pub(super) struct Reached {
+    pub(super) connection: Record,
+    pub(super) repository: Option<String>,
+}
+
+/// What `authorize` came to of what it read before it names a runner.
+pub(super) enum Reaching {
+    /// What it acts on.
+    Reached(Reached),
+    /// For `github`, the installation that holds the project's repository, which is not ready:
+    /// reported, or on a terminal offered to set up.
+    Unready(Box<Unready>),
+    /// It ends here with this status, having reported why.
+    Ended(ExitCode),
+}
+
+/// The installation that holds the project's repository, which is not `active` or whose
+/// authority was never verified, with that repository's full name.
+pub(super) struct Unready {
+    installation: GitHubInstallation,
+    repository: String,
+    not_ready: NotReady,
+}
+
+/// How a connection a runner is to be authorized for is not ready.
+#[derive(Clone, Copy)]
+enum NotReady {
+    /// It is not `active`.
+    Inactive,
+    /// Its authority was never verified.
+    Unverified,
+}
+
+/// Why `authorize github` sends no authorization for the project: what it read of the project
+/// and the organization's installations, judged in this order.
+enum Unreached {
+    /// The project has no repository, or one that is not GitHub's or not `active`, or
+    /// `INTEGRATION` names another installation than the one that holds it; the reason, as the
+    /// refusal states it.
+    RepositoryNotConnected(&'static str),
+    /// The installation the project's repository names is not among those listed, by its ID.
+    ConnectionNotFound(String),
+    /// That installation is not `active`, or its authority was never verified.
+    Unready(Box<Unready>),
+}
+
+impl Unready {
+    /// `installation`, holding the repository `repository`, where it is not ready: not
+    /// `active`, or its authority never verified.
+    fn of(installation: GitHubInstallation, repository: String) -> Result<Reached, Box<Self>> {
+        let not_ready = if installation.state != GitHubInstallationState::Active {
+            NotReady::Inactive
+        } else if installation.authority_verified_at.is_none() {
+            NotReady::Unverified
+        } else {
+            return Ok(Reached {
+                connection: Record::Github(installation),
+                repository: Some(repository),
+            });
+        };
+        Err(Box::new(Self {
+            installation,
+            repository,
+            not_ready,
+        }))
+    }
+}
+
+impl Unreached {
+    /// What the organization's GitHub `records`, read from its list of installations, reach of
+    /// the project whose repository is `repository`, with `named` the installation `INTEGRATION`
+    /// names by ID.
+    fn judged(
+        repository: Option<ProjectRepository>,
+        records: Vec<Record>,
+        named: Option<&str>,
+    ) -> Result<Reached, Self> {
+        let Some(repository) = repository else {
+            return Err(Self::RepositoryNotConnected("has no repository"));
+        };
+        let github =
+            useful_support::wire_name(repository.provider_kind).as_deref() == Some("github");
+        let binding = match repository.installation_binding_id {
+            Some(binding) if github => binding,
+            _ => {
+                return Err(Self::RepositoryNotConnected(
+                    "has a repository that is not GitHub's",
+                ));
+            }
+        };
+        if useful_support::wire_name(repository.availability).as_deref() != Some(ACTIVE) {
+            return Err(Self::RepositoryNotConnected(
+                "has a repository that is not active",
+            ));
+        }
+        if named.is_some_and(|named| named != binding) {
+            return Err(Self::RepositoryNotConnected(
+                "has a repository that another installation than the one named holds",
+            ));
+        }
+        let Some(installation) = records.into_iter().find_map(|record| match record {
+            Record::Github(installation) if installation.id == binding => Some(installation),
+            _ => None,
+        }) else {
+            return Err(Self::ConnectionNotFound(binding));
+        };
+        Unready::of(installation, repository.full_name).map_err(Self::Unready)
+    }
+}
+
+/// What `authorize github` says on a terminal of an installation that is not ready, before it
+/// offers to set it up: the finding, as a statement's heading, what setting it up does, as its
+/// lines, and the question.
+pub(super) struct SetupOffer {
+    pub(super) finding: String,
+    pub(super) lines: [&'static str; 3],
+    pub(super) question: String,
 }
 
 impl Scope<'_> {
@@ -363,15 +502,249 @@ impl Scope<'_> {
     }
 
     /// The leaf's command line for `runner` and the connection `connection`, by its ID, or
-    /// where none is given as `INTEGRATION` named it.
+    /// where none is given as `INTEGRATION` named it, with `--runs` where it names `all`.
     pub(super) fn command_line(&self, runner: &str, connection: Option<&str>) -> String {
         let named = connection
             .or_else(|| self.connection_id())
             .unwrap_or(self.provider().as_str());
+        let runs = match self.runs {
+            ConnectionAuthorizationRuns::App => "",
+            ConnectionAuthorizationRuns::All => " --runs all",
+        };
         format!(
-            "{} {named} --runner {runner} --project {} --org {} --yes",
+            "{} {named} --runner {runner} --project {} --org {}{runs} --yes",
             self.command, self.project_id, self.organization
         )
+    }
+
+    /// What `authorize` acts on, read under `options` before any runner is named. For
+    /// `github`: the project, whose read not finding it is `project_not_found`, then the
+    /// organization's installations, judged by [`Unreached::judged`], an installation that is
+    /// not ready left to the leaf to report or offer to set up. For `gitlab` and `linear`: the
+    /// connection [`Scope::connection`] takes. Otherwise the command ends here, having
+    /// reported why, with nothing sent.
+    pub(super) fn reached(
+        &self,
+        deployment: &Deployment,
+        options: &Options,
+        runner: Option<&str>,
+    ) -> anyhow::Result<Reaching> {
+        if self.provider() != Provider::Github {
+            return Ok(match self.connection(deployment, options, runner)? {
+                Ok(connection) => Reaching::Reached(Reached {
+                    connection,
+                    repository: None,
+                }),
+                Err(exit) => Reaching::Ended(exit),
+            });
+        }
+        let api_url = deployment.fingerprint().api_url();
+        let json = options.json;
+        let repository = match self.project_repository(deployment, options)? {
+            Ok(repository) => repository,
+            Err(failure) => {
+                return self
+                    .report(api_url, &RouteFailure::Failed(failure))
+                    .write(api_url, json)
+                    .map(Reaching::Ended);
+            }
+        };
+        let records = match list::read(self.provider(), deployment, options, self.organization)? {
+            Ok(records) => records,
+            Err(refusal) => {
+                return refusal
+                    .write(deployment, self.organization, options)
+                    .map(Reaching::Ended);
+            }
+        };
+        match Unreached::judged(repository, records, self.connection_id()) {
+            Ok(reached) => Ok(Reaching::Reached(reached)),
+            Err(Unreached::Unready(unready)) => Ok(Reaching::Unready(unready)),
+            Err(unreached) => self
+                .unreached(&unreached)
+                .write(api_url, json)
+                .map(Reaching::Ended),
+        }
+    }
+
+    /// The repository of the project, or none, read under `options`; a failed read as the
+    /// nearest failure of a connection authorization route, a project not found as Cloud's
+    /// own refusal of one.
+    fn project_repository(
+        &self,
+        deployment: &Deployment,
+        options: &Options,
+    ) -> anyhow::Result<Result<Option<ProjectRepository>, MemberGrantFailure>> {
+        let read = project::with_api(
+            deployment,
+            options.http.transport_policy(),
+            &options.authentication,
+            |api| api.get(self.organization, self.project_id),
+        )?;
+        Ok(read
+            .map(|project| project.repository.map(|repository| *repository))
+            .map_err(project_failure))
+    }
+
+    /// The refusal of `unreached`: `repository_not_connected` with the command that shows
+    /// the project, `connection_not_found` with the list of the organization's
+    /// integrations, and an installation that is not ready as [`Scope::unready`] reports
+    /// it.
+    fn unreached(&self, unreached: &Unreached) -> ApiFailureReport {
+        match unreached {
+            Unreached::RepositoryNotConnected(reason) => ApiFailureReport::new(
+                "repository_not_connected",
+                format!(
+                    "error: the project {} {reason}, so no GitHub installation of the \
+                     organization {} can be authorized for its runs",
+                    self.project_id, self.organization
+                ),
+                format!(
+                    "Show the project's repository:\n  useful project show {} --org {}",
+                    self.project_id, self.organization
+                ),
+                OutcomeClass::GeneralFailure,
+            ),
+            Unreached::ConnectionNotFound(id) => {
+                no_connection(self.organization, self.provider(), Some(id))
+            }
+            Unreached::Unready(unready) => self.unready(unready),
+        }
+    }
+
+    /// The refusal of authorizing for the installation `unready` names, where no setup ran:
+    /// `connection_inactive` or `connection_unverified`, exit 1, naming the guided setup of
+    /// that installation by its GitHub ID.
+    pub(super) fn unready(&self, unready: &Unready) -> ApiFailureReport {
+        connection_not_ready(
+            self.organization,
+            self.provider(),
+            unready.not_ready,
+            Some(&unready.installation),
+        )
+    }
+
+    /// What `authorize` says on a terminal of the installation `unready` names, and the question
+    /// with which it offers to set it up. The installation's account and the repository are
+    /// another party's text.
+    pub(super) fn setup_offer(&self, unready: &Unready) -> SetupOffer {
+        let organization = self.organization;
+        let installation = &unready.installation;
+        let account = visible_text(&installation.provider_account_login);
+        let repository = visible_text(&unready.repository);
+        let standing = match unready.not_ready {
+            NotReady::Inactive => format!("is not active in the organization {organization}"),
+            NotReady::Unverified => {
+                format!("was never verified for the organization {organization}")
+            }
+        };
+        SetupOffer {
+            finding: format!(
+                "The GitHub installation {} on {account}, which holds the project's repository \
+                 {repository}, {standing}. Connecting it now:",
+                installation.id
+            ),
+            lines: [
+                "begins a GitHub setup session for the organization that names the installation",
+                "waits while you prove at GitHub that you administer it",
+                "authorizes the runner once the setup completes, after stating what it reaches",
+            ],
+            question: format!(
+                "Connect the installation on {account} that holds {repository} to the \
+                 organization {organization} now?"
+            ),
+        }
+    }
+
+    /// Runs the guided setup of the installation `unready` names for the organization, under the
+    /// member's session with the transport `options` selects, as `useful org integration connect
+    /// github --installation ID` runs it, printing its reports. Where it completes and answers
+    /// that installation `active` and verified, what `authorize` then acts on; where it answers
+    /// another or one not ready, the refusal [`Scope::unready`] words; otherwise the setup's
+    /// status, its report naming the next step.
+    pub(super) fn set_up(
+        &self,
+        deployment: &Deployment,
+        options: &Options,
+        unready: Box<Unready>,
+    ) -> Result<Result<Reached, ExitCode>, CommandFailure> {
+        let guided = github::guide(
+            deployment,
+            CommonArgs::new(
+                false,
+                PrincipalAuthenticationArgs::default(),
+                crate::cli::HttpOptions {
+                    allow_insecure_http: options.http.allow_insecure_http,
+                },
+            ),
+            Guidance {
+                organization: self.organization,
+                installation: Some(&unready.installation.provider_installation_id),
+                binding: None,
+                listed: None,
+                no_wait: false,
+                timeout: None,
+            },
+        )?;
+        let Some(completed) = guided.completed else {
+            return Ok(Err(guided.status));
+        };
+        let unready = if completed.id == unready.installation.id {
+            match Unready::of(completed, unready.repository) {
+                Ok(reached) => return Ok(Ok(reached)),
+                Err(unready) => unready,
+            }
+        } else {
+            unready
+        };
+        let api_url = deployment.fingerprint().api_url();
+        Ok(Err(self.unready(&unready).write(api_url, false)?))
+    }
+
+    /// What authorizing the runner reaches, which `authorize` states before it acts: the runs
+    /// the authorization covers; for `github`, besides, the account that owns the installation
+    /// and the project's repository, each another party's text, that the runs act as Cloud's
+    /// GitHub App, and that the runner is issued a token for a run only.
+    pub(super) fn statement(&self, reached: &Reached) -> Vec<String> {
+        let github = self.provider() == Provider::Github;
+        let runs = match (self.runs, github) {
+            (ConnectionAuthorizationRuns::App, _) => {
+                "the authorization covers every app run of the project on the runner, whoever or \
+                 whatever caused it; members' runs are unaffected"
+            }
+            (ConnectionAuthorizationRuns::All, true) => {
+                "the authorization covers every run of the project on the runner: each member's \
+                 run acts at GitHub as the App, and no member's GitHub sign-in is used there"
+            }
+            (ConnectionAuthorizationRuns::All, false) => {
+                "the authorization covers every run of the project on the runner, whoever caused \
+                 it"
+            }
+        };
+        let mut lines = vec![runs.to_owned()];
+        if github {
+            if let Some(account) = reached.connection.account() {
+                lines.push(format!(
+                    "the GitHub account {} owns the installation",
+                    visible_text(account)
+                ));
+            }
+            if let Some(repository) = reached.repository.as_deref() {
+                lines.push(format!(
+                    "a token reaches one repository, the project's: {}",
+                    visible_text(repository)
+                ));
+            }
+            lines.extend(
+                [
+                    "the runs act as Cloud's GitHub App: GitHub attributes the commits, pushes \
+                     and pull requests made with the token to the App, not to a member",
+                    "the runner is issued a token for a run only, each expiring within the hour",
+                ]
+                .map(str::to_owned),
+            );
+        }
+        lines
     }
 
     /// The connection a runner is authorized for, read from the provider's list of the
@@ -425,8 +798,8 @@ impl Scope<'_> {
     }
 
     /// The organization's authorizations in force for the project and the provider, of
-    /// `runner_id` alone where one is given, read to the last page (REQ-INTEGRATION-28): those
-    /// that hold the project and the provider for a runner, whichever connection they name.
+    /// `runner_id` alone where one is given, read to the last page: those that hold the
+    /// project and the provider for a runner, whichever connection they name.
     pub(super) fn in_force(
         &self,
         api: &MemberGrantApi,
@@ -465,8 +838,9 @@ impl Scope<'_> {
         self.resolved(api, read)
     }
 
-    /// Authorizes `runner_id` for `connection_id` in the project under `key`, once more under
-    /// the same key when the answer was lost (REQ-INTEGRATION-27).
+    /// Authorizes `runner_id` for `connection_id` in the project for the runs `--runs` named
+    /// under `key`, once more under the same key when the answer was lost. The runs are sent
+    /// on every request, and never dropped.
     pub(super) fn authorize(
         &self,
         api: &MemberGrantApi,
@@ -479,13 +853,14 @@ impl Scope<'_> {
             runner_id,
             provider: self.provider().wire(),
             connection_id,
+            runs: self.runs,
         };
         let made = replayed(|| api.authorize_connection(self.organization, &request, key));
         self.resolved(api, made)
     }
 
     /// Ends the authorization `authorization_id` under `key`, once more under the same key when
-    /// the answer was lost (REQ-INTEGRATION-29).
+    /// the answer was lost.
     pub(super) fn end(
         &self,
         api: &MemberGrantApi,
@@ -522,6 +897,29 @@ impl Scope<'_> {
     /// `failure` as the command reports it, worded with the organization and the provider.
     pub(super) fn report(&self, deployment: &str, failure: &RouteFailure) -> ApiFailureReport {
         report(deployment, failure, self.organization, self.provider())
+    }
+
+    /// `failure` of making an authorization as the command reports it: a request Cloud refuses
+    /// as malformed is one that does not serve its runs, `runs_not_served`; any other as
+    /// [`Scope::report`] words it.
+    pub(super) fn refused_authorization(
+        &self,
+        deployment: &str,
+        failure: &RouteFailure,
+    ) -> ApiFailureReport {
+        match failure {
+            RouteFailure::Failed(MemberGrantFailure::InvalidInput) => ApiFailureReport::new(
+                "runs_not_served",
+                format!(
+                    "error: this deployment refused the authorization of {} runs as malformed; \
+                     it does not serve an authorization's runs",
+                    self.runs.name()
+                ),
+                "Ask the deployment's operator when it will. Nothing was authorized.".to_owned(),
+                OutcomeClass::GeneralFailure,
+            ),
+            failure => self.report(deployment, failure),
+        }
     }
 
     /// The heading of the statement of authorizing the runner `runner` for `connection`.
@@ -572,7 +970,7 @@ struct AuthorizationResult<'a, V> {
     authorization: V,
 }
 
-/// Reports the authorization `authorize` made (REQ-INTEGRATION-33).
+/// Reports the authorization `authorize` made.
 pub(super) fn write_authorized(
     deployment: &str,
     authorization: &ConnectionAuthorization,
@@ -588,8 +986,8 @@ pub(super) fn write_authorized(
     )
 }
 
-/// Reports the authorization `deauthorize` ended (REQ-INTEGRATION-33): what names it, without
-/// who made it, when or its scope.
+/// Reports the authorization `deauthorize` ended: what names it, without who made it, when or
+/// its scope.
 pub(super) fn write_deauthorized(
     deployment: &str,
     authorization: &ConnectionAuthorization,
@@ -650,8 +1048,8 @@ struct ConnectionRequiredResult<'a> {
 }
 
 /// Refuses a leaf given a provider where the organization holds several `active` connections at
-/// it (REQ-INTEGRATION-33): exit 2, naming each by its ID and account, then the command line
-/// `example` that names one; under `--json`, one document with outcome `connection_required`.
+/// it: exit 2, naming each by its ID and account, then the command line `example` that names
+/// one; under `--json`, one document with outcome `connection_required`.
 fn write_connection_required(
     deployment: &str,
     provider: Provider,
@@ -706,8 +1104,8 @@ fn connecting(org: &str, provider: Provider) -> String {
 }
 
 /// The refusal of a leaf that finds no connection of the organization `org` at `provider` to
-/// authorize a runner for (REQ-INTEGRATION-33): none `active`, with the command that connects
-/// one, or none by the ID `INTEGRATION` named, with the list of the organization's integrations.
+/// authorize a runner for: none `active`, with the command that connects one, or none by the ID
+/// `INTEGRATION` named, with the list of the organization's integrations.
 fn no_connection(org: &str, provider: Provider, connection_id: Option<&str>) -> ApiFailureReport {
     let name = provider.as_str();
     let (summary, remedy) = match connection_id {
@@ -733,8 +1131,89 @@ fn no_connection(org: &str, provider: Provider, connection_id: Option<&str>) -> 
     )
 }
 
+/// The refusal of authorizing a runner for a connection of the organization `org` at `provider`
+/// that is not ready, `connection_inactive` or `connection_unverified`, the command's own where
+/// it read `installation` and Cloud's otherwise: exit 1, with the command that connects the
+/// organization, which makes or verifies one, naming the installation by its GitHub ID where
+/// the command read it.
+fn connection_not_ready(
+    org: &str,
+    provider: Provider,
+    not_ready: NotReady,
+    installation: Option<&GitHubInstallation>,
+) -> ApiFailureReport {
+    let name = provider.as_str();
+    let connecting = match installation {
+        Some(installation) => format!(
+            "useful org integration connect github --installation {} --org {org}",
+            installation.provider_installation_id
+        ),
+        None => connecting(org, provider),
+    };
+    let connection = installation.map_or_else(
+        || format!("that {name} connection"),
+        |installation| format!("the {name} connection {}", installation.id),
+    );
+    let (outcome, summary, remedy) = match not_ready {
+        NotReady::Inactive => (
+            "connection_inactive",
+            format!("error: {connection} of the organization {org} is not active"),
+            format!("Connect the organization at {name}:"),
+        ),
+        NotReady::Unverified => (
+            "connection_unverified",
+            format!(
+                "error: the authority of {connection} of the organization {org} was never \
+                 verified"
+            ),
+            format!("Connect the organization at {name} again, which verifies its authority:"),
+        ),
+    };
+    ApiFailureReport::new(
+        outcome,
+        summary,
+        format!(
+            "{remedy}\n  {connecting}\nor list its integrations:\n  useful org integration list \
+             --org {org}"
+        ),
+        OutcomeClass::GeneralFailure,
+    )
+}
+
+/// A failed read of the project as the nearest failure of a connection authorization route: a
+/// project the read does not find is Cloud's refusal of one not found.
+fn project_failure(failure: ProjectFailure) -> MemberGrantFailure {
+    match failure {
+        ProjectFailure::NotFound => MemberGrantFailure::ConnectionAuthorizationRefused(
+            ConnectionAuthorizationRefusal::ProjectNotFound,
+        ),
+        ProjectFailure::Forbidden => MemberGrantFailure::Forbidden,
+        ProjectFailure::Unauthenticated => MemberGrantFailure::Unauthenticated,
+        ProjectFailure::RateLimited { retry_after } => MemberGrantFailure::RateLimited {
+            retry_after: Some(retry_after),
+        },
+        ProjectFailure::Unreachable(category) => MemberGrantFailure::Unreachable { category },
+        ProjectFailure::Protocol {
+            credential_rejected,
+        } => MemberGrantFailure::InvalidResponse {
+            credential_rejected,
+        },
+        // A project read defines none of these answers.
+        ProjectFailure::InvalidInput
+        | ProjectFailure::RepositoryNotBound
+        | ProjectFailure::NameUnavailable
+        | ProjectFailure::QuantityLimitReached
+        | ProjectFailure::ProviderUnavailable { .. }
+        | ProjectFailure::IdempotencyConflict
+        | ProjectFailure::SourceConflict
+        | ProjectFailure::RepositoryUnavailable
+        | ProjectFailure::ProjectArchived
+        | ProjectFailure::Conflict => invalid(),
+    }
+}
+
 /// The refusal of a project `--project` names by a name no project of the organization `org`
-/// has (REQ-INTEGRATION-33).
+/// has.
 pub(super) fn project_not_found(org: &str) -> ApiFailureReport {
     ApiFailureReport::new(
         "project_not_found",
@@ -745,9 +1224,9 @@ pub(super) fn project_not_found(org: &str) -> ApiFailureReport {
 }
 
 /// A failure of a leaf acting on a connection authorization of the organization `org` at
-/// `provider` (REQ-INTEGRATION-33): an owner's refusal, each refusal only those routes answer
-/// worded with the organization and the provider, and a deployment that does not serve them;
-/// any other as a grant's.
+/// `provider`: an owner's refusal, each refusal only those routes answer worded with the
+/// organization and the provider, and a deployment that does not serve them; any other as a
+/// grant's.
 fn report(
     deployment: &str,
     failure: &RouteFailure,
@@ -805,11 +1284,8 @@ fn report(
             format!("error: {name} connection not found in the organization {org}"),
             connect,
         ),
-        R::ConnectionInactive => refused(
-            "connection_inactive",
-            format!("error: that {name} connection of the organization {org} is not active"),
-            connect,
-        ),
+        R::ConnectionInactive => connection_not_ready(org, provider, NotReady::Inactive, None),
+        R::ConnectionUnverified => connection_not_ready(org, provider, NotReady::Unverified, None),
         R::ProviderIneligible => refused(
             "provider_ineligible",
             format!(
@@ -825,7 +1301,8 @@ fn report(
                  organization {org} in that project"
             ),
             format!(
-                "List the organization's integrations:\n  {list}\nor end the runner's \
+                "List the organization's integrations:\n  {list}\nAn authorization of other \
+                 runs is made only after the one in force is ended. End the runner's \
                  authorization in that project:\n  useful org integration deauthorize {name} \
                  --runner RUNNER --project PROJECT --org {org} --yes"
             ),

@@ -388,7 +388,6 @@ fn update_retries_failures_before_and_during_an_updated_response() {
     }
 }
 
-// INV-CLI-10
 #[test]
 fn mutation_attempt_budget_includes_interrupted_success_responses() {
     let interrupted = interrupted_success("201 Created");
@@ -492,8 +491,6 @@ fn membership_history_preserves_pagination_and_decodes_lifecycle_rows() {
     ));
 }
 
-// REQ-MEMBER-54
-// INV-CLI-10
 #[test]
 fn membership_role_update_retries_with_one_key_and_exact_merge_patch() {
     let server =
@@ -534,7 +531,6 @@ fn membership_role_update_retries_with_one_key_and_exact_merge_patch() {
     );
 }
 
-// REQ-MEMBER-54
 #[test]
 fn membership_termination_retries_exactly_on_distinct_member_and_self_routes() {
     let cases = [
@@ -600,7 +596,6 @@ fn membership_termination_rejects_malformed_no_content_successes() {
     }
 }
 
-// REQ-MEMBER-55
 #[test]
 fn membership_mutations_classify_owner_and_transition_conflicts() {
     let cases = [
@@ -776,10 +771,12 @@ fn update_and_membership_list_classify_only_their_contracted_failures() {
     }
 }
 
-// REQ-AUDIT-65, REQ-AUDIT-48, REQ-CLOUDDEF-12
-// REQ-AUDIT-65, REQ-AUDIT-48, REQ-CLOUDDEF-12: the listing asks for vocabulary 6, and a page
-// in it decodes whose records name a connection authorization, with the connection it
-// authorizes, and a workflow definition's deletion, with its state and version.
+// The listing asks for vocabulary 7, and a page in it decodes whose records name a connection
+// authorization, with the connection it authorizes and its runs, a workflow definition's deletion,
+// with its state and version, a schedule's pause, with its trigger, a GitHub installation's
+// authority verification, with the GitHub user who proved it, an issue of an authorization's
+// installation to a runner, with the permissions issued, and a run record's deletion, with its
+// reason.
 #[test]
 fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
     let page = serde_json::to_vec(&serde_json::json!({"items": [{
@@ -793,7 +790,10 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
         "actor": {"kind": "principal", "principalId": "prn_01k0z6r1w8f4jy2m7q9v3x5abc"},
         "action": "connection_authorization.authorized",
         "subject": {"kind": "connection_authorization", "id": "cna_01k0z6r1w8f4jy2m7q9v3x5abc"},
-        "changes": [{"field": "connection_id", "after": "gac_01k0z6r1w8f4jy2m7q9v3x5abc"}]
+        "changes": [
+            {"field": "connection_id", "after": "gac_01k0z6r1w8f4jy2m7q9v3x5abc"},
+            {"field": "runs", "after": "all"}
+        ]
     }, {
         "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abd",
         "occurredAt": "2026-11-18T12:05:00Z",
@@ -809,12 +809,69 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
             {"field": "state", "before": "archived", "after": "deleted"},
             {"field": "version", "before": "2", "after": "2"}
         ]
+    }, {
+        "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abe",
+        "occurredAt": "2026-11-18T12:05:00Z",
+        "retention": {
+            "identifier": "identity-tenancy-production-730d-v1",
+            "retainUntil": "2028-11-17T12:05:00Z"
+        },
+        "detailsStatus": "details_available",
+        "actor": {"kind": "principal", "principalId": "prn_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "action": "workflow_definition.schedule_paused",
+        "subject": {"kind": "workflow_definition", "id": "def_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "changes": [
+            {"field": "trigger_name", "after": "nightly"},
+            {"field": "version", "before": "2", "after": "2"}
+        ]
+    }, {
+        "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abf",
+        "occurredAt": "2026-11-21T12:00:00Z",
+        "retention": {
+            "identifier": "identity-tenancy-production-730d-v1",
+            "retainUntil": "2028-11-20T12:00:00Z"
+        },
+        "detailsStatus": "details_available",
+        "actor": {"kind": "principal", "principalId": "prn_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "action": "github_installation.authority_verified",
+        "subject": {"kind": "github_installation", "id": "ghi_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "changes": [
+            {"field": "github_user_id", "after": "9001"},
+            {"field": "github_login", "after": "octo-admin"}
+        ]
+    }, {
+        "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abg",
+        "occurredAt": "2026-11-22T12:00:00Z",
+        "retention": {
+            "identifier": "identity-tenancy-production-730d-v1",
+            "retainUntil": "2028-11-21T12:00:00Z"
+        },
+        "detailsStatus": "details_available",
+        "actor": {"kind": "runner", "runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "action": "connection_authorization.credential_issued",
+        "subject": {"kind": "connection_authorization", "id": "cna_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "changes": [
+            {"field": "repository_connection_id", "after": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc"},
+            {"field": "permissions", "after": "contents:read"}
+        ]
+    }, {
+        "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abh",
+        "occurredAt": "2026-11-23T12:00:00Z",
+        "retention": {
+            "identifier": "identity-tenancy-production-730d-v1",
+            "retainUntil": "2028-11-22T12:00:00Z"
+        },
+        "detailsStatus": "details_available",
+        "actor": {"kind": "system"},
+        "action": "run_record.deleted",
+        "subject": {"kind": "run", "id": "run_01k0z6r1w8f4jy2m7q9v3x5abc"},
+        "changes": [{"field": "reason", "after": "expired"}]
     }]}))
     .unwrap();
     let server = ScriptedHttpServer::respond(response("200 OK", Some(JSON_MEDIA_TYPE), &[], &page));
     let outcome =
         list_organization_audit_records(&http_client(), &server.api_url, TOKEN, "acme", None, None)
-            .expect("a connection authorization record should decode");
+            .expect("the audit page should decode");
     let ListOrganizationAuditRecordsOutcome::Listed(page) = outcome else {
         panic!("audit page = {outcome:?}");
     };
@@ -827,7 +884,13 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
         encoded["items"][0]["subject"]["id"],
         "cna_01k0z6r1w8f4jy2m7q9v3x5abc"
     );
-    assert_eq!(encoded["items"][0]["changes"][0]["field"], "connection_id");
+    assert_eq!(
+        encoded["items"][0]["changes"],
+        serde_json::json!([
+            {"field": "connection_id", "after": "gac_01k0z6r1w8f4jy2m7q9v3x5abc"},
+            {"field": "runs", "after": "all"}
+        ])
+    );
     let deletion = &encoded["items"][1];
     assert_eq!(deletion["action"], "workflow_definition.deleted");
     assert_eq!(deletion["subject"]["kind"], "workflow_definition");
@@ -839,14 +902,55 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
             {"field": "version", "before": "2", "after": "2"}
         ])
     );
+    assert_eq!(
+        encoded["items"][2]["action"],
+        "workflow_definition.schedule_paused"
+    );
+    assert_eq!(encoded["items"][2]["changes"][0]["field"], "trigger_name");
+    let verification = &encoded["items"][3];
+    assert_eq!(
+        verification["action"],
+        "github_installation.authority_verified"
+    );
+    assert_eq!(verification["subject"]["kind"], "github_installation");
+    assert_eq!(
+        verification["changes"],
+        serde_json::json!([
+            {"field": "github_user_id", "after": "9001"},
+            {"field": "github_login", "after": "octo-admin"}
+        ])
+    );
+    let issue = &encoded["items"][4];
+    assert_eq!(
+        issue["action"],
+        "connection_authorization.credential_issued"
+    );
+    assert_eq!(issue["subject"]["kind"], "connection_authorization");
+    assert_eq!(
+        issue["changes"],
+        serde_json::json!([
+            {"field": "repository_connection_id", "after": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc"},
+            {"field": "permissions", "after": "contents:read"}
+        ])
+    );
+    let run_deletion = &encoded["items"][5];
+    assert_eq!(run_deletion["action"], "run_record.deleted");
+    assert_eq!(
+        run_deletion["subject"],
+        serde_json::json!({"kind": "run", "id": "run_01k0z6r1w8f4jy2m7q9v3x5abc"})
+    );
+    assert_eq!(
+        run_deletion["changes"],
+        serde_json::json!([{"field": "reason", "after": "expired"}])
+    );
     server.finish_one();
 
     for (limit, cursor, query) in [
-        (None, None, "?vocabulary=6"),
+        (None, None, "?vocabulary=7"),
         (
             Some(100),
             Some("opaque cursor"),
-            "?limit=100&cursor=opaque+cursor&vocabulary=6",
+            "?limit=100&cursor=opaque+cursor&vocabulary=7",
         ),
     ] {
         let page = serde_json::to_vec(&serde_json::json!({"items": []})).unwrap();
@@ -1050,7 +1154,6 @@ fn mutation_successes_require_their_response_identity_headers() {
     missing_update_identity.finish_one();
 }
 
-// INV-CLI-10
 #[test]
 fn interrupted_success_with_mismatched_identity_is_not_retried() {
     let mut interrupted = response(
@@ -1077,7 +1180,6 @@ fn interrupted_success_with_mismatched_identity_is_not_retried() {
     assert_protocol_error(&error);
 }
 
-// REQ-AUTH-56
 #[test]
 fn redirects_and_malformed_unauthorized_responses_are_protocol_failures() {
     let redirect = ScriptedHttpServer::respond(response(
@@ -1131,7 +1233,6 @@ fn unauthorized_status_survives_the_body_deadline() {
     assert!(!error.to_string().contains(TOKEN));
 }
 
-// INV-CLI-9
 #[test]
 fn deadlines_cover_headers_and_reads_do_not_retry() {
     let mut server = ScriptedHttpServer::respond_when_released(success("200 OK"));
@@ -1188,7 +1289,6 @@ fn explicit_server_status_with_interrupted_body_is_not_retried() {
     );
 }
 
-// INV-CLI-10
 #[test]
 fn explicit_server_failures_are_not_retried() {
     let server = ScriptedHttpServer::respond(response("503 Service Unavailable", None, &[], &[]));
@@ -1205,7 +1305,6 @@ fn explicit_server_failures_are_not_retried() {
     server.finish_one();
 }
 
-// REQ-INVITE-58
 #[test]
 fn issue_invitation_retries_an_ambiguous_transport_failure_with_the_same_request() {
     let invitation_id = "inv_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1254,7 +1353,6 @@ fn issue_invitation_retries_an_ambiguous_transport_failure_with_the_same_request
     );
 }
 
-// REQ-INVITE-58
 #[test]
 fn accept_invitation_replays_the_same_capability_body_after_an_interrupted_success() {
     let capability = "inv_01k0z6r1w8f4jy2m7q9v3x5abc.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";

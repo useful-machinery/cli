@@ -121,7 +121,7 @@ impl SecretInput {
 
 /// `bytes`, read as the secret `name` names, once one trailing line ending is trimmed, when they
 /// are one line of 1 to `max` printable characters without a space: the form of a Claude Code
-/// token and of an integration token (REQ-INTEGRATION-1). The refusal never quotes them.
+/// token and of an integration token. The refusal never quotes them.
 pub(super) fn one_line(
     name: &str,
     max: usize,

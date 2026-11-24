@@ -59,7 +59,6 @@ fn audit_success(next_cursor: Option<&str>) -> Vec<u8> {
     json_http_response("200 OK", audit_page(next_cursor))
 }
 
-// REQ-AUDIT-7, REQ-AUDIT-8, REQ-AUDIT-21, REQ-AUDIT-22, REQ-AUDIT-65
 #[test]
 fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
     let cursor = "next page /+=";
@@ -142,7 +141,7 @@ fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
     let requests = server.finish();
     assert_eq!(requests.len(), 1, "the CLI must return exactly one page");
     assert!(requests[0].starts_with(
-        "GET /api/v1/organizations/acme-research/audit-records?limit=100&cursor=opaque+%2F%2B%3D%3F%26&vocabulary=6 HTTP/1.1\r\n"
+        "GET /api/v1/organizations/acme-research/audit-records?limit=100&cursor=opaque+%2F%2B%3D%3F%26&vocabulary=7 HTTP/1.1\r\n"
     ));
     assert_eq!(
         header_value(&requests[0], "authorization"),
@@ -151,7 +150,6 @@ fn organization_audit_list_preserves_one_privacy_safe_page_as_stable_json() {
     assert!(useful_test_support::request_header(&requests[0], "idempotency-key").is_none());
 }
 
-// REQ-AUDIT-14
 #[test]
 fn redacted_acceptance_audit_warning_does_not_recreate_an_actor() {
     let mut page = audit_page(None);
@@ -178,7 +176,6 @@ fn redacted_acceptance_audit_warning_does_not_recreate_an_actor() {
     server.finish();
 }
 
-// REQ-AUDIT-23
 #[test]
 fn human_audit_list_identifies_available_details_without_inventing_unavailable_details() {
     let (server, _directory, _path, credential_path) =
@@ -221,7 +218,6 @@ fn human_audit_list_identifies_available_details_without_inventing_unavailable_d
     server.finish();
 }
 
-// REQ-AUDIT-21
 #[test]
 fn organization_audit_rejects_invalid_filters_before_loading_deployment() {
     for args in [
@@ -239,7 +235,6 @@ fn organization_audit_rejects_invalid_filters_before_loading_deployment() {
     }
 }
 
-// REQ-AUDIT-24
 #[test]
 fn refused_organization_audit_listing_reports_outcome_and_exit_without_server_wording() {
     let problem = |status_text: &str, status: u16, kind: &str| {
@@ -370,7 +365,6 @@ fn gitlab_audit_page() -> serde_json::Value {
     })
 }
 
-// REQ-AUDIT-10, REQ-AUDIT-22, REQ-AUDIT-23, REQ-AUDIT-65
 #[test]
 fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
     let page = gitlab_audit_page();
@@ -396,7 +390,7 @@ fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
     assert_eq!(document["items"], page["items"]);
     let requests = server.finish();
     assert!(requests[0].starts_with(
-        "GET /api/v1/organizations/acme-research/audit-records?vocabulary=6 HTTP/1.1\r\n"
+        "GET /api/v1/organizations/acme-research/audit-records?vocabulary=7 HTTP/1.1\r\n"
     ));
 
     let (server, _directory, _path, credential_path) =
@@ -426,9 +420,8 @@ fn organization_audit_list_reads_gitlab_connection_and_candidate_records() {
     server.finish();
 }
 
-// REQ-AUDIT-48
 #[test]
-fn organization_audit_list_reads_a_connection_authorization_record() {
+fn organization_audit_list_reads_connection_authorization_records() {
     let page = serde_json::json!({
         "items": [gitlab_audit_item(
             "aud_01k0z6r1w8f4jy2m7q9v3x5abc",
@@ -447,7 +440,29 @@ fn organization_audit_list_reads_a_connection_authorization_record() {
                 { "field": "project_id", "after": "prj_01k0z6r1w8f4jy2m7q9v3x5abc" },
                 { "field": "runner_id", "after": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc" },
                 { "field": "connection_id", "after": "gac_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "runs", "before": "all" },
                 { "field": "state", "before": "active", "after": "revoked" }
+            ]),
+        ), gitlab_audit_item(
+            "aud_01k0z6r1w8f4jy2m7q9v3x5abd",
+            "2026-11-18T11:00:00Z",
+            serde_json::json!({
+                "kind": "runner",
+                "runnerId": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc"
+            }),
+            "connection_authorization.credential_issued",
+            serde_json::json!({
+                "kind": "connection_authorization",
+                "id": "cna_01k0z6r1w8f4jy2m7q9v3x5abc"
+            }),
+            serde_json::json!([
+                { "field": "provider", "after": "github" },
+                { "field": "project_id", "after": "prj_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "runner_id", "after": "rnr_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "connection_id", "after": "gac_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "repository_connection_id", "after": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "run_id", "after": "run_01k0z6r1w8f4jy2m7q9v3x5abc" },
+                { "field": "permissions", "after": "contents:write,pull_requests:write" }
             ]),
         )],
         "warnings": []
@@ -492,7 +507,9 @@ fn organization_audit_list_reads_a_connection_authorization_record() {
     for expected in [
         "action: connection_authorization.revoked",
         "target: connection_authorization cna_01k0z6r1w8f4jy2m7q9v3x5abc",
-        "changes: 5",
+        "changes: 6",
+        "action: connection_authorization.credential_issued",
+        "changes: 7",
     ] {
         assert!(
             stdout.lines().any(|line| line == expected),
@@ -502,7 +519,6 @@ fn organization_audit_list_reads_a_connection_authorization_record() {
     server.finish();
 }
 
-// REQ-AUDIT-44, REQ-CLOUDDEF-12
 #[test]
 fn organization_audit_list_reads_a_workflow_definition_deletion_record() {
     let page = serde_json::json!({

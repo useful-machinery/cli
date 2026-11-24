@@ -1,7 +1,7 @@
-//! `useful workflow definition enable` and `disable` (REQ-WFDEF-24): one command whose
-//! target value the leaf supplies. A definition the home holds, named by its ID, has its
-//! record's `enabled` set without a request; any other ID, or a name, names a Cloud definition of
-//! the project in effect, whose automatic starts are turned on or off (REQ-CLOUDDEF-15).
+//! `useful workflow definition enable` and `disable`: one command whose target value the leaf
+//! supplies. A definition the home holds, named by its ID, has its record's `enabled` set without
+//! a request; any other ID, or a name, names a Cloud definition of the project in effect, whose
+//! automatic starts are turned on or off.
 
 use std::io::{self, Write};
 

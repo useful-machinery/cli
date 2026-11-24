@@ -1,5 +1,5 @@
 //! `INTEGRATION`: the connection a `useful org integration` leaf acts on, named by its ID or by
-//! its provider (REQ-CONNECTION-107).
+//! its provider.
 use std::io::{self, Write};
 
 use clap::ValueEnum;
@@ -51,8 +51,8 @@ impl Target {
 }
 
 /// What `INTEGRATION` names on a leaf that also acts on the organization's token of a token
-/// service (REQ-INTEGRATION-17): a connection, or a token by its service, any provider id that is
-/// neither a built-in provider's nor `github`, `gitlab` or `linear`.
+/// service: a connection, or a token by its service, any provider id that is neither a built-in
+/// provider's nor `github`, `gitlab` or `linear`.
 #[derive(Clone, Debug)]
 pub(in crate::cli) enum Integration {
     Connection(Target),
@@ -87,7 +87,7 @@ const fn noun(provider: Provider) -> &'static str {
 
 /// Refuses `subject`, a command or one of its options, given a connection of `given` where it
 /// takes a connection of `needed` alone: a usage error written before any request, naming the
-/// provider it needs, with `remedy` as its remedy (REQ-CONNECTION-106).
+/// provider it needs, with `remedy` as its remedy.
 pub(in crate::cli) fn refuse(
     subject: &str,
     needed: &[Provider],
@@ -109,7 +109,7 @@ pub(in crate::cli) fn refuse(
 }
 
 /// Refuses the first of `options` given, each paired with the providers that take it, that a
-/// connection of `given` does not take (REQ-CONNECTION-106); `None` when there is none.
+/// connection of `given` does not take; `None` when there is none.
 pub(super) fn refuse_options(
     given: Provider,
     options: &[(Option<&'static str>, &[Provider])],
@@ -247,7 +247,7 @@ pub(in crate::cli) fn resolve<F: JsonOutputKind>(
     }
 }
 
-/// Whether a connection is still in use: not removed or revoked (REQ-CONNECTION-107).
+/// Whether a connection is still in use: not removed or revoked.
 pub(in crate::cli) fn in_use(record: &Record) -> bool {
     match record {
         Record::Github(installation) => {

@@ -1,20 +1,17 @@
-//! The tree-run job (REQ-RUNNERENROLL-91): an offer whose spec carries `workflowTree`
-//! runs the published tree with this runner's own `useful` release. Preparation downloads
-//! and verifies the tree's files, publishes them with the revision's bindings into a
-//! run-scoped home under the assignment's private directory, checks the digest the
-//! local publish reports against the spec's and writes the revision's resolution record
-//! beside the published snapshot (REQ-WFDEF-32); execution runs `useful workflow run create`
-//! under the assignment's lease, resumes the run through its waits and attempts
-//! (`resume_loop`), reporting its root progress and the step states of the run and its
-//! child runs (`steps`, REQ-RUNNERENROLL-88), and reports the record's exit once
-//! (REQ-RUNNERENROLL-170), with the root's text exports its current attempt published
-//! (`exports`, REQ-RUNNERENROLL-131). It applies each trigger delivery for the assignment with `useful
-//! workflow run event`, those the offer carries before the run's first step
-//! (REQ-TRIGGER-136), and each authorized Cloud control with the `useful workflow run` control
-//! command it names (REQ-RUNNERENROLL-208). A continuation attempt adopts the run an earlier
-//! attempt created instead (`adopt`, REQ-RUNNERENROLL-217): it downloads and publishes
-//! nothing, keeps the resolution record the first attempt wrote and drives the run directory
-//! the retained home holds, applying its deliveries and controls in the same loop.
+//! The tree-run job: an offer whose spec carries `workflowTree` runs the published tree with this
+//! runner's own `useful` release. Preparation downloads and verifies the tree's files, publishes
+//! them with the revision's bindings into a run-scoped home under the assignment's private
+//! directory, checks the digest the local publish reports against the spec's and writes the
+//! revision's resolution record beside the published snapshot; execution runs
+//! `useful workflow run create` under the assignment's lease, resumes the run through its waits and
+//! attempts (`resume_loop`), reporting its root progress and the step states of the run and its
+//! child runs (`steps`), and reports the record's exit once, with the root's text exports its
+//! current attempt published (`exports`). It applies each trigger delivery for the assignment with
+//! `useful workflow run event`, those the offer carries before the run's first step, and each
+//! authorized Cloud control with the `useful workflow run` control command it names. A continuation
+//! attempt adopts the run an earlier attempt created instead (`adopt`): it downloads and publishes
+//! nothing, keeps the resolution record the first attempt wrote and drives the run directory the
+//! retained home holds, applying its deliveries and controls in the same loop.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
@@ -44,6 +41,7 @@ mod activity;
 mod command;
 mod download;
 mod exports;
+mod record_delivery;
 mod records;
 mod resume_loop;
 mod steps;
@@ -52,6 +50,8 @@ mod tests;
 
 pub(super) use activity::{HeldRuns, RunActivity, RunPaths, RunRead};
 pub(super) use download::{HttpTreeBroker, TreeBroker, is_safe_tree_path};
+pub(super) use record_delivery::HttpRecordBroker;
+use record_delivery::{Delivery, RecordBroker, Scope};
 pub(super) use records::{TransportResult, TreeConclusion, published_path};
 pub(super) use resume_loop::{DriveFailure, ReportSink, TreeEnd};
 
@@ -61,10 +61,10 @@ use resume_loop::ResumeIntervals;
 
 const ROOT_WORKFLOW_FILE: &str = "workflow.yaml";
 const RESOLUTION_FILE: &str = "resolution.json";
-/// The flat binding kinds whose resolved provider ids the mirror uses (REQ-WFDEF-32).
+/// The flat binding kinds whose resolved provider ids the mirror uses.
 const RESOLVED_KINDS: [&str; 2] = ["linear.team", "linear.state"];
 /// The kinds of the `linear` integration's bindings whose resolved provider ids the mirror
-/// uses, recorded under the member `linear` (REQ-WFDEF-32).
+/// uses, recorded under the member `linear`.
 const RESOLVED_LINEAR_KINDS: [&str; 2] = ["team", "state"];
 
 /// The executable a tree run supervises, or the one its workflow-Git helper runs: this
@@ -75,17 +75,19 @@ pub(super) type UsefulExecutable = Arc<dyn Fn() -> std::io::Result<PathBuf> + Se
 #[derive(Clone)]
 pub(super) struct TreeRunDependencies {
     broker: Option<Arc<dyn TreeBroker>>,
+    record_broker: Option<Arc<dyn RecordBroker>>,
+    final_delivery_bound: Duration,
     executable: UsefulExecutable,
     helper_executable: UsefulExecutable,
     intervals: ResumeIntervals,
     command_bound: Duration,
     deliveries: Inbox<TriggerDelivery>,
     controls: Inbox<RunControl>,
-    /// The fence each `useful` command of a run enters, which the clones share
-    /// (INV-RUNNER-53).
+    /// The fence each `useful` command of a run enters, which the clones
+    /// share.
     fence: Arc<CommandFence>,
-    /// The disk and minimum each `useful` command holds its run's steps by
-    /// (REQ-RUNNERENROLL-155); none when the service runs no disk monitor or its minimum is 0.
+    /// The disk and minimum each `useful` command holds its run's steps by; none when the
+    /// service runs no disk monitor or its minimum is 0.
     disk_gate: Option<RunnerDiskGate>,
 }
 
@@ -93,6 +95,8 @@ impl TreeRunDependencies {
     pub(super) fn new(broker: Option<Arc<dyn TreeBroker>>) -> Self {
         Self {
             broker,
+            record_broker: None,
+            final_delivery_bound: Duration::from_secs(60),
             executable: Arc::new(std::env::current_exe),
             helper_executable: Arc::new(std::env::current_exe),
             intervals: ResumeIntervals::default(),
@@ -104,27 +108,38 @@ impl TreeRunDependencies {
         }
     }
 
-    /// The fence each `useful` command of a run, and each single-workflow execution, enters
-    /// (INV-RUNNER-53).
+    pub(super) fn with_record_broker(mut self, broker: Arc<dyn RecordBroker>) -> Self {
+        self.record_broker = Some(broker);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_record_delivery_timing(mut self, bound: Duration) -> Self {
+        self.final_delivery_bound = bound;
+        self
+    }
+
+    /// The fence each `useful` command of a run, and each single-workflow execution,
+    /// enters.
     pub(super) fn fence(&self) -> &Arc<CommandFence> {
         &self.fence
     }
 
     /// Gives each `useful` command `gate` in `RUNNER_DISK_GATE_ENVIRONMENT`, so the run holds
-    /// its next step while the disk `gate` names is low (REQ-RUNNERENROLL-155).
+    /// its next step while the disk `gate` names is low.
     pub(super) fn with_disk_gate(mut self, gate: RunnerDiskGate) -> Self {
         self.disk_gate = Some(gate);
         self
     }
 
-    /// Queues `delivery` for the tree run of `assignment_id`, which applies it once
-    /// (REQ-TRIGGER-136).
+    /// Queues `delivery` for the tree run of `assignment_id`, which applies it
+    /// once.
     pub(super) fn deliver(&self, assignment_id: &str, delivery: TriggerDelivery) {
         self.deliveries.push(assignment_id, delivery);
     }
 
-    /// Queues `control` for the tree run of `assignment_id`, which applies it once
-    /// (REQ-RUNNERENROLL-208).
+    /// Queues `control` for the tree run of `assignment_id`, which applies it
+    /// once.
     pub(super) fn control(&self, assignment_id: &str, control: RunControl) {
         self.controls.push(assignment_id, control);
     }
@@ -136,8 +151,8 @@ impl TreeRunDependencies {
         self.controls.forget(assignment_id);
     }
 
-    /// The executable the workspace's workflow-Git helper runs in its internal helper mode
-    /// (REQ-RUNNERENROLL-121).
+    /// The executable the workspace's workflow-Git helper runs in its internal helper
+    /// mode.
     pub(super) fn helper_executable(&self) -> std::io::Result<PathBuf> {
         (self.helper_executable)()
     }
@@ -191,7 +206,7 @@ impl Inbound for RunControl {
 
 /// The trigger deliveries, or the controls, the connection received for each assignment the
 /// runner holds and its tree run has not yet taken. Each assignment has a queue of its own,
-/// so an item for one neither drops nor wakes another's (INV-RUNNER-62).
+/// so an item for one neither drops nor wakes another's.
 #[derive(Clone)]
 struct Inbox<T> {
     queues: Arc<Mutex<BTreeMap<String, Arc<AssignmentInbox<T>>>>>,
@@ -264,27 +279,28 @@ impl<T: Inbound> AssignmentInbox<T> {
     }
 }
 
-/// How a created run meets the pending deliveries its offer carries (REQ-TRIGGER-136).
+/// How a created run meets the pending deliveries its offer carries.
 enum PendingStop {
     /// The root is edge-scheduled, so its first step is a `workflow` step the runtime holds
     /// before: the run is created with a stop of the runner's own before that step in place
     /// of the start's own stop step `start`, which the runner puts back when it lifts its own.
     Held { start: Option<String> },
-    /// The root is not edge-scheduled, so the runtime holds before none of its steps
-    /// (REQ-WFEXEC-62, REQ-WFFORMAT-93): the run is created with the start's own stop as
-    /// named, which `create` refuses `step_not_holdable`, and no stop of the runner's, and
-    /// the deliveries are applied once `create` returns, with no `stop`, `lift` or `resume`.
+    /// The root is not edge-scheduled, so the runtime holds before none of its steps: the
+    /// run is created with the start's own stop as named, which `create` refuses
+    /// `step_not_holdable`, and no stop of the runner's, and the deliveries are applied once
+    /// `create` returns, with no `stop`, `lift` or `resume`.
     Unheld,
 }
 
 /// The assignment's tree-run files, all under its private directory.
 struct TreeLayout {
+    record_files: PathBuf,
     tree: PathBuf,
     home: PathBuf,
     bindings: PathBuf,
     /// The origin a GitHub project's workspace checkout cloned, recorded when the runner
-    /// installs its Git relay for it, which a continuation reinstalls for the same origin
-    /// (REQ-RUNNERENROLL-122).
+    /// installs its Git relay for it, which a continuation reinstalls for the same
+    /// origin.
     origin: PathBuf,
     inputs: PathBuf,
     log: PathBuf,
@@ -294,6 +310,7 @@ struct TreeLayout {
 impl TreeLayout {
     fn under(private: &Path) -> Self {
         Self {
+            record_files: private.join("tree-record-files"),
             tree: private.join("tree"),
             home: private.join("home"),
             bindings: private.join("bindings.json"),
@@ -305,7 +322,7 @@ impl TreeLayout {
     }
 }
 
-/// A run's activity, which publishes `log` as where the run's log is (REQ-RUNNERENROLL-144).
+/// A run's activity, which publishes `log` as where the run's log is.
 fn activity_logging_to(log: &Path) -> Arc<RunActivity> {
     let activity = RunActivity::new();
     activity.publish_log(log.to_owned());
@@ -320,7 +337,7 @@ pub(super) fn tree_home(private: &Path) -> PathBuf {
 
 /// Records in the assignment's private directory, beside the run-scoped home, the origin
 /// its workspace checkout cloned and its Git relay serves: an attempt that adopts the run
-/// clones nothing, and reinstalls the relay for this origin (REQ-RUNNERENROLL-122).
+/// clones nothing, and reinstalls the relay for this origin.
 pub(super) fn record_origin(private: &Path, origin: &str) -> std::io::Result<()> {
     write_private(&TreeLayout::under(private).origin, origin.as_bytes())
 }
@@ -337,24 +354,25 @@ pub(super) fn recorded_origin(private: &Path) -> std::io::Result<Option<Arc<str>
 
 /// How a tree run's first command starts it.
 enum TreeStart {
-    /// `useful workflow run create` with these arguments (REQ-RUNNERENROLL-191), the root
-    /// workflow's first step, and, when the offer carries pending deliveries, how they meet
-    /// the run: before that step, behind a stop of the runner's own, on an edge-scheduled
-    /// root, or once `create` returns on any other.
+    /// `useful workflow run create` with these arguments, the root workflow's first step,
+    /// and, when the offer carries pending deliveries, how they meet the run: before that
+    /// step, behind a stop of the runner's own, on an edge-scheduled root, or once `create`
+    /// returns on any other.
     Create {
         arguments: Vec<OsString>,
         first: String,
         pending_stop: Option<PendingStop>,
     },
     /// The home's run, resumed from these steps, or, with none, from where its record
-    /// stands (REQ-RUNNERENROLL-218, REQ-RUNNERENROLL-219).
+    /// stands.
     Adopt(Vec<String>),
 }
 
-/// What a tree run takes from its assignment's offer: the assignment, under which the
-/// connection queues its trigger deliveries and controls, the spec, for its cancellation grace, and the
-/// deliveries the offer carried (REQ-TRIGGER-136).
+/// What a tree run takes from its assignment's offer: the assignment, under which the connection
+/// queues its trigger deliveries and controls, the spec, for its cancellation grace, and the
+/// deliveries the offer carried.
 struct TreeOffer<'a> {
+    attempt_id: &'a str,
     assignment_id: &'a str,
     execution_spec: &'a ExecutionSpecV1RunnerProjection,
     pending: &'a [TriggerDelivery],
@@ -363,6 +381,7 @@ struct TreeOffer<'a> {
 /// A prepared tree run: published into its home and ready to `create`, or adopted from
 /// the home an earlier attempt created.
 pub(super) struct TreeRun {
+    delivery: Option<Delivery>,
     cancellation: CancellationPolicy,
     sleeper: Arc<dyn Sleeper>,
     useful: UsefulCommand,
@@ -390,7 +409,7 @@ impl TreeRun {
         useful: UsefulCommand,
         start: TreeStart,
         runs: PathBuf,
-        documents: PathBuf,
+        layout: TreeLayout,
     ) -> Self {
         Self {
             cancellation: CancellationPolicy::new(
@@ -402,11 +421,19 @@ impl TreeRun {
                         .cancellation_grace_seconds,
                 ),
             ),
+            delivery: dependencies.record_broker.as_ref().map(|broker| {
+                Delivery::new(
+                    Arc::clone(broker),
+                    Scope::new(offer.assignment_id, offer.attempt_id),
+                    layout.record_files,
+                    dependencies.final_delivery_bound,
+                )
+            }),
             sleeper: Arc::clone(sleeper),
             useful,
             start,
             runs,
-            documents,
+            documents: layout.documents,
             intervals: dependencies.intervals,
             deliveries: dependencies.deliveries.of(offer.assignment_id),
             controls: dependencies.controls.of(offer.assignment_id),
@@ -414,24 +441,30 @@ impl TreeRun {
         }
     }
 
+    pub(super) fn record_delivery(&self) -> record_delivery::Summary {
+        self.delivery
+            .as_ref()
+            .map(Delivery::summary)
+            .unwrap_or_default()
+    }
+
     pub(super) fn cancellation(&self) -> &CancellationPolicy {
         &self.cancellation
     }
 
     /// Whether the run is working, which the assignment manager shares with it so
-    /// agent-login setup and the offer rule can read it (INV-RUNNER-15, INV-RUNNER-40).
+    /// agent-login setup and the offer rule can read it.
     pub(super) fn activity(&self) -> &Arc<RunActivity> {
         &self.useful.activity
     }
 
-    /// Runs `useful workflow run create`, or adopts the home's run, and resumes the run until
-    /// its record reads `exited` or the assignment's cancellation ends it, applying the
-    /// cancellation to each process and each trigger delivery and control to the run, and
-    /// queuing each new root progress and step report and each application through `reports`. The
-    /// loop's future is boxed so it does not enlarge the job's stack frame, which in a
-    /// debug build holds the tree job's future before boxing it. The run is working again
-    /// once the loop returns or is dropped, whatever ended it, so its release and report
-    /// count as work (INV-RUNNER-15).
+    /// Runs `useful workflow run create`, or adopts the home's run, and resumes the run until its
+    /// record reads `exited` or the assignment's cancellation ends it, applying the cancellation
+    /// to each process and each trigger delivery and control to the run, and queuing each new
+    /// root progress and step report and each application through `reports`. The loop's future is
+    /// boxed so it does not enlarge the job's stack frame, which in a debug build holds the tree
+    /// job's future before boxing it. The run is working again once the loop returns or is
+    /// dropped, whatever ended it, so its release and report count as work.
     pub(super) async fn drive(&self, reports: ReportSink<'_>) -> Result<TreeEnd, DriveFailure> {
         let _working = self.activity().working_at_end();
         Box::pin(resume_loop::drive(self, reports)).await
@@ -440,6 +473,7 @@ impl TreeRun {
 
 /// The identity a tree run's preparation acts for.
 pub(super) struct TreePreparation<'a> {
+    pub(super) attempt_id: &'a str,
     pub(super) assignment_id: &'a str,
     pub(super) execution_spec: &'a ExecutionSpecV1RunnerProjection,
     pub(super) tree: &'a WorkflowTreeV1RunnerProjection,
@@ -595,6 +629,7 @@ pub(super) fn prepare(
     Ok(TreeRun::new(
         dependencies,
         &TreeOffer {
+            attempt_id: preparation.attempt_id,
             assignment_id: preparation.assignment_id,
             execution_spec: preparation.execution_spec,
             pending: &preparation.tree.pending_deliveries,
@@ -607,15 +642,15 @@ pub(super) fn prepare(
             pending_stop,
         },
         runs,
-        layout.documents,
+        layout,
     ))
 }
 
-/// What a tree run's adoption acts for (REQ-RUNNERENROLL-217): the run-scoped home the
-/// attempt that created the run left, and the adopting assignment's own id, private
-/// directory, environment, spec, sleeper, named steps and the trigger deliveries its offer
-/// carried.
+/// What a tree run's adoption acts for: the run-scoped home the attempt that created the
+/// run left, and the adopting assignment's own id, private directory, environment, spec,
+/// sleeper, named steps and the trigger deliveries its offer carried.
 pub(super) struct TreeAdoption<'a> {
+    pub(super) attempt_id: &'a str,
     pub(super) assignment_id: &'a str,
     pub(super) home: &'a Path,
     pub(super) private: &'a Path,
@@ -650,7 +685,7 @@ pub(super) fn adopt(
         environment: adoption.environment.clone(),
         activity: activity_logging_to(&layout.log),
         home: adoption.home.to_owned(),
-        log: RunLog::new(layout.log),
+        log: RunLog::new(layout.log.clone()),
         sleeper: Arc::clone(&adoption.sleeper),
         bound: dependencies.command_bound,
         fence: Arc::clone(&dependencies.fence),
@@ -662,6 +697,7 @@ pub(super) fn adopt(
     Ok(TreeRun::new(
         dependencies,
         &TreeOffer {
+            attempt_id: adoption.attempt_id,
             assignment_id: adoption.assignment_id,
             execution_spec: adoption.execution_spec,
             pending: adoption.pending_deliveries,
@@ -670,7 +706,7 @@ pub(super) fn adopt(
         useful,
         TreeStart::Adopt(adoption.steps.to_vec()),
         runs,
-        layout.documents,
+        layout,
     ))
 }
 
@@ -678,8 +714,8 @@ pub(super) fn adopt(
 /// edge-scheduled.
 struct FirstStep {
     step: String,
-    /// The root's steps are `workflow` steps, the only steps the runtime holds before
-    /// (REQ-WFEXEC-62); a root is all `workflow` steps or has none (REQ-WFFORMAT-93).
+    /// The root's steps are `workflow` steps, the only steps the runtime holds
+    /// before; a root is all `workflow` steps or has none.
     edge_scheduled: bool,
 }
 
@@ -709,15 +745,15 @@ fn first_step(tree: &Path, workflow_path: &str) -> Result<FirstStep, AssignmentD
         })
 }
 
-/// The revision's `resolution.json` (REQ-WFDEF-32): each flat `linear.team` and
-/// `linear.state` key the spec's resolution gives an id and, under the member `linear`, each
-/// `team` and `state` binding of the `linear` integration's entry it gives one, each as
-/// exactly `{id, name}`. A member of the resolution is a flat entry exactly when its `kind`
-/// is a string; any other is an integration's entry keyed by its id. A binding resolved
-/// without a display name is named by its bound value; one without an id is left out, so the
-/// mirror reports it `mirror_state_unknown` when it writes that state. An integration's
-/// `account`, and every other integration's entry, are not written: the store refuses a
-/// record holding anything but these.
+/// The revision's `resolution.json`: each flat `linear.team` and `linear.state` key the
+/// spec's resolution gives an id and, under the member `linear`, each `team` and `state`
+/// binding of the `linear` integration's entry it gives one, each as exactly `{id, name}`. A
+/// member of the resolution is a flat entry exactly when its `kind` is a string; any other
+/// is an integration's entry keyed by its id. A binding resolved without a display name is
+/// named by its bound value; one without an id is left out, so the mirror reports it
+/// `mirror_state_unknown` when it writes that state. An integration's `account`, and every
+/// other integration's entry, are not written: the store refuses a record holding anything
+/// but these.
 fn resolution_record(resolution: &serde_json::Value) -> serde_json::Value {
     let linear = useful_execution::IntegrationProvider::Linear.as_str();
     let mut record = serde_json::Map::new();
@@ -763,10 +799,10 @@ fn resolved_entry(resolved: &serde_json::Value) -> Option<serde_json::Value> {
 }
 
 /// `useful workflow run create` for the run: the run inputs, the start's owner, the stop step,
-/// the Cloud run page as `external.url` (REQ-LOCALRUN-209), and the pinned source as the
-/// engine path derives it (REQ-RUNNERENROLL-120). The stop step is the
-/// start's own as named, which the runtime refuses when it cannot hold before it, or, on an
-/// edge-scheduled root with pending deliveries, the runner's own before the first step.
+/// the Cloud run page as `external.url`, and the pinned source as the engine path derives it.
+/// The stop step is the start's own as named, which the runtime refuses when it cannot hold
+/// before it, or, on an edge-scheduled root with pending deliveries, the runner's own before
+/// the first step.
 fn create_arguments(
     definition: &str,
     execution_spec: &ExecutionSpecV1RunnerProjection,
@@ -802,14 +838,15 @@ fn create_arguments(
     }
     // Each value inside its name's argument, so a branch that begins with `-` is not read
     // as a flag.
-    let source = super::assignment::source_revision(execution_spec);
-    let mut names = vec![("commit", source.commit_oid())];
-    names.extend(source.branch().map(|branch| ("branch", branch)));
-    if let Some((branch, commit_oid)) = source.definition() {
-        names.extend([("workflowBranch", branch), ("workflowCommit", commit_oid)]);
-    }
-    for (name, value) in names {
-        arguments.extend(["--source-revision".into(), format!("{name}={value}").into()]);
+    if let Some(source) = super::assignment::source_revision(execution_spec) {
+        let mut names = vec![("commit", source.commit_oid())];
+        names.extend(source.branch().map(|branch| ("branch", branch)));
+        if let Some((branch, commit_oid)) = source.definition() {
+            names.extend([("workflowBranch", branch), ("workflowCommit", commit_oid)]);
+        }
+        for (name, value) in names {
+            arguments.extend(["--source-revision".into(), format!("{name}={value}").into()]);
+        }
     }
     if let Some(step) = stop_before {
         arguments.extend(["--pause-before".into(), step.into()]);

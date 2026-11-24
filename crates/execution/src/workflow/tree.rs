@@ -1,6 +1,6 @@
-//! Validation of a workflow tree: a directory with `workflow.yaml` at its root
-//! (REQ-WFDEF-8 to REQ-WFDEF-16). Nothing here executes a step or acts on the root-only
-//! blocks; it checks them, computes the tree digest and keeps the walked files.
+//! Validation of a workflow tree: a directory with `workflow.yaml` at its root. Nothing
+//! here executes a step or acts on the root-only blocks; it checks them, computes the
+//! tree digest and keeps the walked files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -47,12 +47,12 @@ pub struct ValidatedTree {
     pub workflow_files: Vec<String>,
     pub programs: Vec<String>,
     pub required_tools: Vec<String>,
-    /// The argv of the root's `requires.check`, which only the host condition runs
-    /// (REQ-WFDEF-42, REQ-WFEXEC-81).
+    /// The argv of the root's `requires.check`, which only the host condition
+    /// runs.
     pub required_check: Option<Vec<String>>,
     /// The root's declared integrations by provider id, each with the `as` that applies to
     /// it (the entry's own, else `requires.as`, else none) as its `acting_as`, and its
-    /// bindings as declared (REQ-WFDEF-14, REQ-WFDEF-34, REQ-WFDEF-37).
+    /// bindings as declared.
     pub required_integrations: BTreeMap<IntegrationProvider, Integration>,
     pub triggers: BTreeMap<String, TreeTrigger>,
     pub bindings: BTreeMap<String, Binding>,
@@ -61,7 +61,7 @@ pub struct ValidatedTree {
 }
 
 /// One kept file of a tree: its bytes and whether its mode has the owner execute bit.
-/// The digest reads only the bytes (REQ-WFDEF-11).
+/// The digest reads only the bytes.
 #[derive(Clone, Eq, PartialEq)]
 pub struct TreeFile {
     pub bytes: Arc<[u8]>,
@@ -69,7 +69,7 @@ pub struct TreeFile {
 }
 
 impl fmt::Debug for TreeFile {
-    /// The length, never the contents (REQ-WFDEF-15).
+    /// The length, never the contents.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("TreeFile")
@@ -81,7 +81,8 @@ impl fmt::Debug for TreeFile {
 
 /// A trigger as `useful workflow validate DIR` reports it: a provider rule's source,
 /// event and `where`, a schedule's timetable or a definition rule's binding and outcomes, and
-/// a start trigger's `subject`, `inputs`, `stopBefore`, `owner` and `busyBehavior`.
+/// a start trigger's `subject`, `inputs`, `stopBefore`, `owner` and `busyBehavior`, or a
+/// control trigger's `action`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeTrigger {
     pub kind: TreeTriggerKind,
@@ -93,12 +94,14 @@ pub struct TreeTrigger {
     /// A provider rule's `on.where` as written; none for a schedule, a definition rule or a
     /// rule without one.
     pub condition: Option<String>,
+    /// A control trigger's action as written.
+    pub action: Option<TriggerControlAction>,
     /// A schedule's cron expression.
     pub schedule: Option<String>,
     /// A schedule's time zone.
     pub timezone: Option<String>,
     /// A definition rule's binding reference as written, `$` and the binding key; none for
-    /// every other trigger (REQ-WFDEF-39).
+    /// every other trigger.
     pub definition: Option<String>,
     /// A definition rule's outcome names in the order written; empty for every other trigger.
     pub outcomes: Vec<String>,
@@ -115,7 +118,7 @@ pub struct TreeTrigger {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TreeTriggerKind {
     Start,
-    /// A start trigger whose `on` is a timetable (REQ-WFDEF-31).
+    /// A start trigger whose `on` is a timetable.
     Schedule,
     Control,
 }
@@ -130,7 +133,7 @@ impl TreeTriggerKind {
     }
 }
 
-/// One failure in a tree, with a stable code and what it concerns (REQ-WFDEF-15).
+/// One failure in a tree, with a stable code and what it concerns.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeDiagnostic {
     pub code: &'static str,
@@ -300,8 +303,8 @@ impl fmt::Display for TreeLocation {
     }
 }
 
-/// Whether `root` is a tree (REQ-WFDEF-8): a regular `workflow.yaml` sits directly under it.
-/// `useful workflow run create --path` admits such a directory from the tree (REQ-LOCALRUN-169).
+/// Whether `root` is a tree: a regular `workflow.yaml` sits directly under it.
+/// `useful workflow run create --path` admits such a directory from the tree.
 pub fn is_workflow_tree(root: &Path) -> bool {
     fs::symlink_metadata(root.join(ROOT_WORKFLOW)).is_ok_and(|metadata| metadata.is_file())
 }
@@ -410,8 +413,11 @@ impl From<&Trigger> for TreeTrigger {
                 owner,
                 busy_behavior,
             } => (on, subject, inputs, stop_before, owner, busy_behavior),
-            Trigger::Control { on, .. } => {
-                return Self::event(TreeTriggerKind::Control, on);
+            Trigger::Control { on, control } => {
+                return Self {
+                    action: Some(control.clone()),
+                    ..Self::event(TreeTriggerKind::Control, on)
+                };
             }
         };
         let trigger = match on {
@@ -458,6 +464,7 @@ impl TreeTrigger {
             source: None,
             event: None,
             condition: None,
+            action: None,
             schedule: None,
             timezone: None,
             definition: None,
@@ -471,7 +478,7 @@ impl TreeTrigger {
     }
 }
 
-/// `workflow.yaml` and every `.yaml` or `.yml` file directly under the root (REQ-WFDEF-8).
+/// `workflow.yaml` and every `.yaml` or `.yml` file directly under the root.
 fn workflow_files(files: &BTreeMap<String, TreeFile>) -> Vec<String> {
     let mut workflow_files = vec![ROOT_WORKFLOW.to_owned()];
     workflow_files.extend(
@@ -484,8 +491,7 @@ fn workflow_files(files: &BTreeMap<String, TreeFile>) -> Vec<String> {
 }
 
 /// A `.yaml` or `.yml` file directly under the root other than `workflow.yaml`: a workflow
-/// file of the tree (REQ-WFDEF-8) and the only file a `workflow` step may name
-/// (REQ-WFFORMAT-89).
+/// file of the tree and the only file a `workflow` step may name.
 pub(crate) fn is_workflow_file_beside_root(path: &str) -> bool {
     !path.contains('/')
         && path != ROOT_WORKFLOW
@@ -537,9 +543,9 @@ fn check_stage_file(
     }
 }
 
-/// A stage file's `requires` override names only integrations the tree's root declares
-/// (REQ-WFDEF-35). Every stage file is resolved as its own top, so only the tree knows the
-/// root an override is judged against; names alone are compared, never `as` or `bindings`.
+/// A stage file's `requires` override names only integrations the tree's root declares.
+/// Every stage file is resolved as its own top, so only the tree knows the root an
+/// override is judged against; names alone are compared, never `as` or `bindings`.
 fn check_integration_overrides(
     file: &str,
     workflow: &ResolvedWorkflow,
@@ -570,8 +576,8 @@ fn check_integration_overrides(
     }
 }
 
-/// A program in a tree is named bare (REQ-WFDEF-16): no `cmd` step, `cmd` finalizer or
-/// command recovery handler may name its `argv[0]` by path.
+/// A program in a tree is named bare: no `cmd` step, `cmd` finalizer or command
+/// recovery handler may name its `argv[0]` by path.
 fn check_commands(file: &str, workflow: &ValidatedWorkflow, diagnostics: &mut Vec<TreeDiagnostic>) {
     let finalizers = workflow
         .finalizers
@@ -722,10 +728,9 @@ fn check_triggers(
     }
 }
 
-/// A provider rule: its `source` names a `connection` binding or a declared integration
-/// (REQ-WFDEF-38), every `$key` in its `where` or a control's `when` is declared, neither holds
-/// a quoted literal, and each is in the grammar that evaluates it, a `where` Cloud's and a
-/// `when` the wait's (REQ-WFDEF-52).
+/// A provider rule: its `source` names a `connection` binding or a declared integration, every
+/// `$key` in its `where` or a control's `when` is declared, neither holds a quoted literal, and
+/// each is in the grammar that evaluates it, a `where` Cloud's and a `when` the wait's.
 fn check_rule(
     name: &str,
     rule: &TriggerRule,
@@ -814,9 +819,9 @@ fn check_rule(
     }
 }
 
-/// A trigger's `where` in the grammar Cloud evaluates it with, `workflowtrigger.ParseRule`
-/// (REQ-WFDEF-52): conjuncts joined by ` and `, each exactly one ` == ` between two operands,
-/// an operand `true`, `false`, a `$key` (non-empty, no space or `"`) or an `event.<path>`.
+/// A trigger's `where` in the grammar Cloud evaluates it with, `workflowtrigger.ParseRule`:
+/// conjuncts joined by ` and `, each exactly one ` == ` between two operands, an operand
+/// `true`, `false`, a `$key` (non-empty, no space or `"`) or an `event.<path>`.
 /// `contracts/fixtures/workflow/v1/trigger-rule-grammar.json` pins both implementations.
 fn is_trigger_where(rule: &str) -> bool {
     let operand = |text: &str| match text.strip_prefix('$') {
@@ -830,8 +835,8 @@ fn is_trigger_where(rule: &str) -> bool {
     })
 }
 
-/// A start trigger's `owner` (REQ-WFDEF-54, REQ-WFDEF-30): a `$binding` owner is of kind
-/// `member` and takes no filter; each filter is a binding of kind `members`.
+/// A start trigger's `owner`: a `$binding` owner is of kind `member` and takes no
+/// filter; each filter is a binding of kind `members`.
 fn check_owner(
     name: &str,
     owner: &OwnerDeclaration,
@@ -879,17 +884,16 @@ struct EventReads {
     each_input: bool,
 }
 
-/// A schedule trigger reads no event (REQ-WFDEF-56, REQ-WFDEF-31).
+/// A schedule trigger reads no event.
 const SCHEDULE_READS: EventReads = EventReads {
     code: "schedule_trigger_invalid",
     holds: |_| false,
     each_input: false,
 };
 
-/// A definition trigger reads the members of the run that ended and its exports by name
-/// (REQ-WFDEF-58, REQ-WFDEF-39). The check is of shape: whether the bound definition
-/// exports the name is known only when one of its runs ends. The event holds the attempt,
-/// but no trigger reads it.
+/// A definition trigger reads the members of the run that ended and its exports by name.
+/// The check is of shape: whether the bound definition exports the name is known only
+/// when one of its runs ends. The event holds the attempt, but no trigger reads it.
 const DEFINITION_READS: EventReads = EventReads {
     code: "definition_trigger_invalid",
     holds: |value| {
@@ -908,9 +912,9 @@ const DEFINITION_READS: EventReads = EventReads {
     each_input: true,
 };
 
-/// A start trigger on a schedule or another definition's run (REQ-WFDEF-56, REQ-WFDEF-58): each `subject`
-/// or `inputs` value that begins `event.` is one its event holds, any other value being a
-/// literal, its owner is a `$binding` or absent, and it declares no `stopBefore`.
+/// A start trigger on a schedule or another definition's run: each `subject` or `inputs` value that
+/// begins `event.` is one its event holds, any other value being a literal, its owner is a
+/// `$binding` or absent, and it declares no `stopBefore`.
 fn check_event_reads(
     name: &str,
     reads: &EventReads,
@@ -948,7 +952,7 @@ fn check_event_reads(
 }
 
 /// A binding reference in a trigger or the mirror names a declared binding of `kind`: a flat
-/// one of that kind, or for `linear.state` a `state` binding under `linear` (REQ-WFDEF-63).
+/// one of that kind, or for `linear.state` a `state` binding under `linear`.
 fn check_binding(
     blocks: &RootBlocks,
     key: &str,
@@ -1018,8 +1022,8 @@ fn declared_integration<'a>(
 }
 
 /// A flat key that is also a name an integration declares, or the id of an integration that
-/// declares bindings, is `binding_declared_twice`, once for each such integration
-/// (REQ-WFDEF-64): flat keys in bytewise order, integrations in id order.
+/// declares bindings, is `binding_declared_twice`, once for each such integration: flat
+/// keys in bytewise order, integrations in id order.
 fn check_bindings_declared_once(blocks: &RootBlocks, diagnostics: &mut Vec<TreeDiagnostic>) {
     let Some(requires) = &blocks.requires else {
         return;
@@ -1053,8 +1057,8 @@ fn is_event_path(value: &str) -> bool {
     })
 }
 
-/// The shape of a five-field cron expression (REQ-WFDEF-31): each field `*`, digits,
-/// three-letter names, `-`, `,` and `/`. Cloud publication parses it fully.
+/// The shape of a five-field cron expression: each field `*`, digits, three-letter
+/// names, `-`, `,` and `/`. Cloud publication parses it fully.
 fn is_cron_shape(cron: &str) -> bool {
     let fields = cron.split_whitespace().collect::<Vec<_>>();
     fields.len() == 5
@@ -1070,7 +1074,7 @@ fn is_cron_shape(cron: &str) -> bool {
 
 /// The shape of a zone name: one or more `/`-separated segments, each a letter followed by
 /// letters, digits, `_`, `+` or `-`, and not `Local`. The check is lexical; Cloud resolves
-/// the name when it checks that the definition can start (REQ-CLOUDDEF-150).
+/// the name when it checks that the definition can start.
 fn is_zone_shape(timezone: &str) -> bool {
     timezone != "Local"
         && timezone.split('/').all(|segment| {
@@ -1081,8 +1085,8 @@ fn is_zone_shape(timezone: &str) -> bool {
         })
 }
 
-/// The root's `mirror` block (REQ-WFFORMAT-101): its issue input, outcome keys, states,
-/// guards and template variables, each failure at the `mirror` location with its key.
+/// The root's `mirror` block: its issue input, outcome keys, states, guards and
+/// template variables, each failure at the `mirror` location with its key.
 fn check_mirror(
     root_workflow: &ResolvedWorkflow,
     blocks: &RootBlocks,
@@ -1158,7 +1162,7 @@ fn check_mirror(
 }
 
 /// The outcomes besides the root's own that a mirror may map: `failed` and the engine
-/// outcomes a local run reaches. `superseded` is never mirrored (REQ-WFFORMAT-114).
+/// outcomes a local run reaches. `superseded` is never mirrored.
 const MIRRORED_ENGINE_OUTCOMES: [&str; 3] = ["failed", "withdrawn", "canceled"];
 
 /// The outcomes a run of the root can exit with: its declared outcomes, the exits its edges
@@ -1197,7 +1201,7 @@ fn root_exit_outcomes(workflow: &ValidatedWorkflow) -> BTreeSet<&str> {
 }
 
 /// Each `$` and the key that follows it, scanned lexically: ASCII alphanumerics, `.` and `_`,
-/// so a `$<id>.<name>` reference is read whole, less a trailing `.` (REQ-WFDEF-37).
+/// so a `$<id>.<name>` reference is read whole, less a trailing `.`.
 fn binding_references(expression: &str) -> impl Iterator<Item = &str> {
     expression.match_indices('$').map(|(index, _)| {
         let rest = &expression[index + 1..];
@@ -1239,7 +1243,7 @@ fn parse_excludes(
     excludes
 }
 
-/// One `exclude` pattern in the documented subset of gitignore (REQ-WFDEF-12).
+/// One `exclude` pattern in the documented subset of gitignore.
 #[derive(Debug)]
 struct ExcludePattern {
     segments: Vec<String>,
@@ -1410,7 +1414,7 @@ impl TreeWalk {
     }
 }
 
-/// The tree digest (REQ-WFDEF-11): the content-closure framing under its own domain.
+/// The tree digest: the content-closure framing under its own domain.
 fn digest_tree(files: &BTreeMap<String, TreeFile>) -> WorkflowContentDigest {
     let mut context = Context::new(&SHA256);
     context.update(TREE_DIGEST_DOMAIN);

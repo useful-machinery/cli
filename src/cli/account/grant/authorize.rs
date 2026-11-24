@@ -20,15 +20,14 @@ use super::{
 pub(super) const ABOUT: &str =
     "Authorize a runner to use one of your grants or tokens, or all of them";
 
-/// The remedy for a Codex grant authorized for another runner (REQ-GRANT-66), which `useful account
-/// integration authorize` reports: a Codex grant serves one runner, and another sign-in cannot make a
-/// second grant for another runner, since a held grant is refused or replaced in place
-/// (REQ-GRANT-73).
+/// The remedy for a Codex grant authorized for another runner, which `useful account integration
+/// authorize` reports: a Codex grant serves one runner, and another sign-in cannot make a second
+/// grant for another runner, since a held grant is refused or replaced in place.
 pub(in crate::cli) const MOVE_CODEX_GRANT: &str = "A Codex grant serves one runner at a time. To move it to this runner, end its authorization for the other, which `useful account integration show INTEGRATION` names, then authorize this one:\n  useful account integration deauthorize INTEGRATION --runner RUNNER --yes";
 
-/// `useful account integration authorize INTEGRATION [--runner RUNNER]` or `useful account integration authorize
-/// --all [--runner RUNNER]`; given no `--runner` it names the runners it can act on instead
-/// (REQ-GRANT-81).
+/// `useful account integration authorize INTEGRATION [--runner RUNNER]` or `useful account
+/// integration authorize --all [--runner RUNNER]`; given no `--runner` it names the runners it can
+/// act on instead.
 #[derive(Debug, Args)]
 #[group(id = "target", args = ["grant", "all"], required = true, multiple = false)]
 pub(in crate::cli) struct Command {
@@ -51,11 +50,11 @@ pub(in crate::cli) struct Command {
     options: Options,
 }
 
-/// Who can use the grant or token once the runner is authorized for it (REQ-GRANT-66,
-/// REQ-INTEGRATION-20): an OAuth grant's tokens are issued only to the runs its owner started
-/// (REQ-GRANT-10), and every step of such a run can read the token, while a native grant's login
-/// is the runner's to every run and step. The member's token is issued to the runs whose actor
-/// is the member and whose workflow declares the service as the member's.
+/// Who can use the grant or token once the runner is authorized for it: an OAuth grant's tokens
+/// are issued only to the runs its owner started, and every step of such a run can read the
+/// token, while a native grant's login is the runner's to every run and step. The member's token
+/// is issued to the runs whose actor is the member and whose workflow declares the service as
+/// the member's.
 impl Stated for Command {
     const COMMAND: &'static str = "useful account integration authorize";
     const STATEMENT: Statement = Statement(&[
@@ -83,7 +82,7 @@ impl Stated for Command {
     const ASKS: bool = true;
 }
 
-/// An authorization `authorize` made: of a grant, or of a token (REQ-INTEGRATION-20).
+/// An authorization `authorize` made: of a grant, or of a token.
 pub(in crate::cli) enum Made {
     Grant(MemberGrantAuthorization),
     Token(IntegrationTokenAuthorization),
@@ -224,9 +223,9 @@ impl Command {
     }
 
     /// Authorizes the runner `--runner` names for every unrevoked grant and every token of the
-    /// member that can serve it (REQ-INTEGRATION-20): each tried in turn, since only Cloud knows
-    /// which organization the runner is in. Without `--yes` it asks after the statement where it
-    /// can ask. The tokens are read only once the served read names a token service.
+    /// member that can serve it: each tried in turn, since only Cloud knows which organization
+    /// the runner is in. Without `--yes` it asks after the statement where it can ask. The
+    /// tokens are read only once the served read names a token service.
     fn run_all(
         &self,
         deployment: &Deployment,
@@ -281,11 +280,11 @@ impl Command {
 }
 
 /// Authorizes `runner_id` for each of `subjects`, the grants and tokens of `owner`, in turn,
-/// each under a request key of its own made before anything is sent and kept for the replay of
-/// a lost answer and of a refreshed session (REQ-GRANT-66, REQ-INTEGRATION-20), since only Cloud
-/// knows which organization the runner is in. A refusal of one subject is its outcome; any
-/// other failure ends the command at that subject, keeping the outcomes before it to report, and
-/// is reported with `report`'s remedy, as is a runner nothing found.
+/// each under a request key of its own made before anything is sent and kept for the replay of a
+/// lost answer and of a refreshed session, since only Cloud knows which organization the runner
+/// is in. A refusal of one subject is its outcome; any other failure ends the command at that
+/// subject, keeping the outcomes before it to report, and is reported with `report`'s remedy, as
+/// is a runner nothing found.
 pub(in crate::cli) fn authorize_every(
     deployment: &Deployment,
     policy: HttpTransportPolicy,

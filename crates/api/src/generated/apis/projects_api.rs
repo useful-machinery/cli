@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -266,7 +266,7 @@ pub fn archive_project(
     }
 }
 
-/// An optional `runnerPoolId` that names a member's personal pool is answered `409` `runner-pool-member-assigned`.
+/// Omit `repository` to create a project with no repository. An optional `runnerPoolId` that names a member's personal pool is answered `409` `runner-pool-member-assigned`.  Problem types: 409 `project-name-unavailable`.
 pub fn create_project(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -461,6 +461,7 @@ pub fn get_project(
     }
 }
 
+/// Problem types: 404 `repository-not-bound`.
 pub fn get_project_repository(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -662,7 +663,7 @@ pub fn remove_project_runner_pool(
     }
 }
 
-/// An archived project is answered `409` `project-archived`, even for its current name, and nothing changes.
+/// An archived project is answered `409` `project-archived`, even for its current name, and nothing changes.  Problem types: 409 `project-name-unavailable`.
 pub fn rename_project(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1008,7 +1009,7 @@ pub fn unarchive_project(
     }
 }
 
-/// An archived project is answered `409` `project-archived`, even for its current branch, without reading the provider, and nothing changes.
+/// An archived project is answered `409` `project-archived`, even for its current branch, without reading the provider, and nothing changes.  Problem types: 404 `repository-not-bound`.
 pub fn update_project_repository(
     configuration: &configuration::Configuration,
     organization_ref: &str,

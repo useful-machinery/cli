@@ -17,11 +17,11 @@ pub(super) struct Command {
 
 impl Command {
     /// Reads every grant of the member and then the providers the deployment serves, to name
-    /// the other OAuth providers they hold nothing of (REQ-GRANT-64, REQ-GRANT-96), and, where
-    /// that read names a token service, the member's tokens (REQ-INTEGRATION-19): against a
-    /// deployment that serves none no token list is read. A deployment that predates the served
-    /// read names none, and a read that fails otherwise fails the command as a failed grant
-    /// read does. Nothing of an organization's is read.
+    /// the other OAuth providers they hold nothing of, and, where that read names a token
+    /// service, the member's tokens: against a deployment that serves none no token list is
+    /// read. A deployment that predates the served read names none, and a read that fails
+    /// otherwise fails the command as a failed grant read does. Nothing of an organization's is
+    /// read.
     pub(super) fn run(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
         let json = self.options.json;
         let read = super::with_api(deployment, &self.options, |api| {

@@ -37,8 +37,6 @@ const INTERNAL_PACKAGES: [&str; 8] = [
     "useful-test-support",
 ];
 
-// INV-SYSTEM-5
-// INV-CLI-1
 #[test]
 fn workspace_members_and_edges_match_final_graph() {
     let root = cli_root();
@@ -163,8 +161,6 @@ fn workspace_members_and_edges_match_final_graph() {
     );
 }
 
-// INV-CONTRACT-4
-// INV-CLI-2
 #[test]
 fn moved_sources_have_one_final_owner_and_private_generated_api() {
     let root = cli_root();
@@ -339,7 +335,6 @@ fn special_targets() -> Vec<(&'static str, BTreeSet<&'static str>)> {
     Vec::new()
 }
 
-// INV-CLI-2
 #[test]
 fn residual_module_dependencies_match_architecture() {
     let src = cli_root().join("src");
@@ -419,7 +414,7 @@ const EXECUTION_IMPLEMENTATION_MODULES: [&str; 6] = [
 ];
 
 #[test]
-fn execution_facade_and_process_ownership_match_slice_two_b() {
+fn execution_facade_exports_only_its_process_interfaces() {
     let root = cli_root();
     let facade_path = root.join("crates/execution/src/lib.rs");
     let facade = read_source(&facade_path);
@@ -494,7 +489,6 @@ fn execution_boundary_policy_rejects_public_modules() {
     assert!(exposed_module_declarations("mod workflow;\n").is_empty());
 }
 
-// INV-CLI-4
 #[test]
 fn execution_and_runner_receive_identity_without_reading_root_build_policy() {
     let root = cli_root();
@@ -741,7 +735,6 @@ fn external_crate_containment() -> Vec<(&'static str, Vec<&'static str>)> {
     ]
 }
 
-// INV-CLI-3
 #[test]
 fn external_crates_stay_inside_their_owning_packages() {
     let root = cli_root();
@@ -777,7 +770,6 @@ fn external_crates_stay_inside_their_owning_packages() {
     );
 }
 
-// INV-TESTING-42
 #[test]
 fn runner_test_waits_hold_no_literal_real_time_bound() {
     const LITERAL_BOUNDS: [&str; 2] = [
@@ -825,7 +817,6 @@ fn runner_test_waits_hold_no_literal_real_time_bound() {
     );
 }
 
-// INV-TESTING-41
 #[test]
 fn runner_watchdog_call_sites_print_the_expiry() {
     let root = cli_root();
@@ -858,7 +849,6 @@ fn runner_watchdog_call_sites_print_the_expiry() {
     );
 }
 
-// INV-TESTING-41
 #[test]
 fn runner_watchdog_scan_rejects_each_discarding_form() {
     let discards = |source: &str| {

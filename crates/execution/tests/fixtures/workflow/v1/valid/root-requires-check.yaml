@@ -1,5 +1,5 @@
 # requires declares the host check a host wait's condition runs, beside the tools admission
-# probes (REQ-WFFORMAT-82, REQ-WFDEF-42).
+# probes.
 schemaVersion: 1
 programs: [bin]
 steps:

@@ -1,6 +1,6 @@
 //! The connection that reaches a repository: the one GitHub binding or GitLab connection of an
 //! organization through which `useful project create` and `useful project update` bind the
-//! repository they name (REQ-PROJECT-101).
+//! repository they name.
 use std::io::{self, Write};
 
 use anyhow::bail;
@@ -55,7 +55,7 @@ impl Reached {
 }
 
 /// Refuses a `--integration` that names a Linear connection, a usage error written before any
-/// request (REQ-CONNECTION-106); `None` for any other connection, or none.
+/// request; `None` for any other connection, or none.
 pub(in crate::cli) fn refuse_linear(connection: Option<&Target>) -> Option<CommandResult> {
     let given = connection?.provider();
     (given == Provider::Linear)
@@ -63,10 +63,10 @@ pub(in crate::cli) fn refuse_linear(connection: Option<&Target>) -> Option<Comma
 }
 
 /// The connection of `organization` that reaches `repository`, the one `connection` names or
-/// else the one among the organization's GitHub bindings and GitLab connections in use
-/// (REQ-PROJECT-101, REQ-CONNECTION-107). A connection ID with a repository ID is answered
-/// with no request. When no connection or several reach the repository, or a read is refused,
-/// the refusal is written and the exit code the command ends with is returned.
+/// else the one among the organization's GitHub bindings and GitLab connections in use. A
+/// connection ID with a repository ID is answered with no request. When no connection or
+/// several reach the repository, or a read is refused, the refusal is written and the exit
+/// code the command ends with is returned.
 pub(in crate::cli) fn find<F: JsonOutputKind>(
     deployment: &Deployment,
     options: &CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -179,7 +179,7 @@ fn among_all<F: JsonOutputKind>(
 
 /// The repositories the connection `id` of `provider` reaches, each as its provider ID and
 /// path: those a GitHub binding's installation grants, or those selected for a GitLab
-/// connection, every page read (REQ-CONNECTION-70, REQ-CONNECTION-73).
+/// connection, every page read.
 fn reaches<F: JsonOutputKind>(
     provider: Provider,
     id: &str,

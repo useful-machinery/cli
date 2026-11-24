@@ -1,15 +1,15 @@
-//! `useful org integration` acting on the organization's token of a token service
-//! (REQ-INTEGRATION-16 to REQ-INTEGRATION-20) and on a runner's authorization for one of the
-//! organization's connections in one project (REQ-INTEGRATION-33, REQ-INTEGRATION-34). The
+//! `useful org integration` acting on the organization's token of a token service and on a
+//! runner's authorization for one of the organization's connections in one project. The
 //! connection cases themselves are in `connection`, `github` and `gitlab`.
 
 use super::*;
 
 use super::grant::{
     ALPHA, BRAVO, CHARLIE, ENDED_RUNNER_ID, LIST_ACME_RUNNERS, LIST_EVERY_KIND, NEW_RUNNER_ID,
-    OAUTH_GRANT_ID, ORGANIZATION_ID, READ_SERVED, RUNNER_ID, SENTINEL, TOKEN,
-    assert_stated_by_the_refusal, deleted, json_output, oauth_grant, organization, page, prepared,
-    private_file, problem, registration, registrations, request_body, run_grant, statement, stderr,
+    OAUTH_GRANT_ID, ORGANIZATION_ID, Opener, Place, READ_SERVED, RUNNER_ID, SENTINEL, TOKEN,
+    assert_stated_by_the_refusal, deleted, json_output, oauth_grant, on_terminal, opener_command,
+    organization, page, prepared, private_file, problem, registration, registrations, request_body,
+    run_grant, statement, stderr,
 };
 
 const KNOWN_TOKEN: &str = "mergify-known-org-token-1c2d";
@@ -102,7 +102,7 @@ fn one_document(output: &Output) -> serde_json::Value {
 }
 
 /// The answer of a deployment that serves GitHub and the token services `mergify` and
-/// `buildkite` (REQ-GRANT-78).
+/// `buildkite`.
 fn serving_tokens() -> Vec<u8> {
     json_http_response(
         "200 OK",
@@ -200,10 +200,6 @@ fn token_authorized(runner_id: &str) -> Vec<u8> {
     )
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-17
-// REQ-INTEGRATION-18
-// REQ-INTEGRATION-60
 #[test]
 fn connect_stores_the_organizations_token_and_reconnect_stores_its_next_version() {
     let directory = tempfile::tempdir().unwrap();
@@ -364,11 +360,6 @@ fn connect_stores_the_organizations_token_and_reconnect_stores_its_next_version(
     assert!(server.finish().is_empty());
 }
 
-// REQ-INTEGRATION-17
-// REQ-INTEGRATION-20
-// REQ-INTEGRATION-56
-// REQ-INTEGRATION-57
-// REQ-INTEGRATION-58
 #[test]
 fn each_leaf_acts_on_the_organizations_token_through_its_routes() {
     let held = || tokens(&[acme_mergify(1)]);
@@ -547,9 +538,6 @@ fn each_leaf_acts_on_the_organizations_token_through_its_routes() {
     );
 }
 
-// REQ-INTEGRATION-17
-// REQ-INTEGRATION-20
-// REQ-INTEGRATION-81
 #[test]
 fn a_refusal_ends_the_leaf_and_a_token_the_organization_lacks_is_not_found() {
     let forbidden = || problem("403 Forbidden", 403, "forbidden");
@@ -655,11 +643,14 @@ fn connection_authorization(
         "runnerName": "bravo",
         "connectionId": connection_id,
         "connectionAccount": "acme",
+        "repository": "acme/website",
+        "runs": "app",
         "authorizedBy": PRINCIPAL_ID,
         "createdAt": "2026-11-19T09:00:00Z",
         "scope": {
             "state": "current",
             "github": {
+                "appSlug": "useful-machinery",
                 "repositorySelection": "selected",
                 "permissions": [
                     {"name": "contents", "access": "write"},
@@ -672,19 +663,148 @@ fn connection_authorization(
     })
 }
 
-/// The 201 that makes [`connection_authorization`], which echoes the request's key.
-fn connection_authorized(runner_id: &str, connection_id: &str) -> Vec<u8> {
+/// The 201 that makes [`connection_authorization`] with `members` set over it, which echoes the
+/// request's key.
+fn connection_authorized_as(
+    runner_id: &str,
+    connection_id: &str,
+    members: &serde_json::Value,
+) -> Vec<u8> {
+    let mut authorization = connection_authorization(runner_id, "github", connection_id);
+    for (name, value) in members.as_object().unwrap() {
+        authorization[name] = value.clone();
+    }
     http_response_with_headers(
         "201 Created",
         Some("application/json"),
         &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
-        &serde_json::to_vec(&connection_authorization(
-            runner_id,
-            "github",
-            connection_id,
-        ))
-        .unwrap(),
+        &serde_json::to_vec(&authorization).unwrap(),
     )
+}
+
+/// The 201 that makes [`connection_authorization`], which echoes the request's key.
+fn connection_authorized(runner_id: &str, connection_id: &str) -> Vec<u8> {
+    connection_authorized_as(runner_id, connection_id, &serde_json::json!({}))
+}
+
+const READ_ACME_PROJECT: &str =
+    "GET /api/v1/organizations/acme/projects/prj_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
+const BEGIN_ACME_SETUP: &str = "POST /api/v1/organizations/acme/github/setup-sessions HTTP/1.1";
+const READ_ACME_SETUP: &str =
+    "GET /api/v1/organizations/acme/github/setup-sessions/ghs_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
+const COMPLETE_ACME_SETUP: &str = "POST /api/v1/organizations/acme/github/setup-sessions/ghs_01k0z6r1w8f4jy2m7q9v3x5abc/completion HTTP/1.1";
+
+/// A GitHub repository of the project, `full_name`, held by the installation `binding` and in
+/// `availability`, as a project read answers it.
+fn github_repository(binding: &str, full_name: &str, availability: &str) -> serde_json::Value {
+    serde_json::json!({
+        "connectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "providerKind": "github",
+        "installationBindingId": binding,
+        "providerRepositoryId": "123456789",
+        "fullName": full_name,
+        "defaultBranch": "main",
+        "availability": availability
+    })
+}
+
+/// The project acme's read answers, holding `repository` or none.
+fn project_body(repository: Option<serde_json::Value>) -> serde_json::Value {
+    let blockers = match repository.as_ref().map(|held| &held["availability"]) {
+        Some(availability) if availability == "unavailable" => {
+            serde_json::json!(["repository_unavailable"])
+        }
+        _ => serde_json::json!([]),
+    };
+    serde_json::json!({
+        "id": PROJECT_ID,
+        "organizationId": ORGANIZATION_ID,
+        "name": "website",
+        "runnerPool": {"id": "rpl_01k0z6r1w8f4jy2m7q9v3x5abc", "name": "builders"},
+        "repository": repository,
+        "executionReadiness": {
+            "ready": blockers.as_array().unwrap().is_empty(),
+            "blockers": blockers
+        },
+        "createdAt": "2026-09-05T12:00:00Z",
+        "updatedAt": "2026-09-05T12:01:00Z"
+    })
+}
+
+fn project_holding(repository: Option<serde_json::Value>) -> Vec<u8> {
+    json_http_response("200 OK", project_body(repository))
+}
+
+/// The project whose `active` GitHub repository `acme/website` the installation `binding` holds.
+fn project_of(binding: &str) -> Vec<u8> {
+    project_holding(Some(github_repository(binding, "acme/website", "active")))
+}
+
+/// The reads `authorize github` makes of a project whose repository `globex/website` acme's
+/// second installation, on the account `globex`, holds, while both installations are `active`.
+fn globex_reads() -> Vec<Vec<u8>> {
+    vec![
+        project_holding(Some(github_repository(
+            OTHER_INSTALLATION_ID,
+            "globex/website",
+            "active",
+        ))),
+        installations_in(&["active", "active"]),
+    ]
+}
+
+/// What Cloud answers of the authorization of acme's second installation, on `globex`.
+fn globex_authorization(runs: &str) -> serde_json::Value {
+    serde_json::json!({
+        "connectionAccount": "globex",
+        "repository": "globex/website",
+        "runs": runs
+    })
+}
+
+/// `useful org integration args --org acme`, to run on a terminal as the leader of a new session
+/// whose controlling terminal is its standard input, from a remote shell so that no browser is
+/// opened. The CLI test environment includes Python.
+fn org_on_terminal(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("python3");
+    command
+        .args([
+            "-c",
+            "import fcntl, os, sys, termios; os.setsid(); \
+             fcntl.ioctl(0, termios.TIOCSCTTY, 0); os.execv(sys.argv[1], sys.argv[1:])",
+            crate::executable().to_str().unwrap(),
+            "org",
+            "integration",
+        ])
+        .args(args)
+        .args(["--org", "acme", "--allow-insecure-http"]);
+    for variable in DEPLOYMENT_VARIABLES
+        .into_iter()
+        .chain(RUNNER_TELEMETRY_VARIABLES)
+    {
+        command.env_remove(variable);
+    }
+    command
+        .envs(deployment_environment_with_issuer(
+            &server.api_url,
+            &server.issuer,
+            credential.to_str().unwrap(),
+        ))
+        .env("SSH_CONNECTION", "198.51.100.7 52000 192.0.2.10 22");
+    command
+}
+
+/// The first line of `shown` that asks.
+fn question(shown: &str) -> &str {
+    shown
+        .lines()
+        .find(|line| line.contains("[y/N]"))
+        .unwrap_or_else(|| panic!("nothing asked in\n{shown}"))
+}
+
+/// The JSON documents a command printed, in order.
+fn documents(output: &Output) -> Vec<serde_json::Value> {
+    super::github::documents(output)
 }
 
 /// One page of acme's connection authorizations in force: `runner_id`'s for its installation.
@@ -712,14 +832,6 @@ fn in_project(leaf: &str, server: &ScriptedServer, credential: &Path, args: &[&s
     )
 }
 
-// REQ-INTEGRATION-19
-// REQ-INTEGRATION-22
-// REQ-INTEGRATION-34
-// REQ-INTEGRATION-32
-// REQ-INTEGRATION-54
-// REQ-INTEGRATION-55
-// REQ-INTEGRATION-78
-// REQ-INTEGRATION-79
 #[test]
 fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens() {
     let answers = || {
@@ -752,7 +864,7 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
 
     assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
     let document = one_document(&listed);
-    // The connection list keeps its own members (REQ-CONNECTION-104).
+    // The connection list keeps its own members.
     assert_eq!(document["unlisted"], serde_json::json!([]), "{document}");
     let item = &document["items"][0];
     assert_eq!(item["id"], INSTALLATION_ID, "{document}");
@@ -763,6 +875,13 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
     assert_eq!(
         authorization["scope"]["github"]["repositorySelection"],
         "selected"
+    );
+    // Its runs, its repository and the App it acts as.
+    assert_eq!(authorization["runs"], "app", "{item}");
+    assert_eq!(authorization["repository"], "acme/website", "{item}");
+    assert_eq!(
+        authorization["scope"]["github"]["appSlug"],
+        "useful-machinery"
     );
     let token = &document["tokens"][0];
     assert_eq!(token["id"], BUILDKITE_TOKEN_ID, "{document}");
@@ -787,6 +906,20 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
         "{text}"
     );
     assert!(text.contains(&format!("{OTHER_PRINCIPAL_NAME} ({OTHER_PRINCIPAL_ID})")));
+    for field in ["acme/website", "useful-machinery"] {
+        assert_eq!(
+            text.lines().filter(|line| line.contains(field)).count(),
+            1,
+            "{field} not on one line of\n{text}"
+        );
+    }
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.split_whitespace().any(|word| word == "app"))
+            .count(),
+        1,
+        "runs not on one line of\n{text}"
+    );
 
     // An authorizations read Cloud refuses is passed over, and the connections carry none.
     let (server, _directory, credential) = prepared(vec![
@@ -816,10 +949,6 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
     assert_eq!(document["tokens"], serde_json::json!([]));
 }
 
-// REQ-INTEGRATION-19
-// REQ-INTEGRATION-34
-// REQ-INTEGRATION-54
-// REQ-INTEGRATION-65
 #[test]
 fn show_shows_the_organizations_token_or_a_connection_with_its_authorizations() {
     let (server, _directory, credential) = prepared(vec![
@@ -841,8 +970,10 @@ fn show_shows_the_organizations_token_or_a_connection_with_its_authorizations() 
         "{document}"
     );
 
+    // A scope the provider could not be read for, and a repository Cloud answered none of.
     let mut linear = connection_authorization(RUNNER_ID, "linear", LINEAR_CONNECTION_ID);
     linear["scope"] = serde_json::json!({"state": "unavailable"});
+    linear["repository"] = serde_json::Value::Null;
     let (server, _directory, credential) = prepared(vec![
         json_http_response("200 OK", serde_json::json!({"items": [linear]})),
         json_http_response("200 OK", super::connection::connection()),
@@ -870,58 +1001,86 @@ fn show_shows_the_organizations_token_or_a_connection_with_its_authorizations() 
         document["authorizations"][0]["scope"],
         serde_json::json!({"state": "unavailable"})
     );
+    assert_eq!(
+        document["authorizations"][0].get("repository"),
+        Some(&serde_json::Value::Null),
+        "{document}"
+    );
 }
 
-// REQ-INTEGRATION-33
-// REQ-INTEGRATION-27
-// REQ-INTEGRATION-32
-// REQ-INTEGRATION-24
 #[test]
-fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_connection() {
-    let (server, _directory, credential) = prepared(vec![
-        installations_in(&["active"]),
-        connection_authorized(NEW_RUNNER_ID, INSTALLATION_ID),
-        installations_in(&["active"]),
-        connection_authorized(NEW_RUNNER_ID, INSTALLATION_ID),
-    ]);
+fn authorize_with_a_project_authorizes_the_installation_that_holds_the_projects_repository() {
+    let authorized = |runs: &str| {
+        vec![connection_authorized_as(
+            NEW_RUNNER_ID,
+            OTHER_INSTALLATION_ID,
+            &globex_authorization(runs),
+        )]
+    };
+    let (server, _directory, credential) = prepared(
+        [
+            globex_reads(),
+            authorized("all"),
+            globex_reads(),
+            authorized("all"),
+            globex_reads(),
+            authorized("app"),
+            // An answer of other runs than the request's.
+            globex_reads(),
+            authorized("app"),
+        ]
+        .concat(),
+    );
+    let all = [
+        "github",
+        "--runner",
+        NEW_RUNNER_ID,
+        "--yes",
+        "--runs",
+        "all",
+    ];
     let json = in_project(
+        "authorize",
+        &server,
+        &credential,
+        &[&all[..], &["--json"]].concat(),
+    );
+    assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
+    let human = in_project("authorize", &server, &credential, &all);
+    let app = in_project(
         "authorize",
         &server,
         &credential,
         &["github", "--runner", NEW_RUNNER_ID, "--yes", "--json"],
     );
-    let human = in_project(
+    let other_runs = in_project(
         "authorize",
         &server,
         &credential,
-        &["github", "--runner", NEW_RUNNER_ID, "--yes"],
-    );
-    // Without --yes each is refused before anything is sent.
-    let refusal = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &["github", "--runner", NEW_RUNNER_ID],
-    );
-    let token_refusal = org(
-        &server,
-        &credential,
-        &["authorize", "mergify", "--runner", NEW_RUNNER_ID],
+        &[&all[..], &["--json"]].concat(),
     );
     let requests = server.finish();
+
+    // The project and the installations are read, and the installation that holds the project's
+    // repository is authorized, though two are active.
+    let one = [
+        READ_ACME_PROJECT,
+        LIST_ACME_INSTALLATIONS,
+        AUTHORIZE_ACME_CONNECTION,
+    ];
     assert_eq!(
         requests
             .iter()
             .map(|request| request.lines().next().unwrap())
             .collect::<Vec<_>>(),
-        [
-            LIST_ACME_INSTALLATIONS,
-            AUTHORIZE_ACME_CONNECTION,
-            LIST_ACME_INSTALLATIONS,
-            AUTHORIZE_ACME_CONNECTION,
-        ]
+        [one; 4].concat()
     );
-    for request in [&requests[1], &requests[3]] {
+    for (request, runs) in [
+        (&requests[2], "all"),
+        (&requests[5], "all"),
+        (&requests[8], "app"),
+        (&requests[11], "all"),
+    ] {
         assert!(!header_value(request, "idempotency-key").is_empty());
         assert_eq!(
             body(request),
@@ -929,12 +1088,12 @@ fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_c
                 "projectId": PROJECT_ID,
                 "runnerId": NEW_RUNNER_ID,
                 "provider": "github",
-                "connectionId": INSTALLATION_ID
+                "connectionId": OTHER_INSTALLATION_ID,
+                "runs": runs
             })
         );
     }
 
-    assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
     let document = json_output(&json);
     assert_eq!(document["outcome"], "authorized", "{document}");
     assert_eq!(
@@ -946,13 +1105,16 @@ fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_c
             "projectName": "Website",
             "runnerId": NEW_RUNNER_ID,
             "runnerName": "bravo",
-            "connectionId": INSTALLATION_ID,
-            "connectionAccount": "acme",
+            "connectionId": OTHER_INSTALLATION_ID,
+            "connectionAccount": "globex",
+            "runs": "all",
+            "repository": "globex/website",
             "authorizedBy": PRINCIPAL_ID,
             "createdAt": "2026-11-19T09:00:00Z",
             "scope": {
                 "state": "current",
                 "github": {
+                    "appSlug": "useful-machinery",
                     "repositorySelection": "selected",
                     "permissions": [
                         {"name": "contents", "access": "write"},
@@ -962,13 +1124,20 @@ fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_c
             }
         })
     );
+    assert_eq!(json_output(&app)["authorization"]["runs"], "app");
+    let refused = json_output(&other_runs);
+    assert_eq!(refused["outcome"], "invalid_response", "{refused}");
+
+    // The report prints the same named fields, one line each.
     assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
     let report = String::from_utf8(human.stdout.clone()).unwrap();
     for field in [
         CONNECTION_AUTHORIZATION_ID,
         PROJECT_ID,
-        INSTALLATION_ID,
+        OTHER_INSTALLATION_ID,
         "contents",
+        "globex/website",
+        "useful-machinery",
     ] {
         assert_eq!(
             report.lines().filter(|line| line.contains(field)).count(),
@@ -976,77 +1145,166 @@ fn authorize_with_a_project_authorizes_the_runner_for_the_organizations_active_c
             "{field} not on one line of\n{report}"
         );
     }
+    assert_eq!(
+        report
+            .lines()
+            .filter(|line| line.split_whitespace().any(|word| word == "all"))
+            .count(),
+        1,
+        "runs not on one line of\n{report}"
+    );
 
-    // What the authorization permits is stated before acting, as the refusal states it, and
-    // none of it is a token's statement.
-    assert_eq!(refusal.status.code(), Some(2));
-    let stated = statement(&json, INSTALLATION_ID);
-    assert_eq!(stated, statement(&human, INSTALLATION_ID));
-    assert_stated_by_the_refusal(&stated, &stderr(&refusal));
-    let token_statement: Vec<_> = stderr(&token_refusal)
-        .lines()
-        .filter(|line| line.contains("for the organization's token, "))
-        .map(str::to_owned)
-        .collect();
-    assert!(!token_statement.is_empty(), "{}", stderr(&token_refusal));
+    // What the authorization reaches is stated before acting, under a heading naming the
+    // connection: the account that owns the installation and the project's repository.
+    let stated = statement(&json, OTHER_INSTALLATION_ID);
+    assert_eq!(stated, statement(&human, OTHER_INSTALLATION_ID));
     assert!(
-        stated.iter().all(|line| !token_statement
+        stated
             .iter()
-            .any(|token| token.ends_with(line.as_str()))),
-        "{stated:?} {token_statement:?}"
+            .any(|line| line.contains("globex") && !line.contains("globex/website")),
+        "no account in {stated:?}"
+    );
+    assert!(
+        stated.iter().any(|line| line.contains("globex/website")),
+        "no repository in {stated:?}"
     );
 }
 
-// REQ-INTEGRATION-33
-// REQ-INTEGRATION-71
+#[test]
+fn authorize_with_a_project_without_yes_reads_and_states_then_asks_on_a_terminal_or_refuses() {
+    let (server, _directory, credential) = prepared(
+        [
+            globex_reads(),
+            globex_reads(),
+            globex_reads(),
+            vec![connection_authorized_as(
+                NEW_RUNNER_ID,
+                OTHER_INSTALLATION_ID,
+                &globex_authorization("app"),
+            )],
+            globex_reads(),
+        ]
+        .concat(),
+    );
+    let args = ["github", "--runner", NEW_RUNNER_ID];
+    let off_terminal = in_project("authorize", &server, &credential, &args);
+    let off_terminal_json = in_project(
+        "authorize",
+        &server,
+        &credential,
+        &[&args[..], &["--json"]].concat(),
+    );
+    let on_a_terminal = || {
+        org_on_terminal(
+            &server,
+            &credential,
+            &[&["authorize"][..], &args, &["--project", PROJECT_ID]].concat(),
+        )
+    };
+    let (accepted_shown, accepted) = on_terminal(on_a_terminal(), &[("[y/N]", "y\n")]);
+    let (declined_shown, declined) = on_terminal(on_a_terminal(), &[("[y/N]", "n\n")]);
+    let requests = server.finish();
+
+    let reads = [READ_ACME_PROJECT, LIST_ACME_INSTALLATIONS];
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.lines().next().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            &reads[..],
+            &reads,
+            &reads,
+            &[AUTHORIZE_ACME_CONNECTION],
+            &reads
+        ]
+        .concat()
+    );
+
+    // Off a terminal the command reads, states and refuses, naming --yes, the account and the
+    // repository, with nothing sent.
+    for output in [&off_terminal, &off_terminal_json] {
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(output));
+        assert!(output.stdout.is_empty(), "{}", stderr(output));
+        let refusal = stderr(output);
+        for named in ["--yes", "globex", "globex/website"] {
+            assert!(refusal.contains(named), "{named} not in\n{refusal}");
+        }
+    }
+    let stated = statement(&off_terminal, OTHER_INSTALLATION_ID);
+    assert!(
+        stated.iter().any(|line| line.contains("globex/website")),
+        "{stated:?}"
+    );
+
+    // On a terminal it states, then asks; yes authorizes, and any other answer sends nothing.
+    assert_eq!(accepted.status.code(), Some(0), "{accepted_shown}");
+    let repository = accepted_shown
+        .find("globex/website")
+        .unwrap_or_else(|| panic!("the repository is not stated in\n{accepted_shown}"));
+    assert!(
+        repository < accepted_shown.find("[y/N]").unwrap(),
+        "{accepted_shown}"
+    );
+    assert_eq!(body(&requests[6])["runs"], "app");
+    assert_eq!(declined.status.code(), Some(2), "{declined_shown}");
+}
+
+/// One page of acme's Linear connections: the fixture's, `Research`, and, where `two`, a second
+/// on the workspace `Globex`, each `active`; none where `two` is false.
+fn linear_connections_in(two: bool) -> Vec<u8> {
+    let first = super::connection::connection();
+    let mut second = first.clone();
+    second["id"] = "lcn_01k0z6r1w8f4jy2m7q9v3x5abd".into();
+    second["workspaceName"] = "Globex".into();
+    let items = if two { vec![first, second] } else { vec![] };
+    json_http_response("200 OK", serde_json::json!({"items": items}))
+}
+
 #[test]
 fn authorize_with_a_project_takes_the_one_active_connection_or_the_one_named() {
+    // At Linear the command takes the organization's one active connection; GitHub's is the
+    // project's repository's.
     let (server, _directory, credential) = prepared(vec![
-        installations_in(&["active", "active"]),
-        installations_in(&["active", "active"]),
-        installations_in(&["active", "active"]),
-        connection_authorized(NEW_RUNNER_ID, OTHER_INSTALLATION_ID),
-        installations_in(&["disconnected"]),
-        installations_in(&["disconnected"]),
-    ]);
-    let several = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &["github", "--runner", NEW_RUNNER_ID, "--yes", "--json"],
-    );
-    let several_human = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &["github", "--runner", NEW_RUNNER_ID, "--yes"],
-    );
-    let named = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &[
-            OTHER_INSTALLATION_ID,
-            "--runner",
+        linear_connections_in(true),
+        linear_connections_in(true),
+        linear_connections_in(true),
+        connection_authorized_as(
             NEW_RUNNER_ID,
-            "--yes",
-            "--json",
-        ],
-    );
-    let none_active = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &["github", "--runner", NEW_RUNNER_ID, "--yes", "--json"],
-    );
-    let none_active_human = in_project(
-        "authorize",
-        &server,
-        &credential,
-        &["github", "--runner", NEW_RUNNER_ID, "--yes"],
-    );
+            "lcn_01k0z6r1w8f4jy2m7q9v3x5abd",
+            &serde_json::json!({"provider": "linear", "repository": null}),
+        ),
+        linear_connections_in(false),
+        linear_connections_in(false),
+    ]);
+    let linear = |integration: &str, args: &[&str]| {
+        in_project(
+            "authorize",
+            &server,
+            &credential,
+            &[&[integration, "--runner", NEW_RUNNER_ID, "--yes"][..], args].concat(),
+        )
+    };
+    let several = linear("linear", &["--json"]);
+    let several_human = linear("linear", &[]);
+    let named = linear("lcn_01k0z6r1w8f4jy2m7q9v3x5abd", &["--json"]);
+    let none_active = linear("linear", &["--json"]);
+    let none_active_human = linear("linear", &[]);
     let requests = server.finish();
-    assert_eq!(body(&requests[3])["connectionId"], OTHER_INSTALLATION_ID);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.lines().next().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            LIST_ACME_LINEAR,
+            LIST_ACME_LINEAR,
+            LIST_ACME_LINEAR,
+            AUTHORIZE_ACME_CONNECTION,
+            LIST_ACME_LINEAR,
+            LIST_ACME_LINEAR,
+        ]
+    );
 
     assert_eq!(several.status.code(), Some(2), "{}", stderr(&several));
     let document = json_output(&several);
@@ -1054,21 +1312,26 @@ fn authorize_with_a_project_takes_the_one_active_connection_or_the_one_named() {
     assert_eq!(
         document["connections"],
         serde_json::json!([
-            {"id": INSTALLATION_ID, "account": "acme"},
-            {"id": OTHER_INSTALLATION_ID, "account": "globex"}
+            {"id": LINEAR_CONNECTION_ID, "account": "Research"},
+            {"id": "lcn_01k0z6r1w8f4jy2m7q9v3x5abd", "account": "Globex"}
         ])
     );
     assert_eq!(several_human.status.code(), Some(2));
     assert!(several_human.stdout.is_empty());
-    for named in [INSTALLATION_ID, OTHER_INSTALLATION_ID, "globex"] {
+    for named in [
+        LINEAR_CONNECTION_ID,
+        "lcn_01k0z6r1w8f4jy2m7q9v3x5abd",
+        "Globex",
+    ] {
         assert!(stderr(&several_human).contains(named), "{named}");
     }
 
     assert_eq!(named.status.code(), Some(0), "{}", stderr(&named));
     assert_eq!(
-        json_output(&named)["authorization"]["connectionId"],
-        OTHER_INSTALLATION_ID
+        body(&requests[3])["connectionId"],
+        "lcn_01k0z6r1w8f4jy2m7q9v3x5abd"
     );
+    assert_eq!(body(&requests[3])["runs"], "app");
 
     assert_eq!(
         none_active.status.code(),
@@ -1079,19 +1342,440 @@ fn authorize_with_a_project_takes_the_one_active_connection_or_the_one_named() {
     assert_eq!(json_output(&none_active)["outcome"], "connection_not_found");
     assert_eq!(none_active_human.status.code(), Some(1));
     assert!(
-        stderr(&none_active_human).contains("useful org integration connect github"),
+        stderr(&none_active_human).contains("useful org integration connect linear"),
         "{}",
         stderr(&none_active_human)
     );
 }
 
-// REQ-INTEGRATION-33
-// REQ-GRANT-81
-// REQ-INTEGRATION-72
+#[test]
+fn authorize_with_a_project_refuses_before_sending_unless_an_active_verified_installation_holds_its_repository()
+ {
+    let gitlab = serde_json::json!({
+        "connectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "providerKind": "gitlab",
+        "gitlabConnectionId": "glc_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "instanceUrl": "https://gitlab.com",
+        "providerRepositoryId": "123456789",
+        "fullName": "acme/website",
+        "defaultBranch": "main",
+        "availability": "active"
+    });
+    let mut unverified = super::github::installation_body("active");
+    unverified["id"] = INSTALLATION_ID.into();
+    unverified["authorityVerifiedAt"] = serde_json::Value::Null;
+    let unverified = json_http_response("200 OK", serde_json::json!({"items": [unverified]}));
+    let project_show = format!("useful project show {PROJECT_ID} --org acme");
+    // The guided setup naming the installation by its GitHub ID.
+    let connect = "useful org integration connect github --installation 713 --org acme";
+    // The project read, the installations read, the integration named, the outcome and the
+    // command the report names.
+    type Case<'a> = (Vec<u8>, Vec<u8>, &'a str, &'a str, Option<&'a str>);
+    let cases: [Case<'_>; 7] = [
+        // The project has no repository.
+        (
+            project_holding(None),
+            installations_in(&["active"]),
+            "github",
+            "repository_not_connected",
+            Some(project_show.as_str()),
+        ),
+        // Its repository is GitLab's.
+        (
+            project_holding(Some(gitlab)),
+            installations_in(&["active"]),
+            "github",
+            "repository_not_connected",
+            Some(project_show.as_str()),
+        ),
+        // Its repository is unavailable.
+        (
+            project_holding(Some(github_repository(
+                INSTALLATION_ID,
+                "acme/website",
+                "unavailable",
+            ))),
+            installations_in(&["active"]),
+            "github",
+            "repository_not_connected",
+            Some(project_show.as_str()),
+        ),
+        // INTEGRATION names another installation than the repository's.
+        (
+            project_of(INSTALLATION_ID),
+            installations_in(&["active", "active"]),
+            OTHER_INSTALLATION_ID,
+            "repository_not_connected",
+            Some(project_show.as_str()),
+        ),
+        // The repository's installation is not listed.
+        (
+            project_of(OTHER_INSTALLATION_ID),
+            installations_in(&["active"]),
+            "github",
+            "connection_not_found",
+            None,
+        ),
+        // It is disconnected.
+        (
+            project_of(INSTALLATION_ID),
+            installations_in(&["disconnected"]),
+            "github",
+            "connection_inactive",
+            Some(connect),
+        ),
+        // It is active, and its authority was never verified.
+        (
+            project_of(INSTALLATION_ID),
+            unverified,
+            "github",
+            "connection_unverified",
+            Some(connect),
+        ),
+    ];
+    for (project, installations, integration, outcome, remedy) in cases {
+        let (server, _directory, credential) = prepared(vec![
+            project.clone(),
+            installations.clone(),
+            project,
+            installations,
+        ]);
+        let run = |json: &[&str]| {
+            in_project(
+                "authorize",
+                &server,
+                &credential,
+                &[&[integration, "--runner", NEW_RUNNER_ID, "--yes"][..], json].concat(),
+            )
+        };
+        let json = run(&["--json"]);
+        let human = run(&[]);
+        let reads = [READ_ACME_PROJECT, LIST_ACME_INSTALLATIONS];
+        assert_eq!(sent(server), [reads, reads].concat(), "{outcome}");
+        assert_eq!(json.status.code(), Some(1), "{outcome}: {}", stderr(&json));
+        assert_eq!(json_output(&json)["outcome"], outcome);
+        assert_eq!(human.status.code(), Some(1), "{outcome}");
+        assert!(human.stdout.is_empty(), "{outcome}");
+        if let Some(remedy) = remedy {
+            let text = stderr(&human);
+            assert!(text.contains(remedy), "{remedy} not in\n{text}");
+        }
+    }
+
+    // A project the read does not find is the project not found, and nothing more is read.
+    let (server, _directory, credential) =
+        prepared(vec![problem("404 Not Found", 404, "not-found")]);
+    let missing = in_project(
+        "authorize",
+        &server,
+        &credential,
+        &["github", "--runner", NEW_RUNNER_ID, "--yes", "--json"],
+    );
+    assert_eq!(sent(server), [READ_ACME_PROJECT]);
+    assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
+    assert_eq!(json_output(&missing)["outcome"], "project_not_found");
+}
+
+// `authorize github --project` where the installation that holds the project's repository is
+// not active or not verified, which it offers to set up on a terminal.
+
+/// The GitHub installation ID of acme's installation on `globex`.
+const GLOBEX_GITHUB_ID: &str = "717";
+const CONNECT_GLOBEX: &str = "useful org integration connect github --installation 717 --org acme";
+
+/// Acme's installation on `globex`, GitHub installation 717, in `state`, its authority verified
+/// where `proven`.
+fn globex_installation(state: &str, proven: bool) -> serde_json::Value {
+    let mut installation = super::github::installation_body(state);
+    installation["id"] = OTHER_INSTALLATION_ID.into();
+    installation["providerAccountLogin"] = "globex".into();
+    installation["providerInstallationId"] = GLOBEX_GITHUB_ID.into();
+    if !proven {
+        installation["authorityVerifiedAt"] = serde_json::Value::Null;
+    }
+    installation
+}
+
+/// Acme's installations: its own, `active` and verified, and the one on `globex` as
+/// [`globex_installation`] has it.
+fn with_globex(state: &str, proven: bool) -> Vec<u8> {
+    let mut own = super::github::installation_body("active");
+    own["id"] = INSTALLATION_ID.into();
+    json_http_response(
+        "200 OK",
+        serde_json::json!({"items": [own, globex_installation(state, proven)]}),
+    )
+}
+
+/// The reads `authorize github` makes of a project whose repository `globex/website` the
+/// installation on `globex` holds, as [`globex_installation`] has it.
+fn unready_reads(state: &str, proven: bool) -> Vec<Vec<u8>> {
+    vec![
+        project_holding(Some(github_repository(
+            OTHER_INSTALLATION_ID,
+            "globex/website",
+            "active",
+        ))),
+        with_globex(state, proven),
+    ]
+}
+
+/// `useful org integration authorize github --runner RUNNER --project PROJECT --runs all args`
+/// on a terminal.
+fn authorize_on_terminal(server: &ScriptedServer, credential: &Path, args: &[&str]) -> Command {
+    org_on_terminal(
+        server,
+        credential,
+        &[
+            &[
+                "authorize",
+                "github",
+                "--runner",
+                NEW_RUNNER_ID,
+                "--project",
+                PROJECT_ID,
+                "--runs",
+                "all",
+            ][..],
+            args,
+        ]
+        .concat(),
+    )
+}
+
+fn setup_begun() -> Vec<u8> {
+    json_http_response("201 Created", super::github::setup_session())
+}
+
+fn setup_read(state: &str, verification: serde_json::Value) -> Vec<u8> {
+    json_http_response("200 OK", super::github::setup_read(state, verification))
+}
+
+/// The installation a completion `request` named.
+fn completed_installation(request: &str) -> serde_json::Value {
+    assert!(request.starts_with(COMPLETE_ACME_SETUP), "{request}");
+    request_body(request)["providerInstallationId"].clone()
+}
+
+#[test]
+fn authorize_with_a_project_on_a_terminal_sets_up_an_unready_installation_and_then_authorizes() {
+    use super::github::{requests_on, unverified_read, verified};
+    for (state, proven) in [("active", false), ("disconnected", true)] {
+        let (server, _directory, credential) = prepared(
+            [
+                unready_reads(state, proven),
+                vec![
+                    with_globex(state, proven),
+                    setup_begun(),
+                    json_http_response("200 OK", unverified_read()),
+                    setup_read(
+                        "pending",
+                        verified(&[(GLOBEX_GITHUB_ID, true)], requests_on(&[])),
+                    ),
+                    json_http_response("200 OK", globex_installation("active", true)),
+                    connection_authorized_as(
+                        NEW_RUNNER_ID,
+                        OTHER_INSTALLATION_ID,
+                        &globex_authorization("all"),
+                    ),
+                ],
+            ]
+            .concat(),
+        );
+        // Accepted, then the authorization's own question once the setup completes.
+        let (shown, output) = on_terminal(
+            authorize_on_terminal(&server, &credential, &[]),
+            &[("[y/N]", "y\n"), ("[y/N]", "y\n")],
+        );
+        assert_eq!(output.status.code(), Some(0), "{state}: {shown}");
+        let requests = server.finish();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                READ_ACME_PROJECT,
+                LIST_ACME_INSTALLATIONS,
+                LIST_ACME_INSTALLATIONS,
+                BEGIN_ACME_SETUP,
+                READ_ACME_SETUP,
+                READ_ACME_SETUP,
+                COMPLETE_ACME_SETUP,
+                AUTHORIZE_ACME_CONNECTION
+            ],
+            "{state}"
+        );
+        assert_eq!(completed_installation(&requests[6]), GLOBEX_GITHUB_ID);
+        assert_eq!(
+            body(&requests[7]),
+            serde_json::json!({
+                "projectId": PROJECT_ID,
+                "runnerId": NEW_RUNNER_ID,
+                "provider": "github",
+                "connectionId": OTHER_INSTALLATION_ID,
+                "runs": "all"
+            })
+        );
+        // The offer names the organization, the repository and the installation's account.
+        let offer = question(&shown);
+        assert!(offer.contains("acme"), "{offer}");
+        assert!(offer.contains("globex/website"), "{offer}");
+        assert!(
+            offer.replace("globex/website", "").contains("globex"),
+            "{offer}"
+        );
+        // The statement of what the authorization reaches comes after the setup.
+        let stated = shown
+            .rfind("a token reaches one repository")
+            .unwrap_or_else(|| panic!("nothing stated in\n{shown}"));
+        assert!(shown.find("[y/N]").unwrap() < stated, "{shown}");
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(report.contains(CONNECTION_AUTHORIZATION_ID), "{report}");
+    }
+}
+
+#[test]
+fn authorize_with_a_project_ends_with_the_setups_outcome_where_the_setup_does_not_complete() {
+    use super::github::{requests_on, verified};
+    let cases = [
+        // GitHub holds the request to install the App again, which no owner has approved.
+        (
+            "awaiting_approval",
+            "disconnected",
+            true,
+            setup_read("pending", verified(&[], requests_on(&["globex"]))),
+        ),
+        (
+            "consent_denied",
+            "active",
+            false,
+            setup_read("pending", serde_json::json!({"state": "denied"})),
+        ),
+    ];
+    for (outcome, state, proven, ending) in cases {
+        let setup = vec![with_globex(state, proven), setup_begun(), ending];
+        let (server, _directory, credential) =
+            prepared([unready_reads(state, proven), setup.clone()].concat());
+        let (shown, output) = on_terminal(
+            authorize_on_terminal(&server, &credential, &["--yes"]),
+            &[("[y/N]", "y\n")],
+        );
+        assert_eq!(output.status.code(), Some(1), "{outcome}: {shown}");
+        assert_eq!(
+            sent(server),
+            [
+                READ_ACME_PROJECT,
+                LIST_ACME_INSTALLATIONS,
+                LIST_ACME_INSTALLATIONS,
+                BEGIN_ACME_SETUP,
+                READ_ACME_SETUP
+            ],
+            "{outcome}"
+        );
+
+        // The guided setup naming the installation ends with that outcome, and the command
+        // reports its ending and next step as the guided setup does.
+        let connect = |json: &[&str]| {
+            let (server, _directory, credential) = prepared(setup.clone());
+            let output = opener_command(
+                &server,
+                &credential,
+                &Opener::new(0),
+                Place::Headless,
+                &[
+                    &[
+                        "org",
+                        "integration",
+                        "connect",
+                        "github",
+                        "--installation",
+                        GLOBEX_GITHUB_ID,
+                        "--org",
+                        "acme",
+                    ][..],
+                    json,
+                ]
+                .concat(),
+            )
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+            server.finish();
+            output
+        };
+        assert_eq!(documents(&connect(&["--json"]))[1]["outcome"], outcome);
+        let guided = connect(&[]);
+        assert_eq!(guided.status.code(), Some(1), "{outcome}");
+        let reported = stderr(&guided);
+        let ending = reported[reported.find("error:").unwrap()..].trim_end();
+        assert!(
+            shown.replace("\r\n", "\n").contains(ending),
+            "{ending} not in\n{shown}"
+        );
+    }
+}
+
+#[test]
+fn authorize_with_a_project_reports_an_unready_installation_where_the_offer_is_declined_or_not_made()
+ {
+    for (state, proven, outcome) in [
+        ("active", false, "connection_unverified"),
+        ("disconnected", true, "connection_inactive"),
+    ] {
+        let (server, _directory, credential) =
+            prepared((0..4).flat_map(|_| unready_reads(state, proven)).collect());
+        let (declined_shown, declined) = on_terminal(
+            authorize_on_terminal(&server, &credential, &[]),
+            &[("[y/N]", "n\n")],
+        );
+        let (json_shown, json_on_terminal) = on_terminal(
+            authorize_on_terminal(&server, &credential, &["--json"]),
+            &[],
+        );
+        let args = ["github", "--runner", NEW_RUNNER_ID, "--runs", "all"];
+        let off_terminal = in_project("authorize", &server, &credential, &args);
+        let off_terminal_json = in_project(
+            "authorize",
+            &server,
+            &credential,
+            &[&args[..], &["--json"]].concat(),
+        );
+        // Nothing but the reads: no setup session begins.
+        let reads = [READ_ACME_PROJECT, LIST_ACME_INSTALLATIONS];
+        assert_eq!(sent(server), [reads; 4].concat(), "{outcome}");
+
+        assert!(!json_shown.contains("[y/N]"), "{json_shown}");
+        for output in [
+            &declined,
+            &json_on_terminal,
+            &off_terminal,
+            &off_terminal_json,
+        ] {
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{outcome}: {}",
+                stderr(output)
+            );
+        }
+        for output in [&json_on_terminal, &off_terminal_json] {
+            assert_eq!(json_output(output)["outcome"], outcome);
+        }
+        for text in [declined_shown, stderr(&off_terminal)] {
+            assert!(
+                text.contains(CONNECT_GLOBEX),
+                "{CONNECT_GLOBEX} not in\n{text}"
+            );
+        }
+    }
+}
+
 #[test]
 fn authorize_with_a_project_given_no_runner_names_those_without_an_authorization_there() {
     // Charlie holds the project's authorization, so bravo and alpha are named.
     let (server, _directory, credential) = prepared(vec![
+        project_of(INSTALLATION_ID),
         installations_in(&["active"]),
         project_authorizations(RUNNER_ID),
         registrations(&[
@@ -1104,6 +1788,7 @@ fn authorize_with_a_project_given_no_runner_names_those_without_an_authorization
     assert_eq!(
         sent(server),
         [
+            READ_ACME_PROJECT,
             LIST_ACME_INSTALLATIONS,
             LIST_ACME_PROJECT_AUTHORIZATIONS,
             LIST_RUNNERS_OF_ACME,
@@ -1122,10 +1807,6 @@ fn authorize_with_a_project_given_no_runner_names_those_without_an_authorization
     assert_eq!(runners, [NEW_RUNNER_ID, ENDED_RUNNER_ID], "{document}");
 }
 
-// REQ-INTEGRATION-33
-// REQ-INTEGRATION-27
-// REQ-INTEGRATION-73
-// REQ-INTEGRATION-77
 #[test]
 fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome() {
     let refusals = [
@@ -1166,9 +1847,21 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
             "connection-authorization-already-authorized",
             "already_authorized",
         ),
+        (
+            "409 Conflict",
+            409,
+            "connection-authorization-connection-unverified",
+            "connection_unverified",
+        ),
+        // A Cloud that refuses the request's runs as malformed, as one released before runs is.
+        ("400 Bad Request", 400, "bad-request", "runs_not_served"),
     ];
     for (status, code, slug, outcome) in refusals {
         let (server, _directory, credential) = prepared(vec![
+            project_of(INSTALLATION_ID),
+            installations_in(&["active"]),
+            problem(status, code, slug),
+            project_of(INSTALLATION_ID),
             installations_in(&["active"]),
             problem(status, code, slug),
         ]);
@@ -1178,13 +1871,35 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
             &credential,
             &["github", "--runner", NEW_RUNNER_ID, "--yes", "--json"],
         );
-        assert_eq!(
-            sent(server),
-            [LIST_ACME_INSTALLATIONS, AUTHORIZE_ACME_CONNECTION],
-            "{outcome}"
+        let human = in_project(
+            "authorize",
+            &server,
+            &credential,
+            &["github", "--runner", NEW_RUNNER_ID, "--yes"],
         );
+        // Each refusal answers the one request sent, which is never sent again.
+        let one = [
+            READ_ACME_PROJECT,
+            LIST_ACME_INSTALLATIONS,
+            AUTHORIZE_ACME_CONNECTION,
+        ];
+        assert_eq!(sent(server), [one, one].concat(), "{outcome}");
         assert_eq!(json.status.code(), Some(1), "{outcome}: {}", stderr(&json));
         assert_eq!(json_output(&json)["outcome"], outcome);
+        assert_eq!(human.status.code(), Some(1), "{outcome}");
+        assert!(human.stdout.is_empty(), "{outcome}");
+        let text = stderr(&human);
+        assert!(!text.is_empty(), "{outcome}");
+        let names = match outcome {
+            // Another runs is authorized only once the one in force is
+            // ended.
+            "already_authorized" => Some("useful org integration deauthorize github"),
+            "connection_unverified" => Some("useful org integration connect github"),
+            _ => None,
+        };
+        if let Some(command) = names {
+            assert!(text.contains(command), "{command} not in\n{text}");
+        }
     }
 
     // The generic not-found of a deployment that routes no connection authorization is told
@@ -1197,6 +1912,7 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
         ),
     ] {
         let (server, _directory, credential) = prepared(vec![
+            project_of(INSTALLATION_ID),
             installations_in(&["active"]),
             problem("404 Not Found", 404, "not-found"),
             organization_read,
@@ -1210,6 +1926,7 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
         assert_eq!(
             sent(server),
             [
+                READ_ACME_PROJECT,
                 LIST_ACME_INSTALLATIONS,
                 AUTHORIZE_ACME_CONNECTION,
                 READ_ACME
@@ -1220,8 +1937,6 @@ fn authorize_with_a_project_reports_each_of_clouds_refusals_with_its_own_outcome
     }
 }
 
-// REQ-INTEGRATION-33
-// REQ-INTEGRATION-76
 #[test]
 fn project_is_required_for_a_connection_and_refused_for_a_token_before_any_request() {
     let (server, _directory, credential) = prepared(vec![]);
@@ -1260,6 +1975,27 @@ fn project_is_required_for_a_connection_and_refused_for_a_token_before_any_reque
             NEW_RUNNER_ID,
             "--yes",
         ],
+        // --runs without --project, and on deauthorize.
+        &[
+            "authorize",
+            "github",
+            "--runner",
+            NEW_RUNNER_ID,
+            "--runs",
+            "all",
+            "--yes",
+        ],
+        &[
+            "deauthorize",
+            "github",
+            "--runner",
+            RUNNER_ID,
+            "--project",
+            PROJECT_ID,
+            "--runs",
+            "all",
+            "--yes",
+        ],
     ] {
         let output = org(&server, &credential, args);
         assert_eq!(
@@ -1273,7 +2009,6 @@ fn project_is_required_for_a_connection_and_refused_for_a_token_before_any_reque
     assert!(server.finish().is_empty());
 }
 
-// REQ-INTEGRATION-33
 #[test]
 fn project_is_named_by_its_exact_name_among_the_organizations_projects() {
     let project = serde_json::json!({
@@ -1281,14 +2016,15 @@ fn project_is_named_by_its_exact_name_among_the_organizations_projects() {
         "organizationId": ORGANIZATION_ID,
         "name": "website",
         "runnerPool": null,
-        "repository": null,
-        "executionReadiness": {"ready": false, "blockers": ["runner_pool_unassigned", "repository_detached"]},
+        "repository": github_repository(INSTALLATION_ID, "acme/website", "active"),
+        "executionReadiness": {"ready": false, "blockers": ["runner_pool_unassigned"]},
         "createdAt": "2026-09-05T12:00:00Z",
         "updatedAt": "2026-09-05T12:01:00Z"
     });
     let projects = || json_http_response("200 OK", serde_json::json!({"items": [project.clone()]}));
     let (server, _directory, credential) = prepared(vec![
         projects(),
+        project_of(INSTALLATION_ID),
         installations_in(&["active"]),
         connection_authorized(NEW_RUNNER_ID, INSTALLATION_ID),
         projects(),
@@ -1328,15 +2064,17 @@ fn project_is_named_by_its_exact_name_among_the_organizations_projects() {
         requests[0]
     );
     assert_eq!(named.status.code(), Some(0), "{}", stderr(&named));
-    assert_eq!(body(&requests[2])["projectId"], PROJECT_ID);
+    assert!(
+        requests[1].starts_with(READ_ACME_PROJECT),
+        "{}",
+        requests[1]
+    );
+    assert_eq!(body(&requests[3])["projectId"], PROJECT_ID);
     assert_eq!(unknown.status.code(), Some(1), "{}", stderr(&unknown));
     assert_eq!(json_output(&unknown)["outcome"], "project_not_found");
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
 }
 
-// REQ-INTEGRATION-33
-// REQ-INTEGRATION-29
-// REQ-INTEGRATION-74
 #[test]
 fn deauthorize_with_a_project_ends_the_runners_authorization_found_in_the_organizations_list() {
     let (server, _directory, credential) = prepared(vec![
@@ -1402,9 +2140,6 @@ fn deauthorize_with_a_project_ends_the_runners_authorization_found_in_the_organi
     assert_stated_by_the_refusal(&stated, &stderr(&refusal));
 }
 
-// REQ-INTEGRATION-33
-// REQ-GRANT-81
-// REQ-INTEGRATION-75
 #[test]
 fn deauthorize_with_a_project_given_no_runner_names_those_that_hold_an_authorization_there() {
     let mut unregistered = connection_authorization(ENDED_RUNNER_ID, "github", INSTALLATION_ID);

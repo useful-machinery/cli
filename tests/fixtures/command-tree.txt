@@ -169,6 +169,10 @@ workflow run publication
 workflow run publication create
 workflow run publication list
 workflow run publication show
+workflow run record
+workflow run record create
+workflow run record download
+workflow run record restore
 workflow run release
 workflow run resume
 workflow run retry

@@ -32,7 +32,7 @@ impl ExecutionJob {
     }
 
     /// The job, feeding `view`, which the manager also holds, as it runs a single-workflow
-    /// run (INV-RUNNER-47).
+    /// run.
     pub(in crate::service) fn feeding(self, view: AssignmentRunView) -> Self {
         Self {
             view: Some(view),
@@ -41,7 +41,7 @@ impl ExecutionJob {
     }
 
     /// The job, its single-workflow run's engine consulting `start_gate` before each command
-    /// or agent step (REQ-RUNNERENROLL-155, INV-ENGINE-46).
+    /// or agent step.
     pub(in crate::service) fn with_start_gate(self, start_gate: Arc<dyn StepStartGate>) -> Self {
         Self { start_gate, ..self }
     }
@@ -185,9 +185,9 @@ impl ExecutionJob {
                     )
                 });
                 // The engine executes inside the runner's command fence, entered on a
-                // blocking worker since it waits while a holder holds the fence
-                // (INV-RUNNER-53). A tree run's commands enter it on their own, so a waiting
-                // tree run leaves it open.
+                // blocking worker since it waits while a holder holds the fence. A tree
+                // run's commands enter it on their own, so a waiting tree run leaves it
+                // open.
                 let fence = Arc::clone(&self.command_fence);
                 match tokio::task::spawn_blocking(move || fence.enter()).await {
                     Ok(entry) => {
@@ -999,8 +999,8 @@ impl ExecutionJob {
             report,
         });
         match enqueued {
-            // Step reporting changes no run's result (REQ-RUNNERENROLL-88): the run event
-            // records why its latest report for steps alone was refused, and the run goes on.
+            // Step reporting changes no run's result: the run event records why its latest
+            // report for steps alone was refused, and the run goes on.
             Err(error) if steps_only => self.run_event.set(KeyValue::new(
                 telemetry::attribute::STEP_REPORT_REFUSAL,
                 outbox_cause(error, terminal),
@@ -1105,10 +1105,10 @@ impl ExecutionJob {
     }
 }
 
-// How the teardown phase ended (REQ-TELEMETRY-68): `Succeeded` once process
-// quiescence is proven and the workspace is released or retained as asked,
-// `Cancelled` when a shutdown preempted a proven release, and `Failed` when
-// quiescence was not proven or the cleanup quarantined the workspace.
+// How the teardown phase ended: `Succeeded` once process quiescence is
+// proven and the workspace is released or retained as asked, `Cancelled`
+// when a shutdown preempted a proven release, and `Failed` when quiescence
+// was not proven or the cleanup quarantined the workspace.
 fn teardown_end(
     quiescence: super::super::workspace::ProcessQuiescence,
     release: super::super::workspace::CleanupResult,

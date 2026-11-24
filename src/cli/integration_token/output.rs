@@ -1,7 +1,7 @@
 //! How a token service's token is printed: the record's view, which every command that shows a
 //! token prints, the report of a token connected, replaced, shown or revoked, and a refusal with
-//! its remedy (REQ-INTEGRATION-16 to REQ-INTEGRATION-20). Only the record's named fields are
-//! printed, so nothing an answer adds beyond the model, a token least of all, reaches output.
+//! its remedy. Only the record's named fields are printed, so nothing an answer adds beyond the
+//! model, a token least of all, reaches output.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -210,8 +210,8 @@ impl ListedToken {
         )
     }
 
-    /// Reports the one token `show INTEGRATION` names, as the one document or a report
-    /// (REQ-INTEGRATION-19).
+    /// Reports the one token `show INTEGRATION` names, as the one document or a
+    /// report.
     pub(in crate::cli) fn write_shown(
         &self,
         deployment: &str,
@@ -307,8 +307,7 @@ impl<'a> TokenResult<'a> {
 }
 
 /// Reports the token `connect` stored, or the next version `reconnect` stored where it
-/// `replaced` the one held, of the organization `slug` names where one was named
-/// (REQ-INTEGRATION-16, REQ-INTEGRATION-18).
+/// `replaced` the one held, of the organization `slug` names where one was named.
 pub(super) fn write_connected(
     deployment: &str,
     token: &IntegrationToken,
@@ -379,7 +378,7 @@ struct RevokedResult<'a> {
 }
 
 /// Reports `token`, of the organization `slug` names where one was named, which `disconnect`
-/// erased from Cloud; it stays valid at the service (REQ-INTEGRATION-20).
+/// erased from Cloud; it stays valid at the service.
 pub(in crate::cli) fn write_revoked(
     deployment: &str,
     token: &IntegrationToken,

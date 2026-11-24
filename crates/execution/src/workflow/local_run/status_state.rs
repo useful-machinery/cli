@@ -21,15 +21,15 @@ pub struct LocalStatusStateView {
 }
 
 /// A recorded start time and the time elapsed since it at a caller's `now`, zero for a start
-/// recorded after `now` (REQ-LOCALRUN-189).
+/// recorded after `now`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalStatusStart {
     pub at: String,
     pub elapsed: Duration,
 }
 
-/// The current attempt's start and its in-flight nodes (REQ-LOCALRUN-189). A start the state
-/// does not record, as in a state an earlier `useful` wrote (REQ-LOCALRUN-201), is `None`.
+/// The current attempt's start and its in-flight nodes. A start the state does not record,
+/// as in a state an earlier `useful` wrote, is `None`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalStatusProgress {
     pub started: Option<LocalStatusStart>,
@@ -113,8 +113,7 @@ impl LocalStatusStateView {
     }
 
     /// The source each `firstOf` of the current attempt's steps took, a line each naming the
-    /// step, the binding and the reference; nothing for an attempt that has none
-    /// (REQ-EVIDENCE-29, REQ-LOCALRUN-145).
+    /// step, the binding and the reference; nothing for an attempt that has none.
     pub fn write_input_sources(&self, writer: &mut impl Write) -> io::Result<()> {
         for step in &self.current()?.progress.steps {
             for source in &step.input_sources {
@@ -131,8 +130,7 @@ impl LocalStatusStateView {
     }
 
     /// The class of each classified failure of the current attempt's steps, a line each
-    /// naming the step and the class; nothing for an attempt that has none (REQ-WFEXEC-79,
-    /// REQ-LOCALRUN-145).
+    /// naming the step and the class; nothing for an attempt that has none.
     pub fn write_failure_classes(&self, writer: &mut impl Write) -> io::Result<()> {
         for step in &self.current()?.progress.steps {
             if let Some(class) = step.failure_class {

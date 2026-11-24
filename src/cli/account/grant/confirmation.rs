@@ -14,37 +14,36 @@ use clap::{ArgAction, ArgMatches, Args, CommandFactory, FromArgMatches};
 use crate::exit_code::ExitCode;
 use useful_api::MemberGrantKind;
 
-/// Who can use a native grant once a runner holds it (REQ-GRANT-66).
+/// Who can use a native grant once a runner holds it.
 pub(in crate::cli) const NATIVE_AUTHORIZE: &[&str] = &[
     "every run the runner serves can use the agent login, whichever member caused the run",
     "every step on the runner can read the agent login",
 ];
 
-/// The stop Cloud requests of the runner's run when a native grant's authorization ends
-/// (REQ-GRANT-48).
+/// The stop Cloud requests of the runner's run when a native grant's authorization
+/// ends.
 pub(in crate::cli) const NATIVE_DEAUTHORIZE: &[&str] =
     &["the run the runner is serving will be asked to stop, whichever member started it"];
 
-/// The stop Cloud requests of each runner's run when a native grant is revoked (REQ-GRANT-48).
+/// The stop Cloud requests of each runner's run when a native grant is revoked.
 pub(in crate::cli) const NATIVE_REVOKE: &[&str] = &[
     "the run each of the agent login's runners is serving will be asked to stop, whichever \
      member started it",
 ];
 
-/// What ending a runner's authorization for a token does, whoever's it is (REQ-INTEGRATION-20).
+/// What ending a runner's authorization for a token does, whoever's it is.
 pub(in crate::cli) const TOKEN_DEAUTHORIZE: &[&str] = &[
     "the runner is issued the token no more; a running assignment loses it at its next refresh, \
      within five minutes",
 ];
 
-/// What revoking a token does, whoever's it is (REQ-INTEGRATION-20).
+/// What revoking a token does, whoever's it is.
 pub(in crate::cli) const TOKEN_REVOKE: &[&str] =
     &["the token is erased from Cloud; it stays valid at the service until it is ended there"];
 
 /// What a statement depends on: the kind of the grant a leaf acts on, or that it acts on the
-/// member's or the organization's token of a token service (REQ-INTEGRATION-20), or on a
-/// runner's authorization for one of the organization's connections in one project
-/// (REQ-INTEGRATION-33).
+/// member's or the organization's token of a token service, or on a runner's authorization
+/// for one of the organization's connections in one project.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::cli) enum Kind {
     Grant(MemberGrantKind),
@@ -95,8 +94,8 @@ impl Statement {
 }
 
 /// A leaf that states what acting does before it acts, and in place of acting when `--yes` is
-/// missing where it cannot ask: `authorize` who can use the grant (REQ-GRANT-66), `revoke` and
-/// `deauthorize` the runs that will be asked to stop (REQ-GRANT-67, REQ-GRANT-68).
+/// missing where it cannot ask: `authorize` who can use the grant, `revoke` and `deauthorize`
+/// the runs that will be asked to stop.
 pub(in crate::cli) trait Stated: Args {
     /// The leaf's command path, which the refusal's usage names.
     const COMMAND: &'static str;
@@ -106,7 +105,7 @@ pub(in crate::cli) trait Stated: Args {
     const ACTION: &'static str;
 
     /// Whether a missing `--yes` is left to the leaf rather than refused before it runs, so that
-    /// it can ask in its place (REQ-GRANT-82, [`asks`]): only `authorize` and `deauthorize` do.
+    /// it can ask in its place ([`asks`]): only `authorize` and `deauthorize` do.
     const ASKS: bool = false;
 }
 
@@ -131,7 +130,7 @@ pub(in crate::cli) fn can_ask() -> bool {
 
 /// Asks `question` on standard error with `[y/N]` and reads one line of answer from standard
 /// input: whether it is yes. The grant commands ask every question this way.
-pub(super) fn ask(question: fmt::Arguments<'_>) -> io::Result<bool> {
+pub(in crate::cli) fn ask(question: fmt::Arguments<'_>) -> io::Result<bool> {
     let mut stderr = io::stderr().lock();
     write!(stderr, "{question} [y/N] ")?;
     stderr.flush()?;
@@ -143,14 +142,36 @@ pub(super) fn ask(question: fmt::Arguments<'_>) -> io::Result<bool> {
     ))
 }
 
-/// After the statement of a leaf given its runner without `--yes` where it can ask
-/// (REQ-GRANT-82, INV-CLI-16): asks whether to go on, the question `--yes` stands for. Any
-/// answer but yes is reported, having sent nothing, and the leaf exits 2.
+/// After the statement of a leaf given its runner without `--yes` where it can ask: asks
+/// whether to go on, the question `--yes` stands for. Any answer but yes is reported,
+/// having sent nothing, and the leaf exits 2.
 pub(in crate::cli) fn go_on(asks: bool) -> anyhow::Result<Result<(), ExitCode>> {
     if !asks || ask(format_args!("Continue?"))? {
         return Ok(Ok(()));
     }
     writeln!(io::stderr().lock(), "error: not confirmed, nothing sent")?;
+    Ok(Err(ExitCode::UsageError))
+}
+
+/// After the statement of a leaf that reads what it acts on before it states it, as `useful
+/// org integration authorize` of a connection does, whose runner `asks`: on a terminal and
+/// without `json`, asks as [`go_on`] does; elsewhere refuses with exit 2, having sent
+/// nothing, naming `action`, what the leaf does, and `command_line`, the leaf's command line
+/// with `--yes`.
+pub(in crate::cli) fn go_on_or_refuse(
+    asks: bool,
+    json: bool,
+    action: &str,
+    command_line: &str,
+) -> anyhow::Result<Result<(), ExitCode>> {
+    if !asks || (!json && can_ask()) {
+        return go_on(asks);
+    }
+    writeln!(
+        io::stderr().lock(),
+        "error: the required argument '--{YES}' was not provided, nothing sent\n\n{action}, run \
+         the command again with --{YES}:\n  {command_line}"
+    )?;
     Ok(Err(ExitCode::UsageError))
 }
 
@@ -207,10 +228,10 @@ impl<C: Stated> FromArgMatches for Confirmation<C> {
     }
 }
 
-/// Whether the leaf `C`, given its runner, asks before it acts (REQ-GRANT-82): not with
-/// `--yes`; without it, where it can ask, `--json` absent, it asks after its statement
-/// ([`go_on`]). Elsewhere it refuses, before anything is read or sent, as a missing `--yes` is
-/// refused when the command line is parsed, and exits 2.
+/// Whether the leaf `C`, given its runner, asks before it acts: not with `--yes`; without it,
+/// where it can ask, `--json` absent, it asks after its statement ([`go_on`]). Elsewhere it
+/// refuses, before anything is read or sent, as a missing `--yes` is refused when the command
+/// line is parsed, and exits 2.
 pub(in crate::cli) fn asks<C: Stated>(
     yes: bool,
     json: bool,

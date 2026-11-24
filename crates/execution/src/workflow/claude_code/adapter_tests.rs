@@ -184,7 +184,7 @@ struct ProcessFixture {
     ready: FixtureSignal,
     descendant_ready: FixtureSignal,
     interrupted: FixtureSignal,
-    /// The case's side of the `release` FIFO beside `ready` (INV-TESTING-29).
+    /// The case's side of the `release` FIFO beside `ready`.
     release_channel: FixtureRelease,
     expected_cwd: PathBuf,
     diagnostic_directory: PathBuf,
@@ -1026,9 +1026,9 @@ fn await_fixture_release() {
     read_fixture_release(&ready.with_file_name("release"));
 }
 
-/// Opens the `release` FIFO at `path` and takes one release from it, a byte at a time so that
-/// a release queued behind it stays for the next wait (INV-TESTING-29). The case holds a writer
-/// for its life, so the open returns at once and end of file means the case has gone away.
+/// Opens the `release` FIFO at `path` and takes one release from it, a byte at a time so that a
+/// release queued behind it stays for the next wait. The case holds a writer for its life, so
+/// the open returns at once and end of file means the case has gone away.
 fn read_fixture_release(path: &Path) {
     let mut release = std::fs::File::open(path).unwrap();
     let mut byte = [0_u8; 1];
@@ -1174,7 +1174,6 @@ async fn expired_bound_message(bounded: impl Future<Output = ()> + Send + 'stati
     *expired.into_panic().downcast::<String>().unwrap()
 }
 
-// INV-TESTING-18
 #[tokio::test]
 async fn fixture_watchdog_expiry_names_the_last_fixture_progress() {
     let message = expired_watchdog_message(async {
@@ -1209,7 +1208,6 @@ async fn fixture_watchdog_expiry_names_the_last_fixture_progress() {
     );
 }
 
-// INV-TESTING-18
 #[tokio::test]
 async fn native_resource_watchdog_expiry_carries_the_mcp_observation() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1272,8 +1270,6 @@ fn launch_plan_stages_exact_prompt_and_lf_delimited_input() {
     assert_eq!(session_argument[1], OsStr::new(fixture.session_id.as_ref()));
 }
 
-// REQ-AGENT-17
-// INV-HARNESS-9
 #[test]
 fn an_existing_native_session_entry_is_never_selected_or_replaced() {
     let fixture = ProcessFixture::new(AgentValueMode::None, 1024);
@@ -1295,8 +1291,6 @@ fn an_existing_native_session_entry_is_never_selected_or_replaced() {
     );
 }
 
-// REQ-GRANT-37
-// INV-HARNESS-9
 #[test]
 fn the_bridge_removes_only_the_ambient_directories_it_created() {
     let fixture = ProcessFixture::new(AgentValueMode::None, 1024);
@@ -1325,7 +1319,6 @@ fn native_project_slug_matches_the_pinned_claude_code_storage_format() {
     );
 }
 
-// REQ-AGENT-18, REQ-AGENT-19
 #[test]
 fn attachment_transport_is_ordered_lossless_and_uses_only_sealed_identities() {
     let source = tempfile::NamedTempFile::new().unwrap();
@@ -1496,7 +1489,6 @@ fn unreadable_native_attachment_preserves_the_attachment_read_failure() {
     assert!(!error.is_empty());
 }
 
-// REQ-AGENT-19
 #[test]
 fn native_attachment_above_the_inline_cap_uses_a_bounded_path_reference() {
     let oversized = vec![0x5a; MAXIMUM_INLINE_ATTACHMENT_FRAME_BYTES + 1];
@@ -1554,7 +1546,6 @@ async fn initial_input_is_written_while_large_stdout_is_pumped() {
     .await;
 }
 
-// REQ-AGENT-62
 #[tokio::test]
 async fn slow_startup_does_not_expire_initial_input_delivery() {
     with_watchdog(async {
@@ -1585,7 +1576,6 @@ async fn slow_startup_does_not_expire_initial_input_delivery() {
     .await;
 }
 
-// REQ-AGENT-46, REQ-AGENT-62
 #[tokio::test]
 async fn cancellation_during_initial_input_quiesces_the_process_group() {
     with_watchdog(async {
@@ -1618,8 +1608,6 @@ async fn cancellation_during_initial_input_quiesces_the_process_group() {
     .await;
 }
 
-// REQ-AGENT-29, REQ-AGENT-35, REQ-AGENT-93, REQ-AGENT-85
-// INV-HARNESS-7, INV-HARNESS-23, INV-HARNESS-24
 #[tokio::test]
 async fn a_rejected_result_is_corrected_through_the_tool_and_the_last_accepted_one_is_the_value() {
     with_watchdog(async {
@@ -1669,7 +1657,6 @@ async fn a_rejected_result_is_corrected_through_the_tool_and_the_last_accepted_o
     .await;
 }
 
-// REQ-AGENT-87, REQ-AGENT-42
 #[tokio::test]
 async fn a_stream_the_reader_cannot_name_fails_nothing_and_leaves_no_rejection_record() {
     let fixture = ProcessFixture::new(AgentValueMode::None, 1024);
@@ -1740,7 +1727,6 @@ async fn assert_fails_at_start(fixture: ProcessFixture) {
     )));
 }
 
-// REQ-AGENT-89
 #[tokio::test]
 async fn an_init_without_the_result_tool_fails_at_start() {
     with_watchdog(assert_fails_at_start(ProcessFixture::scripted(
@@ -1750,8 +1736,6 @@ async fn an_init_without_the_result_tool_fails_at_start() {
     .await;
 }
 
-// REQ-AGENT-44
-// INV-HARNESS-4
 #[tokio::test]
 async fn an_init_naming_another_version_fails_at_start() {
     with_watchdog(assert_fails_at_start(ProcessFixture::scripted(
@@ -1761,7 +1745,6 @@ async fn an_init_naming_another_version_fails_at_start() {
     .await;
 }
 
-// INV-TESTING-29
 #[test]
 fn a_release_neither_waits_for_the_fixture_nor_ends_its_next_wait() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1792,8 +1775,6 @@ fn a_release_neither_waits_for_the_fixture_nor_ends_its_next_wait() {
     waiter.join().unwrap();
 }
 
-// REQ-AGENT-88
-// INV-HARNESS-24
 #[tokio::test]
 async fn a_silent_claude_code_is_stopped_at_the_quiet_bound() {
     with_watchdog(async {
@@ -1919,7 +1900,6 @@ async fn a_silent_claude_code_is_stopped_at_the_quiet_bound() {
     .await;
 }
 
-// REQ-AGENT-88
 #[tokio::test]
 async fn the_result_an_interrupt_at_the_quiet_bound_draws_decides_nothing() {
     with_watchdog(async {
@@ -1982,7 +1962,6 @@ async fn the_result_an_interrupt_at_the_quiet_bound_draws_decides_nothing() {
     .await;
 }
 
-// REQ-AGENT-32, REQ-AGENT-94
 #[tokio::test]
 async fn every_authoritatively_valid_json_root_is_returned_as_submitted() {
     let cases = [
@@ -2012,7 +1991,6 @@ async fn every_authoritatively_valid_json_root_is_returned_as_submitted() {
     }
 }
 
-// REQ-AGENT-30
 #[tokio::test]
 async fn an_oversized_submission_receives_bounded_feedback_before_a_valid_one() {
     with_watchdog(async {
@@ -2041,7 +2019,6 @@ async fn an_oversized_submission_receives_bounded_feedback_before_a_valid_one() 
     .await;
 }
 
-// REQ-AGENT-31
 #[tokio::test]
 async fn a_step_without_an_accepted_submission_fails_with_missing_result() {
     with_watchdog(async {
@@ -2066,7 +2043,6 @@ async fn a_step_without_an_accepted_submission_fails_with_missing_result() {
     .await;
 }
 
-// REQ-AGENT-34
 #[tokio::test]
 async fn validation_timeout_stops_its_worker_and_discards_the_submission() {
     with_watchdog(async {
@@ -2180,8 +2156,6 @@ async fn cancellation_after_an_accepted_result_forces_containment_quiescent() {
     .await;
 }
 
-// REQ-AGENT-22, REQ-AGENT-23, REQ-AGENT-24
-// INV-HARNESS-3
 #[tokio::test]
 async fn normal_driver_preserves_runner_configuration_and_returns_only_final_response() {
     let fixture = ProcessFixture::new(
@@ -2276,7 +2250,7 @@ async fn normal_driver_preserves_runner_configuration_and_returns_only_final_res
         b"retained subagent activity\n"
     );
     // The adapter created the ambient project path under a configuration
-    // directory that had none, and removed it with its links (REQ-GRANT-37).
+    // directory that had none, and removed it with its links.
     assert!(!fixture.config.join("projects").exists());
     assert_eq!(std::fs::read_dir(&fixture.config).unwrap().count(), 0);
 
@@ -2370,8 +2344,6 @@ async fn a_scripted_harness_that_writes_nowhere_emits_the_named_capture_diagnost
     assert!(diagnostic > quiescent);
 }
 
-// REQ-AGENT-39, REQ-AGENT-40
-// INV-HARNESS-5
 #[tokio::test]
 async fn production_failure_matrix_uses_only_existing_typed_outcomes() {
     let successful = json!({"type": "result", "subtype": "success", "is_error": false,
@@ -2506,8 +2478,6 @@ async fn cancellation_during_native_work_drains_and_quiesces_before_reporting() 
     .await;
 }
 
-// REQ-AGENT-46
-// INV-HARNESS-8
 #[tokio::test]
 async fn forced_cancellation_removes_a_stubborn_in_group_descendant() {
     with_watchdog(async {

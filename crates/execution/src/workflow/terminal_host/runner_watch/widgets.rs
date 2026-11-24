@@ -5,11 +5,11 @@ use crate::format_bytes;
 mod assignment;
 
 const RUNNER_WATCH_TITLE: &str = " Useful Machinery runner ";
-/// The banner's label while the newest request failed (REQ-RUNNERENROLL-141).
+/// The banner's label while the newest request failed.
 pub(super) const LAST_KNOWN_LABEL: &str = "last known";
 /// The note left when an answer's boot ID differs from the one shown.
 pub(super) const RESTARTED_LABEL: &str = "runner restarted";
-/// The operation notice's word while the runner has not yet answered (REQ-RUNNERENROLL-142).
+/// The operation notice's word while the runner has not yet answered.
 pub(super) const IN_FLIGHT_LABEL: &str = "waiting for the runner";
 /// A free text is not ellipsized below this width before a less needed fact is left out.
 const MINIMUM_FREE_TEXT_WIDTH: usize = 8;
@@ -434,7 +434,7 @@ fn login_lines(logins: &[RunnerWatchLogin], width: usize, color: bool) -> Vec<Li
 }
 
 /// The operation notice: what is in flight and for how long, or the outcome's facts, whole
-/// on at most three rows with the rest counted (REQ-RUNNERENROLL-142).
+/// on at most three rows with the rest counted.
 fn notice_lines(screen: &RunnerWatchScreen, width: usize, color: bool) -> Vec<Line<'static>> {
     match &screen.notice {
         None => Vec::new(),

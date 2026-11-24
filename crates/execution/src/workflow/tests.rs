@@ -23,7 +23,6 @@ fn canonical_valid_fixture() -> Vec<u8> {
     fs::read(fixture_root().join("valid/plan-implement-test.yaml")).unwrap()
 }
 
-// REQ-WFFORMAT-65, REQ-EXPORTS-6, REQ-EXPORTS-7, REQ-EXPORTS-9
 #[test]
 fn export_presentation_sources_validate_without_creating_dependencies() {
     // Source admission stays behind the canonical schema until the inert
@@ -116,7 +115,6 @@ fn export_presentation_sources_validate_without_creating_dependencies() {
     );
 }
 
-// REQ-WFFORMAT-54
 #[test]
 fn media_type_parameters_use_horizontal_separators_and_control_free_unicode_values() {
     for valid in [
@@ -151,7 +149,6 @@ fn media_type_parameters_use_horizontal_separators_and_control_free_unicode_valu
     }
 }
 
-// REQ-WFFORMAT-32
 #[test]
 fn environment_passthrough_rejects_reserved_invalid_and_duplicate_names() {
     for names in [
@@ -180,7 +177,6 @@ fn environment_passthrough_rejects_reserved_invalid_and_duplicate_names() {
     );
 }
 
-// REQ-WFFORMAT-32
 #[test]
 fn environment_passthrough_admits_only_the_grant_token_names_among_reserved_ones() {
     let fixture =
@@ -221,7 +217,6 @@ fn environment_passthrough_admits_only_the_grant_token_names_among_reserved_ones
     }
 }
 
-// REQ-WFFORMAT-32, REQ-WFFORMAT-33
 #[test]
 fn declared_only_environment_names_exclude_invalid_reserved_and_inherited_names() {
     for name in [
@@ -264,7 +259,6 @@ fn declared_only_environment_names_exclude_invalid_reserved_and_inherited_names(
     }
 }
 
-// REQ-WFFORMAT-102
 #[test]
 fn node_environment_passthrough_decodes_absent_distinct_from_empty() {
     let fixture = fs::read(fixture_root().join("valid/node-environment-passthrough.yaml")).unwrap();
@@ -303,7 +297,6 @@ fn node_environment_passthrough_decodes_absent_distinct_from_empty() {
     );
 }
 
-// REQ-WFFORMAT-1, REQ-WFFORMAT-34, REQ-WFFORMAT-44
 #[test]
 fn canonical_workflow_decodes_into_the_complete_execution_document() {
     let workflow = decode(&canonical_valid_fixture()).unwrap();
@@ -458,7 +451,6 @@ fn canonical_workflow_decodes_into_the_complete_execution_document() {
     );
 }
 
-// REQ-WFFORMAT-41
 #[test]
 fn workflow_v1_decodes_the_three_closed_recovery_forms_only_on_ordinary_steps() {
     let fixture = fs::read(fixture_root().join("valid/recovery-forms.yaml")).unwrap();
@@ -491,7 +483,6 @@ fn workflow_v1_decodes_the_three_closed_recovery_forms_only_on_ordinary_steps() 
     assert!(workflow.finalizers.is_empty());
 }
 
-// REQ-WFFORMAT-46
 #[test]
 fn workflow_v1_decodes_all_three_closed_agent_profiles() {
     let fixture = fs::read(fixture_root().join("valid/mixed-agent-harnesses.yaml")).unwrap();
@@ -521,7 +512,6 @@ fn workflow_v1_decodes_all_three_closed_agent_profiles() {
     );
 }
 
-// REQ-WFFORMAT-48
 #[test]
 fn workflow_v1_codex_shape_is_exact() {
     for config in [
@@ -543,7 +533,6 @@ fn workflow_v1_codex_shape_is_exact() {
     }
 }
 
-// REQ-WFFORMAT-61
 #[test]
 fn finalizers_decode_with_independent_order_defaults_and_engine_context() {
     let source = br#"schemaVersion: 1
@@ -620,7 +609,6 @@ finalizers:
     );
 }
 
-// REQ-WFFORMAT-1, REQ-WFFORMAT-7, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-101
 #[test]
 fn root_workflow_decodes_name_version_root_blocks_and_input_completion() {
     let workflow =
@@ -681,7 +669,7 @@ fn root_workflow_decodes_name_version_root_blocks_and_input_completion() {
             otherwise: "withdraw".to_owned(),
         }
     );
-    // The mirror block keeps its templates and guards as written (REQ-WFFORMAT-101).
+    // The mirror block keeps its templates and guards as written.
     let state = |state: &str, unless: Option<&str>| MirrorState {
         state: state.to_owned(),
         unless: unless.map(str::to_owned),
@@ -770,7 +758,6 @@ fn root_workflow_decodes_name_version_root_blocks_and_input_completion() {
     }
 }
 
-// REQ-WFDEF-34, REQ-WFDEF-44, REQ-WFFORMAT-82
 #[test]
 fn root_requires_decodes_as_and_integrations_as_declared() {
     let workflow =
@@ -807,7 +794,6 @@ fn root_requires_decodes_as_and_integrations_as_declared() {
     assert!(requires.integrations.is_empty());
 }
 
-// REQ-WFDEF-39, REQ-WFFORMAT-82
 #[test]
 fn a_definition_trigger_decodes_its_binding_and_outcomes_as_written() {
     let workflow =
@@ -841,7 +827,6 @@ fn a_definition_trigger_decodes_its_binding_and_outcomes_as_written() {
     );
 }
 
-// REQ-WFDEF-45, REQ-WFFORMAT-82
 #[test]
 fn root_integration_bindings_decode_with_kinds_defaults_and_integration_references() {
     let workflow =
@@ -885,7 +870,6 @@ fn root_integration_bindings_decode_with_kinds_defaults_and_integration_referenc
     );
 }
 
-// REQ-WFDEF-34
 #[test]
 fn root_requires_decodes_a_declared_token_service() {
     let workflow = decode(
@@ -905,14 +889,20 @@ fn root_requires_decodes_a_declared_token_service() {
                 }
             ),
             (IntegrationProvider::Buildkite, Integration::default()),
+            (
+                IntegrationProvider::Cloudflare,
+                Integration {
+                    acting_as: Some(IntegrationAs::Org),
+                    bindings: BTreeMap::new(),
+                }
+            ),
         ])
     );
 }
 
-// REQ-WFDEF-34
 #[test]
 fn declared_integrations_iterate_in_the_bytewise_order_of_their_ids() {
-    let source = "schemaVersion: 1\nrequires:\n  integrations:\n    mergify: {}\n    linear: {}\n    gitlab.com: {}\n    github: {}\n    codex: {}\n    claude_code: {}\n    buildkite: {}\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
+    let source = "schemaVersion: 1\nrequires:\n  integrations:\n    mergify: {}\n    linear: {}\n    gitlab.com: {}\n    github: {}\n    codex: {}\n    claude_code: {}\n    cloudflare: {}\n    buildkite: {}\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
     let integrations = decode(source.as_bytes())
         .unwrap()
         .root
@@ -930,6 +920,7 @@ fn declared_integrations_iterate_in_the_bytewise_order_of_their_ids() {
         [
             "buildkite",
             "claude_code",
+            "cloudflare",
             "codex",
             "github",
             "gitlab.com",
@@ -939,7 +930,6 @@ fn declared_integrations_iterate_in_the_bytewise_order_of_their_ids() {
     );
 }
 
-// REQ-WFDEF-34
 #[test]
 fn every_schema_integration_provider_decodes_to_its_closed_id() {
     let schema: Value = serde_json::from_str(STRUCTURAL_SCHEMA).unwrap();
@@ -965,7 +955,6 @@ fn every_schema_integration_provider_decodes_to_its_closed_id() {
     }
 }
 
-// REQ-WFFORMAT-87, REQ-WFFORMAT-88, REQ-WFFORMAT-110
 #[test]
 fn typed_outcomes_decode_the_names_and_the_outcome_source() {
     let workflow =
@@ -1000,7 +989,6 @@ fn typed_outcomes_decode_the_names_and_the_outcome_source() {
     assert_eq!(plain.outcome, None);
 }
 
-// REQ-WFFORMAT-89, REQ-WFFORMAT-92
 #[test]
 fn workflow_steps_decode_the_child_file_inputs_and_edges() {
     let workflow =
@@ -1050,7 +1038,6 @@ fn workflow_steps_decode_the_child_file_inputs_and_edges() {
     );
 }
 
-// REQ-WFFORMAT-92, REQ-WFFORMAT-95
 #[test]
 fn workflow_steps_decode_hand_backs_and_control_references() {
     let workflow =
@@ -1093,7 +1080,6 @@ fn workflow_steps_decode_hand_backs_and_control_references() {
     );
 }
 
-// REQ-WFFORMAT-98, REQ-WFFORMAT-99
 #[test]
 fn workflow_steps_decode_for_each_and_item_references() {
     let workflow =
@@ -1137,7 +1123,6 @@ fn workflow_steps_decode_for_each_and_item_references() {
     );
 }
 
-// REQ-WFFORMAT-92, REQ-WFFORMAT-96, REQ-WFFORMAT-97
 #[test]
 fn workflow_steps_decode_backward_limited_and_external_edges() {
     let workflow =
@@ -1179,7 +1164,6 @@ fn workflow_steps_decode_backward_limited_and_external_edges() {
     );
 }
 
-// REQ-WFFORMAT-2, REQ-WFFORMAT-8, REQ-WFFORMAT-11, REQ-WFFORMAT-34, REQ-WFFORMAT-36, REQ-WFFORMAT-37, REQ-WFFORMAT-41, REQ-WFFORMAT-42, REQ-WFFORMAT-45, REQ-WFFORMAT-46, REQ-WFFORMAT-53, REQ-WFFORMAT-54, REQ-WFFORMAT-61, REQ-WFRECOVERY-56, REQ-WFRECOVERY-57, REQ-WFFORMAT-28, REQ-WFFORMAT-82, REQ-WFFORMAT-89, REQ-WFFORMAT-92, REQ-WFFORMAT-95, REQ-WFFORMAT-96, REQ-WFFORMAT-102, REQ-WFFORMAT-105, REQ-COMPAT-26, REQ-WFFORMAT-109
 #[test]
 fn every_canonical_invalid_fixture_is_a_structural_failure() {
     let invalid_root = fixture_root().join("invalid");
@@ -1217,7 +1201,6 @@ fn structural_violation(source: &[u8]) -> (Option<String>, String, Option<serde_
     )
 }
 
-// REQ-WFFORMAT-103, REQ-WFDEF-46
 #[test]
 fn a_structural_failure_names_the_field_and_the_rule() {
     let mut hyphenated = canonical_valid_fixture();
@@ -1277,6 +1260,12 @@ fn a_structural_failure_names_the_field_and_the_rule() {
             None,
         ),
         (
+            "workspace-unknown-value.yaml",
+            "steps.work.workspace",
+            "enum",
+            Some(serde_json::json!(["new", "write", "read", "none"])),
+        ),
+        (
             "unknown-failure-policy.yaml",
             "steps.lint.failurePolicy",
             "enum",
@@ -1313,7 +1302,8 @@ fn a_structural_failure_names_the_field_and_the_rule() {
                 "claude_code",
                 "codex",
                 "mergify",
-                "buildkite"
+                "buildkite",
+                "cloudflare"
             ])),
         ),
         (
@@ -1335,7 +1325,7 @@ fn a_structural_failure_names_the_field_and_the_rule() {
             None,
         ),
         // An integration binding's kind is one its provider lists, a provider that lists
-        // none holds no bindings, and a default is text (REQ-WFDEF-45).
+        // none holds no bindings, and a default is text.
         (
             "root-integration-binding-unknown-kind.yaml",
             "requires.integrations.linear.bindings.team.kind",
@@ -1387,7 +1377,6 @@ fn a_structural_failure_names_the_field_and_the_rule() {
     }
 }
 
-// REQ-WFFORMAT-4, REQ-WFFORMAT-5, REQ-WFCOND-3
 #[test]
 fn every_canonical_forbidden_yaml_fixture_is_refused() {
     let forbidden_root = fixture_root().join("yaml-forbidden");
@@ -1414,7 +1403,6 @@ fn every_canonical_forbidden_yaml_fixture_is_refused() {
     );
 }
 
-// REQ-WFFORMAT-63
 #[test]
 fn finalization_context_is_structurally_restricted_to_finalizer_inputs_and_attachments() {
     let agent_prefix = "schemaVersion: 1
@@ -1449,7 +1437,6 @@ steps:
     }
 }
 
-// REQ-WFFORMAT-56
 #[test]
 fn agent_only_output_sources_are_structurally_refused_on_command_nodes() {
     let agent_profile = "agentProfiles:
@@ -1494,7 +1481,6 @@ fn agent_only_output_sources_are_structurally_refused_on_command_nodes() {
     }
 }
 
-// REQ-WFFORMAT-47, REQ-WFFORMAT-51
 #[test]
 fn unused_agent_profiles_still_use_the_pi_config_contract() {
     let source = b"schemaVersion: 1
@@ -1518,7 +1504,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-4, REQ-WFFORMAT-5, REQ-WFFORMAT-10
 #[test]
 fn forbidden_yaml_features_are_not_normalized() {
     let cases = [
@@ -1594,7 +1579,6 @@ fn forbidden_yaml_features_are_not_normalized() {
     }
 }
 
-// REQ-WFFORMAT-3, REQ-WFFORMAT-5
 #[test]
 fn yaml_1_2_core_does_not_apply_legacy_scalar_coercions() {
     let workflow = decode(
@@ -1631,7 +1615,6 @@ fn yaml_1_2_core_does_not_apply_legacy_scalar_coercions() {
     );
 }
 
-// REQ-WFFORMAT-3, REQ-WFFORMAT-5
 #[test]
 fn float_schema_version_is_forbidden_yaml() {
     let error = decode(
@@ -1642,7 +1625,6 @@ fn float_schema_version_is_forbidden_yaml() {
     assert_eq!(error.kind(), DecodeFailureKind::ForbiddenYaml);
 }
 
-// REQ-WFFORMAT-4
 #[test]
 fn tag_directive_is_accepted() {
     let workflow = decode(
@@ -1654,7 +1636,6 @@ fn tag_directive_is_accepted() {
     assert!(workflow.steps.contains_key("prepare"));
 }
 
-// REQ-WFFORMAT-4
 #[test]
 fn byte_order_mark_prefix_is_accepted() {
     let source = b"schemaVersion: 1\nsteps: {prepare: {kind: cmd, command: {argv: [\"true\"]}}}\n";
@@ -1666,7 +1647,6 @@ fn byte_order_mark_prefix_is_accepted() {
     assert_eq!(workflow, decode(source).unwrap());
 }
 
-// REQ-WFFORMAT-5
 #[test]
 fn explicit_yaml_core_tags_are_accepted() {
     let workflow = decode(
@@ -1682,7 +1662,6 @@ fn explicit_yaml_core_tags_are_accepted() {
     assert_eq!(prepare.argv, ["true"]);
 }
 
-// REQ-WFFORMAT-76
 #[test]
 fn workflow_file_size_and_nesting_limits_match_cloud_boundaries() {
     let source = "schemaVersion: 1\nsteps: {prepare: {kind: cmd, command: {argv: [\"true\"]}}}\n";
@@ -1717,7 +1696,6 @@ fn workflow_file_size_and_nesting_limits_match_cloud_boundaries() {
     }
 }
 
-// REQ-WFFORMAT-6
 #[test]
 fn decode_failures_are_classified() {
     let failures = [

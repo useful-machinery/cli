@@ -77,16 +77,10 @@ impl StepProjection for WorkflowRunStepView {
         if let Some(detail) = live_failed_stage_detail(self) {
             return Some(InspectorField::new("failure", detail, Tone::Failure));
         }
-        self.inherited.as_ref().map_or_else(
-            || live_inspector_fact(self.fact.as_ref()),
-            |detail| {
-                Some(InspectorField::new(
-                    "inheritance",
-                    crate::workflow::render_style::inherited_detail(detail),
-                    Tone::Neutral,
-                ))
-            },
-        )
+        self.inherited
+            .as_ref()
+            .map(inheritance_field)
+            .or_else(|| live_inspector_fact(self.fact.as_ref()))
     }
 
     fn inspector_outputs(&self) -> Vec<InspectorOutput> {
@@ -450,7 +444,7 @@ pub(super) fn harness_description(harness: StepHarness<'_>) -> String {
             harness_words("codex", Some(model), "effort", Some(effort))
         }
         // A runner answers the workflow format's harness words; any other is drawn as
-        // received (REQ-RUNNERENROLL-135).
+        // received.
         StepHarness::Words {
             harness,
             model,
@@ -515,6 +509,14 @@ pub(super) fn inspector_timing<Step: StepProjection>(
     }
 }
 
+fn inheritance_field(detail: &crate::workflow::evidence::InheritedDetail) -> InspectorField {
+    InspectorField::new(
+        "inheritance",
+        crate::workflow::render_style::inherited_detail(detail),
+        Tone::Neutral,
+    )
+}
+
 pub(super) fn live_inspector_fact(fact: Option<&ObservedStepTransition>) -> Option<InspectorField> {
     match fact? {
         ObservedStepTransition::Recovery {
@@ -561,6 +563,7 @@ pub(super) fn live_inspector_fact(fact: Option<&ObservedStepTransition>) -> Opti
             cancellation_reason(detail.code),
             Tone::Blocked,
         )),
+        ObservedStepTransition::Inherited { detail, .. } => Some(inheritance_field(detail)),
         ObservedStepTransition::OutputsCommitted { .. } => None,
     }
 }

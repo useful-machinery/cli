@@ -1,5 +1,4 @@
-//! The report of `useful workflow doctor` (REQ-CREDREADY-1 to REQ-CREDREADY-23,
-//! REQ-CREDREADY-26 to REQ-CREDREADY-30): the credentials a workflow tree declares, each judged
+//! The report of `useful workflow doctor`: the credentials a workflow tree declares, each judged
 //! met, failing or unverified on what Cloud showed of the organization's connections and, with
 //! `--runner`, of the member's grants on that runner, with what the member holds of each provider
 //! beside it and where a declaring file's integrations and the inference differ, printed as a
@@ -13,15 +12,16 @@ use serde::Serialize;
 
 use crate::exit_code::ExitCode;
 use useful_runner::{
-    CredentialRequirement, Declaration, DeclarationKind, DerivedCredentials, Difference,
-    IntegrationDifference, Node, NodeKind, OriginDeclaration, ReadinessCode, RepositorySource,
-    UnknownDeclaration, WorkflowCredentials, read_workflow_credentials,
+    CredentialKind, CredentialRequirement, Declaration, DeclarationKind, DerivedCredentials,
+    Difference, IntegrationDifference, Node, NodeKind, OriginDeclaration, ReadinessCode,
+    RepositorySource, UnknownDeclaration, WorkflowCredentials, read_workflow_credentials,
 };
 
+use super::authorizations::{Authorization, InForce};
 use super::grants::{Held, OnRunner, ProviderView};
 
 /// The credentials the tree under `source_root` needs, or `None` once the first file that does
-/// not resolve was rejected as `useful workflow validate` rejects it (REQ-CREDREADY-2).
+/// not resolve was rejected as `useful workflow validate` rejects it.
 pub(super) fn derive(
     source_root: &Path,
     workflow_files: &[PathBuf],
@@ -44,8 +44,8 @@ pub(super) fn derive(
 
 const MET: &str = "met";
 
-/// What meets a requirement (REQ-CREDREADY-30): the runner's host, a grant the runner can use, or
-/// a connection Cloud holds ready, named in that order when several do.
+/// What meets a requirement: the runner's host, a grant the runner can use, or a connection Cloud
+/// holds ready, named in that order when several do.
 #[derive(Clone, Copy)]
 enum MetBy {
     Host,
@@ -81,7 +81,7 @@ struct Verdict {
 }
 
 impl Verdict {
-    /// Whether the requirement fails the report (REQ-CREDREADY-17).
+    /// Whether the requirement fails the report.
     fn fails(&self) -> bool {
         !matches!(self.state, MET | "unverified")
     }
@@ -91,36 +91,49 @@ impl Verdict {
 pub(super) struct Report<'a> {
     pub(super) credentials: WorkflowCredentials,
     /// Where a declaring file's integrations and the inference differ, when a named file
-    /// declares them (REQ-CREDREADY-28); they change no requirement, count or exit status.
+    /// declares them; they change no requirement, count or exit status.
     pub(super) differences: Option<Vec<IntegrationDifference>>,
     /// The organization in effect, for the next actions, when Cloud was asked.
     pub(super) organization: Option<&'a str>,
     /// The project in effect, for the next actions.
     pub(super) project: Option<&'a str>,
-    /// The member's grants, when they were read (REQ-CREDREADY-22).
+    /// The GitHub connection authorization read for the project in effect and `--runner`:
+    /// `None` when it was not read or the read was passed over, else the one in force or
+    /// none.
+    pub(super) authorization: Option<Authorization<'a>>,
+    /// The member's grants, when they were read.
     pub(super) grants: Option<Held<'a>>,
-    /// The deployment asked, when a read was made (REQ-CREDREADY-17).
+    /// The deployment asked, when a read was made.
     pub(super) deployment: Option<&'a str>,
 }
 
 impl<'a> Report<'a> {
-    /// The report of a derivation no Cloud read was made for (REQ-CREDREADY-7).
+    /// The report of a derivation no Cloud read was made for.
     pub(super) fn unread(derived: DerivedCredentials) -> Self {
         Self {
             credentials: derived.reported,
             differences: derived.differences,
             organization: None,
             project: None,
+            authorization: None,
             grants: None,
             deployment: None,
         }
     }
 
-    /// What the report makes of `requirement` (REQ-CREDREADY-26, REQ-CREDREADY-30). With a
-    /// runner named, its host and then a grant it can use meet a requirement; then a connection
-    /// Cloud holds ready does. A requirement nothing meets keeps the failing state its connection
-    /// read gave it; else, with a runner named and a read that could be made, it takes the state
-    /// of the member's grants on that runner; else it stays as its read left it.
+    /// The connection authorization read beside the requirement, which only `github`
+    /// has.
+    fn authorization(&self, requirement: &CredentialRequirement) -> Option<&Authorization<'a>> {
+        self.authorization
+            .as_ref()
+            .filter(|_| requirement.kind == CredentialKind::Github)
+    }
+
+    /// What the report makes of `requirement`. With a runner named, its host and then a grant it
+    /// can use meet a requirement; then a connection Cloud holds ready does. A requirement
+    /// nothing meets keeps the failing state its connection read gave it; else, with a runner
+    /// named and a read that could be made, it takes the state of the member's grants on that
+    /// runner; else it stays as its read left it.
     fn verdict(&self, requirement: &CredentialRequirement) -> Verdict {
         let runner = self.grants.as_ref().and_then(Held::runner);
         let on_runner = self
@@ -200,8 +213,8 @@ impl<'a> Report<'a> {
         summary
     }
 
-    /// Whether a requirement reads `missing`, `reconnect_required` or `insufficient_permission`
-    /// (REQ-CREDREADY-17).
+    /// Whether a requirement reads `missing`, `reconnect_required` or
+    /// `insufficient_permission`.
     fn fails(&self) -> bool {
         self.credentials
             .requirements
@@ -209,7 +222,7 @@ impl<'a> Report<'a> {
             .any(|requirement| self.verdict(requirement).fails())
     }
 
-    /// Writes the report; the command fails when a requirement does (REQ-CREDREADY-17).
+    /// Writes the report; the command fails when a requirement does.
     pub(super) fn write(&self, json: bool) -> anyhow::Result<ExitCode> {
         if json {
             super::super::super::write_pretty_json(&JsonReport::from_report(self))
@@ -316,8 +329,8 @@ fn write_human_report_to(output: &mut impl Write, report: &Report<'_>) -> io::Re
 
 /// `<provider id> · not declared · needed by: <origins>`, or `<provider id> · declared · not
 /// otherwise called for`, without the workflow file. The provider id is the key of
-/// `requires.integrations` to declare or the one declared, `gitlab.com` for the kind `gitlab`
-/// (REQ-CREDREADY-28).
+/// `requires.integrations` to declare or the one declared, `gitlab.com` for the kind
+/// `gitlab`.
 fn describe_difference(difference: &IntegrationDifference) -> String {
     let provider = difference.integration.as_str();
     match difference.difference {
@@ -359,6 +372,9 @@ fn write_requirement(
     if let Some(cloud) = requirement.cloud() {
         writeln!(output, "  cloud: {cloud}")?;
     }
+    if let Some(authorization) = report.authorization(requirement) {
+        authorization.write_human(output)?;
+    }
     for origin in &requirement.origins {
         writeln!(
             output,
@@ -369,7 +385,7 @@ fn write_requirement(
     }
     writeln!(output)?;
     writeln!(output, "  {}", verdict.next_action)?;
-    // A kind with no grant provider, a token service, has no grants to show (REQ-CREDREADY-29).
+    // A kind with no grant provider, a token service, has no grants to show.
     if let Some(held) = report
         .grants
         .as_ref()
@@ -448,7 +464,7 @@ struct JsonReport<'a> {
     workflows: &'a [String],
     requirements: Vec<JsonRequirement<'a>>,
     unknown: Vec<JsonDeclaration<'a>>,
-    /// Present when a named file declares its integrations (REQ-CREDREADY-28).
+    /// Present when a named file declares its integrations.
     #[serde(skip_serializing_if = "Option::is_none")]
     differences: Option<Vec<JsonDifference<'a>>>,
     summary: JsonSummary,
@@ -497,17 +513,21 @@ impl<'a> JsonReport<'a> {
 struct JsonRequirement<'a> {
     kind: &'static str,
     state: &'static str,
-    /// What meets the requirement, present only when it is met (REQ-CREDREADY-30).
+    /// What meets the requirement, present only when it is met.
     #[serde(skip_serializing_if = "Option::is_none")]
     met_by: Option<&'static str>,
     code: &'static str,
-    /// Present on the kinds Cloud holds: `github`, `gitlab` and `linear` (REQ-CREDREADY-16).
+    /// Present on the kinds Cloud holds: `github`, `gitlab` and `linear`.
     #[serde(skip_serializing_if = "Option::is_none")]
     cloud: Option<&'static str>,
     next_action: String,
     origins: Vec<JsonDeclaration<'a>>,
-    /// What the member holds of the kind's provider, when the grants were read
-    /// (REQ-CREDREADY-22).
+    /// On `github`, where it was read, the connection authorization in force, or `null` where
+    /// none is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_authorization: Option<Option<&'a InForce>>,
+    /// What the member holds of the kind's provider, when the grants were
+    /// read.
     #[serde(skip_serializing_if = "Option::is_none")]
     grant: Option<ProviderView<'a>>,
 }
@@ -527,6 +547,9 @@ impl<'a> JsonRequirement<'a> {
                 .iter()
                 .map(JsonDeclaration::from_declaration)
                 .collect(),
+            connection_authorization: report
+                .authorization(requirement)
+                .map(Authorization::in_force),
             grant: report
                 .grants
                 .as_ref()
@@ -613,7 +636,7 @@ struct JsonSummary {
     insufficient_permission: usize,
     unverified: usize,
     unknown: usize,
-    /// Present when a named file declares its integrations (REQ-CREDREADY-28).
+    /// Present when a named file declares its integrations.
     #[serde(skip_serializing_if = "Option::is_none")]
     differences: Option<usize>,
 }

@@ -1,6 +1,5 @@
-//! `useful workflow run input` (REQ-RUNINPUT-65 to REQ-RUNINPUT-67, REQ-RUNINPUT-75): the
-//! inputs a Cloud run retains, which `RUN` names in Cloud alone in the organization in effect
-//! (REQ-LOCALRUN-180); nothing under the `useful` home is read.
+//! `useful workflow run input`: the inputs a Cloud run retains, which `RUN` names in Cloud
+//! alone in the organization in effect; nothing under the `useful` home is read.
 
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
@@ -165,18 +164,18 @@ const DOWNLOAD_STAGING: u8 = 0;
 const DOWNLOAD_CANCELLED: u8 = 1;
 const DOWNLOAD_COMMITTING: u8 = 2;
 
-struct DownloadCommitControl {
+pub(super) struct DownloadCommitControl {
     state: AtomicU8,
 }
 
 impl DownloadCommitControl {
-    const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             state: AtomicU8::new(DOWNLOAD_STAGING),
         }
     }
 
-    fn begin_commit(&self) -> bool {
+    pub(super) fn begin_commit(&self) -> bool {
         self.state
             .compare_exchange(
                 DOWNLOAD_STAGING,
@@ -187,7 +186,7 @@ impl DownloadCommitControl {
             .is_ok()
     }
 
-    fn interrupt(&self) -> bool {
+    pub(super) fn interrupt(&self) -> bool {
         match self.state.compare_exchange(
             DOWNLOAD_STAGING,
             DOWNLOAD_CANCELLED,
@@ -291,9 +290,8 @@ fn download_selected(
     cancellation: &useful_api::HttpCancellation,
     commit_control: &DownloadCommitControl,
 ) -> anyhow::Result<Result<DownloadedInputs, DownloadFailure>> {
-    let (parent, destination_name) = match destination_parent(&command.output) {
-        Ok(destination) => destination,
-        Err(failure) => return Ok(Err(failure)),
+    let Some((parent, destination_name)) = destination_parent(&command.output) else {
+        return Ok(Err(DownloadFailure::DestinationInvalid));
     };
     if std::fs::symlink_metadata(&command.output).is_ok() {
         return Ok(Err(DownloadFailure::DestinationExists));
@@ -469,20 +467,16 @@ fn download_api_failure(failure: RunFailure, input_set_id: Option<&str>) -> Down
     }
 }
 
-fn destination_parent(destination: &Path) -> Result<(PathBuf, &std::ffi::OsStr), DownloadFailure> {
-    let name = destination
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or(DownloadFailure::DestinationInvalid)?;
+pub(super) fn destination_parent(destination: &Path) -> Option<(PathBuf, &std::ffi::OsStr)> {
+    let name = destination.file_name().filter(|name| !name.is_empty())?;
     let parent = destination
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let metadata = std::fs::metadata(parent).map_err(|_| DownloadFailure::DestinationInvalid)?;
-    if !metadata.is_dir() {
-        return Err(DownloadFailure::DestinationInvalid);
-    }
-    Ok((parent.to_owned(), name))
+    std::fs::metadata(parent)
+        .ok()?
+        .is_dir()
+        .then(|| (parent.to_owned(), name))
 }
 
 fn select_members(

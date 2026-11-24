@@ -18,14 +18,13 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use url::Url;
 use zeroize::Zeroize as _;
 
-use crate::credential::Credential;
 use crate::runner_http::{self, SensitiveString};
 use crate::service::config::RepositoryUrlPolicy;
 use useful_execution::ManagedProcessGroup;
 use useful_execution::{
     CaptureCancellation, CloudGitCaptureProjection, EnvironmentSnapshot, ResolvedWorkflow, resolve,
 };
-use useful_runner_protocol::ExecutionSpecV1RunnerProjection;
+use useful_runner_protocol::RepositorySourcesV1RunnerProjection;
 
 const PROVIDER_RETRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -148,49 +147,28 @@ impl Drop for ProviderSecret {
 
 #[derive(Clone)]
 pub(super) struct HttpSourceCredentialBroker {
-    credential_endpoint: Url,
-    availability_endpoint: Url,
-    workflow_git_endpoint: Url,
-    workflow_git_revoke_endpoint: Url,
-    preparation_revoke_endpoint: Url,
-    runner_credential: Credential,
+    target: runner_http::ServingTarget,
     boot_id: Arc<str>,
     repository_url_policy: RepositoryUrlPolicy,
     recorder: Option<Arc<crate::telemetry::Recorder>>,
     retry_waiter: Arc<dyn ProviderRetryWaiter>,
 }
 
-pub(super) use crate::runner_http::{private_runner_http_endpoint, wait_for_cancellation};
+pub(super) use crate::runner_http::wait_for_cancellation;
 
 impl HttpSourceCredentialBroker {
     pub(super) fn new(
-        endpoint: &Url,
-        runner_credential: &Credential,
+        target: runner_http::ServingTarget,
         boot_id: &str,
         repository_url_policy: RepositoryUrlPolicy,
-    ) -> Result<Self, ()> {
-        let credential_endpoint =
-            private_runner_http_endpoint(endpoint, "/v1/runner/source-credentials")?;
-        let availability_endpoint =
-            private_runner_http_endpoint(endpoint, "/v1/runner/source-commit-availability")?;
-        let workflow_git_endpoint =
-            private_runner_http_endpoint(endpoint, "/v1/runner/workflow-git-credentials")?;
-        let workflow_git_revoke_endpoint =
-            private_runner_http_endpoint(endpoint, "/v1/runner/workflow-git-credentials/revoke")?;
-        let preparation_revoke_endpoint =
-            private_runner_http_endpoint(endpoint, "/v1/runner/source-credentials/revoke")?;
-        Ok(Self {
-            credential_endpoint,
-            availability_endpoint,
-            workflow_git_endpoint,
-            workflow_git_revoke_endpoint,
-            preparation_revoke_endpoint,
-            runner_credential: runner_credential.clone(),
+    ) -> Self {
+        Self {
+            target,
             boot_id: Arc::from(boot_id),
             repository_url_policy,
             recorder: None,
             retry_waiter: Arc::new(SystemProviderRetryWaiter),
-        })
+        }
     }
 
     pub(super) fn with_recorder(mut self, recorder: Arc<crate::telemetry::Recorder>) -> Self {
@@ -291,22 +269,22 @@ impl From<runner_http::Failure> for CredentialBrokerFailure {
 impl HttpSourceCredentialBroker {
     fn request_current(
         &self,
-        endpoint: &Url,
+        path: &str,
         assignment_id: &str,
         retry_cancellation: &CaptureCancellation,
         request_cancellation: &CaptureCancellation,
         source_role: Option<&str>,
-    ) -> Result<runner_http::Response, CredentialBrokerFailure> {
+    ) -> Result<(Url, runner_http::Response), CredentialBrokerFailure> {
         loop {
-            let response = self.request_current_once(
-                endpoint,
+            let (endpoint, response) = self.request_current_once(
+                path,
                 assignment_id,
                 retry_cancellation,
                 request_cancellation,
                 source_role,
             )?;
             let Some(retry_after) = response.retry_after else {
-                return Ok(response);
+                return Ok((endpoint, response));
             };
             self.retry_waiter.wait(retry_after, retry_cancellation)?;
         }
@@ -314,12 +292,12 @@ impl HttpSourceCredentialBroker {
 
     fn request_current_once(
         &self,
-        endpoint: &Url,
+        path: &str,
         assignment_id: &str,
         retry_cancellation: &CaptureCancellation,
         request_cancellation: &CaptureCancellation,
         source_role: Option<&str>,
-    ) -> Result<runner_http::Response, CredentialBrokerFailure> {
+    ) -> Result<(Url, runner_http::Response), CredentialBrokerFailure> {
         ensure_broker_current(retry_cancellation)?;
         let mut request = serde_json::json!({
             "schemaVersion": 1,
@@ -332,18 +310,20 @@ impl HttpSourceCredentialBroker {
         let body = serde_json::to_vec(&request)
             .map(ProviderSecret)
             .map_err(|_| CredentialBrokerFailure::Unavailable)?;
-        self.request_encoded(endpoint, body, Some(request_cancellation))
+        self.request_encoded(path, body, Some(request_cancellation))
     }
 
     fn request_encoded(
         &self,
-        endpoint: &Url,
+        path: &str,
         mut body: ProviderSecret,
         cancellation: Option<&CaptureCancellation>,
-    ) -> Result<runner_http::Response, CredentialBrokerFailure> {
+    ) -> Result<(Url, runner_http::Response), CredentialBrokerFailure> {
+        let target = self.target.current();
+        let endpoint = target.url(path);
         let response = runner_http::post_json(
-            endpoint,
-            &self.runner_credential,
+            &endpoint,
+            target.credential(),
             std::mem::take(&mut body.0),
             &[StatusCode::OK, StatusCode::FAILED_DEPENDENCY],
             runner_http::REQUEST_TIMEOUT,
@@ -354,27 +334,27 @@ impl HttpSourceCredentialBroker {
         if !response.private_no_store {
             return Err(CredentialBrokerFailure::InvalidResponse);
         }
-        Ok(response)
+        Ok((endpoint, response))
     }
 
     fn issue_current(
         &self,
-        endpoint: &Url,
+        path: &str,
         assignment_id: &str,
         cancellation: &CaptureCancellation,
     ) -> Result<ProviderCredential, CredentialBrokerFailure> {
-        self.issue_current_with_cancellation(endpoint, assignment_id, cancellation, cancellation)
+        self.issue_current_with_cancellation(path, assignment_id, cancellation, cancellation)
     }
 
     fn issue_current_with_cancellation(
         &self,
-        endpoint: &Url,
+        path: &str,
         assignment_id: &str,
         retry_cancellation: &CaptureCancellation,
         request_cancellation: &CaptureCancellation,
     ) -> Result<ProviderCredential, CredentialBrokerFailure> {
-        let response = self.request_current(
-            endpoint,
+        let (mut expected, response) = self.request_current(
+            path,
             assignment_id,
             retry_cancellation,
             request_cancellation,
@@ -426,7 +406,6 @@ impl HttpSourceCredentialBroker {
         let repository_url = validate_repository_url(&repository_url, self.repository_url_policy)?;
         let (internal_url, canonical_repository_url) = match read_url {
             Some(read_url) => {
-                let mut expected = self.credential_endpoint.clone();
                 expected.set_path(&format!(
                     "/v1/runner/git-read/{assignment_id}/repository.git"
                 ));
@@ -485,7 +464,8 @@ impl HttpSourceCredentialBroker {
         })
         .map(ProviderSecret)
         .map_err(|_| CredentialBrokerFailure::Unavailable)?;
-        let response = self.request_encoded(&self.preparation_revoke_endpoint, body, None)?;
+        let (_, response) =
+            self.request_encoded("/v1/runner/source-credentials/revoke", body, None)?;
         match response.status {
             StatusCode::NO_CONTENT => Ok(()),
             StatusCode::CONFLICT => Err(CredentialBrokerFailure::Fenced),
@@ -508,7 +488,8 @@ impl HttpSourceCredentialBroker {
         })
         .map(ProviderSecret)
         .map_err(|_| CredentialBrokerFailure::Unavailable)?;
-        let response = self.request_encoded(&self.workflow_git_revoke_endpoint, body, None)?;
+        let (_, response) =
+            self.request_encoded("/v1/runner/workflow-git-credentials/revoke", body, None)?;
         match response.status {
             StatusCode::CONFLICT => return Err(CredentialBrokerFailure::Fenced),
             StatusCode::NO_CONTENT if token.starts_with("grg_") => {
@@ -542,8 +523,8 @@ impl HttpSourceCredentialBroker {
         cancellation: &CaptureCancellation,
         source_role: Option<&str>,
     ) -> Result<CommitAvailability, CredentialBrokerFailure> {
-        let response = self.request_current(
-            &self.availability_endpoint,
+        let (_, response) = self.request_current(
+            "/v1/runner/source-commit-availability",
             assignment_id,
             cancellation,
             cancellation,
@@ -578,7 +559,7 @@ impl SourceCredentialBroker for HttpSourceCredentialBroker {
         let worker_cancellation = cancellation.clone();
         run_broker_worker("runner-source-credential", cancellation, move || {
             broker.issue_current(
-                &broker.credential_endpoint.clone(),
+                "/v1/runner/source-credentials",
                 &assignment_id,
                 &worker_cancellation,
             )
@@ -631,7 +612,7 @@ impl SourceCredentialBroker for HttpSourceCredentialBroker {
         ensure_broker_current(cancellation)?;
         let request_lifetime = CaptureCancellation::default();
         self.issue_current_with_cancellation(
-            &self.workflow_git_endpoint,
+            "/v1/runner/workflow-git-credentials",
             assignment_id,
             cancellation,
             &request_lifetime,
@@ -781,10 +762,13 @@ struct WorkflowSourceClosureDigest {
 }
 
 impl MaterializationRequest {
-    pub(super) fn from_validated(execution_spec: &ExecutionSpecV1RunnerProjection) -> Self {
-        let workflow = &execution_spec.workflow_definition_source;
+    pub(super) fn from_validated(
+        source: &RepositorySourcesV1RunnerProjection,
+        schema_version: u64,
+    ) -> Self {
+        let workflow = &source.workflow_definition_source;
         Self {
-            repository_connection_id: execution_spec
+            repository_connection_id: source
                 .primary_workspace_source
                 .repository_connection_id
                 .clone(),
@@ -795,7 +779,7 @@ impl MaterializationRequest {
                 algorithm: workflow.workflow_source_closure_digest.algorithm.clone(),
                 value: workflow.workflow_source_closure_digest.value.clone(),
             },
-            definition_role: execution_spec.schema_version == 3,
+            definition_role: schema_version == 3,
         }
     }
 
@@ -2875,7 +2859,6 @@ mod tests {
         assert_eq!(fs::read_dir(private.path()).unwrap().count(), 0);
     }
 
-    // REQ-WORKSPACE-13, REQ-WORKSPACE-14, REQ-WORKSPACE-17, REQ-WORKSPACE-18
     #[test]
     fn pinned_definition_does_not_read_workspace_yaml_or_static_files() {
         let fixture = repository_fixture(
@@ -3347,7 +3330,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-15
     #[test]
     fn leaves_lfs_pointers_and_submodules_unhydrated() {
         let mut fixture = repository_fixture(OUTPUTLESS_WORKFLOW);
@@ -3465,7 +3447,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-13
     #[test]
     fn every_attempt_requires_a_new_empty_destination_and_credential_issue() {
         let fixture = repository_fixture(OUTPUTLESS_WORKFLOW);
@@ -3542,7 +3523,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-25
     #[test]
     fn rejects_a_non_commit_pinned_oid_as_an_integrity_failure() {
         let workflow = "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
@@ -3562,7 +3542,6 @@ mod tests {
         ));
     }
 
-    // REQ-WORKSPACE-23
     #[test]
     fn missing_pinned_commit_requires_authoritative_provider_absence() {
         let (_fixture, assignment, projection, broker) =
@@ -3581,7 +3560,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-24
     #[test]
     fn missing_definition_is_classified_against_definition_not_available_workspace() {
         let (fixture, assignment, mut definition, broker) =
@@ -3623,7 +3601,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-24
     #[test]
     fn repository_unavailability_never_becomes_commit_unavailability() {
         let (_fixture, assignment, projection, broker) =
@@ -3683,7 +3660,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-25
     #[test]
     fn rejects_a_non_sha1_repository_before_fetching_the_pinned_commit() {
         let temporary = tempfile::tempdir().unwrap();
@@ -3791,19 +3767,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn source_broker_requests_follow_the_serving_target() {
+        test_server::assert_promoted_bearer(
+            |target| {
+                HttpSourceCredentialBroker::new(target, "boot", RepositoryUrlPolicy::production())
+            },
+            |broker| {
+                let _ = broker.issue("assignment", &CaptureCancellation::default());
+            },
+        );
+    }
+
     fn http_source_broker(endpoint: &Url) -> HttpSourceCredentialBroker {
         HttpSourceCredentialBroker::new(
-            endpoint,
-            &test_credential(),
+            crate::runner_http::ServingTarget::new(
+                crate::runner_http::Target::new(endpoint, &test_credential()).unwrap(),
+            ),
             "rbt_01k0z6r1w8f4jy2m7q9v3x5abc",
             RepositoryUrlPolicy::production(),
         )
-        .unwrap()
     }
 
-    // REQ-WORKSPACE-21: the broker's canonical provider URL cannot select the
-    // Git transport target. The broker's public Cloud origin and the exact
-    // assignment path (not the private runner socket origin) are authoritative.
+    // The broker's canonical provider URL cannot select the Git transport
+    // target. The broker's public Cloud origin and the exact assignment path
+    // (not the private runner socket origin) are authoritative.
     #[test]
     fn gitlab_grant_uses_only_the_assignment_cloud_read_url() {
         let assignment = "asn_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -3853,8 +3841,8 @@ mod tests {
         }
     }
 
-    // REQ-WORKSPACE-34: a partial GitLab checkout that never reached workflow
-    // installation must not retain the relay remote on a failed preparation.
+    // A partial GitLab checkout that never reached workflow installation must
+    // not retain the relay remote on a failed preparation.
     #[test]
     fn failed_gitlab_preparation_restores_only_its_own_remote() {
         let temporary = tempfile::tempdir().unwrap();
@@ -3936,14 +3924,7 @@ mod tests {
             r#"{"schemaVersion":1,"reason":"repository_unavailable"}"#,
         );
         let (recorder, capture) = test_recorder("rbt_fixture");
-        let broker = HttpSourceCredentialBroker::new(
-            &endpoint,
-            &test_credential(),
-            "rbt_01k0z6r1w8f4jy2m7q9v3x5abc",
-            RepositoryUrlPolicy::production(),
-        )
-        .unwrap()
-        .with_recorder(recorder);
+        let broker = http_source_broker(&endpoint).with_recorder(recorder);
 
         let result = broker.issue(
             "asn_01k0z6r1w8f4jy2m7q9v3x5abc",
@@ -4129,13 +4110,7 @@ mod tests {
             "200 OK",
             r#"{"schemaVersion":1,"availability":"repository_unavailable"}"#,
         );
-        let broker = HttpSourceCredentialBroker::new(
-            &endpoint,
-            &test_credential(),
-            "rbt_01k0z6r1w8f4jy2m7q9v3x5abc",
-            RepositoryUrlPolicy::production(),
-        )
-        .unwrap();
+        let broker = http_source_broker(&endpoint);
 
         assert_eq!(
             broker.commit_availability(
@@ -4229,13 +4204,7 @@ mod tests {
             while stream.read(&mut buffer).is_ok_and(|read| read != 0) {}
         });
         let endpoint = Url::parse(&format!("ws://{address}/v1/runner/connect")).unwrap();
-        let broker = HttpSourceCredentialBroker::new(
-            &endpoint,
-            &test_credential(),
-            "rbt_01k0z6r1w8f4jy2m7q9v3x5abc",
-            RepositoryUrlPolicy::production(),
-        )
-        .unwrap();
+        let broker = http_source_broker(&endpoint);
         let cancellation = CaptureCancellation::default();
         let cancel = cancellation.clone();
         let canceller = std::thread::spawn(move || {
@@ -4305,7 +4274,6 @@ mod tests {
         assert_eq!(result, Err(MaterializationFailure::AssignmentFenced));
     }
 
-    // REQ-WORKSPACE-25
     #[test]
     fn rejects_a_pinned_digest_mismatch_after_checkout() {
         let workflow = "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";

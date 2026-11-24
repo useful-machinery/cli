@@ -210,7 +210,6 @@ fn completed_response(outcome: &AgentOutcome) -> &str {
     response.as_str()
 }
 
-// REQ-AGENT-26
 #[test]
 fn recorded_response_is_ordered_bounded_and_repeatable_across_chunking() {
     let expected = replay(RESPONSE_SUCCESS, AgentValueKind::Response);
@@ -449,7 +448,6 @@ fn ordinary_tool_events_are_normalized_without_correlation_authority() {
     )));
 }
 
-// REQ-AGENT-38
 #[test]
 fn malformed_observation_shapes_and_unknown_vocabularies_are_unrecognized() {
     let terminal = assistant(
@@ -705,7 +703,6 @@ fn protocol_rejection_uses_the_revised_closed_state() {
     );
 }
 
-// REQ-AGENT-37
 #[test]
 fn native_retry_observations_do_not_override_the_final_response() {
     let replay = replay(NATIVE_RECOVERY, AgentValueKind::Response);
@@ -718,7 +715,6 @@ fn native_retry_observations_do_not_override_the_final_response() {
     )));
 }
 
-// REQ-AGENT-45, REQ-DIAG-36
 #[test]
 fn pi_structured_error_code_projects_only_safe_fields() {
     for (code, status, expected) in [
@@ -773,8 +769,6 @@ fn pi_structured_error_code_projects_only_safe_fields() {
     }
 }
 
-// REQ-AGENT-40
-// INV-HARNESS-5
 #[test]
 fn terminal_stop_reason_uses_the_native_mode_table() {
     for (reason, expected) in [
@@ -843,7 +837,6 @@ fn malformed_update_does_not_change_the_active_block() {
     assert_eq!(completed_response(&replay.outcome), "ab");
 }
 
-// REQ-AGENT-28
 #[test]
 fn response_limit_is_enforced_incrementally_and_on_the_terminal_candidate() {
     let mut parser = PiJsonV1Parser::new(
@@ -1150,7 +1143,6 @@ fn candidate_nested_and_truncated_tool_observations_do_not_settle_a_result() {
     );
 }
 
-// REQ-AGENT-30
 #[test]
 fn sibling_result_rejection_is_recoverable_and_a_later_singleton_succeeds() {
     let replay = replay_accepted_result(SIBLING_RESULT_CORRECTION, "call-corrected-result");

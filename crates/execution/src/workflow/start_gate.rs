@@ -1,6 +1,6 @@
-//! The step driver's start gate (INV-ENGINE-46): one question the driver asks before it
-//! prepares a command or agent step of the workflow's own steps, answered by whoever runs
-//! the engine. With no gate the driver asks nothing.
+//! The step driver's start gate: one question the driver asks before it prepares a
+//! command or agent step of the workflow's own steps, answered by whoever runs the
+//! engine. With no gate the driver asks nothing.
 
 use std::time::Duration;
 

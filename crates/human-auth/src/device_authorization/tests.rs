@@ -61,7 +61,6 @@ fn request_form(request: &str) -> std::collections::HashMap<String, String> {
         .collect()
 }
 
-// REQ-AUTH-23
 #[test]
 fn device_authorization_requests_the_exact_client_audience_and_scopes() -> anyhow::Result<()> {
     let server = ScriptedHttpServer::respond(json_response(
@@ -131,7 +130,6 @@ fn device_authorization_defaults_the_poll_interval_and_allows_missing_complete_u
     Ok(())
 }
 
-// REQ-AUTH-53
 #[test]
 fn insecure_activation_urls_require_the_invocation_opt_in() -> anyhow::Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({
@@ -150,7 +148,6 @@ fn insecure_activation_urls_require_the_invocation_opt_in() -> anyhow::Result<()
     Ok(())
 }
 
-// REQ-AUTH-23, REQ-AUTH-26
 #[test]
 fn token_polling_handles_standard_device_grant_outcomes() -> anyhow::Result<()> {
     let responses = [
@@ -258,7 +255,6 @@ fn token_polling_reuses_one_http_connection() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-24, REQ-AUTH-54
 #[test]
 fn issued_access_and_refresh_tokens_are_validated_and_redacted() -> anyhow::Result<()> {
     let server = ScriptedHttpServer::respond(json_response(
@@ -290,7 +286,6 @@ fn issued_access_and_refresh_tokens_are_validated_and_redacted() -> anyhow::Resu
     Ok(())
 }
 
-// REQ-AUTH-24
 #[test]
 fn invalid_device_and_token_payloads_are_protocol_errors() -> anyhow::Result<()> {
     for body in [
@@ -388,7 +383,6 @@ fn invalid_device_and_token_payloads_are_protocol_errors() -> anyhow::Result<()>
     Ok(())
 }
 
-// REQ-AUTH-33
 #[test]
 fn oauth_request_deadline_bounds_the_complete_exchange() -> anyhow::Result<()> {
     // Keep the peer pending so this isolated check observes only the production
@@ -419,7 +413,6 @@ fn oauth_request_deadline_bounds_the_complete_exchange() -> anyhow::Result<()> {
     Ok(())
 }
 
-// REQ-AUTH-33, REQ-AUTH-56
 #[test]
 fn redirects_oversized_responses_and_temporary_failures_are_classified() -> anyhow::Result<()> {
     let oversized = format!(

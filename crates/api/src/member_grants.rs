@@ -1,5 +1,5 @@
-//! The member's grants of both kinds under `/v1/me/grants` (REQ-GRANT-58 to REQ-GRANT-62),
-//! over the generated principals client.
+//! The member's grants of both kinds under `/v1/me/grants`, over the generated principals
+//! client.
 //!
 //! Responses decode leniently into the generated models, which name no material, so nothing
 //! a response wrongly adds can reach a caller, and a generated error is never formatted: its
@@ -28,7 +28,7 @@ pub type MemberGrantAuthorization = models::GrantAuthorization;
 pub type MemberGrantKind = models::grant::Kind;
 pub type MemberGrantState = models::grant::State;
 // A native grant's exchange with a runner and its ended authorizations are the agent-login
-// models the grant carries unchanged (REQ-GRANT-13).
+// models the grant carries unchanged.
 pub type GrantReport = models::AgentLoginReport;
 pub type GrantEndedAuthorization = models::AgentLoginEndedAuthorization;
 
@@ -128,16 +128,16 @@ pub enum MemberGrantFailure {
     RunnerHoldsLogin,
     AlreadyAuthorized,
     AuthorizationNotFound,
-    // The refusals only the integration-token routes answer (REQ-INTEGRATION-2 to
-    // REQ-INTEGRATION-6), which a grant's name would misreport.
+    // The refusals only the integration-token routes answer, which a grant's name
+    // would misreport.
     IntegrationTokenInvalid,
     IntegrationTokenExists,
     IntegrationTokenNotFound,
     IntegrationTokenRunnerNotFound,
     IntegrationTokenAlreadyAuthorized,
     IntegrationTokenAuthorizationNotFound,
-    // The refusals only the connection authorization routes answer (REQ-INTEGRATION-27 to
-    // REQ-INTEGRATION-29), one value for the seven so a caller that reads none of them names one.
+    // The refusals only the connection authorization routes answer, one value for the seven so a
+    // caller that reads none of them names one.
     ConnectionAuthorizationRefused(ConnectionAuthorizationRefusal),
     RateLimited { retry_after: Option<u64> },
     Unreachable { category: UnreachableCategory },
@@ -286,16 +286,16 @@ fn classify_error<E>(error: apis::Error<E>) -> MemberGrantFailure {
 /// The largest page the list serves.
 pub const MEMBER_GRANT_PAGE: i32 = 200;
 
-/// The provider vocabulary this release decodes (REQ-GRANT-95, REQ-GRANT-96): an answer may name
-/// a grant of any provider of the deployment's table, which this client shows by its id. It is
-/// sent on every operation that takes it, the grant list, a grant, its uses, a consent begun by
-/// provider or from an identity, a consent session and the identity list; a deployment that
-/// predates the parameter ignores it and names only the built-in providers.
+/// The provider vocabulary this release decodes: an answer may name a grant of any provider of
+/// the deployment's table, which this client shows by its id. It is sent on every operation that
+/// takes it, the grant list, a grant, its uses, a consent begun by provider or from an identity,
+/// a consent session and the identity list; a deployment that predates the parameter ignores it
+/// and names only the built-in providers.
 pub(crate) const PROVIDER_VOCABULARY: i32 = 2;
 
 /// Whether `name` has the shape of a provider id: a lowercase letter followed by at most 62
-/// lowercase letters, digits, dots and hyphens, the shape the deployment's table admits
-/// (REQ-PROVIDER-20). Every OAuth provider is named so, and `codex`, but not `claude_code`.
+/// lowercase letters, digits, dots and hyphens, the shape the deployment's table admits.
+/// Every OAuth provider is named so, and `codex`, but not `claude_code`.
 pub fn valid_provider_id(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|first| first.is_ascii_lowercase())
@@ -305,8 +305,8 @@ pub fn valid_provider_id(name: &str) -> bool {
         })
 }
 
-/// Whether an answer may name `name` as an OAuth grant's provider (REQ-GRANT-96): any provider
-/// id but a coding agent's, since the coding agents are the native providers and no others.
+/// Whether an answer may name `name` as an OAuth grant's provider: any provider id but a
+/// coding agent's, since the coding agents are the native providers and no others.
 pub(crate) fn oauth_provider(name: &str) -> bool {
     valid_provider_id(name)
         && MemberGrantProvider::from_wire(name)
@@ -361,7 +361,7 @@ impl MemberGrantApi {
     }
 
     /// One page of the member's grants of `kind`, or of both kinds, OAuth grants first, when
-    /// it is `None` (REQ-GRANT-58).
+    /// it is `None`.
     pub fn list(
         &self,
         kind: Option<MemberGrantKind>,
@@ -387,11 +387,11 @@ impl MemberGrantApi {
         Ok(page)
     }
 
-    /// The providers this deployment serves grants for that this release can use, in its order
-    /// (REQ-GRANT-78), or `None` from a deployment that predates the read and answers its route
-    /// 404, which says nothing of what it serves. The answer is read as text rather than into the
-    /// generated models, so a provider a later deployment serves that this release cannot use is
-    /// passed over (REQ-GRANT-182).
+    /// The providers this deployment serves grants for that this release can use, in its order,
+    /// or `None` from a deployment that predates the read and answers its route 404, which says
+    /// nothing of what it serves. The answer is read as text rather than into the generated
+    /// models, so a provider a later deployment serves that this release cannot use is passed
+    /// over.
     pub fn served_providers(&self) -> Result<Option<Vec<ServedGrantProvider>>, MemberGrantFailure> {
         self.served_answer()?.map(|body| served(&body)).transpose()
     }
@@ -412,7 +412,7 @@ impl MemberGrantApi {
         Ok(Some(response.body))
     }
 
-    /// One of the member's grants of either kind, by its ID (REQ-GRANT-58).
+    /// One of the member's grants of either kind, by its ID.
     pub fn get(&self, grant_id: &str) -> Result<MemberGrant, MemberGrantFailure> {
         let grant = apis::principals_api::get_grant(
             &self.configuration,
@@ -502,7 +502,7 @@ impl MemberGrantApi {
         Ok((memberships, page.next_cursor))
     }
 
-    /// Authorizes one runner for the grant (REQ-GRANT-59).
+    /// Authorizes one runner for the grant.
     pub fn authorize(
         &self,
         grant_id: &str,
@@ -526,7 +526,7 @@ impl MemberGrantApi {
         Ok(authorization)
     }
 
-    /// Ends one authorization of the grant (REQ-GRANT-60).
+    /// Ends one authorization of the grant.
     pub fn deauthorize(
         &self,
         grant_id: &str,
@@ -541,7 +541,7 @@ impl MemberGrantApi {
         )
     }
 
-    /// Revokes the grant (REQ-GRANT-62).
+    /// Revokes the grant.
     pub fn revoke(&self, grant_id: &str, key: &str) -> Result<(), MemberGrantFailure> {
         confirmed_delete(
             &self.configuration,
@@ -552,8 +552,8 @@ impl MemberGrantApi {
     }
 
     /// Imports a coding agent's login as a native grant of `provider` at generation 1 for the
-    /// organization `organization` names by ID or slug (REQ-GRANT-61). An OAuth provider's
-    /// grant is made by its consent, so one is refused here before anything is sent.
+    /// organization `organization` names by ID or slug. An OAuth provider's grant is made by
+    /// its consent, so one is refused here before anything is sent.
     pub fn import(
         &self,
         organization: &str,
@@ -598,8 +598,8 @@ impl MemberGrantApi {
         Ok(grant)
     }
 
-    /// Stores new material as the native grant's next generation (REQ-GRANT-61, REQ-GRANT-16):
-    /// the grant keeps its ID, organization, provider and authorizations.
+    /// Stores new material as the native grant's next generation: the grant keeps its ID,
+    /// organization, provider and authorizations.
     pub fn replace(
         &self,
         grant_id: &str,
@@ -673,9 +673,9 @@ fn authorization_prefix(grant_id: &str) -> Option<&'static str> {
     }
 }
 
-/// A provider a deployment serves grants for that this release can use (REQ-GRANT-78): an OAuth
-/// provider named by a provider id, or a coding agent, with the name the deployment gives it for
-/// people when that name is fit to print.
+/// A provider a deployment serves grants for that this release can use: an OAuth provider named
+/// by a provider id, or a coding agent, with the name the deployment gives it for people when
+/// that name is fit to print.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServedGrantProvider {
     /// The provider's id, as a grant and a consent name it.
@@ -805,7 +805,7 @@ fn valid_grant(value: &MemberGrant) -> bool {
         .all(|time| time.as_deref().is_none_or(|time| !time.is_empty()))
 }
 
-/// An authorization checked as an agent login's is (REQ-GRANT-13), naming its organization.
+/// An authorization checked as an agent login's is, naming its organization.
 fn valid_authorization(value: &MemberGrantAuthorization, prefix: &str) -> bool {
     valid_authorization_record(
         prefix,
@@ -847,7 +847,6 @@ mod tests {
     use super::*;
     use crate::resource::{classify_problem, problem_fixture};
 
-    // REQ-GRANT-65
     #[test]
     fn each_grant_refusal_maps_to_one_outcome_and_a_generic_not_found_only_for_an_organization() {
         use MemberGrantFailure as F;
@@ -962,7 +961,6 @@ mod tests {
         }]})
     }
 
-    // REQ-GRANT-58
     #[test]
     fn a_grants_id_provider_and_kind_agree_and_carry_what_its_kind_requires() {
         const RUN: &str = "run_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1029,9 +1027,6 @@ mod tests {
         (result, server.finish_one())
     }
 
-    // REQ-GRANT-58
-    // REQ-GRANT-96
-    // REQ-COMPAT-20
     #[test]
     fn a_grant_of_any_well_formed_oauth_provider_is_read_and_one_of_another_kind_is_invalid() {
         const ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1089,9 +1084,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-64
-    // REQ-GRANT-13
-    // REQ-GRANT-27
     #[test]
     fn a_native_grants_authorizations_are_checked_as_an_agent_logins_are() {
         let authorization = serde_json::json!({
@@ -1155,8 +1147,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-78
-    // REQ-GRANT-182
     #[test]
     fn a_served_provider_this_release_cannot_use_is_passed_over() {
         // A later deployment may serve a provider of a kind, or named in a shape, this release was

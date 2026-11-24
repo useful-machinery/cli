@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -36,6 +36,12 @@ pub struct GitHubInstallation {
     pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    /// When a completion whose verified setup session proved its GitHub user's authority over the installation bound, reactivated or first verified this binding; null for a binding no such completion has touched.
+    #[serde(
+        rename = "authorityVerifiedAt",
+        deserialize_with = "Option::deserialize"
+    )]
+    pub authority_verified_at: Option<String>,
 }
 
 impl GitHubInstallation {
@@ -48,6 +54,7 @@ impl GitHubInstallation {
         state: State,
         created_at: String,
         updated_at: String,
+        authority_verified_at: Option<String>,
     ) -> GitHubInstallation {
         GitHubInstallation {
             id,
@@ -58,6 +65,7 @@ impl GitHubInstallation {
             state,
             created_at,
             updated_at,
+            authority_verified_at,
         }
     }
 }

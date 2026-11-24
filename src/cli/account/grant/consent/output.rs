@@ -1,6 +1,6 @@
-//! What a consent prints (REQ-GRANT-1, REQ-GRANT-4): the session the member has to approve
-//! and how it settled, as text or as newline-delimited JSON events, and the grant it made.
-//! Nothing a response adds beyond the model reaches output.
+//! What a consent prints: the session the member has to approve and how it settled, as
+//! text or as newline-delimited JSON events, and the grant it made. Nothing a response
+//! adds beyond the model reaches output.
 
 use std::io::{self, Write};
 
@@ -8,6 +8,7 @@ use anyhow::Context;
 use serde::Serialize;
 
 use super::super::super::super::ApiFailureReport;
+use super::super::github_app_alternative;
 use super::super::projection::grant_provider;
 use crate::exit_code::{ExitCode, OutcomeClass};
 use useful_api::{
@@ -15,7 +16,7 @@ use useful_api::{
 };
 
 /// A grant as the CLI presents it: the model's named fields only, enums as their wire
-/// strings. Nothing a response adds beyond the model reaches output (REQ-GRANT-4).
+/// strings. Nothing a response adds beyond the model reaches output.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::cli) struct GrantView<'a> {
@@ -116,9 +117,9 @@ pub(in crate::cli) fn report(deployment: &str, failure: &GrantFailure) -> ApiFai
     }
 }
 
-/// The provider a consent asks: as its wire name, which a start request names, and as its name
-/// in prose; and the grant `useful account integration reconnect` named, when that command started the
-/// consent, which the remedy of a consent that did not complete names (REQ-GRANT-73).
+/// The provider a consent asks: as its wire name, which a start request names, and as its name in
+/// prose; and the grant `useful account integration reconnect` named, when that command started the
+/// consent, which the remedy of a consent that did not complete names.
 #[derive(Clone, Copy)]
 pub(in crate::cli) struct ConsentProvider<'a> {
     pub(in crate::cli) name: &'a str,
@@ -128,7 +129,7 @@ pub(in crate::cli) struct ConsentProvider<'a> {
 
 impl<'a> ConsentProvider<'a> {
     /// The provider of a session `GrantApi` answered: one of the three this client has a title
-    /// for, or any other OAuth provider, named and titled by its id (REQ-GRANT-96).
+    /// for, or any other OAuth provider, named and titled by its id.
     fn of_session(provider: &'a str) -> Self {
         [
             ConsentProvider::GITHUB,
@@ -146,14 +147,15 @@ impl<'a> ConsentProvider<'a> {
 
     /// The command that runs the consent again: `reconnect` of the grant it named, or else
     /// `create` of the provider, which `create` makes when the member holds none.
-    fn remedy(self) -> String {
+    fn command(self) -> String {
         match self.reconnects {
-            Some(grant) => format!("Run useful account integration reconnect {grant} again."),
-            None => format!(
-                "Run useful account integration connect {} again.",
-                self.name
-            ),
+            Some(grant) => format!("useful account integration reconnect {grant}"),
+            None => format!("useful account integration connect {}", self.name),
         }
+    }
+
+    fn remedy(self) -> String {
+        format!("Run {} again.", self.command())
     }
 }
 
@@ -201,6 +203,10 @@ struct ConsentEvent<'a> {
     category: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_after: Option<u64>,
+    /// The other choice than the member's own sign-in, for a `github` consent that did not
+    /// complete or was refused for want of GitHub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alternative: Option<&'a str>,
 }
 
 impl<'a> ConsentEvent<'a> {
@@ -219,12 +225,13 @@ impl<'a> ConsentEvent<'a> {
             grant_id: None,
             category: None,
             retry_after: None,
+            alternative: None,
         }
     }
 }
 
 /// A consent session as the CLI presents it: its named fields only, so nothing a response
-/// adds beyond the model reaches output (REQ-GRANT-4).
+/// adds beyond the model reaches output.
 pub(super) struct SessionView<'a> {
     id: &'a str,
     provider: ConsentProvider<'a>,
@@ -322,6 +329,7 @@ impl<'a> SessionView<'a> {
             write_json_line(&ConsentEvent {
                 session_id: Some(self.id),
                 reason: self.reason.map(reason_code),
+                alternative: verdict.and(github_app_alternative(self.provider.name)),
                 grant: self.grant.as_ref(),
                 ..ConsentEvent::result(deployment, outcome)
             })?;
@@ -351,7 +359,8 @@ impl<'a> SessionView<'a> {
                     None => writeln!(stdout, "✗ Provider grant consent {verdict}.")?,
                 }
                 self.write_fields(&mut stdout, deployment)?;
-                writeln!(stdout, "\n{}", self.provider.remedy())?;
+                writeln!(stdout, "\n{}", self.remedy())?;
+                write_alternative(&mut stdout, github_app_alternative(self.provider.name))?;
             }
         }
         stdout.flush()?;
@@ -370,6 +379,29 @@ impl<'a> SessionView<'a> {
         writeln!(output, "deployment: {deployment}")
     }
 
+    /// The next step that can succeed after a consent that did not complete. The consent names no
+    /// identity, so it creates the link, and it fails `subject_mismatch` when the provider's user
+    /// is linked to another account: consenting again as that user cannot succeed, so for `github`
+    /// the other choice that follows is the step, and for another provider it is a consent as
+    /// another user.
+    fn remedy(&self) -> String {
+        let ConsentProvider { name, title, .. } = self.provider;
+        match self.reason {
+            Some(GrantSessionReason::ProviderGrantSessionReasonCodeSubjectMismatch) => {
+                let cannot = format!("Consenting again as that {title} user cannot succeed.");
+                if github_app_alternative(name).is_some() {
+                    cannot
+                } else {
+                    format!(
+                        "{cannot} Sign in to {title} as a user no other account has linked, then run:\n  {}",
+                        self.provider.command()
+                    )
+                }
+            }
+            _ => self.provider.remedy(),
+        }
+    }
+
     fn reason_words(&self, reason: GrantSessionReason) -> String {
         let provider = self.provider.title;
         match reason {
@@ -383,7 +415,9 @@ impl<'a> SessionView<'a> {
                 "your account can no longer complete it".to_owned()
             }
             GrantSessionReason::ProviderGrantSessionReasonCodeSubjectMismatch => {
-                format!("the {provider} user you approved as does not match the identity")
+                format!(
+                    "the {provider} user you approved as is linked to another Useful Machinery account"
+                )
             }
             GrantSessionReason::ProviderGrantSessionReasonCodeExchangeFailed => {
                 format!("{provider} did not issue the grant")
@@ -421,6 +455,7 @@ pub(super) fn write_consent_failure(
     json: bool,
 ) -> anyhow::Result<ExitCode> {
     let mut report = report(deployment, failure);
+    let mut alternative = None;
     match (failure, session_id) {
         (GrantFailure::NotFound, None) => {
             report.summary = "error: linked identity not found".to_owned();
@@ -437,10 +472,11 @@ pub(super) fn write_consent_failure(
                 "error: this deployment does not serve grants for {} yet",
                 provider.title
             );
+            alternative = github_app_alternative(provider.name);
         }
         _ => {}
     }
-    write_refusal(deployment, session_id, &report, json)
+    write_refusal_naming(deployment, session_id, &report, alternative, json)
 }
 
 /// Reports a refusal as a consent's result: on standard output as its JSON event, or on
@@ -451,11 +487,24 @@ pub(in crate::cli) fn write_refusal(
     report: &ApiFailureReport,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
+    write_refusal_naming(deployment, session_id, report, None, json)
+}
+
+/// [`write_refusal`], naming `alternative` as the other choice after the
+/// remedy.
+fn write_refusal_naming(
+    deployment: &str,
+    session_id: Option<&str>,
+    report: &ApiFailureReport,
+    alternative: Option<&str>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
     if json {
         write_json_line(&ConsentEvent {
             session_id,
             category: report.category,
             retry_after: report.retry_after,
+            alternative,
             ..ConsentEvent::result(deployment, report.outcome)
         })?;
     } else {
@@ -465,15 +514,28 @@ pub(in crate::cli) fn write_refusal(
             writeln!(stderr, "session: {id}")?;
         }
         writeln!(stderr, "\n{}", report.remedy)?;
+        write_alternative(&mut stderr, alternative)?;
     }
     Ok(report.class.exit_code())
 }
 
+/// Names acting as the GitHub App, when `alternative` is that, as a command an owner of the
+/// organization runs.
+fn write_alternative(output: &mut impl Write, alternative: Option<&str>) -> io::Result<()> {
+    match alternative {
+        Some(command) => writeln!(
+            output,
+            "\nTo let your runs of a project act as the GitHub App instead, have an owner of its organization run:\n  {command}"
+        ),
+        None => Ok(()),
+    }
+}
+
 /// Reports, after the consent's own result, that the consent `useful account integration reconnect`
 /// ran was given as another account than the one the grant `named` is linked to: the consent made
-/// or renewed the grant `made`, and `named` is as it was (REQ-GRANT-73, REQ-GRANT-2). Under
-/// `--json` it is one more event, with outcome `not_reconnected` and the named grant's ID; the
-/// consent's result before it carries the grant made. Exits 1.
+/// or renewed the grant `made`, and `named` is as it was. Under `--json` it is one more event, with
+/// outcome `not_reconnected` and the named grant's ID; the consent's result before it carries the
+/// grant made. Exits 1.
 pub(in crate::cli) fn write_not_reconnected(
     deployment: &str,
     provider: ConsentProvider<'_>,

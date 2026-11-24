@@ -93,7 +93,6 @@ fn selected_terminal_events_map_to_host_controls() {
     }
 }
 
-// REQ-RUNNERENROLL-142
 #[test]
 fn shifted_letters_no_binding_takes_map_to_their_character() {
     for (code, modifiers, expected) in [
@@ -125,7 +124,6 @@ fn shifted_letters_no_binding_takes_map_to_their_character() {
     }
 }
 
-// REQ-LOCALRUN-43
 #[test]
 fn enter_opens_the_selected_steps_full_screen_log() {
     let snapshot = direct_snapshot(direct_command_step(
@@ -182,7 +180,6 @@ fn enter_opens_the_selected_steps_full_screen_log() {
     assert!(rendered.contains("▏ ○ selected-command"));
 }
 
-// REQ-LOCALRUN-44
 #[test]
 fn full_screen_log_keeps_each_record_on_one_row() {
     let snapshot = direct_snapshot(long_log_step());
@@ -209,7 +206,6 @@ fn full_screen_log_keeps_each_record_on_one_row() {
     );
 }
 
-// REQ-LOCALRUN-45, REQ-LOCALRUN-46
 #[test]
 fn full_log_key_bindings_navigate_deterministic_records() {
     let snapshot = direct_snapshot(numbered_log_step(50, 140));
@@ -296,7 +292,6 @@ fn full_log_key_bindings_navigate_deterministic_records() {
     assert_eq!(full_log_top_order(&interaction, &snapshot), Some(48));
 }
 
-// REQ-LOCALRUN-47
 #[test]
 fn paused_log_keeps_its_anchor_and_pan_as_output_arrives() {
     let mut snapshot = direct_snapshot(numbered_log_step(30, 120));
@@ -348,7 +343,6 @@ fn paused_log_keeps_its_anchor_and_pan_as_output_arrives() {
     assert_eq!(interaction.full_log.horizontal_offset, horizontal_offset);
 }
 
-// REQ-LOCALRUN-47
 #[test]
 fn paused_log_anchor_survives_terminal_resize() {
     let snapshot = direct_snapshot(numbered_log_step(40, 80));
@@ -366,7 +360,6 @@ fn paused_log_anchor_survives_terminal_resize() {
     assert_eq!(interaction.full_log.available_rows, 3);
 }
 
-// REQ-LOCALRUN-36
 #[test]
 fn clamped_log_keeps_retained_and_total_counts_visible_at_minimum_width() {
     let (snapshot, mut interaction) = clamped_log_snapshot(MINIMUM_WIDTH, MINIMUM_HEIGHT);
@@ -383,7 +376,6 @@ fn clamped_log_keeps_retained_and_total_counts_visible_at_minimum_width() {
     );
 }
 
-// REQ-LOCALRUN-48
 #[test]
 fn eviction_clamps_a_paused_anchor_and_marks_the_clamp() {
     let (snapshot, mut interaction) = clamped_log_snapshot(140, 20);
@@ -397,7 +389,6 @@ fn eviction_clamps_a_paused_anchor_and_marks_the_clamp() {
     assert!(rendered.contains("12:34:56.000 stderr │ record 09"));
 }
 
-// REQ-LOCALRUN-44
 #[test]
 fn full_log_horizontal_pan_reaches_the_end_of_wide_graphemes() {
     let payload = format!("START{}END", "界".repeat(80));
@@ -436,7 +427,6 @@ fn full_log_horizontal_pan_reaches_the_end_of_wide_graphemes() {
     );
 }
 
-// REQ-LOCALRUN-44
 #[test]
 fn horizontal_pan_is_bounded_and_clamps_only_when_content_requires_it() {
     let long_payload = format!("START-{}-END", "x".repeat(120));
@@ -493,7 +483,6 @@ fn horizontal_pan_is_bounded_and_clamps_only_when_content_requires_it() {
     assert_eq!(interaction.full_log.horizontal_offset, 0);
 }
 
-// REQ-LOCALRUN-44
 #[test]
 fn full_ring_eviction_exposes_the_next_horizontal_bound() {
     let records = (1..=4096)
@@ -544,7 +533,6 @@ fn full_ring_eviction_exposes_the_next_horizontal_bound() {
     }
 }
 
-// REQ-LOCALRUN-33
 #[test]
 fn log_preview_preserves_merged_order_and_accents_stderr_without_tinting_content() {
     let step = direct_log_step(
@@ -603,7 +591,6 @@ fn log_preview_preserves_merged_order_and_accents_stderr_without_tinting_content
     );
 }
 
-// REQ-LOCALRUN-41, REQ-LOCALRUN-42
 #[test]
 fn numbered_channels_filter_command_logs_and_report_hidden_records() {
     let step = direct_log_step(
@@ -671,7 +658,6 @@ fn numbered_channels_filter_command_logs_and_report_hidden_records() {
     assert!(all_hidden.contains("All log channels hidden."));
 }
 
-// REQ-LOCALRUN-42
 #[test]
 fn filtered_log_tracks_hidden_appends_and_eviction() {
     let mut snapshot = direct_snapshot(numbered_log_step(4, 20));
@@ -701,7 +687,6 @@ fn filtered_log_tracks_hidden_appends_and_eviction() {
     assert_eq!(interaction.filtered_log.hidden_records, 1);
 }
 
-// REQ-LOCALRUN-42
 #[test]
 fn full_log_navigation_skips_filtered_records() {
     let snapshot = direct_snapshot(numbered_log_step(30, 20));
@@ -726,7 +711,6 @@ fn full_log_navigation_skips_filtered_records() {
     assert!(rendered.contains("15 hidden"));
 }
 
-// REQ-LOCALRUN-34, REQ-LOCALRUN-41
 #[test]
 fn agent_channels_group_observations_and_dim_secondary_rows() {
     let step = direct_agent_log_step(vec![
@@ -832,7 +816,6 @@ fn agent_channels_group_observations_and_dim_secondary_rows() {
     );
 }
 
-// REQ-LOCALRUN-32
 #[test]
 fn log_timestamps_are_utc_with_milliseconds_and_elide_before_sources() {
     let step = direct_log_step(
@@ -866,7 +849,6 @@ fn log_timestamps_are_utc_with_milliseconds_and_elide_before_sources() {
     assert!(narrow.iter().all(|row| !row.contains("10:34:56.789")));
 }
 
-// REQ-LOCALRUN-35
 #[test]
 fn log_preview_preserves_safety_continuation_record_metadata() {
     let step = direct_log_step(
@@ -899,7 +881,6 @@ fn log_preview_preserves_safety_continuation_record_metadata() {
     );
 }
 
-// REQ-LOCALRUN-31, REQ-LOCALRUN-35
 #[test]
 fn log_preview_rewraps_deterministically_and_keeps_the_visual_tail() {
     let step = long_log_step();
@@ -942,7 +923,6 @@ fn log_preview_rewraps_deterministically_and_keeps_the_visual_tail() {
     );
 }
 
-// REQ-LOCALRUN-31
 #[test]
 fn large_history_preview_keeps_only_the_visible_visual_tail() {
     use crate::workflow::presentation_feed::MAX_NORMALIZED_CHILD_RECORD_BYTES;
@@ -975,7 +955,6 @@ fn large_history_preview_keeps_only_the_visible_visual_tail() {
     assert!(rows[3..].iter().all(|row| !row.contains("stdout")));
 }
 
-// REQ-LOCALRUN-36, REQ-LOCALRUN-40
 #[test]
 fn log_preview_reports_counts_following_and_evicted_history() {
     let mut step = direct_log_step(
@@ -1035,7 +1014,6 @@ fn log_preview_reports_counts_following_and_evicted_history() {
     );
 }
 
-// REQ-LOCALRUN-37
 #[test]
 fn empty_log_preview_distinguishes_waiting_and_no_output() {
     for (state, expected) in [
@@ -1051,8 +1029,7 @@ fn empty_log_preview_distinguishes_waiting_and_no_output() {
     }
 }
 
-// REQ-LOCALRUN-22, REQ-LOCALRUN-53: Ctrl-C during ordinary execution requests an
-// interruption with `user_request`.
+// Ctrl-C during ordinary execution requests an interruption with `user_request`.
 #[test]
 fn navigation_is_bounded_and_ctrl_c_interrupts_with_user_request() {
     let cancellation = CancellationSource::new();
@@ -1087,7 +1064,6 @@ fn navigation_is_bounded_and_ctrl_c_interrupts_with_user_request() {
     assert!(cancellation.interruption_requested());
 }
 
-// REQ-LOCALRUN-54
 #[test]
 fn finalization_ctrl_c_escalates_from_graceful_to_force_abort() {
     let cancellation = CancellationSource::new();
@@ -1128,7 +1104,6 @@ fn finalization_ctrl_c_escalates_from_graceful_to_force_abort() {
     ));
 }
 
-// REQ-LOCALRUN-10, REQ-LOCALRUN-55, REQ-LOCALRUN-58
 #[test]
 fn quit_requires_adapter_completion_on_every_surface() {
     let cancellation = CancellationSource::new();
@@ -1189,7 +1164,6 @@ fn quit_requires_adapter_completion_on_every_surface() {
     }
 }
 
-// REQ-LOCALRUN-62
 #[test]
 fn restoration_attempts_every_operation_after_cursor_failure() {
     let actions = RefCell::new(Vec::new());
@@ -1232,7 +1206,6 @@ fn restoration_attempts_every_operation_after_cursor_failure() {
     );
 }
 
-// REQ-LOCALRUN-4
 #[tokio::test]
 async fn setup_and_initial_render_failures_attempt_restoration_before_execution() {
     for (failures, expected_operation, expected_actions) in [
@@ -1277,7 +1250,6 @@ async fn setup_and_initial_render_failures_attempt_restoration_before_execution(
     }
 }
 
-// REQ-LOCALRUN-3
 #[tokio::test]
 async fn terminal_input_is_inert_until_execution_is_activated() {
     let (_temporary, _workflow, view, _) = scripted_host_view();
@@ -1298,7 +1270,6 @@ async fn terminal_input_is_inert_until_execution_is_activated() {
     assert!(actions.try_recv().is_err());
 }
 
-// REQ-LOCALRUN-11, REQ-LOCALRUN-53, REQ-LOCALRUN-58
 #[tokio::test]
 async fn scripted_input_keeps_q_inert_during_execution_and_restores_after_cancellation() {
     let (_temporary, workflow, view, now) = scripted_host_view();
@@ -1363,7 +1334,6 @@ async fn scripted_input_keeps_q_inert_during_execution_and_restores_after_cancel
     assert!(cancellation.interruption_requested());
 }
 
-// REQ-LOCALRUN-61
 #[tokio::test]
 async fn normal_stop_and_injected_runtime_failures_restore_the_terminal() {
     let (_temporary, _workflow, view, _) = scripted_host_view();
@@ -1394,7 +1364,6 @@ async fn normal_stop_and_injected_runtime_failures_restore_the_terminal() {
     .await;
 }
 
-// REQ-LOCALRUN-61
 #[tokio::test]
 async fn terminal_task_unwind_requests_cancellation_before_application_join() {
     let (_temporary, _workflow, view, _) = scripted_host_view();
@@ -1422,7 +1391,6 @@ async fn terminal_task_unwind_requests_cancellation_before_application_join() {
     );
 }
 
-// REQ-LOCALRUN-61
 #[cfg(unix)]
 #[tokio::test]
 async fn widget_panic_restores_pty_and_reports_on_stderr() {
@@ -1574,7 +1542,6 @@ async fn widget_panic_restores_before_reporting_its_payload() {
     );
 }
 
-// REQ-LOCALRUN-62
 #[tokio::test]
 async fn teardown_failure_and_task_unwind_attempt_restoration_with_closed_precedence() {
     let (_temporary, workflow, view, now) = scripted_host_view();
@@ -1608,7 +1575,6 @@ async fn teardown_failure_and_task_unwind_attempt_restoration_with_closed_preced
     .await;
 }
 
-// REQ-LOCALRUN-24, REQ-LOCALRUN-25, REQ-LOCALRUN-26, REQ-LOCALRUN-28, REQ-LOCALRUN-30, REQ-EVIDENCE-15, REQ-EVIDENCE-17
 #[test]
 fn inspector_renders_authoritative_command_states_and_dispositions() {
     let timing = WorkflowRunElapsed {
@@ -1781,7 +1747,6 @@ fn ellipsize_preserves_grapheme_clusters() {
     assert_eq!(ellipsize("a👩‍🚀bc", 4), "a👩‍🚀…");
 }
 
-// REQ-LOCALRUN-25
 #[test]
 fn repeated_values_keep_fitting_values_and_report_omissions() {
     let fitting = vec!["a".to_owned(), "b".to_owned()];
@@ -1847,7 +1812,6 @@ fn compact_inspector_ellipsizes_unicode_and_preserves_log_space() {
     assert!(!rendered.contains('\u{fffd}'));
 }
 
-// REQ-LOCALRUN-28
 #[test]
 fn inspector_renders_outputs_in_a_dedicated_structured_panel() {
     let step = direct_command_step(
@@ -1892,7 +1856,6 @@ fn inspector_renders_outputs_in_a_dedicated_structured_panel() {
     );
 }
 
-// REQ-LOCALRUN-28
 #[test]
 fn inspector_reports_when_a_step_declares_no_outputs() {
     let mut step = direct_command_step(
@@ -1917,7 +1880,6 @@ fn inspector_reports_when_a_step_declares_no_outputs() {
     assert!(!buffer_text(&buffer).contains("report"));
 }
 
-// REQ-LOCALRUN-31
 #[tokio::test]
 async fn full_view_renders_header_steps_inspector_and_selected_log_tail() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1976,7 +1938,6 @@ async fn full_view_renders_header_steps_inspector_and_selected_log_tail() {
     assert!(rendered.contains("^C cancel run"));
 }
 
-// REQ-LOCALRUN-7, REQ-LOCALRUN-8, REQ-LOCALRUN-9, REQ-LOCALRUN-14, REQ-LOCALRUN-23
 #[test]
 fn responsive_application_composes_wide_stacked_and_too_small_views() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2051,7 +2012,6 @@ fn responsive_application_composes_wide_stacked_and_too_small_views() {
     assert_eq!(interaction.selected, 1);
 }
 
-// REQ-LOCALRUN-12, REQ-LOCALRUN-14
 #[test]
 fn workflow_header_separates_identity_status_duration_and_counts() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2084,7 +2044,6 @@ fn workflow_header_separates_identity_status_duration_and_counts() {
     assert!(!rows[0].contains("published"));
 }
 
-// REQ-LOCALRUN-13
 #[test]
 fn workflow_header_status_tracks_failure_and_publication_lifecycle() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2125,7 +2084,6 @@ fn workflow_header_status_tracks_failure_and_publication_lifecycle() {
     assert_eq!(workflow_header_status(&snapshot).0, "succeeded");
 }
 
-// REQ-LOCALRUN-11, REQ-LOCALRUN-51
 #[test]
 fn resize_sequence_preserves_log_surface_viewport_and_help() {
     let mut snapshot = direct_snapshot(numbered_log_step(40, 200));
@@ -2217,7 +2175,6 @@ fn resize_sequence_preserves_log_surface_viewport_and_help() {
     assert!(!log.contains("workflow.yaml"));
 }
 
-// REQ-LOCALRUN-10, REQ-LOCALRUN-11
 #[test]
 fn too_small_view_freezes_hidden_split_and_log_interaction_state() {
     let mut snapshot = direct_snapshot(numbered_log_step(40, 200));
@@ -2292,7 +2249,6 @@ fn too_small_view_freezes_hidden_split_and_log_interaction_state() {
     assert_eq!(log.full_log.horizontal_offset, horizontal_offset);
 }
 
-// REQ-LOCALRUN-50, REQ-LOCALRUN-51
 #[test]
 fn contextual_footers_and_help_remain_discoverable_at_minimum_size() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2482,7 +2438,6 @@ fn contextual_footers_and_help_remain_discoverable_at_minimum_size() {
     assert!(!completed_help.contains("^C"));
 }
 
-// REQ-LOCALRUN-50, REQ-LOCALRUN-51
 #[test]
 fn contextual_footer_and_help_use_the_command_palette() {
     let snapshot = direct_snapshot(long_log_step());
@@ -2539,7 +2494,6 @@ fn contextual_footer_and_help_use_the_command_palette() {
     );
 }
 
-// REQ-LOCALRUN-13, REQ-LOCALRUN-51, REQ-LOCALRUN-58
 #[test]
 fn terminal_lifecycle_hides_quit_until_adapter_completion() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2587,7 +2541,6 @@ fn terminal_lifecycle_hides_quit_until_adapter_completion() {
     assert!(render_too_small_text(&snapshot).contains("q to quit"));
 }
 
-// REQ-LOCALRUN-56
 #[test]
 fn cancelling_workflow_does_not_advertise_an_inactive_cancel_command() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -2621,7 +2574,6 @@ fn cancelling_workflow_does_not_advertise_an_inactive_cancel_command() {
     );
 }
 
-// REQ-LOCALRUN-6
 #[test]
 fn color_disabled_rendering_retains_symbols_labels_and_focus() {
     let snapshot = direct_snapshot(long_log_step());
@@ -2710,7 +2662,6 @@ fn color_enabled_rendering_separates_structure_content_and_focus() {
     );
 }
 
-// REQ-LOCALRUN-18
 #[test]
 fn running_step_indicator_advances_with_elapsed_time() {
     let mut step = long_log_step();
@@ -2728,7 +2679,6 @@ fn running_step_indicator_advances_with_elapsed_time() {
     assert_eq!(step_state_glyph(&step), "⠋");
 }
 
-// REQ-LOCALRUN-16
 #[test]
 fn live_dag_separates_ordinary_and_finalization_phases_after_trigger_commit() {
     let mut snapshot = snapshot_from_yaml(
@@ -2770,7 +2720,6 @@ finalizers:
     assert!(finalization < finalizer);
 }
 
-// REQ-LOCALRUN-18
 #[test]
 fn graph_layout_is_stable_when_step_state_and_timing_change() {
     let mut snapshot = snapshot_from_yaml(
@@ -2797,7 +2746,6 @@ fn graph_layout_is_stable_when_step_state_and_timing_change() {
     assert!(rendered.iter().any(|line| line.contains("1.2s")));
 }
 
-// REQ-LOCALRUN-19, REQ-LOCALRUN-20
 #[test]
 fn responsive_rows_drop_detail_before_kind_and_then_ellipsize_identity() {
     let mut snapshot = snapshot_from_yaml(
@@ -2829,7 +2777,6 @@ fn responsive_rows_drop_detail_before_kind_and_then_ellipsize_identity() {
     );
 }
 
-// REQ-LOCALRUN-19, REQ-LOCALRUN-20
 #[test]
 fn kind_column_widens_to_fit_workflow_steps_and_keeps_durations_aligned() {
     let mut snapshot = snapshot_from_yaml(
@@ -2874,7 +2821,6 @@ fn kind_column_widens_to_fit_workflow_steps_and_keeps_durations_aligned() {
     );
 }
 
-// REQ-LOCALRUN-21, REQ-LOCALRUN-23
 #[test]
 fn scrolling_and_resize_keep_selection_visible_with_boundary_connectors() {
     let snapshot = snapshot_from_yaml(
@@ -2911,7 +2857,6 @@ fn scrolling_and_resize_keep_selection_visible_with_boundary_connectors() {
     assert!(!resized.iter().any(|line| line.contains("branch")));
 }
 
-// REQ-LOCALRUN-9
 #[test]
 fn too_small_view_only_advertises_the_available_lifecycle_action() {
     let mut snapshot = direct_snapshot(long_log_step());
@@ -3622,7 +3567,6 @@ fn buffer_position(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16)
     (x, u16::try_from(y).unwrap())
 }
 
-// REQ-LOCALRUN-27
 #[test]
 fn agent_inspector_shows_profile_and_harness_instead_of_command_and_cwd() {
     for (harness, expected) in [
@@ -3680,7 +3624,6 @@ fn agent_inspector_shows_profile_and_harness_instead_of_command_and_cwd() {
     }
 }
 
-// REQ-LOCALRUN-49
 #[test]
 fn reopening_the_full_log_starts_at_the_newest_output_and_follows() {
     let snapshot = direct_snapshot(numbered_log_step(30, 120));
@@ -3714,7 +3657,6 @@ fn reopening_the_full_log_starts_at_the_newest_output_and_follows() {
     assert_eq!(interaction.full_log.lines_behind(&log), 0);
 }
 
-// REQ-LOCALRUN-52
 #[test]
 fn open_help_ignores_every_key_but_escape_ctrl_c_and_q() {
     let cancellation = CancellationSource::new();
@@ -3780,10 +3722,10 @@ fn open_help_ignores_every_key_but_escape_ctrl_c_and_q() {
     assert_eq!(interaction.selected, 1);
 }
 
-// REQ-LOCALRUN-294, REQ-LOCALRUN-14, REQ-LOCALRUN-26: a stage that succeeded on a failed
-// child is drawn with the failed state's symbol, label and tone, counted failed, and gives
-// the failing node's path as its detail and the inspector's failure; it is not an advisory
-// issue. Without the record the stage reads succeeded.
+// A stage that succeeded on a failed child is drawn with the failed state's symbol, label
+// and tone, counted failed, and gives the failing node's path as its detail and the
+// inspector's failure; it is not an advisory issue. Without the record the stage reads
+// succeeded.
 #[test]
 fn a_stage_whose_child_failed_is_presented_failed() {
     let mut snapshot = snapshot_from_yaml(

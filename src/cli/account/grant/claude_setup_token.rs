@@ -1,7 +1,6 @@
 //! A fresh Claude Code sign-in, `claude setup-token`, run on a pseudo-terminal `useful` owns in a
 //! private temporary configuration directory, its prompts passed to the member and the token it
-//! prints taken out of what the member sees (REQ-GRANT-71, REQ-GRANT-74, INV-CLI-13,
-//! INV-CLI-14).
+//! prints taken out of what the member sees.
 //!
 //! Only the provider's documented names are used: the command `claude setup-token`, the
 //! variable `CLAUDE_CONFIG_DIR` and the form of the token `CLAUDE_CODE_OAUTH_TOKEN` takes. The
@@ -31,7 +30,7 @@ use crate::exit_code::OutcomeClass;
 const PROGRAM: &str = "claude";
 const ARGUMENT: &str = "setup-token";
 // A token of the usual length fits on one line, so the sign-in does not wrap it; one that does
-// not is joined across the wrap (INV-CLI-22).
+// not is joined across the wrap.
 const MIN_COLUMNS: u16 = 256;
 const DEFAULT_ROWS: u16 = 24;
 const ESC: u8 = 0x1b;
@@ -104,9 +103,9 @@ impl fmt::Display for Failure {
     }
 }
 
-/// The failure a sign-in ends in before anything is run, read or sent when the member could
-/// not answer it: standard input is not a terminal (REQ-GRANT-177). `useful account integration connect
-/// claude_code` asks this before its first request, and [`sign_in`] before anything else.
+/// The failure a sign-in ends in before anything is run, read or sent when the member could not
+/// answer it: standard input is not a terminal. `useful account integration connect claude_code`
+/// asks this before its first request, and [`sign_in`] before anything else.
 pub(in crate::cli) fn unanswerable() -> Option<Failure> {
     (!io::stdin().is_terminal()).then_some(Failure::NoTerminal)
 }
@@ -456,16 +455,16 @@ impl Drop for RawInput {
     }
 }
 
-/// Relays a sign-in's output byte for byte except a Claude Code token, which it takes instead
-/// (INV-CLI-14, INV-CLI-22). Terminal control sequences are relayed unchanged and skipped
-/// while matching [`MARKER`]; only a suffix that could begin it is held back, so a prompt
-/// without a line ending is relayed at once. Once the marker is seen, the run that follows is withheld up to a space, a
-/// tab, a line break that ends a line narrower than the terminal, or the end of the output. The
-/// run's bytes in `A-Z`, `a-z`, `0-9`, `_` and `-` are joined into the token across the control
-/// sequences and the line breaks of full lines in it, which are relayed when it ends, since the
-/// provider wraps a token longer than its terminal; any other byte in it is dropped. The output
-/// yields a token only when every run is that same token, unbroken by another byte and of a
-/// length Cloud accepts, so a change in the provider's output fails closed.
+/// Relays a sign-in's output byte for byte except a Claude Code token, which it takes instead.
+/// Terminal control sequences are relayed unchanged and skipped while matching [`MARKER`]; only a
+/// suffix that could begin it is held back, so a prompt without a line ending is relayed at once.
+/// Once the marker is seen, the run that follows is withheld up to a space, a tab, a line break
+/// that ends a line narrower than the terminal, or the end of the output. The run's bytes in `A-Z`,
+/// `a-z`, `0-9`, `_` and `-` are joined into the token across the control sequences and the line
+/// breaks of full lines in it, which are relayed when it ends, since the provider wraps a token
+/// longer than its terminal; any other byte in it is dropped. The output yields a token only when
+/// every run is that same token, unbroken by another byte and of a length Cloud accepts, so a
+/// change in the provider's output fails closed.
 struct Withhold {
     escape: Escape,
     // The terminal's width, and how much of the current line the printing bytes have filled;
@@ -506,7 +505,7 @@ impl Run {
         }
     }
 
-    /// A token Cloud accepts (REQ-GRANT-12): unbroken, more than the marker and at most
+    /// A token Cloud accepts: unbroken, more than the marker and at most
     /// [`MAX_CLAUDE_CODE_TOKEN`] bytes.
     fn well_formed(&self) -> bool {
         !self.broken && self.token.len() > MARKER.len() && self.token.len() <= MAX_CLAUDE_CODE_TOKEN
@@ -720,7 +719,6 @@ mod tests {
         (relay, token)
     }
 
-    // INV-CLI-22
     #[test]
     fn a_token_interrupted_by_a_control_sequence_or_a_wrapped_line_is_withheld_and_joined() {
         // The first line of each fills a terminal of this width, so its line break is a wrap.
@@ -760,7 +758,6 @@ mod tests {
         assert_eq!(relay, b"\r\n\r\nnext\r\n");
     }
 
-    // INV-CLI-22
     #[test]
     fn a_run_interrupted_by_another_character_is_withheld_and_yields_none() {
         for (output, expected) in [
@@ -779,7 +776,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-22
     #[test]
     fn an_aborted_control_string_does_not_stop_the_token_being_withheld() {
         for (output, expected) in [
@@ -803,7 +799,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-14
     #[test]
     fn the_token_is_taken_out_of_the_relay_and_everything_else_is_relayed_unchanged() {
         let colour = format!("Your token:\r\n\x1b[32m{TOKEN}\x1b[39m\r\nStore it safely.\r\n");
@@ -839,7 +834,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-22
     #[test]
     fn a_second_distinct_token_or_output_without_one_yields_none() {
         let second = "sk-ant-oat01-the-second";
@@ -866,7 +860,6 @@ mod tests {
         assert_eq!(relay, b"\r\n");
     }
 
-    // REQ-GRANT-71
     #[test]
     fn a_relay_that_cannot_start_kills_and_waits_for_the_started_sign_in() {
         use std::os::unix::process::ExitStatusExt;
@@ -897,7 +890,6 @@ mod tests {
         });
     }
 
-    // INV-CLI-14
     #[test]
     fn a_prompt_without_a_line_ending_is_relayed_without_waiting_for_one() {
         let prompt = b"Paste code here if prompted > ";

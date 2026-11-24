@@ -541,7 +541,6 @@ fn storage_full_state_write() -> crate::workflow::local_run::LocalRunDirectoryEr
     }
 }
 
-// INV-ENGINE-8
 #[tokio::test]
 async fn transition_ceiling_failure_is_typed_and_committed_as_a_diagnostic() {
     let mut fixture = admitted_fixture(CancellationSource::new(), Duration::from_secs(7));
@@ -593,7 +592,6 @@ async fn transition_ceiling_failure_is_typed_and_committed_as_a_diagnostic() {
     assert_eq!(result, Err(CoordinationError::TransitionCapacityExceeded));
 }
 
-// INV-ENGINE-8
 #[tokio::test]
 async fn initialization_capacity_failure_is_committed_as_a_diagnostic() {
     let mut fixture = admitted_fixture(CancellationSource::new(), Duration::from_secs(7));
@@ -632,7 +630,6 @@ async fn initialization_capacity_failure_is_committed_as_a_diagnostic() {
     );
 }
 
-// INV-ENGINE-8
 #[tokio::test]
 async fn failed_commit_prevents_initial_action_release() {
     let fixture = admitted_fixture(CancellationSource::new(), Duration::from_secs(7));
@@ -663,8 +660,8 @@ async fn failed_commit_prevents_initial_action_release() {
     assert!(timeline.lock().unwrap().is_empty());
 }
 
-// INV-ENGINE-8, INV-ENGINE-54: both commit sites, the reduction's and the coordination
-// diagnostic's, carry the port's classified failure and release no action.
+// Both commit sites, the reduction's and the coordination diagnostic's, carry the
+// port's classified failure and release no action.
 #[tokio::test]
 async fn failed_commit_carries_the_port_failure_from_both_commit_sites() {
     let expected = CommitFailure {
@@ -1202,7 +1199,6 @@ steps:
     assert_eq!(result.unwrap().state.workflow, WorkflowState::Succeeded);
 }
 
-// INV-ENGINE-8
 #[tokio::test]
 async fn changed_payload_for_one_handler_occurrence_identity_fails_closed() {
     const HANDLER_WORKFLOW: &str = r#"schemaVersion: 1

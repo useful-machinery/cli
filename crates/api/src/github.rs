@@ -9,11 +9,13 @@ use super::generated::apis::{self, source_connections_api};
 use super::generated::models;
 use super::http_client::{generated_configuration, zeroize_generated_bearer_access_token};
 use super::http_util::{self, BoundedBodyError};
-use super::{HttpTransportPolicy, UnreachableCategory, classify_reqwest_error, problem};
+use super::{HttpTransportPolicy, UnreachableCategory, classify_reqwest_error, problem, resource};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const SOURCE_CONNECTION_CONFLICT: &str =
     "https://api.usefulmachinery.com/problems/source-connection-conflict";
+const AUTHORITY_UNPROVEN: &str =
+    "https://api.usefulmachinery.com/problems/github-installation-authority-unproven";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +28,9 @@ pub struct GitHubInstallation {
     pub state: GitHubInstallationState,
     pub created_at: String,
     pub updated_at: String,
+    /// When Cloud verified the organization's authority over the
+    /// installation; null when it has not.
+    pub authority_verified_at: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -49,12 +54,67 @@ pub struct GitHubSetupSession {
     pub state: GitHubSetupState,
     pub expires_at: String,
     pub setup_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_url: Option<String>,
+    pub verification: GitHubSetupVerification,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitHubSetupState {
     Pending,
+    Completed,
+    Expired,
+}
+
+/// Where a setup session's proof at GitHub stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubSetupVerification {
+    pub state: GitHubSetupVerificationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_login: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installations: Option<Vec<GitHubSetupInstallation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_requests: Option<GitHubSetupPendingRequests>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitHubSetupVerificationState {
+    Unverified,
+    Verified,
+    Denied,
+    Failed,
+}
+
+/// An installation the verified GitHub user could complete the session
+/// with.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubSetupInstallation {
+    pub provider_installation_id: String,
+    pub provider_account_login: String,
+    pub provider_account_type: GitHubAccountType,
+    pub held_by_organization: bool,
+}
+
+/// The accounts where GitHub holds the verified user's unapproved request to install the App;
+/// `read` is false where GitHub did not answer, and `items` is then empty.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubSetupPendingRequests {
+    pub read: bool,
+    pub items: Vec<GitHubSetupPendingRequest>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubSetupPendingRequest {
+    pub provider_account_id: String,
+    pub provider_account_login: String,
+    pub provider_account_type: GitHubAccountType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -104,7 +164,7 @@ impl GitHubApi {
     ) -> Result<Vec<GitHubInstallation>, GitHubFailure> {
         let page =
             source_connections_api::list_git_hub_installations(&self.configuration, organization)
-                .map_err(|error| classify_git_hub_error(error, false))?;
+                .map_err(|error| classify_git_hub_error(error, Conflicts::None))?;
         page.items
             .into_iter()
             .map(GitHubInstallation::try_from)
@@ -115,8 +175,42 @@ impl GitHubApi {
     pub fn begin_setup(&self, organization: &str) -> Result<GitHubSetupSession, GitHubFailure> {
         let session =
             source_connections_api::begin_git_hub_setup(&self.configuration, organization)
-                .map_err(|error| classify_git_hub_error(error, false))?;
-        GitHubSetupSession::try_from(session).map_err(|_| GitHubFailure::protocol(false))
+                .map_err(|error| classify_git_hub_error(error, Conflicts::None))?;
+        let session =
+            GitHubSetupSession::try_from(session).map_err(|_| GitHubFailure::protocol(false))?;
+        // Begin answers a pending, unverified session with its authorization URL;
+        // the read's other states are a protocol failure here.
+        if session.state != GitHubSetupState::Pending
+            || session.authorization_url.is_none()
+            || session.verification.state != GitHubSetupVerificationState::Unverified
+        {
+            return Err(GitHubFailure::protocol(false));
+        }
+        Ok(session)
+    }
+
+    /// Reads a setup session; a read changes nothing, so it is not replayed. A `429` is
+    /// `RateLimited` with its `Retry-After`, which a guided setup waits out.
+    pub fn setup_session(
+        &self,
+        organization: &str,
+        setup_session: &str,
+    ) -> Result<GitHubSetupSession, GitHubFailure> {
+        let session: models::GitHubSetupSession = self.get(
+            &format!(
+                "organizations/{}/github/setup-sessions/{}",
+                apis::urlencode(organization),
+                apis::urlencode(setup_session),
+            ),
+            Conflicts::None,
+            TooManyRequests::RateLimited,
+        )?;
+        let session =
+            GitHubSetupSession::try_from(session).map_err(|_| GitHubFailure::protocol(false))?;
+        if session.id != setup_session {
+            return Err(GitHubFailure::protocol(false));
+        }
+        Ok(session)
     }
 
     pub fn complete_setup(
@@ -126,7 +220,7 @@ impl GitHubApi {
         provider_installation_id: &str,
     ) -> Result<GitHubInstallation, GitHubFailure> {
         let request = models::CompleteGitHubSetupRequest::new(provider_installation_id.to_owned());
-        let installation = replay_once_after_transport_error(true, || {
+        let installation = replay_once_after_transport_error(Conflicts::SetupCompletion, || {
             source_connections_api::complete_git_hub_setup(
                 &self.configuration,
                 organization,
@@ -148,7 +242,7 @@ impl GitHubApi {
         organization: &str,
         installation: &str,
     ) -> Result<GitHubInstallation, GitHubFailure> {
-        let disconnected = replay_once_after_transport_error(true, || {
+        let disconnected = replay_once_after_transport_error(Conflicts::SourceConnection, || {
             source_connections_api::disconnect_git_hub_installation(
                 &self.configuration,
                 organization,
@@ -169,11 +263,35 @@ impl GitHubApi {
         organization: &str,
         installation: &str,
     ) -> Result<GitHubRepositoryList, GitHubFailure> {
+        let page: models::GitHubRepositoryList = self.get(
+            &format!(
+                "organizations/{}/github/installations/{}/repositories",
+                apis::urlencode(organization),
+                apis::urlencode(installation),
+            ),
+            Conflicts::SourceConnection,
+            TooManyRequests::Unexpected,
+        )?;
+        let page =
+            GitHubRepositoryList::try_from(page).map_err(|_| GitHubFailure::protocol(false))?;
+        if page.installation.id != installation {
+            return Err(GitHubFailure::protocol(false));
+        }
+        Ok(page)
+    }
+
+    /// GETs `path` under `/v1/` and decodes its `200` JSON answer. The generated client drops an
+    /// error's headers, so this reads the response itself: a `429` is taken as `too_many` says,
+    /// and any other refusal is classified against `conflicts`.
+    fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        conflicts: Conflicts,
+        too_many: TooManyRequests,
+    ) -> Result<T, GitHubFailure> {
         let endpoint = format!(
-            "{}/v1/organizations/{}/github/installations/{}/repositories",
+            "{}/v1/{path}",
             self.configuration.base_path.trim_end_matches('/'),
-            apis::urlencode(organization),
-            apis::urlencode(installation),
         );
         let mut request = self
             .configuration
@@ -194,6 +312,7 @@ impl GitHubApi {
             .map_err(|error| GitHubFailure::Unreachable(classify_reqwest_error(&error)))?;
         let status = response.status();
         let content_type = response.headers().get(CONTENT_TYPE).cloned();
+        let retry_after = resource::retry_after(response.headers());
         let body = match http_util::read_bounded_blocking_body(response) {
             Ok(body) => body,
             Err(BoundedBodyError::TooLarge) => {
@@ -210,8 +329,11 @@ impl GitHubApi {
                 }));
             }
         };
+        if status == StatusCode::TOO_MANY_REQUESTS && too_many == TooManyRequests::RateLimited {
+            return Err(GitHubFailure::RateLimited { retry_after });
+        }
         if status != StatusCode::OK {
-            return Err(classify_git_hub_response(status, &body, true));
+            return Err(classify_git_hub_response(status, &body, conflicts));
         }
         let content_type = content_type
             .as_ref()
@@ -221,14 +343,7 @@ impl GitHubApi {
         if content_type.as_deref() != Some(problem::JSON_MEDIA_TYPE) {
             return Err(GitHubFailure::protocol(false));
         }
-        let page: models::GitHubRepositoryList =
-            serde_json::from_slice(&body).map_err(|_| GitHubFailure::protocol(false))?;
-        let page =
-            GitHubRepositoryList::try_from(page).map_err(|_| GitHubFailure::protocol(false))?;
-        if page.installation.id != installation {
-            return Err(GitHubFailure::protocol(false));
-        }
-        Ok(page)
+        serde_json::from_slice(&body).map_err(|_| GitHubFailure::protocol(false))
     }
 }
 
@@ -239,14 +354,14 @@ impl Drop for GitHubApi {
 }
 
 fn replay_once_after_transport_error<T, E>(
-    conflict_allowed: bool,
+    conflicts: Conflicts,
     mut operation: impl FnMut() -> Result<T, Box<apis::Error<E>>>,
 ) -> Result<T, GitHubFailure> {
     match operation() {
         Err(error) if matches!(error.as_ref(), apis::Error::Reqwest(_)) => {
-            operation().map_err(|error| classify_git_hub_error(*error, conflict_allowed))
+            operation().map_err(|error| classify_git_hub_error(*error, conflicts))
         }
-        result => result.map_err(|error| classify_git_hub_error(*error, conflict_allowed)),
+        result => result.map_err(|error| classify_git_hub_error(*error, conflicts)),
     }
 }
 
@@ -257,8 +372,17 @@ pub enum GitHubFailure {
     InvalidInput,
     NotFound,
     SourceConnectionConflict,
+    /// Cloud refused a completion because the session proves no authority over the
+    /// installation.
+    AuthorityUnproven,
+    /// Cloud answered `429`; `retry_after` is its `Retry-After` in seconds, where it gave one.
+    RateLimited {
+        retry_after: Option<u64>,
+    },
     Unreachable(UnreachableCategory),
-    Protocol { credential_rejected: bool },
+    Protocol {
+        credential_rejected: bool,
+    },
 }
 
 impl GitHubFailure {
@@ -279,14 +403,31 @@ impl GitHubFailure {
     }
 }
 
-fn classify_git_hub_error<T>(error: apis::Error<T>, conflict_allowed: bool) -> GitHubFailure {
+/// The `409` problems an operation can be answered; any other `409` is a protocol failure.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Conflicts {
+    None,
+    SourceConnection,
+    /// A setup completion: a source connection conflict or unproven authority.
+    SetupCompletion,
+}
+
+/// How a `GET` takes a `429`.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TooManyRequests {
+    /// As `RateLimited` with its `Retry-After`, for a caller that waits it out: the session read
+    /// a guided setup polls.
+    RateLimited,
+    /// As any other answer the operation does not define, a protocol failure.
+    Unexpected,
+}
+
+fn classify_git_hub_error<T>(error: apis::Error<T>, conflicts: Conflicts) -> GitHubFailure {
     match error {
         apis::Error::Reqwest(error) => GitHubFailure::Unreachable(classify_reqwest_error(&error)),
-        apis::Error::ResponseError(response) => classify_git_hub_response(
-            response.status,
-            response.content.as_bytes(),
-            conflict_allowed,
-        ),
+        apis::Error::ResponseError(response) => {
+            classify_git_hub_response(response.status, response.content.as_bytes(), conflicts)
+        }
         apis::Error::Serde(_) | apis::Error::Io(_) => GitHubFailure::protocol(false),
     }
 }
@@ -294,7 +435,7 @@ fn classify_git_hub_error<T>(error: apis::Error<T>, conflict_allowed: bool) -> G
 fn classify_git_hub_response(
     status: StatusCode,
     body: &[u8],
-    conflict_allowed: bool,
+    conflicts: Conflicts,
 ) -> GitHubFailure {
     if status.is_server_error() {
         return GitHubFailure::Unreachable(UnreachableCategory::Server);
@@ -308,8 +449,11 @@ fn classify_git_hub_response(
         (StatusCode::UNAUTHORIZED, problem::UNAUTHORIZED) => GitHubFailure::Unauthenticated,
         (StatusCode::FORBIDDEN, problem::FORBIDDEN) => GitHubFailure::Forbidden,
         (StatusCode::NOT_FOUND, problem::NOT_FOUND) => GitHubFailure::NotFound,
-        (StatusCode::CONFLICT, SOURCE_CONNECTION_CONFLICT) if conflict_allowed => {
+        (StatusCode::CONFLICT, SOURCE_CONNECTION_CONFLICT) if conflicts != Conflicts::None => {
             GitHubFailure::SourceConnectionConflict
+        }
+        (StatusCode::CONFLICT, AUTHORITY_UNPROVEN) if conflicts == Conflicts::SetupCompletion => {
+            GitHubFailure::AuthorityUnproven
         }
         _ => GitHubFailure::protocol(credential_rejected),
     }
@@ -357,6 +501,12 @@ impl TryFrom<models::GitHubInstallation> for GitHubInstallation {
             },
             created_at: value.created_at,
             updated_at: value.updated_at,
+            authority_verified_at: match value.authority_verified_at {
+                Some(verified_at) if verified_at.is_empty() => {
+                    return Err("the installation authority verification time is empty");
+                }
+                verified_at => verified_at,
+            },
         })
     }
 }
@@ -365,30 +515,149 @@ impl TryFrom<models::GitHubSetupSession> for GitHubSetupSession {
     type Error = &'static str;
 
     fn try_from(value: models::GitHubSetupSession) -> Result<Self, Self::Error> {
-        let setup_url =
-            Url::parse(&value.setup_url).map_err(|_| "the GitHub setup URL is invalid")?;
         if !useful_support::valid_typed_id(&value.id, "ghs_") {
             return Err("the GitHub setup session ID is invalid");
         }
         if value.expires_at.is_empty() {
             return Err("the GitHub setup expiration time is empty");
         }
-        if setup_url.cannot_be_a_base()
-            || !setup_url_transport_is_allowed(&setup_url)
-            || setup_url.host_str().is_none()
-            || !setup_url.username().is_empty()
-            || setup_url.password().is_some()
-            || setup_url.fragment().is_some()
-        {
+        // The browser is handed both URLs, so both are held to the same rule.
+        if !browser_url_is_allowed(&value.setup_url) {
             return Err("the GitHub setup URL is invalid");
+        }
+        if value
+            .authorization_url
+            .as_deref()
+            .is_some_and(|url| !browser_url_is_allowed(url))
+        {
+            return Err("the GitHub authorization URL is invalid");
         }
         Ok(Self {
             id: value.id,
             state: match value.state {
                 models::git_hub_setup_session::State::Pending => GitHubSetupState::Pending,
+                models::git_hub_setup_session::State::Completed => GitHubSetupState::Completed,
+                models::git_hub_setup_session::State::Expired => GitHubSetupState::Expired,
             },
             expires_at: value.expires_at,
             setup_url: value.setup_url,
+            authorization_url: value.authorization_url,
+            verification: GitHubSetupVerification::try_from(*value.verification)?,
+        })
+    }
+}
+
+impl TryFrom<models::GitHubSetupVerification> for GitHubSetupVerification {
+    type Error = &'static str;
+
+    fn try_from(value: models::GitHubSetupVerification) -> Result<Self, Self::Error> {
+        use models::git_hub_setup_verification::State;
+
+        let state = match value.state {
+            State::Unverified => GitHubSetupVerificationState::Unverified,
+            State::Verified => GitHubSetupVerificationState::Verified,
+            State::Denied => GitHubSetupVerificationState::Denied,
+            State::Failed => GitHubSetupVerificationState::Failed,
+        };
+        // A read carries the proven login and its installations once verified, and only then.
+        let consistent = if state == GitHubSetupVerificationState::Verified {
+            value.github_login.is_some() && value.installations.is_some()
+        } else {
+            value.github_login.is_none()
+                && value.installations.is_none()
+                && value.pending_requests.is_none()
+        };
+        if !consistent {
+            return Err("the GitHub setup verification does not match its state");
+        }
+        if value.github_login.as_deref().is_some_and(str::is_empty) {
+            return Err("the verified GitHub login is empty");
+        }
+        Ok(Self {
+            state,
+            github_login: value.github_login,
+            installations: value
+                .installations
+                .map(|installations| {
+                    installations
+                        .into_iter()
+                        .map(GitHubSetupInstallation::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?,
+            pending_requests: value
+                .pending_requests
+                .map(|requests| GitHubSetupPendingRequests::try_from(*requests))
+                .transpose()?,
+        })
+    }
+}
+
+impl TryFrom<models::GitHubSetupInstallation> for GitHubSetupInstallation {
+    type Error = &'static str;
+
+    fn try_from(value: models::GitHubSetupInstallation) -> Result<Self, Self::Error> {
+        if !valid_provider_id(&value.provider_installation_id) {
+            return Err("the provider installation ID is invalid");
+        }
+        if value.provider_account_login.is_empty() {
+            return Err("the provider account login is empty");
+        }
+        Ok(Self {
+            provider_installation_id: value.provider_installation_id,
+            provider_account_login: value.provider_account_login,
+            provider_account_type: match value.provider_account_type {
+                models::git_hub_setup_installation::ProviderAccountType::Organization => {
+                    GitHubAccountType::Organization
+                }
+                models::git_hub_setup_installation::ProviderAccountType::User => {
+                    GitHubAccountType::User
+                }
+            },
+            held_by_organization: value.held_by_organization,
+        })
+    }
+}
+
+impl TryFrom<models::GitHubSetupPendingRequests> for GitHubSetupPendingRequests {
+    type Error = &'static str;
+
+    fn try_from(value: models::GitHubSetupPendingRequests) -> Result<Self, Self::Error> {
+        if !value.read && !value.items.is_empty() {
+            return Err("pending requests GitHub did not answer carry accounts");
+        }
+        Ok(Self {
+            read: value.read,
+            items: value
+                .items
+                .into_iter()
+                .map(GitHubSetupPendingRequest::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl TryFrom<models::GitHubSetupPendingRequest> for GitHubSetupPendingRequest {
+    type Error = &'static str;
+
+    fn try_from(value: models::GitHubSetupPendingRequest) -> Result<Self, Self::Error> {
+        if !valid_provider_id(&value.provider_account_id) {
+            return Err("the provider account ID is invalid");
+        }
+        if value.provider_account_login.is_empty() {
+            return Err("the provider account login is empty");
+        }
+        Ok(Self {
+            provider_account_id: value.provider_account_id,
+            provider_account_login: value.provider_account_login,
+            provider_account_type: match value.provider_account_type {
+                models::git_hub_setup_pending_request::ProviderAccountType::Organization => {
+                    GitHubAccountType::Organization
+                }
+                models::git_hub_setup_pending_request::ProviderAccountType::User => {
+                    GitHubAccountType::User
+                }
+            },
         })
     }
 }
@@ -433,6 +702,19 @@ fn valid_provider_id(value: &str) -> bool {
     value
         .parse::<i64>()
         .is_ok_and(|parsed| parsed > 0 && parsed.to_string() == value)
+}
+
+/// A URL the CLI prints for a browser to open: HTTPS or loopback HTTP, with a host and no
+/// credentials or fragment.
+fn browser_url_is_allowed(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|url| {
+        !url.cannot_be_a_base()
+            && setup_url_transport_is_allowed(&url)
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 fn setup_url_transport_is_allowed(url: &Url) -> bool {

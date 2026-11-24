@@ -21,22 +21,22 @@ pub(crate) struct WorkflowDocument {
     pub(crate) finalizers: BTreeMap<String, FinalizerDefinition>,
     pub(crate) finalizer_order: Vec<String>,
     pub(crate) exports: BTreeMap<String, ExportDefinition>,
-    /// The declared outcome names (REQ-WFFORMAT-87); empty when the workflow declares none.
+    /// The declared outcome names; empty when the workflow declares none.
     pub(crate) outcomes: Vec<String>,
     pub(crate) outcome: Option<OutcomeDeclaration>,
     pub(crate) name: Option<String>,
     pub(crate) version: Option<String>,
-    /// The root input whose value is a run's subject (REQ-WFFORMAT-100).
+    /// The root input whose value is a run's subject.
     pub(crate) subject: Option<String>,
     pub(crate) root: Option<RootBlocks>,
     /// The outputs of each `workflow` step, derived from its child's summary when the
-    /// document is validated (REQ-WFFORMAT-91); decoding leaves it empty.
+    /// document is validated; decoding leaves it empty.
     pub(crate) derived_outputs: BTreeMap<String, BTreeMap<String, Output>>,
 }
 
-/// The root-only blocks of a workflow file (REQ-WFFORMAT-82). A run acts on none of them
-/// but `mirror` (REQ-WFFORMAT-86) and, through admission, `requires` (REQ-WFEXEC-55,
-/// REQ-WFEXEC-78); an absent block is empty, since the schema admits no empty block.
+/// The root-only blocks of a workflow file. A run acts on none of them but `mirror` and,
+/// through admission, `requires`; an absent block is empty, since the schema admits no
+/// empty block.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootBlocks {
     pub programs: Vec<String>,
@@ -49,8 +49,8 @@ pub struct RootBlocks {
 
 impl RootBlocks {
     /// The blocks a workflow file other than a tree's root may not carry: all of these but
-    /// a `requires` that holds neither `tools` nor `check`, the override of REQ-WFDEF-35
-    /// (REQ-WFFORMAT-115, REQ-WFDEF-42).
+    /// a `requires` that holds neither `tools` nor `check`, which such a file may carry to
+    /// override the root's.
     pub(crate) fn without_override(&self) -> Self {
         let mut blocks = self.clone();
         if blocks
@@ -66,14 +66,13 @@ impl RootBlocks {
 
 /// The `requires` block: the tools admission probes, the check the host condition runs,
 /// and the integrations the workflow declares with whose credentials act for them, kept as
-/// declared (REQ-WFDEF-34, REQ-WFDEF-42). Admission probes `tools` alone and keeps the
-/// environment names of each declared integration's id for every step (REQ-WFEXEC-87); the
-/// engine reads no `as` or `bindings`.
+/// declared. Admission probes `tools` alone and keeps the environment names of each
+/// declared integration's id for every step; the engine reads no `as` or `bindings`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootRequires {
     pub tools: Vec<String>,
-    /// The argv of `requires.check`, which only the host condition runs (REQ-WFDEF-42,
-    /// REQ-WFEXEC-81); `None` when not written.
+    /// The argv of `requires.check`, which only the host condition runs; `None` when
+    /// not written.
     pub check: Option<Vec<String>>,
     /// The block's `as`, the default for every integration; `None` when not written.
     pub acting_as: Option<IntegrationAs>,
@@ -81,15 +80,17 @@ pub struct RootRequires {
     pub integrations: BTreeMap<IntegrationProvider, Integration>,
 }
 
-/// A provider id of `requires.integrations`: the schema's closed list (REQ-WFDEF-34). The
-/// variants are declared in the bytewise order of their ids, so a map keyed by them iterates
-/// as the ids sort.
+/// A provider id of `requires.integrations`: the schema's closed list. The variants are
+/// declared in the bytewise order of their ids, so a map keyed by them iterates as the ids
+/// sort.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum IntegrationProvider {
     #[serde(rename = "buildkite")]
     Buildkite,
     #[serde(rename = "claude_code")]
     ClaudeCode,
+    #[serde(rename = "cloudflare")]
+    Cloudflare,
     #[serde(rename = "codex")]
     Codex,
     #[serde(rename = "github")]
@@ -107,6 +108,7 @@ impl IntegrationProvider {
         match self {
             Self::Buildkite => "buildkite",
             Self::ClaudeCode => "claude_code",
+            Self::Cloudflare => "cloudflare",
             Self::Codex => "codex",
             Self::Github => "github",
             Self::GitlabCom => "gitlab.com",
@@ -115,16 +117,16 @@ impl IntegrationProvider {
         }
     }
 
-    /// The environment names a run delivers to every step for a declared integration
-    /// (REQ-WFEXEC-85, INV-ENGINE-43): the token and its file a runner offers an OAuth
-    /// provider's grant token under (REQ-GRANT-87), the variable a runner offers a coding
-    /// agent's login as (REQ-GRANT-44, REQ-GRANT-37), and the token and its file a runner
-    /// offers a token service's token under (REQ-INTEGRATION-12), the names Cloud lists for
-    /// a reviewed token row. None is a name admission strips as runner-private.
+    /// The environment names a run delivers to every step for a declared integration: the
+    /// token and its file a runner offers an OAuth provider's grant token under, the
+    /// variable a runner offers a coding agent's login as, and the token and its file a
+    /// runner offers a token service's token under, the names Cloud lists for a reviewed
+    /// token row. None is a name admission strips as runner-private.
     pub fn environment_names(self) -> &'static [&'static str] {
         match self {
             Self::Buildkite => &["BUILDKITE_API_TOKEN", "BUILDKITE_API_TOKEN_FILE"],
             Self::ClaudeCode => &[CLAUDE_CODE_LOGIN_VARIABLE],
+            Self::Cloudflare => &["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_TOKEN_FILE"],
             Self::Codex => &[CODEX_LOGIN_VARIABLE],
             Self::Github => &["GH_TOKEN", "GH_TOKEN_FILE"],
             Self::GitlabCom => &["GITLAB_TOKEN", "GITLAB_TOKEN_FILE"],
@@ -137,8 +139,8 @@ impl IntegrationProvider {
     }
 }
 
-/// Whose credentials act for an integration: a member's or the organization's
-/// (REQ-WFDEF-34).
+/// Whose credentials act for an integration: a member's or the
+/// organization's.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IntegrationAs {
     #[serde(rename = "member")]
@@ -147,7 +149,7 @@ pub enum IntegrationAs {
     Org,
 }
 
-/// One entry of `requires.integrations` (REQ-WFDEF-34).
+/// One entry of `requires.integrations`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Integration {
     /// The entry's own `as`, overriding the block's; `None` when not written.
@@ -156,19 +158,19 @@ pub struct Integration {
     pub bindings: BTreeMap<String, IntegrationBinding>,
 }
 
-/// An integration binding (REQ-WFDEF-34): a kind its provider lists, which the schema
-/// closes per provider before this is decoded, and an optional default.
+/// An integration binding: a kind its provider lists, which the schema closes per
+/// provider before this is decoded, and an optional default.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrationBinding {
     pub kind: String,
     pub default: Option<String>,
 }
 
-/// The key of a binding reference, the text after `$` (REQ-WFDEF-37): flat when it holds no
-/// `.`, otherwise the integration before its last `.` and the binding's name after it, so a
-/// provider id that holds a dot, such as `gitlab.com`, stays unambiguous. Every reader of a
-/// reference splits it here, and `Display` joins it back: a name is an identifier and holds no
-/// `.`, so the joined key splits to the same pair.
+/// The key of a binding reference, the text after `$`: flat when it holds no `.`, otherwise
+/// the integration before its last `.` and the binding's name after it, so a provider id that
+/// holds a dot, such as `gitlab.com`, stays unambiguous. Every reader of a reference splits it
+/// here, and `Display` joins it back: a name is an identifier and holds no `.`, so the joined
+/// key splits to the same pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BindingKey<'a> {
     /// A key of the root's flat `bindings` block.
@@ -241,8 +243,8 @@ pub enum BindingKind {
     /// A list of organization members.
     #[serde(rename = "members")]
     Members,
-    /// One workflow definition of the same project, named by a definition trigger
-    /// (REQ-WFDEF-39).
+    /// One workflow definition of the same project, named by a definition
+    /// trigger.
     #[serde(rename = "definition")]
     Definition,
 }
@@ -262,7 +264,7 @@ impl BindingKind {
 }
 
 /// A binding's default or bound value: a string for every kind but `members`, whose value is
-/// a list (REQ-WFDEF-3, REQ-WFDEF-20). Serialized as written, a list as a JSON array.
+/// a list. Serialized as written, a list as a JSON array.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum BindingValue {
@@ -293,8 +295,7 @@ impl BindingValue {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Trigger {
     /// Starts a run of the workflow. No local command acts on `stop_before`, `owner`,
-    /// `busy_behavior`, a schedule rule or a definition rule (REQ-WFDEF-30, REQ-WFDEF-31,
-    /// REQ-WFDEF-33, REQ-WFDEF-39).
+    /// `busy_behavior`, a schedule rule or a definition rule.
     Start {
         on: StartRule,
         subject: Option<String>,
@@ -314,14 +315,14 @@ pub enum Trigger {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TriggerRule {
     /// As written: a binding reference, `$` followed by the binding key, or the bare id of a
-    /// declared integration (REQ-WFDEF-38).
+    /// declared integration.
     pub source: String,
     pub event: String,
     pub condition: Option<String>,
 }
 
-/// What a start trigger evaluates: a provider event, a timetable (REQ-WFDEF-31) or the end
-/// of another definition's run (REQ-WFDEF-39).
+/// What a start trigger evaluates: a provider event, a timetable or the end of another
+/// definition's run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StartRule {
     Event(TriggerRule),
@@ -339,8 +340,8 @@ pub enum StartRule {
     },
 }
 
-/// A start trigger's `stopBefore` (REQ-WFDEF-30): the event's label list and the prefix
-/// that, followed by a root step's name, stops the run before that step.
+/// A start trigger's `stopBefore`: the event's label list and the prefix that, followed
+/// by a root step's name, stops the run before that step.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StopBefore {
     /// An `event.<path>` as written.
@@ -348,8 +349,7 @@ pub struct StopBefore {
     pub prefix: String,
 }
 
-/// A start trigger's `busyBehavior` (REQ-WFDEF-33): what a start does while the subject's
-/// slot is busy.
+/// A start trigger's `busyBehavior`: what a start does while the subject's slot is busy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BusyBehavior {
     Skip,
@@ -366,7 +366,7 @@ impl BusyBehavior {
     }
 }
 
-/// A start trigger's `owner` (REQ-WFDEF-30), the short form read as `from` alone.
+/// A start trigger's `owner`, the short form read as `from` alone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OwnerDeclaration {
     pub from: OwnerSource,
@@ -407,18 +407,17 @@ pub(crate) struct ExportDefinition {
 }
 
 /// An export's source or `outcome.from` as written: one output reference, or a `firstOf` of
-/// two to sixteen distinct output references in the order they are tried (REQ-WFFORMAT-107,
-/// REQ-WFFORMAT-108). Validation checks the two forms by different rules, so the list of one
-/// a single reference resolves to is not written here.
+/// two to sixteen distinct output references in the order they are tried. Validation checks
+/// the two forms by different rules, so the list of one a single reference resolves to is
+/// not written here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SourceReference {
     Reference(OutputReference),
     FirstOf(Vec<OutputReference>),
 }
 
-/// The `outcome` block (REQ-WFFORMAT-88): the output that names a succeeded run's outcome,
-/// the name a failed run takes and the name one takes whose failing step was the host's
-/// (REQ-WFFORMAT-110).
+/// The `outcome` block: the output that names a succeeded run's outcome, the name a failed
+/// run takes and the name one takes whose failing step was the host's.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OutcomeDeclaration {
     pub(crate) from: SourceReference,
@@ -458,19 +457,28 @@ pub(crate) enum InputDeclaration {
 }
 
 /// A JSON input's default: a file path relative to the workflow file, or the literal value
-/// when the YAML value is not text (REQ-WFFORMAT-28).
+/// when the YAML value is not text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum JsonDefault {
     File(String),
     Literal(Value),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeclaredWorkspace {
+    New,
+    Write,
+    Read,
+    None,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StepDefinition {
     pub(crate) body: NodeBody,
     pub(crate) control_dependencies: Vec<String>,
+    pub(crate) workspace: Option<DeclaredWorkspace>,
     pub(crate) recovery: Option<StepRecovery>,
-    /// A `cmd` step's `infrastructureExitCodes` (REQ-WFFORMAT-109); empty for every other step.
+    /// A `cmd` step's `infrastructureExitCodes`; empty for every other step.
     pub(crate) infrastructure_exit_codes: Vec<u8>,
 }
 
@@ -538,9 +546,9 @@ pub(crate) enum NodeBody {
     Workflow(WorkflowNode),
 }
 
-/// A step that runs another workflow file of the same tree as a child run
-/// (REQ-WFFORMAT-89). It has no `CommonNode`: its outputs are derived from the child and
-/// its edges, not dataflow, order it.
+/// A step that runs another workflow file of the same tree as a child run. It has no
+/// `CommonNode`: its outputs are derived from the child and its edges, not dataflow,
+/// order it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkflowNode {
     pub(crate) workflow: String,
@@ -549,19 +557,19 @@ pub(crate) struct WorkflowNode {
     pub(crate) for_each: Option<ForEach>,
 }
 
-/// A `workflow` step's `forEach` (REQ-WFFORMAT-98): the list the step runs one child for
-/// each element of, and the child outcome taken for an empty list. The reference string
-/// form decodes with `empty` absent.
+/// A `workflow` step's `forEach`: the list the step runs one child for each element of,
+/// and the child outcome taken for an empty list. The reference string form decodes with
+/// `empty` absent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ForEach {
     pub(crate) items: ValueReference,
     pub(crate) empty: Option<String>,
 }
 
-/// Where an `on` edge leads (REQ-WFFORMAT-92): a step, which may be the step itself or an
-/// earlier one, an exit, a limited edge (REQ-WFFORMAT-96) or a wait. A wait names the step
-/// a hand-back continues at in `on_hand_back`, required for `approval` and refused
-/// otherwise, and carries `rule` exactly when it is `external` (REQ-WFFORMAT-97).
+/// Where an `on` edge leads: a step, which may be the step itself or an earlier one, an
+/// exit, a limited edge or a wait. A wait names the step a hand-back continues at in
+/// `on_hand_back`, required for `approval` and refused otherwise, and carries `rule`
+/// exactly when it is `external`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EdgeTarget {
     Step(String),
@@ -579,9 +587,9 @@ pub(crate) enum EdgeTarget {
         on_hand_back: Option<String>,
         rule: Option<WaitRule>,
     },
-    /// `{wait: host, then, limit, else}` (REQ-WFFORMAT-111): `then` as authored, which
-    /// validation requires to be the step whose edge it is, and `limit` and `else_` as
-    /// authored, which validation requires; `else_` is never limited nor a host wait.
+    /// `{wait: host, then, limit, else}`: `then` as authored, which validation
+    /// requires to be the step whose edge it is, and `limit` and `else_` as authored,
+    /// which validation requires; `else_` is never limited nor a host wait.
     HostWait {
         then: String,
         limit: Option<u32>,
@@ -589,9 +597,8 @@ pub(crate) enum EdgeTarget {
     },
 }
 
-/// A wait's rule `{source, event, where}` (REQ-WFFORMAT-97, REQ-WFDEF-5): authored on an
-/// `external` wait, derived for the local kinds. `event` is read as one name or a list and
-/// always written as a list.
+/// A wait's rule `{source, event, where}`: authored on an `external` wait, derived for the
+/// local kinds. `event` is read as one name or a list and always written as a list.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WaitRule {
@@ -630,7 +637,7 @@ pub enum WaitKind {
 }
 
 impl WaitKind {
-    /// The kind's name as the format and the records spell it (REQ-WFFORMAT-92).
+    /// The kind's name as the format and the records spell it.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Answer => "answer",
@@ -670,8 +677,8 @@ pub(crate) struct CommonNode {
     pub(crate) failure_policy: FailurePolicy,
     pub(crate) condition: Option<ConditionPredicate>,
     pub(crate) cwd: Option<String>,
-    /// The node's own `environmentPassthrough` (REQ-WFFORMAT-102): `None` when absent, so
-    /// the node receives every name the root declares, distinct from an empty list.
+    /// The node's own `environmentPassthrough`: `None` when absent, so the node receives
+    /// every name the root declares, distinct from an empty list.
     pub(crate) environment_passthrough: Option<BTreeSet<String>>,
     pub(crate) outputs: BTreeMap<String, Output>,
 }
@@ -705,12 +712,11 @@ pub(crate) struct ConditionSelector {
 }
 
 /// A `{ref}` value. `Wait` (`wait.<field>`, a field of the control that resolved the wait
-/// leading to the step) and `ControlsAnswers` (`controls.answers`, the answers recorded
-/// for the step's questions) decode only in a `workflow` step's inputs (REQ-WFFORMAT-95),
-/// as does `Item` (`item`, or `item.<field>` with `field` set), the element a `forEach`
-/// step's child runs for (REQ-WFFORMAT-99). `FirstOf` (`{firstOf}`, two to sixteen distinct
-/// output references in the order they are tried) decodes only in an ordinary step's
-/// `inputs` and agent message (REQ-WFFORMAT-105).
+/// leading to the step) and `ControlsAnswers` (`controls.answers`, the answers recorded for
+/// the step's questions) decode only in a `workflow` step's inputs, as does `Item` (`item`,
+/// or `item.<field>` with `field` set), the element a `forEach` step's child runs for.
+/// `FirstOf` (`{firstOf}`, two to sixteen distinct output references in the order they are
+/// tried) decodes only in an ordinary step's `inputs` and agent message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ValueReference {
     Input { name: String },
@@ -728,9 +734,8 @@ pub(crate) struct OutputReference {
     pub(crate) output: String,
 }
 
-/// A declared output, or one a `workflow` step derives from its child: `ChildExport` is
-/// a `text` or `json` export of the child and `ChildOutcome` the child's recorded outcome
-/// (REQ-WFFORMAT-91).
+/// A declared output, or one a `workflow` step derives from its child: `ChildExport` is a
+/// `text` or `json` export of the child and `ChildOutcome` the child's recorded outcome.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Output {
     TextPath { path: String },

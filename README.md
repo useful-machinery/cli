@@ -1109,31 +1109,56 @@ requires the exact acting principal to be a current active organization owner. T
 uses a service credential only when explicitly selected and never substitutes a runner
 credential, GitHub personal access token, or local Git credential.
 
-Connecting GitHub is deliberately split around browser consent. The CLI neither opens a
-browser nor listens for an inbound callback. Begin a ten-minute setup session and print the
-GitHub App installation page to open:
+Connecting GitHub proves two things at GitHub: that the App is installed on an account, and
+which GitHub account the person completing setup is. Cloud completes no setup session whose
+authority that person has not proven. The guided setup takes both in one command under your
+human session:
 
 ```sh
 useful org integration connect github --org acme-labs
 ```
 
-Open the reported URL in a browser and approve the GitHub account and repositories.
-GitHub then returns the browser to a Useful Machinery setup page that shows the decimal
-installation ID and the completion command. Run that command with the ID:
+It lists the organization's installations with whether each one's authority was verified,
+begins a ten-minute, single-use setup session and prints two URLs and the command that shows
+the session, `useful org integration show ghs_SESSION`. Open the installation URL to install
+the GitHub App on an account and approve its repositories, or to ask an owner of that GitHub
+account for it. The command opens the authorization URL where this machine has a browser:
+approve GitHub's authorization to prove which GitHub account you are, then confirm on the
+Useful Machinery page it leads to. After an installation GitHub returns the browser to a
+Useful Machinery setup page; the CLI listens for no inbound callback. The command waits, 900
+seconds unless `--timeout` says otherwise and no longer than the session's ten minutes, and
+completes the one installation the verified session could complete that the organization does
+not hold verified, or the one `--installation ID` names, exiting 0 with outcome `completed`:
 
 ```sh
 useful org integration connect github --installation 12345678 --org acme-labs
 ```
 
-With `--installation` the command begins a setup session of its own and completes it at
-once for that installation, so it needs nothing from the first invocation but the
-organization; the session the first one began expires unused. Completion uses the
-explicitly selected principal credential, while the deployment requires a pending session
-begun by the same principal in that organization and verifies the installation with the
-platform GitHub App credential. A rejected completion does not let the CLI substitute
-another actor, account, repository list, or provider credential. `--installation` belongs to
-GitHub alone, and `create github` refuses the GitLab and Linear options, such as
-`--token-file` and `--timeout`, before sending anything.
+Where several could be completed and none is named, it sends nothing more and exits 2 with
+`installation_choice_required`, naming `useful org integration connect github --installation
+ID` for each. Otherwise it exits 1 with `awaiting_approval` (GitHub holds your request to
+install the App on the account it names; once an owner of that account approves it, run the
+command again), `consent_denied` (GitHub's authorization was refused), `verification_failed`,
+`expired`, `installation_missing` or `timed_out`, each with its next step. A session that has
+not completed is not resumed: running the guided setup again begins a session of its own and
+asks for the proof again, and there is no separate command to complete one. `--no-wait` returns once the session begins, naming the command that shows it.
+With `--json` the command prints one line as the session begins and one as the wait ends.
+
+Show a setup session; this changes nothing. It prints the session and its verification, the
+GitHub login proven, each installation that login could complete, any request to install the
+App that GitHub holds for it, and the next step:
+
+```sh
+useful org integration show ghs_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+```
+
+Completion uses the explicitly selected principal credential, while the deployment requires a
+pending session begun by the same principal in that organization, verified for a GitHub
+account that administers the installation, and verifies the installation with the platform
+GitHub App credential. A rejected completion does not let the CLI substitute another actor,
+account, repository list, or provider credential. `--installation` belongs to GitHub alone,
+and `connect github` refuses the GitLab and Linear options, such as `--token-file`, before
+sending anything.
 
 List the organization's stable installation bindings and their current `active`,
 `disconnected`, or `revoked` state:
@@ -1169,27 +1194,32 @@ useful org integration disconnect ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 Disconnection marks the binding and its repository connections unavailable for new
 source use; it does not uninstall the GitHub App or rewrite accepted run provenance.
 
-Renew a binding for its own installation, with no page to open. The binding keeps its ID: a
-`disconnected` binding becomes `active` again and an `active` one has the repositories it
-grants refreshed. A `revoked` binding, whose installation GitHub removed for good, is
-refused before any session is begun (exit 1, outcome `source_connection_conflict`); make a
-new connection with `useful org integration connect github` and bind each project bound
-through the old one to a repository again:
+Renew a binding for its own installation. The binding keeps its ID: a `disconnected` binding
+becomes `active` again and an `active` one has the repositories it grants refreshed, and one
+whose authority was never verified is verified. The command proves your GitHub account as the
+guided setup does, opening the authorization URL and waiting, before it completes for the
+binding's own installation, with `--no-wait` and `--timeout` as `connect github` takes them. A
+`revoked` binding, whose installation GitHub removed for good, is refused before any session is
+begun (exit 1, outcome `source_connection_conflict`); make a new connection with
+`useful org integration connect github` and bind each project bound through the old one to a
+repository again:
 
 ```sh
 useful org integration reconnect ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
 ```
 
-Add `--json` to any GitHub leaf for one schema-version-1 result. `create github` returns
-`pending` and the session, `create github --installation` and `reconnect` of a binding
-return `completed`, `org integration disconnect` of a binding returns `disconnected`, and `org
-integration repository list` of a binding returns `listed`. A binding's repositories are chosen on GitHub: `org integration repository add` and
+Add `--json` to any GitHub leaf for one schema-version-1 result. `connect github --no-wait`
+returns `pending` and the session, `show ghs_SESSION` returns `shown`, a guided setup and
+`reconnect` of a binding that complete return `completed`, `org integration disconnect` of a
+binding returns `disconnected`, and `org integration repository list` of a binding returns
+`listed`. A binding's repositories are chosen on GitHub: `org integration repository add` and
 `repository remove` take a GitLab connection alone.
 Expected failures use a
 closed outcome without copying provider responses or API problem prose. Setup completion
 and disconnection retry one ambiguous transport failure with the same session or binding
 identity because the API defines exact replay; beginning a setup session and reads make one
-request attempt.
+request attempt. A later completion retry must reuse the same setup session and, where one
+was named, the same installation ID.
 
 ### GitLab.com
 
@@ -1353,40 +1383,68 @@ useful org integration authorize --all --runner build-1 --org acme --yes
 ```
 
 `authorize INTEGRATION --runner RUNNER --project PROJECT` for a connection at `github`,
-`gitlab` or `linear` makes a connection authorization: the runner may use that connection
-for the app runs of that project. `--project` must be given on the command line, since the
-project is part of what the command writes; it is never taken from the checkout, and without
-it the command exits 2 before any request and names this form. The permission covers every
-app run of that project on that runner, whoever or whatever caused the run, and reaches
-whatever the provider grants the connection, which no authorization narrows; Cloud delivers
-an organization's connection to no run today, so the authorization records a permission and
-delivers nothing. The command states this and does nothing without `--yes`. Named by its
-provider, the command reads the organization's connections at the provider and takes the
-active one; where several are active it exits 2 (`connection_required`) and lists each by ID
-and account, and a connection ID names one. With none active it exits 1
-(`connection_not_found`) naming the command that connects the organization, and a connection
-ID the read does not list exits 1 the same way naming `useful org integration list`. Given no
-`--runner` it exits 2 and lists the organization's runners that hold no authorization for
-that project and provider; it never prompts. It prints the authorization; `--json` prints one document with outcome
-`authorized` whose `authorization` carries `id`, `provider`, `projectId`, `projectName`,
-`runnerId`, `runnerName`, `connectionId`, `connectionAccount`, `authorizedBy`, `createdAt` and
-`scope`: its state, `current` or `unavailable`, and for a current GitHub scope `github` with
-the installation's `repositorySelection` and each permission's `name` and `access`. Cloud
-decides which providers it authorizes: a refusal exits 1 as `forbidden`, `project_not_found`,
-`runner_not_found`, `connection_not_found`, `connection_inactive`, `provider_ineligible` or
-`already_authorized`, and a deployment that does not serve these authorizations as
-`connection_authorizations_not_served`.
+`gitlab` or `linear` makes a connection authorization for the runs of that project on that
+runner. `--project` must be given on the command line, since the project is part of what the
+command writes; it is never taken from the checkout, and without it the command exits 2 before
+any request and names this form. `--runs app`, the default, covers every app run of the
+project on the runner, whoever or whatever caused the run, and leaves members' runs as they
+were; `--runs all` covers every run of the project on the runner, so that a member's run there
+acts at GitHub as the organization's GitHub App and uses no GitHub sign-in of the member's. A
+run the authorization covers is issued the installation's token for its one repository,
+expiring within the hour. `--runs` needs `--project` and is refused for a token, exit 2.
+
+For `github` the command first reads the project and the organization's GitHub installations
+and takes the one that holds the project's repository: a project with no active GitHub
+repository, or a connection ID naming another installation, exits 1
+(`repository_not_connected`), and an installation the read does not list exits 1
+(`connection_not_found`). Where that installation is not active or its authority was never
+verified, it authorizes nothing: on a terminal, without `--json`, it offers the guided setup of
+`useful org integration connect github --installation ID` for that installation and, once the
+setup ends `completed` with it active and verified, resumes for the same project, runner and
+`--runs`; a setup that ends otherwise ends the command with its outcome. Declined, off a
+terminal or with `--json`, it exits 1 (`connection_inactive` or `connection_unverified`)
+naming that command. For `gitlab` and `linear`, named by its provider, the command reads the
+organization's connections at the provider and takes the active one; where several are active
+it exits 2 (`connection_required`) and lists each by ID and account, and a connection ID names
+one. With none active it exits 1 (`connection_not_found`) naming the command that connects the
+organization, and a connection ID the read does not list exits 1 the same way naming
+`useful org integration list`.
+
+Before it acts the command states which runs the authorization covers and, for `github`, the
+GitHub account that owns the installation, the project's repository, that the runs act as the
+App, so that what they push is attributed to the App, and that each token is issued for one
+run. Without `--yes` it asks for confirmation on a terminal; off a terminal or with `--json`,
+confirmation requires `--yes` (exit 2 otherwise). Given no `--runner` it exits 2 and lists the
+organization's runners that hold no authorization for that project and provider; it never
+prompts. It prints the authorization with its runs, its repository and, for a current GitHub
+scope, the App it acts as; `--json` prints one document with outcome `authorized` whose
+`authorization` carries `id`, `provider`, `projectId`, `projectName`, `runnerId`,
+`runnerName`, `connectionId`, `connectionAccount`, `runs`, `repository`, `authorizedBy`,
+`createdAt` and `scope`: its state, `current` or `unavailable`, and for a current GitHub scope
+`github` with the `appSlug`, the installation's `repositorySelection` and each permission's
+`name` and `access`. Cloud decides which providers it authorizes: a refusal exits 1 as
+`forbidden`, `project_not_found`, `runner_not_found`, `connection_not_found`,
+`connection_inactive`, `connection_unverified`, `provider_ineligible` or `already_authorized`
+(an authorization of other runs is made after the one in force is ended), a Cloud that does
+not serve an authorization's runs as `runs_not_served`, and a deployment that does not serve
+these authorizations as `connection_authorizations_not_served`.
+
+Where a member's own GitHub sign-in fails, an owner can let that member's runs on a runner act
+as the organization's GitHub App instead, with `useful org integration authorize github
+--runner RUNNER --project PROJECT --runs all`.
 
 ```sh
 useful org integration authorize github --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --org acme --yes
+useful org integration authorize github --runner rnr_01k0z6r1w8f4jy2m7q9v3x5abc --project prj_01k0z6r1w8f4jy2m7q9v3x5abc --runs all --org acme --yes
 useful org integration authorize ghi_01k0z6r1w8f4jy2m7q9v3x5abc --runner build-1 --project api --org acme --json
 ```
 
 `deauthorize` mirrors `authorize`. For a connection it finds the authorization in force for
 that project, runner and provider in the organization's list, reading no connection; a
-connection ID keeps only an authorization of that connection. It states that the runner's
-permission ends and that no run is asked to stop or loses anything, and does nothing without
-`--yes`. It prints the authorization's ID, project, runner and connection; `--json` prints one
+connection ID keeps only an authorization of that connection. It states that the runner is
+issued the installation no more for the project's runs, that a token already issued stays
+valid until it expires, within the hour, and that no run is asked to stop, and does nothing
+without `--yes`. It prints the authorization's ID, project, runner and connection; `--json` prints one
 document with outcome `deauthorized` whose `authorization` carries `id`, `provider`,
 `projectId`, `projectName`, `runnerId`, `runnerName`, `connectionId` and
 `connectionAccount`. Where none is in force, a repeated command included, it sends nothing more
@@ -2137,8 +2195,11 @@ check, never as current, a `ready` one with availability `unverified` and `--jso
 Each line, in `useful runner show` too, ends with where the provider's credential comes from
 where Runner Serve recorded one, and `--json` carries it as `source`: `host` when the
 service provides it (its own Claude Code or Codex login, or a `GH_TOKEN`, `GITLAB_TOKEN` or
-`USEFUL_LINEAR_ACCESS_TOKEN` in its environment, or the `_FILE` form) and `grant` when a grant
-does (a login Runner Serve installed and offers, or a token issued for the run named), as of
+`USEFUL_LINEAR_ACCESS_TOKEN` in its environment, or the `_FILE` form), `grant` when a grant
+does (a login Runner Serve installed and offers, or a token issued for the run named), and,
+for `github` alone, `org_connection`, printed as `the organization's GitHub App installation`,
+when the token issued for the run named is the organization's GitHub App installation's
+under a connection authorization, as of
 the last setup for a coding agent and of the run named for `github`, `gitlab` and `linear`
 (`codex login:       ready (generation 3), availability available · source: grant`).
 The setup it asks for checks every `ready` login before it answers, so the command can take
@@ -2396,7 +2457,8 @@ such as `install_failed`, `unsupported_target`, `stale_generation` or `cloud_una
 `reconnect_required` for a `ready` login the provider refused at its last use. A provider in
 `foreign_login`, whose steps run on the service's own login, passes. Its details name each provider's availability and next action as
 `<provider>_availability` and `<provider>_next_action`, and where the runner recorded one the
-provider's credential source as `<provider>_source` (`host` or `grant`). It fails
+provider's credential source as `<provider>_source` (`host`, `grant` or, for `github`,
+`org_connection`). It fails
 `readiness_unknown` when the runner has recorded no readiness yet, a runner home that holds
 no configuration included, `config_invalid` for a configuration it cannot load, and
 `config_required` when no `--config` is given and the `useful` home cannot be located because
@@ -3420,11 +3482,15 @@ Progress goes to stderr. `workflow run show` of a Cloud run prints one document 
 handoff and any observed Publication state, outcome, receipt disposition, failure, and
 redacted confirmed pull-request URL separately from execution. After the run's actor,
 `workflow run show` prints one `credential PROVIDER:` line for each provider whose credential source
-the run's runner reported: `host`, `grant of` and the member's principal id, or `grant` when
-Cloud recorded no member; a run with no reported sources prints none. After them it prints
-one `integration ID:` line for each integration the run's workflow declares, in Cloud's
-order: `host`, `connected by` and the member's principal id, `connected by the organization`
-or `connected by a member` when Cloud names no principal, or `not provided`, followed by
+the run's runner reported: `host`, `grant of` and the member's principal id, `grant` when
+Cloud recorded no member, or for `github`'s `org_connection` source
+`the organization's GitHub App installation`; a run with no reported sources prints none.
+After them it prints one `integration ID:` line for each integration the run's workflow
+declares, in Cloud's order: `host`, `the organization's GitHub App installation` for an
+`org_connection` source followed by `, authorized by` and the principal id of the member who
+made the connection authorization when Cloud names one, `connected by` and the member's
+principal id, `connected by the organization` or `connected by a member` when Cloud names no
+principal, or `not provided`, followed by
 `, token v` and the version when there is one; a run whose read carries no integration
 sources prints none. On failure, inspect the existing publication or handoff
 and provider effects before creating another publication attempt. Human cancellation

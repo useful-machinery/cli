@@ -1579,8 +1579,8 @@ fn command_failed(output: &ProcessOutput, cause: GitCaptureFailure) -> GitCaptur
 }
 
 /// The global arguments every Git command the engine itself runs in an execution root
-/// starts with (INV-ENGINE-37): no pager, no optional index writes, no replacement
-/// objects, no `core.fsmonitor` command, no stored untracked cache and no maintenance.
+/// starts with: no pager, no optional index writes, no replacement objects, no
+/// `core.fsmonitor` command, no stored untracked cache and no maintenance.
 pub(super) const EXECUTION_ROOT_GIT_ARGUMENTS: &[&str] = &[
     "--no-pager",
     "--no-optional-locks",
@@ -1596,7 +1596,7 @@ pub(super) const EXECUTION_ROOT_GIT_ARGUMENTS: &[&str] = &[
 ];
 
 /// The fixed variables every Git command the engine itself runs in an execution root
-/// receives (INV-ENGINE-37), set after any inherited or admitted variable.
+/// receives, set after any inherited or admitted variable.
 pub(super) const EXECUTION_ROOT_GIT_ENVIRONMENT: &[(&str, &str)] = &[
     ("LC_ALL", "C"),
     ("GIT_CONFIG_GLOBAL", "/dev/null"),

@@ -1,0 +1,17 @@
+schemaVersion: 1
+steps:
+  seed:
+    kind: cmd
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  join:
+    kind: cmd
+    inputs:
+      seed: {ref: outputs.seed.value}
+      candidate: {ref: outputs.candidate.value}
+    command: {argv: ["true"]}

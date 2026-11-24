@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -40,6 +40,7 @@ pub enum BeginGitHubSetupError {
     Status403(models::Problem),
     Status404(models::Problem),
     Status500(models::Problem),
+    Status503(models::Problem),
     UnknownValue(serde_json::Value),
 }
 
@@ -75,6 +76,15 @@ pub enum CompleteGitHubSetupError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CompleteLinearOAuthCallbackError {
+    Status400(String),
+    Status503(String),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`confirm_git_hub_setup_verification`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConfirmGitHubSetupVerificationError {
     Status400(String),
     Status503(String),
     UnknownValue(serde_json::Value),
@@ -158,6 +168,19 @@ pub enum DisconnectLinearConnectionError {
     Status409(models::Problem),
     Status503(models::Problem),
     Status500(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`get_git_hub_setup_session`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GetGitHubSetupSessionError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
     UnknownValue(serde_json::Value),
 }
 
@@ -325,6 +348,7 @@ pub enum SubmitGitLabCandidateError {
     UnknownValue(serde_json::Value),
 }
 
+/// Problem types: 409 `candidate-conflict`.
 pub fn activate_git_lab_candidate(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -397,7 +421,7 @@ pub fn activate_git_lab_candidate(
     }
 }
 
-/// Creates one single-use setup session that expires after ten minutes.
+/// Creates one single-use setup session that expires after ten minutes, with an unverified verification and GitHub's user authorization for it. A deployment whose GitHub App has no OAuth client answers `503` `provider-unavailable` and begins nothing.
 pub fn begin_git_hub_setup(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -508,7 +532,7 @@ pub fn cancel_git_lab_candidate(
     }
 }
 
-/// Reauthenticates the session actor, reauthorizes current active ownership, and verifies the installation and selected repositories with the platform App credential.
+/// Reauthenticates the session actor and reauthorizes current active ownership. Cloud first refuses another owner's session, an expired session, or a session already completed for a different installation. To prove authority, the session must be verified and its GitHub user must be the installation's own user account, an active administrator of its organization, or the installer or approved requester GitHub named when it was created. Without proof, Cloud answers `409` `github-installation-authority-unproven` regardless of the installation's state, including when GitHub reports it missing. This refusal precedes minting any installation token or disclosing who holds the installation. With proof, Cloud verifies the installation and selected repositories with the platform App credential before binding, reactivating or verifying the binding. A suspended installation or permissions Cloud does not accept yield `409` `source-connection-conflict`.
 pub fn complete_git_hub_setup(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -636,6 +660,68 @@ pub fn complete_linear_o_auth_callback(
     }
 }
 
+/// The form of the confirmation page the grant callback answers for a GitHub setup session's verification posts here. The confirmation makes the verification `verified` only while it awaits that confirmation and its session is pending and unexpired; any other confirmation is `400`. The page carries nothing from the request.
+pub fn confirm_git_hub_setup_verification(
+    configuration: &configuration::Configuration,
+    confirmation: &str,
+) -> Result<String, Error<ConfirmGitHubSetupVerificationError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_form_confirmation = confirmation;
+
+    let uri_str = format!(
+        "{}/v1/integrations/grants/oauth/callback",
+        configuration.base_path
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    let mut multipart_form_params = std::collections::HashMap::new();
+    multipart_form_params.insert("confirmation", p_form_confirmation.to_string());
+    req_builder = req_builder.form(&multipart_form_params);
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `String`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `String`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ConfirmGitHubSetupVerificationError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Problem types: 409 `connection-limit-reached`.
 pub fn create_git_lab_connection(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -880,6 +966,7 @@ pub fn disconnect_git_hub_installation(
     }
 }
 
+/// Problem types: 409 `connection-version-conflict`.
 pub fn disconnect_git_lab_connection(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1007,6 +1094,68 @@ pub fn disconnect_linear_connection(
     } else {
         let content = resp.text()?;
         let entity: Option<DisconnectLinearConnectionError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Answers the session, its state (a pending session past its expiry reads as `expired`) and its verification, writing nothing. While the session is pending and GitHub's user authorization has not yet answered, it carries `authorizationUrl`. Once the verification is `verified` it carries the GitHub login proven and the installations that user could complete the session with, each with whether this organization already holds it, and while the session is pending also `pendingRequests`, read from GitHub on each read; a list GitHub does not answer is reported unread and fails nothing. Another owner is answered `404`.
+pub fn get_git_hub_setup_session(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    setup_session_id: &str,
+) -> Result<models::GitHubSetupSession, Error<GetGitHubSetupSessionError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_setup_session_id = setup_session_id;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/github/setup-sessions/{setupSessionId}",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        setupSessionId = crate::generated::apis::urlencode(p_path_setup_session_id)
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::GitHubSetupSession`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::GitHubSetupSession`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<GetGitHubSetupSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -1452,6 +1601,7 @@ pub fn list_git_lab_connections(
     }
 }
 
+/// Problem types: 409 `cursor-stale`, `repository-unavailable`.
 pub fn list_git_lab_repositories(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1751,6 +1901,7 @@ pub fn list_linear_teams(
     }
 }
 
+/// Problem types: 409 `connection-conflict`, `repository-limit-reached`, `repository-unavailable`.
 pub fn patch_git_lab_repository_selection(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1822,6 +1973,7 @@ pub fn patch_git_lab_repository_selection(
     }
 }
 
+/// Problem types: 409 `candidate-conflict`.
 pub fn submit_git_lab_candidate(
     configuration: &configuration::Configuration,
     organization_ref: &str,

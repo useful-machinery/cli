@@ -6,7 +6,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 use super::Cli;
 
 const LEAVES: &str = "accept add answer approve authorize archive cancel connect create deauthorize decline delete disable disconnect doctor download drain enable end event hand-back interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
-const GROUPS: &str = "account artifact audit credential definition delegation delivery event identity input input-set integration invitation join-key key linear member org pool project publication repository run runner secret service team evaluation webhook workflow";
+const GROUPS: &str = "account artifact audit credential definition delegation delivery event identity input input-set integration invitation join-key key linear member org pool project publication record repository run runner secret service team evaluation webhook workflow";
 const COMMON: [&str; 3] = ["json", "api-key-file", "allow-insecure-http"];
 // These leaves have no limit/cursor contract; see cli/docs/output-style.md.
 const UNPAGINATED_LISTS: [&str; 4] = [
@@ -21,7 +21,7 @@ const UNPAGINATED_LISTS: [&str; 4] = [
 const SELF_CONFIRMING: [&str; 1] = ["account integration disconnect"];
 // These destructive leaves take no --yes at all: `project webhook secret revoke` ends only the
 // overlap of a secret a rotation already replaced, so the subscription keeps a working secret
-// and the tree writes the leaf without a confirmation (REQ-WEBHOOK-75).
+// and the tree writes the leaf without a confirmation.
 const UNCONFIRMED: [&str; 1] = ["project webhook secret revoke"];
 
 // These identities are backed by shared Args or identifier argument types in cli/src/cli.rs
@@ -32,7 +32,7 @@ fn semantic_class(path: &str, long: &str) -> Option<String> {
         // the required value `--input-text` supplies elsewhere.
         "input-text" if path == "workflow run upgrade" => "input-text:override",
         // The connection a project's repository is bound through, GitHub's or GitLab's alone,
-        // found when omitted (`org/connection/reach.rs`, REQ-PROJECT-101).
+        // found when omitted (`org/connection/reach.rs`).
         "connection" if matches!(path, "project create" | "project update") => {
             "connection:repository"
         }
@@ -40,7 +40,7 @@ fn semantic_class(path: &str, long: &str) -> Option<String> {
         // same `PATH|-`, and its help names the key it holds.
         "key-file" if path == "runner join-key issue" => "key-file:runner-key",
         // A runner a single-runner key is issued for may be a name no runner has yet, which
-        // the issue registers (REQ-RUNNERENROLL-1).
+        // the issue registers.
         "runner" if path == "runner join-key issue" => "runner:registering",
         "api-key-file"
         | "key-file"
@@ -60,8 +60,8 @@ fn semantic_class(path: &str, long: &str) -> Option<String> {
         | "input-attachment"
         | "input-attachments-empty"
         | "agent-profiles"
-        // A runner by ID or exact name (REQ-GRANT-65), at each grant leaf that takes one and at
-        // `workflow doctor` (REQ-CREDREADY-23).
+        // A runner by ID or exact name, at each grant leaf that takes one and at `workflow
+        // doctor`.
         | "runner" => long,
         // Only these paths flatten PaginationArgs. Other options named --limit
         // do not acquire pagination semantics just by sharing the spelling.
@@ -314,7 +314,6 @@ fn violations(root: &Command) -> BTreeSet<String> {
     failures
 }
 
-// REQ-DELEGATION-14
 #[test]
 fn cli_grammar_conforms() {
     let mut root = Cli::command();
@@ -327,8 +326,8 @@ fn cli_grammar_conforms() {
     );
 }
 
-// INV-CLI-21: the lexicons hold the words the tree uses and no other, so a word the tree
-// gave up cannot name a new path without changing them.
+// The lexicons hold the words the tree uses and no other, so a word the tree gave up
+// cannot name a new path without changing them.
 #[test]
 fn lexicons_hold_exactly_the_words_of_the_tree() {
     fn collect<'a>(
@@ -371,7 +370,6 @@ fn guide_verb_lexicon(guide: &str) -> BTreeSet<&str> {
         .collect()
 }
 
-// INV-CLI-19
 #[test]
 fn guide_verb_lexicon_is_the_admitted_leaf_set() {
     let guide = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/output-style.md"));
@@ -490,12 +488,6 @@ fn entity_identifier_flags_match_the_command_tree_and_parser() {
     }
 }
 
-// REQ-ACCOUNT-61
-// REQ-SERVICEPRINCIPAL-20
-// REQ-GRANT-6
-// REQ-GRANT-66
-// REQ-GRANT-67
-// REQ-GRANT-68
 #[test]
 fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
     let gated: &[&[&str]] = &[
@@ -554,7 +546,7 @@ fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
         );
     }
     // `authorize` and `deauthorize` check a missing `--yes` as they run, asking on a terminal
-    // in its place (REQ-GRANT-82).
+    // in its place.
     for leaf in ["authorize", "deauthorize"] {
         let input = [
             "useful",
@@ -569,9 +561,6 @@ fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
     }
 }
 
-// REQ-GRANT-65
-// REQ-GRANT-66
-// REQ-GRANT-81
 // `authorize` takes `INTEGRATION` or `--all`, never both, and either leaf names its runner with
 // `--runner`, by ID or by name, or names none, to be told the runners it can name.
 #[test]
@@ -619,7 +608,6 @@ fn authorize_and_deauthorize_take_runner_as_an_option_and_refuse_a_malformed_tar
     }
 }
 
-// REQ-CONNECTION-88
 #[test]
 fn connections_live_only_under_org_integration() {
     let mut root = Cli::command();
@@ -670,7 +658,6 @@ fn connections_live_only_under_org_integration() {
     }
 }
 
-// REQ-PROJECT-102
 #[test]
 fn project_update_takes_a_change_and_confirms_only_a_cleared_repository() {
     for arguments in [
@@ -700,7 +687,6 @@ fn project_update_takes_a_change_and_confirms_only_a_cleared_repository() {
     );
 }
 
-// REQ-TRIGGER-143
 #[test]
 fn project_triggers_and_schedules_are_unknown_commands() {
     let mut root = Cli::command();
@@ -724,7 +710,6 @@ fn project_triggers_and_schedules_are_unknown_commands() {
     }
 }
 
-// REQ-TRIGGER-145
 #[test]
 fn run_linear_offers_only_its_reads() {
     let mut root = Cli::command();
@@ -1177,9 +1162,8 @@ fn parameterized_option_classes_are_isolated_but_ratchet_within_each_class() {
     );
 }
 
-// REQ-CONTINUE-1, REQ-CONTINUE-25, REQ-LOCALRUN-80, REQ-LOCALRUN-184: `resume` keeps
-// `--workflow` and `--execution-root` and takes no `--from`; `retry` takes `--from` or `--all`,
-// and `--workflow` with neither `--all`.
+// `resume` keeps `--workflow` and `--execution-root` and takes no `--from`; `retry` takes
+// `--from` or `--all`, and `--workflow` with neither `--all`.
 #[test]
 fn resume_and_retry_take_their_options() {
     let resume = ["useful", "workflow", "run", "resume", "run_1"];
@@ -1243,8 +1227,8 @@ fn resume_and_retry_take_their_options() {
     }
 }
 
-// REQ-CLOUDDEF-63: a definition's evaluations are listed and shown by the definition's ID or
-// name in the project in effect, `--state` and `--run` filtering the list.
+// A definition's evaluations are listed and shown by the definition's ID or name in the
+// project in effect, `--state` and `--run` filtering the list.
 #[test]
 fn definition_evaluations_name_the_definition_in_the_project_in_effect() {
     let evaluation = "wev_01k0z6r1w8f4jy2m7q9v3x5abc";

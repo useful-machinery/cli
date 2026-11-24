@@ -104,7 +104,6 @@ mod tests {
     use super::super::structure::StructureRule;
     use super::*;
 
-    // REQ-AGENT-54
     #[test]
     fn decodes_a_closed_document_and_rejects_structural_deviations() {
         let valid = b"schemaVersion: 1\nagentProfiles:\n  coding:\n    harness:\n      kind: claude_code\n      config:\n        model: example/model\n        effort: high\n";
@@ -147,7 +146,6 @@ mod tests {
         );
     }
 
-    // REQ-WFFORMAT-52
     #[test]
     fn a_structural_deviation_names_the_field_and_the_rule() {
         let cases = [

@@ -65,13 +65,13 @@ impl<'a> AccountView<'a> {
     }
 }
 
-/// The side every grant states, whose integration it is (REQ-INTEGRATION-13): a grant is always
-/// the member's own, as the member's token is.
+/// The side every grant states, whose integration it is: a grant is always the member's own, as
+/// the member's token is.
 const MEMBER_SIDE: &str = "member";
 
-/// A grant as `useful account integration list` presents it (REQ-GRANT-64): the model's named fields
-/// only, enums as their wire strings, so nothing a response adds beyond the model reaches output
-/// (REQ-GRANT-4, REQ-GRANT-14). The members after `status` are those `show` adds.
+/// A grant as `useful account integration list` presents it: the model's named fields only, enums
+/// as their wire strings, so nothing a response adds beyond the model reaches output. The members
+/// after `status` are those `show` adds.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GrantView<'a> {
@@ -121,7 +121,7 @@ struct DetailView<'a> {
     uses: Option<Vec<UseView<'a>>>,
 }
 
-/// One token issued from an OAuth grant (REQ-GRANT-8): where it went and when, never the token.
+/// One token issued from an OAuth grant: where it went and when, never the token.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UseView<'a> {
@@ -306,9 +306,8 @@ struct ListResult<'a> {
     not_connected: &'a [NotConnectedView<'a>],
 }
 
-/// Writes the member's unrevoked grants, then the member's `tokens` (REQ-INTEGRATION-19), then
-/// each of `providers`, in its order, they hold no grant of (REQ-GRANT-64); it exits 0 whatever
-/// they report.
+/// Writes the member's unrevoked grants, then the member's `tokens`, then each of `providers`,
+/// in its order, they hold no grant of; it exits 0 whatever they report.
 pub(super) fn write_list(
     deployment: &str,
     grants: &[MemberGrant],
@@ -373,8 +372,8 @@ struct GrantResult<'a> {
     grant: GrantView<'a>,
 }
 
-/// Writes one grant in detail (REQ-GRANT-171, REQ-GRANT-172), with the tokens issued from it, newest first,
-/// when it is an OAuth grant.
+/// Writes one grant in detail, with the tokens issued from it, newest first, when it is an OAuth
+/// grant.
 pub(super) fn write_grant(
     deployment: &str,
     grant: &MemberGrant,
@@ -413,9 +412,9 @@ struct AmbiguousResult<'a> {
     grant_ids: &'a [String],
 }
 
-/// Refuses a provider name that names several unrevoked grants, naming them (REQ-GRANT-65):
-/// a command does not choose between them. A command whose JSON is newline-delimited events,
-/// `streaming`, prints the document as one line.
+/// Refuses a provider name that names several unrevoked grants, naming them: a command does
+/// not choose between them. A command whose JSON is newline-delimited events, `streaming`,
+/// prints the document as one line.
 pub(super) fn write_ambiguous(
     deployment: &str,
     provider: &str,
@@ -450,8 +449,8 @@ pub(super) fn write_ambiguous(
     Ok(ExitCode::UsageError)
 }
 
-/// A runner a command names in place of acting (REQ-GRANT-65, REQ-GRANT-81); a runner it found
-/// no registration of is named by its ID alone.
+/// A runner a command names in place of acting; a runner it found no registration of is named
+/// by its ID alone.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OfferedRunnerView<'a> {
@@ -483,17 +482,16 @@ struct RunnerRequiredResult<'a> {
     schema_version: u8,
     deployment: &'a str,
     outcome: &'static str,
-    // What the runner is asked for: a grant, or a token (REQ-INTEGRATION-20).
+    // What the runner is asked for: a grant, or a token.
     #[serde(flatten)]
     holder: Option<Holder<'a>>,
     runners: Vec<OfferedRunnerView<'a>>,
 }
 
 /// Refuses a command that names no one runner as a missing argument is refused: given no
-/// `--runner` (REQ-GRANT-176), or a name several runners have (REQ-GRANT-65). Exit 2, naming
-/// each runner by its name and ID, with `organization` its organization's too, under
-/// `diagnostic`, then the command line `example` that names one; under `--json`, one document
-/// with outcome `runner_required`.
+/// `--runner`, or a name several runners have. Exit 2, naming each runner by its name and ID,
+/// with `organization` its organization's too, under `diagnostic`, then the command line
+/// `example` that names one; under `--json`, one document with outcome `runner_required`.
 pub(super) fn write_runner_required(
     deployment: &str,
     holder: Option<Holder<'_>>,
@@ -520,8 +518,8 @@ pub(super) fn write_runner_required(
 const RUNNER_REQUIRED: &str = "runner_required";
 
 /// Refuses `useful account integration connect --workflow --runner NAME` for a name several runners
-/// have (REQ-GRANT-65, REQ-GRANT-76), as [`write_runner_required`] refuses it, but under `--json`
-/// as the summary event that ends the command's stream, naming the runners.
+/// have, as [`write_runner_required`] refuses it, but under `--json` as the summary event that ends
+/// the command's stream, naming the runners.
 pub(super) fn write_create_runner_required(
     deployment: &str,
     runners: &[Runner],
@@ -615,8 +613,8 @@ pub(super) fn runner_report(deployment: &str, failure: &RunnerFailure) -> ApiFai
     }
 }
 
-/// Reports that a command given no `--runner` has no runner to name (REQ-GRANT-175) for
-/// `holder`, a grant where none is named, with exit 1 and a remedy.
+/// Reports that a command given no `--runner` has no runner to name for `holder`, a
+/// grant where none is named, with exit 1 and a remedy.
 pub(super) fn write_nothing_offered(
     deployment: &str,
     nothing: Nothing,
@@ -671,8 +669,8 @@ struct RevokeResult<'a> {
     ended_authorizations: Option<Vec<EndedAuthorizationView<'a>>>,
 }
 
-/// Reports a revocation (REQ-GRANT-68). For a native grant, `after` is the grant read after
-/// it, `Some(None)` when that read failed, which leaves the revocation done: each runner the
+/// Reports a revocation. For a native grant, `after` is the grant read after it,
+/// `Some(None)` when that read failed, which leaves the revocation done: each runner the
 /// grant was authorized for with its removal state and stop, and what neither covers.
 pub(super) fn write_revoke(
     deployment: &str,
@@ -730,7 +728,7 @@ struct AuthorizedGrantView<'a> {
     authorization: Option<AuthorizationView<'a>>,
 }
 
-/// One token's outcome under `authorize --all` (REQ-INTEGRATION-20).
+/// One token's outcome under `authorize --all`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthorizedTokenView<'a> {
@@ -756,12 +754,12 @@ struct AuthorizeAllResult<'a> {
     tokens: &'a [AuthorizedTokenView<'a>],
 }
 
-/// Reports what `authorize --all` did with each grant (REQ-GRANT-173) and each token
-/// (REQ-INTEGRATION-20), and each refusal with its remedy. It exits 1 when any was refused for
-/// a reason other than serving another organization or being authorized for the runner already,
-/// a Codex grant authorized for another runner among them, or when a failure `ended` the
-/// command: then `outcomes` are those of the subjects before the one it ended at, which follow
-/// them in `subjects`, and the failure is reported after them.
+/// Reports what `authorize --all` did with each grant and each token, and each refusal with its
+/// remedy. It exits 1 when any was refused for a reason other than serving another organization
+/// or being authorized for the runner already, a Codex grant authorized for another runner
+/// among them, or when a failure `ended` the command: then `outcomes` are those of the subjects
+/// before the one it ended at, which follow them in `subjects`, and the failure is reported
+/// after them.
 pub(in crate::cli) fn write_authorize_all(
     deployment: &str,
     runner_id: &str,
@@ -895,8 +893,8 @@ pub(in crate::cli) fn write_authorize_all(
     Ok(exit)
 }
 
-/// `authorize --all`'s refusal of a Codex grant that serves another runner (REQ-GRANT-173),
-/// which Cloud answers as it answers a grant authorized for this runner already.
+/// `authorize --all`'s refusal of a Codex grant that serves another runner, which Cloud
+/// answers as it answers a grant authorized for this runner already.
 fn authorized_elsewhere() -> ApiFailureReport {
     ApiFailureReport::new(
         "authorized_elsewhere",
@@ -925,8 +923,8 @@ fn write_subject_failure(
     writeln!(output, "\n{}\n", report.remedy)
 }
 
-/// A grant operation's failure as the member reads it: each refusal of REQ-GRANT-65 with exit
-/// status 1 and its remedy.
+/// A grant operation's failure as the member reads it: each refusal of a grant or runner name
+/// with exit status 1 and its remedy.
 pub(in crate::cli) fn report(deployment: &str, failure: &MemberGrantFailure) -> ApiFailureReport {
     const SUBJECT: &str = "grant";
     let refused = |outcome, summary: &str, remedy: &str| {
@@ -1029,9 +1027,9 @@ pub(in crate::cli) fn report(deployment: &str, failure: &MemberGrantFailure) -> 
     }
 }
 
-/// A failure of `connect` or `reconnect` on the member's token of `service`
-/// (REQ-INTEGRATION-16, REQ-INTEGRATION-18): a refusal of the member, a token stored meanwhile
-/// with the `reconnect` that stores its next version, and any other as a grant's.
+/// A failure of `connect` or `reconnect` on the member's token of `service`: a refusal of the
+/// member, a token stored meanwhile with the `reconnect` that stores its next version, and any
+/// other as a grant's.
 pub(super) fn token_report(
     deployment: &str,
     failure: &MemberGrantFailure,
@@ -1053,7 +1051,7 @@ pub(super) fn token_report(
 }
 
 /// Reports a grant operation's failure with the remedy a member can act on; `useful workflow
-/// doctor` ends with it too when its grants read fails (REQ-CREDREADY-22).
+/// doctor` ends with it too when its grants read fails.
 pub(in crate::cli) fn failure(
     deployment: &str,
     failure: &MemberGrantFailure,
@@ -1093,8 +1091,8 @@ impl<'a> ImportEvent<'a> {
     }
 }
 
-/// Writes the native grant `useful account integration connect` imported, or the one `useful account integration
-/// reconnect` stored the next generation of, `replaced` (REQ-GRANT-70, REQ-GRANT-73), naming its
+/// Writes the native grant `useful account integration connect` imported, or the one `useful
+/// account integration reconnect` stored the next generation of, `replaced`, naming its
 /// organization by `slug` when that is known.
 pub(super) fn write_imported(
     deployment: &str,
@@ -1149,17 +1147,17 @@ pub(super) fn write_import_refusal(
     Ok(report.class.exit_code())
 }
 
-/// The outcome of a coding agent `useful account integration connect` without `PROVIDER` passes over
-/// because no organization was resolved for its grant (REQ-GRANT-180).
+/// The outcome of a coding agent `useful account integration connect` without `PROVIDER` passes
+/// over because no organization was resolved for its grant.
 pub(super) const ORGANIZATION_REQUIRED: &str = "organization_required";
 
-/// The outcome of a provider `useful account integration connect --workflow` passes over because every
-/// grant the member holds of it needs reconnecting (REQ-GRANT-79).
+/// The outcome of a provider `useful account integration connect --workflow` passes over because
+/// every grant the member holds of it needs reconnecting.
 pub(super) const RECONNECT_REQUIRED: &str = "reconnect_required";
 
 /// Reports a coding agent passed over for want of an organization: as its `import_result`
-/// event, or on standard error with the `refusal` that says why and names how to name one
-/// (REQ-GRANT-180).
+/// event, or on standard error with the `refusal` that says why and names how to name
+/// one.
 pub(super) fn write_organization_required(
     deployment: &str,
     refusal: &str,
@@ -1174,9 +1172,9 @@ pub(super) fn write_organization_required(
     Ok(())
 }
 
-/// Names on standard error the provider whose sign-in `useful account integration connect` runs next, so
-/// the member knows whose prompt follows (REQ-GRANT-75), and in a report parts it from the one
-/// `after` another provider's sign-in printed.
+/// Names on standard error the provider whose sign-in `useful account integration connect` runs
+/// next, so the member knows whose prompt follows, and in a report parts it from the one `after`
+/// another provider's sign-in printed.
 pub(super) fn write_provider_heading(
     provider: &str,
     after: bool,
@@ -1238,9 +1236,9 @@ impl<'a> CreateSummary<'a> {
 /// ran the choice, as its report names them.
 #[derive(Clone, Copy)]
 pub(in crate::cli) enum Scope {
-    /// Every provider (REQ-GRANT-75).
+    /// Every provider.
     Every,
-    /// Those the `--workflow` files call for (REQ-GRANT-76).
+    /// Those the `--workflow` files call for.
     Workflows,
 }
 
@@ -1283,12 +1281,12 @@ fn native_remedy(provider: &str) -> Option<&'static str> {
     }
 }
 
-/// Prints one outcome per provider `useful account integration connect` signed in to or passed over, after
-/// their own output, as the last JSON event or a report on standard output; `code` is the command's
-/// exit status (REQ-GRANT-183). The report's verdict claims each grant made only when every provider
+/// Prints one outcome per provider `useful account integration connect` signed in to or passed
+/// over, after their own output, as the last JSON event or a report on standard output; `code` is
+/// the command's exit status. The report's verdict claims each grant made only when every provider
 /// ended with one, and its remedies name what each other outcome present leaves to do: `useful
-/// account integration reconnect INTEGRATION` for each grant of `reconnect`, the grants of the providers passed
-/// over as `reconnect_required` (REQ-GRANT-185).
+/// account integration reconnect INTEGRATION` for each grant of `reconnect`, the grants of the
+/// providers passed over as `reconnect_required`.
 pub(super) fn write_create_summary(
     deployment: &str,
     outcomes: &[(&str, &'static str)],

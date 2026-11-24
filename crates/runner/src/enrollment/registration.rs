@@ -1,9 +1,8 @@
-//! The host side of a signed-in registration from `useful runner serve`
-//! (REQ-RUNNERENROLL-117, INV-RUNNER-26): the registration record beside the
-//! state, and the operation that registers a runner, issues and consumes its
-//! activation and writes the state, resumably. Cloud's side is a
-//! `RegistrationAuthority` the caller supplies, so this crate reads no human
-//! credential.
+//! The host side of a signed-in registration from `useful runner serve`: the
+//! registration record beside the state, and the operation that registers a
+//! runner, issues and consumes its activation and writes the state,
+//! resumably. Cloud's side is a `RegistrationAuthority` the caller supplies,
+//! so this crate reads no human credential.
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -26,8 +25,8 @@ use super::{
 };
 
 /// How long after staging a registration is resent. Cloud replays a request
-/// under its `Idempotency-Key` for seven days (REQ-API-6), so a resend within
-/// six answers with the runner an earlier send made.
+/// under its `Idempotency-Key` for seven days, so a resend within six answers
+/// with the runner an earlier send made.
 const RESEND_WINDOW: time::Duration = time::Duration::days(6);
 const RECORD_INVALID: &str = "it is not a valid registration record";
 
@@ -129,9 +128,7 @@ impl fmt::Display for RegistrationStage {
     }
 }
 
-/// The closed conflicts of a signed-in registration (REQ-RUNNERENROLL-260).
-/// Their codes are REQ-RUNNERENROLL-261, REQ-RUNNERENROLL-262 and
-/// REQ-RUNNERENROLL-263.
+/// The closed conflicts of a signed-in registration, each reported by its `code`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistrationConflictKind {
     /// The start names another organization, mode or pool than the record,
@@ -247,7 +244,7 @@ impl<F: fmt::Debug> Error for RegistrationError<F> {
 /// under the state lock, resuming the registration an earlier start
 /// recorded. The record is written and synced before the registration is
 /// first sent, and every send carries its key and the same request, so one
-/// host registers at most one runner (INV-RUNNER-26).
+/// host registers at most one runner.
 pub fn register_unless_enrolled<A: RegistrationAuthority>(
     config_path: &Path,
     organization: &str,
@@ -283,13 +280,13 @@ pub fn register_unless_enrolled<A: RegistrationAuthority>(
 }
 
 /// Confirms a signed-in mode against an enrolled host's registration record
-/// under the state lock, sending nothing (REQ-RUNNERENROLL-261): the options
-/// must name the record's target, and its organization when `organization`,
-/// the one `--org` or `USEFUL_ORG` names, is given; the record must name the
-/// state's runner. A start that names no organization resolves none, so the
-/// mode and the pool alone are compared. A record whose runner the state
-/// holds and that is not yet complete is completed, after the activation
-/// journal the state consumed is removed. The state itself is never written.
+/// under the state lock, sending nothing: the options must name the record's
+/// target, and its organization when `organization`, the one `--org` or
+/// `USEFUL_ORG` names, is given; the record must name the state's runner. A
+/// start that names no organization resolves none, so the mode and the pool
+/// alone are compared. A record whose runner the state holds and that is not
+/// yet complete is completed, after the activation journal the state
+/// consumed is removed. The state itself is never written.
 pub fn confirm_registration(
     config_path: &Path,
     organization: Option<&str>,

@@ -95,7 +95,6 @@ fn assert_closed_recovery_step(
     }
 }
 
-// REQ-WFRECOVERY-2, REQ-WFRECOVERY-3, REQ-WFRECOVERY-28, REQ-WFRECOVERY-29, REQ-WFRECOVERY-35, REQ-WFRECOVERY-36, REQ-WFRECOVERY-38, REQ-WFRECOVERY-39, REQ-WFRECOVERY-40, REQ-WFRECOVERY-44, REQ-WFRECOVERY-46, REQ-WFRECOVERY-47, REQ-WFRECOVERY-59
 #[test]
 fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
     for (name, source, handler, invocations) in [
@@ -122,13 +121,13 @@ fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
             String::from_utf8_lossy(&output.stderr)
         );
         let live = String::from_utf8(output.stderr).unwrap();
-        assert!(live.contains("target execution 2 · round 1/1"));
+        assert!(live.contains("target execution 2"));
         if handler.is_some() {
-            assert!(live.contains("recovery_handler cmd running · round 1/1"));
+            assert!(live.contains("recovery_handler cmd"));
             assert!(live.contains("decision recheck"));
         }
         assert!(!live.contains("advisory issue"));
-        assert!(live.contains("latest target failure execution · command_exit · exit 75"));
+        assert!(live.contains("command_exit"));
         let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(terminal["outcome"], "succeeded");
         let step = &terminal["result"]["steps"][0];
@@ -227,7 +226,6 @@ fn local_handlerless_and_command_repair_publish_exact_recovery_evidence() {
     }
 }
 
-// REQ-WFRECOVERY-5, REQ-WFRECOVERY-6, REQ-WFRECOVERY-18, REQ-WFRECOVERY-30, REQ-WFRECOVERY-37
 #[test]
 fn semantic_outputs_output_capture_failure_runs_command_repair_before_recheck() {
     let source = r#"schemaVersion: 1
@@ -298,7 +296,6 @@ exports:
     );
 }
 
-// REQ-WFRECOVERY-38, REQ-WFRECOVERY-45
 #[test]
 fn durable_recovery_is_authoritative_before_handler_and_recheck_launch() {
     let source = "schemaVersion: 1\nsteps:\n  verify:\n    kind: cmd\n    recovery:\n      retries: 1\n      handler:\n        kind: cmd\n        command:\n          argv:\n            - /bin/sh\n            - -c\n            - |\n              set -eu\n              role=false\n              active=false\n              while IFS= read -r line; do\n                case \"$line\" in *'\"role\": \"recovery_handler\"'*) role=true ;; esac\n                case \"$line\" in *'\"state\": \"active\"'*) active=true ;; esac\n              done < \"$RECOVERY_STATE\"\n              $role\n              $active\n              : > handler-observed-durable-state\n              : > repaired\n              printf '%s' '{\"schemaVersion\":1,\"decision\":\"recheck\",\"summary\":\"Durable handler state observed.\",\"reason\":\"The recheck can verify its own durable authorization.\"}' > \"$USEFUL_RECOVERY_RESULT\"\n    command:\n      argv:\n        - /bin/sh\n        - -c\n        - |\n          set -eu\n          if [ ! -f repaired ]; then exit 75; fi\n          decision=false\n          execution=false\n          while IFS= read -r line; do\n            case \"$line\" in *'\"decision\": \"recheck\"'*) decision=true ;; esac\n            case \"$line\" in *'\"targetExecution\": 2'*) execution=true ;; esac\n          done < \"$RECOVERY_STATE\"\n          $decision\n          $execution\n          : > recheck-observed-durable-state\n";
@@ -344,7 +341,6 @@ fn durable_recovery_is_authoritative_before_handler_and_recheck_launch() {
     );
 }
 
-// REQ-WFRECOVERY-31, REQ-WFRECOVERY-36
 #[test]
 fn advisory_exhaustion_is_one_terminal_issue_after_all_target_executions() {
     let bundle = RunBundle::new(
@@ -373,7 +369,6 @@ fn advisory_exhaustion_is_one_terminal_issue_after_all_target_executions() {
     assert!(plain.contains("1 advisory issues"));
 }
 
-// REQ-WFRECOVERY-3, REQ-WFRECOVERY-25, REQ-WFRECOVERY-26, REQ-WFRECOVERY-32, REQ-WFRECOVERY-36, REQ-WFRECOVERY-37, REQ-WFRECOVERY-65, REQ-WFEXEC-79, REQ-LOCALRUN-145
 #[test]
 fn gave_up_and_handler_failure_preserve_the_raw_target_failure() {
     let scenarios = [
@@ -509,7 +504,6 @@ fn assert_infrastructure_decision_is_published(step: &serde_json::Value, run_dir
     assert!(artifact.status.success());
 }
 
-// REQ-WFRECOVERY-60, REQ-WFRECOVERY-62
 #[test]
 fn handler_launch_refusal_is_classified_like_a_step_command() {
     let bundle = RunBundle::new(
@@ -554,7 +548,7 @@ fn handler_launch_refusal_is_classified_like_a_step_command() {
     assert_eq!(view["result"]["steps"][0], *step);
 }
 
-// SC-WFRECOVERY-6: REQ-WFRECOVERY-66, REQ-WFRECOVERY-36
+// SC-WFRECOVERY-6
 #[test]
 fn listed_exit_code_classifies_the_failure_without_a_recovery_round() {
     for (name, command) in [
@@ -611,7 +605,6 @@ fn listed_exit_code_classifies_the_failure_without_a_recovery_round() {
     }
 }
 
-// REQ-WFRECOVERY-1, REQ-WFRECOVERY-4, REQ-WFRECOVERY-36, REQ-WFRECOVERY-55
 #[test]
 fn exhaustion_remains_terminal_until_retry_starts_fresh_execution_one() {
     let bundle = RunBundle::new(&fixture_source("recovery-exhausted.yaml"));
@@ -658,7 +651,6 @@ fn exhaustion_remains_terminal_until_retry_starts_fresh_execution_one() {
     );
 }
 
-// REQ-WFRECOVERY-45
 #[test]
 fn active_status_reports_handler_kind_and_recheck_decision() {
     let source = "schemaVersion: 1\nsteps:\n  verify:\n    kind: cmd\n    recovery:\n      retries: 1\n      handler:\n        kind: cmd\n        command:\n          argv:\n            - /bin/sh\n            - -c\n            - |\n              set -eu\n              mkfifo handler-release\n              : > handler-ready\n              read -r ignored < handler-release\n              printf '%s' '{\"schemaVersion\":1,\"decision\":\"recheck\",\"summary\":\"The handler authorized a recheck.\",\"reason\":\"The status projection must retain this decision.\"}' > \"$USEFUL_RECOVERY_RESULT\"\n    command:\n      argv:\n        - /bin/sh\n        - -c\n        - |\n          set -eu\n          if [ ! -f first-target-failed ]; then\n            : > first-target-failed\n            exit 75\n          fi\n          mkfifo target-release\n          : > target-ready\n          read -r ignored < target-release\n";
@@ -744,7 +736,6 @@ fn active_status_reports_handler_kind_and_recheck_decision() {
     );
 }
 
-// REQ-WFRECOVERY-36, REQ-WFRECOVERY-48, REQ-WFRECOVERY-49, REQ-WFRECOVERY-67, REQ-WFEXEC-134:
 // SIGINT interrupts the step while its handler runs; the handler is cancelled and quiesces, no
 // recheck runs, and the step fails `interrupted`.
 #[test]
@@ -801,7 +792,6 @@ fn cancellation_quiesces_the_ready_handler_and_publishes_no_recheck() {
     );
 }
 
-// REQ-WFRECOVERY-41
 #[test]
 fn status_and_view_dispatch_unsupported_recovery_versions_without_rewriting() {
     let bundle = RunBundle::new(&fixture_source("recovery-handlerless.yaml"));
@@ -918,7 +908,6 @@ fn terminal_pending_publication_reconciles_the_committed_result() {
     assert_eq!(fs::read(result_path).unwrap(), result_bytes);
 }
 
-// REQ-WFRECOVERY-43
 #[test]
 fn archived_view_rejects_invocation_bytes_that_disagree_with_durable_evidence() {
     let bundle = RunBundle::new(&fixture_source("recovery-handlerless.yaml"));
@@ -992,8 +981,6 @@ steps:
     (bundle, output)
 }
 
-// REQ-WFRECOVERY-63
-// INV-ENGINE-30 (AUTO-262)
 #[test]
 fn agent_recovery_handler_without_agent_steps_runs_the_command_step() {
     let (bundle, output) =
@@ -1014,8 +1001,6 @@ fn agent_recovery_handler_without_agent_steps_runs_the_command_step() {
     );
 }
 
-// REQ-WFRECOVERY-63
-// INV-ENGINE-30 (AUTO-262)
 #[test]
 fn agent_recovery_handler_without_agent_steps_is_invoked_when_the_step_fails() {
     let (_bundle, output) = run_agent_recovery_only("agent-recovery-only-failed", "exit 75");

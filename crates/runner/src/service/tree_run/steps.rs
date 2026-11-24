@@ -1,13 +1,12 @@
-//! Reading the step states of a tree run and of every child run under it
-//! (REQ-RUNNERENROLL-88). Each run directory's `state.json` holds `attempts[]`, each with
-//! `attemptNumber` and `progress.steps[]` of `{id, state}`; a `workflow` step's child runs
-//! are complete run directories under `children/<step>/<NNNNNN>/`, or
-//! `children/<step>/<n>/<NNNNNN>/` for element `n` of a fan-out (REQ-LOCALRUN-177), and
-//! the engine's `child_run_directories` finds them, so the runner and the engine tell a
-//! child run from an element by the same `run.json`. The records are read as untyped
-//! JSON, tolerant of members this reader does not know, and a record, step or child
-//! number outside the wire's grammar is skipped rather than reported. The steps running
-//! now, which an overview lists (REQ-RUNNERENROLL-134), are reduced from one scan's
+//! Reading the step states of a tree run and of every child run under it. Each run
+//! directory's `state.json` holds `attempts[]`, each with `attemptNumber` and
+//! `progress.steps[]` of `{id, state}`; a `workflow` step's child runs are complete run
+//! directories under `children/<step>/<NNNNNN>/`, or `children/<step>/<n>/<NNNNNN>/` for
+//! element `n` of a fan-out, and the engine's `child_run_directories` finds them, so the
+//! runner and the engine tell a child run from an element by the same `run.json`. The
+//! records are read as untyped JSON, tolerant of members this reader does not know, and a
+//! record, step or child number outside the wire's grammar is skipped rather than
+//! reported. The steps running now, which an overview lists, are reduced from one scan's
 //! observations by `running_now`.
 
 use std::collections::{HashMap, HashSet};
@@ -199,12 +198,12 @@ fn levels(run: &[TreeStepRunElement]) -> Vec<Level<'_>> {
         .collect()
 }
 
-/// The steps running now among `observations`, as `StepReader::scan` yields them
-/// (REQ-RUNNERENROLL-134): the steps in a live state of each run's newest attempt, in runs
-/// whose every level is the newest child run of its `workflow` step and fan-out element, for
-/// an attempt or a child run that a killed process left behind keeps its steps live. A
-/// `workflow` step is left out when a step listed in a child run beneath it names it in its
-/// path, so the leaf is kept. At most 16 in scan order, with the number left out.
+/// The steps running now among `observations`, as `StepReader::scan` yields them: the steps
+/// in a live state of each run's newest attempt, in runs whose every level is the newest
+/// child run of its `workflow` step and fan-out element, for an attempt or a child run that
+/// a killed process left behind keeps its steps live. A `workflow` step is left out when a
+/// step listed in a child run beneath it names it in its path, so the leaf is kept. At most
+/// 16 in scan order, with the number left out.
 pub(super) fn running_now(observations: &[TreeStepObservation]) -> (Vec<OverviewRunningStep>, u64) {
     let mut newest_attempt = HashMap::<Vec<Level<'_>>, u64>::new();
     let mut newest_child = HashMap::<(Vec<Level<'_>>, &str, Option<u64>), u64>::new();

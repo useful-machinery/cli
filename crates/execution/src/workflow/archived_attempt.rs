@@ -175,29 +175,27 @@ pub(crate) struct ArchivedStep {
     pub(crate) command_output: Option<ArchivedCommandOutput>,
     pub(crate) recovery: Option<super::publication::StepRecoverySummaryV1>,
     pub(crate) invocations: Vec<super::publication::RecoveryInvocationV1>,
-    /// The failed child of a `succeeded` `workflow` step (REQ-LOCALRUN-219); `None` for
-    /// any other step.
+    /// The failed child of a `succeeded` `workflow` step; `None` for any other step.
     pub(crate) failed_child: Option<FailedChild>,
-    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79); `None` for any
-    /// other step.
+    /// The class of a `failed` ordinary step's failure; `None` for any other step.
     pub(crate) failure_class: Option<super::evidence::FailureClass>,
-    /// The source each `firstOf` of a step that started took (REQ-EVIDENCE-28).
+    /// The source each `firstOf` of a step that started took.
     pub(crate) input_sources: Vec<super::evidence::InputSource>,
     /// The count of outputs the step committed, as the attempt recorded them; `None` for an
-    /// attempt recorded without them, which keeps the declared count (REQ-LOCALRUN-221).
+    /// attempt recorded without them, which keeps the declared count.
     pub(crate) committed_outputs: Option<usize>,
 }
 
 impl ArchivedStep {
     /// The state the step is presented with: `failed` for a `succeeded` step whose child
-    /// failed, its recorded state otherwise (REQ-LOCALRUN-221). The recorded `state` stays
-    /// what output dispositions, validation and the advisory rules read.
+    /// failed, its recorded state otherwise. The recorded `state` stays what output
+    /// dispositions, validation and the advisory rules read.
     pub(crate) fn presented_state(&self) -> WorkflowStepStateV1 {
         presented_step_state(self.state, self.failed_child.as_ref())
     }
 
     /// The count of outputs the step committed, or `declared` for an attempt recorded
-    /// without them (REQ-OUTPUTS-17, REQ-LOCALRUN-221).
+    /// without them.
     pub(crate) fn committed_output_count(&self, declared: usize) -> usize {
         self.committed_outputs.unwrap_or(declared)
     }
@@ -220,7 +218,7 @@ impl PresentedStepState for super::runtime::StepStateKind {
 }
 
 /// The state a step is presented with, live or archived: `failed` for a `succeeded` step
-/// that carries its child's failure, `state` otherwise (REQ-LOCALRUN-221).
+/// that carries its child's failure, `state` otherwise.
 pub(crate) fn presented_step_state<State: PresentedStepState>(
     state: State,
     failed_child: Option<&FailedChild>,
@@ -250,8 +248,8 @@ pub(crate) struct ArchivedFinalization {
 pub struct LoadedLocalArchivedAttempt {
     pub projection: LocalArchivedAttempt,
     pub result: WorkflowResultV1,
-    /// The attempt's wait copy `attempts/<N>/wait.json` when it ended in a wait
-    /// (REQ-LOCALRUN-179).
+    /// The attempt's wait copy `attempts/<N>/wait.json` when it ended in a
+    /// wait.
     pub wait: Option<super::wait::WaitRecord>,
 }
 
@@ -290,11 +288,10 @@ pub fn load_local_archived_attempt(
 }
 
 /// How the finished child run at `child` ended, for a parent that recovers from abandonment
-/// without running it again (REQ-CONTINUE-112): `Cancelled` for a child whose run record
-/// reads `canceled` or whose published result is cancelled, `Exited` with the recorded
-/// outcome, the published result's available `text` and `json` exports and the primary issue
-/// of a `failed` result, and
-/// `Interrupted` for a child with no outcome or no readable published result.
+/// without running it again: `Cancelled` for a child whose run record reads `canceled` or
+/// whose published result is cancelled, `Exited` with the recorded outcome, the published
+/// result's available `text` and `json` exports and the primary issue of a `failed` result,
+/// and `Interrupted` for a child with no outcome or no readable published result.
 pub fn adopted_child_outcome(child: &Path) -> super::step_runtime::ChildRunOutcome {
     use super::step_runtime::ChildRunOutcome;
     let Some(outcome) = super::local_run::open_run_root(child)
@@ -304,7 +301,7 @@ pub fn adopted_child_outcome(child: &Path) -> super::step_runtime::ChildRunOutco
     else {
         return ChildRunOutcome::Interrupted;
     };
-    // `chosen_outcome`'s outcome for a cancelled run (REQ-WFEXEC-57).
+    // `chosen_outcome`'s outcome for a cancelled run.
     if outcome == "canceled" {
         return ChildRunOutcome::Cancelled;
     }
@@ -336,8 +333,7 @@ pub fn adopted_child_outcome(child: &Path) -> super::step_runtime::ChildRunOutco
         exports.insert(name.clone(), value);
     }
     // An adopted child ran in an earlier attempt, so no interruption of this one failed it;
-    // its failure is the primary issue of its published result when that is `failed`
-    // (REQ-WFEXEC-77).
+    // its failure is the primary issue of its published result when that is `failed`.
     let failure = (loaded.result.outcome == WorkflowOutcomeV1::Failed)
         .then(|| loaded.result.primary_issue.clone())
         .flatten()
@@ -800,8 +796,8 @@ fn validate_and_project_result(
         .as_ref()
         .map(|finalization| finalization.trigger)
         .unwrap_or(match result.outcome {
-            // A waiting or continued attempt's steps are terminal as a success's are
-            // (REQ-WFEXEC-61, REQ-WFEXEC-64).
+            // A waiting or continued attempt's steps are terminal as a success's
+            // are.
             WorkflowOutcomeV1::Succeeded
             | WorkflowOutcomeV1::Waiting
             | WorkflowOutcomeV1::Continued => FinalizationTriggerV1::Succeeded,
@@ -970,8 +966,8 @@ fn project_finalization(
     workflow: &super::resolution::ResolvedWorkflow,
 ) -> Result<(Option<ArchivedFinalization>, Vec<ArchivedStep>), ()> {
     let (wire, durable) = match (&result.finalization, &attempt.finalization) {
-        // A waiting or continued attempt runs no finalizer and records no finalization
-        // (REQ-WFEXEC-61, REQ-WFEXEC-64).
+        // A waiting or continued attempt runs no finalizer and records no
+        // finalization.
         (None, None)
             if workflow.definition.finalizers.is_empty()
                 || matches!(
@@ -1120,7 +1116,7 @@ fn finalizer_disposition_matches_definition(
 }
 
 // Every source of a `firstOf` is consumed: a blocked step names each one that did not
-// supply its value (REQ-WFCOND-46).
+// supply its value.
 fn consumed_output_sources(step: &ValidatedStep) -> Vec<&super::validated::ResolvedOutputSource> {
     match step {
         ValidatedStep::Command(command) => command
@@ -1430,7 +1426,7 @@ fn project_step(
     inherited_data_available: bool,
     committed_outputs: Option<usize>,
 ) -> Result<ArchivedStep, ()> {
-    // Only a `succeeded` `workflow` step records its failed child (REQ-LOCALRUN-219).
+    // Only a `succeeded` `workflow` step records its failed child.
     if step.failed_child.is_some()
         && (step.state != WorkflowStepStateV1::Succeeded
             || role != WorkflowNodeRole::Step
@@ -1438,14 +1434,14 @@ fn project_step(
     {
         return Err(());
     }
-    // Only a `failed` ordinary step records its failure's class (REQ-WFEXEC-79).
+    // Only a `failed` ordinary step records its failure's class.
     if step.failure_class.is_some()
         && (step.state != WorkflowStepStateV1::Failed || role != WorkflowNodeRole::Step)
     {
         return Err(());
     }
     // Each recorded source names a `firstOf` of the step's body and a reference its list
-    // holds (REQ-EVIDENCE-28).
+    // holds.
     let first_of = definition.first_of_bindings();
     if !step.input_sources.iter().all(|recorded| {
         first_of.get(&recorded.binding).is_some_and(|sources| {
@@ -1767,7 +1763,7 @@ fn validate_exports(
     steps: &[ArchivedStep],
 ) -> Result<(), ()> {
     // Each export's source is the one the reducer settled on, by the same rule over the
-    // steps the attempt ended with (INV-ENGINE-45).
+    // steps the attempt ended with.
     let sources = workflow
         .definition
         .exports
@@ -1826,7 +1822,7 @@ fn validate_exports(
             WorkflowNodeRole::Finalizer => AttemptNodeRoleV1::Finalizer,
         };
         // A `workflow` step commits only the child exports that were available, so an
-        // export of one it left out is unavailable with `source_failed` (REQ-WFEXEC-60).
+        // export of one it left out is unavailable with `source_failed`.
         let left_out = archived_step_data_available(source_step)
             && attempt.definition.is_some()
             && source.node.role == WorkflowNodeRole::Step
@@ -2077,8 +2073,8 @@ fn prerequisite_satisfied(
                 producer.state,
                 WorkflowStepStateV1::Failed | WorkflowStepStateV1::Blocked
             ));
-    // A `firstOf` source is satisfied by its success or its skip (REQ-WFCOND-45); an
-    // inherited step was inherited as one or the other.
+    // A `firstOf` source is satisfied by its success or its skip; an inherited step
+    // was inherited as one or the other.
     let first_of_satisfied = succeeded
         || matches!(
             producer.state,
@@ -2089,7 +2085,7 @@ fn prerequisite_satisfied(
         && (!prerequisite.first_of || first_of_satisfied)
 }
 
-// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-83).
+// A step an edge-scheduled walk never reached is part of a success.
 fn step_succeeds_workflow(step: &ArchivedStep) -> bool {
     matches!(
         step.state,
@@ -2156,7 +2152,6 @@ mod tests {
         );
     }
 
-    // REQ-WFEXEC-83
     #[test]
     fn a_step_an_edge_walk_never_reached_reads_back_with_an_unrun_export_source() {
         let workflow = super::super::validation::validate(
@@ -2192,8 +2187,8 @@ mod tests {
         assert_eq!(project(WorkflowNodeRole::Finalizer), Err(()));
     }
 
-    // REQ-LOCALRUN-219: the loader keeps the failed child a `succeeded` `workflow` step
-    // recorded, and refuses one on a step of any other state or kind.
+    // The loader keeps the failed child a `succeeded` `workflow` step recorded, and
+    // refuses one on a step of any other state or kind.
     #[test]
     fn only_a_succeeded_workflow_step_carries_a_failed_child() {
         let summary = super::super::validation::ChildWorkflowSummary {
@@ -2290,7 +2285,6 @@ mod tests {
         }
     }
 
-    // REQ-WFEXEC-60
     #[test]
     fn a_child_export_a_succeeded_workflow_step_left_out_is_source_failed() {
         let source: super::super::publication::ExportSourceV1 =

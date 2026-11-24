@@ -1,12 +1,11 @@
-//! Workflow definitions under the `useful` home (REQ-WFDEF-17 to REQ-WFDEF-22): the home's
-//! location, the `definition.json` records and their `revisions/<n>/bindings.json`
-//! snapshots under `workflows/<id>/`, each with the optional `resolution.json` of provider
-//! ids beside it that the Cloud runner writes and publishing never does (REQ-WFDEF-32), and
-//! the read-only tree copies under `trees/sha256/<hex>/`. Publishing holds an exclusive lock on the definition's
-//! `publish.lock`, reads the record under it, writes the snapshot, then the tree copy when
-//! none is present, then the record, which is replaced whole by a rename. A definition is
-//! created under a dot-named `workflows/.staging-<id>/` that readers skip and renamed to
-//! `workflows/<id>/` once its record is written.
+//! Workflow definitions under the `useful` home: the home's location, the `definition.json` records
+//! and their `revisions/<n>/bindings.json` snapshots under `workflows/<id>/`, each with the
+//! optional `resolution.json` of provider ids beside it that the Cloud runner writes and publishing
+//! never does, and the read-only tree copies under `trees/sha256/<hex>/`. Publishing holds an
+//! exclusive lock on the definition's `publish.lock`, reads the record under it, writes the
+//! snapshot, then the tree copy when none is present, then the record, which is replaced whole by a
+//! rename. A definition is created under a dot-named `workflows/.staging-<id>/` that readers skip
+//! and renamed to `workflows/<id>/` once its record is written.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -62,7 +61,7 @@ const UNKNOWN_PUBLISHER: &str = "unknown";
 const MAXIMUM_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 const MAXIMUM_BINDINGS_BYTES: u64 = 1024 * 1024;
 
-/// The `useful` home: `$USEFUL_HOME` when set and not empty, otherwise `$HOME/.useful` (REQ-WFDEF-17).
+/// The `useful` home: `$USEFUL_HOME` when set and not empty, otherwise `$HOME/.useful`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowHome {
     root: PathBuf,
@@ -104,9 +103,9 @@ impl WorkflowHome {
         digest_hex(digest).map(|hex| self.trees_directory().join(hex))
     }
 
-    /// The home's copy of `revision`'s tree for a run of definition `id`
-    /// (REQ-LOCALRUN-173): `tree_not_retained` when the copy holds no `workflow.yaml`. The
-    /// copy's contents are the caller's to validate.
+    /// The home's copy of `revision`'s tree for a run of definition `id`:
+    /// `tree_not_retained` when the copy holds no `workflow.yaml`. The copy's contents are
+    /// the caller's to validate.
     pub fn retained_tree(
         &self,
         id: &str,
@@ -127,7 +126,7 @@ impl WorkflowHome {
         }
     }
 
-    /// `workflows/<id>/runs/`, which holds the definition's runs (REQ-LOCALRUN-173).
+    /// `workflows/<id>/runs/`, which holds the definition's runs.
     pub fn runs_directory(&self, id: &str) -> PathBuf {
         self.definition_directory(id).join(RUNS_DIRECTORY)
     }
@@ -144,7 +143,7 @@ impl WorkflowHome {
     }
 
     /// The home's own `runs/`, beside `workflows/` and `trees/`, which holds the runs of a
-    /// `--path` run created with no `--run-dir` (REQ-WFDEF-17, REQ-LOCALRUN-174).
+    /// `--path` run created with no `--run-dir`.
     pub fn home_runs_directory(&self) -> PathBuf {
         self.root.join(RUNS_DIRECTORY)
     }
@@ -161,11 +160,11 @@ impl WorkflowHome {
         self.root.join(TREES_DIRECTORY).join(SHA256_DIRECTORY)
     }
 
-    /// Revision `revision`'s resolution record of definition `id` (REQ-WFDEF-32): the
-    /// provider id resolved for each binding it names, by the reference key
-    /// [`BindingsSnapshot::text_values_by_reference`] answers values by, or `None` when the revision has
-    /// no `resolution.json`. A revision the record does not list, or a record that cannot be
-    /// read or is not of the record's shape, is `definition_record_invalid`.
+    /// Revision `revision`'s resolution record of definition `id`: the provider id resolved for
+    /// each binding it names, by the reference key [`BindingsSnapshot::text_values_by_reference`]
+    /// answers values by, or `None` when the revision has no `resolution.json`. A revision the
+    /// record does not list, or a record that cannot be read or is not of the record's shape, is
+    /// `definition_record_invalid`.
     pub fn revision_resolution(
         &self,
         id: &str,
@@ -195,7 +194,7 @@ impl WorkflowHome {
 /// The ids of a `resolution.json` by the key a reference names each binding by: a flat key's
 /// entry under the key, and the `linear` integration's under `linear.<name>` from the member
 /// `linear`, an object from name to entry, told from the flat key `linear`'s own entry by
-/// whether its `id` is a string. No other member nests (REQ-WFDEF-32).
+/// whether its `id` is a string. No other member nests.
 fn resolved_ids(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
     let linear = IntegrationProvider::Linear;
     let mut ids = BTreeMap::new();
@@ -215,8 +214,8 @@ fn resolved_ids(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
     Some(ids)
 }
 
-/// One entry of a revision's `resolution.json` (REQ-WFDEF-32): the provider's id for the
-/// bound value and the name it had when Cloud resolved it.
+/// One entry of a revision's `resolution.json`: the provider's id for the bound value
+/// and the name it had when Cloud resolved it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResolvedBinding {
@@ -246,7 +245,7 @@ pub struct DefinitionRecord {
     /// Newest first.
     pub revisions: Vec<RevisionRecord>,
     /// Required on read and kept as read; a new record writes `null`, and no command sets a
-    /// value (REQ-WFDEF-79), so one an earlier release recorded stays as it was.
+    /// value, so one an earlier release recorded stays as it was.
     #[serde(deserialize_with = "Option::deserialize")]
     pub cloud_id: Option<String>,
 }
@@ -297,10 +296,10 @@ impl RevisionRecord {
     }
 }
 
-/// A revision's `bindings.json` (REQ-WFDEF-3): every declared binding with its kind and value,
-/// the flat block's by key and each integration's under its id, but a `definition` binding
-/// given none (REQ-WFDEF-40). Only an integration that declares bindings has a group, so the
-/// snapshot of a root that declares no integration binding is the flat block alone.
+/// A revision's `bindings.json`: every declared binding with its kind and value, the flat
+/// block's by key and each integration's under its id, but a `definition` binding given none.
+/// Only an integration that declares bindings has a group, so the snapshot of a root that
+/// declares no integration binding is the flat block alone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BindingsSnapshot {
     flat: BTreeMap<String, BoundBinding>,
@@ -344,8 +343,8 @@ impl BindingsSnapshot {
         &self.integrations
     }
 
-    /// Every text value by the key a reference names its binding by after `$` (REQ-WFDEF-37):
-    /// a flat key as it is and an integration binding as `<id>.<name>`, the keys
+    /// Every text value by the key a reference names its binding by after `$`: a flat key as it
+    /// is and an integration binding as `<id>.<name>`, the keys
     /// [`WorkflowHome::revision_resolution`] answers ids by. A `members` list is no text value.
     pub fn text_values_by_reference(&self) -> BTreeMap<String, String> {
         self.members()
@@ -430,11 +429,11 @@ pub struct BoundIntegrationBinding {
     pub value: String,
 }
 
-/// A `--bindings` file (REQ-WFDEF-20): a JSON object whose members name the bindings a
-/// publish sets, flat bindings by key, each the value, an object of `value` with an optional
-/// `kind`, or `null` for the declared default, and, for an integration that declares
-/// bindings, an object under its id of such members by name. Which a member is, and whether
-/// it fits, is judged against the root's declarations by [`NamedBindings::judge`].
+/// A `--bindings` file: a JSON object whose members name the bindings a publish sets, flat
+/// bindings by key, each the value, an object of `value` with an optional `kind`, or `null`
+/// for the declared default, and, for an integration that declares bindings, an object under
+/// its id of such members by name. Which a member is, and whether it fits, is judged against
+/// the root's declarations by [`NamedBindings::judge`].
 #[derive(Clone, Eq, PartialEq)]
 pub struct BindingsFile {
     /// The file it was read from, which `bindings_file_invalid` names; absent when parsed.
@@ -548,7 +547,7 @@ impl BindingsFile {
     }
 }
 
-/// What an invocation names a binding for (REQ-WFDEF-20, REQ-WFDEF-21).
+/// What an invocation names a binding for.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Named {
     /// This value, which fits the declared kind.
@@ -557,8 +556,8 @@ pub enum Named {
     Default,
 }
 
-/// A binding the command line names (REQ-WFDEF-41): `--binding KEY=VALUE`, with the `VALUE`,
-/// or `--binding-default KEY`, without one. `KEY` is a flat binding's key or an integration
+/// A binding the command line names: `--binding KEY=VALUE`, with the `VALUE`, or
+/// `--binding-default KEY`, without one. `KEY` is a flat binding's key or an integration
 /// binding's `<integration>.<name>`.
 #[derive(Clone, Eq, PartialEq)]
 pub struct BindingOption {
@@ -613,9 +612,10 @@ impl BindingOption {
     }
 }
 
-/// The bindings an invocation names (REQ-WFDEF-20, REQ-WFDEF-41), judged against the root
-/// before the home is touched: the flat block's by key and each integration's under its id
-/// by name. A binding it does not name takes what REQ-WFDEF-21 gives it.
+/// The bindings an invocation names, judged against the root before the home is touched:
+/// the flat block's by key and each integration's under its id by name. A binding it does
+/// not name keeps the value the current revision recorded for it with the kind the root
+/// declares now, and otherwise takes its declared default.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NamedBindings {
     flat: BTreeMap<String, Named>,
@@ -783,7 +783,7 @@ impl<'a> Declared<'a> {
     }
 
     /// Whether the binding may have no value: a `definition` binding without one has no
-    /// entry in the snapshot (REQ-WFDEF-40).
+    /// entry in the snapshot.
     fn may_be_unbound(self) -> bool {
         matches!(self, Self::Flat(binding) if binding.kind == BindingKind::Definition)
     }
@@ -868,11 +868,11 @@ impl<'a> Declarations<'a> {
 }
 
 /// The snapshot of the bindings the root declares, flat (`declared`) and under its
-/// `integrations` (REQ-WFDEF-21). Each takes the value `named` gives it, its default when
-/// `named` names it for its default, else the value the `current` snapshot holds for it with
-/// the kind declared now, else its default; a `definition` binding left without one has no
-/// entry (REQ-WFDEF-40). A current binding the root no longer declares, or declares with
-/// another kind, is not kept. A value is recorded as written and never resolved.
+/// `integrations`. Each takes the value `named` gives it, its default when `named` names it
+/// for its default, else the value the `current` snapshot holds for it with the kind
+/// declared now, else its default; a `definition` binding left without one has no entry. A
+/// current binding the root no longer declares, or declares with another kind, is not kept.
+/// A value is recorded as written and never resolved.
 pub(crate) fn resolve_bindings(
     declared: &BTreeMap<String, Binding>,
     integrations: &BTreeMap<IntegrationProvider, Integration>,
@@ -933,7 +933,7 @@ pub(crate) fn resolve_bindings(
     Ok(snapshot)
 }
 
-/// Which record a publish adds its revision to (REQ-WFDEF-19).
+/// Which record a publish adds its revision to.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PublishTarget {
     /// The one record whose `name` is the root's, or a new one when none has it.
@@ -968,18 +968,17 @@ pub struct EnabledChange {
     pub changed: bool,
 }
 
-/// Where a publish of a root records its revision (REQ-WFDEF-19): the root's `name` and the
-/// record the target resolved to, none when the publish creates one.
+/// Where a publish of a root records its revision: the root's `name` and the record the
+/// target resolved to, none when the publish creates one.
 struct PublishPlace {
     name: String,
     resolved: Option<StoredDefinition>,
 }
 
 /// The first half of a publish of `tree`: refuses a root without `name`
-/// (`definition_name_missing`) and resolves `target` (REQ-WFDEF-19), reading the home without a
-/// lock. `To` reads that record (`definition_id_invalid`, `definition_not_found`), `Resolve`
-/// the one record of the root's name (`definition_name_ambiguous` for more than one) and
-/// `New` none.
+/// (`definition_name_missing`) and resolves `target`, reading the home without a lock. `To`
+/// reads that record (`definition_id_invalid`, `definition_not_found`), `Resolve` the one
+/// record of the root's name (`definition_name_ambiguous` for more than one) and `New` none.
 fn resolve_publish(
     home: &WorkflowHome,
     tree: &ValidatedTree,
@@ -994,13 +993,12 @@ fn resolve_publish(
     Ok(PublishPlace { name, resolved })
 }
 
-/// Records `tree` as a new revision of the target definition (REQ-WFDEF-19 to
-/// REQ-WFDEF-22) with the bindings `named` sets and, for an existing definition, the rest
-/// of its current snapshot that the root still declares with the same kind (REQ-WFDEF-21).
-/// `by` is the publisher's login name, `unknown` when empty. Publishes to
-/// one definition are serialized by its `publish.lock`, held from the record read through
-/// the record rename; one that finds it held is `publish_conflict`. A refusal writes
-/// nothing; a failure after the revision directory is made removes what this publish
+/// Records `tree` as a new revision of the target definition with the bindings `named` sets
+/// and, for an existing definition, the rest of its current snapshot that the root still
+/// declares with the same kind. `by` is the publisher's login name, `unknown` when empty.
+/// Publishes to one definition are serialized by its `publish.lock`, held from the record
+/// read through the record rename; one that finds it held is `publish_conflict`. A refusal
+/// writes nothing; a failure after the revision directory is made removes what this publish
 /// wrote. A definition this publish creates is written under `workflows/.staging-<id>/`,
 /// which readers skip, and renamed to `workflows/<id>/` once its record exists, so what a
 /// stopped publish left, a `revisions/<n>` or a staging directory, is skipped, never removed.
@@ -1120,7 +1118,7 @@ fn write_publication(
     })
 }
 
-/// The record `id` (REQ-WFDEF-27: `definition_id_invalid`, `definition_not_found` or
+/// The record `id` (`definition_id_invalid`, `definition_not_found` or
 /// `definition_record_invalid`).
 pub fn read_definition(home: &WorkflowHome, id: &str) -> Result<StoredDefinition, DefinitionError> {
     check_definition_id(id)?;
@@ -1220,7 +1218,7 @@ fn read_bindings(
         .ok_or_else(|| invalid("bindings snapshot is not of the snapshot shape", None))
 }
 
-/// Sets the record's `enabled`, replacing it whole only when it changes (REQ-WFDEF-24).
+/// Sets the record's `enabled`, replacing it whole only when it changes.
 pub fn set_enabled(
     home: &WorkflowHome,
     id: &str,
@@ -1238,8 +1236,9 @@ pub fn set_enabled(
     })
 }
 
-/// A refused or failed definition command, with the id, ids, binding key (and its integration,
-/// for an integration binding) or path it concerns and never the contents of a tree file, bindings file or record (REQ-WFDEF-27).
+/// A refused or failed definition command, with the id, ids, binding key (and its integration, for
+/// an integration binding) or path it concerns and never the contents of a tree file, bindings file
+/// or record.
 #[derive(Debug)]
 pub enum DefinitionError {
     HomeUnavailable,
@@ -1532,10 +1531,10 @@ fn is_definition_id(value: &str) -> bool {
     is_prefixed_ulid(value, DEFINITION_ID_PREFIX)
 }
 
-/// Refuses `id` with `definition_id_invalid` unless it is `def_` and 26 characters
-/// (REQ-WFDEF-27). Local and Cloud definition ids share the shape, so the check cannot tell
-/// one from the other: a definition named by an id is found by looking under the home and
-/// then in the project in effect (REQ-CLOUDDEF-42).
+/// Refuses `id` with `definition_id_invalid` unless it is `def_` and 26 characters. Local
+/// and Cloud definition ids share the shape, so the check cannot tell one from the other: a
+/// definition named by an id is found by looking under the home and then in the project in
+/// effect.
 pub fn check_definition_id(id: &str) -> Result<(), DefinitionError> {
     if is_definition_id(id) {
         Ok(())

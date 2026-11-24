@@ -1,11 +1,10 @@
-//! The run mirror (REQ-LOCALRUN-191, INV-ENGINE-25): which runs write to Linear and through
-//! what. A definition run of a root workflow that carries `mirror`, its issue input not the
-//! empty text, gets a `Mirror` over its issue input, its revision's bindings snapshot and
-//! resolution record (REQ-WFDEF-32), its owner and id, its `external.url` or run directory
-//! and its run directory; a run whose issue input is the empty text has none. The hook
-//! sites in `create.rs`, `end.rs` and `resume.rs` drive it against the Linear target, and a
-//! write's result never changes the command's. A command that ends a run itself checks for a
-//! Linear credential first (`outcome_credentials`, REQ-LOCALRUN-204).
+//! The run mirror: which runs write to Linear and through what. A definition run of a root
+//! workflow that carries `mirror`, its issue input not the empty text, gets a `Mirror` over
+//! its issue input, its revision's bindings snapshot and resolution record, its owner and
+//! id, its `external.url` or run directory and its run directory; a run whose issue input is
+//! the empty text has none. The hook sites in `create.rs`, `end.rs` and `resume.rs` drive it
+//! against the Linear target, and a write's result never changes the command's. A command
+//! that ends a run itself checks for a Linear credential first (`outcome_credentials`).
 
 pub(super) mod linear;
 
@@ -27,14 +26,14 @@ pub(super) type Hook =
     dyn FnOnce(&Mirror, &dyn MirrorTarget) -> Result<(), LocalRunDirectoryError> + Send;
 
 /// The run's mirror, or `None` when it writes nothing: its root has no `mirror` block, it was
-/// started by path (no definition or revision), it is a child run, a nested run included,
-/// whose stages' `onStage` its root's mirror writes, or its issue input is the empty text, as
-/// an optional input the run was not given resolves to (REQ-WFFORMAT-84). A missing or non-text
-/// issue input, or a snapshot or resolution record that cannot be read, still makes a
-/// `Mirror`, whose every hook records the failure. A revision with a resolution record
-/// makes a mirror that matches and writes states by id (REQ-LOCALRUN-192). Both the snapshot's
-/// values and the record's ids are read by the key a reference names after `$`, so a
-/// `$linear.done` finds the `linear` integration's `done` binding (REQ-WFDEF-37).
+/// started by path (no definition or revision), it is a child run, a nested run included, whose
+/// stages' `onStage` its root's mirror writes, or its issue input is the empty text, as an
+/// optional input the run was not given resolves to. A missing or non-text issue input, or a
+/// snapshot or resolution record that cannot be read, still makes a `Mirror`, whose every hook
+/// records the failure. A revision with a resolution record makes a mirror that matches and
+/// writes states by id. Both the snapshot's values and the record's ids are read by the key a
+/// reference names after `$`, so a `$linear.done` finds the `linear` integration's `done`
+/// binding.
 pub(super) fn mirror_for_run(
     home: Option<&WorkflowHome>,
     record: &WorkflowRunRecord,
@@ -79,10 +78,10 @@ pub(super) fn mirror_for_run(
             (Ok(snapshot.text_values_by_reference()), resolved_ids)
         }
     };
-    // REQ-LOCALRUN-191: the run's URL is the record's `external.url`, which a Cloud runner
-    // sets to the run's page, else the run directory; its reference is that same external
-    // URL, else the command that shows the run on this host. The external URL itself is what
-    // the start comment looks for on the issue (REQ-LOCALRUN-216).
+    // The run's URL is the record's `external.url`, which a Cloud runner sets to the run's
+    // page, else the run directory; its reference is that same external URL, else the
+    // command that shows the run on this host. The external URL itself is what the start
+    // comment looks for on the issue.
     let external_url = record.external.get("url");
     let run_url = external_url.cloned().unwrap_or_else(|| {
         url::Url::from_file_path(run_directory).map_or_else(
@@ -132,16 +131,16 @@ pub(super) fn read_run_record(run_directory: &Path) -> Option<WorkflowRunRecord>
         .and_then(|record| serde_json::from_value(record).ok())
 }
 
-/// The message a command refuses with when `outcome_credentials` fails (REQ-LOCALRUN-204).
+/// The message a command refuses with when `outcome_credentials` fails.
 pub(super) const CREDENTIALS_REFUSAL: &str = "No Linear credential is set, so the run's mirror \
     cannot update its issue in Linear; the run is unchanged. Set USEFUL_LINEAR_ACCESS_TOKEN_FILE, \
     USEFUL_LINEAR_ACCESS_TOKEN or LINEAR_API_KEY and run the command again.";
 
 /// The check a command makes before it ends a run itself with `outcome` and then performs
-/// `onOutcome` (REQ-LOCALRUN-204): `mirror_credentials_unavailable` when the run's mirror maps
-/// `outcome` and the environment's Linear target has no credential, the failure that write would
-/// record; nothing for a run without a mirror or an outcome the mirror does not map. It reads
-/// the environment and sends nothing.
+/// `onOutcome`: `mirror_credentials_unavailable` when the run's mirror maps `outcome` and the
+/// environment's Linear target has no credential, the failure that write would record; nothing
+/// for a run without a mirror or an outcome the mirror does not map. It reads the environment
+/// and sends nothing.
 pub(super) fn outcome_credentials(
     mirror: Option<&Mirror>,
     outcome: &str,
@@ -155,9 +154,9 @@ pub(super) fn outcome_credentials(
 }
 
 /// Performs `hook` against Linear on this thread, with the credential the environment holds now,
-/// so each hook reads a token a runner replaced during the run (REQ-LOCALRUN-192). A failed
-/// write is already a record; a record that cannot be written is dropped too, since the mirror
-/// never changes the command's result (INV-ENGINE-25).
+/// so each hook reads a token a runner replaced during the run. A failed write is already a
+/// record; a record that cannot be written is dropped too, since the mirror never changes the
+/// command's result.
 pub(super) fn perform(mirror: &Mirror, hook: Box<Hook>) {
     let target = linear::LinearTarget::from_environment();
     let _ = hook(mirror, &target);
@@ -205,8 +204,8 @@ fn first_token(file: Option<&Path>, value: Option<String>) -> Option<Zeroizing<S
 mod tests {
     use super::*;
 
-    // REQ-LOCALRUN-192: the file's trimmed token comes first; a file that is missing, empty or
-    // not one token is skipped for the variable, which is taken by the same rule.
+    // The file's trimmed token comes first; a file that is missing, empty or not one token is
+    // skipped for the variable, which is taken by the same rule.
     #[test]
     fn the_offered_token_is_the_files_then_the_variables() {
         let files = tempfile::tempdir().unwrap();

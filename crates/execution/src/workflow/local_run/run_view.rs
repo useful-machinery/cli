@@ -1,8 +1,7 @@
 //! A run read whole for a viewer: the run, its newest attempt's steps and finalizers as the
-//! workflow declares them, and one step's output (REQ-RUNNERENROLL-144,
-//! REQ-RUNNERENROLL-145). A tree run is read from its directory, with a settled step's
-//! retained output; a run in this process without one is projected from the run interface's
-//! model, with a step's newest records.
+//! workflow declares them, and one step's output. A tree run is read from its directory,
+//! with a settled step's retained output; a run in this process without one is projected
+//! from the run interface's model, with a step's newest records.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -710,8 +709,7 @@ pub struct LiveRunViewRequest {
 /// directory's read answers: `running` until the engine has ended the run and `exited`
 /// after, one attempt, its state the engine's word for where the run is, no wait and no
 /// outcome, and each step as the model has observed it. A named step of the run gives its
-/// newest records; no step and a step the run does not have give none
-/// (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145).
+/// newest records; no step and a step the run does not have give none.
 ///
 /// The model's lock is held once, to copy the snapshot, and the snapshot shares the ring of
 /// the named step alone; it is dropped before this returns.
@@ -757,7 +755,7 @@ pub fn live_run_view<Clock: ObservationClock>(
     }
 }
 
-/// The steps in flight of a run in this process (REQ-RUNNERENROLL-134).
+/// The steps in flight of a run in this process.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LiveRunningSteps {
     /// The first steps in flight in the definition's presentation order.

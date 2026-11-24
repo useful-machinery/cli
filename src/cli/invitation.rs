@@ -280,7 +280,7 @@ impl Access {
     }
 }
 
-/// Runs `run` in the organization in effect (REQ-ORG-87), for the organization's own leaves.
+/// Runs `run` in the organization in effect, for the organization's own leaves.
 fn execute_in(
     options: InvitationOptions,
     deployment: &Deployment,

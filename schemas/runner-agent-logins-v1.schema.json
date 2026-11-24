@@ -82,7 +82,16 @@
             "install_failed"
           ]
         },
-        "grantId": { "type": "string", "pattern": "^pgr_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "grantId": {
+          "description": "The grant a ready token was issued from.",
+          "type": "string",
+          "pattern": "^pgr_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "connectionAuthorizationId": {
+          "description": "The connection authorization a ready github token was issued under, in place of a grant: the organization's GitHub App installation an owner authorized for the run.",
+          "type": "string",
+          "pattern": "^cna_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
         "generation": { "type": "integer", "minimum": 1 },
         "expiresAt": { "type": "string", "format": "date-time" },
         "checkedAt": { "type": "string", "format": "date-time" },
@@ -101,8 +110,8 @@
           "format": "date-time"
         },
         "source": {
-          "description": "Where the provider's credential came from for that assignment, as its admission settled it: host while the service environment carries the provider's names, grant while the admission holds a token it can read back. Absent while neither provides one.",
-          "enum": ["host", "grant"]
+          "description": "Where the provider's credential came from for that assignment, as its admission settled it: host while the service environment carries the provider's names, grant while the admission holds a token issued from a grant it can read back, org_connection, on github's entry alone, while it holds one issued under a connection authorization. Absent while neither provides one. A token issued later in the run under another grant or authorization leaves it as it was.",
+          "enum": ["host", "grant", "org_connection"]
         }
       },
       "dependentRequired": {
@@ -110,11 +119,32 @@
         "endedAt": ["checkedAt"],
         "source": ["runId"]
       },
-      "if": { "properties": { "state": { "const": "ready" } } },
-      "then": { "required": ["grantId", "generation", "expiresAt"] },
-      "else": {
-        "properties": { "grantId": false, "generation": false, "expiresAt": false }
-      }
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "ready" } } },
+          "then": {
+            "required": ["generation", "expiresAt"],
+            "oneOf": [{ "required": ["grantId"] }, { "required": ["connectionAuthorizationId"] }]
+          },
+          "else": {
+            "properties": {
+              "grantId": false,
+              "connectionAuthorizationId": false,
+              "generation": false,
+              "expiresAt": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "github" } } },
+          "else": {
+            "properties": {
+              "connectionAuthorizationId": false,
+              "source": { "enum": ["host", "grant"] }
+            }
+          }
+        }
+      ]
     }
   },
   "properties": {

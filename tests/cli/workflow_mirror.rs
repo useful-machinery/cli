@@ -1,6 +1,5 @@
-//! The run mirror end to end (REQ-LOCALRUN-191, REQ-LOCALRUN-192, REQ-LOCALRUN-186): `useful`
-//! performs a root workflow's `mirror` writes against a loopback stand-in for Linear's GraphQL
-//! API and records each under the run's `mirror/`.
+//! The run mirror end to end: `useful` performs a root workflow's `mirror` writes against a
+//! loopback stand-in for Linear's GraphQL API and records each under the run's `mirror/`.
 
 use std::fs;
 use std::io::Write as _;
@@ -73,16 +72,15 @@ inputs:
     kind: text
 "#;
 
-/// A loopback stand-in for Linear's GraphQL API (REQ-LOCALRUN-192): it serves
-/// `POST /graphql` by the body's `operationName`, answering `IssueState` with the issue in
-/// its current state, by the name and the id of the team state so named, its `updatedAt`
-/// (`ISSUE_UPDATED_AT`), and its team, `team-auto` until it is moved, with the team's
-/// states, `STATES` until one is renamed; `IssueComments` with the same issue and its
-/// comments, none until one is added, or with HTTP 500 and a GraphQL error while it fails
-/// that read; and each mutation with `success` true, or with HTTP 500 and a GraphQL error
-/// while it fails mutations. A mutation it is told to hold stays
-/// in flight, unanswered, until it is released. It records every body in order, and the
-/// `Authorization` value each request carried.
+/// A loopback stand-in for Linear's GraphQL API: it serves `POST /graphql` by the body's
+/// `operationName`, answering `IssueState` with the issue in its current state, by the
+/// name and the id of the team state so named, its `updatedAt` (`ISSUE_UPDATED_AT`), and
+/// its team, `team-auto` until it is moved, with the team's states, `STATES` until one is
+/// renamed; `IssueComments` with the same issue and its comments, none until one is added,
+/// or with HTTP 500 and a GraphQL error while it fails that read; and each mutation with
+/// `success` true, or with HTTP 500 and a GraphQL error while it fails mutations. A
+/// mutation it is told to hold stays in flight, unanswered, until it is released. It
+/// records every body in order, and the `Authorization` value each request carried.
 pub(super) struct LinearStub {
     base: String,
     state: Arc<Mutex<StubState>>,
@@ -133,9 +131,9 @@ impl LinearStub {
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                // The thread is detached and holds the listener for the whole test, so a panic
-                // here would release the address while the test's `useful` processes still aim at it
-                // (INV-TESTING-22): an unreadable connection is skipped and the next one served.
+                // The thread is detached and holds the listener for the whole test, so a panic here
+                // would release the address while the test's `useful` processes still aim at it: an
+                // unreadable connection is skipped and the next one served.
                 let request = match useful_test_support::try_read_request(&mut stream) {
                     Ok(request) => request,
                     Err(error) => {
@@ -438,8 +436,8 @@ pub(super) fn mirror_writes(run: &Path) -> Vec<(String, Value)> {
     writes
 }
 
-/// Writes `resolution` as revision 1's `resolution.json` (REQ-WFDEF-32) of `definition` in
-/// `home`, as the Cloud runner records the revision's resolution.
+/// Writes `resolution` as revision 1's `resolution.json` of `definition` in `home`, as the
+/// Cloud runner records the revision's resolution.
 pub(super) fn write_resolution(home: &Home, definition: &str, resolution: &Value) {
     let path = Path::new(home.path())
         .join("workflows")
@@ -495,10 +493,9 @@ fn comments(stub: &LinearStub) -> Vec<String> {
         .collect()
 }
 
-// REQ-LOCALRUN-270, REQ-LOCALRUN-271, REQ-LOCALRUN-275, REQ-LOCALRUN-278: a definition run of a mirrored root
-// comments when it starts and when its stage exits, each comment keyed by the issue's id it
-// read first, moves the issue to the bound `Done` on `landed`, and records each write under
-// `mirror/`; without an `external.url` its start reads no comments.
+// A definition run of a mirrored root comments when it starts and when its stage exits, each
+// comment keyed by the issue's id it read first, moves the issue to the bound `Done` on `landed`,
+// and records each write under `mirror/`; without an `external.url` its start reads no comments.
 #[test]
 fn a_mirrored_run_comments_at_start_and_stage_and_moves_the_issue_on_its_outcome() {
     let published = engineering(true);
@@ -554,14 +551,14 @@ fn a_mirrored_run_comments_at_start_and_stage_and_moves_the_issue_on_its_outcome
         writes[2].1["action"],
         json!({"kind": "state", "state": "Done", "binding": "done"})
     );
-    // A write changes nothing the run records (INV-ENGINE-25).
+    // A write changes nothing the run records.
     let record = run_record(&run);
     assert_eq!(record["state"], "exited");
     assert_eq!(record["outcome"], "landed");
 }
 
-// REQ-LOCALRUN-191, REQ-LOCALRUN-276: a write Linear refuses, or one without a key, is a
-// failed record and never changes the run's outcome; without a key nothing is sent.
+// A write Linear refuses, or one without a key, is a failed record and never changes the
+// run's outcome; without a key nothing is sent.
 #[test]
 fn a_failed_mirror_write_is_recorded_and_never_fails_the_run() {
     let published = engineering(true);
@@ -594,17 +591,17 @@ fn a_failed_mirror_write_is_recorded_and_never_fails_the_run() {
     assert_eq!(stub.bodies(), Vec::<Value>::new());
 }
 
-/// The variable naming the file that holds the run's Linear grant token (REQ-LOCALRUN-274).
+/// The variable naming the file that holds the run's Linear grant token.
 const TOKEN_FILE_VARIABLE: &str = "USEFUL_LINEAR_ACCESS_TOKEN_FILE";
 
-/// The variable holding the run's Linear grant token (REQ-LOCALRUN-274).
+/// The variable holding the run's Linear grant token.
 const TOKEN_VARIABLE: &str = "USEFUL_LINEAR_ACCESS_TOKEN";
 
-// REQ-LOCALRUN-274: the mirror writes with the first Linear credential the environment
-// offers, read anew for each hook: the token in the file `USEFUL_LINEAR_ACCESS_TOKEN_FILE` names,
-// sent as `Bearer` before `USEFUL_LINEAR_ACCESS_TOKEN` and `LINEAR_API_KEY`, and sent replaced by
-// a hook after the file is replaced; else `USEFUL_LINEAR_ACCESS_TOKEN` as `Bearer`, a missing
-// file being skipped; else `LINEAR_API_KEY` bare.
+// The mirror writes with the first Linear credential the environment offers, read anew for each
+// hook: the token in the file `USEFUL_LINEAR_ACCESS_TOKEN_FILE` names, sent as `Bearer` before
+// `USEFUL_LINEAR_ACCESS_TOKEN` and `LINEAR_API_KEY`, and sent replaced by a hook after the file
+// is replaced; else `USEFUL_LINEAR_ACCESS_TOKEN` as `Bearer`, a missing file being skipped; else
+// `LINEAR_API_KEY` bare.
 #[test]
 fn the_mirror_writes_with_the_first_linear_credential_the_environment_offers() {
     let published = engineering(true);
@@ -676,9 +673,9 @@ fn replaced(contents: &str, from: &str, to: &str) -> String {
     contents.replacen(from, to, 1)
 }
 
-// REQ-LOCALRUN-206, REQ-LOCALRUN-292: a mirrored run whose stage fails mirrors the failure
-// outcome its record reads, but when the root's state commit fails the attempt is left
-// unsettled, its record `running`, and nothing is written for `onOutcome`.
+// A mirrored run whose stage fails mirrors the failure outcome its record reads, but when
+// the root's state commit fails the attempt is left unsettled, its record `running`, and
+// nothing is written for `onOutcome`.
 #[test]
 fn a_failed_state_commit_writes_no_outcome_to_the_mirror() {
     let tree = engineering_tree(true);
@@ -750,8 +747,8 @@ fn a_failed_state_commit_writes_no_outcome_to_the_mirror() {
     assert_eq!(record["outcome"], Value::Null, "{record}");
 }
 
-// REQ-LOCALRUN-273: a run started by path and a run of a root without `mirror` write
-// nothing and have no `mirror/`.
+// A run started by path and a run of a root without `mirror` write nothing and have
+// no `mirror/`.
 #[test]
 fn a_path_run_and_an_unmirrored_root_write_nothing() {
     let published = engineering(true);
@@ -781,7 +778,7 @@ fn a_path_run_and_an_unmirrored_root_write_nothing() {
     assert!(!run.join("mirror").exists());
     assert_eq!(stub.bodies(), Vec::<Value>::new());
 
-    // REQ-LOCALRUN-298: `show` lists no mirror write for a run without `mirror/`.
+    // `show` lists no mirror write for a run without `mirror/`.
     let run = run.to_str().unwrap();
     assert_eq!(
         shown_mirror(&published.command(&["show", run]).output().unwrap()),
@@ -796,10 +793,10 @@ fn a_path_run_and_an_unmirrored_root_write_nothing() {
     assert_eq!(document["mirror"], json!([]), "{document}");
 }
 
-// REQ-WFDEF-32, REQ-LOCALRUN-272, REQ-LOCALRUN-277: once a person renamed the `Done` state,
-// a run of a revision without a resolution record finds no team state of the bound name,
-// while one of a revision with the record moves the issue by the id it resolved; `run.url`
-// is the run directory's `file://` URL, or the record's `external.url` when it has one.
+// Once a person renamed the `Done` state, a run of a revision without a resolution record
+// finds no team state of the bound name, while one of a revision with the record moves the
+// issue by the id it resolved; `run.url` is the run directory's `file://` URL, or the
+// record's `external.url` when it has one.
 #[test]
 fn a_resolution_record_moves_the_issue_by_state_id_and_run_url_is_the_external_url() {
     let published = engineering(true);
@@ -850,9 +847,9 @@ fn a_resolution_record_moves_the_issue_by_state_id_and_run_url_is_the_external_u
     );
 }
 
-// REQ-LOCALRUN-191, REQ-WFDEF-32, REQ-WFDEF-37: a mirror state named `$linear.done` reads the
-// integration binding's value from the snapshot's `linear` member, and once a person renamed
-// the state, its id from the resolution record's.
+// A mirror state named `$linear.done` reads the integration binding's value from the
+// snapshot's `linear` member, and once a person renamed the state, its id from the resolution
+// record's.
 #[test]
 fn a_mirror_state_of_an_integration_binding_moves_the_issue_by_its_value_or_resolved_id() {
     let tree = design_stage(Tree::nested(), true);
@@ -897,7 +894,6 @@ fn a_mirror_state_of_an_integration_binding_moves_the_issue_by_its_value_or_reso
     );
 }
 
-// REQ-LOCALRUN-272, REQ-WFFORMAT-101
 #[test]
 fn run_reference_is_the_external_url_else_the_show_command() {
     let tree = engineering_tree(true);
@@ -939,9 +935,9 @@ fn create_with_run_page(published: &Published, stub: &LinearStub, ticket: &str) 
     })
 }
 
-// REQ-LOCALRUN-216, REQ-LOCALRUN-298: a run whose issue already holds a comment linking its
-// `external.url` posts no start comment, records the write skipped `start_announced` with
-// the text it would have written, and `show` lists it so.
+// A run whose issue already holds a comment linking its `external.url` posts no start
+// comment, records the write skipped `start_announced` with the text it would have written,
+// and `show` lists it so.
 #[test]
 fn a_start_comment_is_skipped_when_the_issue_already_links_the_run() {
     let published = engineering(true);
@@ -993,9 +989,8 @@ fn a_start_comment_is_skipped_when_the_issue_already_links_the_run() {
     );
 }
 
-// REQ-LOCALRUN-278: comments that do not link the run, or comments that cannot be read,
-// leave the start comment to be written, after an issue read of its own when the comments
-// read failed.
+// Comments that do not link the run, or comments that cannot be read, leave the start
+// comment to be written, after an issue read of its own when the comments read failed.
 #[test]
 fn a_start_comment_is_written_when_no_comment_links_the_run_or_none_can_be_read() {
     let published = engineering(true);
@@ -1025,11 +1020,10 @@ fn a_start_comment_is_written_when_no_comment_links_the_run_or_none_can_be_read(
     assert_eq!(start_write.get("diagnostic"), None, "{start_write}");
 }
 
-// REQ-WFDEF-32, REQ-LOCALRUN-277: with a resolution record the guard
-// `issue.state != $ownedState` compares state ids: it does not hold for an issue in the
-// owned state a person renamed, and holds for one in another state now bearing the owned
-// state's name; a bound key the record gives no id is `mirror_state_unknown` and sends
-// nothing.
+// With a resolution record the guard `issue.state != $ownedState` compares state ids: it
+// does not hold for an issue in the owned state a person renamed, and holds for one in
+// another state now bearing the owned state's name; a bound key the record gives no id
+// is `mirror_state_unknown` and sends nothing.
 #[test]
 fn with_a_resolution_record_the_guard_holds_by_state_id() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1248,11 +1242,10 @@ impl MirroredWaitTree {
     }
 }
 
-// SC-LOCALRUN-12, REQ-LOCALRUN-270, REQ-LOCALRUN-272, REQ-LOCALRUN-275, REQ-LOCALRUN-271, REQ-LOCALRUN-298,
-// REQ-WFFORMAT-101: a mirrored run comments when it starts, naming the run by its id and the
-// command that shows it, when its stage exits and when it waits; `withdraw`
-// skips the state write when a person already moved the issue out of the owned state,
-// `cancel` moves an issue still in it to the bound `Canceled`, and `show` lists every write.
+// SC-LOCALRUN-12: a mirrored run comments when it starts, naming the run by its id and the command
+// that shows it, when its stage exits and when it waits; `withdraw` skips the state write when a
+// person already moved the issue out of the owned state, `cancel` moves an issue still in it to the
+// bound `Canceled`, and `show` lists every write.
 #[test]
 fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1360,9 +1353,9 @@ fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     );
 }
 
-// REQ-WFEXEC-73, REQ-LOCALRUN-271, REQ-LOCALRUN-240: a withdrawal of a live run while its stage runs
-// ends it `withdrawn` once the stage finishes, and its process fires `onOutcome.withdrawn` once,
-// moving the issue still in the owned state to the bound `Backlog`.
+// A withdrawal of a live run while its stage runs ends it `withdrawn` once the stage finishes, and
+// its process fires `onOutcome.withdrawn` once, moving the issue still in the owned state to the
+// bound `Backlog`.
 #[test]
 fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1446,10 +1439,10 @@ fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
     );
 }
 
-// SC-LOCALRUN-15, REQ-LOCALRUN-270, REQ-LOCALRUN-135, REQ-LOCALRUN-244, REQ-LOCALRUN-255:
-// SIGINT to the process of a mirrored run interrupts its stage, whose repair wait's `onWait`
-// comment begins with the interruption, and the run writes no `onOutcome`; a live run ended
-// by `cancel`, even from a shell without the key, still writes `onOutcome.canceled`.
+// SC-LOCALRUN-15: SIGINT to the process of a mirrored run interrupts its stage, whose repair
+// wait's `onWait` comment begins with the interruption, and the run writes no `onOutcome`; a
+// live run ended by `cancel`, even from a shell without the key, still writes
+// `onOutcome.canceled`.
 #[test]
 fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1487,7 +1480,7 @@ fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
     assert!(!stub.operations().contains(&"UpdateIssueState".to_owned()));
 
     // A live run is cancelled from a shell without the key: the process that holds it writes
-    // `onOutcome.canceled` with its own (REQ-LOCALRUN-204).
+    // `onOutcome.canceled` with its own.
     stub.clear();
     let mut live = tree.held(&stub, "AUTO-2");
     let output = tree.run_adjusted(&stub, &["cancel", "AUTO-2", "--json"], without_key);
@@ -1511,9 +1504,9 @@ fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
     );
 }
 
-// SC-CONTINUE-12, REQ-LOCALRUN-270, REQ-WFEXEC-72: a `retry` of a mirrored run's repair
-// wait that SIGINT stops before its stage's child is prepared keeps that wait and writes no
-// `onWait`, since the wait's was written when it was entered; nothing else is written either.
+// SC-CONTINUE-12: a `retry` of a mirrored run's repair wait that SIGINT stops before its
+// stage's child is prepared keeps that wait and writes no `onWait`, since the wait's was
+// written when it was entered; nothing else is written either.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -1572,11 +1565,10 @@ mirror:
         .replacen("inputs:\n", "inputs:\n  ticket:\n    kind: text\n", 1)
 }
 
-// REQ-LOCALRUN-270, REQ-LOCALRUN-272, REQ-WFEXEC-108, REQ-WFEXEC-110: each stage of a nested run writes the root's
-// `onStage` with its path from the root and its `summary` export, else its outcome, before
-// the nested run routes it, and the nested run's own exit writes one for the root's step;
-// the nested run writes no mirror of its own, and a stage that ends `blocked` into an
-// `answer` wait the root carries is followed by the root's one `onWait`.
+// Each stage of a nested run writes the root's `onStage` with its path from the root and its
+// `summary` export, else its outcome, before the nested run routes it, and the nested run's own
+// exit writes one for the root's step; the nested run writes no mirror of its own, and a stage that
+// ends `blocked` into an `answer` wait the root carries is followed by the root's one `onWait`.
 #[test]
 fn a_nested_runs_stages_comment_through_the_roots_mirror() {
     let bundle = super::workflow_nested::asking_tree();
@@ -1688,7 +1680,7 @@ fn control_names(run: &Path) -> Vec<String> {
 }
 
 /// Checks that `output` is `leaf` refused `mirror_credentials_unavailable` with a message
-/// naming the three variables a Linear credential is read from (REQ-LOCALRUN-204).
+/// naming the three variables a Linear credential is read from.
 fn refused_without_key(output: &Output, leaf: &str) {
     let document = refused(output, leaf, "mirror_credentials_unavailable");
     let message = document["diagnostics"][0]["message"].as_str().unwrap();
@@ -1697,11 +1689,10 @@ fn refused_without_key(output: &Output, leaf: &str) {
     }
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-254, REQ-LOCALRUN-186: `cancel`, and
-// `cancel --control cancel`, of a mirrored waiting run from a shell with no Linear credential,
-// its `LINEAR_API_KEY` unset or empty and no grant token, are refused before anything changes
-// and nothing is sent, and the same `cancel` with the key ends the run `withdrawn` and moves
-// its issue.
+// SC-LOCALRUN-17: `cancel`, and `cancel --control cancel`, of a mirrored waiting run from a
+// shell with no Linear credential, its `LINEAR_API_KEY` unset or empty and no grant token, are
+// refused before anything changes and nothing is sent, and the same `cancel` with the key ends
+// the run `withdrawn` and moves its issue.
 #[test]
 fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_changes() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1741,10 +1732,10 @@ fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_chan
     );
 }
 
-// SC-LOCALRUN-17, REQ-LOCALRUN-204, REQ-LOCALRUN-274: the check before `cancel` ends a
-// mirrored waiting run is for any Linear credential: a token file that is missing and an
-// empty `USEFUL_LINEAR_ACCESS_TOKEN` are none, so it still refuses, and from a shell whose only
-// credential is `USEFUL_LINEAR_ACCESS_TOKEN` it proceeds and moves the issue with that token.
+// SC-LOCALRUN-17: the check before `cancel` ends a mirrored waiting run is for any Linear
+// credential: a token file that is missing and an empty `USEFUL_LINEAR_ACCESS_TOKEN` are none,
+// so it still refuses, and from a shell whose only credential is `USEFUL_LINEAR_ACCESS_TOKEN`
+// it proceeds and moves the issue with that token.
 #[test]
 fn ending_a_mirrored_waiting_run_with_only_the_linear_access_token_proceeds() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1778,9 +1769,9 @@ fn ending_a_mirrored_waiting_run_with_only_the_linear_access_token_proceeds() {
     assert_eq!(stub.authorizations(), ["Bearer variable-token"; 2]);
 }
 
-// REQ-LOCALRUN-254, REQ-LOCALRUN-243, REQ-CONTINUE-2: `cancel` of a mirrored `running` run
-// whose process is gone, from a shell without the key, is refused and leaves the abandoned
-// attempt unsettled, so the same `cancel` with the key ends the run.
+// `cancel` of a mirrored `running` run whose process is gone, from a shell without the
+// key, is refused and leaves the abandoned attempt unsettled, so the same `cancel` with
+// the key ends the run.
 #[test]
 fn ending_a_mirrored_abandoned_run_without_the_key_is_refused_before_anything_changes() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1830,10 +1821,10 @@ fn first_attempt(run: &Path) -> Value {
     read_json(&run.join("state.json"))["attempts"][0].clone()
 }
 
-// REQ-LOCALRUN-204, REQ-LOCALRUN-254, REQ-LOCALRUN-239: `resume` of a mirrored `running` run whose process is
-// gone after a withdrawal was recorded, from a shell without the key, is refused at phase
-// `continuation` and leaves the abandoned attempt unsettled with the control kept; the same
-// `resume` with the key withdraws the run and writes its `onOutcome.withdrawn` once.
+// `resume` of a mirrored `running` run whose process is gone after a withdrawal was recorded, from
+// a shell without the key, is refused at phase `continuation` and leaves the abandoned attempt
+// unsettled with the control kept; the same `resume` with the key withdraws the run and writes its
+// `onOutcome.withdrawn` once.
 #[test]
 fn resuming_an_abandoned_run_whose_withdrawal_is_recorded_without_the_key_is_refused() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1918,8 +1909,8 @@ fn resuming_an_abandoned_run_whose_withdrawal_is_recorded_without_the_key_is_ref
     );
 }
 
-// REQ-LOCALRUN-204: a mirror whose `onOutcome` does not map the outcome writes nothing, so
-// `cancel` without the key ends the run.
+// A mirror whose `onOutcome` does not map the outcome writes nothing, so `cancel` without
+// the key ends the run.
 #[test]
 fn a_mirror_that_does_not_map_the_outcome_needs_no_key() {
     let withdrawn = "      withdrawn: {state: $backlog, unless: issue.state != $ownedState}\n";
@@ -1941,11 +1932,11 @@ fn a_mirror_that_does_not_map_the_outcome_needs_no_key() {
     assert_eq!(mirror_names(&run), writes);
 }
 
-// REQ-LOCALRUN-273, REQ-LOCALRUN-204: a run whose mirror `issue` input is the empty text, as
-// an optional input the run was not given resolves to, has no mirror: it passes `onStart`,
-// `onStage` and `onWait` sending Linear nothing and recording nothing, `show` lists no write,
-// and `withdraw` without the key ends it although `onOutcome` maps `withdrawn`. A run of the
-// same definition that gives the input mirrors as before.
+// A run whose mirror `issue` input is the empty text, as an optional input the run was not
+// given resolves to, has no mirror: it passes `onStart`, `onStage` and `onWait` sending
+// Linear nothing and recording nothing, `show` lists no write, and `withdraw` without the key
+// ends it although `onOutcome` maps `withdrawn`. A run of the same definition that gives the
+// input mirrors as before.
 #[test]
 fn a_run_whose_issue_input_is_empty_has_no_mirror() {
     let mut header = MIRRORED_WAIT_HEADER.to_owned();
@@ -1997,10 +1988,9 @@ fn a_run_whose_issue_input_is_empty_has_no_mirror() {
     assert_eq!(write["outcome"], "written", "{write}");
 }
 
-// REQ-LOCALRUN-204, REQ-CONTINUE-110: `resume` of a mirrored run whose repair wait a recorded
-// `control.withdraw` resolves, from a shell without the key, is refused at phase
-// `continuation` and keeps waiting with the control recorded; the same `resume` with the key
-// withdraws the run and moves its issue.
+// `resume` of a mirrored run whose repair wait a recorded `control.withdraw` resolves, from a
+// shell without the key, is refused at phase `continuation` and keeps waiting with the
+// control recorded; the same `resume` with the key withdraws the run and moves its issue.
 #[test]
 fn resuming_a_recorded_withdrawal_without_the_key_is_refused_and_keeps_the_run_waiting() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);

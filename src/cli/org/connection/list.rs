@@ -1,6 +1,6 @@
-//! `useful org integration list`: the organization's connections to every provider in one list
-//! (REQ-CONNECTION-104), each with the runners' authorizations in force for it
-//! (REQ-INTEGRATION-34), then the organization's tokens (REQ-INTEGRATION-19).
+//! `useful org integration list`: the organization's connections to every provider in one
+//! list, each with the runners' authorizations in force for it, then the organization's
+//! tokens.
 use std::io::{self, Write};
 
 use anyhow::Context;
@@ -69,8 +69,7 @@ impl Provider {
         }
     }
 
-    /// The provider id a connection authorization names (REQ-INTEGRATION-27): GitLab's is
-    /// `gitlab.com`.
+    /// The provider id a connection authorization names: GitLab's is `gitlab.com`.
     pub(in crate::cli) const fn wire(self) -> &'static str {
         match self {
             Self::Github => "github",
@@ -88,8 +87,12 @@ struct Item {
     state: String,
     name: Option<String>,
     connection: Value,
+    // When a GitHub installation's authority was verified, or that it was not, which the report
+    // prints on its row; `connection` carries `authorityVerifiedAt`.
+    #[serde(skip)]
+    authority: Option<String>,
     // The runners' authorizations in force for the connection, where the organization's were
-    // read and answered (REQ-INTEGRATION-34).
+    // read and answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     authorizations: Option<InForce>,
 }
@@ -348,6 +351,10 @@ impl Record {
             state: self.state().to_owned(),
             name: self.name().map(str::to_owned),
             connection,
+            authority: match self {
+                Self::Github(installation) => Some(github::authority(installation)),
+                Self::Gitlab(_) | Self::Linear(_) => None,
+            },
             authorizations: None,
         })
     }
@@ -430,11 +437,11 @@ fn write_list(
     let mut output = io::stdout().lock();
     writeln!(output, "✓ Connections listed.")?;
     for item in items {
-        writeln!(
-            output,
-            "{}",
-            row(&item.id, item.provider, &item.state, item.name.as_deref())
-        )?;
+        let row = row(&item.id, item.provider, &item.state, item.name.as_deref());
+        match &item.authority {
+            Some(authority) => writeln!(output, "{row}  authority {authority}")?,
+            None => writeln!(output, "{row}")?,
+        }
         if let Some(authorizations) = &item.authorizations {
             authorizations.write_human(&mut output, "  ")?;
         }

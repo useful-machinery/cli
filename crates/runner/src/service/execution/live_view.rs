@@ -1,7 +1,6 @@
 //! What a control socket read shows of a single-workflow assignment's run: the run
 //! interface's model, kept in memory within the runner's bounds, and the observer pair that
-//! feeds it only after the runner's own observer has seen each observation
-//! (INV-RUNNER-47, REQ-RUNNERENROLL-147).
+//! feeds it only after the runner's own observer has seen each observation.
 
 use useful_execution::{
     ExecutionSeed, LiveRunViewRequest, LiveRunningSteps, ObservationClock, ResolvedWorkflow,
@@ -59,12 +58,12 @@ impl AssignmentRunView {
     }
 
     /// The first steps in flight, at most `MAXIMUM_RUNNING_STEPS`, and the number of the
-    /// others, copied in one hold of the model's lock (REQ-RUNNERENROLL-134).
+    /// others, copied in one hold of the model's lock.
     pub(in crate::service) fn running_steps(&self) -> LiveRunningSteps {
         live_running_steps(&self.model, MAXIMUM_RUNNING_STEPS)
     }
 
-    /// The run as `request` asks for it (REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-145).
+    /// The run as `request` asks for it.
     pub(in crate::service) fn run(&self, request: &LiveRunViewRequest) -> RunView {
         live_run_view(&self.model, request)
     }
@@ -102,7 +101,7 @@ impl ExecutionObserver<RunnerExecutionInstant> for AssignmentRunView {
 /// The runner's observer and a second observer the engine feeds as one: each observation
 /// reaches the runner's observer first, and the second, the run's view in production, only
 /// once the runner's has finished with it, so what the runner queues for Cloud and records
-/// is what it would be without the second (INV-RUNNER-47).
+/// is what it would be without the second.
 #[derive(Clone)]
 pub(super) struct ObserverThenView<Second> {
     runner: RunnerExecutionObserver,

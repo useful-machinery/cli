@@ -78,13 +78,14 @@ use super::resolution::{ResolvedWorkflow, resolve_retained};
 use super::run_record::{RunState, WorkflowRunRecord};
 use super::runtime::{
     ActiveStepInvocation, EnteredWait, ExecutionSeed, FinalizationSummary, InheritedDisposition,
-    InheritedStepSeed, StepState, TargetExecutionNumber, WorkflowState,
+    InheritedStepSeed, RevalidatedStepSeed, StepState, TargetExecutionNumber, WorkflowState,
 };
 use super::schema_common::{
     is_canonical_absolute_path, is_canonical_relative_path, is_lowercase_hex, lowercase_hex,
     utc_timestamp,
 };
 use super::step_runtime::StepFailureCause;
+use super::step_workspace::{StepWorkspaces, WORKSPACES_DIRECTORY};
 use super::tree::{ValidatedTree, validate_workflow_tree};
 use super::tree_copy::{self, FileOperationError, TreeCopyError, file_locator, write_tree_copy};
 use super::value::CapturedValue;
@@ -108,20 +109,20 @@ const INVOCATIONS_DIRECTORY: &str = "invocations";
 const VALUES_DIRECTORY: &str = "values";
 pub(super) const PRIVATE_DIRECTORY: &str = ".private";
 const CHILDREN_DIRECTORY: &str = "children";
-/// The wait record of a waiting run (REQ-LOCALRUN-178), at the root and under the attempt.
+/// The wait record of a waiting run, at the root and under the attempt.
 const WAIT_RECORD_FILE: &str = "wait.json";
 const WAIT_RECORD_TEMPORARY_FILE: &str = "wait.json.tmp";
-/// The run record's outcome for a run that a withdrawal ended at its wait (REQ-CONTINUE-109).
+/// The run record's outcome for a run that a withdrawal ended at its wait.
 pub const WITHDRAWN_OUTCOME: &str = "withdrawn";
-/// The run record's outcome for a run canceled while it waits (REQ-CONTINUE-75).
+/// The run record's outcome for a run canceled while it waits.
 pub const CANCELED_OUTCOME: &str = "canceled";
-/// The run record's outcome for a run its successor superseded (INV-ENGINE-26).
+/// The run record's outcome for a run its successor superseded.
 pub const SUPERSEDED_OUTCOME: &str = "superseded";
-/// The prefix of a run record's id (REQ-LOCALRUN-175).
+/// The prefix of a run record's id.
 const RUN_ID_PREFIX: &str = "run_";
-/// The controls appended to the run (REQ-LOCALRUN-178), written by `wait::append_control`.
+/// The controls appended to the run, written by `wait::append_control`.
 pub(super) const CONTROLS_DIRECTORY: &str = "controls";
-/// The mirror writes of the run (REQ-LOCALRUN-193), written by `mirror::append_write`.
+/// The mirror writes of the run, written by `mirror::append_write`.
 pub(super) const MIRROR_DIRECTORY: &str = "mirror";
 const INITIAL_ATTEMPT_NUMBER: u64 = 1;
 const INITIAL_ATTEMPT_DIRECTORY: &str = "000001";
@@ -253,17 +254,16 @@ pub enum LocalRunDirectoryError {
     WaitRecordInvalid,
     ControlEventInvalid,
     MirrorWriteInvalid,
-    /// No run under the `useful` home has the id (REQ-LOCALRUN-180): `run_not_found`.
+    /// No run under the `useful` home has the id: `run_not_found`.
     RunNotFound,
     /// A parent's commit refused because one of its child runs failed to commit its own
-    /// state (REQ-LOCALRUN-207, INV-ENGINE-57); it classifies as the child's failure and
-    /// reads as the child's own error.
+    /// state; it classifies as the child's failure and reads as the child's own error.
     ChildCommitFailed(ChildCommitFailure),
 }
 
-/// A child run's failed state commit as its parent's [`LocalRunCommitPort`] latches it
-/// (REQ-LOCALRUN-207, INV-ENGINE-57): the classified failure and, beside it, the text of
-/// the child's own error, which names the child's file, for the root command to print.
+/// A child run's failed state commit as its parent's [`LocalRunCommitPort`] latches it:
+/// the classified failure and, beside it, the text of the child's own error, which names
+/// the child's file, for the root command to print.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildCommitFailure {
     pub failure: CommitFailure,
@@ -338,8 +338,8 @@ impl PartialEq for LocalRunDirectoryError {
 
 impl Eq for LocalRunDirectoryError {}
 
-/// INV-ENGINE-33: a failed state write keeps its class, operation and OS error number,
-/// never its path or the operating system's message.
+/// A failed state write keeps its class, operation and OS error number, never its path
+/// or the operating system's message.
 impl ClassifiedCommitError for LocalRunDirectoryError {
     fn commit_failure(&self) -> CommitFailure {
         match self {
@@ -541,15 +541,15 @@ struct WorkflowManifestV1 {
     agent_profile_replacement: Option<ManifestFileV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tree: Option<ManifestTreeV1>,
-    /// Written only for a run created with `--source-revision` (REQ-LOCALRUN-217), so the
-    /// manifest of a run given none keeps its bytes and digest.
+    /// Written only for a run created with `--source-revision`, so the manifest of a run
+    /// given none keeps its bytes and digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_revision: Option<ManifestSourceRevisionV1>,
 }
 
-/// The source revision a run was created with (REQ-LOCALRUN-217), whose variables every
-/// admission of the run and of its child runs sets: `commit`, and `branch` and the workflow
-/// pair `workflowBranch` and `workflowCommit` when given.
+/// The source revision a run was created with, whose variables every admission of the run
+/// and of its child runs sets: `commit`, and `branch` and the workflow pair
+/// `workflowBranch` and `workflowCommit` when given.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ManifestSourceRevisionV1 {
@@ -601,9 +601,9 @@ impl ManifestSourceRevisionV1 {
     }
 }
 
-/// The run's read-only copy of the tree it was admitted from (REQ-LOCALRUN-170): the
-/// copy's directory under `workflow/`, the tree digest (REQ-WFDEF-11) and the root's
-/// `programs` and `requires.tools`.
+/// The run's read-only copy of the tree it was admitted from: the copy's directory
+/// under `workflow/`, the tree digest and the root's `programs` and
+/// `requires.tools`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestTreeV1 {
@@ -620,8 +620,8 @@ impl ManifestTreeV1 {
     }
 }
 
-/// A retained tree copy whose recomputed digest differs from the manifest's
-/// (REQ-LOCALRUN-171); a copy that no longer validates as a tree has no digest.
+/// A retained tree copy whose recomputed digest differs from the manifest's; a
+/// copy that no longer validates as a tree has no digest.
 #[derive(Debug)]
 pub struct TreeCopyMismatch {
     expected: String,
@@ -640,7 +640,7 @@ impl TreeCopyMismatch {
 }
 
 /// Re-validates the run's tree copy (`<run>/workflow/tree`) and compares its digest
-/// with the manifest's record (REQ-LOCALRUN-171). Run, retry and continue share it.
+/// with the manifest's record. Run, retry and continue share it.
 pub(crate) fn verify_tree_copy(
     run_directory: &Path,
     record: &ManifestTreeV1,
@@ -746,12 +746,12 @@ pub(super) struct LocalAttemptV1 {
     pub(super) state: AttemptStateV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) continuation: Option<super::publication::ContinuationRecordV1>,
-    /// The backward or limited edge a `continued` attempt took (REQ-WFEXEC-64,
-    /// REQ-CONTINUE-78); no other attempt has one.
+    /// The backward or limited edge a `continued` attempt took; no other
+    /// attempt has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) taken_edge: Option<super::publication::ContinuationEdgeV1>,
-    /// The run a successor imported this attempt from (REQ-LOCALRUN-195); an attempt the
-    /// run made itself has none.
+    /// The run a successor imported this attempt from; an attempt the run made itself
+    /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) imported: Option<ImportedAttemptV1>,
     pub(super) execution_root: String,
@@ -778,8 +778,7 @@ pub(super) struct LocalAttemptV1 {
     pub(super) result: AttemptResultV1,
 }
 
-/// Where a successor's imported attempt came from (REQ-LOCALRUN-195): the predecessor's
-/// run id.
+/// Where a successor's imported attempt came from: the predecessor's run id.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ImportedAttemptV1 {
@@ -805,9 +804,9 @@ pub(super) enum AttemptStateV1 {
     Cancelled,
     Interrupted,
     Rejected,
-    /// The attempt ended on a wait the run continues from (REQ-WFEXEC-61).
+    /// The attempt ended on a wait the run continues from.
     Waiting,
-    /// The attempt took a backward or limited edge the run continues from (REQ-WFEXEC-64).
+    /// The attempt took a backward or limited edge the run continues from.
     Continued,
 }
 
@@ -913,21 +912,21 @@ pub(super) struct AttemptStepV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub(super) detail: Option<NodeDetail>,
-    /// A failed node's classified facts, recorded when it failed (REQ-LOCALRUN-198).
+    /// A failed node's classified facts, recorded when it failed.
     #[serde(
         default,
         deserialize_with = "super::evidence::deserialize_non_null_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub(super) diagnostic: Option<FailureDiagnosticV1>,
-    /// The failed child of a `succeeded` `workflow` step (REQ-WFEXEC-77, REQ-LOCALRUN-219).
+    /// The failed child of a `succeeded` `workflow` step.
     #[serde(
         default,
         deserialize_with = "super::evidence::deserialize_non_null_option",
         skip_serializing_if = "Option::is_none"
     )]
     pub(super) failed_child: Option<super::evidence::FailedChild>,
-    /// The class of a `failed` ordinary step's failure (REQ-WFEXEC-79).
+    /// The class of a `failed` ordinary step's failure.
     #[serde(
         default,
         deserialize_with = "super::evidence::deserialize_non_null_option",
@@ -935,12 +934,12 @@ pub(super) struct AttemptStepV1 {
     )]
     pub(super) failure_class: Option<super::evidence::FailureClass>,
     /// The source each `firstOf` of a step that started took, kept through recovery
-    /// executions and whatever state the step then reaches (REQ-EVIDENCE-28); absent from a
-    /// state an earlier `useful` wrote.
+    /// executions and whatever state the step then reaches; absent from a state an earlier
+    /// `useful` wrote.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) input_sources: Vec<super::evidence::InputSource>,
     /// The time of the commit that first moved the node out of `pending` in this attempt,
-    /// kept through recovery executions and after the node ends (REQ-LOCALRUN-201).
+    /// kept through recovery executions and after the node ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1293,7 +1292,7 @@ pub(super) struct DurableFinalizerV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub(super) detail: Option<NodeDetail>,
-    /// A failed node's classified facts, recorded when it failed (REQ-LOCALRUN-198).
+    /// A failed node's classified facts, recorded when it failed.
     #[serde(
         default,
         deserialize_with = "super::evidence::deserialize_non_null_option",
@@ -1336,8 +1335,8 @@ pub(super) enum AttemptStepStateV1 {
 
 impl AttemptStepStateV1 {
     /// Whether a node in this state has started and not ended: the states that record a
-    /// node's `startedAt` (REQ-LOCALRUN-201) and that `useful workflow run show` reports as a
-    /// running child's in-flight nodes (REQ-LOCALRUN-189).
+    /// node's `startedAt` and that `useful workflow run show` reports as a running child's
+    /// in-flight nodes.
     pub(super) const fn is_in_flight(self) -> bool {
         matches!(
             self,
@@ -1454,10 +1453,10 @@ struct LocalDiagnosticV1 {
     action_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     guard_id: Option<String>,
-    /// A `state_persistence_failure`'s class (REQ-LOCALRUN-205).
+    /// A `state_persistence_failure`'s class.
     #[serde(skip_serializing_if = "Option::is_none")]
     cause: Option<CommitFailureClass>,
-    /// A `state_persistence_failure`'s operating-system error number (REQ-LOCALRUN-205).
+    /// A `state_persistence_failure`'s operating-system error number.
     #[serde(skip_serializing_if = "Option::is_none")]
     os_error: Option<i32>,
 }
@@ -1568,8 +1567,8 @@ pub enum RetryIneligibilityReason {
     LatestAttemptRejected,
     OwnershipUnproven,
     /// The run record carries `successor`: a restart superseded the run, whose last attempt
-    /// may still read `waiting` (REQ-LOCALRUN-196). Published as the continuation code
-    /// `continuation_disposition_ineligible` (REQ-CONTINUE-29, REQ-LOCALRUN-129).
+    /// may still read `waiting`. Published as the continuation code
+    /// `continuation_disposition_ineligible`.
     RunSuperseded,
 }
 
@@ -1622,7 +1621,7 @@ impl LocalRetryRejection {
         self.ownership_reason
     }
 
-    /// The successor's run id when the run record carries one (REQ-LOCALRUN-196).
+    /// The successor's run id when the run record carries one.
     pub fn successor(&self) -> Option<&str> {
         self.successor.as_deref()
     }
@@ -1663,13 +1662,13 @@ impl PendingLocalRetry {
         update_run_record(&self.root, state, attempts, outcome)
     }
 
-    /// The run's tree copy and its manifest record, for a run admitted from a tree
-    /// (REQ-LOCALRUN-170).
+    /// The run's tree copy and its manifest record, for a run admitted from a
+    /// tree.
     pub fn tree_copy(&self) -> Option<(PathBuf, &ManifestTreeV1)> {
         retained_tree_copy(&self.normalized, self.tree.as_ref())
     }
 
-    /// `verify_tree_copy` for a run admitted from a tree (REQ-LOCALRUN-171).
+    /// `verify_tree_copy` for a run admitted from a tree.
     pub fn verify_tree_copy(&self) -> Option<Result<ValidatedTree, TreeCopyMismatch>> {
         self.tree
             .as_ref()
@@ -1680,8 +1679,8 @@ impl PendingLocalRetry {
         (&self.workflow, &self.inputs, self.maximum_parallel_steps)
     }
 
-    /// The source revision the run was created with, which the retry's admission sets
-    /// (REQ-LOCALRUN-217); none for a run created without one.
+    /// The source revision the run was created with, which the retry's admission
+    /// sets; none for a run created without one.
     pub fn source_revision(&self) -> Option<&SourceRevisionProvenance> {
         self.source_revision.as_ref()
     }
@@ -1713,8 +1712,8 @@ impl PendingLocalRetry {
         Ok(current_attempt(&*lock_state(&self.state.current)?)?.attempt_number)
     }
 
-    /// The execution root of the run's latest attempt, where a retry given none runs
-    /// (REQ-LOCALRUN-78).
+    /// The execution root of the run's latest attempt, where a retry given none
+    /// runs.
     pub fn prior_execution_root(&self) -> Result<PathBuf, LocalRunDirectoryError> {
         Ok(PathBuf::from(
             &current_attempt(&*lock_state(&self.state.current)?)?.execution_root,
@@ -1722,7 +1721,7 @@ impl PendingLocalRetry {
     }
 
     /// Whether a withdrawal is unhonored over the run this retry holds before its attempt
-    /// begins (`withdrawal_unhonored_in`, REQ-LOCALRUN-213), read under the run lock.
+    /// begins (`withdrawal_unhonored_in`), read under the run lock.
     pub fn withdrawal_unhonored(&self) -> Result<bool, LocalRunDirectoryError> {
         withdrawal_unhonored_in(
             &self.normalized,
@@ -1733,17 +1732,17 @@ impl PendingLocalRetry {
 
     /// Takes the run's controls lock (`ControlsLock`), waiting while a withdrawal holds it, so
     /// the retry asks `withdrawal_unhonored` again and begins its attempt without a withdrawal
-    /// being appended in between (REQ-LOCALRUN-213); it is held until the returned value is
-    /// dropped. `end_running` takes it itself, so it must be dropped before that.
+    /// being appended in between; it is held until the returned value is dropped.
+    /// `end_running` takes it itself, so it must be dropped before that.
     pub fn lock_controls(&self) -> Result<ControlsLock, LocalRunDirectoryError> {
         ControlsLock::take(&self.root)
     }
 
     /// Ends the `running` run this retry holds with `outcome` without an attempt, as
-    /// `PendingLocalContinuation::end_running` does (`end_running_run`, REQ-LOCALRUN-213), once
-    /// the latest attempt's processes are quiesced as `begin` quiesces them: a process whose
-    /// ownership cannot be proven refuses it `OwnershipUnproven` with the run unchanged. The
-    /// caller holds no controls lock.
+    /// `PendingLocalContinuation::end_running` does (`end_running_run`), once the latest
+    /// attempt's processes are quiesced as `begin` quiesces them: a process whose ownership
+    /// cannot be proven refuses it `OwnershipUnproven` with the run unchanged. The caller holds
+    /// no controls lock.
     pub fn end_running(self, outcome: &str) -> Result<(), LocalRetryBeginError> {
         let state = lock_state(&self.state.current)?.clone();
         quiesce_retried_attempt(
@@ -1773,7 +1772,7 @@ pub enum LocalContinuationOpen {
     Rejected(LocalRetryRejection),
 }
 
-/// The definition a continuation's attempt runs under (REQ-CONTINUE-11, REQ-CONTINUE-97).
+/// The definition a continuation's attempt runs under.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContinuationDefinitionMode {
     /// The definition that governed the prior attempt, which the attempt points at.
@@ -1785,8 +1784,8 @@ pub enum ContinuationDefinitionMode {
     Run,
 }
 
-/// What a successor carries from its predecessor beyond the imported attempts and controls
-/// (REQ-LOCALRUN-195, REQ-LOCALRUN-197).
+/// What a successor carries from its predecessor beyond the imported attempts and
+/// controls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SuccessorCarry {
     /// Nothing more: the successor's record reads `running` and its first own attempt
@@ -1799,16 +1798,15 @@ pub enum SuccessorCarry {
 }
 
 /// One piece of a waiting run's carried state that does not resolve against another
-/// workflow (REQ-LOCALRUN-197): `code` is `position_unresolved`, `wait_target_unresolved`,
-/// `outcome_unrouted` or `items_unresolved`, and `message` names the step and the outcome
-/// or element.
+/// workflow: `code` is `position_unresolved`, `wait_target_unresolved`, `outcome_unrouted`
+/// or `items_unresolved`, and `message` names the step and the outcome or element.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CarryMiss {
     pub code: &'static str,
     pub message: String,
 }
 
-/// What `PendingLocalContinuation::failed_attempt_restart` finds (REQ-CONTINUE-81).
+/// What `PendingLocalContinuation::failed_attempt_restart` finds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FailedAttemptRestart {
     /// The latest attempt did not end `failed`.
@@ -1825,6 +1823,7 @@ pub struct PendingLocalContinuation {
     lock: File,
     run: LocalRunV1,
     state: LocalRunStateV1,
+    lost_workspaces: BTreeSet<String>,
     prior_execution_root: PathBuf,
     prior_workflow: ResolvedWorkflow,
     initial_workflow: ResolvedWorkflow,
@@ -1842,12 +1841,11 @@ impl PendingLocalContinuation {
         &self.normalized
     }
 
-    /// Declares that the attempt `begin` starts continues from the run's wait, which a
-    /// control or an external event resolved (REQ-CONTINUE-75, REQ-CONTINUE-80): `begin`
-    /// reads the root wait record before removing it, the returned owner holds it
-    /// (`LocalAttemptOwner::resumed_wait_record`) and the attempt's execution seed carries it,
-    /// so an interruption before any step of the attempt has started keeps that wait
-    /// (REQ-WFEXEC-72, INV-ENGINE-32). `begin` then refuses a run without a root wait record.
+    /// Declares that the attempt `begin` starts continues from the run's wait, which a control
+    /// or an external event resolved: `begin` reads the root wait record before removing it,
+    /// the returned owner holds it (`LocalAttemptOwner::resumed_wait_record`) and the
+    /// attempt's execution seed carries it, so an interruption before any step of the attempt
+    /// has started keeps that wait. `begin` then refuses a run without a root wait record.
     pub fn keep_resolved_wait(&mut self) {
         self.keep_resolved_wait = true;
     }
@@ -1862,18 +1860,17 @@ impl PendingLocalContinuation {
         update_run_record(&self.root, state, attempts, outcome)
     }
 
-    /// The run's root wait record (REQ-LOCALRUN-178), or `None` when the run does not wait.
+    /// The run's root wait record, or `None` when the run does not wait.
     pub fn wait(&self) -> Result<Option<WaitRecord>, LocalRunDirectoryError> {
         read_optional_wait_record(&self.root)
     }
 
-    /// The first control, in ordinal order, that resolves `wait` for this run, read under
-    /// the run lock (REQ-LOCALRUN-197): a command that inspected the run before locking it
-    /// asks again here, since a control recorded in between resolves nothing once copied to a
-    /// successor (REQ-LOCALRUN-195). The controls are read by `controls_rule`, so a
-    /// `control.retry` naming a `host` wait resolves it (INV-ENGINE-48). `None` when no control
-    /// does, for a wait no control resolves (an external wait, REQ-WFEXEC-65), as for a rule
-    /// outside the matcher's grammar, and for a run without a record.
+    /// The first control, in ordinal order, that resolves `wait` for this run, read under the
+    /// run lock: a command that inspected the run before locking it asks again here, since a
+    /// control recorded in between resolves nothing once copied to a successor. The controls
+    /// are read by `controls_rule`, so a `control.retry` naming a `host` wait resolves it.
+    /// `None` when no control does, for a wait no control resolves (an external wait), as for a
+    /// rule outside the matcher's grammar, and for a run without a record.
     pub fn resolving_control(
         &self,
         wait: &WaitRecord,
@@ -1887,24 +1884,23 @@ impl PendingLocalContinuation {
     }
 
     /// Whether a withdrawal is unhonored over the run this continuation holds before its attempt
-    /// begins (`withdrawal_unhonored_in`, REQ-LOCALRUN-213), read under the run lock.
+    /// begins (`withdrawal_unhonored_in`), read under the run lock.
     pub fn withdrawal_unhonored(&self) -> Result<bool, LocalRunDirectoryError> {
         withdrawal_unhonored_in(&self.normalized, &self.root, &self.state)
     }
 
     /// Takes the run's controls lock (`ControlsLock`), waiting while a withdrawal holds it, so
     /// the continuation asks `withdrawal_unhonored` again and begins its attempt without a
-    /// withdrawal being appended in between (REQ-LOCALRUN-213); it is held until the returned
-    /// value is dropped. `end_running`, `end_waiting` and `settle_abandoned` take it
-    /// themselves, so it must be dropped before any of them.
+    /// withdrawal being appended in between; it is held until the returned value is dropped.
+    /// Drop it before calling `end_running` or `end_waiting`, which take it themselves.
     pub fn lock_controls(&self) -> Result<ControlsLock, LocalRunDirectoryError> {
         ControlsLock::take(&self.root)
     }
 
     /// The nested run a wait the root carries waits in when its payload names no child, as a
-    /// `stop` entered before the nested step started does (REQ-WFEXEC-76): the latest child of
-    /// the wait's root step at the element its `step` names, with that element, or `None` when
-    /// the latest child is at another element or there is none.
+    /// `stop` entered before the nested step started does: the latest child of the wait's root
+    /// step at the element its `step` names, with that element, or `None` when the latest
+    /// child is at another element or there is none.
     pub fn nested_run_at_element(
         &self,
         wait: &WaitRecord,
@@ -1923,23 +1919,21 @@ impl PendingLocalContinuation {
         self.end_waiting(WITHDRAWN_OUTCOME)
     }
 
-    /// Ends a waiting run without another attempt (REQ-CONTINUE-109): the run record reads
-    /// `exited` with `outcome` (`withdrawn` or `canceled`) and its attempt count unchanged,
-    /// the root wait record is removed, and the run lock is released. Under the controls lock,
-    /// before the record changes, the withdrawals later than the waiting attempt's `settledAt`
-    /// are spent (REQ-LOCALRUN-211); the run lock is released before the controls lock. A run
-    /// that does not wait is `StateConflict` and left as it is. The caller holds no controls
-    /// lock.
+    /// Ends a waiting run without another attempt: the run record reads `exited` with
+    /// `outcome` (`withdrawn` or `canceled`) and its attempt count unchanged, the root wait
+    /// record is removed, and the run lock is released. Under the controls lock, before the
+    /// record changes, the withdrawals later than the waiting attempt's `settledAt` are spent;
+    /// the run lock is released before the controls lock. A run that does not wait is
+    /// `StateConflict` and left as it is. The caller holds no controls lock.
     pub fn end_waiting(self, outcome: &str) -> Result<(), LocalRunDirectoryError> {
         verify_retry_lock_identity(&self.root, &self.lock)?;
         let Some(wait) = read_optional_wait_record(&self.root)? else {
             return Err(LocalRunDirectoryError::StateConflict);
         };
-        // REQ-CONTINUE-124: a wait the root carries from a nested run ends that nested run's
-        // wait first, under the root's lock and then the nested run's; a carried `stop` names
-        // no child, so its nested run is the one at the wait's element (REQ-WFEXEC-76). A
-        // successor that imported the wait holds no nested run: the record's `payload.child`
-        // names its predecessor's (REQ-CONTINUE-80).
+        // A wait the root carries from a nested run ends that nested run's wait first, under
+        // the root's lock and then the nested run's; a carried `stop` names no child, so its
+        // nested run is the one at the wait's element. A successor that imported the wait
+        // holds no nested run: the record's `payload.child` names its predecessor's.
         let nested = match wait_child(&wait) {
             _ if self.imported_prior().is_some() => None,
             WaitChild::Carried { locator, .. } => Some(self.normalized.join(locator)),
@@ -1962,13 +1956,12 @@ impl PendingLocalContinuation {
     }
 
     /// Ends a run whose record reads `running` and whose process is gone without another
-    /// attempt (REQ-LOCALRUN-186, REQ-LOCALRUN-211): under the controls lock the run record
-    /// reads `exited` with `outcome` (`withdrawn` or `canceled`) and its attempt count
-    /// unchanged, then an unsettled latest attempt is settled as interrupted (REQ-CONTINUE-2)
-    /// and a terminal one, such as one that ended `continued`, takes its `settledAt` again when
-    /// a withdrawal is later than it, so no later attempt is withdrawn by a withdrawal recorded
-    /// before; the run lock is released before the controls lock. The caller holds no controls
-    /// lock.
+    /// attempt: under the controls lock the run record reads `exited` with `outcome`
+    /// (`withdrawn` or `canceled`) and its attempt count unchanged, then an unsettled latest
+    /// attempt is settled as interrupted and a terminal one, such as one that ended
+    /// `continued`, takes its `settledAt` again when a withdrawal is later than it, so no later
+    /// attempt is withdrawn by a withdrawal recorded before; the run lock is released before
+    /// the controls lock. The caller holds no controls lock.
     pub fn end_running(self, outcome: &str) -> Result<(), LocalRunDirectoryError> {
         end_running_run(
             &self.normalized,
@@ -1979,12 +1972,11 @@ impl PendingLocalContinuation {
         )
     }
 
-    /// Supersedes this waiting run by `successor`, a run that already exists
-    /// (REQ-LOCALRUN-175, INV-ENGINE-26): the run record reads `exited` with the outcome
-    /// `superseded`, `successor` set, its attempt count unchanged and its `position` cleared,
-    /// the root wait record is removed, and the run lock is released. No attempt, control or
-    /// mirror record is written. A run that does not wait, or has no run record, is
-    /// `StateConflict` and left as it is.
+    /// Supersedes this waiting run by `successor`, a run that already exists: the run record
+    /// reads `exited` with the outcome `superseded`, `successor` set, its attempt count
+    /// unchanged and its `position` cleared, the root wait record is removed, and the run
+    /// lock is released. No attempt, control or mirror record is written. A run that does not
+    /// wait, or has no run record, is `StateConflict` and left as it is.
     pub fn supersede(self, successor: &str) -> Result<(), LocalRunDirectoryError> {
         verify_retry_lock_identity(&self.root, &self.lock)?;
         if !is_run_id(successor) {
@@ -2005,16 +1997,15 @@ impl PendingLocalContinuation {
         remove_root_wait_record(&self.root)
     }
 
-    /// The run record (REQ-WFDEF-4), or `None` for a run admitted from a workflow file's
-    /// closure.
+    /// The run record, or `None` for a run admitted from a workflow file's closure.
     pub fn record(&self) -> Result<Option<WorkflowRunRecord>, LocalRunDirectoryError> {
         read_optional_run_record(&self.root)
     }
 
     /// Ends this run without an attempt because its predecessor continued or exited without
-    /// being superseded by it (REQ-LOCALRUN-196): the run record reads `exited` `withdrawn`
-    /// with its attempt count unchanged, the root wait record is removed when present, and
-    /// the run lock is released. No attempt, control or mirror record is written.
+    /// being superseded by it: the run record reads `exited` `withdrawn` with its attempt
+    /// count unchanged, the root wait record is removed when present, and the run lock is
+    /// released. No attempt, control or mirror record is written.
     pub fn abandon(self) -> Result<(), LocalRunDirectoryError> {
         verify_retry_lock_identity(&self.root, &self.lock)?;
         if let Some(record) = read_optional_run_record(&self.root)? {
@@ -2029,7 +2020,7 @@ impl PendingLocalContinuation {
     }
 
     /// The run the prior attempt was recorded under when this run is a successor whose first
-    /// own attempt has yet to begin (REQ-LOCALRUN-195, REQ-CONTINUE-79); `None` otherwise.
+    /// own attempt has yet to begin; `None` otherwise.
     pub fn imported_prior(&self) -> Option<&str> {
         self.state
             .attempts
@@ -2039,9 +2030,9 @@ impl PendingLocalContinuation {
     }
 
     /// The retained child outcome of each `workflow` step the last attempt succeeded or
-    /// inherited (REQ-WFEXEC-58, REQ-LOCALRUN-197), by step: its `text` output
-    /// `CHILD_OUTCOME_OUTPUT`, read through its carrier and checked against it. A step that
-    /// retained no outcome is absent. Nothing is written.
+    /// inherited, by step: its `text` output `CHILD_OUTCOME_OUTPUT`, read through its
+    /// carrier and checked against it. A step that retained no outcome is absent. Nothing
+    /// is written.
     pub fn inherited_child_outcomes(
         &self,
     ) -> Result<BTreeMap<String, String>, LocalRunDirectoryError> {
@@ -2065,10 +2056,10 @@ impl PendingLocalContinuation {
     }
 
     /// The length of the list the `forEach` step `step` of `workflow` fans out over, as this
-    /// run would read it (REQ-WFFORMAT-98, REQ-LOCALRUN-197): a `json` root input from
-    /// `inputs`, or a `json` export of an earlier `workflow` step retained by the last
-    /// attempt, read through its carrier. `None` when `step` is not a `forEach` step, or its
-    /// list is absent or not an array. Nothing is written.
+    /// run would read it: a `json` root input from `inputs`, or a `json` export of an
+    /// earlier `workflow` step retained by the last attempt, read through its carrier.
+    /// `None` when `step` is not a `forEach` step, or its list is absent or not an array.
+    /// Nothing is written.
     pub fn inherited_items_length(
         &self,
         workflow: &ResolvedWorkflow,
@@ -2119,17 +2110,16 @@ impl PendingLocalContinuation {
     }
 
     /// What of this waiting run's carried state does not resolve against `workflow`, another
-    /// revision's, with `inputs` the run's inputs projected onto it (REQ-LOCALRUN-197): in
-    /// this order, a record `position` naming no `workflow` step, or an element of a step
-    /// that is not `forEach` (`position_unresolved`); the root wait record's `then`, or its
-    /// `onHandBack`, naming no step, or the nested step of a wait carried from a nested run
-    /// (REQ-CONTINUE-91) that is not a `workflow` step of the nested workflow its root step
-    /// names (`wait_target_unresolved`); the retained outcome of a
-    /// `workflow` step the continuation from either target would inherit that is not a key of
-    /// its `on` edges (`outcome_unrouted`); and a fan-out wait's element beyond the list its
-    /// step now reads, or under a step that is not `forEach` (`items_unresolved`). One miss
-    /// per code and step; none when everything resolves. A run without a root wait record is
-    /// `StateConflict`. Nothing is written.
+    /// revision's, with `inputs` the run's inputs projected onto it: in this order, a record
+    /// `position` naming no `workflow` step, or an element of a step that is not `forEach`
+    /// (`position_unresolved`); the root wait record's `then`, or its `onHandBack`, naming no
+    /// step, or the nested step of a wait carried from a nested run that is not a `workflow`
+    /// step of the nested workflow its root step names (`wait_target_unresolved`); the
+    /// retained outcome of a `workflow` step the continuation from either target would
+    /// inherit that is not a key of its `on` edges (`outcome_unrouted`); and a fan-out wait's
+    /// element beyond the list its step now reads, or under a step that is not `forEach`
+    /// (`items_unresolved`). One miss per code and step; none when everything resolves. A run
+    /// without a root wait record is `StateConflict`. Nothing is written.
     pub fn resolve_carry(
         &self,
         workflow: &ResolvedWorkflow,
@@ -2188,9 +2178,9 @@ impl PendingLocalContinuation {
                 );
             }
         }
-        // REQ-CONTINUE-91: a wait the root carries from a nested run (REQ-WFEXEC-75) also
-        // continues at its nested step, which must be a `workflow` step of the nested workflow
-        // the waiting step names in this revision's tree.
+        // A wait the root carries from a nested run also continues at its nested step, which
+        // must be a `workflow` step of the nested workflow the waiting step names in this
+        // revision's tree.
         if wait.is_carried()
             && let (Some(step), Some(nested)) = (
                 wait.step.first().and_then(Value::as_str),
@@ -2255,8 +2245,8 @@ impl PendingLocalContinuation {
         Ok(misses)
     }
 
-    /// The edge the prior attempt took when it ended `continued` (REQ-WFEXEC-64,
-    /// REQ-CONTINUE-78); `None` for any other prior attempt.
+    /// The edge the prior attempt took when it ended `continued`; `None` for any
+    /// other prior attempt.
     pub fn continued_edge(&self) -> Option<&super::publication::ContinuationEdgeV1> {
         self.state
             .attempts
@@ -2266,8 +2256,8 @@ impl PendingLocalContinuation {
     }
 
     /// The steps the prior attempt left starting, running or capturing outputs when its
-    /// process died (REQ-CONTINUE-76), in the prior attempt's order; none when the prior
-    /// attempt is terminal.
+    /// process died, in the prior attempt's order; none when the prior attempt is
+    /// terminal.
     pub fn abandoned_steps(&self) -> Vec<String> {
         self.state
             .attempts
@@ -2287,13 +2277,13 @@ impl PendingLocalContinuation {
             .collect()
     }
 
-    /// The run's tree copy and its manifest record, for a run admitted from a tree
-    /// (REQ-LOCALRUN-170).
+    /// The run's tree copy and its manifest record, for a run admitted from a
+    /// tree.
     pub fn tree_copy(&self) -> Option<(PathBuf, &ManifestTreeV1)> {
         retained_tree_copy(&self.normalized, self.tree.as_ref())
     }
 
-    /// `verify_tree_copy` for a run admitted from a tree (REQ-LOCALRUN-171).
+    /// `verify_tree_copy` for a run admitted from a tree.
     pub fn verify_tree_copy(&self) -> Option<Result<ValidatedTree, TreeCopyMismatch>> {
         self.tree
             .as_ref()
@@ -2312,8 +2302,8 @@ impl PendingLocalContinuation {
         self.maximum_parallel_steps
     }
 
-    /// The source revision the run was created with, which every attempt's admission sets
-    /// (REQ-LOCALRUN-217); none for a run created without one.
+    /// The source revision the run was created with, which every attempt's admission
+    /// sets; none for a run created without one.
     pub fn source_revision(&self) -> Option<&SourceRevisionProvenance> {
         self.source_revision.as_ref()
     }
@@ -2392,15 +2382,6 @@ impl PendingLocalContinuation {
         ResolvedInputs::new(values)
     }
 
-    /// A later admission rejection still settles an abandoned owner, without claiming
-    /// a new attempt. Already terminal history remains byte-for-byte unchanged, and so does an
-    /// attempt a withdrawal is unhonored over (REQ-LOCALRUN-213), which the run's next `resume`
-    /// or `retry` ends. A command that ends the run uses `end_running` instead. The caller holds
-    /// no controls lock.
-    pub fn settle_abandoned(self) -> Result<(), LocalRunDirectoryError> {
-        settle_abandoned_snapshot(&self.normalized, &self.root, &self.state)
-    }
-
     fn state_store(&self) -> Result<Arc<StateStore>, LocalRunDirectoryError> {
         store_from_locked_snapshot(&self.root, &self.state)
     }
@@ -2443,16 +2424,22 @@ impl PendingLocalContinuation {
         workflow: &ResolvedWorkflow,
         from: &[String],
     ) -> Option<Vec<String>> {
-        super::continuation::partition(&workflow.definition, from, &self.unfinished_steps())
-            .ok()
-            .map(|partition| partition.reexecuted)
+        super::continuation::partition(
+            &workflow.definition,
+            from,
+            &self.unfinished_steps(),
+            &self.lost_workspaces,
+            &BTreeSet::new(),
+        )
+        .ok()
+        .map(|partition| partition.reexecuted)
     }
 
     /// The mapped inputs this run's continuation, admitted as `admitted`, would give the
     /// child of its `workflow` step `step` for element `item` under `controls`, read before
-    /// the continuation begins (REQ-CONTINUE-117): the same mapper the step runs, with every
-    /// referenced output read from the prior attempt's retained carrier as the continuation
-    /// would inherit it. `None` when the step forms no request for that element.
+    /// the continuation begins: the same mapper the step runs, with every referenced output
+    /// read from the prior attempt's retained carrier as the continuation would inherit it.
+    /// `None` when the step forms no request for that element.
     pub fn child_request_inputs(
         &self,
         admitted: &AdmittedWorkflow,
@@ -2508,12 +2495,12 @@ impl PendingLocalContinuation {
         }
     }
 
-    /// What a repair continuation of this run would restart (REQ-CONTINUE-81): when the
-    /// latest attempt ended `failed`, every ordinary step of its definition, in presentation
-    /// order, it left other than `succeeded`, `skipped` or `inherited`. A latest attempt that
-    /// did not fail during execution, such as one that succeeded with a declared outcome, is
-    /// `NotFailed`; a failed attempt that left no such step, whose failure was a finalizer's,
-    /// is `FinalizerOnly`, which names no step to continue from.
+    /// What a repair continuation of this run would restart: when the latest attempt ended
+    /// `failed`, every ordinary step of its definition, in presentation order, it left other
+    /// than `succeeded`, `skipped` or `inherited`. A latest attempt that did not fail during
+    /// execution, such as one that succeeded with a declared outcome, is `NotFailed`; a
+    /// failed attempt that left no such step, whose failure was a finalizer's, is
+    /// `FinalizerOnly`, which names no step to continue from.
     pub fn failed_attempt_restart(&self) -> FailedAttemptRestart {
         let Some(prior) = self
             .state
@@ -2532,12 +2519,12 @@ impl PendingLocalContinuation {
     }
 
     /// The steps `useful workflow run retry` with neither `--from` nor `--all` continues this
-    /// ended run from (REQ-LOCALRUN-184): for an edge-scheduled workflow the ordinary step the
-    /// latest attempt started last, the stage the run's `position` named until the run exited
-    /// (REQ-WFDEF-4); otherwise the steps `failed_attempt_restart` names for a failed attempt,
-    /// read as well for a latest attempt that was cancelled or interrupted. None when the run
-    /// names none: an edge-scheduled run none of whose ordinary steps started, and otherwise an
-    /// attempt that ended any other way or one whose failure was a finalizer's alone.
+    /// ended run from: for an edge-scheduled workflow the ordinary step the latest attempt
+    /// started last, the stage the run's `position` named until the run exited; otherwise the
+    /// steps `failed_attempt_restart` names for a failed attempt, read as well for a latest
+    /// attempt that was cancelled or interrupted. None when the run names none: an
+    /// edge-scheduled run none of whose ordinary steps started, and otherwise an attempt that
+    /// ended any other way or one whose failure was a finalizer's alone.
     pub fn ended_attempt_restart(&self) -> Vec<String> {
         let Some(prior) = self.state.attempts.last() else {
             return Vec::new();
@@ -2597,7 +2584,7 @@ impl PendingLocalContinuation {
     }
 
     /// The steps the prior attempt left neither succeeded nor inherited, which an
-    /// edge-scheduled continuation re-executes (REQ-CONTINUE-96).
+    /// edge-scheduled continuation re-executes.
     fn unfinished_steps(&self) -> BTreeSet<String> {
         self.state
             .attempts
@@ -2618,29 +2605,53 @@ impl PendingLocalContinuation {
         &self,
         workflow: &ResolvedWorkflow,
         from: &[String],
-    ) -> Result<(Vec<String>, Vec<String>), Vec<super::continuation::AdmissionViolation>> {
-        let partition =
-            super::continuation::partition(&workflow.definition, from, &self.unfinished_steps())
-                .map_err(|invalid| {
-                    let mut violations = if invalid.is_empty() {
-                        vec![super::continuation::AdmissionViolation::InvalidFrom {
-                            id: String::new(),
-                        }]
-                    } else {
-                        invalid
-                            .into_iter()
-                            .map(|id| super::continuation::AdmissionViolation::InvalidFrom { id })
-                            .collect::<Vec<_>>()
-                    };
-                    super::continuation::sort_violations(&mut violations, &workflow.definition);
-                    violations.dedup();
-                    violations
-                })?;
+    ) -> Result<super::continuation::Partition, Vec<super::continuation::AdmissionViolation>> {
         let Some(prior) = self.state.attempts.last() else {
             return Err(vec![super::continuation::AdmissionViolation::InvalidFrom {
                 id: String::new(),
             }]);
         };
+        let mut reusable = BTreeSet::new();
+        if self.imported_prior().is_none()
+            && let Ok(index) = LocalRunStateIndex::new(&self.state)
+        {
+            reusable.extend(
+                workflow
+                    .definition
+                    .steps
+                    .keys()
+                    .filter(|id| {
+                        index.disposition(prior.attempt_number, id)
+                            == Some(InheritedDisposition::Succeeded)
+                            && !super::continuation::definition_changed(
+                                workflow,
+                                &self.prior_workflow,
+                                id,
+                            )
+                    })
+                    .cloned(),
+            );
+        }
+        let partition = super::continuation::partition(
+            &workflow.definition,
+            from,
+            &self.unfinished_steps(),
+            &self.lost_workspaces,
+            &reusable,
+        )
+        .map_err(|invalid| {
+            let mut violations = if invalid.is_empty() {
+                vec![super::continuation::AdmissionViolation::InvalidFrom { id: String::new() }]
+            } else {
+                invalid
+                    .into_iter()
+                    .map(|id| super::continuation::AdmissionViolation::InvalidFrom { id })
+                    .collect::<Vec<_>>()
+            };
+            super::continuation::sort_violations(&mut violations, &workflow.definition);
+            violations.dedup();
+            violations
+        })?;
         let states: BTreeMap<String, super::continuation::PriorState> = prior
             .progress
             .steps
@@ -2673,9 +2684,10 @@ impl PendingLocalContinuation {
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        for source in
-            super::continuation::referenced_outputs(&workflow.definition, &partition.reexecuted)
-        {
+        for source in super::continuation::referenced_outputs(
+            &workflow.definition,
+            partition.reexecuted.iter().chain(&partition.revalidated),
+        ) {
             if source.node.role != super::validated::WorkflowNodeRole::Step
                 || !inherited.contains(source.node.id.as_str())
                 || effectively_skipped.contains(&source.node.id)
@@ -2707,23 +2719,22 @@ impl PendingLocalContinuation {
         if !failures.is_empty() {
             return Err(failures);
         }
-        Ok((partition.reexecuted, partition.inherited))
+        Ok(partition)
     }
 
-    /// Claim only after the caller has admitted the projected inputs and every profile.
-    /// The admitted inputs must equal the projection completed as admission completes it:
-    /// an optional or defaulted input the run lacks holds its default or empty value, and
-    /// every other input is the run's own (REQ-CONTINUE-9).
-    /// Staging is non-authoritative until the single locked state replacement succeeds.
-    /// An `edge` continuation records the edge it took and, when the edge is counted, first
-    /// rewrites `run.json` with the new attempt count and the edge's count incremented, so a
-    /// process that ends before the attempt exists has still taken the count once
-    /// (REQ-WFEXEC-64, REQ-LOCALRUN-175, INV-ENGINE-22).
+    /// Claim only after the caller has admitted the projected inputs and every profile. The
+    /// admitted inputs must equal the projection completed as admission completes it: an
+    /// optional or defaulted input the run lacks holds its default or empty value, and every
+    /// other input is the run's own. Staging is non-authoritative until the single locked
+    /// state replacement succeeds. An `edge` continuation records the edge it took and, when
+    /// the edge is counted, first rewrites `run.json` with the new attempt count and the
+    /// edge's count incremented, so a process that ends before the attempt exists has still
+    /// taken the count once.
     ///
     /// `mode` names the attempt's definition: `Inherited` requires `admitted` to be the prior
     /// attempt's, `Replaced` retains `admitted` under the new attempt's directory, and `Run`
     /// requires `admitted` to be the run's own and records `definitionSource` `replaced` when
-    /// it differs from the prior attempt's (REQ-CONTINUE-97).
+    /// it differs from the prior attempt's.
     pub fn begin(
         self,
         admitted: &AdmittedWorkflow,
@@ -2734,7 +2745,7 @@ impl PendingLocalContinuation {
     ) -> Result<LocalAttemptOwner, LocalRunDirectoryError> {
         verify_retry_lock_identity(&self.root, &self.lock)?;
         // The wait the attempt continues from, read before anything changes and before
-        // `remove_root_wait_record` removes it (REQ-WFEXEC-72).
+        // `remove_root_wait_record` removes it.
         let resumed_wait = if self.keep_resolved_wait {
             Some(
                 read_optional_wait_record(&self.root)?
@@ -2765,12 +2776,16 @@ impl PendingLocalContinuation {
         } else {
             None
         };
-        let (reexecuted, inherited) = self
+        let super::continuation::Partition {
+            reexecuted,
+            revalidated,
+            inherited,
+            rebuilt,
+        } = self
             .partition(admitted.workflow(), &from)
             .map_err(|_| LocalRunDirectoryError::StateConflict)?;
         // Admission completed each optional or defaulted input the run lacks; complete the
-        // projection the same way, so only that completion and the run's own values match
-        // (REQ-CONTINUE-9, REQ-WFFORMAT-84).
+        // projection the same way, so only that completion and the run's own values match.
         let projected = self
             .projected_inputs(admitted.workflow())
             .map_err(|_| LocalRunDirectoryError::StateConflict)?;
@@ -2783,7 +2798,7 @@ impl PendingLocalContinuation {
             .finalizers
             .values()
             .any(|node| super::admission::has_git_output(&node.body))
-            || reexecuted.iter().any(|id| {
+            || reexecuted.iter().chain(&revalidated).any(|id| {
                 admitted
                     .workflow()
                     .definition
@@ -2845,7 +2860,7 @@ impl PendingLocalContinuation {
                 }
             }
             // A restart continuation runs under the run's own definition, already retained
-            // as its `workflow/` (REQ-CONTINUE-97).
+            // as its `workflow/`.
             ContinuationDefinitionMode::Run => attempt_definition_for_run(&self.run),
         };
         let abandoned = !prior.state.is_terminal();
@@ -2916,10 +2931,10 @@ impl PendingLocalContinuation {
                 prior_manifest_digest: portable_digest(&prior_definition.manifest_digest),
             }
         };
-        // A run-definition continuation that resolves no root wait is a restart's first own
-        // attempt whichever command begins it: `upgrade --from`, or `retry --from` after an
-        // `upgrade --from` interrupted before that attempt (REQ-CONTINUE-98). The continuation of an upgrade's
-        // carried wait keeps the reason its control gave it (REQ-CONTINUE-80).
+        // A run-definition continuation that resolves no root wait is a restart's first own attempt
+        // whichever command begins it: `upgrade --from`, or `retry --from` after an
+        // `upgrade --from` interrupted before that attempt. The continuation of an upgrade's
+        // carried wait keeps the reason its control gave it.
         let reason = if mode == ContinuationDefinitionMode::Run
             && read_optional_wait_record(&self.root)?.is_none()
         {
@@ -2973,6 +2988,8 @@ impl PendingLocalContinuation {
             },
             reason: Some(reason),
             edge: edge.clone(),
+            rebuilt_workspaces: rebuilt,
+            revalidated_steps: revalidated,
         };
         let mut attempt = fresh_attempt(
             admitted,
@@ -3064,34 +3081,8 @@ fn store_from_locked_snapshot(
     }))
 }
 
-/// Settles the unsettled latest attempt of the locked `state` of the run at `normalized`, whose
-/// root is `root`, for a command that ends without an attempt and without ending the run
-/// (`settle_unsettled_attempt`, REQ-CONTINUE-2); a terminal attempt is left as it is. Settling
-/// never spends a withdrawal (REQ-LOCALRUN-213): under the controls lock, an attempt a
-/// withdrawal is unhonored over (`withdrawal_unhonored_in`) stays unsettled, so the run's next
-/// `resume` or `retry` still reads it and ends the run `withdrawn`. The caller holds no controls
-/// lock.
-fn settle_abandoned_snapshot(
-    normalized: &Path,
-    root: &OwnedFd,
-    state: &LocalRunStateV1,
-) -> Result<(), LocalRunDirectoryError> {
-    let prior = state
-        .attempts
-        .last()
-        .ok_or(LocalRunDirectoryError::StateInvalid)?;
-    if prior.state.is_terminal() {
-        return Ok(());
-    }
-    let _controls = ControlsLock::take(root)?;
-    if withdrawal_unhonored_in(normalized, root, state)? {
-        return Ok(());
-    }
-    settle_unsettled_attempt(root, state, prior)
-}
-
 /// Settles `prior`, the unsettled latest attempt of the locked `state`, as interrupted by its
-/// process's abandonment (REQ-CONTINUE-2), with `settledAt` now and its process guards quiesced.
+/// process's abandonment, with `settledAt` now and its process guards quiesced.
 fn settle_unsettled_attempt(
     root: &OwnedFd,
     state: &LocalRunStateV1,
@@ -3176,6 +3167,13 @@ pub enum LocalStatusResult {
     PublicationFailed { phase: &'static str },
 }
 
+mod portable_record;
+pub use portable_record::{
+    CapturedPortableRecord, CreatedPortableRecord, OpenedPortableRecord, PortableRecordCapture,
+    PortableRecordError, PortableRecordFiles, assemble_portable_record, create_portable_record,
+    open_portable_record, portable_record_files, restore_portable_record,
+};
+
 mod run_view;
 pub use run_view::{
     LiveRunViewRequest, LiveRunningStep, LiveRunningSteps, RunView, RunViewChildRun, RunViewError,
@@ -3193,9 +3191,9 @@ pub struct LocalRunStatusSnapshot {
     pub status_state: LocalStatusStateView,
     pub run_directory: PathBuf,
     pub run: Value,
-    /// The run record `run.json` (REQ-LOCALRUN-175), or `None` for a run without one.
+    /// The run record `run.json`, or `None` for a run without one.
     pub record: Option<Value>,
-    /// The root wait record `wait.json` while the run waits (REQ-LOCALRUN-146).
+    /// The root wait record `wait.json` while the run waits.
     pub wait: Option<WaitRecord>,
     pub state: Value,
     pub current_attempt_number: u64,
@@ -3208,7 +3206,7 @@ pub struct LocalRunStatusSnapshot {
 }
 
 impl LocalRunStatusSnapshot {
-    /// Where the run keeps the copy of the tree it was admitted from (REQ-LOCALRUN-170),
+    /// Where the run keeps the copy of the tree it was admitted from,
     /// `<run directory>/workflow/tree`, as `LocalAttemptOwner::tree_copy_directory` names it;
     /// a run admitted from a workflow file's closure, which has no run record, keeps none.
     pub fn tree_copy_directory(&self) -> PathBuf {
@@ -3216,7 +3214,7 @@ impl LocalRunStatusSnapshot {
     }
 }
 
-/// The tree copy directory of the run at `run_directory` (REQ-LOCALRUN-170).
+/// The tree copy directory of the run at `run_directory`.
 fn run_tree_copy_directory(run_directory: &Path) -> PathBuf {
     run_directory
         .join(WORKFLOW_DIRECTORY)
@@ -3256,8 +3254,8 @@ impl LocalAttemptOwner {
         Self::create_with_record(requested, admitted, None)
     }
 
-    /// `create`, writing `record` as the run directory's `run.json` (REQ-LOCALRUN-175)
-    /// into the staging root, so the directory holds it when it appears.
+    /// `create`, writing `record` as the run directory's `run.json` into the staging
+    /// root, so the directory holds it when it appears.
     pub fn create_with_record(
         requested: &Path,
         admitted: &AdmittedWorkflow,
@@ -3271,9 +3269,9 @@ impl LocalAttemptOwner {
         )
     }
 
-    /// Rewrites the run record's `state`, `attempts` and `outcome` (REQ-LOCALRUN-175): the
-    /// attempt's chosen outcome once it exits, `None` while it is live. A run without a
-    /// record is left as it is.
+    /// Rewrites the run record's `state`, `attempts` and `outcome`: the attempt's chosen
+    /// outcome once it exits, `None` while it is live. A run without a record is left as
+    /// it is.
     pub fn update_run_record(
         &self,
         state: RunState,
@@ -3286,7 +3284,7 @@ impl LocalAttemptOwner {
     /// Rewrites the run record for an attempt that ended on a recorded wait: `waiting`,
     /// `attempts` and no `outcome`, as `update_run_record`, and, for a counted wait (a host
     /// wait under its limit, `EnteredWait::counted_edge`), its edge's count in `edges`
-    /// incremented, in the same write (REQ-WFEXEC-80, REQ-WFDEF-4).
+    /// incremented, in the same write.
     pub fn record_waiting(
         &self,
         attempts: u64,
@@ -3303,19 +3301,19 @@ impl LocalAttemptOwner {
         })
     }
 
-    /// Creates `requested` as a successor of the waiting run `predecessor` holds
-    /// (REQ-LOCALRUN-195, INV-ENGINE-50) and returns its directory, its lock released: as
-    /// `create_with_record`, with `admitted`'s `workflow/` and `record` as its `run.json`, but
-    /// carrying the predecessor's Git baseline and importing its attempts and controls rather
-    /// than staging a first attempt. The successor's first own attempt is a continuation of
-    /// the last imported one. `record` must name the predecessor's run as `predecessor` and
-    /// count its attempts; the predecessor is left as it is, for `supersede`.
+    /// Creates `requested` as a successor of the waiting run `predecessor` holds and returns
+    /// its directory, its lock released: as `create_with_record`, with `admitted`'s
+    /// `workflow/` and `record` as its `run.json`, but carrying the predecessor's Git baseline
+    /// and importing its attempts and controls rather than staging a first attempt. The
+    /// successor's first own attempt is a continuation of the last imported one. `record` must
+    /// name the predecessor's run as `predecessor` and count its attempts; the predecessor is
+    /// left as it is, for `supersede`.
     ///
     /// `carry` says what else the successor holds: with `Continue` its record reads `running`
     /// and it holds no wait; with `Wait` its record reads `waiting` and the predecessor's root
-    /// wait record is copied as its own (REQ-LOCALRUN-197). A record whose state disagrees,
-    /// or `Wait` for a predecessor without a root wait record, is `StateInvalid` before
-    /// anything is staged. The record's `position`, `edges` and `external` are the caller's.
+    /// wait record is copied as its own. A record whose state disagrees, or `Wait` for a
+    /// predecessor without a root wait record, is `StateInvalid` before anything is staged.
+    /// The record's `position`, `edges` and `external` are the caller's.
     pub fn create_successor(
         requested: &Path,
         admitted: &AdmittedWorkflow,
@@ -3364,12 +3362,11 @@ impl LocalAttemptOwner {
         .map(|published| published.normalized)
     }
 
-    /// Writes the wait record of the wait this attempt ended on (REQ-LOCALRUN-178,
-    /// INV-ENGINE-20): `attempts/<NNNNNN>/wait.json` and then, through
-    /// `.private/wait.json.tmp` and a rename, the identical `wait.json` at the run root, both
-    /// owner-only and read-only. The caller writes it before the run record reads `waiting`.
-    /// A wait the root carries from a nested run (`WaitRecord::is_carried`) first moves the run
-    /// record's `position` to the wait's `step`, the same path (REQ-WFEXEC-98, REQ-WFEXEC-109).
+    /// Writes the wait record of the wait this attempt ended on: `attempts/<NNNNNN>/wait.json`
+    /// and then, through `.private/wait.json.tmp` and a rename, the identical `wait.json` at
+    /// the run root, both owner-only and read-only. The caller writes it before the run record
+    /// reads `waiting`. A wait the root carries from a nested run (`WaitRecord::is_carried`)
+    /// first moves the run record's `position` to the wait's `step`, the same path.
     pub fn record_wait(&self, record: &WaitRecord) -> Result<(), LocalRunDirectoryError> {
         if !record.is_valid() {
             return Err(LocalRunDirectoryError::WaitRecordInvalid);
@@ -3397,8 +3394,8 @@ impl LocalAttemptOwner {
 
     /// The record of the wait this attempt continues from, as `begin` removed it, when the
     /// continuation kept it (`PendingLocalContinuation::keep_resolved_wait`). An attempt that
-    /// ends on that wait kept (`EnteredWait::kept`, REQ-WFEXEC-129) writes this record back
-    /// unchanged with `record_wait` (REQ-LOCALRUN-178).
+    /// ends on that wait kept (`EnteredWait::kept`) writes this record back unchanged with
+    /// `record_wait`.
     pub fn resumed_wait_record(&self) -> Option<&WaitRecord> {
         self.resumed_wait.as_ref()
     }
@@ -3407,8 +3404,8 @@ impl LocalAttemptOwner {
         &self.normalized
     }
 
-    /// Where `create` wrote the run's tree copy for a run admitted from a tree
-    /// (REQ-LOCALRUN-170): `<run directory>/workflow/tree`, the root
+    /// Where `create` wrote the run's tree copy for a run admitted from a
+    /// tree: `<run directory>/workflow/tree`, the root
     /// `AdmittedWorkflow::with_tree_copy` binds.
     pub fn tree_copy_directory(&self) -> PathBuf {
         run_tree_copy_directory(&self.normalized)
@@ -3428,6 +3425,10 @@ impl LocalAttemptOwner {
 
     pub fn private_directory_handle(&self) -> &OwnedFd {
         &self.state.private
+    }
+
+    pub fn step_workspaces(&self) -> StepWorkspaces {
+        StepWorkspaces::new(Arc::clone(&self.state.root), self.normalized.clone())
     }
 
     pub fn create_agent_diagnostic_sessions(
@@ -3598,7 +3599,7 @@ impl LocalAttemptOwner {
                 &artifacts,
             )?;
             // A continuation of a resolved wait carries it, so an interruption before any
-            // step has started keeps it (REQ-WFEXEC-72, INV-ENGINE-32).
+            // step has started keeps it.
             Ok(match resumed_wait {
                 Some(record) => seed.with_resumed_wait(resumed_entered_wait(&record)?),
                 None => seed,
@@ -3661,8 +3662,8 @@ impl LocalAttemptOwner {
     }
 
     /// Appends the `state_persistence_failure` diagnostic of `failure` for the current
-    /// attempt and settles nothing (REQ-LOCALRUN-205, INV-ENGINE-56): the attempt stays the
-    /// abandoned attempt the next retry or continuation settles.
+    /// attempt and settles nothing: the attempt stays the abandoned attempt the next retry
+    /// or continuation settles.
     pub async fn record_state_persistence_failure_async(
         &self,
         failure: CommitFailure,
@@ -3673,8 +3674,8 @@ impl LocalAttemptOwner {
             .map_err(|_| LocalRunDirectoryError::StateWriteUnavailable)?
     }
 
-    /// Whether the attempt reads settled in the last state this owner committed
-    /// (REQ-LOCALRUN-206). A state write that failed did not advance it.
+    /// Whether the attempt reads settled in the last state this owner
+    /// committed. A state write that failed did not advance it.
     pub fn attempt_settled(&self) -> bool {
         lock_state(&self.state.current).is_ok_and(|state| {
             current_attempt(&state).is_ok_and(|attempt| attempt.state.is_terminal())
@@ -3738,8 +3739,7 @@ fn record_state_persistence_failure(
 }
 
 /// The cause an unsettled `attempt_number` is settled `interrupted` with: the state
-/// persistence failure its owner recorded before it stopped, or the owner's loss
-/// (REQ-LOCALRUN-205).
+/// persistence failure its owner recorded before it stopped, or the owner's loss.
 fn abandoned_attempt_cause(state: &LocalRunStateV1, attempt_number: u64) -> InterruptionCauseV1 {
     if state.diagnostics.iter().any(|diagnostic| {
         diagnostic.attempt_number == attempt_number
@@ -3809,22 +3809,22 @@ pub struct LocalRunCommitPort {
     accounting: InvocationAccountingLog,
     artifacts: ArtifactStaging,
     /// Set by a child run whose own state commit failed; once set, every commit is refused
-    /// with it and writes nothing (REQ-LOCALRUN-207, INV-ENGINE-57).
+    /// with it and writes nothing.
     child_failure: Arc<OnceLock<ChildCommitFailure>>,
     /// The text of the error the first failed commit returned: its write, path and OS
-    /// message, which the classified failure never holds (REQ-LOCALRUN-143, INV-ENGINE-55).
+    /// message, which the classified failure never holds.
     failure_text: Arc<OnceLock<String>>,
 }
 
 impl LocalRunCommitPort {
     /// The latch a child run's failed state commit sets, after which this port refuses
-    /// every commit with that failure (REQ-LOCALRUN-207, INV-ENGINE-57).
+    /// every commit with that failure.
     pub fn child_failure_latch(&self) -> Arc<OnceLock<ChildCommitFailure>> {
         Arc::clone(&self.child_failure)
     }
 
     /// The cell this port sets to the text of its first failed commit's error, for the
-    /// command to print once the engine has consumed the port (REQ-LOCALRUN-143).
+    /// command to print once the engine has consumed the port.
     pub fn failure_text(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.failure_text)
     }
@@ -3985,7 +3985,7 @@ impl StateStore {
             }
             attempt.state = attempt_state_of(&commit.state.workflow);
             // A continued attempt keeps the edge it took, so a run whose next attempt never
-            // began continues from it (REQ-CONTINUE-78).
+            // began continues from it.
             if let WorkflowState::Continued { edge } = &commit.state.workflow {
                 attempt.taken_edge = Some(edge.clone().into());
             }
@@ -4208,12 +4208,12 @@ struct PublishedRunDirectory<Kept> {
     kept: Kept,
 }
 
-/// Stages a run directory under a sibling `.run-*` root and publishes it with one
-/// no-replace rename (INV-ENGINE-19), so it appears complete or not at all: `run.lock` held,
-/// `workflow/` retained from `admitted` (REQ-LOCALRUN-170), `attempts/`, `.private/`,
-/// `local-run.json` with `git_baseline`'s answer, `run.json` when `record` is given, then
-/// what `stage` writes and the `state.json` it answers, the whole verified before the
-/// rename. `create` stages a first attempt and `create_successor` imports a predecessor's.
+/// Stages a run directory under a sibling `.run-*` root and publishes it with one no-replace
+/// rename, so it appears complete or not at all: `run.lock` held, `workflow/` retained from
+/// `admitted`, `attempts/`, `.private/`, `local-run.json` with `git_baseline`'s answer,
+/// `run.json` when `record` is given, then what `stage` writes and the `state.json` it
+/// answers, the whole verified before the rename. `create` stages a first attempt and
+/// `create_successor` imports a predecessor's.
 fn publish_run_directory<Kept>(
     requested: &Path,
     admitted: &AdmittedWorkflow,
@@ -4333,11 +4333,11 @@ fn publish_run_directory<Kept>(
     })
 }
 
-/// Stages a successor's import of the waiting run `predecessor` holds (REQ-LOCALRUN-195,
-/// INV-ENGINE-50): its `attempts/` copied entire, its root `workflow/` copied under the first
-/// attempt that ran under it, its `controls/` copied when it has them, its root `wait.json`
-/// copied when `wait` carries it (REQ-LOCALRUN-197), and the state of its attempts
-/// re-located and marked imported from `predecessor_id` under a fresh state identity.
+/// Stages a successor's import of the waiting run `predecessor` holds: its `attempts/` copied
+/// entire, its root `workflow/` copied under the first attempt that ran under it, its
+/// `controls/` copied when it has them, its root `wait.json` copied when `wait` carries it,
+/// and the state of its attempts re-located and marked imported from `predecessor_id` under a
+/// fresh state identity.
 fn stage_successor_import(
     predecessor: &PendingLocalContinuation,
     predecessor_id: &str,
@@ -4393,13 +4393,12 @@ fn stage_successor_import(
     })
 }
 
-/// The predecessor's attempts as a successor imports them (REQ-LOCALRUN-195), each marked
-/// imported from `predecessor_id` unless it already carries the mark of the run it was
-/// recorded under, and the first attempt that ran under the predecessor's own
-/// definition: that attempt's definition is re-located to `attempt` itself, where the
-/// successor keeps the predecessor's `workflow/`, and each later one that ran under it to
-/// `prior_attempt` naming it, both with the predecessor's digests. An attempt that ran under
-/// a replacement keeps its own locator.
+/// The predecessor's attempts as a successor imports them, each marked imported from
+/// `predecessor_id` unless it already carries the mark of the run it was recorded under, and
+/// the first attempt that ran under the predecessor's own definition: that attempt's
+/// definition is re-located to `attempt` itself, where the successor keeps the predecessor's
+/// `workflow/`, and each later one that ran under it to `prior_attempt` naming it, both with
+/// the predecessor's digests. An attempt that ran under a replacement keeps its own locator.
 fn relocate_run_definitions(
     run: &LocalRunV1,
     state: &LocalRunStateV1,
@@ -4482,13 +4481,13 @@ fn copy_entry(from: &OwnedFd, name: &str, to: &OwnedFd) -> Result<(), LocalRunDi
 
 /// Creates the child run directory `children/<step>/<NNNNNN>/`, or for fan-out element
 /// `item` `children/<step>/<n>/<NNNNNN>/`, under `parent`'s run directory with the next
-/// ordinal there (REQ-LOCALRUN-177, INV-ENGINE-19), as `create_with_record` creates a run:
-/// the tests' entry point to what `ChildRunParent::create_child` does for the CLI's
-/// dispatcher. `admitted` is the child's admission from the parent's tree copy, so the
-/// child's `workflow/tree/` is written from the pinned bytes with the parent's digest;
-/// `record` is `WorkflowRunRecord::child_of` the parent's record for `step` and `item`. A
-/// record that does not descend from the parent's `run.json` for `step` and `item`, or whose
-/// tree is not the admitted one, is refused before anything is written.
+/// ordinal there, as `create_with_record` creates a run: the tests' entry point to what
+/// `ChildRunParent::create_child` does for the CLI's dispatcher. `admitted` is the child's
+/// admission from the parent's tree copy, so the child's `workflow/tree/` is written from
+/// the pinned bytes with the parent's digest; `record` is `WorkflowRunRecord::child_of` the
+/// parent's record for `step` and `item`. A record that does not descend from the parent's
+/// `run.json` for `step` and `item`, or whose tree is not the admitted one, is refused
+/// before anything is written.
 #[cfg(test)]
 pub(crate) fn create_child(
     parent: &LocalAttemptOwner,
@@ -4507,9 +4506,9 @@ pub(crate) fn create_child(
     )
 }
 
-/// What a running parent attempt lends the child runs its `workflow` steps start
-/// (REQ-WFEXEC-59): its run directory and record, without the attempt's ownership, so a
-/// dispatcher can create `children/<step>/<NNNNNN>/` while the attempt runs.
+/// What a running parent attempt lends the child runs its `workflow` steps start: its
+/// run directory and record, without the attempt's ownership, so a dispatcher can
+/// create `children/<step>/<NNNNNN>/` while the attempt runs.
 #[derive(Clone)]
 pub struct ChildRunParent {
     root: Arc<OwnedFd>,
@@ -4535,16 +4534,16 @@ impl ChildRunParent {
         create_child_under(&self.root, &self.normalized, step, item, admitted, record)
     }
 
-    /// Whether a withdrawal recorded for this run is pending (REQ-WFEXEC-73), read under the
-    /// run lock its attempt holds.
+    /// Whether a withdrawal recorded for this run is pending, read under the run lock its
+    /// attempt holds.
     pub fn withdrawal_pending(&self) -> Result<bool, LocalRunDirectoryError> {
         read_withdrawal_pending(&self.normalized, &self.root)
     }
 
     /// Rewrites this run's `run.json` `position` to `position`, under the run lock its
     /// attempt holds: a root's to the full path of the stage its nested run is about to
-    /// create, `[<step>, <nested>]` or `[<step>, {"item": n}, <nested>]` (REQ-WFEXEC-98). A
-    /// position that is not a step path is `StateInvalid` and changes nothing.
+    /// create, `[<step>, <nested>]` or `[<step>, {"item": n}, <nested>]`. A position that
+    /// is not a step path is `StateInvalid` and changes nothing.
     pub fn rewrite_position(&self, position: Vec<Value>) -> Result<(), LocalRunDirectoryError> {
         let valid = position
             .first()
@@ -4572,33 +4571,33 @@ impl LocalAttemptOwner {
         })
     }
 
-    /// Whether a withdrawal recorded for this run is pending (REQ-WFEXEC-73), read under the
-    /// run lock this attempt holds, whether or not the run has `workflow` steps.
+    /// Whether a withdrawal recorded for this run is pending, read under the run lock this
+    /// attempt holds, whether or not the run has `workflow` steps.
     pub fn withdrawal_pending(&self) -> Result<bool, LocalRunDirectoryError> {
         read_withdrawal_pending(&self.normalized, &self.state.root)
     }
 
     /// Takes the run's controls lock (`ControlsLock`) for the attempt's last read of the
-    /// withdrawals (REQ-WFEXEC-73), waiting while a withdrawal holds it; it is held until the
-    /// returned value is dropped, after the run lock is released.
+    /// withdrawals, waiting while a withdrawal holds it; it is held until the returned value
+    /// is dropped, after the run lock is released.
     pub fn lock_controls(&self) -> Result<ControlsLock, LocalRunDirectoryError> {
         ControlsLock::take(&self.state.root)
     }
 
     /// Spends the withdrawals recorded before this settled attempt ends the run, honored or
-    /// not (REQ-WFEXEC-73, REQ-LOCALRUN-211): when one naming no wait is later than its
-    /// `settledAt` (`withdrawn_after_settlement`), that is taken again now, so every withdrawal
-    /// recorded before it reads spent to the next attempt (`withdrawal_pending_in`). Called
-    /// under the controls lock after the attempt's last read, so a withdrawal appended after it
-    /// finds the run released. An unsettled attempt, one no withdrawal is later than and
-    /// unreadable controls leave the state as it is.
+    /// not: when one naming no wait is later than its `settledAt`
+    /// (`withdrawn_after_settlement`), that is taken again now, so every withdrawal recorded
+    /// before it reads spent to the next attempt (`withdrawal_pending_in`). Called under the
+    /// controls lock after the attempt's last read, so a withdrawal appended after it finds the
+    /// run released. An unsettled attempt, one no withdrawal is later than and unreadable
+    /// controls leave the state as it is.
     pub fn spend_withdrawals(&self) -> Result<(), LocalRunDirectoryError> {
         spend_withdrawals_in(&self.normalized, &self.state)
     }
 
     /// Removes the run's root `wait.json` this attempt wrote with `record_wait`, when present,
-    /// for an attempt that ends `withdrawn` after writing it (REQ-WFEXEC-73). The attempt's
-    /// copy stays as history.
+    /// for an attempt that ends `withdrawn` after writing it. The attempt's copy stays as
+    /// history.
     pub fn remove_wait_record(&self) -> Result<(), LocalRunDirectoryError> {
         remove_root_wait_record(&self.state.root)
     }
@@ -4657,9 +4656,9 @@ fn create_child_under(
     InitialLocalRun::create_with_record(&child_directory.join(name), admitted, Some(record))
 }
 
-/// The ordinal `create_child` gives `step`'s next child run (REQ-LOCALRUN-177): one past
-/// the highest ordinal under `children/<step>/`, read from the directory rather than kept
-/// in a counter, so `1` before the step has run. The tests' view of `next_ordinal_in`.
+/// The ordinal `create_child` gives `step`'s next child run: one past the highest ordinal
+/// under `children/<step>/`, read from the directory rather than kept in a counter, so
+/// `1` before the step has run. The tests' view of `next_ordinal_in`.
 #[cfg(test)]
 pub(crate) fn next_child_ordinal(
     parent: &LocalAttemptOwner,
@@ -4705,9 +4704,9 @@ fn ordinals_in(directory: &OwnedFd) -> Result<Vec<u64>, LocalRunDirectoryError> 
     Ok(ordinals)
 }
 
-/// One six-digit entry of `children/<step>/` (REQ-LOCALRUN-177): a plain child run, which
-/// holds `run.json`, as what was read of it, or the directory of a fan-out element's child
-/// runs, which does not.
+/// One six-digit entry of `children/<step>/`: a plain child run, which holds `run.json`,
+/// as what was read of it, or the directory of a fan-out element's child runs, which does
+/// not.
 enum StepChildEntry<T> {
     Child(T),
     Element(OwnedFd),
@@ -4807,8 +4806,8 @@ impl RunDirectoryTarget {
         if normalized.to_str().is_none() {
             return Err(LocalRunDirectoryError::InvalidPath);
         }
-        // The tree copy's `programs` directories lead `PATH` (REQ-WFEXEC-53), and a `PATH`
-        // entry cannot contain `:`; refuse before anything is written.
+        // The tree copy's `programs` directories lead `PATH`, and a `PATH` entry cannot
+        // contain `:`; refuse before anything is written.
         if admitted
             .tree()
             .is_some_and(|tree| !tree.programs().is_empty())
@@ -5013,7 +5012,7 @@ fn retain_execution_specification(
     Ok(manifest)
 }
 
-/// Copies the admitted tree read-only under `workflow/tree/` (REQ-LOCALRUN-170), as
+/// Copies the admitted tree read-only under `workflow/tree/`, as
 /// `tree_copy::write_tree_copy` writes it.
 fn retain_tree_copy(
     workflow_directory: &OwnedFd,
@@ -5782,7 +5781,7 @@ fn update_invocation_ledger<Deadline>(
                 session.diagnostic_identity
             )
         });
-        // An interrupted step was stopped as a cancellation stops it (REQ-WFEXEC-69).
+        // An interrupted step was stopped as a cancellation stops it.
         let cancelled = commit.state.steps.get(&step_id).is_some_and(|runtime| {
             matches!(runtime.state, StepState::Cancelled { .. })
                 || matches!(&runtime.state, StepState::Failed { detail } if detail.is_interrupted())
@@ -5994,6 +5993,10 @@ where
     attempt.force_abort = runtime.force_abort;
     update_progress_nodes(
         &mut attempt.progress.steps,
+        attempt
+            .continuation
+            .as_ref()
+            .map_or(&[][..], |record| &record.revalidated_steps),
         &runtime.steps,
         retained_outputs,
         now,
@@ -6097,6 +6100,7 @@ where
     }
     update_progress_nodes(
         &mut progress.finalizers,
+        &[],
         &runtime.steps,
         retained_outputs,
         now,
@@ -6104,9 +6108,10 @@ where
 }
 
 /// Projects the runtime state onto the durable nodes at a commit made at `now`. A node
-/// that becomes active records `now` as its start once and keeps it (REQ-LOCALRUN-201).
+/// that becomes active records `now` as its start once and keeps it.
 fn update_progress_nodes<Cause, Output>(
     nodes: &mut [AttemptStepV1],
+    revalidated: &[String],
     runtime_steps: &BTreeMap<String, super::runtime::StepRuntimeState<Cause, Output>>,
     retained_outputs: &RetainedOutputSets,
     now: &str,
@@ -6118,6 +6123,16 @@ fn update_progress_nodes<Cause, Output>(
         let next_state = attempt_step_state(&runtime.state);
         let retained = retained_outputs.get(&(node.role, node.id.clone()));
         node.outputs = match &runtime.state {
+            StepState::Inherited {
+                disposition: InheritedDisposition::Succeeded,
+                ..
+            } if node.state == AttemptStepStateV1::Pending && revalidated.contains(&node.id) => {
+                Some(
+                    retained
+                        .ok_or(LocalRunDirectoryError::StateConflict)?
+                        .clone(),
+                )
+            }
             StepState::Inherited { disposition, .. } => {
                 let durable = node
                     .outputs
@@ -6146,12 +6161,12 @@ fn update_progress_nodes<Cause, Output>(
         }
         node.detail = attempt_step_detail(&runtime.state);
         node.diagnostic = attempt_step_diagnostic(&runtime.state)?;
-        // REQ-LOCALRUN-219: only a `succeeded` entry carries its failed child.
+        // Only a `succeeded` entry carries its failed child.
         node.failed_child = match &runtime.state {
             StepState::Succeeded { .. } => runtime.failed_child.clone(),
             _ => None,
         };
-        // REQ-WFEXEC-79: only a `failed` entry carries its failure's class.
+        // Only a `failed` entry carries its failure's class.
         node.failure_class = match &runtime.state {
             StepState::Failed { .. } => runtime.failure_class,
             _ => None,
@@ -6319,8 +6334,8 @@ fn attempt_step_detail<Output>(state: &StepState<Output>) -> Option<NodeDetail> 
     }
 }
 
-/// A failed node's classified facts, projected while its failure detail is still in memory
-/// (REQ-LOCALRUN-198); an inherited node of a later attempt carries none.
+/// A failed node's classified facts, projected while its failure detail is still in
+/// memory; an inherited node of a later attempt carries none.
 fn attempt_step_diagnostic<Output>(
     state: &StepState<Output>,
 ) -> Result<Option<FailureDiagnosticV1>, LocalRunDirectoryError> {
@@ -6552,7 +6567,7 @@ fn append_diagnostic(
 }
 
 /// Appends a `code` diagnostic for `attempt_number`, carrying the class and OS error number
-/// of the commit `failure` a `state_persistence_failure` names (REQ-LOCALRUN-205).
+/// of the commit `failure` a `state_persistence_failure` names.
 fn append_diagnostic_of(
     state: &mut LocalRunStateV1,
     attempt_number: u64,
@@ -6764,8 +6779,7 @@ fn verify_initial_staging(
     Ok(())
 }
 
-/// The run's `run.json` (REQ-LOCALRUN-175), refused at its path when it does not parse
-/// or validate.
+/// The run's `run.json`, refused at its path when it does not parse or validate.
 pub(super) fn read_run_record(root: &OwnedFd) -> Result<WorkflowRunRecord, LocalRunDirectoryError> {
     let bytes = read_regular_file(root, RUN_RECORD_FILE)?;
     serde_json::from_slice::<WorkflowRunRecord>(&bytes)
@@ -6792,8 +6806,8 @@ fn read_optional_state(root: &OwnedFd) -> Result<Option<LocalRunStateV1>, LocalR
 
 /// Sets the run record's `state`, `attempts` and `outcome` through `.private/run.json.tmp`
 /// and a rename over `run.json`, so an interrupted rewrite leaves no entry in the run root,
-/// and clears its `position` once the run is `exited` (REQ-WFDEF-48). The caller holds the
-/// run lock. A run without `run.json` is left as it is.
+/// and clears its `position` once the run is `exited`. The caller holds the run lock. A run
+/// without `run.json` is left as it is.
 fn update_run_record(
     root: &OwnedFd,
     state: RunState,
@@ -6837,10 +6851,9 @@ fn rewrite_run_record(
     sync_directory(root)
 }
 
-/// Rewrites the run record for the attempt a counted edge starts (REQ-LOCALRUN-175,
-/// REQ-WFEXEC-64): `running`, `attempts` the new attempt's number and the edge's count in
-/// `edges` incremented, in one write under the run lock. A run without `run.json` is left as
-/// it is.
+/// Rewrites the run record for the attempt a counted edge starts: `running`, `attempts` the
+/// new attempt's number and the edge's count in `edges` incremented, in one write under the
+/// run lock. A run without `run.json` is left as it is.
 fn count_run_record_edge(
     root: &OwnedFd,
     attempts: u64,
@@ -6854,7 +6867,7 @@ fn count_run_record_edge(
     })
 }
 
-/// Increments the count `record` holds for the edge `key` (REQ-WFDEF-4).
+/// Increments the count `record` holds for the edge `key`.
 fn increment_edge(record: &mut WorkflowRunRecord, key: &str) -> Result<(), LocalRunDirectoryError> {
     let count = record.edges.entry(key.to_owned()).or_insert(0);
     *count = count
@@ -6899,8 +6912,8 @@ pub(super) fn write_through_private(
     replaced
 }
 
-/// The run's root `wait.json` (REQ-LOCALRUN-178), or `None` while the run does not wait;
-/// a record that does not parse or validate is refused at its path.
+/// The run's root `wait.json`, or `None` while the run does not wait; a record that does
+/// not parse or validate is refused at its path.
 fn read_optional_wait_record(root: &OwnedFd) -> Result<Option<WaitRecord>, LocalRunDirectoryError> {
     read_if_present(root, WAIT_RECORD_FILE, |root| {
         let bytes = read_regular_file(root, WAIT_RECORD_FILE)?;
@@ -6916,7 +6929,7 @@ fn read_optional_wait_record(root: &OwnedFd) -> Result<Option<WaitRecord>, Local
 }
 
 /// The wait copy `attempts/<N>/wait.json` of the attempt `attempt_number` of the run whose
-/// directory is `root`, or `None` for an attempt that entered no wait (REQ-LOCALRUN-179).
+/// directory is `root`, or `None` for an attempt that entered no wait.
 pub(super) fn read_attempt_wait_record(
     root: &OwnedFd,
     attempt_number: u64,
@@ -6934,7 +6947,7 @@ pub(super) fn read_attempt_wait_record(
 }
 
 /// What `useful workflow run resume RUN_DIR` without `--from` finds before it takes the run
-/// lock (REQ-CONTINUE-74, REQ-CONTINUE-76).
+/// lock.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WaitInspection {
     /// A live process holds the run lock.
@@ -6947,29 +6960,29 @@ pub enum WaitInspection {
     /// The wait's rule is outside the matcher's grammar (`wait_rule_invalid`).
     RuleInvalid { wait: WaitRecord, error: RuleError },
     /// The condition source could not read the condition an `external` wait's rule names
-    /// (`wait_condition_unavailable`, REQ-CONTINUE-103); the wait neither holds nor resolves.
+    /// (`wait_condition_unavailable`); the wait neither holds nor resolves.
     ConditionUnavailable {
         wait: WaitRecord,
         error: super::wait::ConditionError,
     },
     /// The run reads `running`, no process holds its lock and its latest attempt ended
     /// `continued` on `edge`: the process ended before the next attempt began, so the run
-    /// continues from the edge's target, uncounted (REQ-CONTINUE-78).
+    /// continues from the edge's target, uncounted.
     Continued {
         edge: super::publication::ContinuationEdgeV1,
     },
     /// The run does not wait: `state` is its record's, or `None` for a run without a
     /// record; a record that reads `waiting` without a root wait record is one too.
-    /// `successor` is the record's: set once a restart superseded the run
-    /// (REQ-LOCALRUN-196), so the refusal can name it (REQ-CONTINUE-29).
+    /// `successor` is the record's: set once a restart superseded the run, so the
+    /// refusal can name it.
     NoWait {
         state: Option<RunState>,
         successor: Option<String>,
     },
 }
 
-/// What resolved a wait (REQ-CONTINUE-74): a control under `controls/` for a rule on source
-/// `useful`, or an event a condition source observed for a rule on any other source.
+/// What resolved a wait: a control under `controls/` for a rule on source `useful`, or an
+/// event a condition source observed for a rule on any other source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedBy {
     Control(ControlEvent),
@@ -6985,10 +6998,9 @@ pub struct WaitProbe {
 }
 
 impl WaitProbe {
-    /// Whether a withdrawal recorded for the probed run is pending (REQ-LOCALRUN-186), read
-    /// without the run lock a live process holds: the reader's read
-    /// (`withdrawal_pending_for_reader`), since the holder may be a command that has not begun
-    /// its attempt yet (REQ-LOCALRUN-212).
+    /// Whether a withdrawal recorded for the probed run is pending, read without the run lock
+    /// a live process holds: the reader's read (`withdrawal_pending_for_reader`), since the
+    /// holder may be a command that has not begun its attempt yet.
     pub fn withdrawal_pending(&self) -> Result<bool, LocalRunDirectoryError> {
         let (normalized, root) = open_run_root(&self.run_directory)?;
         let Some(state) = read_optional_state(&root)? else {
@@ -7009,8 +7021,8 @@ impl WaitProbe {
     }
 }
 
-/// What the host condition reads of the run at `requested` (REQ-WFEXEC-81): the run's id,
-/// its latest attempt's execution root and its tree copy, `<run>/workflow/tree`.
+/// What the host condition reads of the run at `requested`: the run's id, its latest
+/// attempt's execution root and its tree copy, `<run>/workflow/tree`.
 pub(crate) struct HostConditionRun {
     pub(crate) run_id: String,
     pub(crate) execution_root: PathBuf,
@@ -7037,10 +7049,9 @@ pub(crate) fn host_condition_run(
 }
 
 /// The first control under `run_directory`'s `controls/`, in ordinal order, that the rule
-/// `wait`'s controls are read by (`controls_rule`) matches for the run `run_id`
-/// (REQ-CONTINUE-101), `Ok(None)` when none does and `Ok(None)` without reading the controls
-/// for a wait no control resolves (REQ-WFEXEC-65); a rule outside the grammar is
-/// `Err(RuleError)`.
+/// `wait`'s controls are read by (`controls_rule`) matches for the run `run_id`, `Ok(None)`
+/// when none does and `Ok(None)` without reading the controls for a wait no control
+/// resolves; a rule outside the grammar is `Err(RuleError)`.
 fn control_resolution(
     run_directory: &Path,
     run_id: &str,
@@ -7053,12 +7064,12 @@ fn control_resolution(
     Ok(super::wait::evaluate(&rule, run_id, wait, &controls).map(|control| control.cloned()))
 }
 
-/// Probes the run at `requested` without taking its lock (REQ-CONTINUE-74): a lock a live
-/// process holds is `Locked`; otherwise the run record, the root wait record and the events
-/// decide: the controls for a rule on source `um`; for a `host` wait the controls a `repair`
-/// wait is read by and, only when none resolves it, the host condition `conditions`
-/// evaluates (REQ-WFEXEC-81, INV-ENGINE-48); and for a rule on any other source the events
-/// `conditions` observes now, never the controls (REQ-WFEXEC-65). Nothing is written.
+/// Probes the run at `requested` without taking its lock: a lock a live process holds is
+/// `Locked`; otherwise the run record, the root wait record and the events decide: the
+/// controls for a rule on source `um`; for a `host` wait the controls a `repair` wait is
+/// read by and, only when none resolves it, the host condition `conditions` evaluates; and
+/// for a rule on any other source the events `conditions` observes now, never the controls.
+/// Nothing is written.
 pub fn inspect_wait(
     requested: &Path,
     conditions: &dyn super::wait::ConditionSource,
@@ -7119,9 +7130,9 @@ pub fn inspect_wait(
         }));
     };
     let resolved = if wait.kind == super::wait::WaitKind::Host {
-        // INV-ENGINE-48: a `control.retry` or `control.withdraw` naming the wait resolves it
-        // before the host condition is asked; the condition holds the wait or observes
-        // `host.healthy`, and it is never unavailable (REQ-WFEXEC-81).
+        // A `control.retry` or `control.withdraw` naming the wait resolves it before the
+        // host condition is asked; the condition holds the wait or observes `host.healthy`,
+        // and it is never unavailable.
         match control_resolution(&normalized, &record.id, &wait)? {
             Ok(None) => {
                 let events = conditions.observe_host(&normalized, &wait)?;
@@ -7151,18 +7162,17 @@ pub fn inspect_wait(
     Ok(probe(inspection))
 }
 
-/// Whether `controls` hold a `control.withdraw` naming no wait that no attempt of `attempts`
-/// has honored (REQ-LOCALRUN-186, REQ-WFEXEC-73): one recorded after the attempt before the
-/// current process's attempts settled. The current process's attempts are the latest and,
-/// when backward or limited edges chained it to earlier ones in the same process
-/// (REQ-WFEXEC-64), those; a run with no earlier attempt has every such control pending. So a
-/// withdrawal an earlier attempt ended on, outlived or honored as it settled (whose
-/// `settledAt` `LocalAttemptOwner::spend_withdrawals` took after that read) is spent, and one
-/// recorded while a `retry` or resume held the lock before creating its attempt is not. This is
-/// the owner's read (`LocalAttemptOwner::withdrawal_pending`,
+/// Whether `controls` hold a `control.withdraw` naming no wait that no attempt of `attempts` has
+/// honored: one recorded after the attempt before the current process's attempts settled. The
+/// current process's attempts are the latest and, when backward or limited edges chained it to
+/// earlier ones in the same process, those; a run with no earlier attempt has every such control
+/// pending. So a withdrawal an earlier attempt ended on, outlived or honored as it settled
+/// (whose `settledAt` `LocalAttemptOwner::spend_withdrawals` took after that read) is spent, and
+/// one recorded while a `retry` or resume held the lock before creating its attempt is not. This
+/// is the owner's read (`LocalAttemptOwner::withdrawal_pending`,
 /// `ChildRunParent::withdrawal_pending`): an attempt in its cleanup is already terminal, and its
-/// last read still sees a withdrawal recorded before its own `settledAt`. A reader that does
-/// not own the latest attempt reads through `withdrawal_pending_for_reader`.
+/// last read still sees a withdrawal recorded before its own `settledAt`. A reader that does not
+/// own the latest attempt reads through `withdrawal_pending_for_reader`.
 fn withdrawal_pending_in(attempts: &[LocalAttemptV1], controls: &[ControlEvent]) -> bool {
     let mut first = attempts.len();
     while let Some(attempt) = first.checked_sub(1).and_then(|index| attempts.get(index)) {
@@ -7185,14 +7195,14 @@ fn withdrawal_pending_in(attempts: &[LocalAttemptV1], controls: &[ControlEvent])
 }
 
 /// Whether `controls` hold a `control.withdraw` naming no wait that the attempt a reader that
-/// does not own the latest of `attempts` finds next would honor (REQ-LOCALRUN-212): a
-/// withdrawal (`WaitProbe::withdrawal_pending`), which may find the run held by a `retry` or
-/// `resume` that has not begun its attempt. While the latest attempt's span is open, because it
-/// is unsettled or ended `continued` while the run record does not read `exited` (`exited`
-/// false), the reader answers as its owner does (`withdrawal_pending_in`); otherwise only one
-/// later than the latest attempt's `settledAt` is pending, so one that attempt honored, or the
-/// run's ending spent, is not. A command that holds the run asks `withdrawal_unhonored_in`,
-/// the same rule over an open span.
+/// does not own the latest of `attempts` finds next would honor: a withdrawal
+/// (`WaitProbe::withdrawal_pending`), which may find the run held by a `retry` or `resume` that
+/// has not begun its attempt. While the latest attempt's span is open, because it is unsettled
+/// or ended `continued` while the run record does not read `exited` (`exited` false), the
+/// reader answers as its owner does (`withdrawal_pending_in`); otherwise only one later than
+/// the latest attempt's `settledAt` is pending, so one that attempt honored, or the run's
+/// ending spent, is not. A command that holds the run asks `withdrawal_unhonored_in`, the same
+/// rule over an open span.
 fn withdrawal_pending_for_reader(
     attempts: &[LocalAttemptV1],
     controls: &[ControlEvent],
@@ -7210,12 +7220,10 @@ fn withdrawal_pending_for_reader(
 }
 
 /// Whether a withdrawal is unhonored over the run at `normalized`, whose root is `root` and whose
-/// locked state is `state` (REQ-LOCALRUN-213): the run record reads `running`, the latest
-/// attempt is unsettled or ended `continued`, so no process honored or spent what was recorded
-/// over its span, and the owner's read (`withdrawal_pending_in`) finds a `control.withdraw`
-/// naming no wait. The one question a command that holds the run before its attempt begins asks,
-/// and the one `settle_abandoned_snapshot` asks before it settles; a run without a record has
-/// none.
+/// locked state is `state`: the run record reads `running`, the latest attempt is unsettled or
+/// ended `continued`, so no process honored or spent what was recorded over its span, and the
+/// owner's read (`withdrawal_pending_in`) finds a `control.withdraw` naming no wait. A run
+/// without a record has no unhonored withdrawal.
 fn withdrawal_unhonored_in(
     normalized: &Path,
     root: &OwnedFd,
@@ -7241,10 +7249,10 @@ fn record_exited(root: &OwnedFd) -> Result<bool, LocalRunDirectoryError> {
 }
 
 /// Takes the `settledAt` of the latest attempt in `store`, the state of the run at `normalized`,
-/// again now when `withdrawn_after_settlement` holds for it (REQ-LOCALRUN-211), so every
-/// withdrawal recorded before reads spent to the next attempt (`withdrawal_pending_in`). The
-/// caller holds the run lock and the controls lock. An unsettled attempt, one no withdrawal is
-/// later than and unreadable controls leave the state as it is.
+/// again now when `withdrawn_after_settlement` holds for it, so every withdrawal recorded before
+/// reads spent to the next attempt (`withdrawal_pending_in`). The caller holds the run lock and
+/// the controls lock. An unsettled attempt, one no withdrawal is later than and unreadable
+/// controls leave the state as it is.
 fn spend_withdrawals_in(
     normalized: &Path,
     store: &StateStore,
@@ -7269,8 +7277,8 @@ fn spend_withdrawals_in(
 
 /// Runs `end` under the run's controls lock (`ControlsLock`) and releases the run lock `lock`,
 /// which the caller verified, before the controls lock, also when `end` fails: a withdrawal
-/// waiting for the controls lock then finds the run released (REQ-LOCALRUN-211). No caller may
-/// hold the controls lock already.
+/// waiting for the controls lock then finds the run released. No caller may hold the controls
+/// lock already.
 fn end_under_controls(
     root: &OwnedFd,
     lock: File,
@@ -7284,11 +7292,11 @@ fn end_under_controls(
 }
 
 /// Ends the `running` run at `normalized`, whose root is `root` and whose locked state is
-/// `state`, with `outcome` once its process is gone (REQ-LOCALRUN-186, REQ-LOCALRUN-211):
-/// under the controls lock it marks the record `exited` with `outcome` and the attempt count
-/// unchanged, then settles the latest attempt as interrupted when it is unsettled, or spends the
-/// withdrawals later than its `settledAt` when it is terminal (`spend_withdrawals_in`), and
-/// releases the run lock `lock` before the controls lock.
+/// `state`, with `outcome` once its process is gone: under the controls lock it marks the record
+/// `exited` with `outcome` and the attempt count unchanged, then settles the latest attempt as
+/// interrupted when it is unsettled, or spends the withdrawals later than its `settledAt` when
+/// it is terminal (`spend_withdrawals_in`), and releases the run lock `lock` before the controls
+/// lock.
 fn end_running_run(
     normalized: &Path,
     root: &OwnedFd,
@@ -7315,8 +7323,8 @@ fn end_running_run(
 }
 
 /// Whether `attempt` is settled and `controls` hold a `control.withdraw` naming no wait later
-/// than its `settledAt` (REQ-LOCALRUN-211): one its spend has not covered, which a later
-/// attempt would read as pending (`withdrawal_pending_in`).
+/// than its `settledAt`: one its spend has not covered, which a later attempt would read as
+/// pending (`withdrawal_pending_in`).
 fn withdrawn_after_settlement(attempt: &LocalAttemptV1, controls: &[ControlEvent]) -> bool {
     attempt.state.is_terminal()
         && settled_at(attempt).is_some_and(|since| withdrawn_since(controls, Some(since)))
@@ -7339,14 +7347,13 @@ fn withdrawn_since(controls: &[ControlEvent], since: Option<OffsetDateTime>) -> 
     })
 }
 
-/// A run's controls lock (REQ-LOCALRUN-186, REQ-WFEXEC-73, INV-ENGINE-39): an exclusive
-/// `flock` on the run directory itself, which nothing else locks. A withdrawal holds it from its
-/// check that a live process holds the run through its append, and that process holds it from
-/// its last read of the withdrawals through the release of the run lock, so a withdrawal is
-/// appended only while the process will still read it, or finds the run released. A process
-/// that chains attempts carries it from before the release of one attempt's run lock into
-/// `acquire_local_continuation_bridged`, which drops it once the next attempt's try of the run
-/// lock answered (REQ-LOCALRUN-214). Opaque; released when dropped.
+/// A run's controls lock: an exclusive `flock` on the run directory itself, which nothing else
+/// locks. A withdrawal holds it from its check that a live process holds the run through its
+/// append, and that process holds it from its last read of the withdrawals through the release
+/// of the run lock, so a withdrawal is appended only while the process will still read it, or
+/// finds the run released. A process that chains attempts carries it from before the release of
+/// one attempt's run lock into `acquire_local_continuation_bridged`, which drops it once the
+/// next attempt's try of the run lock answered. Opaque; released when dropped.
 pub struct ControlsLock {
     _directory: OwnedFd,
 }
@@ -7385,24 +7392,22 @@ fn read_withdrawal_pending(
     ))
 }
 
-/// The control values an attempt of the run at `requested` starts with (REQ-WFEXEC-63,
-/// REQ-CONTINUE-104), read from the wait copies of the attempts before `attempt_number` and
-/// the run's controls. An imported attempt's copy (REQ-LOCALRUN-195) is resolved by a control
-/// naming any run of the lineage: the run it was recorded under, copied with it, a successor
-/// that carried the wait (REQ-LOCALRUN-197) and recorded the control, or this run. A `host`
-/// wait copy no control resolves was resolved by the host condition when the attempt after it
-/// records continuation reason `host` (REQ-CONTINUE-93); `reason` is the continuation reason of
-/// attempt `attempt_number` while `state.json` does not record it yet.
+/// The control values an attempt of the run at `requested` starts with, read from the wait
+/// copies of the attempts before `attempt_number` and the run's controls. An imported attempt's
+/// copy is resolved by a control naming any run of the lineage: the run it was recorded under,
+/// copied with it, a successor that carried the wait and recorded the control, or this run. A
+/// `host` wait copy no control resolves was resolved by the host condition when the attempt
+/// after it records continuation reason `host`; `reason` is the continuation reason of attempt
+/// `attempt_number` while `state.json` does not record it yet.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AttemptControls {
     /// `wait` and `resume_item` from the attempt immediately before, when it entered a wait
     /// a control resolved, so only the attempt that continues the wait reads its control's
-    /// fields (REQ-WFEXEC-63); `answers` from every resolved `answer` wait, the latest per
-    /// `then` step.
+    /// fields; `answers` from every resolved `answer` wait, the latest per `then` step.
     pub controls: super::step_runtime::ControlContext,
     /// The step a `control.retry` continues at and its `payload.agentProfiles`, the
     /// agent-profile replacement that step's child resolves with, from the latest earlier
-    /// resolved wait however many attempts back (REQ-AGENT-59).
+    /// resolved wait however many attempts back.
     pub replacement: Option<(String, Value)>,
 }
 
@@ -7422,17 +7427,17 @@ pub fn attempt_controls(
 }
 
 impl AttemptControls {
-    /// The control values attempt `attempt_number` of the nested run at `nested` starts with
-    /// (REQ-WFEXEC-110, INV-ENGINE-61). Controls are recorded on the root at `root` alone, the
-    /// nested run being at the root's path `prefix` (`[<step>]` or `[<step>, {"item": n}]`):
-    /// the wait copies of the nested run's earlier attempts are matched, by `kind@since` and
-    /// the full path, with the root's wait copies that carried them and read against the
-    /// control or the host condition that resolved the root's (REQ-CONTINUE-92,
-    /// REQ-CONTINUE-93). `answers` come from every root wait copy at `prefix` followed by one
-    /// nested step, keyed by that step, so a fresh nested run at the element, as a successor's
-    /// carry starts, receives them too. `reason` is the continuation reason of the root's
-    /// attempt after its last recorded one, read for a carried copy that attempt continues
-    /// while the root's `state.json` does not record it yet, as `attempt_controls` reads it.
+    /// The control values attempt `attempt_number` of the nested run at `nested` starts with.
+    /// Controls are recorded on the root at `root` alone, the nested run being at the root's
+    /// path `prefix` (`[<step>]` or `[<step>, {"item": n}]`): the wait copies of the nested
+    /// run's earlier attempts are matched, by `kind@since` and the full path, with the root's
+    /// wait copies that carried them and read against the control or the host condition that
+    /// resolved the root's. `answers` come from every root wait copy at `prefix` followed by
+    /// one nested step, keyed by that step, so a fresh nested run at the element, as a
+    /// successor's carry starts, receives them too. `reason` is the continuation reason of the
+    /// root's attempt after its last recorded one, read for a carried copy that attempt
+    /// continues while the root's `state.json` does not record it yet, as `attempt_controls`
+    /// reads it.
     pub fn nested(
         root: &Path,
         nested: &Path,
@@ -7476,7 +7481,7 @@ impl AttemptControls {
     }
 
     /// Keeps the answers of `wait` for `step` when `resolution` is the `control.answer` that
-    /// resolved it, the latest per step (REQ-WFEXEC-63).
+    /// resolved it, the latest per step.
     fn record_answers(
         &mut self,
         step: &str,
@@ -7515,10 +7520,10 @@ impl AttemptControls {
         {
             self.replacement = Some((target.clone(), profiles.clone()));
         }
-        // Only the attempt that continues the wait reads its control's fields (REQ-WFEXEC-63)
-        // and resumes its fan-out at the recorded element (REQ-WFEXEC-96); one reaching the
-        // step after a later attempt ended without a wait (a backward or limited edge, an
-        // abandoned attempt) has no `wait.<field>` and starts at the first element.
+        // Only the attempt that continues the wait reads its control's fields and resumes its
+        // fan-out at the recorded element; one reaching the step after a later attempt ended
+        // without a wait (a backward or limited edge, an abandoned attempt) has no
+        // `wait.<field>` and starts at the first element.
         if number + 1 != attempt_number {
             return;
         }
@@ -7536,9 +7541,8 @@ impl AttemptControls {
 enum WaitResolution {
     /// The control that resolved it.
     Control(ControlEvent),
-    /// The host condition (REQ-WFEXEC-81): a `host` wait copy that no control resolved,
-    /// followed by an attempt whose continuation reason is `host` (REQ-CONTINUE-93). It
-    /// carries no payload.
+    /// The host condition: a `host` wait copy that no control resolved, followed by an
+    /// attempt whose continuation reason is `host`. It carries no payload.
     Condition,
 }
 
@@ -7574,8 +7578,8 @@ fn continued_step<'a>(wait: &'a WaitRecord, resolution: &WaitResolution) -> &'a 
 }
 
 /// Whether `resolution` retries `wait` in place at `step`, the step it continues at: a
-/// `control.retry` of a `repair` or `host` wait entered at that step, or the host condition
-/// (REQ-WFEXEC-63, REQ-CONTINUE-93).
+/// `control.retry` of a `repair` or `host` wait entered at that step, or the host
+/// condition.
 fn retried_in_place(wait: &WaitRecord, resolution: &WaitResolution, step: &str) -> bool {
     let retried = match resolution {
         WaitResolution::Control(control) => {
@@ -7590,16 +7594,16 @@ fn retried_in_place(wait: &WaitRecord, resolution: &WaitResolution, step: &str) 
     retried && wait.step.first().and_then(Value::as_str) == Some(step)
 }
 
-/// The `wait.<field>` values the attempt continuing the last of `waits`, the earlier
-/// attempts' resolved wait copies in attempt order, starts with at the step that wait
-/// continues at (REQ-WFEXEC-63): the string fields of the control that resolved it. When it
-/// was retried in place (`retried_in_place`: a `control.retry` of a `repair` or `host` wait
-/// entered at the step it continues at, or the host condition, whose layer is empty), the
-/// fields are laid over the ones the attempt that entered the wait had there, found the same
-/// way from the copy of the attempt immediately before it, resolved and continuing at the same
-/// step, and so on back; a retried step thus keeps the fields of the control that first
-/// started it, under each retry's own, through any number of host waits in a row. Any other
-/// wait or control keeps nothing earlier.
+/// The `wait.<field>` values the attempt continuing the last of `waits`, the earlier attempts'
+/// resolved wait copies in attempt order, starts with at the step that wait continues at: the
+/// string fields of the control that resolved it. When it was retried in place
+/// (`retried_in_place`: a `control.retry` of a `repair` or `host` wait entered at the step it
+/// continues at, or the host condition, whose layer is empty), the fields are laid over the
+/// ones the attempt that entered the wait had there, found the same way from the copy of the
+/// attempt immediately before it, resolved and continuing at the same step, and so on back; a
+/// retried step thus keeps the fields of the control that first started it, under each retry's
+/// own, through any number of host waits in a row. Any other wait or control keeps nothing
+/// earlier.
 fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, String> {
     let mut layers = Vec::new();
     let mut entries = waits.iter().rev().peekable();
@@ -7628,13 +7632,12 @@ fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, Stri
 
 /// Each wait copy of the attempts before `attempt_number` of the run at `root`, in attempt
 /// order, with what resolved it: the control, read by `controls_rule` (a `host` wait's by the
-/// repair rule, INV-ENGINE-48; a wait no control resolves has none), and otherwise, for a
+/// repair rule; a wait no control resolves has none), and otherwise, for a
 /// `host` wait copy, the host condition when the attempt right after it records continuation
 /// reason `host` in `state.json` or, not recorded yet, is attempt `attempt_number` with
-/// `reason` `host` (REQ-CONTINUE-93). An imported attempt's copy (REQ-LOCALRUN-195) is
-/// resolved by a control naming any run of the lineage: the run it was recorded under,
-/// copied with it, a successor that carried the wait (REQ-LOCALRUN-197) and recorded the
-/// control, or this run. A run without a record has none.
+/// `reason` `host`. An imported attempt's copy is resolved by a control naming any run of the
+/// lineage: the run it was recorded under, copied with it, a successor that carried the wait
+/// and recorded the control, or this run. A run without a record has none.
 fn resolved_attempt_waits(
     normalized: &Path,
     root: &OwnedFd,
@@ -7672,9 +7675,9 @@ fn resolved_attempt_waits(
         };
         // The copy of a wait an imported attempt entered was resolved under some run of the
         // lineage: the run the attempt was recorded under, or a successor that carried the
-        // wait (REQ-LOCALRUN-197). Every control here was recorded on this run or copied
-        // along the lineage (REQ-LOCALRUN-195), so each is read as its own run's; a wait
-        // this run itself entered is resolved by a control naming this run alone.
+        // wait. Every control here was recorded on this run or copied along the lineage, so
+        // each is read as its own run's; a wait this run itself entered is resolved by a
+        // control naming this run alone.
         let control = super::wait::controls_rule(&wait).and_then(|rule| {
             if imported(number) {
                 controls.iter().find(|control| {
@@ -7711,9 +7714,8 @@ fn resolved_attempt_waits(
 }
 
 /// Ends the nested run at `nested` with `outcome` as `end_waiting` ends a waiting run, when it
-/// still waits on the wait its root carries as `wait` (REQ-CONTINUE-92); a nested run that
-/// waits on no such wait is left as it is. A nested run another process holds is
-/// `StateConflict`.
+/// still waits on the wait its root carries as `wait`; a nested run that waits on no such wait
+/// is left as it is. A nested run another process holds is `StateConflict`.
 fn end_carried_wait(
     nested: &Path,
     wait: &WaitRecord,
@@ -7728,20 +7730,19 @@ fn end_carried_wait(
     }
 }
 
-/// What a wait record's `payload.child` names (REQ-CONTINUE-82, INV-ENGINE-27).
+/// What a wait record's `payload.child` names.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WaitChild {
     /// The payload names no child.
     Absent,
     /// The waiting step's own child: the canonical `children/<step>/<NNNNNN>` or, for a
     /// fan-out waiting at element n, `children/<step>/<n>/<NNNNNN>`, relative to the run
-    /// directory (REQ-LOCALRUN-177).
+    /// directory.
     Owned { locator: PathBuf, item: Option<u64> },
-    /// A wait the root carries from a nested run (REQ-WFEXEC-75, REQ-CONTINUE-92), whose
-    /// `step` is the root step's path followed by the nested step: `locator` is the waiting
-    /// element's nested run in `Owned`'s canonical form, and `child`, the rest of the
-    /// payload's path, the nested step's own child relative to the nested run, canonical as a
-    /// plain step's.
+    /// A wait the root carries from a nested run, whose `step` is the root step's path
+    /// followed by the nested step: `locator` is the waiting element's nested run in
+    /// `Owned`'s canonical form, and `child`, the rest of the payload's path, the nested
+    /// step's own child relative to the nested run, canonical as a plain step's.
     Carried {
         locator: PathBuf,
         item: Option<u64>,
@@ -7797,7 +7798,7 @@ pub fn wait_child(wait: &WaitRecord) -> WaitChild {
 
 /// How many of `segments` the canonical child locator of `step`, at fan-out element
 /// `element`, takes from their start: `children/<step>/<NNNNNN>` or
-/// `children/<step>/<n>/<NNNNNN>` (REQ-LOCALRUN-177); `None` when they do not start with it.
+/// `children/<step>/<n>/<NNNNNN>`; `None` when they do not start with it.
 fn canonical_child(step: &str, element: Option<u64>, segments: &[&str]) -> Option<usize> {
     if !super::schema_common::is_identifier(step) {
         return None;
@@ -7822,7 +7823,7 @@ fn canonical_child(step: &str, element: Option<u64>, segments: &[&str]) -> Optio
 
 /// Whether the latest attempt of the run at `requested` ended `failed`, read without the run
 /// lock: the evidence that selects a repair continuation over a fresh child, which the
-/// continuation reads again under the lock (REQ-CONTINUE-81).
+/// continuation reads again under the lock.
 pub fn latest_attempt_failed(requested: &Path) -> Result<bool, LocalRunDirectoryError> {
     let (_, root) = open_run_root(requested)?;
     let state = read_state(&root)?;
@@ -7832,11 +7833,11 @@ pub fn latest_attempt_failed(requested: &Path) -> Result<bool, LocalRunDirectory
         .is_some_and(|attempt| attempt.state == AttemptStateV1::WorkflowFailed))
 }
 
-/// The latest child run of `step` under the run at `requested` (REQ-LOCALRUN-177), its run
-/// record's state and its fan-out element, or `None` before the step, or the element, has
-/// run a child. When the run record's `position` is `[<step>, {"item": n}]` it is the
-/// highest ordinal under `children/<step>/<n>/`; otherwise the highest ordinal under the
-/// highest element's directory, or under `children/<step>/` for a plain step.
+/// The latest child run of `step` under the run at `requested`, its run record's state and
+/// its fan-out element, or `None` before the step, or the element, has run a child. When
+/// the run record's `position` is `[<step>, {"item": n}]` it is the highest ordinal under
+/// `children/<step>/<n>/`; otherwise the highest ordinal under the highest element's
+/// directory, or under `children/<step>/` for a plain step.
 pub fn latest_child_run(
     requested: &Path,
     step: &str,
@@ -7875,9 +7876,9 @@ pub fn latest_child_run(
         .map(|(name, record)| (element_path.join(name), record.state, Some(item))))
 }
 
-/// The fan-out element of `step` the run record's `position` names (REQ-WFEXEC-68), the
-/// element an abandoned fan-out resumes at even before its child exists, or `None` when the
-/// position names no element of `step`.
+/// The fan-out element of `step` the run record's `position` names, the element an
+/// abandoned fan-out resumes at even before its child exists, or `None` when the position
+/// names no element of `step`.
 pub fn positioned_element(
     requested: &Path,
     step: &str,
@@ -7915,17 +7916,16 @@ pub fn lock_holder(
     Ok(query_run_lock(&root)?.and_then(|lock| lock.pid))
 }
 
-/// Whether `value` has the form of a run record's id (REQ-LOCALRUN-175): `run_` and a
-/// lowercase ULID.
+/// Whether `value` has the form of a run record's id: `run_` and a lowercase ULID.
 pub fn is_run_id(value: &str) -> bool {
     super::schema_common::is_prefixed_ulid(value, RUN_ID_PREFIX)
 }
 
-/// The canonical directory of the run `id` under `home` (REQ-LOCALRUN-180) whose `run.json`
-/// carries `id`: the one `workflows/<definition id>/runs/<id>/`, then the home's own
-/// `runs/<id>/`, then any entry of the home's `runs/`, which a caller may have named with
-/// `--run-dir`. A value that is not a run id is `InvalidPath`, and an id no run under the
-/// home has is `RunNotFound`.
+/// The canonical directory of the run `id` under `home` whose `run.json` carries `id`: the
+/// one `workflows/<definition id>/runs/<id>/`, then the home's own `runs/<id>/`, then any
+/// entry of the home's `runs/`, which a caller may have named with `--run-dir`. A value
+/// that is not a run id is `InvalidPath`, and an id no run under the home has is
+/// `RunNotFound`.
 pub fn locate_run(home: &WorkflowHome, id: &str) -> Result<PathBuf, LocalRunDirectoryError> {
     if !is_run_id(id) {
         return Err(LocalRunDirectoryError::InvalidPath);
@@ -7960,9 +7960,9 @@ pub struct ListedRun {
 }
 
 impl ListedRun {
-    /// Whether the run is drifted (REQ-LOCALRUN-190): its record reads `running` or
-    /// `waiting` and its revision is below `current`, its definition's current revision. A
-    /// run with no revision and an exited run never drift.
+    /// Whether the run is drifted: its record reads `running` or `waiting` and its
+    /// revision is below `current`, its definition's current revision. A run with no
+    /// revision and an exited run never drift.
     pub fn drifted(&self, current: u64) -> bool {
         matches!(self.record.state, RunState::Running | RunState::Waiting)
             && self
@@ -7980,11 +7980,11 @@ pub struct RunListing {
     pub unreadable: Vec<(PathBuf, LocalRunDirectoryError)>,
 }
 
-/// Lists every `workflows/<definition id>/runs/<run id>/` under `home` (REQ-LOCALRUN-173)
-/// and every entry of the home's own `runs/` that holds a `run.json` (REQ-LOCALRUN-174),
-/// with its root wait record, taking no lock and writing nothing. A missing `workflows/` or
-/// `runs/` directory lists nothing. An entry of the home's `runs/` with no `run.json` is a
-/// run with no record, which a caller named with `--run-dir`, and is passed by.
+/// Lists every `workflows/<definition id>/runs/<run id>/` under `home` and every entry of
+/// the home's own `runs/` that holds a `run.json`, with its root wait record, taking no
+/// lock and writing nothing. A missing `workflows/` or `runs/` directory lists nothing. An
+/// entry of the home's `runs/` with no `run.json` is a run with no record, which a caller
+/// named with `--run-dir`, and is passed by.
 pub fn list_runs(home: &WorkflowHome) -> Result<RunListing, LocalRunDirectoryError> {
     let mut listing = RunListing {
         runs: Vec::new(),
@@ -8054,7 +8054,7 @@ fn sorted_entries(directory: &Path) -> Result<Vec<OsString>, LocalRunDirectoryEr
     Ok(names)
 }
 
-/// Where one child run lies under a run's `children/` (REQ-LOCALRUN-177).
+/// Where one child run lies under a run's `children/`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildRunDirectory {
     pub step: String,
@@ -8064,7 +8064,7 @@ pub struct ChildRunDirectory {
     pub directory: PathBuf,
 }
 
-/// One child run under a run's `children/` (REQ-LOCALRUN-177).
+/// One child run under a run's `children/`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildRun {
     pub step: String,
@@ -8158,8 +8158,8 @@ fn child_runs_reading<T>(
     Ok(runs)
 }
 
-/// Removes the run's root `wait.json` when present (REQ-LOCALRUN-178): a later attempt
-/// begins or the run is withdrawn. The attempt copies stay as history.
+/// Removes the run's root `wait.json` when present: a later attempt begins or the run
+/// is withdrawn. The attempt copies stay as history.
 fn remove_root_wait_record(root: &OwnedFd) -> Result<(), LocalRunDirectoryError> {
     match unlinkat(root, WAIT_RECORD_FILE, AtFlags::empty()) {
         Ok(()) => sync_directory(root),
@@ -8194,7 +8194,7 @@ pub fn read_durable_record(
 /// link, but of at most `maximum_bytes`: a larger file is refused from its size before any
 /// of it is read. The runner reads an exported text's carrier, which a step can make as
 /// large as a set admits, through this reader with the bound the runner protocol puts on a
-/// carried text (REQ-RUNNERENROLL-272).
+/// carried text.
 pub fn read_run_file_bounded(
     requested: &Path,
     name: &str,
@@ -8215,7 +8215,7 @@ pub struct FileTail {
 /// walking the path as `read_run_file_bounded` does, without following a symbolic link or
 /// waiting on a FIFO, and answers them with the number of bytes of the file before them. A
 /// file of any size is read only from its window: a step's retained output and a run log
-/// can be far larger than a reader wants of them (REQ-RUNNERENROLL-145).
+/// can be far larger than a reader wants of them.
 pub fn read_run_file_tail(
     requested: &Path,
     name: &str,
@@ -8438,11 +8438,11 @@ pub fn await_run_lock_gate() -> Result<(), LocalRunDirectoryError> {
     Ok(())
 }
 
-/// A seam for the end-to-end tests of an attempt interrupted before its stage's child is
-/// prepared (feature `test-fixtures`, REQ-WFEXEC-72): when `USEFUL_TEST_CHILD_START_GATE` names a
-/// path, the child dispatcher calls this before it prepares a child, which writes
-/// `<path>.starting` and returns once `<path>` exists, with `await_run_lock_gate`'s timeout.
-/// Without the feature, or the variable, it returns at once.
+/// A seam for the end-to-end tests of an attempt interrupted before its stage's child is prepared
+/// (feature `test-fixtures`): when `USEFUL_TEST_CHILD_START_GATE` names a path, the child
+/// dispatcher calls this before it prepares a child, which writes `<path>.starting` and returns
+/// once `<path>` exists, with `await_run_lock_gate`'s timeout. Without the feature, or the
+/// variable, it returns at once.
 pub fn await_child_start_gate() -> Result<(), LocalRunDirectoryError> {
     #[cfg(feature = "test-fixtures")]
     await_test_gate(
@@ -8454,11 +8454,10 @@ pub fn await_child_start_gate() -> Result<(), LocalRunDirectoryError> {
 }
 
 /// A seam for the end-to-end tests of a withdrawal recorded while a settled attempt finishes
-/// (feature `test-fixtures`, REQ-LOCALRUN-211): when `USEFUL_TEST_SETTLED_GATE` names a path, an
-/// attempt that is not a quiet child calls this once its execution returned and before its
-/// first read of the withdrawals, which writes `<path>.settled` and returns once `<path>`
-/// exists, with `await_run_lock_gate`'s timeout. Without the feature, or the variable, it
-/// returns at once.
+/// (feature `test-fixtures`): when `USEFUL_TEST_SETTLED_GATE` names a path, an attempt that is
+/// not a quiet child calls this once its execution returned and before its first read of the
+/// withdrawals, which writes `<path>.settled` and returns once `<path>` exists, with
+/// `await_run_lock_gate`'s timeout. Without the feature, or the variable, it returns at once.
 pub fn await_settled_gate() -> Result<(), LocalRunDirectoryError> {
     #[cfg(feature = "test-fixtures")]
     await_test_gate(
@@ -8469,12 +8468,12 @@ pub fn await_settled_gate() -> Result<(), LocalRunDirectoryError> {
     Ok(())
 }
 
-/// A seam for the end-to-end tests of a withdrawal that meets an attempt ending its run
-/// (feature `test-fixtures`, REQ-LOCALRUN-211): when `USEFUL_TEST_RELEASE_GATE` names a path, an
-/// attempt that ends the run calls this while it holds the run's controls lock, after its last
-/// read and its spend and before its final record, which writes `<path>.releasing` and returns
-/// once `<path>` exists, with `await_run_lock_gate`'s timeout. Without the feature, or the
-/// variable, it returns at once.
+/// A seam for the end-to-end tests of a withdrawal that meets an attempt ending its run (feature
+/// `test-fixtures`): when `USEFUL_TEST_RELEASE_GATE` names a path, an attempt that ends the run
+/// calls this while it holds the run's controls lock, after its last read and its spend and
+/// before its final record, which writes `<path>.releasing` and returns once `<path>` exists,
+/// with `await_run_lock_gate`'s timeout. Without the feature, or the variable, it returns at
+/// once.
 pub fn await_release_gate() -> Result<(), LocalRunDirectoryError> {
     #[cfg(feature = "test-fixtures")]
     await_test_gate(
@@ -8486,12 +8485,11 @@ pub fn await_release_gate() -> Result<(), LocalRunDirectoryError> {
 }
 
 /// A seam for the end-to-end tests of a withdrawal recorded while a `retry` or `resume` holds a
-/// run before its attempt begins (feature `test-fixtures`, REQ-LOCALRUN-213): when
-/// `USEFUL_TEST_BEGIN_GATE` names a path, a command that begins an attempt not continuing an edge
-/// calls this on its blocking thread before it takes the controls lock to ask again for an
-/// unhonored withdrawal and begin, which writes `<path>.beginning` and returns once `<path>`
-/// exists, with `await_run_lock_gate`'s timeout. Without the feature, or the variable, it
-/// returns at once.
+/// run before its attempt begins (feature `test-fixtures`): when `USEFUL_TEST_BEGIN_GATE` names a
+/// path, a command that begins an attempt not continuing an edge calls this on its blocking
+/// thread before it takes the controls lock to ask again for an unhonored withdrawal and begin,
+/// which writes `<path>.beginning` and returns once `<path>` exists, with `await_run_lock_gate`'s
+/// timeout. Without the feature, or the variable, it returns at once.
 pub fn await_begin_gate() -> Result<(), LocalRunDirectoryError> {
     #[cfg(feature = "test-fixtures")]
     await_test_gate(
@@ -8555,12 +8553,10 @@ pub fn acquire_local_continuation(
     acquire_local_continuation_bridged(requested, None)
 }
 
-/// `acquire_local_continuation` for a process that chains attempts (REQ-WFEXEC-64,
-/// REQ-LOCALRUN-214, INV-ENGINE-60): `bridge` is the run's controls lock the attempt that ended
-/// `continued` took before it released the run lock, so a withdrawal that arrives in between
-/// waits for this acquisition. It is dropped as soon as the one non-blocking try of the run
-/// lock answered, taken or contended, before anything else here runs: the error path settles
-/// the abandoned attempt (`settle_abandoned_snapshot`), which takes the controls lock itself.
+/// `acquire_local_continuation` for a process that chains attempts: `bridge` is the run's
+/// controls lock the attempt that ended `continued` took before it released the run lock, so a
+/// withdrawal that arrives in between waits for this acquisition. It is dropped as soon as the
+/// one non-blocking try of the run lock answers, whether taken or contended.
 pub fn acquire_local_continuation_bridged(
     requested: &Path,
     bridge: Option<ControlsLock>,
@@ -8620,45 +8616,28 @@ pub fn acquire_local_continuation_bridged(
     };
     // The state claim is authoritative. A crash may have left only a prepared
     // next-attempt directory; remove that orphan under the lock after quiescence.
-    let retained = (|| {
-        cleanup_unclaimed_attempt_directory(&root, &state)?;
-        let mut retained_read_budget = RetainedReadBudget::default();
-        let (prior_workflow, _, _) = load_attempt_retained_execution_with_budget(
-            &root,
-            &run,
-            &state,
-            prior,
-            &mut retained_read_budget,
-        )?;
-        let (initial_workflow, inputs, maximum_parallel_steps, tree, source_revision) =
-            load_retained_execution_with_budget(&root, &run, &mut retained_read_budget)?;
-        validate_retained_outputs_against_definition(prior, &prior_workflow)?;
-        verify_retained_output_evidence(&root, &state, prior.attempt_number)?;
-        authenticate_retained_output_producers(
-            &root,
-            &run,
-            &state,
-            prior,
-            &initial_workflow,
-            &mut retained_read_budget,
-        )?;
-        Ok::<_, LocalRunDirectoryError>((
-            prior_workflow,
-            initial_workflow,
-            inputs,
-            maximum_parallel_steps,
-            tree,
-            source_revision,
-        ))
-    })();
-    let (prior_workflow, initial_workflow, inputs, maximum_parallel_steps, tree, source_revision) =
-        match retained {
-            Ok(retained) => retained,
-            Err(error) => {
-                settle_abandoned_snapshot(&normalized, &root, &state)?;
-                return Err(error);
-            }
-        };
+    cleanup_unclaimed_attempt_directory(&root, &state)?;
+    let lost_workspaces = lost_workspaces(&root, &state, prior)?;
+    let mut retained_read_budget = RetainedReadBudget::default();
+    let (prior_workflow, _, _) = load_attempt_retained_execution_with_budget(
+        &root,
+        &run,
+        &state,
+        prior,
+        &mut retained_read_budget,
+    )?;
+    let (initial_workflow, inputs, maximum_parallel_steps, tree, source_revision) =
+        load_retained_execution_with_budget(&root, &run, &mut retained_read_budget)?;
+    validate_retained_outputs_against_definition(prior, &prior_workflow)?;
+    verify_retained_output_evidence(&root, &state, prior.attempt_number)?;
+    authenticate_retained_output_producers(
+        &root,
+        &run,
+        &state,
+        prior,
+        &initial_workflow,
+        &mut retained_read_budget,
+    )?;
     Ok(LocalContinuationOpen::Acquired(Box::new(
         PendingLocalContinuation {
             normalized,
@@ -8668,6 +8647,7 @@ pub fn acquire_local_continuation_bridged(
             state,
             prior_execution_root,
             prior_workflow,
+            lost_workspaces,
             initial_workflow,
             inputs,
             maximum_parallel_steps,
@@ -8677,6 +8657,33 @@ pub fn acquire_local_continuation_bridged(
             keep_resolved_wait: false,
         },
     )))
+}
+
+/// Keep the successful prior step ids whose directories are absent. The continuation's
+/// definition decides which of them establish workspaces.
+fn lost_workspaces(
+    root: &OwnedFd,
+    state: &LocalRunStateV1,
+    prior: &LocalAttemptV1,
+) -> Result<BTreeSet<String>, LocalRunDirectoryError> {
+    let index = LocalRunStateIndex::new(state)?;
+    let workspaces = open_optional_directory(root, WORKSPACES_DIRECTORY)?;
+    let mut lost = BTreeSet::new();
+    for step in &prior.progress.steps {
+        if !matches!(
+            index.disposition(prior.attempt_number, &step.id),
+            Some(InheritedDisposition::Succeeded)
+        ) {
+            continue;
+        }
+        if let Some(directory) = &workspaces
+            && read_if_present(directory, &step.id, |_| Ok(()))?.is_some()
+        {
+            continue;
+        }
+        lost.insert(step.id.clone());
+    }
+    Ok(lost)
 }
 
 fn open_retry_lock(root: &OwnedFd) -> Result<File, LocalRunDirectoryError> {
@@ -8977,11 +8984,19 @@ pub(super) fn required_inherited_outputs(
         .filter(|step| step.state == AttemptStepStateV1::Inherited)
         .map(|step| step.id.as_str())
         .collect::<BTreeSet<_>>();
+    // A revalidated step reads its inputs whether it then runs or keeps its result, so the
+    // set is the same before and after the reducer decides it.
+    let revalidated = attempt
+        .continuation
+        .as_ref()
+        .map_or(&[][..], |record| &record.revalidated_steps);
     let reexecuted = attempt
         .progress
         .steps
         .iter()
-        .filter(|step| step.state != AttemptStepStateV1::Inherited)
+        .filter(|step| {
+            step.state != AttemptStepStateV1::Inherited || revalidated.contains(&step.id)
+        })
         .map(|step| step.id.clone())
         .collect::<Vec<_>>();
     let mut required = super::continuation::referenced_outputs(&workflow.definition, &reexecuted)
@@ -8989,8 +9004,24 @@ pub(super) fn required_inherited_outputs(
         .filter(|source| inherited.contains(source.node.id.as_str()))
         .map(|source| (source.node.id, source.output))
         .collect::<BTreeSet<_>>();
-    // An inherited `workflow` step routes the continuation from its retained outcome
-    // (REQ-WFEXEC-58), which a step that inherited a skip does not have.
+    // A step kept mid-attempt carries every output it retained.
+    required.extend(
+        attempt
+            .progress
+            .steps
+            .iter()
+            .filter(|step| {
+                step.state == AttemptStepStateV1::Inherited && revalidated.contains(&step.id)
+            })
+            .flat_map(|step| {
+                step.outputs
+                    .iter()
+                    .flatten()
+                    .map(|output| (step.id.clone(), output.name().to_owned()))
+            }),
+    );
+    // An inherited `workflow` step routes the continuation from its retained
+    // outcome, which a step that inherited a skip does not have.
     required.extend(
         attempt
             .progress
@@ -9036,6 +9067,50 @@ fn load_execution_seed(
     validate_retained_outputs_against_definition(attempt, admitted.workflow())?;
     verify_retained_output_evidence(root, &state, attempt_number)?;
     let required_outputs = required_inherited_outputs(attempt, admitted.workflow())?;
+    let mut values = BTreeMap::new();
+    let mut load = |retained: &RetainedOutputV1| {
+        let producer = retained
+            .producer()
+            .cloned()
+            .ok_or(LocalRunDirectoryError::StateInvalid)?;
+        let key = (
+            producer.attempt_number,
+            producer.node.clone(),
+            producer.output.clone(),
+        );
+        if let Some(value) = values.get(&key) {
+            return Ok((producer, CapturedValue::clone(value)));
+        }
+        let producer_attempt = index
+            .attempt(producer.attempt_number)
+            .filter(|attempt| attempt.attempt_id == producer.attempt_id)
+            .ok_or(LocalRunDirectoryError::StateInvalid)?;
+        let definition = resolved_attempt_definition(&run, &state, producer_attempt)?;
+        let producer_workflow =
+            cached_producer_workflow(&mut producer_workflows, definition, || {
+                load_attempt_retained_execution_with_budget(
+                    root,
+                    &run,
+                    &state,
+                    producer_attempt,
+                    &mut retained_read_budget,
+                )
+                .map(|(workflow, _, _)| workflow)
+            })?;
+        if let Some(carrier) = retained.carrier() {
+            retained_read_budget.account_size(carrier.size_bytes)?;
+        }
+        let value = load_retained_value(
+            root,
+            &state,
+            producer_workflow,
+            artifacts,
+            &producer.node,
+            retained,
+        )?;
+        values.insert(key, value.clone());
+        Ok((producer, value))
+    };
     let mut inherited_steps = BTreeMap::new();
     for step in &attempt.progress.steps {
         if step.state != AttemptStepStateV1::Inherited {
@@ -9062,35 +9137,8 @@ fn load_execution_seed(
             if !retained_output_matches_declaration(retained, declaration) {
                 return Err(LocalRunDirectoryError::StateInvalid);
             }
-            let producer = retained
-                .producer()
-                .cloned()
-                .ok_or(LocalRunDirectoryError::StateInvalid)?;
-            let producer_attempt = index
-                .attempt(producer.attempt_number)
-                .filter(|attempt| attempt.attempt_id == producer.attempt_id)
-                .ok_or(LocalRunDirectoryError::StateInvalid)?;
-            let definition = resolved_attempt_definition(&run, &state, producer_attempt)?;
-            let producer_workflow =
-                cached_producer_workflow(&mut producer_workflows, definition, || {
-                    load_attempt_retained_execution_with_budget(
-                        root,
-                        &run,
-                        &state,
-                        producer_attempt,
-                        &mut retained_read_budget,
-                    )
-                    .map(|(workflow, _, _)| workflow)
-                })?;
             let name = retained.name().to_owned();
-            let value = load_retained_value(
-                root,
-                &state,
-                producer_workflow,
-                artifacts,
-                &step.id,
-                retained,
-            )?;
+            let (producer, value) = load(retained)?;
             if outputs.insert(name.clone(), value).is_some()
                 || producers.insert(name, producer).is_some()
             {
@@ -9098,7 +9146,7 @@ fn load_execution_seed(
             }
         }
         // A child export the inherited `workflow` step left out stays absent, as it was
-        // when the step first succeeded (REQ-WFEXEC-58).
+        // when the step first succeeded.
         if disposition == InheritedDisposition::Succeeded
             && required_outputs.iter().any(|(node, output)| {
                 node == &step.id
@@ -9121,19 +9169,20 @@ fn load_execution_seed(
             },
         );
     }
-    let seed = ExecutionSeed::new(admitted, inherited_steps)
+    let revalidated = load_revalidated_steps(attempt, &index, admitted, load)?;
+    let seed = ExecutionSeed::new_with_revalidated(admitted, inherited_steps, revalidated)
         .map_err(|_| LocalRunDirectoryError::StateInvalid)?;
     let super::validated::Scheduling::Edges { .. } = &admitted.workflow().definition.scheduling
     else {
         return Ok(seed);
     };
-    // An edge-scheduled walk decides each limited edge from the run record's counts
-    // (REQ-WFEXEC-64, INV-ENGINE-22); a run without a record has none.
+    // An edge-scheduled walk decides each limited edge from the run record's
+    // counts; a run without a record has none.
     let seed = match read_optional_run_record(root)? {
         Some(record) => seed.with_edge_counts(record.edges),
         None => seed,
     };
-    // An edge-scheduled continuation starts the one step it names (REQ-CONTINUE-96).
+    // An edge-scheduled continuation starts the one step it names.
     Ok(
         match attempt
             .continuation
@@ -9146,9 +9195,106 @@ fn load_execution_seed(
     )
 }
 
+/// Gather the prior results and the evidence for the reducer's keep-or-run decision.
+fn load_revalidated_steps(
+    attempt: &LocalAttemptV1,
+    index: &LocalRunStateIndex<'_>,
+    admitted: &AdmittedWorkflow,
+    mut load: impl FnMut(
+        &RetainedOutputV1,
+    ) -> Result<
+        (super::runtime::OutputProducer, CapturedValue),
+        LocalRunDirectoryError,
+    >,
+) -> Result<BTreeMap<String, RevalidatedStepSeed<CapturedValue>>, LocalRunDirectoryError> {
+    let mut seeds = BTreeMap::new();
+    let Some(record) = attempt
+        .continuation
+        .as_ref()
+        .filter(|record| !record.revalidated_steps.is_empty())
+    else {
+        return Ok(seeds);
+    };
+    let prior = attempt
+        .prior_attempt_number
+        .and_then(|number| index.attempt(number))
+        .ok_or(LocalRunDirectoryError::StateInvalid)?;
+    for id in &record.revalidated_steps {
+        let previous = index
+            .step(prior.attempt_number, id)
+            .ok_or(LocalRunDirectoryError::StateInvalid)?;
+        let prior_state = match previous.state {
+            AttemptStepStateV1::Succeeded => super::evidence::InheritedPriorState::Succeeded,
+            AttemptStepStateV1::Inherited
+                if index.disposition(prior.attempt_number, id)
+                    == Some(InheritedDisposition::Succeeded) =>
+            {
+                super::evidence::InheritedPriorState::Inherited
+            }
+            _ => return Err(LocalRunDirectoryError::StateInvalid),
+        };
+        let mut kept = InheritedStepSeed {
+            detail: super::evidence::InheritedDetail {
+                prior_attempt_id: prior.attempt_id.clone(),
+                prior_attempt_number: prior.attempt_number,
+                prior_state,
+                definition_changed: false,
+            },
+            disposition: InheritedDisposition::Succeeded,
+            outputs: BTreeMap::new(),
+            producers: BTreeMap::new(),
+        };
+        for retained in previous.outputs.iter().flatten() {
+            let name = retained.name();
+            let output = completed_step_output(prior, previous, name)
+                .ok_or(LocalRunDirectoryError::StateInvalid)?;
+            let (producer, value) = load(&output)?;
+            kept.outputs.insert(name.to_owned(), value);
+            kept.producers.insert(name.to_owned(), producer);
+        }
+        let (references, mut unchanged) =
+            super::continuation::revalidation_basis(&admitted.workflow().definition, id);
+        let mut reproduced = BTreeMap::new();
+        for (producer, names) in references {
+            if index
+                .step(attempt.attempt_number, &producer)
+                .is_some_and(|step| step.state == AttemptStepStateV1::Inherited)
+            {
+                unchanged.insert(producer);
+                continue;
+            }
+            let previous = index.step(prior.attempt_number, &producer);
+            let mut values = BTreeMap::new();
+            for name in names {
+                let Some(retained) =
+                    previous.and_then(|step| completed_step_output(prior, step, &name))
+                else {
+                    // A missing value cannot be reproduced by a new execution.
+                    unchanged.insert(producer.clone());
+                    break;
+                };
+                let (_, value) = load(&retained)?;
+                values.insert(name, value);
+            }
+            if !unchanged.contains(&producer) {
+                reproduced.insert(producer, values);
+            }
+        }
+        seeds.insert(
+            id.clone(),
+            RevalidatedStepSeed {
+                kept,
+                reproduced,
+                unchanged,
+            },
+        );
+    }
+    Ok(seeds)
+}
+
 /// The wait `record` names as the engine holds it: its kind, its waiting step, `then`,
 /// `onHandBack` and the `payload.outcome` it was entered on when that is a string. The record
-/// itself, not this, is what a kept wait writes back (REQ-WFEXEC-129).
+/// itself, not this, is what a kept wait writes back.
 fn resumed_entered_wait(record: &WaitRecord) -> Result<EnteredWait, LocalRunDirectoryError> {
     let step = record
         .step
@@ -9513,8 +9659,8 @@ fn completed_step_output(
     Some(output)
 }
 
-/// The producer of the output `output` of `node`, a step `attempt` ran itself
-/// (REQ-CONTINUE-15): the attempt's ids, the node and the output's name.
+/// The producer of the output `output` of `node`, a step `attempt` ran
+/// itself: the attempt's ids, the node and the output's name.
 fn own_output_producer(
     attempt: &LocalAttemptV1,
     node: &str,
@@ -9732,9 +9878,8 @@ fn verify_retained_output(
 }
 
 /// The run root holds exactly the entries of `run_root_entries`, with or without the run
-/// record `run.json`, the directory `children/` (REQ-LOCALRUN-98, REQ-LOCALRUN-177), the
-/// wait record `wait.json` as a regular file, the directory `controls/` (REQ-LOCALRUN-178)
-/// and the directory `mirror/` (REQ-LOCALRUN-193).
+/// record `run.json`, the directory `children/`, the directory `workspaces/`, the wait record
+/// `wait.json` as a regular file, the directory `controls/` and the directory `mirror/`.
 fn verify_existing_run_layout(root: &OwnedFd) -> Result<(), LocalRunDirectoryError> {
     let mut entries = directory_entries(root)?;
     for name in [
@@ -9756,6 +9901,7 @@ fn verify_existing_run_layout(root: &OwnedFd) -> Result<(), LocalRunDirectoryErr
     entries.remove(RUN_RECORD_FILE.as_bytes());
     let optional_entries_typed = [
         (CHILDREN_DIRECTORY, FileType::Directory),
+        (WORKSPACES_DIRECTORY, FileType::Directory),
         (CONTROLS_DIRECTORY, FileType::Directory),
         (MIRROR_DIRECTORY, FileType::Directory),
         (WAIT_RECORD_FILE, FileType::RegularFile),
@@ -9789,8 +9935,7 @@ fn run_root_entries() -> BTreeSet<Vec<u8>> {
 }
 
 /// A run's retained definition, inputs and parallelism, its tree record when the run was
-/// admitted from a tree (REQ-LOCALRUN-170) and its source revision when it was created with
-/// one (REQ-LOCALRUN-217).
+/// admitted from a tree and its source revision when it was created with one.
 type RetainedExecution = (
     ResolvedWorkflow,
     ResolvedInputs,
@@ -9906,7 +10051,7 @@ fn load_retained_execution_directory(
     let manifest: WorkflowManifestV1 = decode_schema_one(&manifest_bytes)?;
     validate_manifest(&manifest).map_err(|_| LocalRunDirectoryError::StateInvalid)?;
     // The tree copy is an entry only when the manifest, authenticated by its digest,
-    // declares it; `verify_tree_copy` judges the copy's contents (REQ-LOCALRUN-171).
+    // declares it; `verify_tree_copy` judges the copy's contents.
     let mut expected_workflow_entries = BTreeSet::from([
         WORKFLOW_MANIFEST_FILE.as_bytes().to_vec(),
         WORKFLOW_FILES_DIRECTORY.as_bytes().to_vec(),
@@ -10147,7 +10292,7 @@ fn retry_rejection(
 }
 
 /// The successor named by the run's `run.json`, or `None` for a run without one or one no
-/// restart superseded (REQ-LOCALRUN-196).
+/// restart superseded.
 fn run_successor(root: &OwnedFd) -> Result<Option<String>, LocalRunDirectoryError> {
     Ok(read_optional_run_record(root)?.and_then(|record| record.successor))
 }
@@ -10272,7 +10417,7 @@ pub fn read_local_run_status(requested: &Path) -> Result<LocalRunStatusSnapshot,
     let reported_directory = Some(snapshot.run_directory.clone());
     let run_value = serde_json::to_value(&snapshot.run)
         .map_err(|_| invalid_status_error(&reported_directory))?;
-    // The run record (REQ-LOCALRUN-146): only a run admitted from a tree holds one.
+    // The run record: only a run admitted from a tree holds one.
     let record = read_optional_run_record(&snapshot.root)
         .map_err(|_| invalid_status_error(&reported_directory))?
         .map(serde_json::to_value)
@@ -10991,7 +11136,7 @@ fn recovery_status_with(
 
 /// Retry and continuation eligibility in its closed precedence order: the lock, unproven
 /// ownership, a superseded run record (`superseded`: the record carries `successor`, whose
-/// last attempt may still read `waiting`, REQ-LOCALRUN-196), then the last attempt's state.
+/// last attempt may still read `waiting`), then the last attempt's state.
 fn retry_eligibility(
     state: AttemptStateV1,
     recovery: &LocalRecoveryStatus,
@@ -11336,7 +11481,7 @@ fn validate_run_state_pair(
         return Err(LocalRunDirectoryError::StateInvalid);
     }
     // An imported attempt's definition is re-located to the attempt that holds the
-    // predecessor's copy (REQ-LOCALRUN-195), so it is not the run's own.
+    // predecessor's copy, so it is not the run's own.
     for attempt in state
         .attempts
         .iter()
@@ -11882,30 +12027,20 @@ fn validate_attempt_continuation(
             .then_some(())
             .ok_or(LocalRunDirectoryError::AttemptContinuationInvalid);
     };
-    let reexecuted = attempt
-        .progress
-        .steps
-        .iter()
-        .filter(|step| step.state != AttemptStepStateV1::Inherited)
-        .map(|step| step.id.as_str())
-        .collect::<Vec<_>>();
     if attempt.trigger != AttemptTriggerV1::Continuation
         || continuation.workspace.preparation
             != super::publication::ContinuationPreparationV1::Ready
         || !super::result_metadata::validate_continuation_record(continuation)
         || continuation.workspace.execution_root != attempt.execution_root
-        || reexecuted
-            != continuation
-                .reexecuted_steps
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        || continuation.inherited_steps.len() != inherited.len()
-        || continuation
-            .inherited_steps
-            .iter()
-            .zip(&inherited)
-            .any(|(record, step)| record.id != step.id)
+        || !super::result_metadata::matches_partition_steps(
+            continuation,
+            attempt.progress.steps.iter().map(|step| {
+                (
+                    step.id.as_str(),
+                    step.state == AttemptStepStateV1::Inherited,
+                )
+            }),
+        )
     {
         return Err(LocalRunDirectoryError::AttemptContinuationInvalid);
     }
@@ -11927,7 +12062,7 @@ fn validate_attempt_continuation(
     {
         return Err(LocalRunDirectoryError::AttemptContinuationInvalid);
     }
-    for (record, step) in continuation.inherited_steps.iter().zip(inherited) {
+    for step in inherited {
         let Some(NodeDetail::Inherited(detail)) = &step.detail else {
             return Err(LocalRunDirectoryError::AttemptInheritedStepInvalid);
         };
@@ -11964,8 +12099,13 @@ fn validate_attempt_continuation(
         if detail.prior_attempt_id != prior.attempt_id
             || detail.prior_attempt_number != prior.attempt_number
             || detail.prior_state != prior_state
-            || detail.prior_state != record.prior_state
-            || detail.definition_changed != record.definition_changed
+            || !super::result_metadata::matches_partition_inheritance(
+                continuation,
+                &step.id,
+                detail,
+            )
+            || (continuation.revalidated_steps.contains(&step.id)
+                && disposition != InheritedDisposition::Succeeded)
             || outputs.len() != prior_outputs.len()
             || (disposition == InheritedDisposition::Skipped && !outputs.is_empty())
         {
@@ -12115,9 +12255,9 @@ fn validate_attempt_recovery(
         return Err(LocalRunDirectoryError::AttemptRecoveryAccountingInvalid);
     }
     for step in &attempt.progress.steps {
-        // REQ-WFEXEC-79, REQ-WFRECOVERY-42: a failed ordinary step with recovery is
-        // classified exactly when its recovery ended `infrastructure`; one with none only by
-        // its exit status (REQ-WFRECOVERY-66). No other step is classified.
+        // A failed ordinary step with recovery is classified exactly when its recovery ended
+        // `infrastructure`; one with none only by its exit status. No other step is
+        // classified.
         let exit_status_classifies = matches!(
             &step.detail,
             Some(NodeDetail::Failed(detail))
@@ -12230,9 +12370,9 @@ fn validate_attempt_finalization<'a>(
                             finalizer.state,
                             finalizer.started_at.as_deref(),
                         )
-                        // A finalizer's body takes no `firstOf` (REQ-EVIDENCE-28).
+                        // A finalizer's body takes no `firstOf`.
                         || !finalizer.input_sources.is_empty()
-                        // No finalizer's failure is classified (REQ-WFEXEC-79).
+                        // No finalizer's failure is classified.
                         || finalizer.failure_class.is_some()
                         || !retained_output_set_valid(
                             finalizer.role,
@@ -12502,7 +12642,7 @@ fn retained_outputs_match_declarations(
     }
     let declared = &definition.common().outputs;
     // A `workflow` step commits its `outcome` and only the child exports that were
-    // available (REQ-WFEXEC-58), so a child export it left out is absent.
+    // available, so a child export it left out is absent.
     let optional = |declaration: &super::document::Output| {
         matches!(declaration, super::document::Output::ChildExport { .. })
     };
@@ -12705,8 +12845,8 @@ fn durable_finalizer_valid(finalizer: &DurableFinalizerV1) -> bool {
         )
 }
 
-/// Only a failed node carries a classified diagnostic, and never an empty one
-/// (REQ-LOCALRUN-198).
+/// Only a failed node carries a classified diagnostic, and never an empty
+/// one.
 fn attempt_step_diagnostic_valid(
     state: AttemptStepStateV1,
     diagnostic: Option<&FailureDiagnosticV1>,
@@ -12718,7 +12858,7 @@ fn attempt_step_diagnostic_valid(
 }
 
 /// A node that left `pending` in its attempt may carry the canonical UTC time it did;
-/// a pending or inherited node never does (REQ-LOCALRUN-201).
+/// a pending or inherited node never does.
 fn attempt_step_started_at_valid(state: AttemptStepStateV1, started_at: Option<&str>) -> bool {
     started_at.is_none_or(|started_at| {
         !matches!(
@@ -12729,8 +12869,7 @@ fn attempt_step_started_at_valid(state: AttemptStepStateV1, started_at: Option<&
 }
 
 /// A step that started in its attempt may carry the well-formed sources its `firstOf`s
-/// took; a pending, blocked, skipped, not-run or inherited step never does
-/// (REQ-EVIDENCE-28).
+/// took; a pending, blocked, skipped, not-run or inherited step never does.
 fn attempt_step_input_sources_valid(
     state: AttemptStepStateV1,
     sources: &[super::evidence::InputSource],

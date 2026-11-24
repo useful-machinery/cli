@@ -167,7 +167,7 @@ impl ExecutionJob {
             self.run_event.clone(),
         );
         // The engine and the agent dispatcher feed the run's view only after the runner's
-        // observer (INV-RUNNER-47); the runner's observer alone answers for the run.
+        // observer; the runner's observer alone answers for the run.
         let viewed = ObserverThenView::new(observer.clone(), view.clone());
         let process_guard_registry = self
             .accepted
@@ -566,20 +566,23 @@ impl ExecutionJob {
         .ok()
         .and_then(Result::ok);
         let finished_at = RunnerExecutionClock.now();
-        let prepared = match self.runner_result(
-            &admitted,
-            &diagnostics,
-            result.clone(),
-            &observer,
-            started_at,
-            finished_at,
+        let prepared = match (
+            self.runner_result(
+                &admitted,
+                &diagnostics,
+                result.clone(),
+                &observer,
+                started_at,
+                finished_at,
+            ),
+            self.accepted.primary_source(),
         ) {
-            Ok(run) => match prepare_cloud_workflow_result(
+            (Ok(run), Some(source)) => match prepare_cloud_workflow_result(
                 &run,
                 self.accepted.project_id().to_owned(),
-                self.accepted.repository_connection_id().to_owned(),
-                self.accepted.source_object_format().to_owned(),
-                self.accepted.source_commit_oid().to_owned(),
+                source.repository_connection_id.clone(),
+                source.object_format.clone(),
+                source.commit_oid.clone(),
                 self.accepted.source_display_snapshot().map(|snapshot| {
                     CloudSourceDisplaySnapshotV1 {
                         organization_display_name: snapshot.organization_display_name.clone(),
@@ -631,7 +634,11 @@ impl ExecutionJob {
                     None
                 }
             },
-            Err(failure) => {
+            (Ok(_), None) => {
+                self.record_preparation_failure("runner_result", "missing_source", Vec::new());
+                None
+            }
+            (Err(failure), _) => {
                 self.collapse("runner_internal_failure", failure.code, "bundle_generation");
                 let mut details = Vec::new();
                 if let Some(node) = failure.node {
@@ -874,12 +881,10 @@ impl ExecutionJob {
         ExecutionCompletion::containment_gated(report, workspace_disposition)
     }
 
-    /// A tree run (REQ-RUNNERENROLL-91): `useful workflow run create`, or the adopted run of a
-    /// continuation (REQ-RUNNERENROLL-217), and the resume loop under the assignment's
-    /// lease, its root progress and step observations queued as they change
-    /// (REQ-RUNNERENROLL-88), then the record's exit as the attempt's one terminal report,
-    /// after the gate transitions that reach it and with no step transition
-    /// (REQ-RUNNERENROLL-170).
+    /// A tree run: `useful workflow run create`, or the adopted run of a continuation, and the
+    /// resume loop under the assignment's lease, its root progress and step observations
+    /// queued as they change, then the record's exit as the attempt's one terminal report,
+    /// after the gate transitions that reach it and with no step transition.
     pub(super) async fn run_tree(
         &mut self,
         tree: &TreeRun,
@@ -907,8 +912,7 @@ impl ExecutionJob {
             return completion;
         }
         // A tree run on a GitHub project serves the workspace's Git read access under the
-        // lease as an engine run does (REQ-RUNNERENROLL-121); one on a GitLab project has
-        // no relay to start (REQ-WORKSPACE-42).
+        // lease as an engine run does; one on a GitLab project has no relay to start.
         if self.accepted.workflow_git.is_some() {
             if !self.activate_workflow_git().await
                 && cancellation.cancellation_reason() != Some(CancellationReason::RunnerShutdown)
@@ -963,6 +967,21 @@ impl ExecutionJob {
         if let Some(workflow_git) = &self.accepted.workflow_git {
             workflow_git.disable();
         }
+        let delivery = tree.record_delivery();
+        if let Some(end) = delivery.end {
+            self.run_event
+                .set(KeyValue::new(telemetry::attribute::RECORD_DELIVERY, end));
+        }
+        if let Some(failure) = delivery.failure {
+            self.run_event
+                .set(KeyValue::new(telemetry::attribute::RECORD_FAILURE, failure));
+        }
+        if let Some(sequence) = delivery.sequence.and_then(|s| i64::try_from(s).ok()) {
+            self.run_event.set(KeyValue::new(
+                telemetry::attribute::RECORD_SEQUENCE,
+                sequence,
+            ));
+        }
         let end = match execution {
             LeaseExecution::Completed {
                 output: Ok(end), ..
@@ -1007,16 +1026,16 @@ impl ExecutionJob {
                 return ExecutionCompletion::lease_clock_failed(report.flatten());
             }
         };
-        // A `mirror/` the runner could not read reports no writes and no release
-        // (REQ-RUNNERENROLL-180); the run event keeps why.
+        // A `mirror/` the runner could not read reports no writes and no
+        // release; the run event keeps why.
         if let Some(failure) = end.mirror_failure {
             self.run_event.set(KeyValue::new(
                 telemetry::attribute::MIRROR_READ_FAILURE,
                 failure,
             ));
         }
-        // An export the runner could not list is left out of the finish
-        // (REQ-RUNNERENROLL-275); the run event keeps the class of the first.
+        // An export the runner could not list is left out of the finish; the
+        // run event keeps the class of the first.
         if let Some(failure) = end.export_failure {
             self.run_event.set(KeyValue::new(
                 telemetry::attribute::EXPORT_READ_FAILURE,
@@ -1077,9 +1096,9 @@ impl ExecutionJob {
             }
             last_sequence = sequence;
         }
-        // A tree run delivers no result set (REQ-RUNNERENROLL-176): the required field reads
-        // `failed` at `preparation` for every finish, a succeeded one included, and means only
-        // that no set was delivered. The run-scoped home is removed on success.
+        // A tree run delivers no result set: the required field reads `failed` at
+        // `preparation` for every finish, a succeeded one included, and means only that no set
+        // was delivered. The run-scoped home is removed on success.
         let artifact_delivery = json!({
             "outcome": "failed",
             "phase": "preparation",

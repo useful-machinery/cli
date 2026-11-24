@@ -194,8 +194,6 @@ fn assert_invalid_runner_gateway(output: &std::process::Output) {
     assert!(!output.stderr.is_empty());
 }
 
-// REQ-AGENT-1, REQ-AGENT-13, REQ-AGENT-48
-// INV-HARNESS-11
 #[test]
 fn doctor_selects_path_pi_and_uses_only_the_two_closed_probes() {
     let fixture = PiFixture::new("0.99.1", COMPLETE_HELP, true);
@@ -285,7 +283,6 @@ fn doctor_selects_path_pi_and_uses_only_the_two_closed_probes() {
     }
 }
 
-// REQ-AGENT-49
 #[test]
 fn human_doctor_reports_pi_policy_when_missing_and_unsupported() {
     let missing = tempfile::tempdir().expect("missing Pi directory should be created");
@@ -328,7 +325,6 @@ fn human_doctor_reports_pi_policy_when_missing_and_unsupported() {
     );
 }
 
-// REQ-AGENT-1, REQ-AGENT-65, REQ-AGENT-68
 #[test]
 fn doctor_passes_a_newer_pi_as_untested_and_reports_qualification() {
     for (version, qualification) in [("1.4.0", "untested"), ("1.3.0", "supported_range")] {
@@ -353,7 +349,6 @@ fn doctor_passes_a_newer_pi_as_untested_and_reports_qualification() {
     }
 }
 
-// REQ-AGENT-49
 #[test]
 fn human_doctor_reports_pi_qualification_anchor_when_missing() {
     let missing = tempfile::tempdir().expect("missing Pi directory should be created");
@@ -385,7 +380,6 @@ fn human_doctor_reports_pi_qualification_anchor_when_missing() {
     );
 }
 
-// REQ-AGENT-6
 #[test]
 fn doctor_path_lookup_skips_candidates_not_executable_by_current_user() {
     let inaccessible = PiFixture::new("0.84.2", COMPLETE_HELP, true);
@@ -421,7 +415,6 @@ fn doctor_preserves_selected_path_for_env_interpreter_resolution() {
     assert_eq!(fixture.recorded_probes(), CLOSED_PROBES);
 }
 
-// REQ-AGENT-1, REQ-AGENT-5, REQ-AGENT-7, REQ-AGENT-50
 #[test]
 fn doctor_reports_every_closed_installation_failure_with_exact_probe_boundaries() {
     let missing_directory = tempfile::tempdir().expect("missing Pi directory");
@@ -575,7 +568,6 @@ fn harness_untested_records(output: &std::process::Output) -> Vec<serde_json::Va
         .collect()
 }
 
-// REQ-AGENT-67, REQ-RUNNERENROLL-32
 #[test]
 fn runner_serve_records_harness_untested_for_a_newer_pi_and_still_fails_for_the_gateway() {
     let untested = PiFixture::new("1.4.0", COMPLETE_HELP, true);
@@ -612,7 +604,6 @@ fn pinned_real_pi_validation_ignores_ambient_force_color() {
     assert_eq!(baseline.stdout, force_color.stdout);
 }
 
-// REQ-AGENT-13
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_pi_validation_does_not_read_trust_or_execute_project_extensions() {
@@ -666,8 +657,6 @@ fn pinned_real_pi_validation_does_not_read_trust_or_execute_project_extensions()
     );
 }
 
-// REQ-AGENT-4
-// INV-HARNESS-10
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_pi_conformance_executable_is_exact_and_independent_of_saved_trust() {

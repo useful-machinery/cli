@@ -60,7 +60,6 @@ mod tests {
 
     use super::{Backoff, random_unit};
 
-    // REQ-RUNNERENROLL-37
     #[test]
     fn doubles_the_jitter_cap_until_the_bounded_maximum() {
         let mut backoff = Backoff::new();
@@ -72,7 +71,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-37
     #[test]
     fn applies_full_jitter_within_the_current_cap() {
         let mut backoff = Backoff::new();

@@ -253,7 +253,6 @@ fn diagnostic_codes(report: &Value) -> Vec<&str> {
         .collect()
 }
 
-// REQ-ARTIFACTSET-26
 #[test]
 fn missing_artifact_directory_is_operational_for_humans_and_structured_for_json() {
     let temporary = tempfile::tempdir().unwrap();
@@ -278,7 +277,6 @@ fn missing_artifact_directory_is_operational_for_humans_and_structured_for_json(
     );
 }
 
-// REQ-ARTIFACTSET-1, REQ-ARTIFACTSET-2, REQ-ARTIFACTSET-3, REQ-ARTIFACTSET-8, REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-13, REQ-ARTIFACTSET-21, REQ-ARTIFACTSET-24, REQ-ARTIFACTSET-25
 // `run` gives the command an empty `useful` home and no deployment, so it validates with no
 // stored session and no request.
 #[test]
@@ -330,7 +328,6 @@ fn copied_local_profile_set_validates_in_human_and_json_modes_without_mutation()
     assert_eq!(byte_snapshot(&artifact.root), before);
 }
 
-// REQ-ARTIFACTSET-13, REQ-ARTIFACTSET-16
 #[test]
 fn finalization_summary_is_validated_without_mutating_portable_artifact() {
     let artifact = ArtifactSet::valid();
@@ -387,7 +384,6 @@ fn finalization_summary_is_validated_without_mutating_portable_artifact() {
     assert!(diagnostic_codes(&report).contains(&"result_schema_invalid"));
 }
 
-// REQ-ARTIFACTSET-16
 #[test]
 fn finalization_cancellation_reason_must_match_cancelled_finalizers() {
     let artifact = ArtifactSet::valid();
@@ -431,7 +427,6 @@ fn finalization_cancellation_reason_must_match_cancelled_finalizers() {
     assert!(diagnostic_codes(&report).contains(&"result_schema_invalid"));
 }
 
-// REQ-ARTIFACTSET-16
 #[test]
 fn cancelled_outcome_rejects_required_finalization_issues() {
     let artifact = ArtifactSet::valid();
@@ -485,7 +480,6 @@ fn cancelled_outcome_rejects_required_finalization_issues() {
     assert!(diagnostic_codes(&report).contains(&"result_schema_invalid"));
 }
 
-// REQ-ARTIFACTSET-1, REQ-ARTIFACTSET-9
 #[test]
 fn cloud_metadata_only_and_carrier_bearing_sets_validate() {
     let carrier_bearing = ArtifactSet::valid();
@@ -521,7 +515,6 @@ fn cloud_metadata_only_and_carrier_bearing_sets_validate() {
     }
 }
 
-// REQ-ARTIFACTSET-21, REQ-ARTIFACTSET-23
 #[test]
 fn missing_carrier_remedy_names_the_resolved_path() {
     let artifact = ArtifactSet::valid();
@@ -545,7 +538,6 @@ fn missing_carrier_remedy_names_the_resolved_path() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-ARTIFACTSET-2, REQ-ARTIFACTSET-14, REQ-ARTIFACTSET-17, REQ-ARTIFACTSET-18, REQ-ARTIFACTSET-19, REQ-ARTIFACTSET-24
 #[test]
 fn corruption_is_reported_completely_in_normative_order() {
     let artifact = ArtifactSet::valid();
@@ -586,7 +578,6 @@ fn corruption_is_reported_completely_in_normative_order() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-ARTIFACTSET-4, REQ-ARTIFACTSET-5
 #[test]
 fn alias_and_current_kind_content_failures_are_reported_together() {
     let artifact = ArtifactSet::valid();
@@ -629,7 +620,6 @@ fn alias_and_current_kind_content_failures_are_reported_together() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-ARTIFACTSET-15
 #[test]
 fn carrier_symlinks_and_unsafe_metadata_paths_are_never_followed() {
     let linked = ArtifactSet::valid();
@@ -677,7 +667,6 @@ fn carrier_symlinks_and_unsafe_metadata_paths_are_never_followed() {
     assert_eq!(fs::read(outside).unwrap(), b"outside bytes");
 }
 
-// REQ-ARTIFACTSET-27
 #[test]
 fn unsupported_artifact_kinds_and_usage_errors_are_closed() {
     let artifact = ArtifactSet::valid();
@@ -732,7 +721,6 @@ fn unsupported_artifact_kinds_and_usage_errors_are_closed() {
     }
 }
 
-// REQ-ARTIFACTSET-16
 #[test]
 fn successful_command_without_required_output_metadata_is_rejected() {
     let artifact = ArtifactSet::valid();
@@ -755,7 +743,6 @@ fn successful_command_without_required_output_metadata_is_rejected() {
     assert!(diagnostic_codes(&report).contains(&"result_schema_invalid"));
 }
 
-// REQ-ARTIFACTSET-16
 #[test]
 fn contradictory_workflow_outcome_and_step_state_is_rejected() {
     let artifact = ArtifactSet::valid();
@@ -782,7 +769,6 @@ fn contradictory_workflow_outcome_and_step_state_is_rejected() {
     assert!(diagnostic_codes(&report).contains(&"result_schema_invalid"));
 }
 
-// REQ-ARTIFACTSET-5
 #[test]
 fn canonical_json_with_a_large_rfc_8259_number_is_valid() {
     let artifact = ArtifactSet::valid();
@@ -809,7 +795,6 @@ fn canonical_json_with_a_large_rfc_8259_number_is_valid() {
     );
 }
 
-// REQ-ARTIFACTSET-5
 #[test]
 fn canonical_json_at_the_nesting_limit_is_valid() {
     let artifact = ArtifactSet::valid();
@@ -837,7 +822,6 @@ fn canonical_json_at_the_nesting_limit_is_valid() {
     );
 }
 
-// REQ-ARTIFACTSET-17
 #[test]
 fn malformed_export_does_not_hide_its_usable_carrier_reference() {
     let artifact = ArtifactSet::valid();
@@ -877,7 +861,6 @@ fn malformed_export_does_not_hide_its_usable_carrier_reference() {
     assert!(diagnostic_codes(&report).contains(&"carrier_digest_mismatch"));
 }
 
-// REQ-ARTIFACTSET-20
 #[test]
 fn malformed_unresolved_reference_delta_is_rejected() {
     let artifact = ArtifactSet::valid();
@@ -921,7 +904,6 @@ fn malformed_unresolved_reference_delta_is_rejected() {
     assert!(diagnostic_codes(&report).contains(&"git_pack_invalid"));
 }
 
-// REQ-ARTIFACTSET-20
 #[test]
 fn unresolved_delta_chain_over_the_profile_limit_is_rejected() {
     let artifact = ArtifactSet::valid();
@@ -968,7 +950,6 @@ fn unresolved_delta_chain_over_the_profile_limit_is_rejected() {
     );
 }
 
-// REQ-ARTIFACTSET-6, REQ-ARTIFACTSET-17
 #[test]
 fn zero_delta_carrier_diagnostic_does_not_hide_other_shape_errors() {
     let artifact = ArtifactSet::valid();
@@ -1011,7 +992,6 @@ fn zero_delta_carrier_diagnostic_does_not_hide_other_shape_errors() {
     assert!(codes.contains(&"git_zero_delta_invalid"));
 }
 
-// REQ-ARTIFACTSET-18
 #[cfg(target_os = "linux")]
 #[test]
 fn duplicate_code_and_location_diagnostics_are_deduplicated() {
@@ -1054,7 +1034,6 @@ fn duplicate_code_and_location_diagnostics_are_deduplicated() {
     );
 }
 
-// REQ-ARTIFACTSET-10, REQ-ARTIFACTSET-17
 #[test]
 fn export_limit_does_not_skip_later_authoritative_references() {
     let artifact = ArtifactSet::valid();
@@ -1111,7 +1090,6 @@ fn export_limit_does_not_skip_later_authoritative_references() {
     );
 }
 
-// REQ-ARTIFACTSET-10, REQ-ARTIFACTSET-17
 #[test]
 fn carrier_limit_does_not_skip_later_authoritative_references() {
     let artifact = ArtifactSet::valid();
@@ -1184,7 +1162,6 @@ fn validate_json(artifact: &ArtifactSet) -> (Option<i32>, Value) {
     )
 }
 
-// REQ-ARTIFACTSET-11
 #[test]
 fn result_and_single_carrier_byte_limits_make_the_set_invalid() {
     const GIB: u64 = 1024 * 1024 * 1024;
@@ -1213,7 +1190,6 @@ fn result_and_single_carrier_byte_limits_make_the_set_invalid() {
     assert!(!diagnostic_codes(&report).contains(&"carrier_total_size_limit_exceeded"));
 }
 
-// REQ-ARTIFACTSET-11
 #[test]
 fn distinct_carriers_together_hold_at_most_four_gibibytes() {
     const GIB: u64 = 1024 * 1024 * 1024;
@@ -1257,7 +1233,6 @@ fn distinct_carriers_together_hold_at_most_four_gibibytes() {
     );
 }
 
-// REQ-ARTIFACTSET-22
 #[test]
 fn human_output_escapes_hostile_directory_and_location_names() {
     let artifact = ArtifactSet::valid();
@@ -1309,7 +1284,6 @@ fn human_output_escapes_hostile_directory_and_location_names() {
     );
 }
 
-// REQ-ARTIFACTSET-28
 #[test]
 #[expect(
     clippy::disallowed_methods,

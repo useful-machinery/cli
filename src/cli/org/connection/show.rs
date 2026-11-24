@@ -1,6 +1,6 @@
 //! `useful org integration show`: one connection with the runners' authorizations in force for
-//! it (REQ-CONNECTION-105, REQ-INTEGRATION-34), a Linear authorization session, or the
-//! organization's token of a token service (REQ-INTEGRATION-19).
+//! it, a Linear authorization session, a GitHub setup session, or the organization's token of
+//! a token service.
 use clap::Args;
 use useful_human_auth::Deployment;
 
@@ -14,7 +14,7 @@ use crate::cli::context::{self, OrgArgs};
 use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str = "Show one of the organization's connections or tokens";
-const AFTER_HELP: &str = "INTEGRATION may also be the ID of a Linear authorization session that creating or reconnecting a Linear connection printed; only the owner who started that session can read it.";
+const AFTER_HELP: &str = "INTEGRATION may also be the ID of a Linear authorization session or a GitHub setup session that connecting or reconnecting printed; only the owner who started that session can read it.";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -29,12 +29,13 @@ pub(super) struct Command {
     options: Options,
 }
 
-/// What `show` reads: a connection, a Linear authorization session by its ID, or the
-/// organization's token of a token service.
+/// What `show` reads: a connection, a Linear authorization session or a GitHub setup session by
+/// its ID, or the organization's token of a token service.
 #[derive(Clone, Debug)]
 enum Shown {
     Connection(Target),
     Session(String),
+    SetupSession(String),
     Token(String),
 }
 
@@ -42,11 +43,14 @@ fn parse(value: &str) -> Result<Shown, String> {
     if useful_support::valid_typed_id(value, "las_") {
         return Ok(Shown::Session(value.to_owned()));
     }
+    if useful_support::valid_typed_id(value, "ghs_") {
+        return Ok(Shown::SetupSession(value.to_owned()));
+    }
     match Integration::parse(value) {
         Ok(Integration::Connection(target)) => Ok(Shown::Connection(target)),
         Ok(Integration::Token(service)) => Ok(Shown::Token(service)),
         Err(_) => Err(
-            "integration must be an exact ghi_, glc_, lcn_ or las_ identifier, github, \
+            "integration must be an exact ghi_, glc_, lcn_, las_ or ghs_ identifier, github, \
              gitlab or linear, or a token service's name"
                 .to_owned(),
         ),
@@ -76,6 +80,9 @@ impl Command {
             |options, organization| match connection {
                 Shown::Session(session) => {
                     linear::show_session(deployment, &options, organization, &session)
+                }
+                Shown::SetupSession(session) => {
+                    github::show_setup_session(deployment, &options, organization, &session)
                 }
                 Shown::Token(service) => OrgTokens {
                     deployment,

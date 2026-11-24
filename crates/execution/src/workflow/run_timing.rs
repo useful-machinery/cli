@@ -91,8 +91,8 @@ impl RunTimingObservation {
                     });
             }
             // A step an interruption fails before it starts never passes through `starting`,
-            // yet every failure outside `condition` publishes timing (REQ-WFEXEC-40), so it
-            // starts and finishes at the failure (REQ-WFEXEC-69).
+            // yet every failure outside `condition` publishes timing, so it starts and
+            // finishes at the failure.
             TransitionEvent::Step {
                 step,
                 to: StepStateKind::Failed,
@@ -226,8 +226,8 @@ mod tests {
         }))
     }
 
-    // REQ-WFEXEC-135, REQ-WFEXEC-40: a step an interruption fails before it starts is timed
-    // at that instant, while a `condition` failure, which never ran, stays untimed.
+    // A step an interruption fails before it starts is timed at that instant, while a
+    // `condition` failure, which never ran, stays untimed.
     #[test]
     fn a_failure_without_a_start_is_timed_unless_its_phase_is_condition() {
         let observed_at = ObservationTime {

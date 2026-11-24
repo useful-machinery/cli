@@ -87,11 +87,19 @@ pub(crate) fn test_credential() -> Credential {
 }
 
 #[cfg(test)]
+pub(crate) fn second_test_credential() -> Credential {
+    Credential::from_enrolled_state(
+        "rnr_01k0z6r1w8f4jy2m7q9v3x5abd",
+        "rrc_01k0z6r1w8f4jy2m7q9v3x5abe",
+        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA",
+    )
+    .expect("construct second test runner credential")
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Credential, CredentialError};
 
-    // INV-TRUST-5
-    // INV-RUNNER-9
     #[test]
     fn builds_the_current_enrolled_bearer_without_exposing_it_in_debug() {
         let credential = super::test_credential();

@@ -1,6 +1,6 @@
-//! The integration tokens of the member and of an organization (REQ-INTEGRATION-2 to
-//! REQ-INTEGRATION-6), and the token services the deployment serves (REQ-GRANT-78), as
-//! operations of the member grant client, whose session and failure the grant commands hold.
+//! The integration tokens of the member and of an organization, and the token services the
+//! deployment serves, as operations of the member grant client, whose session and failure
+//! the grant commands hold.
 //!
 //! A record decodes leniently into the generated models, which name no token, and a generated
 //! error is never formatted. The token travels only in a request body built here from the
@@ -111,9 +111,9 @@ impl IntegrationTokenOwner<'_> {
     }
 }
 
-/// A token service a deployment serves (REQ-GRANT-78): a provider of kind `token` named by a
-/// provider id that is no built-in provider's, with the name the deployment gives it for people
-/// when that name is fit to print.
+/// A token service a deployment serves: a provider of kind `token` named by a provider id that
+/// is no built-in provider's, with the name the deployment gives it for people when that name
+/// is fit to print.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServedTokenService {
     /// The service's id, as a token and a workflow name it.
@@ -161,8 +161,8 @@ fn token_service_id(name: &str) -> bool {
 
 impl MemberGrantApi {
     /// The providers and the token services this deployment serves, from one read of
-    /// `GET /v1/me/grant-providers` (REQ-GRANT-78), or `None` from a deployment that predates
-    /// the read. A token service an answer also names as a provider is not one.
+    /// `GET /v1/me/grant-providers`, or `None` from a deployment that predates the read. A
+    /// token service an answer also names as a provider is not one.
     pub fn served_integrations(&self) -> Result<Option<ServedIntegrations>, MemberGrantFailure> {
         let Some(body) = self.served_answer()? else {
             return Ok(None);
@@ -193,7 +193,7 @@ impl MemberGrantApi {
         self.route(path)
     }
 
-    /// One page of the owner's unrevoked tokens, oldest first (REQ-INTEGRATION-4).
+    /// One page of the owner's unrevoked tokens, oldest first.
     pub fn integration_tokens(
         &self,
         owner: IntegrationTokenOwner<'_>,
@@ -221,9 +221,9 @@ impl MemberGrantApi {
         Ok(page)
     }
 
-    /// Stores the owner's token of the token service `provider` (REQ-INTEGRATION-2,
-    /// REQ-INTEGRATION-3), as the next version of the one the owner holds when `replace` is
-    /// set. `token` is read from the caller's zeroizing storage and is sent, never kept.
+    /// Stores the owner's token of the token service `provider`, as the next version of the
+    /// one the owner holds when `replace` is set. `token` is read from the caller's
+    /// zeroizing storage and is sent, never kept.
     pub fn store_integration_token(
         &self,
         owner: IntegrationTokenOwner<'_>,
@@ -251,7 +251,7 @@ impl MemberGrantApi {
         Ok(record)
     }
 
-    /// Authorizes one runner for one of the owner's tokens (REQ-INTEGRATION-5).
+    /// Authorizes one runner for one of the owner's tokens.
     pub fn authorize_integration_token(
         &self,
         owner: IntegrationTokenOwner<'_>,
@@ -284,7 +284,7 @@ impl MemberGrantApi {
         Ok(authorization)
     }
 
-    /// Ends one authorization of one of the owner's tokens (REQ-INTEGRATION-5).
+    /// Ends one authorization of one of the owner's tokens.
     pub fn deauthorize_integration_token(
         &self,
         owner: IntegrationTokenOwner<'_>,
@@ -300,7 +300,7 @@ impl MemberGrantApi {
         )
     }
 
-    /// Revokes one of the owner's tokens (REQ-INTEGRATION-6).
+    /// Revokes one of the owner's tokens.
     pub fn revoke_integration_token(
         &self,
         owner: IntegrationTokenOwner<'_>,
@@ -318,8 +318,7 @@ impl MemberGrantApi {
     /// One page of the directory of the organization an ID or a slug names, which any of its
     /// members may read (`GET /v1/organizations/{organizationRef}/memberships`): each
     /// membership's principal by ID with the display name the directory gives it, and the cursor
-    /// of the next page. Who connected an organization's token is named from it
-    /// (REQ-INTEGRATION-19).
+    /// of the next page. Who connected an organization's token is named from it.
     pub fn organization_directory(
         &self,
         organization: &str,
@@ -493,7 +492,6 @@ mod tests {
         }
     }
 
-    // REQ-GRANT-78
     #[test]
     fn the_served_token_services_are_read_from_the_answer_that_names_the_providers() {
         let answer = serde_json::json!({"items": [
@@ -552,8 +550,6 @@ mod tests {
         assert_eq!(got, Ok(None));
     }
 
-    // REQ-INTEGRATION-2
-    // REQ-INTEGRATION-3
     #[test]
     fn a_store_sends_the_owners_route_key_and_body_and_answers_the_record() {
         for owner in OWNERS {
@@ -581,8 +577,6 @@ mod tests {
         }
     }
 
-    // REQ-INTEGRATION-2
-    // REQ-INTEGRATION-3
     #[test]
     fn a_stored_record_that_is_not_what_was_asked_is_an_invalid_response() {
         let invalid = Err(MemberGrantFailure::InvalidResponse {
@@ -635,7 +629,6 @@ mod tests {
         }
     }
 
-    // REQ-INTEGRATION-4
     #[test]
     fn each_list_sends_its_limit_and_cursor_and_yields_the_page_and_its_next_cursor() {
         for owner in OWNERS {
@@ -657,8 +650,6 @@ mod tests {
         }
     }
 
-    // REQ-INTEGRATION-5
-    // REQ-INTEGRATION-6
     #[test]
     fn authorize_deauthorize_and_revoke_send_the_contracts_routes_each_under_its_key() {
         let no_content = || response("204 No Content", None, true, &[]);
@@ -721,10 +712,6 @@ mod tests {
         );
     }
 
-    // REQ-INTEGRATION-2
-    // REQ-INTEGRATION-3
-    // REQ-INTEGRATION-5
-    // REQ-INTEGRATION-6
     #[test]
     fn each_contracted_problem_maps_to_one_failure_and_a_generic_not_found_only_for_an_organization()
      {

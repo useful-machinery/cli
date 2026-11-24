@@ -744,9 +744,13 @@ fn offer(suffix: &str) -> AssignmentOffer {
                 maximum_parallel_steps: 1,
                 cancellation_grace_seconds: 1,
             },
-            source_branch: "main".to_owned(),
-            workflow_definition_source: production_workflow_definition_source(),
-            primary_workspace_source: production_primary_workspace_source(),
+            source: Some(
+                useful_runner_protocol::RepositorySourcesV1RunnerProjection {
+                    source_branch: "main".to_owned(),
+                    workflow_definition_source: production_workflow_definition_source(),
+                    primary_workspace_source: production_primary_workspace_source(),
+                },
+            ),
             source_display_snapshot: None,
             workspace_branch: None,
             workspace_membership: None,
@@ -775,10 +779,21 @@ fn offer_replay_must_preserve_pinned_continuation_identity() {
         prior_attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5aaa".to_owned(),
         required_runner_boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5aaa".to_owned(),
         execution_root: "/retained/workspace".to_owned(),
-        definition_source: altered.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(
+            altered
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .workflow_definition_source
+                .clone(),
+        ),
         effective_capacity: altered.execution_spec.capacity.clone(),
         prior_manifest_digest: altered
             .execution_spec
+            .source
+            .as_ref()
+            .unwrap()
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),
@@ -829,10 +844,25 @@ fn align_offer_with_source_fixture(manager: &AssignmentManager, offered: &mut As
     let commit_oid = run_fixture_git(&source, &["rev-parse", "HEAD"]);
     offered
         .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
         .workflow_definition_source
         .workflow_path = "workflow.yaml".to_owned();
-    offered.execution_spec.workflow_definition_source.commit_oid = commit_oid.clone();
-    offered.execution_spec.primary_workspace_source.commit_oid = commit_oid;
+    offered
+        .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
+        .workflow_definition_source
+        .commit_oid = commit_oid.clone();
+    offered
+        .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
+        .primary_workspace_source
+        .commit_oid = commit_oid;
     if let Ok(workflow) = resolve(&source, Path::new("workflow.yaml")) {
         align_fixture_capacity(&mut offered.execution_spec, &workflow);
     }
@@ -1821,7 +1851,6 @@ fn assert_acknowledged_run(
     assert_eq!(runs[0]["um.run.result"], result);
 }
 
-// REQ-RUNNERENROLL-78
 /// A test that panics while a guarded step runs unwinds through its runtime, which drops
 /// the engine and with it the owner side of the step's guard, as an abruptly dying runner
 /// would; the guard worker then kills and reaps the step's process group, so the panic
@@ -2034,9 +2063,16 @@ fn v3_spec() -> ExecutionSpecV1RunnerProjection {
     spec.schema_version = 3;
     spec.workspace_branch = Some("topic".to_owned());
     let workspace_commit_oid = "fedcba9876543210fedcba9876543210fedcba98".to_owned();
-    spec.primary_workspace_source.commit_oid = workspace_commit_oid.clone();
+    spec.source
+        .as_mut()
+        .unwrap()
+        .primary_workspace_source
+        .commit_oid = workspace_commit_oid.clone();
     spec.workspace_membership = Some(WorkspaceMembership {
         repository_connection_id: spec
+            .source
+            .as_ref()
+            .unwrap()
             .primary_workspace_source
             .repository_connection_id
             .clone(),
@@ -2085,7 +2121,12 @@ fn v3_source_binding_rejects_missing_or_conflicting_proof() {
     });
     assert_eq!(validate_execution_spec(&wrong_repository), invalid);
     let mut gitlab = spec.clone();
-    gitlab.primary_workspace_source.provider_kind = "gitlab".to_owned();
+    gitlab
+        .source
+        .as_mut()
+        .unwrap()
+        .primary_workspace_source
+        .provider_kind = "gitlab".to_owned();
     gitlab.workspace_membership.as_mut().unwrap().provider_kind = "gitlab".to_owned();
     let display = &mut gitlab.source_display_snapshot.as_mut().unwrap().repository;
     display.provider_kind = "gitlab".to_owned();
@@ -2109,7 +2150,11 @@ fn decoded_execution_spec_versions_retain_semantic_admission_guards() {
             Err(invalid_execution_limits())
         );
         spec.execution_limits.maximum_parallel_steps = 1;
-        spec.primary_workspace_source.commit_oid = "0".repeat(40);
+        spec.source
+            .as_mut()
+            .unwrap()
+            .primary_workspace_source
+            .commit_oid = "0".repeat(40);
         assert_eq!(
             validate_execution_spec(&spec),
             Err(AssignmentDecline::ExecutionSpecInvalid(
@@ -2117,7 +2162,7 @@ fn decoded_execution_spec_versions_retain_semantic_admission_guards() {
             ))
         );
     }
-    for version in [0, 4, u64::MAX] {
+    for version in [0, 5, u64::MAX] {
         let mut spec = decoded_source_display_offer().execution_spec;
         spec.schema_version = version;
         assert_eq!(
@@ -2133,7 +2178,11 @@ fn decoded_execution_spec_versions_retain_semantic_admission_guards() {
 fn gitlab_offer_requires_matching_source_snapshot() {
     let mut spec = decoded_source_display_offer().execution_spec;
     let snapshot = spec.source_display_snapshot.as_mut().unwrap();
-    spec.primary_workspace_source.provider_kind = "gitlab".to_owned();
+    spec.source
+        .as_mut()
+        .unwrap()
+        .primary_workspace_source
+        .provider_kind = "gitlab".to_owned();
     snapshot.repository.provider_kind = "gitlab".to_owned();
     snapshot.repository.instance_url = Some("https://gitlab.com".to_owned());
     snapshot.repository.full_name = format!("group/{}project", "n".repeat(8192 - 13));
@@ -2175,7 +2224,6 @@ async fn malformed_run_input_projection_has_the_closed_immutable_decline() {
     );
 }
 
-// REQ-RUNINPUT-42
 #[tokio::test]
 async fn run_input_failures_keep_transient_local_and_immutable_families_distinct() {
     let cases = [
@@ -2594,7 +2642,6 @@ async fn broker_materialization_transitions_preparing_to_prepared_for_file_expor
     ));
 }
 
-// REQ-WORKSPACE-26
 #[tokio::test]
 async fn command_failure_retains_git_dirty_untracked_ignored_and_build_bytes() {
     let workflow = "schemaVersion: 1\nsteps:\n  write:\n    kind: cmd\n    command:\n      argv: [\"sh\", \"-c\", \"printf committed > tracked-output.txt; git add tracked-output.txt; git -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --quiet -m 'retained fixture'; printf dirty-tracked > tracked-output.txt; printf '*.cache\\\\n' > .gitignore; printf untracked > untracked.txt; printf ignored > ignored.cache; mkdir build; printf build-output > build/result; exit 23\"]\n";
@@ -2687,7 +2734,6 @@ async fn staged_carrier_delivery_reads_while_the_workspace_remains_available() {
     assert!(!helper.exists());
 }
 
-// REQ-RUNNERENROLL-70
 #[tokio::test]
 async fn credential_teardown_failure_after_prepared_delivery_retains_and_admits_a_successor() {
     let workflow =
@@ -2748,6 +2794,27 @@ async fn credential_teardown_failure_after_prepared_delivery_retains_and_admits_
     assert!(workspace.exists());
 }
 
+#[test]
+fn no_source_projection_requires_a_tree_and_its_capacity_digest() {
+    let mut spec = decoded_offer_from_frame(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-no-source.json"
+    )))
+    .execution_spec;
+    let invalid = Err(AssignmentDecline::ExecutionSpecInvalid(
+        ExecutionSpecInvalidReason::InvalidSourceProjection,
+    ));
+    assert_eq!(validate_execution_spec(&spec), Ok(()));
+    spec.source = offer("bg").execution_spec.source;
+    assert_eq!(validate_execution_spec(&spec), invalid);
+    spec.source = None;
+    let tree = spec.workflow_tree.take();
+    assert_eq!(validate_execution_spec(&spec), invalid);
+    spec.workflow_tree = tree;
+    spec.capacity.source_closure_digest.value = "f".repeat(64);
+    assert_eq!(validate_execution_spec(&spec), invalid);
+}
+
 #[tokio::test]
 async fn malformed_and_unsupported_source_projections_have_closed_declines() {
     let workflow =
@@ -2756,6 +2823,9 @@ async fn malformed_and_unsupported_source_projections_have_closed_declines() {
     let mut unsupported = offer("bg");
     unsupported
         .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
         .workflow_definition_source
         .object_format = "sha256".to_owned();
     assert_offer_declined(
@@ -2771,6 +2841,9 @@ async fn malformed_and_unsupported_source_projections_have_closed_declines() {
     let mut malformed = offer("bh");
     malformed
         .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
         .workflow_definition_source
         .commit_oid = "not-an-oid".to_owned();
     assert_offer_declined(
@@ -2786,6 +2859,9 @@ async fn malformed_and_unsupported_source_projections_have_closed_declines() {
     let mut mismatched = offer("bj");
     mismatched
         .execution_spec
+        .source
+        .as_mut()
+        .unwrap()
         .primary_workspace_source
         .commit_oid = "1123456789abcdef0123456789abcdef01234567".to_owned();
     assert_offer_declined(
@@ -2919,7 +2995,6 @@ async fn preparation_deadline_fences_blocked_source_materialization() {
     assert!(held_assignment(&manager).is_none());
 }
 
-// REQ-DIAG-25
 #[tokio::test]
 async fn source_materialization_declines_preserve_failure_provenance() {
     assert_eq!(
@@ -3629,7 +3704,6 @@ async fn run_event_ends_once_at_terminal_ack_or_fence() {
     assert_eq!(runs[0]["um.run.result"], "fenced");
 }
 
-// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn run_phases_are_recorded_as_children_of_the_run() {
     let workflow =
@@ -3667,7 +3741,6 @@ async fn run_phases_are_recorded_as_children_of_the_run() {
     }
 }
 
-// REQ-TELEMETRY-39
 #[tokio::test]
 async fn a_declined_offer_writes_one_rejected_run() {
     let workflow =
@@ -3801,7 +3874,6 @@ async fn wait_until_not_preparing(manager: &mut AssignmentManager) {
     .expect("blocked source preparation did not finish");
 }
 
-// REQ-TELEMETRY-68
 #[tokio::test]
 async fn a_preparation_deadline_times_out_the_phase_and_a_cancellation_cancels_it() {
     let (sleeper, mut sleep_requests) = controlled_sleeper();
@@ -3832,7 +3904,6 @@ async fn a_preparation_deadline_times_out_the_phase_and_a_cancellation_cancels_i
     assert!(checkouts[0].get("error.type").is_none());
 }
 
-// REQ-TELEMETRY-39
 #[tokio::test]
 async fn a_rejected_resent_offer_leaves_the_live_run_open() {
     let workflow =
@@ -3872,7 +3943,6 @@ async fn a_rejected_resent_offer_leaves_the_live_run_open() {
     assert_eq!(runs[0]["um.run.result"], "aborted");
 }
 
-// REQ-TELEMETRY-39
 #[tokio::test]
 async fn shutdown_ends_a_run_it_gives_up_before_execution() {
     let (_temporary, mut manager, offered, mut root_preparation_started, release_root_preparation) =
@@ -4026,7 +4096,6 @@ async fn terminal_grace_wait_failure_classifies_the_retained_run() {
     assert_eq!(event["um.diagnostic.stage"], "terminal_acknowledgement");
 }
 
-// REQ-TELEMETRY-39, REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn authorized_execution_reports_one_run_after_acknowledgement() {
     for (command, expected) in [("true", "succeeded"), ("false", "failed")] {
@@ -4084,7 +4153,6 @@ async fn authorized_execution_reports_one_run_after_acknowledgement() {
     }
 }
 
-// REQ-TELEMETRY-41
 #[tokio::test]
 async fn a_completed_run_writes_one_step_execution_per_executed_node() {
     let workflow = "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"true\"]\nfinalizers:\n  cleanup:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
@@ -4120,7 +4188,6 @@ async fn a_completed_run_writes_one_step_execution_per_executed_node() {
     assert_eq!(capture.span_count("runner.step_execution"), 2);
 }
 
-// REQ-CANCEL-31
 #[tokio::test]
 async fn cancellation_during_result_delivery_reports_execution_terminal() {
     let (_temporary, mut manager, offered, cancellation) = cancellable_running_fixture().await;
@@ -4145,7 +4212,6 @@ async fn cancellation_during_result_delivery_reports_execution_terminal() {
     );
 }
 
-// REQ-CANCEL-29, REQ-WFFINALIZE-14
 #[tokio::test]
 async fn cloud_graceful_cancellation_preserves_open_finalizers() {
     let (_temporary, mut manager, offered, cancellation) = cancellable_running_fixture().await;
@@ -4197,7 +4263,6 @@ async fn causally_requested_renewal_survives_user_cancellation() {
     }
 }
 
-// REQ-CANCEL-29
 #[tokio::test]
 async fn user_cancellation_completion_waits_for_process_quiescence() {
     let workflow =
@@ -4217,7 +4282,6 @@ async fn user_cancellation_completion_waits_for_process_quiescence() {
     assert_acknowledged_run(&mut manager, &capture, "cancelled");
 }
 
-// REQ-CANCEL-32
 #[tokio::test]
 async fn runner_shutdown_remains_an_interruption_after_user_cancellation() {
     let workflow = "schemaVersion: 1\nsteps:\n  check:\n    kind: cmd\n    command:\n      argv: [\"sh\", \"-c\", \"sleep 60\"]\n";
@@ -4441,8 +4505,8 @@ async fn cleanup_exhaustion_preserves_the_preselected_terminal_report() {
     )));
 }
 
-// REQ-RUNNERENROLL-71: a failed cleanup fences the boot, which interrupts every other run it
-// holds as a graceful stop does and exits only once none is held.
+// A failed cleanup fences the boot, which interrupts every other run it holds as a graceful
+// stop does and exits only once none is held.
 #[tokio::test]
 async fn cleanup_failure_interrupts_the_other_held_runs_before_the_exit() {
     let (_temporary, mut manager, _remover, mut requests) = gated_cleanup_manager([false; 6]);
@@ -4572,8 +4636,8 @@ async fn command_workflows_do_not_require_an_agent_runtime() {
     assert_eq!(active_step_count(&manager), Some(1));
 }
 
-// REQ-WORKSPACE-18, REQ-GRANT-87: the clone's credentials and the host's Git helpers never
-// reach a step, and the host's `GH_TOKEN` reaches one that lists it.
+// The clone's credentials and the host's Git helpers never reach a step, and the host's
+// `GH_TOKEN` reaches one that lists it.
 #[tokio::test]
 async fn managed_workflow_environment_excludes_runner_credentials_and_helpers() {
     let workflow = r#"schemaVersion: 1
@@ -4671,8 +4735,8 @@ steps:
     assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
 }
 
-// REQ-WORKSPACE-18, REQ-GRANT-153, REQ-GRANT-86: a step that declares a grant token name the
-// runner's service environment sets receives the service's value of it.
+// A step that declares a grant token name the runner's service environment sets receives the
+// service's value of it.
 #[tokio::test]
 async fn declared_grant_token_names_carry_the_runner_service_values() {
     const GRANT_TOKEN_NAMES: [&str; 3] = [
@@ -4806,7 +4870,6 @@ async fn shutdown_starts_finishing_cleanup_before_the_five_second_reserve() {
     assert!(manager.shutdown_complete());
 }
 
-// REQ-RUNNERENROLL-73
 #[tokio::test]
 async fn shutdown_requests_runner_cancellation_for_running_work() {
     let workflow =
@@ -5000,7 +5063,6 @@ async fn shutdown_while_waiting_for_start_authority_never_activates_workflow_git
     assert_no_executed_workflow_reports(&mut manager);
 }
 
-// REQ-CANCEL-27
 #[tokio::test]
 async fn cancellation_during_start_authorization_reports_pre_execution_stop() {
     let workflow =
@@ -5066,7 +5128,6 @@ fn welcomed_policy_requires_two_complete_renewal_leads() {
     }
 }
 
-// INV-LIFECYCLE-21
 #[test]
 fn active_policy_asks_a_third_into_the_window_for_every_grace() {
     let policy = policy();
@@ -5345,7 +5406,6 @@ async fn slow_renewal_is_applied_before_cancellation_and_reports_real_headroom()
     assert_eq!(event["um.lease.request_age_ms"], 20_000);
 }
 
-// REQ-RUNNERENROLL-149
 #[tokio::test]
 async fn renewal_asked_a_third_into_the_window_outlasts_the_incident_outage() {
     let workflow =
@@ -5384,7 +5444,6 @@ async fn renewal_asked_a_third_into_the_window_outlasts_the_incident_outage() {
     assert_eq!(job.authority_updates.borrow().sequence, 2);
 }
 
-// INV-RUNNER-62
 #[tokio::test]
 async fn each_held_assignment_is_renewed_cancelled_released_and_finished_by_its_own_id() {
     fn renewal(offered: &AssignmentOffer, suffix: &str) -> AssignmentRenewal {
@@ -5475,10 +5534,10 @@ async fn each_held_assignment_is_renewed_cancelled_released_and_finished_by_its_
     assert!(!second_timing.cancellation_started());
 }
 
-// INV-RUNNER-63: an ended assignment that reported a wait may have been settled by Cloud
-// only after it offered a successor, so the successor's offer leaves its unacknowledged
-// terminal report queued, whether it is still finishing or only reporting, and the
-// successor is prepared beside it.
+// An ended assignment that reported a wait may have been settled by Cloud only after it
+// offered a successor, so the successor's offer leaves its unacknowledged terminal
+// report queued, whether it is still finishing or only reporting, and the successor is
+// prepared beside it.
 #[tokio::test]
 async fn successor_keeps_the_terminal_report_of_an_assignment_that_waited() {
     for still_finishing in [true, false] {
@@ -5531,8 +5590,8 @@ async fn successor_keeps_the_terminal_report_of_an_assignment_that_waited() {
     }
 }
 
-// REQ-RUNNERENROLL-315: with `MAXIMUM_HELD_ASSIGNMENTS` waiting assignments held, one more
-// offer is declined `capacity_unavailable`, and each held assignment still renews.
+// With `MAXIMUM_HELD_ASSIGNMENTS` waiting assignments held, one more offer is declined
+// `capacity_unavailable`, and each held assignment still renews.
 #[tokio::test]
 async fn an_offer_past_the_held_assignment_bound_is_declined_and_each_held_one_renews() {
     const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
@@ -5663,11 +5722,11 @@ fn install_held_disk_fixture(
         .activity = Some(activity);
 }
 
-// REQ-RUNNERENROLL-154, REQ-DIAG-44, INV-RUNNER-50: while the published reading is low, an
-// offer of a new run is declined `capacity_unavailable` with the stage `host_disk` and the
-// cause `disk_space_low`, leaving nothing held, kept or prepared, and listed once as
-// `disk_low_offer_declined`; the same offer again changes nothing, and once a reading that
-// is not low is published the next offer is held.
+// While the published reading is low, an offer of a new run is declined
+// `capacity_unavailable` with the stage `host_disk` and the cause `disk_space_low`,
+// leaving nothing held, kept or prepared, and listed once as `disk_low_offer_declined`;
+// the same offer again changes nothing, and once a reading that is not low is published
+// the next offer is held.
 #[tokio::test]
 async fn a_new_offer_on_a_low_disk_is_declined_and_held_again_once_the_disk_recovers() {
     let (_temporary, mut manager) = manager_fixture_on_low_disk();
@@ -5715,8 +5774,8 @@ async fn a_new_offer_on_a_low_disk_is_declined_and_held_again_once_the_disk_reco
     assert_eq!(manager.runner_events.newest_first().len(), events);
 }
 
-// REQ-RUNNERENROLL-154, INV-RUNNER-50: an offer that continues an earlier attempt is held
-// while the disk is low, and no disk decline is listed.
+// An offer that continues an earlier attempt is held while the disk is low, and no disk
+// decline is listed.
 #[tokio::test]
 async fn a_continuation_offer_on_a_low_disk_is_held() {
     let (_temporary, mut manager) = manager_fixture_on_low_disk();
@@ -5726,10 +5785,21 @@ async fn a_continuation_offer_on_a_low_disk_is_held() {
         prior_attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5aaa".to_owned(),
         required_runner_boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5aaa".to_owned(),
         execution_root: "/retained/workspace".to_owned(),
-        definition_source: continued.execution_spec.workflow_definition_source.clone(),
+        definition_source: Some(
+            continued
+                .execution_spec
+                .source
+                .as_ref()
+                .unwrap()
+                .workflow_definition_source
+                .clone(),
+        ),
         effective_capacity: continued.execution_spec.capacity.clone(),
         prior_manifest_digest: continued
             .execution_spec
+            .source
+            .as_ref()
+            .unwrap()
             .workflow_definition_source
             .workflow_source_closure_digest
             .clone(),
@@ -5749,10 +5819,9 @@ async fn a_continuation_offer_on_a_low_disk_is_held() {
     assert!(listed_disk_declines(&manager).is_empty());
 }
 
-// REQ-RUNNERENROLL-154, REQ-DIAG-44, INV-RUNNER-50: beside a held assignment that waits, an
-// offer on a low disk is declined with the disk's diagnostic and the held assignment still
-// renews; beside one that works, the offer is declined plain `capacity_unavailable`, the
-// earlier rule, and no disk decline is listed.
+// Beside a held assignment that waits, an offer on a low disk is declined with the disk's
+// diagnostic and the held assignment still renews; beside one that works, the offer is
+// declined plain `capacity_unavailable`, the earlier rule, and no disk decline is listed.
 #[tokio::test]
 async fn a_low_disk_declines_an_offer_beside_a_waiting_run_which_still_renews() {
     let (_temporary, mut manager) = manager_fixture_on_low_disk();
@@ -5789,8 +5858,8 @@ async fn a_low_disk_declines_an_offer_beside_a_waiting_run_which_still_renews() 
     assert!(listed_disk_declines(&manager).is_empty());
 }
 
-// REQ-RUNNERENROLL-80: a held run whose loop last reported a wait is counted `waiting`
-// beside an assignment being prepared, and the status lists both, the working one first.
+// A held run whose loop last reported a wait is counted `waiting` beside an assignment
+// being prepared, and the status lists both, the working one first.
 #[tokio::test]
 async fn status_counts_a_waiting_run_beside_a_preparing_one_and_lists_both() {
     let (_temporary, mut manager) = manager_fixture("schemaVersion: 1\nsteps: {}\n");
@@ -5972,11 +6041,11 @@ fn end_and_keep_reporting(manager: &mut AssignmentManager, offered: &AssignmentO
     report
 }
 
-// REQ-RUNNERENROLL-134: the overview gives one entry per assignment the manager holds, in one
-// read that changes nothing: the working ones and then the waiting ones as `status` lists
-// them, then the ended ones, each with what its offer said, the time since the runner took
-// it and, for a run, the time Cloud granted it and what its loop last read; the entries'
-// phases tally to the read's counts.
+// The overview gives one entry per assignment the manager holds, in one read that changes
+// nothing: the working ones and then the waiting ones as `status` lists them, then the ended
+// ones, each with what its offer said, the time since the runner took it and, for a run, the
+// time Cloud granted it and what its loop last read; the entries' phases tally to the read's
+// counts.
 #[tokio::test]
 async fn the_overview_gives_one_entry_per_assignment_in_the_order_status_lists_them() {
     let (_temporary, mut manager) = manager_fixture("schemaVersion: 1\nsteps: {}\n");
@@ -6198,11 +6267,11 @@ async fn the_overview_gives_one_entry_per_assignment_in_the_order_status_lists_t
     assert_eq!(acknowledged.counts.total(), Some(3));
 }
 
-// REQ-RUNNERENROLL-144, REQ-RUNNERENROLL-134: the manager's read of one assignment gives the
-// entry the overview lists for it, from the same kind of read, with where a running tree
-// run's directory and log are as its activity published them, and no path for an
-// assignment being prepared or one that ended and still reports; it gives nothing for an
-// assignment the manager neither holds nor reports, and changes nothing `status` reads.
+// The manager's read of one assignment gives the entry the overview lists for it, from the
+// same kind of read, with where a running tree run's directory and log are as its activity
+// published them, and no path for an assignment being prepared or one that ended and still
+// reports; it gives nothing for an assignment the manager neither holds nor reports, and
+// changes nothing `status` reads.
 #[tokio::test]
 async fn the_read_of_one_assignment_gives_its_overview_entry_and_a_running_runs_paths() {
     let (temporary, mut manager) = manager_fixture("schemaVersion: 1\nsteps: {}\n");
@@ -6225,7 +6294,7 @@ async fn the_read_of_one_assignment_gives_its_overview_entry_and_a_running_runs_
     activity.publish_log(paths.log.clone().unwrap());
     activity.publish_directory(paths.directory.clone());
     // The run waits while the runner takes the second offer, and works again once it is being
-    // prepared (INV-RUNNER-40).
+    // prepared.
     activity.reported(true);
     install_run_activity(&mut manager, &running.assignment_id, Arc::clone(&activity));
     install_running_renewal_fixture_beside(&mut manager, ended.clone(), &timing);
@@ -6263,8 +6332,8 @@ async fn the_read_of_one_assignment_gives_its_overview_entry_and_a_running_runs_
     assert_eq!(manager.status_assignments(), status);
 }
 
-// REQ-RUNNERENROLL-134: an offer driven to its acknowledged end is listed exactly while the
-// counts count it, and the manager keeps nothing of what it said once it has ended.
+// An offer driven to its acknowledged end is listed exactly while the counts count it, and
+// the manager keeps nothing of what it said once it has ended.
 #[tokio::test]
 async fn an_assignment_is_listed_from_its_offer_to_its_acknowledged_end_and_then_forgotten() {
     let workflow =
@@ -6313,10 +6382,10 @@ async fn an_assignment_is_listed_from_its_offer_to_its_acknowledged_end_and_then
     assert!(manager.offer_facts.is_empty());
 }
 
-// REQ-RUNNERENROLL-137: an assignment is listed as recent once the runner holds it no longer,
-// never beside its own entry, with how its run ended, when, and how long it was held then;
-// an offer given up before it ran is listed with the result its record ended with, and the
-// later of two is listed first.
+// An assignment is listed as recent once the runner holds it no longer, never beside its own
+// entry, with how its run ended, when, and how long it was held then; an offer given up
+// before it ran is listed with the result its record ended with, and the later of two is
+// listed first.
 #[tokio::test]
 async fn an_ended_assignment_is_listed_as_recent_once_it_is_held_no_longer() {
     let workflow =
@@ -6372,6 +6441,9 @@ async fn an_ended_assignment_is_listed_as_recent_once_it_is_held_no_longer() {
         entry.workflow_path,
         offered
             .execution_spec
+            .source
+            .as_ref()
+            .unwrap()
             .workflow_definition_source
             .workflow_path
     );
@@ -6428,7 +6500,6 @@ async fn an_ended_assignment_is_listed_as_recent_once_it_is_held_no_longer() {
     assert_eq!(recent(&mut manager), listed);
 }
 
-// INV-LIFECYCLE-5
 #[tokio::test]
 async fn causal_acceptance_basis() {
     let workflow =
@@ -6511,7 +6582,6 @@ async fn causal_acceptance_basis() {
     );
 }
 
-// INV-LIFECYCLE-5
 #[tokio::test]
 async fn wrong_wall_time_after_transport_does_not_change_lease_authority() {
     async fn outcome(sent_at: &str) -> (Vec<Duration>, usize) {
@@ -6540,7 +6610,6 @@ async fn wrong_wall_time_after_transport_does_not_change_lease_authority() {
     assert_eq!(past.1, 1);
 }
 
-// INV-LIFECYCLE-5
 #[tokio::test]
 async fn delayed_replayed_and_conflicting_grants() {
     let workflow =
@@ -6658,7 +6727,6 @@ async fn pre_start_renewal_replay_never_gains_authority() {
     );
 }
 
-// REQ-RUNNERENROLL-74, REQ-RUNNERENROLL-76
 #[tokio::test]
 async fn same_boot_reconnect_retains_lease_basis() {
     let workflow =
@@ -6730,7 +6798,6 @@ fn pending_renewal_requests(manager: &AssignmentManager) -> Vec<u64> {
         .collect()
 }
 
-// INV-LIFECYCLE-22
 #[tokio::test]
 async fn renewal_is_asked_again_only_after_its_interval_and_its_acknowledgement() {
     let workflow =
@@ -6784,7 +6851,6 @@ async fn renewal_is_asked_again_only_after_its_interval_and_its_acknowledgement(
     assert_eq!(causal_lease.basis(2), Some(basis));
 }
 
-// REQ-RUNNERENROLL-151, INV-RUNNER-48
 #[tokio::test]
 async fn welcome_asks_again_for_an_accepted_renewal_that_has_no_grant() {
     let workflow =
@@ -6913,7 +6979,6 @@ async fn assert_refused_start_loss(
     );
 }
 
-// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn refused_start_at_deadline_names_lease_loss() {
     assert_refused_start_loss(
@@ -6923,7 +6988,6 @@ async fn refused_start_at_deadline_names_lease_loss() {
     .await;
 }
 
-// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn refused_start_without_policy_names_lease_loss() {
     assert_refused_start_loss(
@@ -6933,7 +6997,6 @@ async fn refused_start_without_policy_names_lease_loss() {
     .await;
 }
 
-// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn refused_start_without_causal_lease_names_lease_loss() {
     assert_refused_start_loss(
@@ -6943,7 +7006,6 @@ async fn refused_start_without_causal_lease_names_lease_loss() {
     .await;
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn start_authorization_deadline_fences_assignment_and_names_start_late() {
     let (_temporary, mut manager) = manager_fixture(
@@ -6978,7 +7040,6 @@ async fn start_authorization_deadline_fences_assignment_and_names_start_late() {
     assert_eq!(loss.reason(), Some(LeaseLossReason::StartLate));
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_timer_failure_marks_runner_boot_unsuccessful_after_terminal_report() {
     let workflow =
@@ -7206,7 +7267,6 @@ async fn pending_result_delivery() -> PendingResultDelivery {
     }
 }
 
-// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn pending_result_delivery_names_unacknowledged_renewal_at_expiry() {
     let mut delivery = pending_result_delivery().await;
@@ -7236,7 +7296,6 @@ async fn pending_result_delivery_names_unacknowledged_renewal_at_expiry() {
     );
 }
 
-// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn pending_result_delivery_names_lease_timer_failure_on_abort() {
     let mut delivery = pending_result_delivery().await;
@@ -7300,7 +7359,6 @@ async fn completion_without_a_terminal_report_fences_assignment_writes() {
     assert!(held_assignment(&manager).is_none());
 }
 
-// INV-LIFECYCLE-5, REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn expiry_release_revokes_running_authority_immediately() {
     let workflow =
@@ -7331,7 +7389,6 @@ async fn expiry_release_revokes_running_authority_immediately() {
     ));
 }
 
-// REQ-RUNNERENROLL-156, REQ-TELEMETRY-56
 #[tokio::test]
 async fn delayed_execution_job_does_not_start_at_cancellation_boundary() {
     let placeholder =
@@ -7383,9 +7440,9 @@ async fn delayed_execution_job_does_not_start_at_cancellation_boundary() {
     );
 }
 
-// INV-RUNNER-53: a single-workflow run's execution enters the runner's command fence before
-// its engine starts, so while the fence is held it marks the hold wanted and runs no step
-// until the hold is dropped.
+// A single-workflow run's execution enters the runner's command fence before its engine
+// starts, so while the fence is held it marks the hold wanted and runs no step until the
+// hold is dropped.
 #[tokio::test]
 async fn a_single_workflow_run_starts_its_engine_only_once_the_fence_is_released() {
     let placeholder =
@@ -7431,7 +7488,6 @@ async fn a_single_workflow_run_starts_its_engine_only_once_the_fence_is_released
     assert!(marker.exists());
 }
 
-// REQ-RUNNERENROLL-75
 #[tokio::test]
 async fn schedules_renewal_before_initial_lease_loss_cancellation() {
     let (_temporary, _manager, mut sleep_requests, _offered, _workspace) =
@@ -7446,7 +7502,6 @@ async fn schedules_renewal_before_initial_lease_loss_cancellation() {
     assert_eq!(duration, Duration::from_secs(359) / 3);
 }
 
-// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report() {
     let (_temporary, mut manager, mut sleep_requests, offered, workspace) =
@@ -7542,7 +7597,6 @@ async fn lease_loss_quiescence_attempts_artifact_delivery_before_terminal_report
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn grant_after_supervisor_deadline_preserves_unacknowledged_reason() {
     let (_temporary, mut manager, mut waits, offered, _workspace) =
@@ -7570,7 +7624,6 @@ async fn grant_after_supervisor_deadline_preserves_unacknowledged_reason() {
     assert_eq!(loss.reason(), Some(LeaseLossReason::RenewalUnreachable));
 }
 
-// REQ-RUNNERENROLL-75, REQ-RUNNERENROLL-156, REQ-TELEMETRY-39, REQ-TELEMETRY-56
 #[tokio::test]
 async fn acknowledged_request_without_a_new_grant_records_late_renewal() {
     let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
@@ -7623,7 +7676,6 @@ async fn acknowledged_request_without_a_new_grant_records_late_renewal() {
     assert_eq!(loss.reason(), Some(LeaseLossReason::RenewalLate));
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn renewal_at_cancellation_boundary_cannot_restore_authority() {
     let workflow =
@@ -7677,7 +7729,6 @@ async fn renewal_at_cancellation_boundary_cannot_restore_authority() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn renewal_clock_failure_names_the_loss_for_each_running_assignment() {
     let (_temporary, mut manager) = manager_fixture("schemaVersion: 1\nsteps: {}\n");
@@ -7707,7 +7758,6 @@ async fn renewal_clock_failure_names_the_loss_for_each_running_assignment() {
     }
 }
 
-// INV-LIFECYCLE-5
 #[tokio::test]
 async fn exact_next_renewal_replaces_the_running_authority() {
     let (_temporary, mut manager, mut sleep_requests, offered, _workspace) =
@@ -7798,11 +7848,10 @@ fn step_records(view: &AssignmentRunView, step: &str) -> Vec<(String, String)> {
     }
 }
 
-// REQ-RUNNERENROLL-147: a running single-workflow assignment's read gives its step in flight
-// and a view whose live run names the step running with what it runs and holds the step's
-// output so far, each line under its source; the read changes no count; once the run has
-// settled the read gives no view; and the reports queued for the run are what they are
-// without a view.
+// A running single-workflow assignment's read gives its step in flight and a view whose live
+// run names the step running with what it runs and holds the step's output so far, each line
+// under its source; the read changes no count; once the run has settled the read gives no
+// view; and the reports queued for the run are what they are without a view.
 #[tokio::test]
 async fn a_single_workflow_assignments_read_gives_its_step_in_flight_and_output() {
     let argv = ["sh", "-c", "echo said; echo warned >&2; sleep 60"];
@@ -7931,48 +7980,6 @@ async fn executes_explicit_command_dag_and_reports_dense_transitions() {
     );
 }
 
-#[test]
-fn invalid_source_and_input_broker_endpoints_fail_construction() {
-    let invalid = url::Url::parse("https://localhost/v1/runner/connect").unwrap();
-    let valid = url::Url::parse("wss://localhost/v1/runner/connect").unwrap();
-    let credential = crate::credential::test_credential();
-    let (recorder, _capture) = crate::telemetry::test_recorder("broker-startup");
-    let policy = RepositoryUrlPolicy::production();
-    let error = AssignmentDependencies::production_brokers(
-        &invalid,
-        &credential,
-        "boot",
-        policy,
-        recorder.clone(),
-        None,
-    )
-    .err()
-    .expect("invalid source endpoint must fail startup");
-    assert!(matches!(
-        error,
-        super::super::ServiceError::SourceBrokerConfiguration(_)
-    ));
-    assert!(!error.requires_operator_recovery());
-
-    let source: Arc<dyn SourceCredentialBroker> =
-        Arc::new(HttpSourceCredentialBroker::new(&valid, &credential, "boot", policy).unwrap());
-    let error = AssignmentDependencies::production_brokers(
-        &invalid,
-        &credential,
-        "boot",
-        policy,
-        recorder,
-        Some(source),
-    )
-    .err()
-    .expect("invalid input endpoint must fail startup");
-    assert!(matches!(
-        error,
-        super::super::ServiceError::InputBrokerConfiguration(_)
-    ));
-    assert!(!error.requires_operator_recovery());
-}
-
 async fn assert_normal_success_and_reuse(
     manager: &mut AssignmentManager,
     reports: &[ExecutionReport],
@@ -8032,7 +8039,6 @@ async fn finish_with_stubborn_guard(
     (temporary, manager, control, reports, offered, capture)
 }
 
-// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn post_success_guard_containment_releases_workspace_and_slot() {
     let (_temporary, mut manager, control, reports, offered, capture) =
@@ -8043,7 +8049,6 @@ async fn post_success_guard_containment_releases_workspace_and_slot() {
     assert_run_phase(&capture, &offered, "runner.run.teardown", "success", None);
 }
 
-// REQ-TELEMETRY-67, REQ-TELEMETRY-68
 #[tokio::test]
 async fn last_containment_wait_observes_departed_guard_before_fencing() {
     let (_temporary, mut manager, control, reports, offered, capture) =
@@ -8053,8 +8058,6 @@ async fn last_containment_wait_observes_departed_guard_before_fencing() {
     assert_run_phase(&capture, &offered, "runner.run.teardown", "success", None);
 }
 
-// REQ-RUNNERENROLL-71
-// REQ-TELEMETRY-68
 #[tokio::test]
 async fn uncontainable_guard_is_named_in_terminal_report_and_fences_offers() {
     let (_temporary, mut manager, control, reports, offered, capture) =
@@ -8159,7 +8162,6 @@ async fn quiescence_failure_waits_for_terminal_ack_or_delivery_deadline() {
     }
 }
 
-// REQ-WFRECOVERY-53
 #[tokio::test]
 async fn runner_executes_recovery_and_reports_exact_summary_and_invocations() {
     let failing_argv = serde_json::to_string(&failing_command_fixture_arguments()).unwrap();
@@ -8194,8 +8196,6 @@ async fn runner_executes_recovery_and_reports_exact_summary_and_invocations() {
     ));
 }
 
-// REQ-WFRECOVERY-63
-// INV-ENGINE-30 (AUTO-262)
 #[tokio::test]
 async fn runner_runs_a_workflow_whose_only_agent_is_a_recovery_handler() {
     let workflow = |argv: Vec<String>| {
@@ -8354,8 +8354,8 @@ async fn runner_reservation_consumes_carried_capacity_without_node_arithmetic() 
     assert_eq!(outbox.lock().entries.len(), 32);
 }
 
-// REQ-RUNNERENROLL-88: a progress report for steps alone cannot use the slots a run's own
-// reports are owed; one that carries the root can.
+// A progress report for steps alone cannot use the slots a run's own reports are owed;
+// one that carries the root can.
 #[test]
 fn steps_only_progress_leaves_outbox_capacity_for_the_run() {
     let outbox = ObservationOutbox::new();
@@ -8392,9 +8392,8 @@ fn logged_kinds(log: &EventLog) -> Vec<(OpenWord<RunnerEventKind>, u64)> {
         .collect()
 }
 
-// REQ-RUNNERENROLL-138: each enqueue the full outbox refuses is logged as an
-// `observation_refused`, repeats folded into its count, and refuses as before; an enqueue it
-// takes logs nothing.
+// Each enqueue the full outbox refuses is logged as an `observation_refused`, repeats folded
+// into its count, and refuses as before; an enqueue it takes logs nothing.
 #[test]
 fn a_full_outbox_logs_each_refusal_as_observation_refused() {
     let outbox = ObservationOutbox::new();
@@ -8443,8 +8442,8 @@ fn a_full_outbox_logs_each_refusal_as_observation_refused() {
     );
 }
 
-// REQ-RUNNERENROLL-138: a second terminal report for one assignment is refused as before,
-// and since the outbox is not full, nothing is logged.
+// A second terminal report for one assignment is refused as before, and since the outbox
+// is not full, nothing is logged.
 #[test]
 fn a_second_terminal_report_is_refused_without_logging_a_full_outbox() {
     let outbox = ObservationOutbox::new();

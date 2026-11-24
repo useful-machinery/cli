@@ -362,10 +362,10 @@ struct ArchivedTerminalStepView {
     maximum_document_width: usize,
     recovery: Option<super::super::publication::StepRecoverySummaryV1>,
     invocations: Vec<super::super::publication::RecoveryInvocationV1>,
-    /// The failed child of a `succeeded` `workflow` step, which `state` presents `Failed`
-    /// (REQ-LOCALRUN-221).
+    /// The failed child of a `succeeded` `workflow` step, which `state` presents
+    /// `Failed`.
     failed_child: Option<FailedChild>,
-    /// The count of outputs the step committed (REQ-OUTPUTS-17).
+    /// The count of outputs the step committed.
     committed_outputs: usize,
 }
 
@@ -618,8 +618,8 @@ impl StepProjection for ArchivedTerminalStepView {
 }
 
 impl ArchivedTerminalStepView {
-    /// The failed child of a stage whose child failed, with the outputs it committed
-    /// (REQ-LOCALRUN-221); `None` for any other step.
+    /// The failed child of a stage whose child failed, with the outputs it
+    /// committed; `None` for any other step.
     fn failed_stage_detail(&self) -> Option<String> {
         self.failed_child.as_ref().map(|failed_child| {
             crate::workflow::presentation::failed_stage_detail(

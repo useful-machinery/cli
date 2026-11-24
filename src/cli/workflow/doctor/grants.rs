@@ -1,11 +1,9 @@
-//! The grants read of `useful workflow doctor` (REQ-CREDREADY-22, REQ-CREDREADY-23,
-//! REQ-CREDREADY-26): the signed-in member's own unrevoked grants, each requirement shown
-//! beside what the member holds of its provider, with the availability and next action of the
-//! member's projection (REQ-GRANT-53) on each runner a grant is authorized for, or on the one
-//! `--runner` names. It lives in the command because `useful-runner` reaches neither the API nor
-//! the human session. Without `--runner` it changes no requirement's state or code
-//! (REQ-CREDREADY-18); with it, it says whether that runner's host or a grant meets a
-//! requirement, and why no grant does.
+//! The grants read of `useful workflow doctor`: the signed-in member's own unrevoked grants,
+//! each requirement shown beside what the member holds of its provider, with the availability
+//! and next action of the member's projection on each runner a grant is authorized for, or on
+//! the one `--runner` names. It lives in the command because `useful-runner` reaches neither the
+//! API nor the human session. Without `--runner` it changes no requirement's state or code; with
+//! it, it says whether that runner's host or a grant meets a requirement, and why no grant does.
 
 use std::io::{self, Write};
 
@@ -26,7 +24,7 @@ pub(super) struct Held<'a> {
     runner: Option<&'a str>,
 }
 
-/// What the runner `--runner` names makes of a requirement (REQ-CREDREADY-26).
+/// What the runner `--runner` names makes of a requirement.
 pub(super) enum OnRunner {
     /// The runner's host supplies the coding agent itself.
     Host,
@@ -56,7 +54,7 @@ impl Held<'_> {
     }
 
     /// What the member holds of the provider `kind` names, or `None` for a kind with no grant
-    /// provider, a token service (REQ-CREDREADY-29).
+    /// provider, a token service.
     pub(super) fn of(&self, kind: CredentialKind) -> Option<ProviderView<'_>> {
         let provider = Provider::of_kind(kind)?;
         let grants: Vec<_> = self
@@ -71,14 +69,13 @@ impl Held<'_> {
     }
 
     /// What the runner `--runner` names makes of the requirement of `kind`, or `None` when no
-    /// runner is named (REQ-CREDREADY-26). A coding agent the runner's host supplies itself,
-    /// as `useful account integration connect --workflow --runner` reads it (REQ-GRANT-76), is the
-    /// host's; this is tested first, since a host's own login projects as `not_delivered`.
-    /// Otherwise a grant is usable there when its availability is `available`, `unverified` or
-    /// `pending`: a runner sets a login up for each assignment it admits before offering
-    /// anything (REQ-GRANT-49). Of several grants the one nearest to usable is reported, one
-    /// authorized for the runner before one that is not. A kind with no grant provider, a token
-    /// service, has nothing to report (REQ-CREDREADY-29).
+    /// runner is named. A coding agent the runner's host supplies itself, as `useful account
+    /// integration connect --workflow --runner` reads it, is the host's; this is tested first,
+    /// since a host's own login projects as `not_delivered`. Otherwise a grant is usable there
+    /// when its availability is `available`, `unverified` or `pending`: a runner sets a login up
+    /// for each assignment it admits before offering anything. Of several grants the one nearest
+    /// to usable is reported, one authorized for the runner before one that is not. A kind with no
+    /// grant provider, a token service, has nothing to report.
     pub(super) fn on_runner(&self, kind: CredentialKind) -> Option<OnRunner> {
         let runner = self.runner?;
         if matches!(kind, CredentialKind::ClaudeCode | CredentialKind::Codex)
@@ -133,7 +130,7 @@ const fn usable(availability: Availability) -> bool {
     )
 }
 
-/// The failing state a grant gives a requirement (REQ-CREDREADY-17, REQ-CREDREADY-26).
+/// The failing state a grant gives a requirement.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Failing {
     Missing,
@@ -177,8 +174,8 @@ pub(super) struct ProviderView<'a> {
     status: Option<MemberStatus>,
 }
 
-/// A grant as the doctor shows it: the fields of `useful account integration list`'s view that say which
-/// grant it is and whose account, and its status on each runner reported (REQ-GRANT-64).
+/// A grant as the doctor shows it: the fields of `useful account integration list`'s view that say
+/// which grant it is and whose account, and its status on each runner reported.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GrantView<'a> {
@@ -206,7 +203,7 @@ struct RunnerView<'a> {
 
 impl<'a> GrantView<'a> {
     /// The grant's authorizations in force, only that of `runner` when one is named, and the
-    /// grant's own status when none is reported (REQ-CREDREADY-23).
+    /// grant's own status when none is reported.
     fn new(grant: &'a MemberGrant, runner: Option<&str>) -> Self {
         let subject = grant_subject(grant);
         let authorizations: Vec<_> = grant

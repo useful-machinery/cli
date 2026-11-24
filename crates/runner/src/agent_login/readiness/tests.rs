@@ -32,7 +32,6 @@ fn state_directory() -> tempfile::TempDir {
     directory
 }
 
-// REQ-GRANT-38
 #[test]
 fn the_document_lives_beside_the_runner_state() {
     assert_eq!(
@@ -41,7 +40,6 @@ fn the_document_lives_beside_the_runner_state() {
     );
 }
 
-// REQ-GRANT-38, REQ-GRANT-42
 #[test]
 fn the_document_records_an_install_without_its_material() {
     let login_root = tempfile::tempdir().unwrap();
@@ -114,7 +112,6 @@ fn the_document_records_an_install_without_its_material() {
     );
 }
 
-// REQ-GRANT-38
 #[test]
 fn every_readiness_state_round_trips_and_a_missing_document_is_none() {
     let state = state_directory();
@@ -162,7 +159,6 @@ fn every_readiness_state_round_trips_and_a_missing_document_is_none() {
     assert_eq!(entries, [READINESS_FILE]);
 }
 
-// REQ-GRANT-38, REQ-GRANT-52, REQ-GRANT-53
 #[test]
 fn the_last_use_of_an_install_round_trips_beside_it_and_only_there() {
     let state = state_directory();
@@ -201,8 +197,7 @@ fn the_last_use_of_an_install_round_trips_beside_it_and_only_there() {
         assert_eq!(value["providers"][0]["lastUseAt"], "2026-11-12T00:58:00Z");
         assert_eq!(ReadinessDocument::load(&path), Ok(Some(document.clone())));
         // The control socket reports the last use with its time, but not
-        // where the install is (REQ-GRANT-129, REQ-GRANT-53,
-        // REQ-RUNNERENROLL-63).
+        // where the install is.
         let reported = serde_json::to_value(document.reported().unwrap()).unwrap();
         let entry = &reported["providers"][0];
         assert_eq!(
@@ -268,7 +263,6 @@ fn the_last_use_of_an_install_round_trips_beside_it_and_only_there() {
     }
 }
 
-// REQ-GRANT-120
 #[test]
 fn an_entry_for_a_provider_this_build_does_not_know_survives_a_rewrite_verbatim() {
     let state = state_directory();
@@ -328,7 +322,6 @@ fn an_entry_for_a_provider_this_build_does_not_know_survives_a_rewrite_verbatim(
     assert_eq!(reported.providers.len(), entries.len() - 1);
 }
 
-// REQ-GRANT-118, REQ-GRANT-51
 #[test]
 fn an_agent_login_entry_an_earlier_release_wrote_as_selected_loads_and_is_written_without_it() {
     let state = state_directory();
@@ -380,7 +373,6 @@ fn an_agent_login_entry_an_earlier_release_wrote_as_selected_loads_and_is_writte
     }
 }
 
-// REQ-GRANT-121
 #[test]
 fn only_a_document_that_is_not_the_runners_record_is_replaced() {
     use std::io::ErrorKind;
@@ -521,7 +513,6 @@ fn write_raw(path: &Path, value: &serde_json::Value) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-// REQ-GRANT-88, REQ-GRANT-38
 #[test]
 fn an_oauth_providers_ready_entry_survives_a_write_and_a_load_unchanged() {
     let state = state_directory();
@@ -531,7 +522,7 @@ fn an_oauth_providers_ready_entry_survives_a_write_and_a_load_unchanged() {
         state: AgentLoginState::Ready,
         checked_at: Some(time(1_794_445_200)),
         issued: Some(IssuedGrant {
-            grant_id: GRANT_ID.to_owned(),
+            issuer: Issuer::Grant(GRANT_ID.to_owned()),
             generation: 4,
             expires_at: time(1_794_474_000),
         }),
@@ -567,8 +558,8 @@ fn an_oauth_providers_ready_entry_survives_a_write_and_a_load_unchanged() {
     assert_eq!(loaded.grant(AgentLoginProvider::Github), Some(&github));
     assert_eq!(loaded.grant(AgentLoginProvider::Gitlab), None);
 
-    // Status carries the grant, its generation and the expiry
-    // (REQ-GRANT-53).
+    // Status carries the grant, its generation and the
+    // expiry.
     let reported = serde_json::to_value(document.reported().unwrap()).unwrap();
     assert_eq!(
         reported["providers"][0],
@@ -593,7 +584,7 @@ fn ended_github() -> GrantReadiness {
         state: AgentLoginState::Ready,
         checked_at: Some(time(1_794_445_200)),
         issued: Some(IssuedGrant {
-            grant_id: GRANT_ID.to_owned(),
+            issuer: Issuer::Grant(GRANT_ID.to_owned()),
             generation: 4,
             expires_at: time(1_794_474_000),
         }),
@@ -603,7 +594,6 @@ fn ended_github() -> GrantReadiness {
     }
 }
 
-// REQ-GRANT-157
 #[test]
 fn an_oauth_entry_with_its_run_and_end_survives_a_write_and_a_load_unchanged() {
     let state = state_directory();
@@ -633,7 +623,6 @@ fn an_oauth_entry_with_its_run_and_end_survives_a_write_and_a_load_unchanged() {
     assert_eq!(ReadinessDocument::load(&path), Ok(Some(running)));
 }
 
-// REQ-GRANT-92, REQ-GRANT-38, REQ-GRANT-88
 #[test]
 fn each_entrys_source_survives_a_write_and_a_load_and_an_oauth_ones_only_beside_its_run() {
     let state = state_directory();
@@ -689,7 +678,6 @@ fn each_entrys_source_survives_a_write_and_a_load_and_an_oauth_ones_only_beside_
     );
 }
 
-// REQ-GRANT-88
 #[test]
 fn a_document_written_before_runs_and_ends_were_recorded_still_loads() {
     let state = state_directory();
@@ -707,13 +695,157 @@ fn a_document_written_before_runs_and_ends_were_recorded_still_loads() {
         (github.state, github.run_id.as_deref(), github.ended_at),
         (AgentLoginState::Ready, None, None)
     );
+    // Its `grantId` is still a grant's.
+    assert_eq!(
+        github.issued.as_ref().map(|issued| &issued.issuer),
+        Some(&Issuer::Grant(GRANT_ID.to_owned()))
+    );
     for provider in [AgentLoginProvider::Gitlab, AgentLoginProvider::Linear] {
         let entry = document.grant(provider).unwrap();
         assert_eq!((entry.run_id.as_deref(), entry.ended_at), (None, None));
     }
 }
 
-// REQ-GRANT-88
+const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+
+/// `ended_github` issued under the connection authorization, with `source`.
+fn github_under_authorization(source: CredentialSource) -> GrantReadiness {
+    let mut github = ended_github();
+    if let Some(issued) = github.issued.as_mut() {
+        issued.issuer = Issuer::ConnectionAuthorization(CONNECTION_AUTHORIZATION_ID.to_owned());
+    }
+    GrantReadiness {
+        source: Some(source),
+        ..github
+    }
+}
+
+#[test]
+fn githubs_entry_under_a_connection_authorization_survives_a_write_and_a_load_with_either_source() {
+    let state = state_directory();
+    let path = readiness_path(&state.path().join("state.json"));
+    // After a switch during the run, the entry holds the ID that issued the
+    // token now beside the source the admission settled, either way round.
+    let granted_after_authorization = GrantReadiness {
+        source: Some(CredentialSource::OrgConnection),
+        ..ended_github()
+    };
+    for github in [
+        github_under_authorization(CredentialSource::OrgConnection),
+        github_under_authorization(CredentialSource::Grant),
+        granted_after_authorization,
+    ] {
+        let document = with_grants([github.clone()]);
+
+        document.write(&path).unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(validator().is_valid(&value), "{value}");
+        assert_eq!(ReadinessDocument::load(&path), Ok(Some(document.clone())));
+        let entry = &value["providers"][0];
+        let reported = serde_json::to_value(document.reported().unwrap()).unwrap();
+        let reported = &reported["providers"][0];
+        for member in ["grantId", "connectionAuthorizationId", "source"] {
+            assert_eq!(entry.get(member), reported.get(member), "{member}");
+        }
+        assert_eq!(
+            entry["source"],
+            github.source.map_or("", CredentialSource::as_str)
+        );
+        match github.issued.map(|issued| issued.issuer) {
+            Some(Issuer::ConnectionAuthorization(id)) => {
+                assert_eq!(entry["connectionAuthorizationId"], id.as_str(), "{entry}");
+                assert!(entry.get("grantId").is_none(), "{entry}");
+            }
+            Some(Issuer::Grant(id)) => {
+                assert_eq!(entry["grantId"], id.as_str(), "{entry}");
+                assert!(entry.get("connectionAuthorizationId").is_none(), "{entry}");
+            }
+            issuer => panic!("{issuer:?}"),
+        }
+    }
+}
+
+#[test]
+fn the_pinned_document_of_githubs_entry_under_an_authorization_loads_as_it_reads() {
+    let state = state_directory();
+    let path = readiness_path(&state.path().join("state.json"));
+    let fixture = cli_root()
+        .join("tests/fixtures/runner-agent-logins/v1/valid/org-connection-grant-tokens.json");
+    write_raw(
+        &path,
+        &serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap(),
+    );
+
+    let document = ReadinessDocument::load(&path).unwrap().unwrap();
+
+    let github = document.grant(AgentLoginProvider::Github).unwrap();
+    assert_eq!(
+        (
+            github.state,
+            github.issued.as_ref().map(|issued| &issued.issuer),
+            github.source,
+        ),
+        (
+            AgentLoginState::Ready,
+            Some(&Issuer::ConnectionAuthorization(
+                CONNECTION_AUTHORIZATION_ID.to_owned()
+            )),
+            Some(CredentialSource::OrgConnection),
+        )
+    );
+}
+
+#[test]
+fn only_githubs_entry_names_an_authorization_or_the_organizations_installation() {
+    let state = state_directory();
+    let path = readiness_path(&state.path().join("state.json"));
+    let on = |provider, github: GrantReadiness| GrantReadiness { provider, ..github };
+    let mut integration_token = ended_github();
+    if let Some(issued) = integration_token.issued.as_mut() {
+        issued.issuer = Issuer::IntegrationToken("itk_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned());
+    }
+    for refused in [
+        on(
+            AgentLoginProvider::Gitlab,
+            github_under_authorization(CredentialSource::Grant),
+        ),
+        on(
+            AgentLoginProvider::Linear,
+            github_under_authorization(CredentialSource::Grant),
+        ),
+        on(
+            AgentLoginProvider::Linear,
+            GrantReadiness {
+                source: Some(CredentialSource::OrgConnection),
+                ..ended_github()
+            },
+        ),
+        // A token service has no entry.
+        integration_token,
+    ] {
+        assert_eq!(
+            with_grants([refused.clone()]).write(&path),
+            Err(ReadinessError::WriteFailed(io::ErrorKind::InvalidData)),
+            "{refused:?}"
+        );
+    }
+    // Nor does a coding agent's.
+    let mut codex = with_grants([]);
+    codex.logins.push(LoginReadiness {
+        provider: AgentLoginProvider::Codex,
+        state: AgentLoginState::NotAuthorized,
+        checked_at: Some(time(1_794_445_200)),
+        login: None,
+        last_use: None,
+        source: Some(CredentialSource::OrgConnection),
+    });
+    assert_eq!(
+        codex.write(&path),
+        Err(ReadinessError::WriteFailed(io::ErrorKind::InvalidData))
+    );
+}
+
 #[test]
 fn a_run_or_an_end_is_refused_without_a_check_time_or_beside_an_installable_entry() {
     let state = state_directory();
@@ -781,14 +913,13 @@ fn a_run_or_an_end_is_refused_without_a_check_time_or_beside_an_installable_entr
     }
 }
 
-// REQ-GRANT-88
 #[test]
 fn each_state_of_an_oauth_entry_round_trips() {
     let state = state_directory();
     let path = readiness_path(&state.path().join("state.json"));
     let validator = validator();
-    // A provider the host provides is recorded `not_delivered` for the run
-    // (REQ-GRANT-153).
+    // A provider the host provides is recorded `not_delivered` for the
+    // run.
     for state in [
         AgentLoginState::NotDelivered,
         AgentLoginState::NotAuthorized,
@@ -825,7 +956,6 @@ fn each_state_of_an_oauth_entry_round_trips() {
     }
 }
 
-// REQ-GRANT-88, REQ-GRANT-87
 #[test]
 fn an_oauth_entry_an_earlier_release_wrote_as_selected_loads_and_is_written_without_it() {
     let state = state_directory();
@@ -873,7 +1003,6 @@ fn an_oauth_entry_an_earlier_release_wrote_as_selected_loads_and_is_written_with
     );
 }
 
-// REQ-GRANT-88, REQ-GRANT-38
 #[test]
 fn a_document_written_before_oauth_entries_were_recorded_still_loads() {
     let state = state_directory();
@@ -909,7 +1038,6 @@ fn a_document_written_before_oauth_entries_were_recorded_still_loads() {
     assert_eq!(oauth_rows(&rewritten), oauth_rows(&written));
 }
 
-// REQ-GRANT-88
 #[test]
 fn recording_an_oauth_entry_replaces_the_providers_last_and_keeps_the_rest() {
     let entry = |provider, state| GrantReadiness {
@@ -971,7 +1099,6 @@ fn recording_an_oauth_entry_replaces_the_providers_last_and_keeps_the_rest() {
     assert_eq!(ReadinessDocument::load(&path), Ok(Some(document)));
 }
 
-// REQ-GRANT-38, REQ-GRANT-88
 #[test]
 fn canonical_schema_and_the_runner_accept_only_valid_readiness_fixtures() {
     let validator = validator();

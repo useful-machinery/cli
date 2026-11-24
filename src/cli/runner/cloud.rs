@@ -80,8 +80,8 @@ pub(super) fn write_pool_create(
 }
 
 /// A pool's waiting runs, runner counts and held runs as `useful runner pool show` reports
-/// them (REQ-RUNNERPOOL-92). useful-api does not name its pool-status model, so the JSON
-/// document borrows it generically and the report takes its counts.
+/// them. useful-api does not name its pool-status model, so the JSON document borrows it
+/// generically and the report takes its counts.
 pub(super) struct PoolStatus<'a, S> {
     pub(super) document: &'a S,
     pub(super) queued_runs: i32,
@@ -306,7 +306,7 @@ pub(super) fn write_runner_show(
 }
 
 /// The runner `useful runner update` changed, with `applied`, the names of what it sent, in
-/// order (REQ-RUNNERPOOL-57).
+/// order.
 pub(super) fn write_runner_update(
     deployment: &str,
     applied: &[&'static str],
@@ -492,7 +492,7 @@ fn write_assignment_to(
 }
 
 /// Every run a registration holds, in the Cloud's order, each with whether it is working or
-/// waiting (REQ-RUNNERPOOL-50).
+/// waiting.
 fn write_held_assignments_to(
     output: &mut impl Write,
     held: &[useful_api::RunnerHeldAssignment],
@@ -639,8 +639,8 @@ pub(super) fn write_failure(
     write_failure_with_context(deployment, failure, authentication, json, None, None)
 }
 
-/// A refused read of the memberships that name the organization in effect (REQ-ORG-87),
-/// written with the closed outcome a runner command reports for the same refusal.
+/// A refused read of the memberships that name the organization in effect, written with
+/// the closed outcome a runner command reports for the same refusal.
 pub(super) fn write_context_failure(
     deployment: &str,
     failure: &useful_api::CommonOrganizationFailure,
@@ -665,10 +665,10 @@ pub(super) const fn context_failure(
 }
 
 /// A request of `useful runner update` that failed after an earlier one succeeded, whose
-/// change stays (REQ-RUNNERPOOL-57): the command exits with the failure's code. Under `--json`
-/// the result is the failure's document with `applied`, what was sent and succeeded, and
-/// `runner`, the runner as the last successful request returned it; in human output the
-/// failure's diagnostic and remedy are followed by `kept`, what stays and how to finish.
+/// change stays: the command exits with the failure's code. Under `--json` the result is the
+/// failure's document with `applied`, what was sent and succeeded, and `runner`, the runner as
+/// the last successful request returned it; in human output the failure's diagnostic and
+/// remedy are followed by `kept`, what stays and how to finish.
 pub(super) fn write_partial_failure(
     deployment: &str,
     failure: &RunnerFailure,
@@ -693,7 +693,7 @@ pub(super) fn write_partial_failure(
 }
 
 /// A single-runner key that failed after `useful runner join-key issue --runner` registered
-/// `runner_id` (REQ-RUNNERENROLL-8); `organization` is the `--org` value, when one was named.
+/// `runner_id`; `organization` is the `--org` value, when one was named.
 pub(super) fn write_activation_failure(
     deployment: &str,
     failure: &RunnerFailure,
@@ -1108,7 +1108,6 @@ struct PoolDeletionUnknown<'a> {
 mod tests {
     use super::*;
 
-    // REQ-RUNNERPOOL-49, REQ-RUNNERPOOL-51, REQ-RUNNERPOOL-52
     #[test]
     fn runner_show_keeps_cloud_projections_separate_from_advertised_metadata() {
         let runner: RunnerRegistration = serde_json::from_str(

@@ -1,6 +1,6 @@
-//! The published tree's files (REQ-RUNNERENROLL-186): download capabilities from the Gateway for
-//! the spec's declared files, then each file's bytes, verified against the spec's
-//! SHA-256 and size and written with the spec's executable bit.
+//! The published tree's files: download capabilities from the Gateway for the spec's declared
+//! files, then each file's bytes, verified against the spec's SHA-256 and size and written with
+//! the spec's executable bit.
 
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -13,9 +13,8 @@ use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
 use ring::digest::{Context as DigestContext, SHA256};
 use serde::Deserialize;
-use url::Url;
 
-use crate::credential::Credential;
+use crate::runner_http::ServingTarget;
 use crate::service::run_inputs::{
     BrokerFailure, PreparationDeadline, broker_operation_runtime, validate_capability_url,
 };
@@ -116,8 +115,7 @@ pub(in crate::service) trait TreeBroker: Send + Sync {
 
 /// The Gateway's private tree broker on the runner endpoint's host.
 pub(in crate::service) struct HttpTreeBroker {
-    capability_endpoint: Url,
-    runner_credential: Credential,
+    target: ServingTarget,
     boot_id: Arc<str>,
 }
 
@@ -132,19 +130,11 @@ struct CapabilityAnswer {
 }
 
 impl HttpTreeBroker {
-    pub(in crate::service) fn new(
-        endpoint: &Url,
-        runner_credential: &Credential,
-        boot_id: &str,
-    ) -> Result<Self, ()> {
-        Ok(Self {
-            capability_endpoint: crate::service::source::private_runner_http_endpoint(
-                endpoint,
-                CAPABILITIES_PATH,
-            )?,
-            runner_credential: runner_credential.clone(),
+    pub(in crate::service) fn new(target: ServingTarget, boot_id: &str) -> Self {
+        Self {
+            target,
             boot_id: Arc::from(boot_id),
-        })
+        }
     }
 }
 
@@ -186,9 +176,10 @@ impl TreeBroker for HttpTreeBroker {
             "files": paths,
         });
         let encoded = block_on_operation(deadline, cancellation, async |client| {
+            let target = self.target.current();
             let mut response = client
-                .post(self.capability_endpoint.clone())
-                .bearer_auth(self.runner_credential.bearer_value())
+                .post(target.url(CAPABILITIES_PATH))
+                .bearer_auth(target.credential().bearer_value())
                 .json(&body)
                 .send()
                 .await

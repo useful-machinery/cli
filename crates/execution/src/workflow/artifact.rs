@@ -188,7 +188,7 @@ impl CaptureFailure {
         self.kind
     }
 
-    fn new(output_identity: Arc<str>, kind: CaptureFailureKind) -> Self {
+    pub(super) fn new(output_identity: Arc<str>, kind: CaptureFailureKind) -> Self {
         Self {
             output_identity,
             kind,
@@ -846,7 +846,7 @@ pub(crate) enum CaptureCandidateDeclaration<'a> {
 }
 
 impl CaptureCandidateDeclaration<'_> {
-    fn output_identity(&self) -> &str {
+    pub(super) fn output_identity(&self) -> &str {
         match self {
             Self::File(declaration) => declaration.output_identity,
             Self::GitBranch(declaration) => declaration.output_identity,
@@ -1174,6 +1174,7 @@ impl ArtifactStaging {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn capture_file_candidates(
         &self,
         declarations: &[CaptureDeclaration<'_>],
@@ -1189,6 +1190,19 @@ impl ArtifactStaging {
 
     pub(crate) fn capture_candidates(
         &self,
+        declarations: &mut [CaptureCandidateDeclaration<'_>],
+        cancellation: &CaptureCancellation,
+    ) -> Result<CaptureCandidateSet, CaptureAttemptFailure> {
+        self.capture_candidates_from(
+            self.inner.execution_root.directory(),
+            declarations,
+            cancellation,
+        )
+    }
+
+    pub(super) fn capture_candidates_from(
+        &self,
+        source_directory: &OwnedFd,
         declarations: &mut [CaptureCandidateDeclaration<'_>],
         cancellation: &CaptureCancellation,
     ) -> Result<CaptureCandidateSet, CaptureAttemptFailure> {
@@ -1278,12 +1292,13 @@ impl ArtifactStaging {
                 CaptureCandidateDeclaration::File(declaration) => self
                     .capture_bounds(CarrierBudgetClass::File, &output_identity)
                     .and_then(|bounds| {
-                        self.stage(
+                        self.stage_with_copier(
+                            source_directory,
                             Arc::clone(&output_identity),
-                            declaration.declared_path,
-                            Arc::from(declaration.profile.media_type()),
+                            declaration,
                             bounds,
                             cancellation,
+                            &mut PortableCopier,
                         )
                         .and_then(|file| {
                             self.semantic_path_value(
@@ -1687,24 +1702,6 @@ impl ArtifactStaging {
         }
     }
 
-    fn stage(
-        &self,
-        output_identity: Arc<str>,
-        declared_path: &Path,
-        media_type: Arc<str>,
-        bounds: CaptureBounds,
-        cancellation: &CaptureCancellation,
-    ) -> Result<CapturedArtifact, CaptureAttemptFailure> {
-        self.stage_with_copier(
-            output_identity,
-            declared_path,
-            media_type,
-            bounds,
-            cancellation,
-            &mut PortableCopier,
-        )
-    }
-
     #[cfg(test)]
     fn capture_with_copier(
         &self,
@@ -1714,9 +1711,9 @@ impl ArtifactStaging {
         copier: &mut impl StreamCopier,
     ) -> Result<CapturedArtifact, CaptureFailure> {
         match self.stage_with_copier(
-            output_identity,
-            declared_path,
-            media_type,
+            self.inner.execution_root.directory(),
+            Arc::clone(&output_identity),
+            &CaptureDeclaration::file(&output_identity, declared_path, &media_type),
             CaptureBounds {
                 maximum_bytes: self.inner.file_limits.maximum_bytes.get(),
                 overflow_kind: CaptureFailureKind::FileSizeLimitExceeded,
@@ -1734,26 +1731,22 @@ impl ArtifactStaging {
 
     fn stage_with_copier(
         &self,
+        source_directory: &OwnedFd,
         output_identity: Arc<str>,
-        declared_path: &Path,
-        media_type: Arc<str>,
+        declaration: &CaptureDeclaration<'_>,
         bounds: CaptureBounds,
         cancellation: &CaptureCancellation,
         copier: &mut impl StreamCopier,
     ) -> Result<CapturedArtifact, CaptureAttemptFailure> {
         cancellation.check()?;
         let lifecycle = self.active_lifecycle(&output_identity)?;
-        let components = capture_components(declared_path).map_err(|kind| {
+        let components = capture_components(declaration.declared_path).map_err(|kind| {
             CaptureAttemptFailure::Capture(CaptureFailure::new(Arc::clone(&output_identity), kind))
         })?;
         cancellation.boundary(&output_identity, CaptureBoundaryKind::BeforeSourceOpen)?;
-        let mut source = open_regular_file(self.inner.execution_root.directory(), &components)
-            .map_err(|kind| {
-                CaptureAttemptFailure::Capture(CaptureFailure::new(
-                    Arc::clone(&output_identity),
-                    kind,
-                ))
-            })?;
+        let mut source = open_regular_file(source_directory, &components).map_err(|kind| {
+            CaptureAttemptFailure::Capture(CaptureFailure::new(Arc::clone(&output_identity), kind))
+        })?;
         cancellation.check()?;
         if source
             .metadata()
@@ -1809,7 +1802,10 @@ impl ArtifactStaging {
                 output_identity,
                 destination,
                 capture_result,
-                profile: (media_type, CarrierBudgetClass::File),
+                profile: (
+                    Arc::from(declaration.profile.media_type()),
+                    CarrierBudgetClass::File,
+                ),
             },
         )
         .map(|carrier| CapturedArtifact { carrier })
@@ -2754,14 +2750,15 @@ fn create_staging_root(
 }
 
 fn open_regular_file(
-    execution_root: &OwnedFd,
+    source_directory: &OwnedFd,
     components: &[OsString],
 ) -> Result<File, CaptureFailureKind> {
     let (file_name, directories) = components
         .split_last()
         .ok_or(CaptureFailureKind::EmptyPath)?;
-    let mut current_directory = openat(execution_root, ".", directory_open_flags(), Mode::empty())
-        .map_err(classify_source_open_failure)?;
+    let mut current_directory =
+        openat(source_directory, ".", directory_open_flags(), Mode::empty())
+            .map_err(classify_source_open_failure)?;
 
     for directory in directories {
         let file_type = component_type(&current_directory, directory)?;

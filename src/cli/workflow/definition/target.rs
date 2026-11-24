@@ -1,8 +1,7 @@
-//! A definition named by its ID or its name wherever it lives (REQ-CLOUDDEF-42, INV-CLI-20):
-//! under the `useful` home, read without a request, and in the project in effect
-//! (REQ-PROJECT-100), read through the public API (REQ-CLOUDDEF-1). A local and a Cloud
-//! definition's ID have one form, so an ID is found by looking, under the home first and in
-//! the project only when the home holds none; a name never has an ID's form. `find` looks in
+//! A definition named by its ID or its name wherever it lives: under the `useful` home, read
+//! without a request, and in the project in effect, read through the public API. A local and a
+//! Cloud definition's ID have one form, so an ID is found by looking, under the home first and
+//! in the project only when the home holds none; a name never has an ID's form. `find` looks in
 //! both places and `home_only` under the home alone; a leaf that changes a definition reads the
 //! home for an ID alone (`held`) and otherwise acts in the project in effect (`in_project`, or
 //! `within_project` for a leaf that chooses its definition itself); `useful workflow run create`
@@ -350,12 +349,12 @@ pub(in crate::cli) struct Looked {
     pub(in crate::cli) cloud: Asked,
 }
 
-/// Finds `named` under the home and then, when the home holds none, in the project in effect
-/// (REQ-CLOUDDEF-42): under the home an ID is read and a name is matched among the records,
-/// both without a request; in the project an ID is read and a name is matched among every
-/// definition, archived ones included. The deployment is loaded only when the home holds none.
-/// Several of one place with the name, none anywhere and any failure end the command, written
-/// as `leaf` writes them: the error is its result.
+/// Finds `named` under the home and then, when the home holds none, in the project in effect:
+/// under the home an ID is read and a name is matched among the records, both without a
+/// request; in the project an ID is read and a name is matched among every definition,
+/// archived ones included. The deployment is loaded only when the home holds none. Several of
+/// one place with the name, none anywhere and any failure end the command, written as `leaf`
+/// writes them: the error is its result.
 pub(in crate::cli) fn find(
     named: &Named,
     in_effect: InEffect,
@@ -427,9 +426,9 @@ pub(in crate::cli) fn find(
 
 /// The record under the home `named` names when it is an ID the home holds, read without a
 /// request; none for a name or for an ID the home does not hold. A leaf that changes a
-/// definition looks under the home for an ID alone (REQ-CLOUDDEF-42): a name, there, always
-/// names a Cloud definition. A refusal of the home ends the command, written as `leaf` writes
-/// one: the error is its result.
+/// definition looks under the home for an ID alone: a name, there, always names a Cloud
+/// definition. A refusal of the home ends the command, written as `leaf` writes one: the
+/// error is its result.
 pub(in crate::cli) fn held(
     named: &Named,
     leaf: Leaf,
@@ -445,10 +444,10 @@ pub(in crate::cli) fn held(
     }
 }
 
-/// The record under the home `named` names, by ID or by name, read without a request, for a
-/// leaf told to look under the home alone (REQ-CLOUDDEF-42): a name several records hold exits
-/// 2 listing their IDs, and none is `definition_not_found` saying Cloud was not asked. A refusal
-/// of the home ends the command, written as `leaf` writes one: the error is its result.
+/// The record under the home `named` names, by ID or by name, read without a request, for a leaf
+/// told to look under the home alone: a name several records hold exits 2 listing their IDs, and
+/// none is `definition_not_found` saying Cloud was not asked. A refusal of the home ends the
+/// command, written as `leaf` writes one: the error is its result.
 pub(in crate::cli) fn home_only(
     named: &Named,
     leaf: Leaf,
@@ -470,8 +469,7 @@ pub(in crate::cli) fn home_only(
 }
 
 /// Ends a leaf that acts on a Cloud definition alone when `named` is an ID the home holds:
-/// `definition_local`, exit 1, before the deployment is loaded and anything is sent
-/// (REQ-CLOUDDEF-42).
+/// `definition_local`, exit 1, before the deployment is loaded and anything is sent.
 pub(in crate::cli) fn cloud_only(named: &Named, leaf: Leaf) -> Result<(), CommandResult> {
     match held(named, leaf)? {
         Some((_, definition)) => Err(local(leaf, &definition)),
@@ -492,13 +490,13 @@ fn local(leaf: Leaf, definition: &StoredDefinition) -> CommandResult {
     Ok(ExitCode::GeneralFailure)
 }
 
-/// Runs `run` with the deployment, the options, the project in effect (REQ-PROJECT-100) and the
-/// ID of the Cloud definition `named` names there (REQ-CLOUDDEF-42). An ID is sent as given,
-/// costing no request, so Cloud answers for a definition it does not hold; a name is matched
-/// among every definition of the project, archived ones included, and several with it exit 2
-/// listing their IDs. With no organization or no project in effect the leaf ends with exit 2
-/// before a request of its own (INV-CLI-20), and every other failure, a read of the project
-/// Cloud refused included, is written as any Cloud leaf writes one.
+/// Runs `run` with the deployment, the options, the project in effect and the ID of the Cloud
+/// definition `named` names there. An ID is sent as given, costing no request, so Cloud answers
+/// for a definition it does not hold; a name is matched among every definition of the project,
+/// archived ones included, and several with it exit 2 listing their IDs. With no organization
+/// or no project in effect the leaf ends with exit 2 before a request of its own, and every
+/// other failure, a read of the project Cloud refused included, is written as any Cloud leaf
+/// writes one.
 pub(in crate::cli) fn in_project(
     named: Named,
     in_effect: InEffect,
@@ -515,9 +513,9 @@ pub(in crate::cli) fn in_project(
     )
 }
 
-/// As [`in_project`], handing `run` the options themselves, for a leaf that goes on to act
-/// under them as a command of another family: `useful workflow run create --on personal|project`
-/// (REQ-RUN-94), whose credential, read once, serves the lookup and the creation.
+/// As [`in_project`], handing `run` the options themselves, for a leaf that goes on to act under
+/// them as a command of another family: `useful workflow run create --on personal|project`,
+/// whose credential, read once, serves the lookup and the creation.
 pub(in crate::cli) fn acting_in_project(
     named: Named,
     in_effect: InEffect,
@@ -537,8 +535,8 @@ pub(in crate::cli) fn acting_in_project(
     )
 }
 
-/// Runs `run` with the deployment, the options and the project in effect (REQ-PROJECT-100), as
-/// [`in_project`] does for a leaf that chooses its definition itself.
+/// Runs `run` with the deployment, the options and the project in effect, as [`in_project`]
+/// does for a leaf that chooses its definition itself.
 pub(in crate::cli) fn within_project(
     in_effect: InEffect,
     options: Options,
@@ -619,7 +617,7 @@ fn project_id(
 }
 
 /// A read of the organization or the project in effect that Cloud refused, written as the
-/// leaf's own refusal of that kind (REQ-CLOUDDEF-15).
+/// leaf's own refusal of that kind.
 fn context_failed(leaf: Leaf, failure: &ContextFailure, json: bool) -> anyhow::Result<ExitCode> {
     let failure = match failure {
         ContextFailure::Refused(failure) => organization_failure(failure),

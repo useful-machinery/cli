@@ -1,12 +1,9 @@
 //! `answer`, `approve`, `hand-back`, `pause`, `unpause`, `resume`, `retry`, `cancel` and
-//! `release` of a Cloud run the lookup found (REQ-LOCALRUN-180, REQ-LOCALRUN-187,
-//! REQ-LOCALRUN-210, REQ-LOCALRUN-218): a control carried to its runner (REQ-RUN-91,
-//! REQ-RUN-110), a continuation or a retry requested (REQ-CONTINUE-55, REQ-CONTINUE-85,
-//! REQ-RETRY-30), a cancellation requested (REQ-CANCEL-38), or the run's subject claim released
-//! by an owner (REQ-CLOUDDEF-97), through the public API under the CLI's session handling. A
-//! verb refused for the run's state names it and the verbs that apply (REQ-LOCALRUN-223).
-//! Nothing under the `useful` home is read or written. `useful workflow run show` reads a Cloud
-//! run in `show`.
+//! `release` of a Cloud run the lookup found: a control carried to its runner, a continuation
+//! or a retry requested, a cancellation requested, or the run's subject claim released by an
+//! owner, through the public API under the CLI's session handling. A verb refused for the run's
+//! state names it and the verbs that apply. Nothing under the `useful` home is read or written.
+//! `useful workflow run show` reads a Cloud run in `show`.
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -37,14 +34,14 @@ use crate::exit_code::ExitCode;
 const RELEASE_COMMAND: &str = "useful workflow run release";
 const CANCEL_COMMAND: &str = "useful workflow run cancel";
 const RETRY_COMMAND: &str = "useful workflow run retry";
-/// What a followed withdrawal reports when it ends before the run is final (REQ-RUN-62).
+/// What a followed withdrawal reports when it ends before the run is final.
 const TIMED_OUT: &str = "The run was not final before the timeout; it continues in Cloud.";
 const STOPPED: &str = "Observation stopped; the run continues in Cloud.";
 const UNREACHABLE: &str = "Cloud could not be reached twice in a row; observation stopped and the run continues in Cloud.";
 
-/// The control a leaf asks Cloud to carry to the run's runner (REQ-LOCALRUN-210), with the
-/// arguments its local form takes: `pause` sends the control kind `stop`, `unpause` the kind
-/// `lift`, and `cancel` of a waiting run the kind `withdraw` (REQ-LOCALRUN-218).
+/// The control a leaf asks Cloud to carry to the run's runner, with the arguments its local
+/// form takes: `pause` sends the control kind `stop`, `unpause` the kind `lift`, and
+/// `cancel` of a waiting run the kind `withdraw`.
 pub(super) enum Control {
     Answer { question: String, text: String },
     Approve,
@@ -56,7 +53,7 @@ pub(super) enum Control {
 }
 
 /// The lookup's miss the failure of a request to the run `found` names stands for, written as
-/// `command`'s refusal (REQ-LOCALRUN-180): Cloud has no such run, or nobody is signed in.
+/// `command`'s refusal: Cloud has no such run, or nobody is signed in.
 fn missed(found: InCloud, command: &'static str, json: bool) -> Missed {
     Box::new(move |failure, options| {
         Ok(found
@@ -87,9 +84,9 @@ fn positioned_step(run: &Run) -> Option<String> {
         })
 }
 
-/// The state of the Cloud run `read` reads (REQ-LOCALRUN-223): a final `state` is ended, a
-/// wait its latest progress report carries is waiting on that kind, and anything else, a run
-/// Cloud has not materialized among it, is running.
+/// The state of the Cloud run `read` reads: a final `state` is ended, a wait its latest
+/// progress report carries is waiting on that kind, and anything else, a run Cloud has not
+/// materialized among it, is running.
 fn standing(read: &RunRead) -> Standing {
     let RunRead::Materialized(run) = read else {
         return Standing::Running;
@@ -119,7 +116,7 @@ fn wait_kind(wait: &RunControlWait) -> WaitKind {
 }
 
 /// Why a control leaf sent nothing: the run does not wait on the wait its control resolves,
-/// in the state it is in (REQ-LOCALRUN-223).
+/// in the state it is in.
 enum Unsent {
     NotWaiting(Standing),
     KindMismatch(Standing),
@@ -150,9 +147,9 @@ impl Control {
         }
     }
 
-    /// The kinds of wait the control resolves, one of which the run must currently wait on
-    /// (a `retry` resolves a `repair` or a `host` wait, REQ-LOCALRUN-210); a `lift` names the
-    /// run's `stop` wait when it waits on one, and a `stop` and a `withdraw` name none.
+    /// The kinds of wait the control resolves, one of which the run must currently wait on (a
+    /// `retry` resolves a `repair` or a `host` wait); a `lift` names the run's `stop` wait
+    /// when it waits on one, and a `stop` and a `withdraw` name none.
     fn resolves(&self) -> Option<&'static [&'static str]> {
         match self {
             Self::Answer { .. } => Some(&["answer"]),
@@ -242,9 +239,9 @@ fn progress_wait(run: &Run) -> Option<CurrentWait> {
     })
 }
 
-/// The question `answer` with no `--question` answers on a Cloud run (REQ-LOCALRUN-210): the
-/// one question `wait` lists, or `1` when it lists none; several are `question_ambiguous`.
-/// A run that does not wait on an answer is left to the request to refuse.
+/// The question `answer` with no `--question` answers on a Cloud run: the one question
+/// `wait` lists, or `1` when it lists none; several are `question_ambiguous`. A run that
+/// does not wait on an answer is left to the request to refuse.
 fn open_question(wait: Option<&CurrentWait>) -> Result<String, Refusal> {
     let listed = wait
         .filter(|current| wire(current.wait.kind) == "answer")
@@ -263,8 +260,8 @@ fn open_question(wait: Option<&CurrentWait>) -> Result<String, Refusal> {
 pub(super) struct CloudRun {
     organization: String,
     run_id: String,
-    /// The lookup that found the run, whose first read of the run ends it
-    /// (REQ-LOCALRUN-180); `None` once the leaf took it.
+    /// The lookup that found the run, whose first read of the run ends it;
+    /// `None` once the leaf took it.
     found: Option<InCloud>,
     /// `--record-only`, which a Cloud run does not read: a usage error once the run is read.
     record_only: bool,
@@ -274,9 +271,9 @@ pub(super) struct CloudRun {
 }
 
 impl CloudRun {
-    /// The Cloud run the lookup found (REQ-LOCALRUN-180), through the leaf's authentication
-    /// and transport; `record_only` is the leaf's `--record-only`, a usage error, exit 2, once
-    /// the run is read.
+    /// The Cloud run the lookup found, through the leaf's authentication and transport;
+    /// `record_only` is the leaf's `--record-only`, a usage error, exit 2, once the run is
+    /// read.
     pub(super) fn found(
         found: InCloud,
         authentication: PrincipalAuthenticationArgs,
@@ -296,8 +293,8 @@ impl CloudRun {
     }
 
     /// Asks Cloud to release the current claim of the run the lookup found under one fresh
-    /// key (REQ-LOCALRUN-187). The request is the run's first, unread; its `404` keeps
-    /// release's own `not_found`, since Cloud answers a run that holds no claim the same way.
+    /// key. The request is the run's first, unread; its `404` keeps release's own
+    /// `not_found`, since Cloud answers a run that holds no claim the same way.
     pub(super) fn release(mut self) -> cli::CommandResult {
         let key = useful_support::generate_idempotency_key()
             .context("generate Cloud claim release request identity")?;
@@ -340,12 +337,12 @@ impl CloudRun {
         self.send(leaf, command, reads, |_| Ok(control))
     }
 
-    /// Ends the Cloud run the lookup found (REQ-LOCALRUN-218, REQ-CANCEL-38): with `force`
-    /// the force cancellation request, sent unread, whose 404 is the lookup's miss; otherwise
-    /// the run is read, and one whose progress carries a wait is sent a withdrawal, carried to
-    /// its runner, and any other the graceful cancellation request, which also follows a
-    /// withdrawal Cloud refuses `run_not_live` or `control_unsupported`. Whichever is sent goes
-    /// under `--idempotency-key` or one fresh key.
+    /// Ends the Cloud run the lookup found: with `force` the force cancellation request, sent
+    /// unread, whose 404 is the lookup's miss; otherwise the run is read, and one whose
+    /// progress carries a wait is sent a withdrawal, carried to its runner, and any other the
+    /// graceful cancellation request, which also follows a withdrawal Cloud refuses
+    /// `run_not_live` or `control_unsupported`. Whichever is sent goes under
+    /// `--idempotency-key` or one fresh key.
     pub(super) fn cancel(mut self, cancel: Cancel) -> cli::CommandResult {
         let key = match cancel.idempotency_key.clone() {
             Some(key) => key,
@@ -408,10 +405,9 @@ impl CloudRun {
         )
     }
 
-    /// The continuation of the Cloud run the lookup found from `steps`, none for `resume`
-    /// (REQ-CONTINUE-55, REQ-CONTINUE-85): the request `useful workflow run retry --from`
-    /// sends, unread, so its 404, or nobody signed in to send it, is the lookup's miss,
-    /// reported as `command`.
+    /// The continuation of the Cloud run the lookup found from `steps`, none for
+    /// `resume`: the request `useful workflow run retry --from` sends, unread, so its
+    /// 404, or nobody signed in to send it, is the lookup's miss, reported as `command`.
     pub(super) fn continue_from(
         mut self,
         command: &'static str,
@@ -428,9 +424,8 @@ impl CloudRun {
             .submit(deployment, missed)
     }
 
-    /// The retry of every step of the Cloud run the lookup found (REQ-RETRY-30,
-    /// REQ-RETRY-44), sent unread and followed within `timeout`: its 404, or nobody signed in
-    /// to send it, is the lookup's miss.
+    /// The retry of every step of the Cloud run the lookup found, sent unread and followed
+    /// within `timeout`: its 404, or nobody signed in to send it, is the lookup's miss.
     pub(super) fn rerun(
         mut self,
         expected_version: Option<i64>,
@@ -451,13 +446,12 @@ impl CloudRun {
     }
 
     /// `useful workflow run retry` with neither `--from` nor `--all` of the Cloud run the
-    /// lookup found (REQ-LOCALRUN-210, REQ-CONTINUE-55): reads the run; one that waits is
-    /// sent the carried `retry` for its wait, refused `wait_kind_mismatch` unless the wait is
-    /// for repair; one that ended other than `succeeded` is continued from the first step its
-    /// progress's position names, as `retry --from` continues it, and refused
-    /// `continuation_step_required` when it names none; a succeeded run is refused
-    /// `latest_attempt_succeeded` and any other `run_not_waiting`, nothing sent, each naming
-    /// the run's state and the verbs that apply (REQ-LOCALRUN-223).
+    /// lookup found: reads the run; one that waits is sent the carried `retry` for its wait,
+    /// refused `wait_kind_mismatch` unless the wait is for repair; one that ended other than
+    /// `succeeded` is continued from the first step its progress's position names, as `retry
+    /// --from` continues it, and refused `continuation_step_required` when it names none; a
+    /// succeeded run is refused `latest_attempt_succeeded` and any other `run_not_waiting`,
+    /// nothing sent, each naming the run's state and the verbs that apply.
     pub(super) fn retry(
         mut self,
         expected_version: Option<i64>,
@@ -523,8 +517,8 @@ impl CloudRun {
         )
     }
 
-    /// `retry` refused `code` for the run's state, naming it and the verbs that apply
-    /// (REQ-LOCALRUN-223); nothing was sent.
+    /// `retry` refused `code` for the run's state, naming it and the verbs that
+    /// apply; nothing was sent.
     fn refuse_retry(&self, code: &'static str, standing: Standing) -> cli::CommandResult {
         self.write_refusal(
             RETRY_COMMAND,
@@ -535,9 +529,9 @@ impl CloudRun {
     }
 
     /// Reads the run until it is final once Cloud accepted the withdrawal `accepted`, as
-    /// `useful workflow run show --wait` reads it (REQ-RUN-61), and prints the `accepted`
-    /// document with the run last read; a timeout, a signal and Cloud unreachable twice in a
-    /// row end the observation with REQ-RUN-62's codes and exit statuses.
+    /// `useful workflow run show --wait` reads it, and prints the `accepted` document with
+    /// the run last read; a timeout, a signal and Cloud unreachable twice in a row end the
+    /// observation with `useful workflow run show --wait`'s codes and exit statuses.
     fn follow(
         self,
         found: InCloud,
@@ -628,7 +622,7 @@ impl CloudRun {
 
     /// Reads the run and answers its wait with `text`: the question `--question` names, or
     /// with none the one its wait lists (`open_question`), refused `question_ambiguous` with
-    /// nothing sent when it lists several (REQ-LOCALRUN-210).
+    /// nothing sent when it lists several.
     pub(super) fn answer(self, question: Option<String>, text: String) -> cli::CommandResult {
         self.send(
             "answer",
@@ -703,9 +697,9 @@ impl CloudRun {
 
     /// Asks Cloud to carry `control` naming the run's current wait to its runner under `key`,
     /// reported as `command`; `first` is the lookup whose first request this is, whose 404, or
-    /// nobody signed in to send it, is the lookup's miss (REQ-LOCALRUN-180). `current` is the
-    /// run's wait and its state as the run read found them: a control the state does not
-    /// admit is refused naming it and the verbs that apply (REQ-LOCALRUN-223).
+    /// nobody signed in to send it, is the lookup's miss. `current` is the run's wait and its
+    /// state as the run read found them: a control the state does not admit is refused naming
+    /// it and the verbs that apply.
     fn post(
         &self,
         deployment: &Deployment,
@@ -738,8 +732,8 @@ impl CloudRun {
         let post =
             |api: &RunApi<'_>| api.request_control(&self.organization, &self.run_id, key, &request);
         let sent = match first {
-            // The control is a found run's first request, which ends the lookup
-            // (REQ-LOCALRUN-180): a 404, or nobody signed in to send it, is the lookup's miss.
+            // The control is a found run's first request, which ends the lookup: a 404, or
+            // nobody signed in to send it, is the lookup's miss.
             Some(found) => match found.first_read(&self.authentication, &self.http, post)? {
                 Ok(submission) => Ok(submission),
                 Err(Unread::Missed(miss)) => return self.write_missed(command, miss),
@@ -792,7 +786,7 @@ impl CloudRun {
         }
     }
 
-    /// The lookup's miss, as control `command` writes it (REQ-LOCALRUN-180).
+    /// The lookup's miss, as control `command` writes it.
     fn write_missed(&self, command: &'static str, miss: RunAddressError) -> cli::CommandResult {
         super::control::write_refusal(command, None, &Refusal::from(miss), self.json)
     }
@@ -905,10 +899,10 @@ impl CloudRun {
 /// The diagnostic code, message and exit status leaf `command` reports `failure` under: the
 /// code and exit status the Cloud forms of the `useful workflow run` commands in `cloud_api`
 /// report it under (`failure_code`), but for an unnamed conflict, which is `conflict`, and a
-/// rejected session, which exits 3 (INV-CLI-17, REQ-LOCALRUN-215). The message is the leaf's
-/// own, chosen by the code. Only `release` reads the run's subject claim, so only its not-found
-/// names it, and its `404` is its own; `show` and the control leaves write a 404 of their first
-/// request as the lookup's miss (REQ-LOCALRUN-180).
+/// rejected session, which exits 3. The message is the leaf's own, chosen by the code. Only
+/// `release` reads the run's subject claim, so only its not-found names it, and its `404` is
+/// its own; `show` and the control leaves write a 404 of their first request as the lookup's
+/// miss.
 pub(super) fn failure_diagnostic(
     command: &str,
     failure: &RunFailure,
@@ -951,8 +945,8 @@ struct ReleasedDocument<'a> {
     claim: &'a RunSubjectClaim,
 }
 
-/// What `cancel` sends a Cloud run (REQ-LOCALRUN-218): `--force`, `--idempotency-key`, and
-/// `--wait` with its `--timeout`.
+/// What `cancel` sends a Cloud run: `--force`, `--idempotency-key`, and `--wait` with its
+/// `--timeout`.
 pub(super) struct Cancel {
     pub(super) force: bool,
     pub(super) idempotency_key: Option<String>,
@@ -991,7 +985,7 @@ impl Followed {
 }
 
 /// How a followed withdrawal's observation ended before the run was final: the document's
-/// outcome and its one diagnostic (REQ-RUN-62).
+/// outcome and its one diagnostic.
 struct Ending {
     outcome: &'static str,
     code: &'static str,
@@ -1017,10 +1011,9 @@ struct Accepted<'a> {
     control: &'a RunControl,
 }
 
-/// Prints the `accepted` document of a carried control (REQ-LOCALRUN-210), or its line; for a
-/// withdrawal `cancel --wait` followed (REQ-LOCALRUN-218), `followed` is the run last read
-/// under `run`, how the observation ended, if it ended before the run was final, and the
-/// exit status.
+/// Prints the `accepted` document of a carried control, or its line; for a withdrawal `cancel
+/// --wait` followed, `followed` is the run last read under `run`, how the observation ended,
+/// if it ended before the run was final, and the exit status.
 fn write_accepted(
     accepted: Accepted<'_>,
     followed: Option<(Option<&Run>, Option<&Ending>, ExitCode)>,
@@ -1134,16 +1127,16 @@ mod tests {
     use crate::cli::workflow::run::cloud_api::failure_code;
     use crate::exit_code::ExitCode;
 
-    // REQ-COMPAT-42, REQ-LOCALRUN-187, REQ-LOCALRUN-210: a refusal Cloud answers `409`
-    // under a type this release does not name is reported as a conflict, exit 1.
+    // A refusal Cloud answers `409` under a type this release does not name is
+    // reported as a conflict, exit 1.
     #[test]
     fn an_unnamed_conflict_is_reported_as_a_conflict() {
         let (code, _, exit) = failure_diagnostic(RELEASE_COMMAND, &RunFailure::Conflict);
         assert_eq!((code, exit), ("conflict", ExitCode::GeneralFailure));
     }
 
-    // INV-CLI-17, REQ-LOCALRUN-215: the leaves report every failure under the code and exit
-    // status the shared mapping gives it, but for an unnamed conflict and a rejected session.
+    // The leaves report every failure under the code and exit status the shared mapping gives
+    // it, but for an unnamed conflict and a rejected session.
     #[test]
     fn every_failure_takes_its_code_from_the_shared_mapping() {
         let samples = [

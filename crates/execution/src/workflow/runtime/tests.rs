@@ -178,9 +178,7 @@ fn inherited_seed(
                 producers,
             },
         )]),
-        entry: None,
-        edge_counts: BTreeMap::new(),
-        resumed_wait: None,
+        ..ExecutionSeed::empty()
     }
 }
 
@@ -509,7 +507,6 @@ fn finalizer_definition(
     }
 }
 
-// REQ-WFCOND-27
 #[test]
 fn disposition_conditions_observe_the_inherited_state() {
     let temporary = tempfile::tempdir().unwrap();
@@ -556,6 +553,98 @@ fn disposition_conditions_observe_the_inherited_state() {
             ..
         }] if step == "consumer"
     ));
+}
+
+#[test]
+fn revalidated_consumer_waits_for_its_producer_and_keeps_only_a_matching_result() {
+    let (_temporary, admitted) = admit_test_workflow(
+        r#"schemaVersion: 1
+steps:
+  producer:
+    kind: cmd
+    command: {argv: ["true"]}
+    outputs: {out: {kind: text, from: path, path: out}}
+  consumer:
+    kind: cmd
+    inputs: {input: {ref: outputs.producer.out}}
+    command: {argv: ["true"]}
+    outputs: {out: {kind: text, from: path, path: out}}
+  dependent:
+    kind: cmd
+    inputs: {input: {ref: outputs.consumer.out}}
+    command: {argv: ["true"]}
+"#,
+    );
+    for (value, require_inherited, keep) in [
+        ("same", false, true),
+        ("other", false, false),
+        ("same", true, false),
+    ] {
+        let kept = inherited_seed(
+            "consumer",
+            crate::workflow::evidence::InheritedPriorState::Succeeded,
+            InheritedDisposition::Succeeded,
+            output_set(&[("out", "retained")]),
+        )
+        .steps
+        .remove("consumer")
+        .unwrap();
+        let seed = RevalidatedStepSeed {
+            kept,
+            reproduced: BTreeMap::from([("producer".into(), output_set(&[("out", "same")]))]),
+            unchanged: if require_inherited {
+                BTreeSet::from(["producer".into()])
+            } else {
+                BTreeSet::new()
+            },
+        };
+        let seed = ExecutionSeed::new_with_revalidated(
+            &admitted,
+            BTreeMap::new(),
+            BTreeMap::from([("consumer".into(), seed)]),
+        )
+        .unwrap();
+        let initial: TestReduction = initialize_seeded_with_operation(&admitted, seed, None);
+        let action = started_step(&initial, "producer").unwrap();
+        let running: TestReduction = reduce(
+            &initial.state,
+            Occurrence::StepStarted {
+                step: "producer".into(),
+                action,
+            },
+        );
+        assert_step(&running.state, "consumer", StepStateKind::Pending);
+        assert_step(&running.state, "dependent", StepStateKind::Pending);
+        assert!(running.actions.is_empty());
+
+        let failed: TestReduction = reduce(
+            &running.state,
+            Occurrence::StepExecutionFailed {
+                step: "producer".into(),
+                action,
+                cause: "failed".into(),
+            },
+        );
+        assert_step(&failed.state, "consumer", StepStateKind::Blocked);
+
+        let mut state = initial.state;
+        let committed = complete_with_outputs(&mut state, "producer", action, &[("out", value)]);
+        if keep {
+            assert!(matches!(&state.steps["consumer"].state,
+                StepState::Inherited { outputs, .. } if outputs == &output_set(&[("out", "retained")])
+            ));
+            assert!(matches!(committed.actions.as_slice(), [RequestedAction {
+                action: Action::StartStep { step, inputs, .. }, ..
+            }] if step == "dependent" && inputs["input"] == ActionInput::Output("retained".into())));
+            assert_eq!(
+                state.output_producers[&("consumer".into(), "out".into())].attempt_number,
+                1
+            );
+        } else {
+            assert!(started_step(&committed, "consumer").is_some());
+            assert_step(&state, "dependent", StepStateKind::Pending);
+        }
+    }
 }
 
 #[test]
@@ -847,7 +936,6 @@ fn uncancelled_admitted_workflow_initializes_the_runtime_graph() {
     assert!(initialization.state.exports.is_none());
 }
 
-// REQ-WFCOND-18, REQ-WFCOND-29, REQ-WFCOND-38
 #[test]
 fn json_input_condition_false_precedes_body_readiness() {
     let temporary = tempfile::tempdir().unwrap();
@@ -957,7 +1045,6 @@ fn admit_test_workflow_with_inputs(
     (temporary, admitted)
 }
 
-// REQ-WFEXEC-1, REQ-WFEXEC-10, REQ-WFEXEC-11
 #[test]
 fn inferred_data_edges_drive_runtime_scheduling_and_blocking() {
     let (_temporary, admitted) = admit_test_workflow(
@@ -1012,7 +1099,6 @@ steps:
     );
 }
 
-// REQ-WFCOND-34
 #[test]
 fn failure_stop_blocks_a_conditioned_step_whose_body_input_failed() {
     let (_temporary, admitted) = admit_test_workflow(
@@ -1069,7 +1155,6 @@ steps:
     );
 }
 
-// INV-ENGINE-16
 #[test]
 fn conditioned_node_is_not_ready_until_its_condition_passed() {
     let nodes = r#"
@@ -1170,7 +1255,6 @@ fn ordinary_node(id: &str) -> WorkflowNode {
     }
 }
 
-// REQ-WFCOND-28, REQ-WFRECOVERY-34
 #[test]
 fn recovering_step_keeps_its_passed_condition_and_reruns_after_a_failure_stop() {
     let (_temporary, admitted) = admit_test_workflow_with_inputs(
@@ -1307,7 +1391,6 @@ steps:
     );
 }
 
-// REQ-WFCOND-31, REQ-WFCOND-33
 #[test]
 fn skipped_step_satisfies_control_but_never_supplies_its_outputs() {
     let (_temporary, admitted) = admit_test_workflow(
@@ -1380,7 +1463,6 @@ steps:
     );
 }
 
-// REQ-WFCOND-33
 #[test]
 fn unavailable_condition_value_blocks_instead_of_skipping_and_fails_a_required_node() {
     let (_temporary, admitted) = admit_test_workflow(
@@ -1549,7 +1631,6 @@ fn initial_cancellation_finishes_without_authorizing_a_start() {
     );
 }
 
-// REQ-WFEXEC-45, REQ-WFEXEC-46
 #[test]
 fn runtime_cancellation_cancels_each_active_action_and_waits_for_quiescence() {
     let initialization = initialize_test(definition(
@@ -1821,7 +1902,6 @@ fn empty_dag_finishes_during_initialization() {
     assert_eq!(reduction.actions, [finish_action(1, BTreeMap::new())]);
 }
 
-// REQ-WFEXEC-1
 #[test]
 fn serial_steps_follow_every_success_state_and_identifier() {
     let initialization =
@@ -1941,7 +2021,6 @@ fn serial_steps_follow_every_success_state_and_identifier() {
     assert_eq!(state.exports, Some(ExportSet::new()));
 }
 
-// REQ-WFEXEC-1
 #[test]
 fn branching_dependents_wait_for_the_producers_committed_outputs() {
     let initialization = initialize_test(definition(
@@ -2054,8 +2133,6 @@ fn branching_dependents_wait_for_the_producers_committed_outputs() {
     );
 }
 
-// REQ-WFEXEC-3, REQ-WFEXEC-4
-// INV-ENGINE-2
 #[test]
 fn ready_selection_is_lexical_and_respects_parallelism() {
     let initialization = initialize_test(definition(
@@ -2206,7 +2283,6 @@ fn inherited_state(disposition: InheritedDisposition, value: Option<&str>) -> St
     }
 }
 
-// REQ-EXPORTS-2, REQ-EXPORTS-3, INV-ENGINE-45
 #[test]
 fn a_first_of_export_settles_on_the_first_source_that_succeeded_or_the_first_that_did_not() {
     let succeeded = |value: &str| StepState::Succeeded {
@@ -2325,7 +2401,6 @@ fn a_first_of_export_settles_on_the_first_source_that_succeeded_or_the_first_tha
     }
 }
 
-// INV-ENGINE-1
 #[test]
 fn duplicate_and_stale_success_occurrences_are_noops() {
     let initialization = initialize_test(definition(&[("producer", &[], &["result"])], &[], 1));
@@ -2430,8 +2505,6 @@ fn duplicate_and_stale_success_occurrences_are_noops() {
     assert_noop(&terminal_state, &duplicate_capture);
 }
 
-// REQ-WFEXEC-17
-// INV-ENGINE-4
 #[test]
 fn failure_first_remains_failed_when_later_cancellation_stops_a_sibling() {
     let initialization = initialize_test(definition(
@@ -2616,8 +2689,6 @@ fn failure_first_remains_failed_when_later_cancellation_stops_a_sibling() {
     );
 }
 
-// REQ-WFEXEC-17
-// INV-ENGINE-4
 #[test]
 fn cancellation_first_makes_a_later_failure_stale() {
     let initialization = initialize_test(definition(
@@ -2716,7 +2787,6 @@ fn cancellation_first_makes_a_later_failure_stale() {
     assert_eq!(state.workflow, WorkflowState::Cancelled { reason });
 }
 
-// REQ-WFEXEC-18
 #[test]
 fn advisory_failure_before_cancellation_leaves_the_run_cancelled() {
     let mut runtime_definition = definition(&[("build", &[], &[]), ("lint", &[], &[])], &[], 2);
@@ -2831,7 +2901,6 @@ fn finished_outcome(reduction: &TestReduction) -> Option<&RunOutcome> {
         })
 }
 
-// REQ-WFEXEC-69, REQ-WFEXEC-134, REQ-WFEXEC-45, REQ-WFEXEC-47
 #[test]
 fn an_interruption_stops_the_active_step_as_a_cancellation_and_fails_it() {
     let graph = finalizer_definition(
@@ -2942,7 +3011,6 @@ fn an_interruption_stops_the_active_step_as_a_cancellation_and_fails_it() {
     assert_eq!(cloud.workflow, WorkflowState::Cancelled { reason });
 }
 
-// REQ-WFEXEC-136
 #[test]
 fn an_interrupted_advisory_step_is_the_primary_issue() {
     let mut graph = definition(&[("lint", &[], &[])], &[], 1);
@@ -2990,7 +3058,6 @@ fn an_interrupted_advisory_step_is_the_primary_issue() {
     );
 }
 
-// REQ-WFEXEC-136, REQ-WFEXEC-17
 #[test]
 fn a_required_issue_before_an_interruption_stays_the_primary_issue() {
     let initialization = initialize_test(definition(
@@ -3044,7 +3111,6 @@ fn a_required_issue_before_an_interruption_stays_the_primary_issue() {
     );
 }
 
-// REQ-WFEXEC-135
 #[test]
 fn an_interruption_with_no_active_step_fails_the_first_pending_step_at_start() {
     let reason = CancellationReason::UserRequest;
@@ -3156,10 +3222,9 @@ fn assert_kept_wait(state: &TestRuntimeState, ending: &TestReduction, reason: Ca
     );
 }
 
-// REQ-WFEXEC-72, REQ-WFEXEC-128, REQ-WFEXEC-69, REQ-WFEXEC-103, INV-ENGINE-32: an interruption
-// before any step of a continuation has started, its entry pending or its entry `workflow` step
-// stopped while `starting`, keeps the wait the continuation continues from and fails nothing; a
-// cancellation of the same continuation cancels it as before.
+// An interruption before any step of a continuation has started, its entry pending or its entry
+// `workflow` step stopped while `starting`, keeps the wait the continuation continues from and
+// fails nothing; a cancellation of the same continuation cancels it as before.
 #[test]
 fn an_interruption_before_a_continuation_starts_a_step_keeps_its_wait() {
     let reason = CancellationReason::TerminationRequest;
@@ -3223,7 +3288,6 @@ fn an_interruption_before_a_continuation_starts_a_step_keeps_its_wait() {
     }
 }
 
-// REQ-WFEXEC-134
 #[test]
 fn an_interrupted_step_with_recovery_gets_no_recovery_round() {
     let mut graph = definition(&[("fetch", &[], &["result"])], &[], 1);
@@ -3323,8 +3387,8 @@ fn an_interrupted_step_with_recovery_gets_no_recovery_round() {
     assert!(started_step(&quiesced, "fetch").is_none());
 }
 
-// REQ-WFEXEC-137: a `starting` command or agent step fails at `start` when its quiescing
-// reports that nothing was launched, and at `execution` when its start had launched.
+// A `starting` command or agent step fails at `start` when its quiescing reports that
+// nothing was launched, and at `execution` when its start had launched.
 #[test]
 fn an_interrupted_step_that_never_launched_fails_at_start() {
     let reason = CancellationReason::UserRequest;
@@ -3366,8 +3430,8 @@ fn an_interrupted_step_that_never_launched_fails_at_start() {
     }
 }
 
-// REQ-WFEXEC-137: a recovery's re-execution withdrawn before it launched leaves the step's
-// earlier execution, so the step still fails at `execution`.
+// A recovery's re-execution withdrawn before it launched leaves the step's earlier
+// execution, so the step still fails at `execution`.
 #[test]
 fn an_unlaunched_re_execution_after_recovery_fails_in_execution() {
     let mut graph = definition(&[("fetch", &[], &["result"])], &[], 1);
@@ -3412,7 +3476,6 @@ fn an_unlaunched_re_execution_after_recovery_fails_in_execution() {
     );
 }
 
-// REQ-WFEXEC-137, REQ-WFFINALIZE-15
 #[test]
 fn an_interruption_while_finalizing_or_after_a_cancellation_acts_as_that_cancellation() {
     let graph = finalizer_definition(
@@ -3477,8 +3540,6 @@ fn an_interruption_while_finalizing_or_after_a_cancellation_acts_as_that_cancell
     );
 }
 
-// REQ-WFEXEC-16
-// INV-ENGINE-4
 #[test]
 fn committed_success_survives_later_cancellation() {
     let initialization = initialize_test(definition(
@@ -3586,8 +3647,6 @@ fn committed_success_survives_later_cancellation() {
     assert_eq!(state.exports, Some(expected_exports));
 }
 
-// REQ-WFEXEC-9, REQ-WFEXEC-11
-// INV-ENGINE-3
 #[test]
 fn every_failure_phase_closes_scheduling_and_reaches_the_fixed_point() {
     for phase in [
@@ -3686,7 +3745,6 @@ fn every_failure_phase_closes_scheduling_and_reaches_the_fixed_point() {
     }
 }
 
-// REQ-WFEXEC-12
 #[test]
 fn later_active_failure_does_not_replace_the_primary_issue() {
     let initialization = initialize_test(definition(
@@ -3786,7 +3844,6 @@ fn later_active_failure_does_not_replace_the_primary_issue() {
     );
 }
 
-// REQ-WFEXEC-11, REQ-WFEXEC-16
 #[test]
 fn successful_sibling_outputs_and_export_reasons_survive_failure() {
     let initialization = initialize_test(definition(
@@ -3925,8 +3982,6 @@ fn successful_sibling_outputs_and_export_reasons_survive_failure() {
     );
 }
 
-// REQ-WFEXEC-2, REQ-WFEXEC-13, REQ-WFEXEC-15
-// INV-ENGINE-3
 #[test]
 fn advisory_failure_satisfies_control_and_keeps_the_gate_open() {
     let mut runtime_definition =
@@ -4004,7 +4059,6 @@ fn advisory_failure_satisfies_control_and_keeps_the_gate_open() {
     ));
 }
 
-// REQ-WFEXEC-2, REQ-WFEXEC-14
 #[test]
 fn advisory_failure_blocks_data_without_synthesis_and_satisfies_later_control() {
     let mut runtime_definition = definition(
@@ -4096,7 +4150,6 @@ fn advisory_failure_blocks_data_without_synthesis_and_satisfies_later_control() 
     ));
 }
 
-// REQ-WFEXEC-12, REQ-WFEXEC-13
 #[test]
 fn required_failure_remains_primary_after_an_advisory_failure() {
     let mut runtime_definition = definition(&[("lint", &[], &[]), ("test", &[], &[])], &[], 2);
@@ -4148,7 +4201,6 @@ fn required_failure_remains_primary_after_an_advisory_failure() {
     );
 }
 
-// INV-ENGINE-1
 #[test]
 fn duplicate_and_stale_failure_occurrences_are_noops() {
     let initialization = initialize_test(definition(&[("producer", &[], &["result"])], &[], 1));
@@ -4222,7 +4274,6 @@ fn duplicate_and_stale_failure_occurrences_are_noops() {
     assert_noop(&terminal, &duplicate);
 }
 
-// INV-ENGINE-1
 #[test]
 fn replaying_the_same_ordered_transcript_is_structurally_identical() {
     let transcript = || {
@@ -4308,8 +4359,6 @@ fn replaying_the_same_ordered_transcript_is_structurally_identical() {
         Some(available_exports(&[("finalReport", "d-committed")]))
     );
 }
-// REQ-WFEXEC-28, REQ-WFEXEC-33
-// INV-ENGINE-5
 #[test]
 fn trace_succeeded_trigger_and_failed_release() {
     let definition = finalizer_definition(
@@ -4385,7 +4434,6 @@ fn trace_succeeded_trigger_and_failed_release() {
     assert!(state.finalization_summary.is_some());
 }
 
-// REQ-CANCEL-29, REQ-WFFINALIZE-8
 #[test]
 fn trace_cancelled_trigger_and_successful_release() {
     let definition = finalizer_definition(
@@ -4427,8 +4475,6 @@ fn trace_cancelled_trigger_and_successful_release() {
     assert!(matches!(start.action, Action::StartStep { .. }));
 }
 
-// REQ-CANCEL-30, REQ-WFFINALIZE-13
-// INV-ENGINE-6
 #[test]
 fn trace_force_abort_during_ordinary_execution_contains_work_and_suppresses_finalizers() {
     let definition = finalizer_definition(
@@ -4615,7 +4661,6 @@ fn ordinary_force_escalation_preserves_an_earlier_graceful_reason() {
     );
 }
 
-// REQ-WFFINALIZE-12
 #[test]
 fn trace_force_abort_waits_for_owned_work_to_quiesce_and_repeated_force_abort_is_inert() {
     let definition = finalizer_definition(
@@ -4730,7 +4775,6 @@ fn trace_force_abort_waits_for_owned_work_to_quiesce_and_repeated_force_abort_is
     ));
 }
 
-// REQ-WFEXEC-31, REQ-WFEXEC-33
 #[test]
 fn trace_failed_finalizer_output_producer_blocks_consumer_without_replacing_primary() {
     let mut definition = finalizer_definition(
@@ -4806,7 +4850,6 @@ fn trace_failed_finalizer_output_producer_blocks_consumer_without_replacing_prim
     assert_eq!(primary_issue.node.id, "archive");
 }
 
-// REQ-WFEXEC-33
 #[test]
 fn trace_advisory_finalizer_failure_preserves_success() {
     let definition = finalizer_definition(
@@ -4864,7 +4907,6 @@ fn trace_advisory_finalizer_failure_preserves_success() {
     );
 }
 
-// REQ-WFFINALIZE-10, REQ-WFFINALIZE-11
 #[test]
 fn trace_fresh_finalization_cancellation_does_not_replay_ordinary_cancellation() {
     let definition = finalizer_definition(
@@ -4926,7 +4968,6 @@ fn trace_fresh_finalization_cancellation_does_not_replay_ordinary_cancellation()
     );
 }
 
-// REQ-WFFINALIZE-14
 #[test]
 fn ordinary_only_cancellation_preserves_open_finalization() {
     let definition = finalizer_definition(
@@ -4987,7 +5028,6 @@ fn ordinary_only_cancellation_preserves_open_finalization() {
     assert_eq!(state.steps["release"].state, StepState::Running);
 }
 
-// REQ-WFFINALIZE-4, REQ-WFFINALIZE-9
 #[test]
 fn initial_cancellation_rearms_finalizers_and_blocks_unavailable_ordinary_outputs() {
     let definition = finalizer_definition(
@@ -5059,7 +5099,6 @@ fn initial_cancellation_rearms_finalizers_and_blocks_unavailable_ordinary_output
     assert_noop(&state, &stale);
 }
 
-// REQ-WFEXEC-29, REQ-WFEXEC-31, REQ-WFEXEC-32
 #[test]
 fn finalizer_classification_precedes_bytewise_independent_selection() {
     let definition = finalizer_definition(
@@ -5159,7 +5198,6 @@ fn finalizer_classification_precedes_bytewise_independent_selection() {
     ));
 }
 
-// REQ-WFEXEC-7
 #[test]
 fn finalizer_ready_prefix_is_bytewise_and_uses_the_execution_parallelism_limit() {
     let definition = finalizer_definition(
@@ -5220,7 +5258,6 @@ fn finalizer_ready_prefix_is_bytewise_and_uses_the_execution_parallelism_limit()
     assert_eq!(state.steps["zeta"].state, StepState::Pending);
 }
 
-// REQ-WFFINALIZE-12
 #[test]
 fn force_abort_escalation_preserves_the_graceful_reason_and_deadline() {
     let definition = finalizer_definition(
@@ -5313,8 +5350,6 @@ fn force_abort_escalation_preserves_the_graceful_reason_and_deadline() {
     );
 }
 
-// REQ-WFEXEC-35, REQ-WFEXEC-36, REQ-WFEXEC-37
-// INV-ENGINE-5
 #[test]
 fn trace_advisory_issue_context_is_exact_sorted_and_immutable() {
     let definition = finalizer_definition(
@@ -5388,7 +5423,6 @@ fn trace_advisory_issue_context_is_exact_sorted_and_immutable() {
     assert!(Arc::ptr_eq(later_bytes, bytes));
 }
 
-// REQ-WFEXEC-30
 #[test]
 fn after_waits_for_every_predecessor_to_be_terminal_whatever_its_outcome() {
     let (_temporary, admitted) = admit_test_workflow(
@@ -5486,7 +5520,6 @@ finalizers:
     assert!(started_step(&released, "last").is_some());
 }
 
-// REQ-WFEXEC-34
 #[test]
 fn finalizers_cannot_change_a_failed_or_cancelled_outcome() {
     let failed_definition = finalizer_definition(
@@ -5579,7 +5612,6 @@ fn finalizers_cannot_change_a_failed_or_cancelled_outcome() {
     );
 }
 
-// REQ-WFFINALIZE-2
 #[test]
 fn finalization_context_bytes_are_fixed_when_the_ordinary_steps_finish() {
     let mut definition = finalizer_definition(
@@ -5694,7 +5726,6 @@ fn finalization_context_bytes_are_fixed_when_the_ordinary_steps_finish() {
     );
 }
 
-// REQ-WFFINALIZE-23
 #[test]
 fn finalizer_is_admitted_at_most_once_per_healthy_attempt() {
     let definition = finalizer_definition(
@@ -5859,8 +5890,6 @@ fn recovery_round(value: u8) -> RecoveryRoundNumber {
     RecoveryRoundNumber(value)
 }
 
-// REQ-WFRECOVERY-2, REQ-WFRECOVERY-28, REQ-WFRECOVERY-30
-// INV-ENGINE-7
 #[test]
 fn recovery_trace_handlerless_recheck_commits_only_execution_two_outputs() {
     let mut graph = definition(&[("fetch", &[], &["result"])], &[], 1);
@@ -5979,8 +6008,6 @@ fn recovery_trace_handlerless_recheck_commits_only_execution_two_outputs() {
     assert!(state.last_transition_sequence.get() <= 18);
 }
 
-// REQ-WFRECOVERY-25
-// INV-ENGINE-7
 #[test]
 fn recovery_trace_gave_up_preserves_the_target_failure_and_starts_no_recheck() {
     let mut graph = definition(&[("verify", &[], &[])], &[], 1);
@@ -6085,7 +6112,6 @@ fn recovery_trace_gave_up_preserves_the_target_failure_and_starts_no_recheck() {
             round: recovery_round(1),
         })
     );
-    // REQ-WFEXEC-79
     assert_eq!(state.steps["verify"].failure_class, None);
     assert!(gave_up.actions.iter().all(|action| !matches!(
         action.action,
@@ -6094,7 +6120,6 @@ fn recovery_trace_gave_up_preserves_the_target_failure_and_starts_no_recheck() {
     assert_eq!(ordinary_issues(&state).len(), 1);
 }
 
-// REQ-WFRECOVERY-65, REQ-WFEXEC-79
 #[test]
 fn recovery_trace_infrastructure_preserves_the_target_failure_and_starts_no_recheck() {
     let mut graph = definition(&[("verify", &[], &[])], &[], 1);
@@ -6173,7 +6198,6 @@ fn recovery_trace_infrastructure_preserves_the_target_failure_and_starts_no_rech
             round: recovery_round(1),
         })
     );
-    // REQ-WFEXEC-79
     assert_eq!(
         state.steps["verify"].failure_class,
         Some(FailureClass::Infrastructure)
@@ -6185,7 +6209,6 @@ fn recovery_trace_infrastructure_preserves_the_target_failure_and_starts_no_rech
     assert_eq!(ordinary_issues(&state).len(), 1);
 }
 
-// REQ-WFRECOVERY-28, REQ-WFRECOVERY-31, REQ-WFRECOVERY-32
 #[test]
 fn recovery_trace_required_exhaustion_selects_latest_failure_once() {
     let mut graph = definition(&[("compile", &[], &[])], &[], 1);
@@ -6275,7 +6298,6 @@ fn recovery_trace_required_exhaustion_selects_latest_failure_once() {
     assert_eq!(ordinary_issues(&state).len(), 1);
 }
 
-// REQ-WFRECOVERY-27, REQ-WFRECOVERY-31
 #[test]
 fn recovery_trace_advisory_exhaustion_releases_control_only_after_terminal_failure() {
     let mut graph = definition(&[("lint", &[], &[]), ("package", &["lint"], &[])], &[], 1);
@@ -6352,7 +6374,6 @@ fn recovery_trace_advisory_exhaustion_releases_control_only_after_terminal_failu
     assert_eq!(state.workflow, WorkflowState::Succeeded);
 }
 
-// REQ-WFRECOVERY-26
 #[test]
 fn recovery_trace_handler_start_failure_stops_without_retrying_the_handler() {
     let mut graph = definition(&[("verify", &[], &[])], &[], 1);
@@ -6418,7 +6439,6 @@ fn recovery_trace_handler_start_failure_stops_without_retrying_the_handler() {
     ));
 }
 
-// REQ-WFRECOVERY-32
 #[test]
 fn recovery_trace_agent_handler_execution_failure_preserves_target_precedence() {
     let mut graph = definition(&[("verify", &[], &[])], &[], 1);
@@ -6497,7 +6517,6 @@ fn recovery_trace_agent_handler_execution_failure_preserves_target_precedence() 
     ));
 }
 
-// REQ-WFRECOVERY-48
 #[test]
 fn recovery_trace_cancellation_preempts_all_five_active_phases() {
     #[derive(Clone, Copy)]
@@ -6705,8 +6724,6 @@ fn recovery_trace_cancellation_preempts_all_five_active_phases() {
     }
 }
 
-// REQ-WFRECOVERY-6, REQ-WFRECOVERY-24, REQ-WFRECOVERY-33, REQ-OUTPUTS-15
-// INV-ENGINE-5, INV-ENGINE-7
 #[test]
 fn recovery_trace_output_capture_failure_only_authorizes_a_full_target_rerun() {
     let mut graph = finalizer_definition(
@@ -7119,7 +7136,6 @@ fn not_reached() -> StepState<String> {
     not_run_state(WorkflowNodeRole::Step, NonExecutionCode::NotReached)
 }
 
-// REQ-WFEXEC-58, REQ-WFEXEC-82, INV-ENGINE-18
 #[test]
 fn edge_scheduling_starts_the_entry_alone_and_then_only_the_routed_target() {
     let initialization = initialize_test(design_build_review());
@@ -7139,7 +7155,6 @@ fn edge_scheduling_starts_the_entry_alone_and_then_only_the_routed_target() {
     assert_eq!(state.exit_outcome, None);
 }
 
-// REQ-WFEXEC-83, INV-ENGINE-18
 #[test]
 fn an_exit_edge_records_the_exit_outcome_and_leaves_unstarted_steps_not_reached() {
     let mut state = design_capturing();
@@ -7168,7 +7183,6 @@ fn an_exit_edge_records_the_exit_outcome_and_leaves_unstarted_steps_not_reached(
     ));
 }
 
-// REQ-WFEXEC-82
 #[test]
 fn a_workflow_step_capture_without_its_outcome_is_stale() {
     let state = design_capturing();
@@ -7220,7 +7234,6 @@ fn design_waiting_on_answers() -> RuntimeDefinition {
     definition
 }
 
-// REQ-WFEXEC-61, INV-ENGINE-20
 #[test]
 fn a_wait_edge_ends_the_attempt_waiting_without_finalization() {
     let mut state = design_capturing_in(design_waiting_on_answers());
@@ -7272,7 +7285,6 @@ fn a_wait_edge_ends_the_attempt_waiting_without_finalization() {
     ));
 }
 
-// REQ-WFEXEC-62, INV-ENGINE-20
 #[test]
 fn a_stop_entered_before_an_authorized_step_ends_the_attempt_waiting() {
     let initialization = initialize_test(design_build_review());
@@ -7333,7 +7345,6 @@ fn a_stop_entered_before_an_authorized_step_ends_the_attempt_waiting() {
     ));
 }
 
-// REQ-WFEXEC-63, REQ-CONTINUE-96, INV-ENGINE-18
 #[test]
 fn a_continuation_starts_the_step_its_seed_names() {
     let initialization = ReductionBuilder::<String, TestDeadline>::new(design_build_review())
@@ -7386,7 +7397,6 @@ fn a_continuation_starts_the_step_its_seed_names() {
     assert_eq!(state.exit_outcome.as_deref(), Some("landed"));
 }
 
-// REQ-WFEXEC-58, REQ-WFEXEC-63
 #[test]
 fn an_inherited_workflow_step_routes_nothing() {
     let definition = edge_definition(
@@ -7427,7 +7437,6 @@ fn an_inherited_workflow_step_routes_nothing() {
     ));
 }
 
-// REQ-WFEXEC-82
 #[test]
 fn an_outcome_without_an_edge_ends_the_walk_without_an_exit_outcome() {
     let mut state = design_capturing();
@@ -7440,7 +7449,6 @@ fn an_outcome_without_an_edge_ends_the_walk_without_an_exit_outcome() {
     assert_eq!(state.exit_outcome, None);
 }
 
-// REQ-WFEXEC-84
 #[test]
 fn a_failed_workflow_step_stops_the_walk_as_a_required_failure() {
     let initialization = initialize_test(design_build_review());
@@ -7594,8 +7602,8 @@ fn taken(step: &str, outcome: &str, target: &str, counted: bool) -> TakenEdgeRec
     }
 }
 
-// REQ-WFEXEC-64, INV-ENGINE-20, INV-ENGINE-22: an edge naming an earlier step, or the step
-// itself, ends the attempt `continued` without finalization; the next attempt starts there.
+// An edge naming an earlier step, or the step itself, ends the attempt `continued` without
+// finalization; the next attempt starts there.
 #[test]
 fn a_backward_or_self_edge_ends_the_attempt_continued() {
     for target in ["design", "review"] {
@@ -7645,8 +7653,8 @@ fn design_planned_through(target: &str, count: u64) -> TestRuntimeState {
     )
 }
 
-// REQ-WFEXEC-133, INV-ENGINE-22: a limited edge under its count takes `then` as a counted
-// continuation, a later step included; at its count it takes `else` as an ordinary target.
+// A limited edge under its count takes `then` as a counted continuation, a later step
+// included; at its count it takes `else` as an ordinary target.
 #[test]
 fn a_limited_edge_continues_under_its_count_and_takes_else_at_it() {
     let mut state = design_planned_through("limit:build:2:exit.failed", 0);
@@ -7695,8 +7703,8 @@ fn a_limited_edge_continues_under_its_count_and_takes_else_at_it() {
     ));
 }
 
-// REQ-WFEXEC-80: a host wait under its count ends the attempt waiting on a counted `host`
-// wait at its own step; at its count it takes `else` as an ordinary target, uncounted.
+// A host wait under its count ends the attempt waiting on a counted `host` wait at its
+// own step; at its count it takes `else` as an ordinary target, uncounted.
 #[test]
 fn a_host_wait_is_entered_counted_under_its_limit_and_takes_else_at_it() {
     let host_failing = |count: u64| {
@@ -7823,8 +7831,8 @@ fn capture_child_outcome(
     )
 }
 
-// REQ-WFEXEC-99, INV-ENGINE-29: an interrupted child's completion enters its `repair` wait,
-// which names the interruption, and any other edge fails the step `interrupted`.
+// An interrupted child's completion enters its `repair` wait, which names the interruption,
+// and any other edge fails the step `interrupted`.
 #[test]
 fn an_interrupted_child_enters_only_a_repair_wait() {
     let mut state = design_interrupted(interrupted_route_definition("build", "wait:repair:design"));
@@ -7890,9 +7898,9 @@ fn an_interrupted_child_enters_only_a_repair_wait() {
     }
 }
 
-// REQ-WFEXEC-101, REQ-WFEXEC-64: a child that completed on its own under an interruption
-// ends the attempt `continued` on an edge that would start a step, counted only as a limited
-// edge's `then`; under a cancellation its completion is stale and the step is cancelled.
+// A child that completed on its own under an interruption ends the attempt `continued` on an
+// edge that would start a step, counted only as a limited edge's `then`; under a
+// cancellation its completion is stale and the step is cancelled.
 #[test]
 fn a_child_completing_under_an_interruption_continues_instead_of_starting_a_step() {
     for (planned, counted) in [("build", false), ("limit:build:2:exit.failed", true)] {
@@ -7929,7 +7937,7 @@ fn a_child_completing_under_an_interruption_continues_instead_of_starting_a_step
     assert!(!stale.occurrence_accepted);
 }
 
-/// The wait a `design` whose nested run entered a wait of `kind` carries (REQ-WFEXEC-75).
+/// The wait a `design` whose nested run entered a wait of `kind` carries.
 fn carried(kind: WaitKind, interrupted: Option<ChildInterruption>) -> EnteredWait {
     EnteredWait {
         step: "design".to_owned(),
@@ -7944,10 +7952,9 @@ fn carried(kind: WaitKind, interrupted: Option<ChildInterruption>) -> EnteredWai
     }
 }
 
-// REQ-WFEXEC-75, INV-ENGINE-62: a `workflow` step whose nested run waits commits nothing and
-// takes no edge: it ends `not_reached` with every unstarted step and the attempt ends on the
-// same wait carried at the step, with no finalization; only the running step's completion
-// carries one.
+// A `workflow` step whose nested run waits commits nothing and takes no edge: it ends
+// `not_reached` with every unstarted step and the attempt ends on the same wait carried at
+// the step, with no finalization; only the running step's completion carries one.
 #[test]
 fn a_nested_runs_wait_ends_the_walk_on_the_carried_wait() {
     let initialization = initialize_test(design_build_review());
@@ -7988,9 +7995,8 @@ fn a_nested_runs_wait_ends_the_walk_on_the_carried_wait() {
     ));
 }
 
-// REQ-WFEXEC-109, REQ-WFEXEC-99: under an interruption the nested run's `repair` wait, which
-// names the interruption that failed its stage, ends the walk as a routed child's edge does
-// and wins over the stop.
+// Under an interruption the nested run's `repair` wait, which names the interruption that
+// failed its stage, ends the walk as a routed child's edge does and wins over the stop.
 #[test]
 fn an_interrupted_nested_runs_repair_wait_is_carried() {
     let mut state = design_interrupted(interrupted_route_definition("build", "exit.failed"));
@@ -8176,7 +8182,6 @@ fn first_of_body(steps: &[&str]) -> StepState<String> {
     )
 }
 
-// REQ-WFCOND-45, INV-ENGINE-44
 #[test]
 fn first_of_waits_for_every_source_and_takes_the_first_that_succeeded() {
     // `b` has no condition, so it is the last source and runs beside `a`.
@@ -8213,7 +8218,6 @@ fn first_of_waits_for_every_source_and_takes_the_first_that_succeeded() {
     assert_eq!(first_of_start(&b_settled), chose("b", "from b"));
 }
 
-// REQ-WFCOND-46, REQ-WFCOND-29
 #[test]
 fn first_of_blocks_on_a_source_that_did_not_supply_or_when_every_source_was_skipped() {
     let conditioned_b = FirstOfShape {
@@ -8261,7 +8265,6 @@ fn first_of_blocks_on_a_source_that_did_not_supply_or_when_every_source_was_skip
     assert_step(&initialization.state, "c", StepStateKind::Skipped);
 }
 
-// REQ-WFCOND-46, REQ-WFEXEC-11
 #[test]
 fn a_failure_stop_settles_a_pending_first_of_consumer() {
     // A required source that fails blocks the step while the other still runs.
@@ -8311,7 +8314,6 @@ fn a_failure_stop_settles_a_pending_first_of_consumer() {
     );
 }
 
-// REQ-WFCOND-45, INV-ENGINE-44
 #[test]
 fn an_inherited_first_of_source_supplies_its_retained_output() {
     let conditioned_b = FirstOfShape {
@@ -8398,7 +8400,6 @@ fn agent_first_of_definition() -> RuntimeDefinition {
     graph
 }
 
-// REQ-EVIDENCE-28, INV-ENGINE-44
 #[test]
 fn a_started_step_records_its_message_sources_through_recovery_and_failure() {
     use crate::workflow::validated::MessageList;

@@ -79,9 +79,9 @@ fn show_args(run_directory: &Path, args: &[&str]) -> Vec<String> {
     all
 }
 
-// REQ-LOCALRUN-189: `--attempt N` of a local run keeps attempt N alone in the attempts and
-// changes nothing else, a number the run has no attempt of is `attempt_not_found` in the
-// `error` document, and `--wait`, which follows a Cloud run, is a usage error.
+// `--attempt N` of a local run keeps attempt N alone in the attempts and changes nothing
+// else, a number the run has no attempt of is `attempt_not_found` in the `error` document,
+// and `--wait`, which follows a Cloud run, is a usage error.
 #[test]
 fn show_selects_one_attempt_of_a_local_run_and_refuses_wait() {
     let bundle = environment_retry_bundle();
@@ -175,7 +175,6 @@ fn retry_acquires_after_pre_rename_publication_crash() {
     assert_eq!(terminal["outcome"], "succeeded");
 }
 
-// REQ-LOCALRUN-78, REQ-LOCALRUN-92, REQ-LOCALRUN-127, REQ-LOCALRUN-129, REQ-LOCALRUN-130
 #[test]
 fn retry_uses_the_immutable_bundle_current_environment_and_fresh_attempt() {
     let bundle = environment_retry_bundle();
@@ -277,7 +276,6 @@ fn retry_uses_the_immutable_bundle_current_environment_and_fresh_attempt() {
     assert!(!run_directory.join("attempts/000003").exists());
 }
 
-// REQ-LOCALRUN-78, REQ-LOCALRUN-101
 #[test]
 fn retry_reconstructs_named_inputs_after_original_sources_are_removed() {
     let bundle = RunBundle::new(
@@ -363,7 +361,6 @@ steps:
     );
 }
 
-// REQ-WFFINALIZE-22, REQ-WFEXEC-51
 #[test]
 fn finalizer_retry_reruns_both_graphs_with_a_fresh_attempt() {
     let bundle = RunBundle::new(include_str!(
@@ -435,7 +432,6 @@ fn finalizer_retry_reruns_both_graphs_with_a_fresh_attempt() {
     );
 }
 
-// REQ-LOCALRUN-4
 #[test]
 fn tui_setup_failure_prevents_retry_execution_and_releases_the_attempt() {
     let bundle = environment_retry_bundle();
@@ -466,7 +462,6 @@ fn tui_setup_failure_prevents_retry_execution_and_releases_the_attempt() {
     assert!(!stderr.contains("summary"));
 }
 
-// REQ-LOCALRUN-103
 #[test]
 fn plain_retry_streams_a_human_run_and_rejection() {
     let bundle = environment_retry_bundle();
@@ -497,7 +492,6 @@ fn plain_retry_streams_a_human_run_and_rejection() {
     assert!(!rejection.stderr.is_empty());
 }
 
-// REQ-LOCALRUN-129
 #[test]
 fn concurrent_retry_is_a_nonblocking_typed_rejection() {
     let bundle = signal_bundle();
@@ -545,7 +539,6 @@ fn concurrent_retry_is_a_nonblocking_typed_rejection() {
     assert_eq!(output.status.code(), Some(130));
 }
 
-// REQ-LOCALRUN-129
 #[test]
 fn ownership_unproven_rejection_preserves_the_predecessor() {
     let bundle = environment_retry_bundle();
@@ -585,7 +578,6 @@ fn ownership_unproven_rejection_preserves_the_predecessor() {
     assert!(!run_directory.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-140
 #[test]
 fn retry_terminal_json_output_failure_preserves_the_published_attempt() {
     let bundle = environment_retry_bundle();
@@ -618,7 +610,6 @@ fn retry_terminal_json_output_failure_preserves_the_published_attempt() {
     assert!(stderr.contains("attempts/000002/result"));
 }
 
-// REQ-AGENT-57
 #[test]
 fn retry_reapplies_the_retained_agent_profile_replacement_after_the_document_is_removed() {
     // The replaced profile is unused, so no harness installation is required and the
@@ -697,7 +688,6 @@ fn retry_reapplies_the_retained_agent_profile_replacement_after_the_document_is_
     assert!(retained.is_file());
 }
 
-// REQ-LOCALRUN-79
 #[test]
 fn retry_warns_about_a_reused_execution_root_without_inspecting_it() {
     let bundle = environment_retry_bundle();
@@ -761,9 +751,8 @@ fn retry_warns_about_a_reused_execution_root_without_inspecting_it() {
     );
 }
 
-// REQ-LOCALRUN-78, REQ-LOCALRUN-79: `retry --all` with no `--execution-root` starts the
-// next attempt of every step where the previous attempt ran, and warns that an earlier
-// attempt used that root.
+// `retry --all` with no `--execution-root` starts the next attempt of every step where
+// the previous attempt ran, and warns that an earlier attempt used that root.
 #[test]
 fn retry_all_without_an_execution_root_reruns_every_step_in_the_previous_root() {
     let bundle = environment_retry_bundle();
@@ -807,8 +796,7 @@ fn retry_all_without_an_execution_root_reruns_every_step_in_the_previous_root() 
     );
 }
 
-// REQ-LOCALRUN-78: `retry --all` of a run that waits is refused `run_waiting` and changes
-// nothing.
+// `retry --all` of a run that waits is refused `run_waiting` and changes nothing.
 #[test]
 fn retry_all_of_a_waiting_run_is_refused_run_waiting() {
     let bundle = super::workflow_continue::wait_tree();
@@ -831,7 +819,6 @@ fn retry_all_of_a_waiting_run_is_refused_run_waiting() {
     assert!(!run_directory.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-168, REQ-OUTPUTS-24
 #[test]
 fn retry_git_capture_keeps_the_recorded_baseline_after_head_advances() {
     let bundle = RunBundle::new(GIT_CONTINUATION_SOURCE);
@@ -893,7 +880,6 @@ fn retry_git_capture_keeps_the_recorded_baseline_after_head_advances() {
     assert_eq!(result["exports"]["branch"]["headOid"], head);
 }
 
-// REQ-LOCALRUN-171
 #[test]
 fn a_retry_of_a_tree_run_rejects_a_modified_copy() {
     let script = "#!/bin/sh\nset -eu\nprintf '%s' \"$USEFUL_WORKFLOW_ROOT\" > workflow-root\ntest \"$RETRY_PHASE\" = retry\n";
@@ -962,8 +948,8 @@ fn a_retry_of_a_tree_run_rejects_a_modified_copy() {
     );
 }
 
-// REQ-LOCALRUN-217: a retry attempt's step sees the revision the run was created with,
-// whatever the launching environment holds.
+// A retry attempt's step sees the revision the run was created with, whatever the
+// launching environment holds.
 #[test]
 fn a_retry_sees_the_source_revision_the_run_was_created_with() {
     let (bundle, run_directory, observed) = failed_source_revision_run("source-retry");
@@ -980,8 +966,8 @@ fn a_retry_sees_the_source_revision_the_run_was_created_with() {
     assert_second_attempt_saw_the_source_revision(&output, &observed);
 }
 
-// REQ-LOCALRUN-177: a retry of a parent that runs a `workflow` step again creates the
-// step's next child ordinal.
+// A retry of a parent that runs a `workflow` step again creates the step's next child
+// ordinal.
 #[test]
 fn retrying_a_parent_runs_its_workflow_step_as_the_next_child() {
     let (bundle, destination, mut parent) = spawn_held_child_tree("retried-parent");
@@ -1048,8 +1034,8 @@ fn resumed(destination: &Path) -> serde_json::Value {
     terminal
 }
 
-// REQ-CONTINUE-112: resuming a parent killed while its child ran starts a new attempt of
-// that child in place and routes on its outcome.
+// Resuming a parent killed while its child ran starts a new attempt of that child in
+// place and routes on its outcome.
 #[test]
 fn resuming_an_abandoned_parent_retries_its_running_child_in_place() {
     let (_bundle, destination) = killed_parent("abandoned-running");
@@ -1069,8 +1055,8 @@ fn resuming_an_abandoned_parent_retries_its_running_child_in_place() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-CONTINUE-112: a child that exited after its parent was killed is adopted: the step
-// settles from the child's recorded outcome and exports without another child attempt.
+// A child that exited after its parent was killed is adopted: the step settles from the
+// child's recorded outcome and exports without another child attempt.
 #[test]
 fn resuming_an_abandoned_parent_adopts_its_exited_child() {
     let (bundle, destination) = killed_parent("abandoned-exited");
@@ -1093,8 +1079,8 @@ fn resuming_an_abandoned_parent_adopts_its_exited_child() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-WFEXEC-113, REQ-CONTINUE-112: an adopted child whose published result is `failed` is
-// recorded as its step's failed child from that result, without another child attempt.
+// An adopted child whose published result is `failed` is recorded as its step's failed
+// child from that result, without another child attempt.
 #[test]
 fn resuming_an_abandoned_parent_records_its_adopted_childs_failure() {
     let (bundle, destination) = killed_parent("abandoned-failed");
@@ -1124,16 +1110,15 @@ fn resuming_an_abandoned_parent_records_its_adopted_childs_failure() {
         "{terminal}"
     );
     assert_eq!(run_record(&destination)["outcome"], "failed");
-    // REQ-LOCALRUN-293: the view reads the adopted child's record the resumed attempt wrote.
+    // The view reads the adopted child's record the resumed attempt wrote.
     let view = super::workflow_run_control::plain_view(&destination);
     let row = super::workflow_run_control::view_row(&view, "design");
     assert!(row.iter().any(|field| field == "state failed"), "{row:?}");
 }
 
-/// REQ-LOCALRUN-143: a failed state commit's standard error has a diagnostic line naming the
-/// write, `exchange state`, its file and the operating system's message for a missing file, a
-/// `class:` field, and after an empty line ends with the indented `useful workflow run resume` for
-/// `run_directory`.
+/// A failed state commit's standard error has a diagnostic line naming the write, `exchange
+/// state`, its file and the operating system's message for a missing file, a `class:` field, and
+/// after an empty line ends with the indented `useful workflow run resume` for `run_directory`.
 fn assert_state_commit_failure(stderr: &[u8], state_file: &Path, run_directory: &Path) {
     let stderr = String::from_utf8_lossy(stderr);
     let lines = stderr.lines().collect::<Vec<_>>();
@@ -1169,11 +1154,9 @@ fn assert_state_commit_failure(stderr: &[u8], state_file: &Path, run_directory: 
     assert!(lines[remedy].starts_with(char::is_whitespace), "{stderr}");
 }
 
-// REQ-LOCALRUN-143, REQ-LOCALRUN-292, REQ-LOCALRUN-206, INV-ENGINE-55, INV-ENGINE-56, REQ-CONTINUE-2,
-// REQ-CONTINUE-76, REQ-CONTINUE-112:
-// a root whose state commit fails names the failure's class, leaves its attempt
-// unsettled and its record `running`, and once the state is back the run is abandoned and resumes
-// at the step that was running, adopting the child that exited.
+// A root whose state commit fails names the failure's class, leaves its attempt unsettled and its
+// record `running`, and once the state is back the run is abandoned and resumes at the step that
+// was running, adopting the child that exited.
 #[test]
 fn a_failed_state_commit_leaves_the_run_running_and_resumable() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -1229,10 +1212,9 @@ fn a_failed_state_commit_leaves_the_run_running_and_resumable() {
     assert!(!destination.join("children/design/000002").exists());
 }
 
-// REQ-LOCALRUN-205, REQ-LOCALRUN-207, INV-ENGINE-57, REQ-CONTINUE-76, REQ-CONTINUE-112: a child whose state commit
-// fails ends its parent unsettled too: the parent's step is not settled from the child, the parent
-// records the child's failure, which its status carries, and stays `running`, and resuming it
-// retries the child in place.
+// A child whose state commit fails ends its parent unsettled too: the parent's step is not settled
+// from the child, the parent records the child's failure, which its status carries, and stays
+// `running`, and resuming it retries the child in place.
 #[test]
 fn a_childs_failed_state_commit_leaves_its_parent_running_and_resumable() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
@@ -1280,8 +1262,8 @@ fn a_childs_failed_state_commit_leaves_its_parent_running_and_resumable() {
     assert_eq!(diagnostic["osError"], 2, "{state}");
 
     fs::rename(&aside, &child_state).unwrap();
-    // REQ-LOCALRUN-205: the status carries the entry, `cause` and `osError` with it, in a
-    // `state` its schema admits.
+    // The status carries the entry, `cause` and `osError` with it, in a `state` its
+    // schema admits.
     let (output, status) = super::workflow_status::status_json(&destination);
     assert!(output.status.success(), "{output:?}");
     assert!(
@@ -1304,7 +1286,7 @@ fn a_childs_failed_state_commit_leaves_its_parent_running_and_resumable() {
     assert_eq!(parent["attempts"], 2);
 }
 
-// REQ-CONTINUE-113: a parent whose process is alive is refused `run_locked`.
+// A parent whose process is alive is refused `run_locked`.
 #[test]
 fn resuming_a_live_parent_is_refused_run_locked() {
     let (_bundle, destination, mut parent) = spawn_held_child_tree("live-parent");
@@ -1319,9 +1301,8 @@ fn resuming_a_live_parent_is_refused_run_locked() {
     assert!(!destination.join("attempts/000002").exists());
 }
 
-// REQ-LOCALRUN-227: an id no run under the home has, with nobody signed in to ask Cloud, is
-// `run_not_found` in the `refused` document of retry and resume, as of every leaf that looks
-// everywhere.
+// An id no run under the home has, with nobody signed in to ask Cloud, is `run_not_found` in
+// the `refused` document of retry and resume, as of every leaf that looks everywhere.
 #[test]
 fn retry_and_resume_refuse_an_unknown_run_id() {
     let home = tempfile::tempdir().unwrap();
@@ -1340,4 +1321,31 @@ fn retry_and_resume_refuse_an_unknown_run_id() {
         let refusal = super::workflow_run_control::refused(&output, leaf, "run_not_found");
         assert!(refusal.get("runDirectory").is_none(), "{refusal}");
     }
+}
+
+// Rerunning a new step empties its directory.
+#[test]
+fn a_retry_reruns_a_new_step_in_an_empty_workspace() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [RETRY_PHASE]
+steps:
+  execute:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'test ! -e marker && touch marker && test "$RETRY_PHASE" = retry']}
+"#,
+    );
+    let directory = initial_failed_run(&bundle, "retry-workspace");
+    assert!(directory.join("workspaces/execute/marker").is_file());
+    let output = isolated_command(&retry_args(
+        &directory,
+        bundle.execution_root(),
+        &["--json"],
+    ))
+    .env("RETRY_PHASE", "retry")
+    .output()
+    .unwrap();
+    let terminal = super::workflow_continue::completed(&output);
+    assert_eq!(terminal["outcome"], "succeeded");
 }

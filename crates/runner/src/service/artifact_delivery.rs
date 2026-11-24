@@ -42,11 +42,11 @@ type UploadReader = Box<dyn Read + Send>;
 /// Streams an opened upload body as the provider PUT's request body.
 ///
 /// The body is polled by the request itself, on the runtime `UploadWork::run`
-/// builds, so a failed connect is reported as the request's error (REQ-DIAG-6).
-/// Reqwest's blocking client instead pumps a reader body from a separate task
-/// and awaits that pump before the response, so a connect failure that drops
-/// the request first surfaced as the pump's disconnection and lost its class.
-/// The reader is `Send` but not `Sync`; the mutex supplies the `Sync` that
+/// builds, so a failed connect is reported as the request's error. Reqwest's
+/// blocking client instead pumps a reader body from a separate task and awaits
+/// that pump before the response, so a connect failure that drops the request
+/// first surfaced as the pump's disconnection and lost its class. The reader is
+/// `Send` but not `Sync`; the mutex supplies the `Sync` that
 /// `reqwest::Body::wrap` requires and is reached through `get_mut` without
 /// locking, since polling has the body exclusively.
 struct UploadBody {
@@ -1417,7 +1417,7 @@ impl UploadWork {
     }
 }
 
-/// Classifies a failed provider PUT from typed errors only (REQ-DIAG-6).
+/// Classifies a failed provider PUT from typed errors only.
 ///
 /// Reqwest's default resolver reports DNS failures as uncategorized I/O
 /// errors and proxy failures are untyped, so both stay unclassified rather
@@ -1597,7 +1597,6 @@ mod tests {
         (String::from_utf8_lossy(head).to_ascii_lowercase(), body)
     }
 
-    // REQ-DIAG-6
     #[test]
     fn upload_put_diagnostic_contains_only_status_or_transport_class() {
         use std::io::Write as _;
@@ -1686,8 +1685,8 @@ mod tests {
         assert_eq!(result, Ok(None));
     }
 
-    // REQ-DIAG-6: the connect failure keeps its class on every upload, not only
-    // when it is observed before the body stream notices the dropped request.
+    // The connect failure keeps its class on every upload, not only when it is
+    // observed before the body stream notices the dropped request.
     #[test]
     fn refused_upload_is_classified_as_connect_failed_every_time() {
         let spec = result_spec();

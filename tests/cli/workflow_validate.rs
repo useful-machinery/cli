@@ -266,7 +266,6 @@ fn assert_static_contents_absent(output: &std::process::Output) {
     }
 }
 
-// REQ-WFFORMAT-24, REQ-WFFORMAT-67, REQ-WFFORMAT-68, REQ-WFFORMAT-70, REQ-WFFORMAT-72
 #[test]
 fn valid_bundle_reports_provenance_without_executing_or_exposing_static_sources() {
     let bundle = WorkflowBundle::valid();
@@ -307,7 +306,6 @@ fn valid_bundle_reports_provenance_without_executing_or_exposing_static_sources(
     assert_static_contents_absent(&json);
 }
 
-// REQ-WFFORMAT-68
 #[test]
 fn valid_finalizers_are_resolved_without_execution() {
     let bundle = WorkflowBundle::valid();
@@ -329,7 +327,6 @@ fn valid_finalizers_are_resolved_without_execution() {
     assert_eq!(report["finalizerCount"], 1);
 }
 
-// REQ-WFFORMAT-45, REQ-WFFORMAT-69
 #[test]
 fn finalizer_diagnostics_preserve_the_node_role() {
     let bundle = WorkflowBundle::valid();
@@ -373,7 +370,6 @@ fn finalizer_diagnostics_preserve_the_node_role() {
     );
 }
 
-// REQ-WFFORMAT-80, REQ-WFFORMAT-88
 #[test]
 fn outcome_diagnostics_name_the_outcome_location() {
     let bundle = WorkflowBundle::valid();
@@ -407,7 +403,6 @@ fn outcome_diagnostics_name_the_outcome_location() {
     assert!(validate(&bundle, true).status.success());
 }
 
-// REQ-WFFORMAT-80, REQ-WFFORMAT-92
 #[test]
 fn edge_diagnostics_name_the_step_and_the_outcome() {
     let bundle = WorkflowBundle::valid();
@@ -446,8 +441,8 @@ fn edge_diagnostics_name_the_step_and_the_outcome() {
     assert_eq!(location["outcome"], "planned");
 }
 
-// REQ-WFFORMAT-115: a child may carry a `requires` override without `tools`, whatever its
-// parent declares, and still no `requires` holding `tools`.
+// A child may carry a `requires` override without `tools`, whatever its parent declares,
+// and still no `requires` holding `tools`.
 #[test]
 fn a_child_may_carry_a_requires_override_without_tools() {
     const CHILD: &str =
@@ -485,7 +480,6 @@ fn a_child_may_carry_a_requires_override_without_tools() {
     assert_eq!(location["step"], "design");
 }
 
-// REQ-WFFORMAT-69, REQ-WFFORMAT-72, REQ-WFFORMAT-103, REQ-WFFORMAT-123, REQ-WFFORMAT-124, REQ-WFFORMAT-125
 #[test]
 fn structural_diagnostics_name_the_field_and_the_rule_without_the_value() {
     let bundle = WorkflowBundle::valid();
@@ -531,7 +525,6 @@ fn structural_diagnostics_name_the_field_and_the_rule_without_the_value() {
     }
 }
 
-// REQ-WFDEF-34, REQ-WFDEF-47, REQ-WFFORMAT-82
 #[test]
 fn a_requires_integrations_declaration_validates_and_reports_nothing_more() {
     const BLOCK: &str = "requires:\n  as: member\n  integrations:\n    linear:\n      as: org\n      bindings:\n        team: {kind: team}\n    github: {}\n    claude_code: {}\n";
@@ -573,7 +566,8 @@ fn a_requires_integrations_declaration_validates_and_reports_nothing_more() {
                 "claude_code",
                 "codex",
                 "mergify",
-                "buildkite"
+                "buildkite",
+                "cloudflare"
             ],
         })
     );
@@ -587,7 +581,6 @@ fn a_requires_integrations_declaration_validates_and_reports_nothing_more() {
     assert!(remedy.contains("requires.integrations.jira"), "{remedy}");
 }
 
-// REQ-WFDEF-45
 #[test]
 fn an_integration_binding_takes_a_kind_its_provider_lists_and_an_optional_default() {
     let block = |binding: &str| {
@@ -620,7 +613,6 @@ fn an_integration_binding_takes_a_kind_its_provider_lists_and_an_optional_defaul
     assert_eq!(accepted.status.code(), Some(0), "{accepted:?}");
 }
 
-// REQ-WFFORMAT-80, REQ-WFFORMAT-102
 #[test]
 fn undeclared_node_environment_passthrough_names_the_step() {
     let bundle = WorkflowBundle::valid();
@@ -639,7 +631,6 @@ fn undeclared_node_environment_passthrough_names_the_step() {
     assert_eq!(location["step"], "inspect");
 }
 
-// REQ-WFFORMAT-106
 #[test]
 fn first_of_diagnostics_name_the_step_and_its_input() {
     let bundle = WorkflowBundle::valid();
@@ -673,7 +664,6 @@ fn first_of_diagnostics_name_the_step_and_its_input() {
     }
 }
 
-// REQ-WFFORMAT-107
 #[test]
 fn first_of_export_diagnostics_name_the_export() {
     let bundle = WorkflowBundle::valid();
@@ -692,7 +682,6 @@ fn first_of_export_diagnostics_name_the_export() {
     assert_eq!(location["export"], "joined");
 }
 
-// REQ-WFFORMAT-98, REQ-WFFORMAT-99
 #[test]
 fn for_each_diagnostics_name_the_step_and_its_input() {
     let bundle = WorkflowBundle::valid();
@@ -753,7 +742,6 @@ fn for_each_diagnostics_name_the_step_and_its_input() {
     assert!(validate(&bundle, true).status.success());
 }
 
-// REQ-WFFORMAT-97
 #[test]
 fn an_external_wait_without_a_rule_is_reported_at_its_edge() {
     let bundle = WorkflowBundle::valid();
@@ -778,7 +766,6 @@ fn an_external_wait_without_a_rule_is_reported_at_its_edge() {
     assert_eq!(location["outcome"], "admitted");
 }
 
-// REQ-WFFORMAT-111
 #[test]
 fn a_host_wait_at_another_step_or_without_a_limit_is_reported_at_its_edge() {
     let bundle = WorkflowBundle::valid();
@@ -821,8 +808,6 @@ fn a_host_wait_at_another_step_or_without_a_limit_is_reported_at_its_edge() {
     assert!(validate(&bundle, true).status.success());
 }
 
-// REQ-WFFORMAT-6, REQ-WFFORMAT-17, REQ-WFFORMAT-18, REQ-WFFORMAT-38, REQ-WFFORMAT-55, REQ-WFFORMAT-56, REQ-WFFORMAT-57, REQ-WFFORMAT-67, REQ-WFFORMAT-69, REQ-WFFORMAT-70, REQ-WFFORMAT-72, REQ-WFFORMAT-76, REQ-WFFORMAT-77
-// REQ-WFFORMAT-71
 #[test]
 fn malformed_semantic_missing_escaping_and_schema_failures_are_bounded_results() {
     let malformed = WorkflowBundle::valid();
@@ -939,7 +924,6 @@ fn malformed_semantic_missing_escaping_and_schema_failures_are_bounded_results()
     }
 }
 
-// REQ-WFFORMAT-18
 #[test]
 fn missing_source_remedy_names_the_resolved_path() {
     let bundle = WorkflowBundle::valid();
@@ -957,7 +941,6 @@ fn missing_source_remedy_names_the_resolved_path() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-WFFORMAT-13
 #[test]
 fn relative_workflow_file_is_cwd_relative_without_root_relative_fallback() {
     let bundle = WorkflowBundle::valid();
@@ -1016,7 +999,6 @@ fn absolute_workflow_paths_do_not_require_a_named_current_directory() {
     );
 }
 
-// REQ-WFFORMAT-12
 #[test]
 fn a_file_without_source_root_is_bounded_by_its_git_repository() {
     let bundle = WorkflowBundle::valid();
@@ -1060,7 +1042,6 @@ fn a_file_without_source_root_is_bounded_by_its_git_repository() {
     assert!(!bundle.marker.exists());
 }
 
-// REQ-WFFORMAT-14
 #[test]
 fn selected_workflow_must_remain_within_the_explicit_source_root() {
     let bundle = WorkflowBundle::valid();
@@ -1086,7 +1067,6 @@ fn selected_workflow_must_remain_within_the_explicit_source_root() {
     assert!(!bundle.marker.exists());
 }
 
-// REQ-WFFORMAT-52
 #[test]
 fn agent_profile_replacement_is_applied_and_reported_without_retention() {
     let bundle = WorkflowBundle::valid();
@@ -1151,7 +1131,6 @@ fn agent_profile_replacement_is_applied_and_reported_without_retention() {
     );
 }
 
-// REQ-WFFORMAT-24, REQ-WFFORMAT-68, REQ-WFFORMAT-84
 #[test]
 fn optional_and_defaulted_inputs_are_not_required_and_a_default_file_joins_the_digest() {
     let bundle = WorkflowBundle::valid();
@@ -1191,4 +1170,43 @@ steps:
     let first = digest(&bundle);
     fs::write(&policy, br#"{"reviewers": 2}"#).expect("policy should be rewritten");
     assert_ne!(digest(&bundle), first);
+}
+
+#[test]
+fn a_step_workspace_validates_and_an_ambiguous_one_names_its_step() {
+    let valid =
+        include_str!("../../crates/execution/tests/fixtures/workflow/v1/valid/step-workspace.yaml");
+    let bundle = WorkflowBundle::valid();
+    bundle.replace_workflow(valid);
+    let file = validate(&bundle, true);
+
+    let tree = tempfile::tempdir().unwrap();
+    fs::write(
+        tree.path().join("workflow.yaml"),
+        "schemaVersion: 1\nname: workspaces\nversion: '1'\nsteps:\n  stage:\n    kind: workflow\n    workflow: stage.yaml\n    on: {succeeded: exit.succeeded, failed: exit.failed}\n",
+    )
+    .unwrap();
+    fs::write(tree.path().join("stage.yaml"), valid).unwrap();
+    let directory = run(&[
+        "workflow",
+        "validate",
+        tree.path().to_str().unwrap(),
+        "--json",
+    ]);
+    for output in [file, directory] {
+        assert!(output.status.success(), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "valid");
+    }
+
+    bundle.replace_workflow(include_str!(
+        "../../crates/execution/tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+    ));
+    let output = validate(&bundle, true);
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "workspace_ambiguous");
+    assert_eq!(diagnostic["location"]["kind"], "step");
+    assert_eq!(diagnostic["location"]["step"], "join");
 }

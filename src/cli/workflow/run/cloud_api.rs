@@ -69,16 +69,16 @@ pub(in crate::cli) struct RunWaitArgs {
 }
 
 /// The Cloud run a continuation or a rerun asks for: the organization reference the request
-/// names and the run's ID, as the lookup found them (REQ-LOCALRUN-180).
+/// names and the run's ID, as the lookup found them.
 struct RunReference {
     organization: String,
     run_id: String,
 }
 
 /// What a Cloud request sent to a run the lookup found writes in place of its failure's
-/// document when Cloud's answer is the lookup's miss (REQ-LOCALRUN-180): given the request's
-/// failure and the options it was sent under, the refusal to write once the operation
-/// completes, or `None` for the failure's own document.
+/// document when Cloud's answer is the lookup's miss: given the request's failure and the
+/// options it was sent under, the refusal to write once the operation completes, or `None`
+/// for the failure's own document.
 pub(in crate::cli) type Missed = Box<
     dyn FnOnce(
             &RunFailure,
@@ -87,9 +87,9 @@ pub(in crate::cli) type Missed = Box<
         + Send,
 >;
 
-/// The cancellation request `useful workflow run cancel` sends a Cloud run (REQ-CANCEL-38,
-/// REQ-LOCALRUN-218): graceful, or with `force` immediate containment, under `key`, followed
-/// with `wait` until it resolves, and reported in the document of the `cancel` operation.
+/// The cancellation request `useful workflow run cancel` sends a Cloud run: graceful, or
+/// with `force` immediate containment, under `key`, followed with `wait` until it resolves,
+/// and reported in the document of the `cancel` operation.
 pub(in crate::cli) struct Cancellation {
     pub(in crate::cli) organization: String,
     pub(in crate::cli) run_id: String,
@@ -176,7 +176,7 @@ struct CancelRecovery {
 impl Cancellation {
     /// Sends the request under its key and reports it; `missed` gives, for a failure of the
     /// request Cloud answered, the result the command ends with in place of the failure's
-    /// document, if any, written once the operation completes (REQ-LOCALRUN-180).
+    /// document, if any, written once the operation completes.
     pub(in crate::cli) fn execute(
         self,
         deployment: Deployment,
@@ -475,12 +475,12 @@ pub(in crate::cli) fn finish_cloud_observation<R, S>(
     })
 }
 
-/// What a `path_run_retired` report tells the user to do instead (REQ-RETRY-35,
-/// REQ-CONTINUE-87); Cloud's own problem prose is never relayed.
+/// What a `path_run_retired` report tells the user to do instead; Cloud's own
+/// problem prose is never relayed.
 const PATH_RUN_RETIRED_GUIDANCE: &str = "Cloud no longer retries or continues a run created by workflow path; publish the workflow as a definition (`useful workflow definition publish --on project`) and start a run of it.";
 
 /// The diagnostic code and exit status a run command reports `failure` under; the Cloud
-/// leaves of `useful workflow run` take theirs from it too (INV-CLI-17).
+/// leaves of `useful workflow run` take theirs from it too.
 pub(in crate::cli) fn failure_code(
     failure: &RunFailure,
     _authentication: crate::cli::PrincipalAuthenticationKind,
@@ -897,7 +897,7 @@ fn write_run_human(deployment: &str, heading: &str, run: &Run) -> anyhow::Result
 }
 
 /// A Cloud run's version, current attempt, branches, actor and the sources of its credentials and
-/// integrations (REQ-RUN-107, REQ-RUN-109).
+/// integrations.
 pub(in crate::cli) fn write_run_attempt(out: &mut impl Write, run: &Run) -> anyhow::Result<()> {
     writeln!(out, "version: {}", run.version)?;
     writeln!(
@@ -905,7 +905,10 @@ pub(in crate::cli) fn write_run_attempt(out: &mut impl Write, run: &Run) -> anyh
         "attempt: {} (number {})",
         run.current_attempt_id, run.current_attempt_number
     )?;
-    writeln!(out, "source branch: {}", run.source_branch)?;
+    match run.source_branch.as_deref() {
+        Some(branch) => writeln!(out, "source branch: {branch}")?,
+        None => writeln!(out, "source: none")?,
+    }
     writeln!(
         out,
         "workspace branch: {}",
@@ -927,74 +930,57 @@ pub(in crate::cli) fn write_run_sources_through_continuation(
     out: &mut impl Write,
     run: &Run,
 ) -> anyhow::Result<()> {
-    writeln!(out, "\nworkflow source:")?;
-    writeln!(
-        out,
-        "  repository connection: {}",
-        run.workflow_definition_source.repository_connection_id
-    )?;
-    writeln!(
-        out,
-        "  object format: {}",
-        enum_text(&run.workflow_definition_source.object_format)?
-    )?;
-    writeln!(
-        out,
-        "  commit: {}",
-        run.workflow_definition_source.commit_oid
-    )?;
-    writeln!(
-        out,
-        "  workflow: {}",
-        run.workflow_definition_source.workflow_path
-    )?;
-    writeln!(
-        out,
-        "  source closure: {}:{}",
-        enum_text(
-            &run.workflow_definition_source
-                .workflow_source_closure_digest
-                .algorithm
-        )?,
-        run.workflow_definition_source
-            .workflow_source_closure_digest
-            .value
-    )?;
-    writeln!(out, "\nprimary workspace source:")?;
-    writeln!(
-        out,
-        "  kind: {}",
-        enum_text(&run.primary_workspace_source.kind)?
-    )?;
-    writeln!(
-        out,
-        "  provider: {}",
-        enum_text(&run.primary_workspace_source.provider_kind)?
-    )?;
-    writeln!(
-        out,
-        "  repository connection: {}",
-        run.primary_workspace_source.repository_connection_id
-    )?;
-    writeln!(
-        out,
-        "  object format: {}",
-        enum_text(&run.primary_workspace_source.object_format)?
-    )?;
-    writeln!(out, "  commit: {}", run.primary_workspace_source.commit_oid)?;
-    writeln!(
-        out,
-        "  materialization: {}",
-        enum_text(&run.primary_workspace_source.materialization_contract)?
-    )?;
-    if let Some(membership) = &run.workspace_membership {
-        writeln!(out, "  membership ref: {}", membership.witness.r#ref)?;
-        writeln!(out, "  membership tip: {}", membership.witness.tip_oid)?;
+    if let (Some(workflow), Some(workspace)) = (
+        run.workflow_definition_source.as_deref(),
+        run.primary_workspace_source.as_deref(),
+    ) {
+        writeln!(out, "\nworkflow source:")?;
         writeln!(
             out,
-            "  membership observed: {}",
-            membership.witness.observed_at
+            "  repository connection: {}",
+            workflow.repository_connection_id
         )?;
+        writeln!(
+            out,
+            "  object format: {}",
+            enum_text(&workflow.object_format)?
+        )?;
+        writeln!(out, "  commit: {}", workflow.commit_oid)?;
+        writeln!(out, "  workflow: {}", workflow.workflow_path)?;
+        writeln!(
+            out,
+            "  source closure: {}:{}",
+            enum_text(&workflow.workflow_source_closure_digest.algorithm)?,
+            workflow.workflow_source_closure_digest.value
+        )?;
+        writeln!(out, "\nprimary workspace source:")?;
+        writeln!(out, "  kind: {}", enum_text(&workspace.kind)?)?;
+        writeln!(out, "  provider: {}", enum_text(&workspace.provider_kind)?)?;
+        writeln!(
+            out,
+            "  repository connection: {}",
+            workspace.repository_connection_id
+        )?;
+        writeln!(
+            out,
+            "  object format: {}",
+            enum_text(&workspace.object_format)?
+        )?;
+        writeln!(out, "  commit: {}", workspace.commit_oid)?;
+        writeln!(
+            out,
+            "  materialization: {}",
+            enum_text(&workspace.materialization_contract)?
+        )?;
+        if let Some(membership) = &run.workspace_membership {
+            writeln!(out, "  membership ref: {}", membership.witness.r#ref)?;
+            writeln!(out, "  membership tip: {}", membership.witness.tip_oid)?;
+            writeln!(
+                out,
+                "  membership observed: {}",
+                membership.witness.observed_at
+            )?;
+        }
     }
     writeln!(out, "\ninputs:")?;
     writeln!(
@@ -1126,8 +1112,8 @@ pub(in crate::cli) fn write_run_delivery_and_times(
     Ok(())
 }
 
-/// A Cloud run's Linear lifecycle binding with its latest update, when it has one
-/// (REQ-TRIGGER-145).
+/// A Cloud run's Linear lifecycle binding with its latest update, when it has
+/// one.
 pub(in crate::cli) fn write_run_linear_lifecycle(
     out: &mut impl Write,
     run: &Run,
@@ -1539,7 +1525,6 @@ mod tests {
     use crate::cli::observation_test_support::ControlledObservationClock as ControlledWaitClock;
     use useful_api::UnreachableCategory;
 
-    // REQ-DIAG-29, REQ-EVIDENCE-23
     #[test]
     fn run_show_renders_latest_decline_beside_placement_and_progress() {
         let observation: RunObservation = serde_json::from_value(serde_json::json!({
@@ -1609,7 +1594,6 @@ mod tests {
         String::from_utf8(output).expect("human report is UTF-8")
     }
 
-    // REQ-DIAG-29, REQ-DIAG-44
     #[test]
     fn run_show_prints_decline_cause_after_code_when_decline_has_no_reason() {
         let output = render_decline(serde_json::json!({
@@ -1625,7 +1609,6 @@ mod tests {
         assert!(!output.contains("host_disk"), "stage rendered in {output}");
     }
 
-    // REQ-DIAG-29
     #[test]
     fn run_show_prints_no_decline_cause_when_diagnostic_names_none() {
         for decline in [
@@ -1644,7 +1627,6 @@ mod tests {
         }
     }
 
-    // REQ-DIAG-29
     #[test]
     fn run_show_escapes_control_characters_in_decline_cause() {
         let output = render_decline(serde_json::json!({
@@ -1834,9 +1816,9 @@ mod tests {
             .collect()
     }
 
-    // REQ-DIAG-29, REQ-DIAG-42, REQ-RUN-105: a failure and a rejection print without their
-    // runner diagnostic, except that a rejection prints, under its reason, each validation
-    // fact its diagnostic holds, escaped, and nothing of a recovery reason it carries.
+    // A failure and a rejection print without their runner diagnostic, except that a
+    // rejection prints, under its reason, each validation fact its diagnostic holds,
+    // escaped, and nothing of a recovery reason it carries.
     #[test]
     fn terminal_run_human_output_includes_primary_issue_or_rejection() {
         let mut failed = serde_json::to_value(run(RunState::Failed)).unwrap();
@@ -2040,7 +2022,6 @@ mod tests {
         (result, clock.into_sleeps(), responses.into_inner().len())
     }
 
-    // REQ-CANCEL-43
     #[test]
     fn cancellation_observation_requires_both_resolved_receipt_and_terminal_run() {
         let recorded = RefCell::new(Vec::new());
@@ -2062,7 +2043,6 @@ mod tests {
         assert_eq!(sleeps, vec![Duration::from_secs(2); 2]);
     }
 
-    // REQ-CANCEL-48
     #[test]
     fn cancellation_observation_fails_on_second_consecutive_retryable_error() {
         let (result, sleeps, remaining) = scripted_cancellation(
@@ -2191,7 +2171,6 @@ mod tests {
         clock.assert_single_poll();
     }
 
-    // REQ-RUN-62
     #[test]
     fn wait_timeout_parser_accepts_documented_units_and_rejects_zero() {
         assert_eq!(

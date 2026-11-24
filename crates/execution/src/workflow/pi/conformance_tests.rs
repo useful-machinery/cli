@@ -964,8 +964,6 @@ fn pinned_real_pi_00_fake_provider_has_no_network_or_timer_success_path() {
     }
 }
 
-// REQ-AGENT-4
-// INV-HARNESS-10
 #[test]
 #[ignore = "requires pinned harness"]
 fn pinned_real_pi_01_qualification_anchor_is_exact_and_supported() {
@@ -985,7 +983,6 @@ fn pinned_real_pi_01_qualification_anchor_is_exact_and_supported() {
     );
 }
 
-// REQ-AGENT-16, REQ-AGENT-17, REQ-AGENT-22
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_pi_02_launch_resources_attachments_and_response_conform() {
@@ -1493,8 +1490,6 @@ async fn pinned_real_pi_04_malformed_tool_arguments_cannot_settle_a_result() {
     .await;
 }
 
-// REQ-AGENT-83, REQ-AGENT-29
-// INV-HARNESS-16 (AUTO-263)
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_pi_04_result_is_judged_as_the_model_wrote_it() {

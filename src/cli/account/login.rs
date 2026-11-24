@@ -125,8 +125,7 @@ pub(super) enum SignIn {
 }
 
 /// Runs the sign-in `account login` starts when this device holds no sign-in,
-/// with its human output, so a command that needs a session can sign in first
-/// (REQ-ACCOUNT-16).
+/// with its human output, so a command that needs a session can sign in first.
 pub(super) fn sign_in_first(
     deployment: &Deployment,
     transport_policy: HttpTransportPolicy,

@@ -130,7 +130,6 @@ impl Fixture {
     }
 }
 
-// REQ-GRANT-36, REQ-GRANT-44
 #[test]
 fn a_delivered_token_is_kept_privately_in_the_runners_directory_and_replaced_in_one_step() {
     let state = state_directory();
@@ -180,7 +179,6 @@ fn a_delivered_token_is_kept_privately_in_the_runners_directory_and_replaced_in_
     assert_eq!(fs::read(&path).unwrap(), token(2).as_bytes());
 }
 
-// REQ-GRANT-44, REQ-GRANT-42
 #[tokio::test]
 async fn setup_asks_for_claude_code_and_keeps_each_newer_generation() {
     let home = tempfile::tempdir().unwrap();
@@ -222,7 +220,6 @@ async fn setup_asks_for_claude_code_and_keeps_each_newer_generation() {
     fixture.assert_no_token_outside_its_file();
 }
 
-// REQ-GRANT-45
 #[tokio::test]
 async fn a_service_with_its_own_claude_code_login_gets_no_token_and_asks_for_none() {
     let token_home = tempfile::tempdir().unwrap();
@@ -277,7 +274,6 @@ async fn a_service_with_its_own_claude_code_login_gets_no_token_and_asks_for_non
     assert_eq!(fixture.claude_code_state().await, AgentLoginState::Ready);
 }
 
-// REQ-GRANT-45
 #[tokio::test]
 async fn a_token_the_runner_kept_is_removed_once_ended_or_outranked() {
     let home = tempfile::tempdir().unwrap();
@@ -320,7 +316,6 @@ async fn a_token_the_runner_kept_is_removed_once_ended_or_outranked() {
     assert_eq!(fixture.cloud.deliveries(), 1);
 }
 
-// REQ-GRANT-44, REQ-GRANT-45
 #[test]
 fn the_token_is_offered_only_where_the_process_environment_has_no_claude_code_login() {
     let state = state_directory();
@@ -371,7 +366,6 @@ fn the_token_is_offered_only_where_the_process_environment_has_no_claude_code_lo
     assert_eq!(offered(&process), Some(OsString::from(token(1))));
 }
 
-// REQ-GRANT-42
 #[test]
 fn a_read_token_never_appears_in_debug() {
     let state = state_directory();

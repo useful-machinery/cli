@@ -1,12 +1,10 @@
-//! `useful workflow run show` (REQ-LOCALRUN-189): the one read of a run, found under the
-//! `useful` home and then in Cloud (REQ-LOCALRUN-180). A run under the home is read from its
-//! records, without taking its lock or changing its directory once an already committed result
-//! publication is finished (REQ-LOCALRUN-150): its status, the current attempt's state, result,
-//! recovery, retry and continuation eligibility (REQ-LOCALRUN-145 to REQ-LOCALRUN-151), with its
-//! run record, attempts, mirror writes (REQ-LOCALRUN-193) and each running child's attempt and
-//! in-flight steps, read from the child's records the same way, and under a child that is a
-//! nested run its `edges` counts and its own children, read the same way again. A Cloud run is
-//! read by `cloud`.
+//! `useful workflow run show`: the one read of a run, found under the `useful` home and then in
+//! Cloud. A run under the home is read from its records, without taking its lock or changing its
+//! directory once an already committed result publication is finished: its status, the current
+//! attempt's state, result, recovery, retry and continuation eligibility, with its run record,
+//! attempts, mirror writes and each running child's attempt and in-flight steps, read from the
+//! child's records the same way, and under a child that is a nested run its `edges` counts and
+//! its own children, read the same way again. A Cloud run is read by `cloud`.
 
 mod cloud;
 
@@ -99,7 +97,7 @@ struct Attempt {
 }
 
 /// A child run with its progress while its record is `running` and, for a nested run, its
-/// own children (REQ-LOCALRUN-189).
+/// own children.
 struct Child {
     run: ChildRun,
     progress: Option<ChildProgress>,
@@ -107,7 +105,7 @@ struct Child {
     nested: Option<Vec<Child>>,
 }
 
-/// A running child's current attempt, read from its own records (REQ-LOCALRUN-189).
+/// A running child's current attempt, read from its own records.
 struct ChildProgress {
     attempt: u64,
     state: &'static str,
@@ -115,11 +113,11 @@ struct ChildProgress {
     progress: LocalStatusProgress,
 }
 
-/// A run `show` cannot read, printed as the `error` document (REQ-LOCALRUN-165).
+/// A run `show` cannot read, printed as the `error` document.
 enum Unread {
     /// The status read refused the run directory `RUN` resolved to.
     Status(LocalStatusError, PathBuf),
-    /// An already committed result publication could not be finished (REQ-LOCALRUN-150).
+    /// An already committed result publication could not be finished.
     Reconciliation(PathBuf, ArchivedAttemptLoadError),
     /// The run record, a child run, a control or a mirror write cannot be read: the
     /// directory is the run's, so a child's message names the child.
@@ -268,7 +266,7 @@ fn usage(message: &str) -> CommandFailure {
     CommandFailure::with_exit_code(anyhow!("{message}"), ExitCode::UsageError)
 }
 
-/// The lookup's refusal (REQ-LOCALRUN-180), as `show` writes it.
+/// The lookup's refusal, as `show` writes it.
 fn write_missed(
     error: super::super::RunAddressError,
     json: bool,
@@ -396,8 +394,8 @@ fn state_attempt(state: &Value, number: u64) -> Option<&Value> {
         .find(|attempt| attempt["attemptNumber"] == number)
 }
 
-/// The `shown` document (REQ-LOCALRUN-189): the status read's members (REQ-LOCALRUN-146)
-/// and the run's position, attempts, children, controls and mirror writes.
+/// The `shown` document: the status read's members and the run's position, attempts,
+/// children, controls and mirror writes.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ShowDocument<'a> {
@@ -408,10 +406,9 @@ struct ShowDocument<'a> {
     run_directory: &'a str,
     run: &'a Value,
     state: &'a Value,
-    /// The run record `run.json`, or null for a run without one (REQ-LOCALRUN-146).
+    /// The run record `run.json`, or null for a run without one.
     record: &'a Option<Value>,
-    /// The root wait record `wait.json`, or null while the run does not wait
-    /// (REQ-LOCALRUN-146).
+    /// The root wait record `wait.json`, or null while the run does not wait.
     wait: Option<&'a WaitRecord>,
     recovery: RecoveryOutput<'a>,
     retry: RetryOutput,
@@ -512,7 +509,7 @@ const fn continuation_reason(reason: RetryIneligibilityReason) -> &'static str {
     }
 }
 
-/// The `error` document of a run `show` cannot read (REQ-LOCALRUN-165).
+/// The `error` document of a run `show` cannot read.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ErrorOutput<'a> {
@@ -551,7 +548,7 @@ struct ShownAttempt<'a> {
     state: &'static str,
     reason: Option<&'a Value>,
     edge: Option<&'a Value>,
-    /// The run a successor imported this attempt from (REQ-LOCALRUN-195), when it did.
+    /// The run a successor imported this attempt from, when it did.
     #[serde(skip_serializing_if = "Option::is_none")]
     imported: Option<&'a Value>,
     result: ShownResult<'a>,
@@ -739,7 +736,7 @@ fn shown_progress(child: &ChildProgress) -> ShownProgress<'_> {
     }
 }
 
-/// The time since a recorded start (REQ-LOCALRUN-124), `-` when the state records none.
+/// The time since a recorded start, `-` when the state records none.
 fn elapsed_text(start: Option<&LocalStatusStart>) -> String {
     start.map_or_else(|| "-".to_owned(), |start| human_duration(start.elapsed))
 }
@@ -809,7 +806,7 @@ fn edges_text(record: &WorkflowRunRecord) -> String {
 }
 
 /// Each child as a row indented by `indent`, with a running child's progress and a nested
-/// run's `edges` counts two further in and its own children four further (REQ-LOCALRUN-189).
+/// run's `edges` counts two further in and its own children four further.
 fn write_children(stdout: &mut impl Write, children: &[Child], indent: usize) -> io::Result<()> {
     let pad = " ".repeat(indent);
     for Child {
@@ -856,8 +853,8 @@ fn write_children(stdout: &mut impl Write, children: &[Child], indent: usize) ->
     Ok(())
 }
 
-/// The report (REQ-LOCALRUN-189): the run record, the current attempt and its recovery, the
-/// wait, the attempts, the children, the controls and the mirror writes, each fact once.
+/// The report: the run record, the current attempt and its recovery, the wait, the
+/// attempts, the children, the controls and the mirror writes, each fact once.
 fn write_plain(shown: &Shown, color: bool) -> io::Result<()> {
     let snapshot = &shown.snapshot;
     let mut stdout = io::stdout().lock();
@@ -981,7 +978,7 @@ fn write_record(
 
 /// The current attempt's number and state, its result, recovery, retry and continuation
 /// eligibility, whether the workspace was modified, each step's recovery and, while ownership
-/// is unproven, its reason, remedy and guards (REQ-LOCALRUN-145, REQ-LOCALRUN-147).
+/// is unproven, its reason, remedy and guards.
 fn write_current_attempt(
     stdout: &mut impl Write,
     snapshot: &LocalRunStatusSnapshot,
@@ -1035,9 +1032,9 @@ fn write_current_attempt(
     snapshot
         .status_state
         .write_recovery(stdout, archived_result.as_ref())?;
-    // REQ-LOCALRUN-145, REQ-EVIDENCE-29: the sources the current attempt's steps took.
+    // The sources the current attempt's steps took.
     snapshot.status_state.write_input_sources(stdout)?;
-    // REQ-LOCALRUN-145, REQ-WFEXEC-79: the classified failures of the current attempt's steps.
+    // The classified failures of the current attempt's steps.
     snapshot.status_state.write_failure_classes(stdout)?;
     if let LocalRecoveryStatus::OwnershipUnproven { guard_ids, reason } = &snapshot.recovery {
         writeln!(stdout, "ownership reason: {}", reason.as_str())?;
@@ -1052,7 +1049,7 @@ fn write_current_attempt(
 }
 
 /// The wait the run is in; for a wait for repair, directly under it, the failed stage it waits
-/// at by the wait's full path (REQ-LOCALRUN-145, REQ-LOCALRUN-221); then its rule and payload.
+/// at by the wait's full path; then its rule and payload.
 fn write_wait(stdout: &mut impl Write, wait: Option<&WaitRecord>, color: bool) -> io::Result<()> {
     let Some(wait) = wait else {
         return writeln!(stdout, "wait: none");

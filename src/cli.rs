@@ -2134,7 +2134,6 @@ mod tests {
     use crate::exit_code::{ExitCode, OutcomeClass};
     use useful_api::UnreachableCategory;
 
-    // INV-TESTING-20
     #[test]
     fn a_unit_test_harness_is_never_its_own_internal_worker() {
         match useful_execution::unsupplied_internal_worker_executable() {
@@ -2417,8 +2416,8 @@ mod tests {
         let run = round.join("run");
         fs::create_dir_all(&execution).unwrap();
         // The assignment workspace holds `workflow.yaml`, so `--path` on it would admit it as
-        // a tree and refuse the fixture's path programs (REQ-LOCALRUN-174). The nested run
-        // takes its file from a directory of its own, admitted from the file's closure.
+        // a tree and refuse the fixture's path programs. The nested run takes its file from a
+        // directory of its own, admitted from the file's closure.
         let source = round.join("source");
         fs::create_dir_all(&source).unwrap();
         fs::copy(workspace.join("nested.yaml"), source.join("nested.yaml")).unwrap();
@@ -2575,7 +2574,6 @@ mod tests {
         );
     }
 
-    // REQ-SERVICEPRINCIPAL-1, REQ-SERVICEPRINCIPAL-23, REQ-SERVICEPRINCIPAL-24
     #[test]
     fn service_authentication_is_explicit_and_human_only_leaves_reject_it() {
         assert!(
@@ -2630,7 +2628,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-21
     #[test]
     fn customer_command_surface_is_exact_and_has_no_operator_entrypoint() {
         let actual = customer_command_paths();
@@ -2650,7 +2647,7 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!((commands.len(), expected.len() - commands.len()), (147, 33));
+        assert_eq!((commands.len(), expected.len() - commands.len()), (150, 34));
         let root = Cli::command();
         let visible = commands
             .iter()
@@ -2664,10 +2661,9 @@ mod tests {
                 })
             })
             .count();
-        assert_eq!(visible, 146);
+        assert_eq!(visible, 149);
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_account_paths_and_options_are_unknown() {
         for (arguments, kind) in [
@@ -2861,7 +2857,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_connection_paths_are_unknown() {
         for arguments in [
@@ -3010,7 +3005,6 @@ mod tests {
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_project_paths_and_options_are_unknown() {
         const PROJECT: &str = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -3161,7 +3155,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_runner_paths_and_options_are_unknown() {
         for (arguments, kind) in [
@@ -3480,7 +3473,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_workflow_paths_and_options_are_unknown() {
         use clap::error::ErrorKind::{
@@ -3496,10 +3488,10 @@ mod tests {
             "publish",
             ".useful/engineering",
         ];
-        // `runner doctor` checks the host alone, and `workflow doctor` reads and never signs in
-        // (REQ-CREDREADY-1, REQ-CREDREADY-13).
+        // `runner doctor` checks the host alone, and `workflow doctor` reads and never signs
+        // in.
         let runner_doctor: &[&[&str]] = &[
-            // The report lists every check (REQ-RUNNERENROLL-46).
+            // The report lists every check.
             &["--list-checks"],
             &["--workflow", "workflow.yaml"],
             &["--readiness"],
@@ -3522,7 +3514,7 @@ mod tests {
             &["--organization-id", "acme"],
         ];
         // `publish --on project` finds its Cloud definition by the tree's name and records no
-        // link to it (REQ-CLOUDDEF-14, REQ-CLOUDDEF-20).
+        // link to it.
         let publish: &[&[&str]] = &[
             &["--cloud", "acme"],
             &["--cloud-to", "def_01k0z6r1w8f4jy2m7q9v3x5abd"],
@@ -3557,7 +3549,7 @@ mod tests {
                 MissingRequiredArgument,
             ),
             // A definition is named by ID or name wherever it lives, and `list` reads the home
-            // and the project in effect to the last page (REQ-CLOUDDEF-42, REQ-WFDEF-25).
+            // and the project in effect to the last page.
             (
                 vec![
                     "useful",
@@ -3589,7 +3581,7 @@ mod tests {
                 UnknownArgument,
             ),
             // The verbs that change a definition act on it where it lives, in the project in
-            // effect, and `update --run-as` names the service principal (REQ-CLOUDDEF-15).
+            // effect, and `update --run-as` names the service principal.
             (
                 vec![
                     "useful",
@@ -3655,14 +3647,14 @@ mod tests {
                 InvalidValue,
             ),
             // `publish` reaches Cloud with `--on project`, to the project's definition of the
-            // tree's name, and never records the link (REQ-CLOUDDEF-14).
+            // tree's name, and never records the link.
             ([PUBLISH, &["--on", "personal"]].concat(), InvalidValue),
             (
                 [PUBLISH, &["--to", "engineering", "--new"]].concat(),
                 ArgumentConflict,
             ),
             // Input sets are workflow inputs, staged in the organization and the project in
-            // effect (REQ-RUNINPUT-61).
+            // effect.
             (
                 vec![
                     "useful",
@@ -3709,7 +3701,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-21, REQ-LOCALRUN-225
     #[test]
     fn the_earlier_run_paths_and_options_are_unknown() {
         use clap::error::ErrorKind::{
@@ -3717,8 +3708,7 @@ mod tests {
         };
         const RUN: &str = "run_01jcq3m8x2k9v7t4r6p0w5n8yz";
         const DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abd";
-        // `show` is the one read of a run, local or Cloud (REQ-LOCALRUN-189), and finds the
-        // run itself (REQ-LOCALRUN-180).
+        // `show` is the one read of a run, local or Cloud, and finds the run itself.
         let cases: Vec<(Vec<&str>, clap::error::ErrorKind)> = vec![
             (
                 vec!["useful", "workflow", "run", "status", RUN],
@@ -3736,7 +3726,7 @@ mod tests {
                 vec!["useful", "workflow", "run", "show", RUN, "--cloud", "acme"],
                 UnknownArgument,
             ),
-            // `list` is one listing of the runs under the home and in Cloud (REQ-RUN-127).
+            // `list` is one listing of the runs under the home and in Cloud.
             (vec!["useful", "run", "list", "acme"], InvalidSubcommand),
             (
                 vec![
@@ -3754,7 +3744,7 @@ mod tests {
                 InvalidValue,
             ),
             // `create --on personal|project` starts a Cloud run in the organization and
-            // project in effect (REQ-RUN-94).
+            // project in effect.
             (
                 vec![
                     "useful", "workflow", "run", "create", DEFINITION, "--cloud", "acme",
@@ -3797,7 +3787,7 @@ mod tests {
                 InvalidValue,
             ),
             // A run's retained inputs and Linear updates are read under `workflow run`, in
-            // the organization in effect (REQ-RUNINPUT-65, REQ-TRIGGER-145).
+            // the organization in effect.
             (
                 vec!["useful", "run", "input", "show", "acme", RUN],
                 InvalidSubcommand,
@@ -3814,8 +3804,8 @@ mod tests {
                 vec!["useful", "workflow", "run", "input", "delete", RUN],
                 MissingRequiredArgument,
             ),
-            // A run's artifacts are listed, downloaded and checked under `workflow run`
-            // (REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-29).
+            // A run's artifacts are listed, downloaded and checked under `workflow
+            // run`.
             (
                 vec!["useful", "artifact", "validate", "out"],
                 InvalidSubcommand,
@@ -3825,7 +3815,7 @@ mod tests {
                 InvalidSubcommand,
             ),
             // A run's publications are created and read under `workflow run`, the run named
-            // by `RUN` or `--run` (REQ-PUBLISH-13, REQ-PUBLISH-56).
+            // by `RUN` or `--run`.
             (
                 vec!["useful", "publication", "list", "acme", RUN],
                 InvalidSubcommand,
@@ -3854,7 +3844,7 @@ mod tests {
                 MissingRequiredArgument,
             ),
             // `answer`, `approve` and `hand-back` find their run under the home and then in
-            // Cloud, and take no `--cloud` (REQ-LOCALRUN-180, REQ-LOCALRUN-210).
+            // Cloud, and take no `--cloud`.
             (
                 vec![
                     "useful", "workflow", "run", "answer", RUN, "--text", "x", "--cloud", "acme",
@@ -3882,7 +3872,7 @@ mod tests {
                 UnknownArgument,
             ),
             // `pause` and `unpause` hold a run before a step and release the hold, and
-            // `create --pause-before` holds it from the start (REQ-LOCALRUN-185).
+            // `create --pause-before` holds it from the start.
             (
                 vec![
                     "useful", "workflow", "run", "stop", RUN, "--before", "deploy", "--reason", "x",
@@ -3905,8 +3895,7 @@ mod tests {
                 ],
                 UnknownArgument,
             ),
-            // `cancel` ends a run wherever it executes, and finds it itself
-            // (REQ-LOCALRUN-186, REQ-LOCALRUN-218).
+            // `cancel` ends a run wherever it executes, and finds it itself.
             (
                 vec!["useful", "run", "cancel", "acme", RUN],
                 InvalidSubcommand,
@@ -3922,7 +3911,7 @@ mod tests {
                 UnknownArgument,
             ),
             // `retry` is the one verb that reruns steps, and `resume` reruns none, for a run
-            // under the home and a Cloud run alike (REQ-LOCALRUN-184, REQ-CONTINUE-1).
+            // under the home and a Cloud run alike.
             (
                 vec!["useful", "run", "continue", "acme", RUN, "--from", "build"],
                 InvalidSubcommand,
@@ -3948,7 +3937,7 @@ mod tests {
                 UnknownArgument,
             ),
             // `upgrade --from` moves a waiting run to its definition's current revision and
-            // runs the named step again (REQ-LOCALRUN-194).
+            // runs the named step again.
             (
                 vec![
                     "useful", "workflow", "run", "restart", RUN, "--at", "review",
@@ -3962,7 +3951,7 @@ mod tests {
                 UnknownArgument,
             ),
             // `release` finds its run under the home and then in Cloud, so it takes no
-            // `--cloud` (REQ-LOCALRUN-187, REQ-LOCALRUN-180).
+            // `--cloud`.
             (
                 vec![
                     "useful", "workflow", "run", "release", RUN, "--cloud", "acme",
@@ -3980,8 +3969,8 @@ mod tests {
         }
     }
 
-    // INV-CLI-21: `workflow run event`, which the runner passes a delivered event, is the
-    // tree's one hidden path.
+    // `workflow run event`, which the runner passes a delivered event, is the tree's one
+    // hidden path.
     #[test]
     fn workflow_run_event_is_the_one_hidden_path() {
         fn hidden(command: &clap::Command, prefix: &str, paths: &mut Vec<String>) {
@@ -3998,8 +3987,8 @@ mod tests {
         assert_eq!(paths, ["workflow run event"]);
     }
 
-    // INV-CLI-21: `--control` of `workflow run cancel`, which the runner passes, is the tree's
-    // one hidden argument.
+    // `--control` of `workflow run cancel`, which the runner passes, is the tree's one hidden
+    // argument.
     #[test]
     fn workflow_run_cancel_control_is_the_one_hidden_argument() {
         fn hidden(command: &clap::Command, prefix: &str, arguments: &mut Vec<String>) {
@@ -4018,7 +4007,6 @@ mod tests {
         assert_eq!(arguments, ["workflow run cancel --control"]);
     }
 
-    // INV-CLI-21
     #[test]
     fn the_earlier_organization_paths_and_options_are_unknown() {
         for (arguments, kind) in [

@@ -1,9 +1,8 @@
 //! A runner's authorization of a grant as the member reads it: what was last delivered to the
-//! runner and what it reported (REQ-GRANT-13), its availability and next action
-//! (REQ-GRANT-53), and, once it ended, whether the runner has confirmed removing its copy
-//! (REQ-GRANT-47) and the stop requested of the run it was serving (REQ-GRANT-48).
+//! runner and what it reported, its availability and next action, and, once it ended, whether the
+//! runner has confirmed removing its copy and the stop requested of the run it was serving.
 //! `useful account integration list` prints it for a grant of either kind. The authorization of a
-//! token `useful account integration authorize` makes is printed here too (REQ-INTEGRATION-20).
+//! token `useful account integration authorize` makes is printed here too.
 
 use std::io::{self, Write};
 
@@ -22,7 +21,7 @@ use super::projection::MemberStatus;
 
 /// A runner's authorization of a grant or agent login, in force or ended: the model's named
 /// fields only, enums as their wire strings. Nothing a response adds beyond the model reaches
-/// output (REQ-GRANT-4, REQ-GRANT-14).
+/// output.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::cli) struct AuthorizationView<'a> {
@@ -39,12 +38,12 @@ pub(in crate::cli) struct AuthorizationView<'a> {
     delivery: Option<DeliveryView<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     report: Option<ReportView<'a>>,
-    // The runner's last use of a native grant where `useful account integration list` prints no exchange
-    // (REQ-GRANT-64).
+    // The runner's last use of a native grant where `useful account integration list` prints no
+    // exchange.
     #[serde(flatten)]
     last_use: Option<LastUseView<'a>>,
-    // An authorization in force's availability and next action (REQ-GRANT-53); an ended
-    // one, and the one `authorize` just made, carry none.
+    // An authorization in force's availability and next action; an ended one, and the
+    // one `authorize` just made, carry none.
     #[serde(flatten)]
     status: Option<MemberStatus>,
     // Whether the text form prints what was delivered and reported: an OAuth grant's
@@ -54,8 +53,7 @@ pub(in crate::cli) struct AuthorizationView<'a> {
 }
 
 /// The runner's last authorization of the agent login, ended, with whether that runner has
-/// confirmed removing the copy it kept (REQ-GRANT-47) and the stop requested of the run it
-/// was serving (REQ-GRANT-48).
+/// confirmed removing the copy it kept and the stop requested of the run it was serving.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::cli) struct EndedAuthorizationView<'a> {
@@ -67,8 +65,7 @@ pub(in crate::cli) struct EndedAuthorizationView<'a> {
     pub(in crate::cli) stop: Option<StopView<'a>>,
 }
 
-/// The graceful cancellation Cloud requested of the run the runner was serving
-/// (REQ-GRANT-48).
+/// The graceful cancellation Cloud requested of the run the runner was serving.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::cli) struct StopView<'a> {
@@ -103,7 +100,7 @@ struct ReportView<'a> {
     reported_at: &'a str,
 }
 
-/// The last use the runner reported and, where Cloud holds it, when (REQ-GRANT-64).
+/// The last use the runner reported and, where Cloud holds it, when.
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LastUseView<'a> {
@@ -254,9 +251,9 @@ impl<'a> AuthorizationView<'a> {
         }
     }
 
-    /// The authorization of a token `useful account integration authorize` just made
-    /// (REQ-INTEGRATION-20): the runner by ID and name, its organization and when. A token's
-    /// runner reports nothing back, so there is no delivery or report.
+    /// The authorization of a token `useful account integration authorize` just made: the
+    /// runner by ID and name, its organization and when. A token's runner reports nothing
+    /// back, so there is no delivery or report.
     pub(in crate::cli) fn of_token(authorization: &'a IntegrationTokenAuthorization) -> Self {
         Self {
             id: &authorization.id,
@@ -363,7 +360,7 @@ const fn report_state(state: AgentLoginReportState) -> &'static str {
     }
 }
 
-/// What a runner's removal state says, and no more (REQ-GRANT-47).
+/// What a runner's removal state says, and no more.
 pub(in crate::cli) fn write_removal_note(output: &mut impl Write) -> io::Result<()> {
     writeln!(
         output,
@@ -373,7 +370,7 @@ pub(in crate::cli) fn write_removal_note(output: &mut impl Write) -> io::Result<
     )
 }
 
-/// What a stop is, and how to follow it with a command the CLI has (REQ-GRANT-48).
+/// What a stop is, and how to follow it with a command the CLI has.
 pub(in crate::cli) fn write_stop_note(output: &mut impl Write) -> io::Result<()> {
     writeln!(
         output,
@@ -383,7 +380,7 @@ pub(in crate::cli) fn write_stop_note(output: &mut impl Write) -> io::Result<()>
 }
 
 /// Each runner a revoked native grant was authorized for, with its removal state and the stop
-/// requested there (REQ-GRANT-68), then what those say.
+/// requested there, then what those say.
 pub(in crate::cli) fn write_revoked_runners(
     output: &mut impl Write,
     ended: &[EndedAuthorizationView<'_>],
@@ -407,7 +404,7 @@ pub(in crate::cli) fn write_revoked_runners(
     Ok(())
 }
 
-/// That revoking a native grant in Cloud leaves its session at the provider (REQ-GRANT-23).
+/// That revoking a native grant in Cloud leaves its session at the provider.
 pub(in crate::cli) fn write_session_note(output: &mut impl Write) -> io::Result<()> {
     writeln!(
         output,
@@ -416,8 +413,7 @@ pub(in crate::cli) fn write_session_note(output: &mut impl Write) -> io::Result<
 }
 
 /// What a runner's authorization was made or ended on, under the member its result names: a
-/// grant, an integration token (REQ-INTEGRATION-20), or an organization's connection
-/// (REQ-INTEGRATION-33).
+/// grant, an integration token, or an organization's connection.
 #[derive(Clone, Copy, Serialize)]
 pub(in crate::cli) enum Holder<'a> {
     #[serde(rename = "grantId")]
@@ -458,7 +454,7 @@ struct AuthorizeResult<'a> {
     authorization: AuthorizationView<'a>,
 }
 
-/// Reports the authorization `authorize` made (REQ-GRANT-66, REQ-INTEGRATION-20).
+/// Reports the authorization `authorize` made.
 pub(in crate::cli) fn write_authorized(
     deployment: &str,
     holder: Holder<'_>,
@@ -498,14 +494,14 @@ struct DeauthorizeResult<'a> {
     // and for an OAuth grant, whose runner kept no copy.
     #[serde(skip_serializing_if = "Option::is_none")]
     removal: Option<RemovalView<'a>>,
-    // Absent as well when no stop was requested there (REQ-GRANT-48).
+    // Absent as well when no stop was requested there.
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<StopView<'a>>,
 }
 
 /// Reports an ended authorization with its removal state and stop, as the read after the
 /// change gives them in `ended`: `None` when that read failed, which leaves the change done,
-/// or when there was none to make (REQ-GRANT-67).
+/// or when there was none to make.
 pub(in crate::cli) fn write_deauthorized(
     deployment: &str,
     holder: Holder<'_>,

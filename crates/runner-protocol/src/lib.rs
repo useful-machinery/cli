@@ -41,22 +41,25 @@ pub enum RunnerFrame {
     Hello {
         envelope: RunnerEnvelope,
         runner_version: String,
-        /// Advertises `treeExecution: 1`: this runner executes published trees
-        /// (REQ-RUNNERENROLL-91).
+        /// Advertises `treeExecution: 1`: this runner executes published
+        /// trees.
         tree_execution: bool,
         /// Advertises `treeContinuation: 1`: this runner adopts a published
         /// tree an earlier attempt left in its retained workspace, so Cloud may
-        /// offer it a definition-backed run's continuation (REQ-COMPAT-32).
+        /// offer it a definition-backed run's continuation.
         tree_continuation: bool,
         /// Advertises `treeWithdraw: 1`: this runner applies a `withdraw` control, so Cloud
-        /// may send it one (REQ-RUNNERENROLL-123).
+        /// may send it one.
         tree_withdraw: bool,
         /// Advertises `treeIntegrationBindings: 1`: this runner reads integration bindings
         /// and an integration's account in a tree block, so Cloud may offer it a run whose
-        /// revision holds one (REQ-COMPAT-34).
+        /// revision holds one.
         tree_integration_bindings: bool,
+        /// Advertises `treeNoSource: 1`: this runner executes a definition-backed run with
+        /// no source, so Cloud may offer it one.
+        tree_no_source: bool,
         /// Advertises `holdsWaitingRuns: 1`: this runner takes another run while every run it
-        /// holds waits, so Cloud may offer it one (REQ-RUNNERENROLL-311, REQ-COMPAT-22).
+        /// holds waits, so Cloud may offer it one.
         holds_waiting_runs: bool,
     },
     WorkspaceRetentionReport {
@@ -141,9 +144,9 @@ pub enum RunnerFrame {
         workflow_event: Value,
         diagnostic: Option<Value>,
     },
-    /// A tree run's ordered root progress between engine attempts (REQ-RUN-88,
-    /// REQ-RUNNERENROLL-181). `progress_sequence` numbers the assignment's
-    /// progress reports from 1, apart from `execution_event_sequence`.
+    /// A tree run's ordered root progress between engine attempts.
+    /// `progress_sequence` numbers the assignment's progress reports from 1,
+    /// apart from `execution_event_sequence`.
     TreeProgress {
         envelope: RunnerEnvelope,
         assignment_id: String,
@@ -151,8 +154,8 @@ pub enum RunnerFrame {
         progress_sequence: u64,
         progress: TreeRootProgress,
     },
-    /// The runner's application of one trigger delivery to the run its assignment holds
-    /// (REQ-TRIGGER-136).
+    /// The runner's application of one trigger delivery to the run its assignment
+    /// holds.
     TriggerDeliveryApplied {
         envelope: RunnerEnvelope,
         assignment_id: String,
@@ -160,7 +163,7 @@ pub enum RunnerFrame {
         application: TriggerDeliveryApplication,
     },
     /// The runner's application of one authorized Cloud control to the run its assignment
-    /// holds (REQ-RUNNERENROLL-206).
+    /// holds.
     RunControlApplied {
         envelope: RunnerEnvelope,
         assignment_id: String,
@@ -175,7 +178,7 @@ pub enum RunnerFrame {
         outcome: Value,
         artifact_delivery: Value,
         diagnostic: Option<Value>,
-        /// The root's exit, carried only by a tree run's finish (REQ-RUNNERENROLL-99).
+        /// The root's exit, carried only by a tree run's finish.
         tree_exit: Option<TreeExit>,
     },
     ExecutionInterrupted {
@@ -227,9 +230,9 @@ pub enum RunnerFrame {
     },
 }
 
-/// The exit of a tree run's root beside its transport outcome (REQ-RUNNERENROLL-99).
-/// The encoder always writes `mirror` and `claimRelease`, so Cloud records an exit
-/// even for a finish that names no outcome.
+/// The exit of a tree run's root beside its transport outcome. The encoder always
+/// writes `mirror` and `claimRelease`, so Cloud records an exit even for a finish
+/// that names no outcome.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeExit {
     pub chosen_outcome: Option<String>,
@@ -238,11 +241,11 @@ pub struct TreeExit {
     pub mirror: Vec<Value>,
     /// Whether the runner requests release of the run's subject claim.
     pub claim_release: bool,
-    /// The root's text exports the finish lists, in order (REQ-RUNNERENROLL-130).
-    /// The encoder writes `exports` only when the list is not empty, so a finish
-    /// that lists none is the frame it was before the member existed
-    /// (REQ-COMPAT-18). The encoder does not truncate the list: a list longer
-    /// than [`MAXIMUM_TREE_EXPORTS`] fails `encode_runner_frame`.
+    /// The root's text exports the finish lists, in order. The encoder writes
+    /// `exports` only when the list is not empty, so a finish that lists none is
+    /// the frame it was before the member existed. The encoder does not truncate
+    /// the list: a list longer than [`MAXIMUM_TREE_EXPORTS`] fails
+    /// `encode_runner_frame`.
     pub exports: Vec<TreeExport>,
 }
 
@@ -342,8 +345,8 @@ impl TreeExport {
 /// the pending wait. The frame's state is `waiting` exactly when `wait` is
 /// present, and `running` otherwise. Timestamps are RFC 3339 UTC with `Z`.
 /// `steps` are the report's step observations; the encoder writes the optional
-/// `steps` member only when the list is non-empty (REQ-COMPAT-29), and Cloud
-/// refuses a frame that names one `(run, run_attempt, step)` twice.
+/// `steps` member only when the list is non-empty, and Cloud refuses a frame
+/// that names one `(run, run_attempt, step)` twice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeRootProgress {
     pub attempt: u64,
@@ -353,14 +356,13 @@ pub struct TreeRootProgress {
     pub steps: Vec<TreeStepObservation>,
 }
 
-/// The wait a waiting tree run reports: the `{kind, since, step}` of its
-/// `wait.json`, for an answer wait the questions it asks, and the failed child
-/// it reports (REQ-COMPAT-30, REQ-COMPAT-31). `questions` is `None` when the wait reports
-/// none, and the encoder then writes no `questions` member; `Some` of an empty
-/// list is written as `[]`. The schema admits `questions` only on kind
-/// `answer`, which the encoder does not check. `failed_child` is `None` when
-/// the wait reports none, and the encoder then writes no `failedChild` member;
-/// the schema admits it on a wait of any kind.
+/// The wait a waiting tree run reports: the `{kind, since, step}` of its `wait.json`, for
+/// an answer wait the questions it asks, and the failed child it reports. `questions` is
+/// `None` when the wait reports none, and the encoder then writes no `questions` member;
+/// `Some` of an empty list is written as `[]`. The schema admits `questions` only on kind
+/// `answer`, which the encoder does not check. `failed_child` is `None` when the wait
+/// reports none, and the encoder then writes no `failedChild` member; the schema admits
+/// it on a wait of any kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeProgressWait {
     pub kind: String,
@@ -404,12 +406,11 @@ impl TreeProgressFailedChildState {
     }
 }
 
-/// The failed child one wait reports, within the bounds Cloud admits
-/// (REQ-COMPAT-31): the child run's outcome, the failing node's `id` and role,
-/// its state and, when known, its phase and code. Only
-/// [`TreeProgressFailedChild::new`] makes one, so the encoder is never handed a
-/// value Cloud refuses: a refused value would fail `encode_runner_frame`, and a
-/// root report that cannot be sent ends the run.
+/// The failed child one wait reports, within the bounds Cloud admits: the child
+/// run's outcome, the failing node's `id` and role, its state and, when known,
+/// its phase and code. Only [`TreeProgressFailedChild::new`] makes one, so the
+/// encoder is never handed a value Cloud refuses: a refused value would fail
+/// `encode_runner_frame`, and a root report that cannot be sent ends the run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeProgressFailedChild {
     outcome: String,
@@ -487,9 +488,9 @@ pub struct TreeProgressWaitQuestion {
     pub text: Option<String>,
 }
 
-/// The questions of one answer wait, within the bounds Cloud admits
-/// (REQ-COMPAT-30). Only [`TreeProgressWaitQuestions::new`] makes one, so the
-/// encoder is never handed a list Cloud refuses: a refused list would fail
+/// The questions of one answer wait, within the bounds Cloud admits. Only
+/// [`TreeProgressWaitQuestions::new`] makes one, so the encoder is never
+/// handed a list Cloud refuses: a refused list would fail
 /// `encode_runner_frame` or exceed the ordinary frame size, and a root report
 /// that cannot be sent ends the run.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -536,9 +537,9 @@ fn tree_progress_wait_questions_value(questions: &TreeProgressWaitQuestions) -> 
         .collect()
 }
 
-/// One step observation of a tree run (REQ-COMPAT-29): the run inside the tree
-/// it belongs to (`run`, empty for the root), that run's engine attempt (from
-/// 1), the step identifier and its latest state.
+/// One step observation of a tree run: the run inside the tree it belongs to
+/// (`run`, empty for the root), that run's engine attempt (from 1), the step
+/// identifier and its latest state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeStepObservation {
     pub run: Vec<TreeStepRunElement>,
@@ -613,11 +614,11 @@ fn tree_step_observation_value(observation: &TreeStepObservation) -> Value {
     })
 }
 
-/// A control delivery Cloud pinned to a run's subject claim (REQ-TRIGGER-134), carried by a
+/// A control delivery Cloud pinned to a run's subject claim, carried by a
 /// `trigger_delivery` effect or, for a delivery accepted while the run was queued, in the
-/// offer's `workflowTree.pendingDeliveries`. `event` is the shared event `{source, event,
-/// at, payload}` and `claim` is `{connection, issue, observation?}`, each as Cloud sent it,
-/// for `useful workflow run event`'s `--event` and `--claim` files (REQ-TRIGGER-136).
+/// offer's `workflowTree.pendingDeliveries`. `event` is the shared event
+/// `{source, event, at, payload}` and `claim` is `{connection, issue, observation?}`, each
+/// as Cloud sent it, for `useful workflow run event`'s `--event` and `--claim` files.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TriggerDelivery {
     pub delivery_id: String,
@@ -672,7 +673,7 @@ pub struct TriggerDeliveryApplication {
 pub const MAXIMUM_RUN_CONTROL_ANSWER_BYTES: usize = 65_536;
 
 /// An authorized Cloud control for the run an assignment holds, carried by a `run_control`
-/// effect (REQ-RUNNERENROLL-90).
+/// effect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunControl {
     pub control_id: String,
@@ -827,11 +828,11 @@ impl ExecutionSpecInvalidReason {
     }
 }
 
-/// The validation facts of the first failure a refused workflow tree's report lists
-/// (REQ-DIAG-42): its code and, each only when it fits its grammar, the location's kind,
-/// the tree-relative path and the step. Each value kept is one Cloud's run read returns,
-/// which omits the whole diagnostic when one member is outside its grammar (REQ-DIAG-26),
-/// so a value outside it is left out rather than trimmed (REQ-DIAG-4).
+/// The validation facts of the first failure a refused workflow tree's report lists: its
+/// code and, each only when it fits its grammar, the location's kind, the tree-relative
+/// path and the step. Each value kept is one Cloud's run read returns, which omits the
+/// whole diagnostic when one member is outside its grammar, so a value outside it is left
+/// out rather than trimmed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationFacts {
     code: String,
@@ -1108,9 +1109,7 @@ pub struct ExecutionSpecV1RunnerProjection {
     pub execution_spec_id: String,
     pub schema_version: u64,
     pub execution_limits: ExecutionLimitsV1RunnerProjection,
-    pub source_branch: String,
-    pub workflow_definition_source: WorkflowDefinitionSourceV1RunnerProjection,
-    pub primary_workspace_source: PrimaryWorkspaceSourceV1RunnerProjection,
+    pub source: Option<RepositorySourcesV1RunnerProjection>,
     pub source_display_snapshot: Option<SourceDisplaySnapshotV1RunnerProjection>,
     pub workspace_branch: Option<String>,
     pub workspace_membership: Option<WorkspaceMembership>,
@@ -1118,6 +1117,13 @@ pub struct ExecutionSpecV1RunnerProjection {
     pub run_inputs: Option<RunInputProjectionV1>,
     /// The published tree a definition-backed run executes in place of `workflowPath`.
     pub workflow_tree: Option<WorkflowTreeV1RunnerProjection>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositorySourcesV1RunnerProjection {
+    pub source_branch: String,
+    pub workflow_definition_source: WorkflowDefinitionSourceV1RunnerProjection,
+    pub primary_workspace_source: PrimaryWorkspaceSourceV1RunnerProjection,
 }
 
 /// The `workflowTree` block of a definition-backed run's spec: the revision's sealed
@@ -1162,7 +1168,7 @@ pub struct ContinuationOffer {
     pub prior_attempt_id: String,
     pub required_runner_boot_id: String,
     pub execution_root: String,
-    pub definition_source: WorkflowDefinitionSourceV1RunnerProjection,
+    pub definition_source: Option<WorkflowDefinitionSourceV1RunnerProjection>,
     pub effective_capacity: ExecutionCapacityV1RunnerProjection,
     pub prior_manifest_digest: WorkflowSourceClosureDigestV1RunnerProjection,
     pub request: Value,
@@ -1433,8 +1439,8 @@ pub enum CloudFrame {
         attempt_id: String,
         reason: String,
     },
-    /// A Gateway-originated effect carrying one delivery for the run the assignment holds
-    /// (REQ-TRIGGER-136).
+    /// A Gateway-originated effect carrying one delivery for the run the assignment
+    /// holds.
     TriggerDelivery {
         envelope: CloudEnvelope,
         effect_id: String,
@@ -1444,7 +1450,7 @@ pub enum CloudFrame {
         delivery: TriggerDelivery,
     },
     /// A Gateway-originated effect carrying one authorized control for the run the
-    /// assignment holds (REQ-RUNNERENROLL-90).
+    /// assignment holds.
     RunControl {
         envelope: CloudEnvelope,
         effect_id: String,
@@ -1539,6 +1545,7 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             tree_continuation,
             tree_withdraw,
             tree_integration_bindings,
+            tree_no_source,
             holds_waiting_runs,
         } => {
             let mut payload = json!({ "runnerVersion": runner_version });
@@ -1553,6 +1560,9 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }
             if *tree_integration_bindings {
                 payload["treeIntegrationBindings"] = json!(1);
+            }
+            if *tree_no_source {
+                payload["treeNoSource"] = json!(1);
             }
             if *holds_waiting_runs {
                 payload["holdsWaitingRuns"] = json!(1);
@@ -2110,9 +2120,9 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
             &frame.direction,
             frame.sent_at,
         ),
-        // The schema keeps these frames for published runners (INV-RUNNER-66); this runner
-        // neither sends nor accepts them. `validate_closed_shape` refuses their type first,
-        // so this arm exists for the exhaustive match.
+        // The schema keeps these frames for published runners; this runner neither sends
+        // nor accepts them. `validate_closed_shape` refuses their type first, so this arm
+        // exists for the exhaustive match.
         generated::RunnerProtocolVersion1::RunnerWorkspaceInventory(_)
         | generated::RunnerProtocolVersion1::RunnerWorkspaceInventoryComplete(_)
         | generated::RunnerProtocolVersion1::CloudWorkspaceRegistrationRejected(_) => {
@@ -2291,6 +2301,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 1.0 => 1,
                 2.0 => 2,
                 3.0 => 3,
+                4.0 => 4,
                 _ => return Err(DecodeError::InvalidFrame("executionSpec.schemaVersion")),
             };
             let maximum_parallel_steps =
@@ -2300,79 +2311,16 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 .execution_limits
                 .cancellation_grace_seconds
                 .get();
-            let workflow_definition_source = WorkflowDefinitionSourceV1RunnerProjection {
-                repository_connection_id: execution_spec
-                    .workflow_definition_source
-                    .repository_connection_id
-                    .to_string(),
-                object_format: execution_spec
-                    .workflow_definition_source
-                    .object_format
-                    .as_str()
-                    .ok_or(DecodeError::InvalidFrame(
-                        "workflowDefinitionSource.objectFormat",
-                    ))?
-                    .to_owned(),
-                commit_oid: execution_spec
-                    .workflow_definition_source
-                    .commit_oid
-                    .to_string(),
-                workflow_path: execution_spec
-                    .workflow_definition_source
-                    .workflow_path
-                    .to_string(),
-                workflow_source_closure_digest: WorkflowSourceClosureDigestV1RunnerProjection {
-                    algorithm: execution_spec
-                        .workflow_definition_source
-                        .workflow_source_closure_digest
-                        .algorithm
-                        .as_str()
-                        .ok_or(DecodeError::InvalidFrame(
-                            "workflowDefinitionSource.workflowSourceClosureDigest.algorithm",
-                        ))?
-                        .to_owned(),
-                    value: execution_spec
-                        .workflow_definition_source
-                        .workflow_source_closure_digest
-                        .value
-                        .to_string(),
-                },
-            };
-            let primary_workspace_source = PrimaryWorkspaceSourceV1RunnerProjection {
-                kind: execution_spec
-                    .primary_workspace_source
-                    .kind
-                    .as_str()
-                    .ok_or(DecodeError::InvalidFrame("primaryWorkspaceSource.kind"))?
-                    .to_owned(),
-                provider_kind: execution_spec
-                    .primary_workspace_source
-                    .provider_kind
-                    .to_string(),
-                repository_connection_id: execution_spec
-                    .primary_workspace_source
-                    .repository_connection_id
-                    .to_string(),
-                object_format: execution_spec
-                    .primary_workspace_source
-                    .object_format
-                    .as_str()
-                    .ok_or(DecodeError::InvalidFrame(
-                        "primaryWorkspaceSource.objectFormat",
-                    ))?
-                    .to_owned(),
-                commit_oid: execution_spec
-                    .primary_workspace_source
-                    .commit_oid
-                    .to_string(),
-                materialization_contract: execution_spec
-                    .primary_workspace_source
-                    .materialization_contract
-                    .as_str()
-                    .ok_or(DecodeError::InvalidFrame(
-                        "primaryWorkspaceSource.materializationContract",
-                    ))?
-                    .to_owned(),
+            let source = match (
+                execution_spec.source_branch,
+                execution_spec.workflow_definition_source,
+                execution_spec.primary_workspace_source,
+            ) {
+                (None, None, None) if schema_version == 4 => None,
+                (Some(branch), Some(workflow), Some(primary)) if schema_version != 4 => Some(
+                    repository_sources_projection(branch.to_string(), workflow, primary)?,
+                ),
+                _ => return Err(DecodeError::InvalidFrame("executionSpec.source")),
             };
             let source_display_snapshot = execution_spec.source_display_snapshot.map(|snapshot| {
                 let repository = match snapshot.repository {
@@ -2398,7 +2346,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 }
             });
             match (schema_version, source_display_snapshot.is_some()) {
-                (1, false) | (2 | 3, true) => {}
+                (1 | 4, false) | (2 | 3, true) => {}
                 _ => {
                     return Err(DecodeError::InvalidFrame(
                         "executionSpec.sourceDisplaySnapshot",
@@ -2512,9 +2460,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                         maximum_parallel_steps,
                         cancellation_grace_seconds,
                     },
-                    source_branch: execution_spec.source_branch.to_string(),
-                    workflow_definition_source,
-                    primary_workspace_source,
+                    source,
                     source_display_snapshot,
                     workspace_branch,
                     workspace_membership,
@@ -2777,6 +2723,65 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "run_control" => variant(value, Frame::CloudRunControl),
         _ => Err(DecodeError::InvalidFrame("type")),
     }
+}
+
+fn repository_sources_projection(
+    source_branch: String,
+    workflow: generated::WorkflowDefinitionSource,
+    primary: generated::PrimaryWorkspaceSource,
+) -> Result<RepositorySourcesV1RunnerProjection, DecodeError> {
+    let workflow_definition_source = WorkflowDefinitionSourceV1RunnerProjection {
+        repository_connection_id: workflow.repository_connection_id.to_string(),
+        object_format: workflow
+            .object_format
+            .as_str()
+            .ok_or(DecodeError::InvalidFrame(
+                "workflowDefinitionSource.objectFormat",
+            ))?
+            .to_owned(),
+        commit_oid: workflow.commit_oid.to_string(),
+        workflow_path: workflow.workflow_path.to_string(),
+        workflow_source_closure_digest: WorkflowSourceClosureDigestV1RunnerProjection {
+            algorithm: workflow
+                .workflow_source_closure_digest
+                .algorithm
+                .as_str()
+                .ok_or(DecodeError::InvalidFrame(
+                    "workflowDefinitionSource.workflowSourceClosureDigest.algorithm",
+                ))?
+                .to_owned(),
+            value: workflow.workflow_source_closure_digest.value.to_string(),
+        },
+    };
+    let primary_workspace_source = PrimaryWorkspaceSourceV1RunnerProjection {
+        kind: primary
+            .kind
+            .as_str()
+            .ok_or(DecodeError::InvalidFrame("primaryWorkspaceSource.kind"))?
+            .to_owned(),
+        provider_kind: primary.provider_kind.to_string(),
+        repository_connection_id: primary.repository_connection_id.to_string(),
+        object_format: primary
+            .object_format
+            .as_str()
+            .ok_or(DecodeError::InvalidFrame(
+                "primaryWorkspaceSource.objectFormat",
+            ))?
+            .to_owned(),
+        commit_oid: primary.commit_oid.to_string(),
+        materialization_contract: primary
+            .materialization_contract
+            .as_str()
+            .ok_or(DecodeError::InvalidFrame(
+                "primaryWorkspaceSource.materializationContract",
+            ))?
+            .to_owned(),
+    };
+    Ok(RepositorySourcesV1RunnerProjection {
+        source_branch,
+        workflow_definition_source,
+        primary_workspace_source,
+    })
 }
 
 fn workflow_tree_projection(
@@ -3355,6 +3360,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeContinuation",
             "treeWithdraw",
             "treeIntegrationBindings",
+            "treeNoSource",
             "holdsWaitingRuns",
         ],
         "execution_transition" => &["diagnostic"],
@@ -3566,7 +3572,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/runner-execution-finished-recovery.json"
         )),
-        // REQ-WFRECOVERY-62
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/runner-execution-finished-recovery-handler-launch.json"
@@ -3647,12 +3652,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-workflow-tree.json"
         )),
-        // REQ-CLOUDDEF-114
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-workflow-tree-integration-bindings.json"
         )),
-        // REQ-COMPAT-32
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-continuation.json"
@@ -3661,12 +3664,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-tree-continuation.json"
         )),
-        // REQ-RUNNERENROLL-99
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/execution-finished-chosen-outcome.json"
         )),
-        // REQ-RUN-88, REQ-RUNNERENROLL-181
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting.json"
@@ -3675,22 +3676,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-running.json"
         )),
-        // REQ-COMPAT-29
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-steps.json"
         )),
-        // REQ-COMPAT-30
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-questions.json"
         )),
-        // REQ-COMPAT-31
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-failed-child.json"
         )),
-        // REQ-TRIGGER-136
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-trigger-delivery.json"
@@ -3707,7 +3704,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-pending-deliveries.json"
         )),
-        // REQ-RUNNERENROLL-90, REQ-RUNNERENROLL-204
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-control-answer.json"
@@ -3720,7 +3716,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-control-lift.json"
         )),
-        // REQ-RUNNERENROLL-123
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-control-withdraw.json"
@@ -3729,17 +3724,14 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-withdraw.json"
         )),
-        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-integration-bindings.json"
         )),
-        // REQ-COMPAT-22
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-holds-waiting-runs.json"
         )),
-        // REQ-RUNNERENROLL-206
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/run-control-applied.json"
@@ -3759,6 +3751,18 @@ mod tests {
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-interrupted-lease-loss.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-no-source.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-no-source-continuation.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-no-source.json"
         )),
     ];
 
@@ -3823,7 +3827,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/runner-execution-finished-recovery-version.json"
         )),
-        // REQ-WFRECOVERY-62
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/runner-execution-finished-recovery-handler-launch-missing-launch-failure.json"
@@ -3844,22 +3847,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-execution-wrong-version.json"
         )),
-        // REQ-COMPAT-32
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-continuation-unknown.json"
         )),
-        // REQ-RUNNERENROLL-99
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/execution-finished-chosen-outcome-empty.json"
         )),
-        // REQ-RUNNERENROLL-181
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-unknown-state.json"
         )),
-        // REQ-COMPAT-29
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-steps-unknown-state.json"
@@ -3868,7 +3867,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-steps-too-many.json"
         )),
-        // REQ-COMPAT-30
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-questions-other-wait.json"
@@ -3881,7 +3879,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-questions-empty-id.json"
         )),
-        // REQ-COMPAT-31
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-failed-child-unknown-state.json"
@@ -3894,7 +3891,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-failed-child-code-not-slug.json"
         )),
-        // REQ-TRIGGER-136
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-trigger-delivery-without-claim.json"
@@ -3911,7 +3907,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-assignment-offer-pending-delivery-without-event.json"
         )),
-        // REQ-RUNNERENROLL-205
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-run-control-answer-without-wait.json"
@@ -3924,7 +3919,6 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-run-control-stop-with-wait.json"
         )),
-        // REQ-RUNNERENROLL-123
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-run-control-withdraw-with-wait.json"
@@ -3937,17 +3931,14 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-withdraw-unknown.json"
         )),
-        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-integration-bindings-unknown.json"
         )),
-        // REQ-COMPAT-22
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-holds-waiting-runs-unknown.json"
         )),
-        // REQ-RUNNERENROLL-206
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/run-control-applied-with-code.json"
@@ -3996,10 +3987,65 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/assignment-interrupted-lease-loss-missing.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/no-source-with-workspace-source.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/no-source-with-snapshot.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/no-source-without-tree.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/schema-2-without-workspace-source.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/no-source-continuation-with-definition.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/schema-2-continuation-without-definition.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-no-source-unknown.json"
+        )),
     ];
 
-    // INV-CONTRACT-7
-    // INV-RUNNER-1
+    #[test]
+    fn no_source_offer_requires_a_tree_and_refuses_repository_fields() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/runner-protocol/v1");
+        let offer =
+            std::fs::read(root.join("valid/cloud-assignment-offer-no-source.json")).unwrap();
+        let CloudFrame::AssignmentOffer { execution_spec, .. } =
+            decode_cloud_frame(&offer).unwrap()
+        else {
+            panic!("expected an assignment offer");
+        };
+        assert!(execution_spec.source.is_none());
+        assert!(execution_spec.workflow_tree.is_some());
+        for name in [
+            "no-source-with-workspace-source.json",
+            "no-source-with-snapshot.json",
+            "no-source-without-tree.json",
+            "schema-2-without-workspace-source.json",
+            "no-source-continuation-with-definition.json",
+            "schema-2-continuation-without-definition.json",
+        ] {
+            let bytes = std::fs::read(root.join("invalid").join(name)).unwrap();
+            assert!(
+                matches!(decode_frame(&bytes), Err(DecodeError::InvalidFrame(_))),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn generated_types_and_handwritten_validation_accept_every_valid_fixture() {
         for (index, fixture) in VALID_FIXTURES.iter().enumerate() {
@@ -4016,7 +4062,6 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-1
     #[test]
     fn runner_codec_refuses_the_recovery_frames_the_schema_keeps_for_published_runners() {
         assert!(decode_cloud_frame(include_bytes!(concat!(
@@ -4055,7 +4100,6 @@ mod tests {
         }
     }
 
-    // REQ-COMPAT-25
     #[test]
     fn earlier_lease_loss_reports_cannot_be_encoded() {
         let assignment_id = "asn_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned();
@@ -4167,15 +4211,14 @@ mod tests {
             tree_continuation: false,
             tree_withdraw: false,
             tree_integration_bindings: false,
+            tree_no_source: false,
             holds_waiting_runs: false,
         };
 
         let encoded = encode_runner_frame(&frame).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
-        // REQ-RUNNERENROLL-91
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeExecution"], 1);
-        // REQ-COMPAT-32
         assert!(value["payload"].get("treeContinuation").is_none());
 
         let continuing = RunnerFrame::Hello {
@@ -4185,13 +4228,13 @@ mod tests {
             tree_continuation: true,
             tree_withdraw: false,
             tree_integration_bindings: false,
+            tree_no_source: false,
             holds_waiting_runs: false,
         };
         let encoded = encode_runner_frame(&continuing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeContinuation"], 1);
-        // REQ-RUNNERENROLL-123
         assert!(value["payload"].get("treeWithdraw").is_none());
 
         let withdrawing = RunnerFrame::Hello {
@@ -4201,15 +4244,15 @@ mod tests {
             tree_continuation: true,
             tree_withdraw: true,
             tree_integration_bindings: false,
+            tree_no_source: false,
             holds_waiting_runs: false,
         };
         let encoded = encode_runner_frame(&withdrawing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeWithdraw"], 1);
-        // REQ-RUNNERENROLL-185, REQ-COMPAT-34
         assert!(value["payload"].get("treeIntegrationBindings").is_none());
-        // REQ-RUNNERENROLL-132
+        assert!(value["payload"].get("treeNoSource").is_none());
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
 
         let integrating = RunnerFrame::Hello {
@@ -4219,12 +4262,14 @@ mod tests {
             tree_continuation: true,
             tree_withdraw: true,
             tree_integration_bindings: true,
+            tree_no_source: true,
             holds_waiting_runs: false,
         };
         let encoded = encode_runner_frame(&integrating).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeIntegrationBindings"], 1);
+        assert_eq!(value["payload"]["treeNoSource"], 1);
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
 
         let holding = RunnerFrame::Hello {
@@ -4234,6 +4279,7 @@ mod tests {
             tree_continuation: true,
             tree_withdraw: true,
             tree_integration_bindings: true,
+            tree_no_source: true,
             holds_waiting_runs: true,
         };
         let encoded = encode_runner_frame(&holding).unwrap();
@@ -4242,7 +4288,6 @@ mod tests {
         assert_eq!(value["payload"]["holdsWaitingRuns"], 1);
     }
 
-    // REQ-COMPAT-32
     #[test]
     fn tree_continuation_offer_with_an_empty_partition_decodes() {
         let CloudFrame::AssignmentOffer {
@@ -4263,7 +4308,6 @@ mod tests {
         assert!(continuation.inherited_steps.is_empty());
     }
 
-    // REQ-RUNNERENROLL-170
     #[test]
     fn tree_finish_always_writes_its_exit_fields() {
         let mut frame = maximal_recovery_terminal_frame();
@@ -4308,7 +4352,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-130
     #[test]
     fn tree_finish_listing_exports_decodes_as_a_runner_frame() {
         assert!(matches!(
@@ -4338,7 +4381,6 @@ mod tests {
         frame
     }
 
-    // REQ-RUNNERENROLL-266, REQ-RUNNERENROLL-276, REQ-COMPAT-18
     #[test]
     fn tree_finish_writes_its_exports_only_when_it_lists_one() {
         let repair = "Repair the build.\nThe café step failed.";
@@ -4374,7 +4416,6 @@ mod tests {
         assert!(untreed["payload"].get("exports").is_none());
     }
 
-    // REQ-RUNNERENROLL-130
     #[test]
     fn tree_export_is_built_only_within_the_frame_item_form() {
         let longest_name = format!("a{}", "B".repeat(63));
@@ -4429,7 +4470,6 @@ mod tests {
         assert!(encode_runner_frame(&tree_finish_with_exports(most)).is_ok());
     }
 
-    // REQ-RUNNERENROLL-130, REQ-RUNNERENROLL-268
     #[test]
     fn tree_export_bounds_are_the_published_bounds() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -4513,7 +4553,6 @@ mod tests {
         )
     }
 
-    // REQ-RUN-88, REQ-RUNNERENROLL-181
     #[test]
     fn tree_progress_encodes_the_contract_fixtures_and_requires_a_wait_while_waiting() {
         let waiting = fixture_waiting_report("external", None);
@@ -4560,8 +4599,7 @@ mod tests {
         vec![question("a", Some(&"x".repeat(bytes - overhead)))]
     }
 
-    // REQ-COMPAT-30, REQ-RUNNERENROLL-323, REQ-RUN-139: the bounds a wait's questions are reported
-    // within, whole or not at all.
+    // The bounds a wait's questions are reported within, whole or not at all.
     #[test]
     fn tree_progress_wait_writes_only_questions_cloud_admits() {
         let encoded_payload = |frame: &RunnerFrame| {
@@ -4708,8 +4746,8 @@ mod tests {
         .unwrap_or_else(|| panic!("refused {outcome:?} {id:?} {phase:?} {code:?}"))
     }
 
-    // REQ-COMPAT-31: a wait's failed child is reported within the bounds Cloud
-    // admits, whole or not at all, and only when the wait holds one.
+    // A wait's failed child is reported within the bounds Cloud admits, whole
+    // or not at all, and only when the wait holds one.
     #[test]
     fn tree_progress_wait_writes_only_a_failed_child_cloud_admits() {
         use TreeProgressFailedChildRole::{Finalizer, Step};
@@ -4876,7 +4914,6 @@ mod tests {
         }
     }
 
-    // REQ-COMPAT-29
     #[test]
     fn tree_progress_writes_steps_only_when_it_has_an_observation() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -4940,7 +4977,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-186, REQ-RUNNERENROLL-187, REQ-RUNNERENROLL-191
     #[test]
     fn tree_offer_projects_the_files_bindings_and_run_page() {
         let CloudFrame::AssignmentOffer { execution_spec, .. } =
@@ -4982,8 +5018,8 @@ mod tests {
         );
     }
 
-    // REQ-CLOUDDEF-114: the projection carries the block's bindings and resolution as Cloud
-    // sent them, an integration's group and account included, and a flat block as before.
+    // The projection carries the block's bindings and resolution as Cloud sent them, an
+    // integration's group and account included, and a flat block as before.
     #[test]
     fn tree_offer_projects_integration_bindings_and_their_resolution_as_sent() {
         for name in [
@@ -5003,7 +5039,6 @@ mod tests {
         }
     }
 
-    // REQ-TRIGGER-136
     #[test]
     fn trigger_delivery_decodes_its_event_and_claim_and_the_application_encodes_the_fixtures() {
         let fixture = valid_runner_fixture;
@@ -5087,7 +5122,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-90, REQ-RUNNERENROLL-204, REQ-RUNNERENROLL-206
     #[test]
     fn run_control_decodes_its_kind_and_the_application_encodes_the_fixtures() {
         let fixture = valid_runner_fixture;
@@ -5221,8 +5255,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-123: this release advertises `treeWithdraw`, so a `withdraw` reaching
-    // it is a control it applies.
+    // This release advertises `treeWithdraw`, so a `withdraw` reaching it is a control it
+    // applies.
     #[test]
     fn run_control_decodes_a_withdraw() {
         let withdraw = valid_runner_fixture("cloud-run-control-withdraw.json");
@@ -5234,7 +5268,6 @@ mod tests {
         assert_eq!(control.action, RunControlAction::Withdraw);
     }
 
-    // REQ-TRIGGER-136
     #[test]
     fn tree_offer_projects_its_pending_deliveries_in_order() {
         let offer = include_bytes!(concat!(
@@ -5327,7 +5360,6 @@ mod tests {
         value["payload"]["decline"].clone()
     }
 
-    // REQ-DIAG-42, REQ-DIAG-4
     #[test]
     fn refused_tree_decline_carries_the_validation_facts() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -5359,8 +5391,8 @@ mod tests {
         );
     }
 
-    // REQ-DIAG-46, REQ-DIAG-4: a fact outside the grammar Cloud's read returns is left out,
-    // never trimmed, and the decline is sent all the same.
+    // A fact outside the grammar Cloud's read returns is left out, never trimmed, and the
+    // decline is sent all the same.
     #[test]
     fn validation_facts_keep_only_values_of_their_grammar() {
         let without_facts = json!({
@@ -5715,7 +5747,11 @@ mod tests {
             panic!("expected offer");
         };
         assert_eq!(
-            execution_spec.primary_workspace_source.provider_kind,
+            execution_spec
+                .source
+                .unwrap()
+                .primary_workspace_source
+                .provider_kind,
             "gitlab"
         );
         assert_eq!(
@@ -5979,7 +6015,6 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-1
     #[test]
     fn canonical_maximal_recovery_frame_has_published_exact_size() {
         let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -6056,7 +6091,6 @@ mod tests {
         ));
     }
 
-    // INV-RUNNER-8
     #[test]
     fn decode_cloud_frame_rejects_invalid_welcome_timing_pair() {
         let bytes = br#"{

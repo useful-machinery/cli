@@ -649,7 +649,6 @@ mod tests {
         }
     }
 
-    // REQ-TELEMETRY-17, REQ-TELEMETRY-26, REQ-TELEMETRY-35
     #[test]
     fn privacy_veto_and_absent_endpoint_disable_export() {
         assert!(matches!(outcome(&[]), SettingsOutcome::Disabled));
@@ -690,7 +689,6 @@ mod tests {
         ));
     }
 
-    // REQ-TELEMETRY-22
     #[test]
     fn empty_signal_specific_settings_fall_back_to_generic_values() {
         let settings = enabled(&[
@@ -708,7 +706,6 @@ mod tests {
         assert_eq!(settings.timeout, Duration::from_millis(250));
     }
 
-    // REQ-TELEMETRY-18, REQ-TELEMETRY-19
     #[test]
     fn endpoint_precedence_and_transport_policy_are_closed() {
         let settings = enabled(&[
@@ -745,7 +742,6 @@ mod tests {
         ));
     }
 
-    // REQ-TELEMETRY-20, REQ-TELEMETRY-21, REQ-TELEMETRY-22
     #[test]
     fn protocol_headers_and_timeout_use_standard_precedence() {
         let settings = enabled(&[
@@ -905,8 +901,6 @@ mod tests {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    // REQ-TELEMETRY-20, REQ-TELEMETRY-23, REQ-TELEMETRY-24, REQ-TELEMETRY-25
-    // INV-TELEMETRY-2
     #[test]
     fn exports_resolved_build_version_in_resource_and_local_events() {
         let receiver = OtlpReceiver::start("200 OK");
@@ -1019,8 +1013,6 @@ mod tests {
         );
     }
 
-    // REQ-TELEMETRY-27
-    // INV-TELEMETRY-3
     #[test]
     fn rejecting_receiver_reports_no_endpoint_header_or_response_details() {
         let receiver = OtlpReceiver::start("503 UNIQUE-RESPONSE-SENTINEL");
@@ -1067,7 +1059,6 @@ mod tests {
         }
     }
 
-    // REQ-TELEMETRY-27, REQ-TELEMETRY-28
     #[test]
     fn exporter_rejection_is_nonfatal_and_diagnostic_is_closed_and_bounded() {
         let capture = TestCapture::default();
@@ -1149,7 +1140,6 @@ mod tests {
         (recorder, capture, export_started, release)
     }
 
-    // REQ-TELEMETRY-28
     #[test]
     fn stalled_export_has_bounded_shutdown() {
         let (recorder, capture, export_started, release) = stalled_recorder(EXPORT_QUEUE_CAPACITY);
@@ -1167,8 +1157,6 @@ mod tests {
         release.send(()).expect("release stalled export");
     }
 
-    // REQ-TELEMETRY-28
-    // INV-TELEMETRY-3
     #[test]
     fn saturated_export_queue_drops_without_blocking_runner_events() {
         let (recorder, capture, export_started, release) = stalled_recorder(1);

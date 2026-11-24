@@ -210,7 +210,6 @@ mod tests {
     use super::*;
     use anyhow::Context as _;
 
-    // REQ-AUTH-23
     #[test]
     fn poll_schedule_honors_interval_and_slow_down() -> anyhow::Result<()> {
         let start = useful_support::monotonic_now();

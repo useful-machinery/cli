@@ -343,8 +343,7 @@ pub(super) fn render_too_small(
     );
 }
 
-/// The too-small notice of a viewer, where only `q` and Ctrl-C act (REQ-LOCALRUN-9,
-/// REQ-LOCALRUN-10).
+/// The too-small notice of a viewer, where only `q` and Ctrl-C act.
 pub(super) fn render_viewer_too_small(
     frame: &mut Frame<'_>,
     area: Rect,

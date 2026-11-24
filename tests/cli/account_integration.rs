@@ -1,8 +1,7 @@
-//! `useful account integration` acting on the member's token of a token service
-//! (REQ-INTEGRATION-16 to REQ-INTEGRATION-20): `connect` and `reconnect` read it from a file,
-//! standard input or a prompt that does not echo, and `list`, `show`, `authorize`,
-//! `deauthorize` and `disconnect` find it by its service once no grant of that name is found. The
-//! grant cases are in `grant`, whose helpers these share.
+//! `useful account integration` acting on the member's token of a token service: `connect` and
+//! `reconnect` read it from a file, standard input or a prompt that does not echo, and `list`,
+//! `show`, `authorize`, `deauthorize` and `disconnect` find it by its service once no grant of
+//! that name is found. The grant cases are in `grant`, whose helpers these share.
 
 use super::*;
 
@@ -130,7 +129,7 @@ fn reports(output: &Output, version: i64) -> bool {
 }
 
 /// The answer of a deployment that serves the five, the OAuth provider `example` and, with
-/// `token`, `mergify` as a token service titled Mergify (REQ-GRANT-78).
+/// `token`, `mergify` as a token service titled Mergify.
 fn serving_with(token: bool) -> Vec<u8> {
     let mut items = vec![
         serde_json::json!({"provider": "github", "kind": "oauth"}),
@@ -231,8 +230,6 @@ fn refused_without_yes(server: &ScriptedServer, credential: &Path, args: &[&str]
     text
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-51
 #[test]
 fn connect_stores_a_token_given_in_a_file_on_standard_input_or_at_a_prompt_that_does_not_echo() {
     let directory = tempfile::tempdir().unwrap();
@@ -305,9 +302,6 @@ fn connect_stores_a_token_given_in_a_file_on_standard_input_or_at_a_prompt_that_
     }
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-51
-// REQ-INTEGRATION-52
 #[test]
 fn connect_refuses_a_token_service_it_cannot_take_before_anything_is_read_or_stored() {
     // A deployment that serves no token service, or predates the read, is asked that alone,
@@ -387,8 +381,6 @@ fn connect_refuses_a_token_service_it_cannot_take_before_anything_is_read_or_sto
     assert!(!text.contains("mergify"), "{text}");
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-52
 // A name outside the five is read for among what the deployment serves before its options are
 // judged, so an OAuth provider's consent begins after one served read.
 #[test]
@@ -451,8 +443,6 @@ fn connect_of_a_served_oauth_provider_begins_its_consent_after_the_served_read()
     }
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-18
 #[test]
 fn connect_refuses_a_held_token_naming_reconnect_which_stores_its_next_version() {
     let held = || tokens(&[mergify_token(1)]);
@@ -565,9 +555,6 @@ fn connect_refuses_a_held_token_naming_reconnect_which_stores_its_next_version()
     );
 }
 
-// REQ-INTEGRATION-16
-// REQ-INTEGRATION-18
-// REQ-INTEGRATION-20
 #[test]
 fn each_refusal_of_a_token_route_is_reported_with_its_outcome_and_remedy() {
     let problem_of =
@@ -653,7 +640,6 @@ fn each_refusal_of_a_token_route_is_reported_with_its_outcome_and_remedy() {
     }
 }
 
-// REQ-INTEGRATION-19
 #[test]
 fn list_prints_the_members_tokens_after_the_grants_and_nothing_of_an_organization() {
     let answers = || {
@@ -712,9 +698,6 @@ fn list_prints_the_members_tokens_after_the_grants_and_nothing_of_an_organizatio
     );
 }
 
-// REQ-INTEGRATION-19
-// REQ-INTEGRATION-53
-// REQ-INTEGRATION-55
 #[test]
 fn list_reads_no_token_unless_the_deployment_serves_a_token_service() {
     for served in [serving_with(false), predating_served()] {
@@ -759,8 +742,6 @@ fn list_reads_no_token_unless_the_deployment_serves_a_token_service() {
     );
 }
 
-// REQ-INTEGRATION-19
-// REQ-INTEGRATION-54
 #[test]
 fn show_of_a_service_shows_the_members_token_once_no_grant_of_it_is_found() {
     let (server, _directory, credential) = prepared(holding_token(authorized_mergify()));
@@ -797,8 +778,6 @@ fn show_of_a_service_shows_the_members_token_once_no_grant_of_it_is_found() {
     assert!(uses.stdout.is_empty());
 }
 
-// REQ-INTEGRATION-20
-// REQ-INTEGRATION-57
 #[test]
 fn disconnect_erases_the_members_token_once_no_grant_of_its_service_is_found() {
     let mut answers = holding_token(mergify_token(1));
@@ -852,8 +831,6 @@ fn disconnect_erases_the_members_token_once_no_grant_of_its_service_is_found() {
     );
 }
 
-// REQ-INTEGRATION-20
-// REQ-INTEGRATION-57
 #[test]
 fn authorize_and_deauthorize_act_on_the_members_token_by_its_service() {
     let mut answers = holding_token(authorized_mergify());
@@ -976,9 +953,6 @@ fn authorize_and_deauthorize_act_on_the_members_token_by_its_service() {
     );
 }
 
-// REQ-INTEGRATION-20
-// REQ-GRANT-81
-// REQ-INTEGRATION-56
 #[test]
 fn authorize_without_a_runner_names_the_runners_the_members_token_is_not_authorized_for() {
     let mut answers = holding_token(authorized_mergify());
@@ -1046,8 +1020,6 @@ fn outcomes_by(entries: &serde_json::Value, id: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-// REQ-INTEGRATION-20
-// REQ-INTEGRATION-58
 #[test]
 fn authorize_all_includes_the_members_tokens() {
     let (server, _directory, credential) = prepared(vec![
@@ -1097,8 +1069,6 @@ fn authorize_all_includes_the_members_tokens() {
     );
 }
 
-// REQ-INTEGRATION-19
-// REQ-INTEGRATION-20
 // A deployment that serves no token service, or predates the served read, may have no token
 // route: a name that names no grant and `authorize --all` ask it for no token list.
 #[test]
@@ -1158,7 +1128,6 @@ fn a_leaf_reads_no_token_list_unless_the_deployment_serves_a_token_service() {
     }
 }
 
-// REQ-INTEGRATION-18
 #[test]
 fn reconnect_reads_a_file_as_the_token_and_never_makes_one() {
     // The file is read as the token, not as a Codex auth.json.

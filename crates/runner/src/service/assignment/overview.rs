@@ -1,17 +1,17 @@
-//! The manager's overview of what it holds (REQ-RUNNERENROLL-134): one entry per assignment,
-//! from what its offer said, which the manager keeps by assignment ID from the offer to the
-//! assignment's end, the time Cloud granted a running one and the last read of its loop; and
-//! the assignments that ended most recently, which the manager keeps in a ring of its own where
-//! it ends their `runner.run` records (REQ-RUNNERENROLL-137, INV-RUNNER-46).
+//! The manager's overview of what it holds: one entry per assignment, from what its offer said,
+//! which the manager keeps by assignment ID from the offer to the assignment's end, the time
+//! Cloud granted a running one and the last read of its loop; and the assignments that ended
+//! most recently, which the manager keeps in a ring of its own where it ends their `runner.run`
+//! records.
 //!
 //! The manager's read of one assignment gives the entry the overview lists for it, with where
 //! a running tree run's directory and log are, as its activity published them, or a running
-//! single-workflow run's view (REQ-RUNNERENROLL-144).
+//! single-workflow run's view.
 //!
 //! Each read applies the manager's queued events as `status` does and changes nothing else:
 //! under the manager's lock it takes only each activity's lock, each view's lock to copy its
 //! steps in flight, each grant's watch value and the outbox's lock, projects no view, opens no
-//! file and waits on nothing (INV-RUNNER-45).
+//! file and waits on nothing.
 
 use super::super::history::kept_text;
 use super::super::tree_run::{RunPaths, RunRead};
@@ -52,8 +52,8 @@ pub(in crate::service) struct AssignmentOverview {
     pub(in crate::service) assignments_omitted: u64,
     /// The runner's reports Cloud has not acknowledged.
     pub(in crate::service) unacknowledged_reports: u64,
-    /// The assignments that ended and that the manager holds no longer, newest first
-    /// (REQ-RUNNERENROLL-137).
+    /// The assignments that ended and that the manager holds no longer, newest
+    /// first.
     pub(in crate::service) recent_assignments: Vec<OverviewRecentAssignment>,
 }
 
@@ -67,10 +67,14 @@ impl AssignmentManager {
             workflow_path: spec
                 .workflow_tree
                 .as_ref()
-                .map_or(&spec.workflow_definition_source.workflow_path, |tree| {
-                    &tree.workflow_path
+                .map(|tree| &tree.workflow_path)
+                .or_else(|| {
+                    spec.source
+                        .as_ref()
+                        .map(|source| &source.workflow_definition_source.workflow_path)
                 })
-                .clone(),
+                .cloned()
+                .unwrap_or_default(),
             run_url: spec
                 .workflow_tree
                 .as_ref()
@@ -134,8 +138,8 @@ impl AssignmentManager {
 
     /// One entry per assignment the manager holds and per ended one still reporting, with
     /// the counts `status_assignments` gives, the running and waiting ones taken from the
-    /// same read as the entries (REQ-RUNNERENROLL-134). An
-    /// assignment whose offer's facts are not kept is left out.
+    /// same read as the entries. An assignment whose offer's facts are not kept is left
+    /// out.
     pub(in crate::service) fn overview_assignments(&mut self) -> AssignmentOverview {
         let (counts, _) = self.status_assignments();
         let now = self.sleeper.now();
@@ -211,12 +215,11 @@ impl AssignmentManager {
     }
 
     /// The entry of `assignment_id`, exactly as `overview_assignments` lists it, with where its
-    /// run's directory and log are, its run's view and the wall-clock time of the read
-    /// (REQ-RUNNERENROLL-144); `None` when the manager neither holds it nor still reports it,
-    /// or its offer's facts are not kept. The paths are a running tree run's, as its activity
-    /// published them, the view a running single-workflow run's, and both none for every other
-    /// state. Like the overview, the read applies the queued events first, opens no file and
-    /// projects no view (INV-RUNNER-45).
+    /// run's directory and log are, its run's view and the wall-clock time of the read; `None`
+    /// when the manager neither holds it nor still reports it, or its offer's facts are not
+    /// kept. The paths are a running tree run's, as its activity published them, the view a
+    /// running single-workflow run's, and both none for every other state. Like the overview,
+    /// the read applies the queued events first, opens no file and projects no view.
     pub(in crate::service) fn read_assignment(
         &mut self,
         assignment_id: &str,
@@ -265,7 +268,7 @@ impl AssignmentManager {
     }
 }
 
-/// One assignment as the manager's read gives it (REQ-RUNNERENROLL-144).
+/// One assignment as the manager's read gives it.
 #[derive(Debug)]
 pub(in crate::service) struct AssignmentRead {
     /// The entry the overview lists for it.
@@ -289,7 +292,7 @@ enum EntryGroup {
 /// The entry of `assignment_id`, held as `held` and working as `is_working` says, at `now` and,
 /// for its lease, at `lease_now`, and where the overview lists it: the phase, `activity`, the
 /// time Cloud granted a running one and its loop's last read, or a single-workflow run's steps
-/// in flight as its view holds them (REQ-RUNNERENROLL-134).
+/// in flight as its view holds them.
 fn held_entry(
     facts: &OfferFacts,
     assignment_id: &str,

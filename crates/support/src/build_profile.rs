@@ -4,7 +4,6 @@ struct CompiledChecks {
     overflow_checks: bool,
 }
 
-// INV-TESTING-23
 #[test]
 fn the_suite_is_compiled_with_debug_assertions_and_overflow_checks() {
     // No stable `cfg` reports overflow checks, so observe them: the addition
@@ -22,7 +21,7 @@ fn the_suite_is_compiled_with_debug_assertions_and_overflow_checks() {
             debug_assertions: true,
             overflow_checks: true,
         },
-        "INV-TESTING-23: the CLI suite is specified for Cargo's `test` profile, \
+        "the CLI suite is specified for Cargo's `test` profile, \
          with debug assertions and integer-overflow checks compiled in"
     );
 }

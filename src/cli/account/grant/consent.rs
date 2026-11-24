@@ -1,7 +1,6 @@
-//! The provider's consent that makes an OAuth grant (REQ-GRANT-1, REQ-GRANT-69), which
-//! `useful account integration connect` runs: it starts the session with one key, replayed once on a
-//! lost response, prints where to approve it, opens that URL when asked to, and polls the
-//! session until it settles.
+//! The provider's consent that makes an OAuth grant, which `useful account integration connect`
+//! runs: it starts the session with one key, replayed once on a lost response, prints where to
+//! approve it, opens that URL when asked to, and polls the session until it settles.
 
 mod output;
 
@@ -80,7 +79,7 @@ struct Recovery {
 /// How a consent ended: its exit status, whether the deployment answered that it does not
 /// serve the provider, which a command that runs several consents passes over, and the ID of
 /// the grant it made when it settled with one, which `reconnect` compares with the grant it
-/// names (REQ-GRANT-73).
+/// names.
 pub(super) struct Ended {
     pub(super) code: ExitCode,
     pub(super) unavailable: bool,

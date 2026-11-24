@@ -33,7 +33,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-11
     #[test]
     fn diagnostic_write_failure_preserves_the_registered_exit_code() {
         let error = anyhow::anyhow!("usage failure");

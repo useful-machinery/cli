@@ -1,7 +1,7 @@
 use super::assignment::{AssignmentScreen, OpenAssignment};
 use super::*;
 
-/// What the viewer shows: the overview, or an opened assignment (REQ-RUNNERENROLL-146).
+/// What the viewer shows: the overview, or an opened assignment.
 pub(super) enum RunnerWatchSurface {
     Overview,
     Assignment(OpenAssignment),
@@ -45,7 +45,7 @@ impl RunnerWatchInteraction {
             TerminalInputEvent::Cancel => return Some(ArchivedTerminalHostExit::Interrupted),
             _ => {}
         }
-        // Below the minimum size only quitting and interrupting act (REQ-LOCALRUN-10).
+        // Below the minimum size only quitting and interrupting act.
         if !operational_area(self.terminal_area) {
             return None;
         }

@@ -1,4 +1,4 @@
-//! Least-recently-used eviction from a directory tree (REQ-RUNNERENROLL-161, INV-RUNNER-52).
+//! Least-recently-used eviction from a directory tree.
 //!
 //! A measuring walk counts the tree and keeps a histogram of the removable bytes by the
 //! minute of each file's last use; the cutoff is the minute by which the oldest bytes reach
@@ -431,7 +431,6 @@ mod tests {
         (temporary, cache)
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn eviction_removes_the_least_recently_used_files_down_to_the_target() {
         let (_temporary, cache) = cache();
@@ -462,7 +461,6 @@ mod tests {
         assert!(!evicted.stopped);
     }
 
-    // REQ-RUNNERENROLL-161
     #[test]
     fn a_files_last_use_is_the_later_of_its_access_and_modification() {
         let (_temporary, cache) = cache();
@@ -478,7 +476,6 @@ mod tests {
         assert!(!used_earlier.exists());
     }
 
-    // REQ-RUNNERENROLL-161
     #[test]
     fn a_tree_within_its_bound_loses_nothing() {
         let (_temporary, cache) = cache();
@@ -493,7 +490,6 @@ mod tests {
         assert_eq!((evicted.removed_files, evicted.removed_bytes), (0, 0));
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn a_file_with_two_names_counts_once_and_loses_both() {
         let (_temporary, cache) = cache();
@@ -517,7 +513,6 @@ mod tests {
         assert_eq!(evicted.removed_files, 1);
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn a_symbolic_link_counts_and_goes_alone_and_is_never_entered() {
         let temporary = tempfile::tempdir().unwrap();
@@ -547,7 +542,6 @@ mod tests {
         assert_eq!(evicted.removed_files, 2);
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn the_cache_directory_tag_directly_in_it_stays_even_at_target_zero() {
         let (_temporary, cache) = cache();
@@ -565,7 +559,6 @@ mod tests {
         assert_eq!(evicted.bytes_after, allocated(&tag));
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn only_the_directories_the_removals_emptied_go_and_never_the_cache() {
         let (_temporary, cache) = cache();
@@ -600,7 +593,6 @@ mod tests {
         assert_eq!(fs::read_dir(&cache).unwrap().count(), 1);
     }
 
-    // REQ-RUNNERENROLL-161
     #[test]
     fn a_file_that_cannot_be_removed_fails_and_the_next_oldest_goes() {
         let (_temporary, cache) = cache();
@@ -622,7 +614,6 @@ mod tests {
         assert_eq!(evicted.removed_files, 1);
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn a_protected_directory_is_neither_entered_nor_counted() {
         let (_temporary, cache) = cache();
@@ -649,7 +640,6 @@ mod tests {
         assert_eq!(evicted.removed_files, 1);
     }
 
-    // REQ-RUNNERENROLL-161, INV-RUNNER-52
     #[test]
     fn a_stopped_eviction_removes_nothing_more_and_says_so() {
         let (_temporary, cache) = cache();

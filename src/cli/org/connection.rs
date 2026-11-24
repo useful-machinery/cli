@@ -1,8 +1,7 @@
 //! `useful org integration`: the organization's connections to GitHub, GitLab and Linear, its
-//! tokens of token services (REQ-INTEGRATION-16 to REQ-INTEGRATION-20), and the runners
-//! authorized for either (REQ-INTEGRATION-33). Each provider keeps its own client, failures and
-//! output in its module here; a token is acted on through `integration_token` and a connection
-//! authorization in `authorization`.
+//! tokens of token services, and the runners authorized for either. Each provider keeps its own
+//! client, failures and output in its module here; a token is acted on through
+//! `integration_token` and a connection authorization in `authorization`.
 mod authorization;
 mod authorize;
 mod create;

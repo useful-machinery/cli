@@ -1,11 +1,8 @@
-//! The read of a Cloud run by `useful workflow run show RUN` (REQ-LOCALRUN-189, REQ-RUN-59 to
-//! REQ-RUN-61): the run the lookup found in the organization in effect (REQ-LOCALRUN-180),
-//! read through the public API with, for a definition-backed run, the newest page of its
-//! controls and, when it holds a subject claim, of its trigger deliveries (REQ-RUN-96,
-//! REQ-RUN-87, REQ-RUN-88, REQ-RUN-110), and the automatic Publication its hand-off started
-//! (REQ-PUBLISH-63). With `--wait` the run is read every two seconds, each observed state on
-//! standard error, until it and its hand-off are final (REQ-RUN-61, REQ-RUN-113,
-//! REQ-PUBLISH-62).
+//! The read of a Cloud run by `useful workflow run show RUN`: the run the lookup found in the
+//! organization in effect, read through the public API with, for a definition-backed run, the
+//! newest page of its controls and, when it holds a subject claim, of its trigger deliveries,
+//! and the automatic Publication its hand-off started. With `--wait` the run is read every
+//! two seconds, each observed state on standard error, until it and its hand-off are final.
 //! Nothing under the `useful` home is read or written.
 
 use std::io::{self, Write};
@@ -81,7 +78,7 @@ pub(super) fn show(
 }
 
 /// Reads the run until it is final, then its listings, and prints it as `show` prints it; a
-/// timeout, a signal and Cloud unreachable twice in a row end the observation (REQ-RUN-62).
+/// timeout, a signal and Cloud unreachable twice in a row end the observation.
 fn follow(cloud: InCloud, options: RunOptions, timeout: Option<Duration>) -> cli::CommandResult {
     let json = options.json;
     let report = Report::of(&cloud, json);
@@ -177,8 +174,8 @@ fn follow(cloud: InCloud, options: RunOptions, timeout: Option<Duration>) -> cli
     )
 }
 
-/// A read the lookup made that Cloud failed (REQ-LOCALRUN-180), written as `show` writes any
-/// Cloud read it failed: `organization` is the one in effect once it was known.
+/// A read the lookup made that Cloud failed, written as `show` writes any Cloud read it
+/// failed: `organization` is the one in effect once it was known.
 pub(super) fn write_lookup_failure(
     deployment: &str,
     organization: Option<String>,
@@ -248,7 +245,7 @@ fn listings(
 }
 
 /// The automatic Publication the run's hand-off started, when it names one, read as
-/// `--wait` reads it (REQ-PUBLISH-63).
+/// `--wait` reads it.
 fn publication(
     cloud: &InCloud,
     options: &RunOptions,
@@ -427,7 +424,7 @@ impl Report {
         Ok(ExitCode::Success)
     }
 
-    /// A run whose creation Cloud has accepted but not yet materialized (REQ-RUN-60).
+    /// A run whose creation Cloud has accepted but not yet materialized.
     fn pending(&self) -> anyhow::Result<ExitCode> {
         if self.json {
             cli::write_pretty_json(&self.document("pending", ExitCode::Success))
@@ -498,13 +495,12 @@ impl Report {
 
 /// The run as `show` prints it without `--json`: its identity and state, what it is and was
 /// asked to run, its owner, route and what it waits for, its definition and claim, workflow
-/// outcome, rejection, latest progress, exits with their mirror results, its controls
-/// (REQ-RUN-110) and deliveries, then its sources, inputs, context, cancellation, hand-off,
-/// automatic Publication (REQ-PUBLISH-63), interruption, continuation, failure, artifact
-/// delivery, times, placement, assignment and connection, and its Linear binding (REQ-RUN-59,
-/// REQ-TRIGGER-145), each fact once.
-/// `deliveries` and `controls` are each a listing, if read, and whether more remain. A held
-/// claim of an exited run adds what it holds and the release command (REQ-RUN-96).
+/// outcome, rejection, latest progress, exits with their mirror results, its controls and
+/// deliveries, then its sources, inputs, context, cancellation, hand-off, automatic
+/// Publication, interruption, continuation, failure, artifact delivery, times, placement,
+/// assignment and connection, and its Linear binding, each fact once. `deliveries` and
+/// `controls` are each a listing, if read, and whether more remain. A held claim of an exited
+/// run adds what it holds and the release command.
 fn write_plain(
     report: &Report,
     read: (&Run, &Value, Option<&Publication>),
@@ -580,7 +576,7 @@ fn write_report(
 }
 
 /// The run's subject claim, or that it has none; a held claim of an exited run adds what it
-/// holds and the command an organization owner releases it with (REQ-RUN-96).
+/// holds and the command an organization owner releases it with.
 fn write_claim(out: &mut impl Write, report: &Report, run: &Value) -> io::Result<()> {
     let claim = &run["subjectClaim"];
     if !claim.is_object() {
@@ -636,11 +632,10 @@ fn write_progress(out: &mut impl Write, progress: &Value) -> io::Result<()> {
     Ok(())
 }
 
-/// The failed stage the runner reported for a wait of any kind (REQ-RUN-112), in the order
-/// `useful workflow run show` prints a local run's: the stage's path, the outcome, the failing
-/// node by its path under the stage with its state, then the phase and the code when each is
-/// a string. A null or absent `failedChild` prints nothing, since it never says the stage
-/// succeeded.
+/// The failed stage the runner reported for a wait of any kind, in the order `useful workflow
+/// run show` prints a local run's: the stage's path, the outcome, the failing node by its path
+/// under the stage with its state, then the phase and the code when each is a string. A null
+/// or absent `failedChild` prints nothing, since it never says the stage succeeded.
 fn write_failed_stage(out: &mut impl Write, wait: &Value) -> io::Result<()> {
     let failed_child = &wait["failedChild"];
     if !failed_child.is_object() {

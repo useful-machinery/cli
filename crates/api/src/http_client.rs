@@ -431,7 +431,6 @@ mod native_distrust_tests;
 mod tests {
     use super::*;
 
-    // INV-CLI-9
     #[test]
     fn https_only_policy_rejects_http_endpoints() {
         let client = HttpClient::new(HttpTransportPolicy::HttpsOnly).unwrap();

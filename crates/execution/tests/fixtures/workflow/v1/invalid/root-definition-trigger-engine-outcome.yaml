@@ -1,5 +1,4 @@
-# A definition rule names declared outcomes, never an engine outcome such as canceled
-# (REQ-WFDEF-39, REQ-WFFORMAT-82).
+# A definition rule names declared outcomes, never an engine outcome such as canceled.
 schemaVersion: 1
 inputs:
   ticket:

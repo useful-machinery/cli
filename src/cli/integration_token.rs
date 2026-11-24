@@ -1,10 +1,9 @@
 //! A token service's token, as both `integration` groups act on it: `useful account integration`
-//! on the member's and `useful org integration` on the organization's (REQ-INTEGRATION-16 to
-//! REQ-INTEGRATION-20). Here are the reads of an owner's tokens and of the token services the
-//! deployment serves, the token read from a file, standard input or a prompt that does not echo
-//! and stored under one request key, and the views and documents of a token in `output`. The
-//! token stays in zeroizing storage from the read to the request body and is dropped once sent;
-//! no view names it.
+//! on the member's and `useful org integration` on the organization's. Here are the reads of an
+//! owner's tokens and of the token services the deployment serves, the token read from a file,
+//! standard input or a prompt that does not echo and stored under one request key, and the views
+//! and documents of a token in `output`. The token stays in zeroizing storage from the read to
+//! the request body and is dropped once sent; no view names it.
 
 mod output;
 
@@ -28,11 +27,11 @@ use useful_human_auth::Deployment;
 
 pub(in crate::cli) use output::{ListedToken, Tokens, side, write_refusal, write_revoked};
 
-/// The most bytes of a token: REQ-INTEGRATION-1's bound.
+/// The most bytes of a token.
 const MAX_TOKEN: usize = 4096;
 
-/// A token read from a file or standard input: REQ-INTEGRATION-1's bound, and one trailing LF or
-/// CRLF, which is trimmed after reading.
+/// A token read from a file or standard input: at most [`MAX_TOKEN`] bytes, and one trailing LF
+/// or CRLF, which is trimmed after reading.
 const TOKEN_INPUT: SecretInput = SecretInput {
     name: "integration token",
     max_bytes: MAX_TOKEN as u64 + 2,
@@ -64,8 +63,8 @@ pub(in crate::cli) fn held(
         .find(|token| token.provider == service))
 }
 
-/// The token services the deployment serves (REQ-GRANT-78): none from one that serves none or
-/// predates the served read, which is then asked for no token list.
+/// The token services the deployment serves: none from one that serves none or predates the
+/// served read, which is then asked for no token list.
 pub(in crate::cli) fn served(
     api: &MemberGrantApi,
 ) -> Result<Vec<ServedTokenService>, MemberGrantFailure> {
@@ -76,8 +75,8 @@ pub(in crate::cli) fn served(
 }
 
 /// The display name the directory of the organization `reference` names, an ID or a slug, gives
-/// each principal, by ID, read to the last page (REQ-INTEGRATION-19). A read that fails names
-/// nobody, so each principal is shown by ID.
+/// each principal, by ID, read to the last page. A read that fails names nobody, so each
+/// principal is shown by ID.
 pub(in crate::cli) fn directory(api: &MemberGrantApi, reference: &str) -> BTreeMap<String, String> {
     let invalid = MemberGrantFailure::InvalidResponse {
         credential_rejected: false,
@@ -95,8 +94,8 @@ pub(in crate::cli) fn directory(api: &MemberGrantApi, reference: &str) -> BTreeM
 }
 
 /// The refusal of `reconnect` for a service whose token is not held, `token_not_found` with
-/// exit 1: `reconnect` never makes a token, and `connect`, the command that does, is the remedy
-/// (REQ-INTEGRATION-18).
+/// exit 1: `reconnect` never makes a token, and `connect`, the command that does, is the
+/// remedy.
 pub(in crate::cli) fn not_held(held: &str, connect: &str) -> ApiFailureReport {
     ApiFailureReport::new(
         "token_not_found",
@@ -127,10 +126,10 @@ pub(in crate::cli) struct Store<'a> {
 }
 
 impl Store<'_> {
-    /// Connects the owner's first token of the service (REQ-INTEGRATION-16): reads the owner's
-    /// tokens, and where one of the service is held refuses with `refuse_held`, exit 2, before
-    /// any token is read; otherwise reads the token and stores it. A failure is reported with
-    /// `report`'s remedy and status.
+    /// Connects the owner's first token of the service: reads the owner's tokens, and where
+    /// one of the service is held refuses with `refuse_held`, exit 2, before any token is
+    /// read; otherwise reads the token and stores it. A failure is reported with `report`'s
+    /// remedy and status.
     pub(in crate::cli) fn connect(
         &self,
         report: impl Fn(&MemberGrantFailure) -> ApiFailureReport,
@@ -150,9 +149,9 @@ impl Store<'_> {
 
     /// Reads the token and stores it once, again under the same key when the answer was lost:
     /// with `replace` as the next version of the token the owner holds, which keeps its ID and
-    /// its authorizations (REQ-INTEGRATION-18). A failure is reported with `report`'s remedy
-    /// and status; a token that cannot be read or is outside REQ-INTEGRATION-1's form is exit 2
-    /// with nothing sent.
+    /// its authorizations. A failure is reported with `report`'s remedy and status; a token
+    /// that cannot be read or is not 1 to [`MAX_TOKEN`] printable ASCII characters without a
+    /// space is exit 2 with nothing sent.
     pub(in crate::cli) fn store(
         &self,
         replace: bool,
@@ -184,7 +183,8 @@ impl Store<'_> {
     /// Reads the token: from `--from-file`, a private file or `-` for standard input; without it
     /// from standard input when that is no terminal, and otherwise at a prompt on the terminal
     /// that does not echo. One trailing line ending is trimmed, and a read that fails or a token
-    /// outside REQ-INTEGRATION-1's form is exit 2, whose message never quotes the input.
+    /// that is not 1 to [`MAX_TOKEN`] printable ASCII characters without a space is exit 2,
+    /// whose message never quotes the input.
     fn read(&self) -> Result<Zeroizing<Vec<u8>>, CommandFailure> {
         let title = title(self.service);
         let read = match self.from_file {

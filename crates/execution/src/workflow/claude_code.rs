@@ -32,9 +32,9 @@ impl ClaudeCodeEffort {
     }
 }
 
-/// The model a login check asks for (INV-HARNESS-18), which has no workflow profile: the
-/// least expensive current Anthropic model that accepts an effort, since the adapter always
-/// passes `--effort`, and the one the live Claude Code smoke pins against the qualification
+/// The model a login check asks for, which has no workflow profile: the least expensive
+/// current Anthropic model that accepts an effort, since the adapter always passes
+/// `--effort`, and the one the live Claude Code smoke pins against the qualification
 /// version `CLAUDE_CODE_STREAM_JSON_V1_QUALIFICATION_VERSION` (2.1.321). A login whose
 /// account may not use it is refused, as the provider classifies that `unauthorized`.
 pub(crate) const LOGIN_CHECK_MODEL: &str = "claude-sonnet-5";
@@ -117,7 +117,7 @@ const PERMISSION_MODE: &str = "bypassPermissions";
 
 /// Set for every invocation over the runner's environment. Claude Code exits by itself five
 /// seconds after its work is done (`CLAUDE_CODE_EXIT_AFTER_STOP_DELAY`), which is how a step
-/// ends (REQ-AGENT-35).
+/// ends.
 pub(crate) const FIXED_INVOCATION_ENVIRONMENT: [(&str, &str); 6] = [
     ("DISABLE_UPDATES", "1"),
     ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),

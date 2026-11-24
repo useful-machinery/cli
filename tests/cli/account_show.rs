@@ -84,7 +84,6 @@ fn projects_request(organization: &str, query: &str) -> String {
     format!("GET /api/v1/organizations/{organization}/projects{query} HTTP/1.1")
 }
 
-// REQ-ORG-88, REQ-PROJECT-100, REQ-AUTH-31
 #[test]
 fn the_variables_name_both_without_another_request() {
     let (output, requests) = show(
@@ -106,7 +105,6 @@ fn the_variables_name_both_without_another_request() {
     assert_eq!(request_lines(&requests), [ME]);
 }
 
-// REQ-ORG-88, REQ-PROJECT-100
 #[test]
 fn a_project_name_is_found_among_every_project_of_the_organization_in_effect() {
     let (output, requests) = show(
@@ -145,7 +143,6 @@ fn a_project_name_is_found_among_every_project_of_the_organization_in_effect() {
     assert_eq!(requests.len(), 2);
 }
 
-// REQ-ORG-88, REQ-PROJECT-100
 #[test]
 fn the_checkout_names_the_project_and_its_organization() {
     let git = acme_widgets_checkout();
@@ -185,7 +182,6 @@ fn the_checkout_names_the_project_and_its_organization() {
     );
 }
 
-// REQ-ORG-88, REQ-PROJECT-100
 #[test]
 fn the_checkout_supplies_the_project_only_in_the_organization_named() {
     let git = acme_widgets_checkout();
@@ -232,7 +228,6 @@ fn the_checkout_supplies_the_project_only_in_the_organization_named() {
     assert!(output.stderr.is_empty());
 }
 
-// REQ-ORG-88, REQ-PROJECT-100, REQ-AUTH-31
 #[test]
 fn nothing_named_leaves_none_in_effect_and_the_status_stands() {
     let memberships =
@@ -262,7 +257,6 @@ fn nothing_named_leaves_none_in_effect_and_the_status_stands() {
     }
 }
 
-// REQ-ORG-88, REQ-AUTH-31
 #[test]
 fn a_signed_out_caller_gets_the_status_alone() {
     let server = ScriptedServer::respond(vec![problem_http_response(
@@ -292,7 +286,6 @@ fn a_signed_out_caller_gets_the_status_alone() {
     assert_eq!(request_lines(&server.finish()), [ME]);
 }
 
-// REQ-ORG-88, REQ-AUTH-31
 #[test]
 fn a_failed_membership_read_is_said_on_standard_error_and_the_status_stands() {
     let (output, requests) = show(
@@ -321,7 +314,6 @@ fn a_failed_membership_read_is_said_on_standard_error_and_the_status_stands() {
     );
 }
 
-// REQ-ORG-88, REQ-AUTH-31
 #[test]
 fn the_service_api_key_reads_the_memberships() {
     let server = ScriptedServer::respond(vec![

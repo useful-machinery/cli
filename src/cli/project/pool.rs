@@ -1,5 +1,5 @@
-//! `useful project pool add|remove`: one pool of the set of the project in effect
-//! (REQ-PROJECT-90).
+//! `useful project pool add|remove`: one pool of the set of the project in
+//! effect.
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
@@ -103,7 +103,7 @@ impl Command {
 impl Target {
     /// Resolves the pool, then reads the project immediately before writing its set with the
     /// one change: the pool routes take no precondition, so a change made to the set between
-    /// the read and the write is replaced (REQ-PROJECT-90).
+    /// the read and the write is replaced.
     fn execute(self, deployment: &Deployment, change: Change) -> crate::cli::CommandResult {
         let Self {
             pool,

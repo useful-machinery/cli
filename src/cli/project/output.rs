@@ -23,7 +23,7 @@ pub(super) fn write_project(
 }
 
 /// The result of `useful project update`: outcome `updated` with `applied`, what it sent and
-/// succeeded in order, and the project as its last request returned it (REQ-PROJECT-102).
+/// succeeded in order, and the project as its last request returned it.
 pub(super) fn write_updated(
     deployment: &str,
     applied: &[&'static str],
@@ -254,10 +254,10 @@ pub(super) fn write_failure(
 }
 
 /// A request that failed after an earlier request of the same command succeeded, whose change
-/// stays (REQ-PROJECT-76): the command exits with the failure's code. Under `--json` the result
-/// is the failure's document with `applied`, what was sent and succeeded in order, and
-/// `project`, the project as the last successful request returned it; in human output the
-/// failure's diagnostic is followed by `kept`, what stays and how to finish.
+/// stays: the command exits with the failure's code. Under `--json` the result is the failure's
+/// document with `applied`, what was sent and succeeded in order, and `project`, the project as
+/// the last successful request returned it; in human output the failure's diagnostic is
+/// followed by `kept`, what stays and how to finish.
 pub(super) fn write_partial_failure(
     deployment: &str,
     failure: ProjectFailure,

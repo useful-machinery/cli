@@ -1,0 +1,10 @@
+schemaVersion: 1
+steps:
+  work:
+    kind: cmd
+    command: {argv: ["true"]}
+finalizers:
+  cleanup:
+    kind: cmd
+    workspace: new
+    command: {argv: ["true"]}

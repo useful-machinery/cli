@@ -39,8 +39,8 @@ pub(super) struct Command {
 }
 
 impl Command {
-    // REQ-RUNNERENROLL-166: the command asks only the live runner, through the control
-    // socket its configuration names, and itself changes nothing on the host.
+    // The command asks only the live runner, through the control socket its
+    // configuration names, and itself changes nothing on the host.
     pub(super) fn execute(self) -> CommandResult {
         let socket_path = super::configured_control_socket_path(self.config.as_deref())?;
         let scope = if self.all {
@@ -135,8 +135,8 @@ fn refusal(error: ControlError) -> CommandFailure {
     }
 }
 
-/// A result exits 1 when any removal failed, else 4 when the pass did not finish, else 0
-/// (REQ-RUNNERENROLL-166).
+/// A result exits 1 when any removal failed, else 4 when the pass did not finish, else
+/// 0.
 fn result_exit_code(report: &PruneReport) -> ExitCode {
     if failed(report) {
         ExitCode::GeneralFailure
@@ -453,7 +453,7 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-166: a failed removal outranks an unfinished pass.
+    // A failed removal outranks an unfinished pass.
     #[test]
     fn a_result_exits_1_on_any_failure_before_4_for_an_unfinished_pass() {
         assert_eq!(

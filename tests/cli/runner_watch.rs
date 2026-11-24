@@ -4,8 +4,8 @@ use std::os::unix::net::UnixListener;
 
 use super::runner_status::write_status_config;
 
-// REQ-RUNNERENROLL-139: without a terminal the command reads no configuration's socket,
-// asks the runner nothing and names `useful runner show`.
+// Without a terminal the command reads no configuration's socket, asks the runner
+// nothing and names `useful runner show`.
 #[test]
 fn runner_watch_without_a_terminal_names_runner_status_and_asks_nothing() {
     let directory = private_credential_directory();
@@ -295,9 +295,9 @@ mod terminal {
         process.master_writer().flush().unwrap();
     }
 
-    // SC-RUNNERENROLL-11, REQ-RUNNERENROLL-146: Enter opens the overview's first assignment
-    // with its run and its Cloud URL, `k` selects a settled step whose output it reads, and
-    // Esc and `q` leave having sent nothing but reads.
+    // SC-RUNNERENROLL-11: Enter opens the overview's first assignment with its run and its
+    // Cloud URL, `k` selects a settled step whose output it reads, and Esc and `q` leave
+    // having sent nothing but reads.
     #[test]
     fn runner_watch_opens_an_assignment_and_reads_a_settled_step_s_output() {
         let watch = Watch::new();
@@ -361,8 +361,7 @@ mod terminal {
         );
     }
 
-    // REQ-RUNNERENROLL-139, REQ-RUNNERENROLL-44: an absent socket is unreachable, exit 4,
-    // and the terminal is never taken over.
+    // An absent socket is unreachable, exit 4, and the terminal is never taken over.
     #[test]
     fn runner_watch_exits_unreachable_before_taking_the_terminal_when_no_runner_answers() {
         let watch = Watch::new();
@@ -373,8 +372,8 @@ mod terminal {
         assert!(!transcript.contains(ENTER_ALTERNATE_SCREEN));
     }
 
-    // REQ-RUNNERENROLL-139, REQ-RUNNERENROLL-135: a serving process of an earlier release
-    // refuses the overview, and the command says to restart it.
+    // A serving process of an earlier release refuses the overview, and the command says
+    // to restart it.
     #[test]
     fn runner_watch_names_runner_serve_when_an_earlier_release_refuses_the_overview() {
         let watch = Watch::new();
@@ -391,8 +390,8 @@ mod terminal {
         assert_eq!(server.stop(), [overview_request()]);
     }
 
-    // REQ-RUNNERENROLL-139, REQ-RUNNERENROLL-44: an answer that is not an overview is a
-    // protocol failure before the terminal is taken over.
+    // An answer that is not an overview is a protocol failure before the terminal is
+    // taken over.
     #[test]
     fn runner_watch_fails_before_taking_the_terminal_on_an_unrecognized_answer() {
         let watch = Watch::new();
@@ -404,8 +403,8 @@ mod terminal {
         assert!(!transcript.contains(ENTER_ALTERNATE_SCREEN));
     }
 
-    // REQ-RUNNERENROLL-139, REQ-RUNNERENROLL-140, REQ-RUNNERENROLL-143: the viewer draws the
-    // runner's overview, sends nothing but overview reads, and `q` leaves it with exit 0.
+    // The viewer draws the runner's overview, sends nothing but overview reads, and `q`
+    // leaves it with exit 0.
     #[test]
     fn runner_watch_draws_the_overview_and_quits_on_q_having_sent_only_reads() {
         let watch = Watch::new();
@@ -430,8 +429,8 @@ mod terminal {
         );
     }
 
-    // REQ-RUNNERENROLL-143: SIGTERM ends the viewer with 143 and Ctrl-C with 130, each
-    // having restored the terminal.
+    // SIGTERM ends the viewer with 143 and Ctrl-C with 130, each having restored the
+    // terminal.
     #[test]
     fn runner_watch_ends_with_143_on_sigterm_and_130_on_ctrl_c() {
         for (end, expected) in [("SIGTERM", 143), ("Ctrl-C", 130)] {
@@ -461,8 +460,8 @@ mod terminal {
         }
     }
 
-    // REQ-RUNNERENROLL-141: the viewer outlives the serving process and draws the next one
-    // that answers at the same socket, by its boot ID.
+    // The viewer outlives the serving process and draws the next one that answers at the
+    // same socket, by its boot ID.
     #[test]
     fn runner_watch_stays_up_while_the_runner_restarts_and_draws_the_new_boot() {
         let watch = Watch::new();

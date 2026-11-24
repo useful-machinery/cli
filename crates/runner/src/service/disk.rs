@@ -1,10 +1,8 @@
-//! The serving runner's disk monitor (INV-RUNNER-49): it reads the work root's filesystem
-//! when the service starts and again `DISK_READ_INTERVAL` after each read ends, each read on
-//! a thread of its own, and publishes the reading in a handle every reader copies from, the
-//! start gate of a single-workflow assignment's engine among them (REQ-RUNNERENROLL-155).
-//! Where a reading changes whether the disk is low (REQ-RUNNERENROLL-152) it writes one
-//! `runner.disk_space` record (REQ-TELEMETRY-55) and records the runner's event
-//! (REQ-RUNNERENROLL-138).
+//! The serving runner's disk monitor: it reads the work root's filesystem when the service
+//! starts and again `DISK_READ_INTERVAL` after each read ends, each read on a thread of its
+//! own, and publishes the reading in a handle every reader copies from, the start gate of a
+//! single-workflow assignment's engine among them. Where a reading changes whether the disk
+//! is low it writes one `runner.disk_space` record and records the runner's event.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -55,7 +53,7 @@ pub(super) struct DiskReading {
 
 /// The newest reading the monitor published, none before its first read succeeds. Its lock
 /// is taken to copy the reading or to swap it, and for nothing else: nothing is read,
-/// awaited or locked inside it (INV-RUNNER-49).
+/// awaited or locked inside it.
 #[derive(Clone, Debug, Default)]
 pub(super) struct DiskReadingHandle {
     reading: Arc<Mutex<Option<DiskReading>>>,
@@ -95,9 +93,9 @@ impl DiskReadingHandle {
     }
 }
 
-/// The start gate a single-workflow assignment's engine consults (REQ-RUNNERENROLL-155,
-/// INV-ENGINE-46): it copies the published reading and reads no file, holding a step only
-/// while that reading is low. A handle holding no reading never holds one.
+/// The start gate a single-workflow assignment's engine consults: it copies the published
+/// reading and reads no file, holding a step only while that reading is low. A handle
+/// holding no reading never holds one.
 impl StepStartGate for DiskReadingHandle {
     fn read(&self) -> StartGateReading {
         match self.published() {
@@ -418,10 +416,9 @@ mod tests {
         })
     }
 
-    // REQ-RUNNERENROLL-152, REQ-TELEMETRY-55, REQ-RUNNERENROLL-138: the monitor reads at
-    // once and again only once each 30-second sleep is released; each reading is published,
-    // a failed read keeps the one before it, and only the turns to low and back write a
-    // record and an event.
+    // The monitor reads at once and again only once each 30-second sleep is released; each
+    // reading is published, a failed read keeps the one before it, and only the turns to
+    // low and back write a record and an event.
     #[tokio::test]
     async fn the_monitor_publishes_each_reading_and_records_each_change_of_state() {
         let mut harness = Harness::start(MINIMUM);
@@ -482,8 +479,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-152, REQ-TELEMETRY-55, REQ-RUNNERENROLL-138: a first reading below
-    // the minimum writes the `low` record and event at once.
+    // A first reading below the minimum writes the `low` record and event at once.
     #[tokio::test]
     async fn a_first_reading_below_the_minimum_is_recorded_at_once() {
         let mut harness = Harness::start(MINIMUM);
@@ -504,7 +500,7 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-152: with a minimum of 0 a disk with nothing available is not low.
+    // With a minimum of 0 a disk with nothing available is not low.
     #[tokio::test]
     async fn a_minimum_of_zero_is_never_low() {
         let mut harness = Harness::start(0);
@@ -517,8 +513,8 @@ mod tests {
         assert_eq!(harness.events(), []);
     }
 
-    // INV-RUNNER-49: while a read is in flight the published reading is the one before it,
-    // copied at once, and the monitor neither reads again nor sleeps until the read returns.
+    // While a read is in flight the published reading is the one before it, copied at once,
+    // and the monitor neither reads again nor sleeps until the read returns.
     #[tokio::test]
     async fn a_read_in_flight_leaves_the_reading_before_it_published() {
         let mut harness = Harness::start(MINIMUM);
@@ -541,9 +537,9 @@ mod tests {
         harness.assert_waiting();
     }
 
-    // REQ-RUNNERENROLL-155: the handle a single-workflow assignment's engine consults as its
-    // start gate answers from the published reading alone: low while the reading is low,
-    // with its available bytes and minimum, and open when it is not low or none is held.
+    // The handle a single-workflow assignment's engine consults as its start gate answers
+    // from the published reading alone: low while the reading is low, with its available
+    // bytes and minimum, and open when it is not low or none is held.
     #[test]
     fn the_handle_as_a_start_gate_holds_only_while_the_published_reading_is_low() {
         let reading = |available_bytes: u64| DiskReading {

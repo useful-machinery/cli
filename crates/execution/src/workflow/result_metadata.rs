@@ -402,33 +402,24 @@ fn validate_continuation(result: &WorkflowResultV1) -> Result<(), ResultMetadata
             local_request != Some(true) && continuation.request.execution_root.is_none()
         }
     };
-    let reexecuted = result
-        .steps
-        .iter()
-        .filter(|step| step.state != WorkflowStepStateV1::Inherited)
-        .map(|step| step.id.as_str())
-        .collect::<Vec<_>>();
     if !request_valid
         || !result.export_sources.keys().eq(result.exports.keys())
-        || reexecuted
-            != continuation
-                .reexecuted_steps
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        || inherited_steps.len() != continuation.inherited_steps.len()
-        || inherited_steps
-            .iter()
-            .zip(&continuation.inherited_steps)
-            .any(|(step, inherited)| {
-                let Some(NodeDetail::Inherited(detail)) = &step.detail else {
-                    return true;
-                };
-                step.id != inherited.id
-                    || detail.prior_attempt_number.checked_add(1) != Some(result.attempt_number)
-                    || detail.prior_state != inherited.prior_state
-                    || detail.definition_changed != inherited.definition_changed
-            })
+        || !matches_partition_steps(
+            continuation,
+            result.steps.iter().map(|step| {
+                (
+                    step.id.as_str(),
+                    step.state == WorkflowStepStateV1::Inherited,
+                )
+            }),
+        )
+        || inherited_steps.iter().any(|step| {
+            let Some(NodeDetail::Inherited(detail)) = &step.detail else {
+                return true;
+            };
+            detail.prior_attempt_number.checked_add(1) != Some(result.attempt_number)
+                || !matches_partition_inheritance(continuation, &step.id, detail)
+        })
     {
         return Err(ResultMetadataError);
     }
@@ -489,9 +480,52 @@ fn valid_attempt_id(attempt_id: &str, provenance: &WorkflowProvenanceV1) -> bool
     }
 }
 
+pub(super) fn matches_partition_inheritance(
+    record: &ContinuationRecordV1,
+    id: &str,
+    detail: &super::evidence::InheritedDetail,
+) -> bool {
+    if let Some(entry) = record.inherited_steps.iter().find(|entry| entry.id == id) {
+        detail.prior_state == entry.prior_state
+            && detail.definition_changed == entry.definition_changed
+    } else {
+        record.revalidated_steps.iter().any(|step| step == id)
+            && !detail.definition_changed
+            && detail.prior_state != super::evidence::InheritedPriorState::Skipped
+    }
+}
+
+/// Match each disjoint list to its subsequence in presentation order.
+pub(super) fn matches_partition_steps<'a>(
+    record: &ContinuationRecordV1,
+    steps: impl Iterator<Item = (&'a str, bool)>,
+) -> bool {
+    let mut outright = record.reexecuted_steps.iter().map(String::as_str);
+    let mut revalidated = record
+        .revalidated_steps
+        .iter()
+        .map(String::as_str)
+        .peekable();
+    let mut inherited = record.inherited_step_ids();
+    for (id, is_inherited) in steps {
+        if revalidated.next_if_eq(&id).is_some() {
+            continue;
+        }
+        if is_inherited {
+            if inherited.next() != Some(id) {
+                return false;
+            }
+        } else if outright.next() != Some(id) {
+            return false;
+        }
+    }
+    outright.next().is_none() && revalidated.next().is_none() && inherited.next().is_none()
+}
+
 pub(super) fn validate_continuation_record(record: &ContinuationRecordV1) -> bool {
     let mut requested = BTreeSet::new();
     let mut partition = BTreeSet::new();
+    let mut rebuilt = BTreeSet::new();
     if record.request.from_steps.is_empty()
         || record.request.from_steps != record.from_steps
         || record
@@ -502,16 +536,19 @@ pub(super) fn validate_continuation_record(record: &ContinuationRecordV1) -> boo
             .reexecuted_steps
             .iter()
             .any(|id| !is_identifier(id) || !partition.insert(id.as_str()))
+        || !requested.is_subset(&partition)
+        || record
+            .rebuilt_workspaces
+            .iter()
+            .any(|id| !partition.contains(id.as_str()) || !rebuilt.insert(id.as_str()))
+        || record
+            .revalidated_steps
+            .iter()
+            .any(|id| !is_identifier(id) || !partition.insert(id.as_str()))
         || record
             .inherited_steps
             .iter()
             .any(|step| !is_identifier(&step.id) || !partition.insert(step.id.as_str()))
-        || !requested.iter().all(|requested| {
-            record
-                .reexecuted_steps
-                .iter()
-                .any(|step| step == *requested)
-        })
     {
         return false;
     }
@@ -525,8 +562,7 @@ pub(super) fn validate_continuation_record(record: &ContinuationRecordV1) -> boo
         ) => valid_digest(manifest_digest) && manifest_digest == prior_manifest_digest,
         // The first own attempt of a successor names no replacement but runs under the
         // successor's own definition, which differs from the prior attempt's, whatever
-        // resolved it: a restart (REQ-CONTINUE-98) or the carried wait of an upgrade
-        // (REQ-CONTINUE-80).
+        // resolved it: a restart or the carried wait of an upgrade.
         (
             ContinuationRequestedDefinitionV1::Inherited(_),
             ContinuationDefinitionSourceV1::Replaced {
@@ -581,7 +617,7 @@ pub(super) fn validate_continuation_record(record: &ContinuationRecordV1) -> boo
         }
     };
     // An `edge` continuation records the edge it took and starts from its target; no other
-    // reason records one (REQ-CONTINUE-77).
+    // reason records one.
     let edge_valid = match (&record.reason, &record.edge) {
         (Some(super::publication::ContinuationReasonV1::Edge), Some(edge)) => {
             is_identifier(&edge.step)
@@ -648,7 +684,7 @@ fn validate_outcome(result: &WorkflowResultV1) -> Result<(), ResultMetadataError
         return Err(ResultMetadataError);
     }
     // A waiting or continued attempt ran no finalizer and every step is terminal as in a
-    // success (REQ-WFEXEC-15, REQ-WFEXEC-61, REQ-WFEXEC-64).
+    // success.
     if matches!(
         result.outcome,
         WorkflowOutcomeV1::Waiting | WorkflowOutcomeV1::Continued
@@ -858,7 +894,7 @@ fn primary_node_detail(primary: &super::evidence::PrimaryIssue) -> NodeDetail {
     }
 }
 
-// A step an edge-scheduled walk never reached is part of a success (REQ-WFEXEC-83).
+// A step an edge-scheduled walk never reached is part of a success.
 fn step_succeeds_workflow(step: &WorkflowStepV1) -> bool {
     matches!(
         step.state,
@@ -1115,7 +1151,7 @@ fn validate_steps(
             _ => None,
         };
         let output_valid = match (step.kind.as_str(), step.state) {
-            // A `workflow` step, like an agent, has no command output (REQ-WFEXEC-60).
+            // A `workflow` step, like an agent, has no command output.
             ("agent" | "workflow", _) => !output_present,
             ("cmd", WorkflowStepStateV1::Succeeded) => output_present,
             ("cmd", WorkflowStepStateV1::Failed) => {
@@ -1138,12 +1174,12 @@ fn validate_steps(
             ("cmd", WorkflowStepStateV1::Cancelled) => true,
             _ => false,
         };
-        // Only a failed node carries the classified diagnostic (REQ-EVIDENCE-27).
+        // Only a failed node carries the classified diagnostic.
         let diagnostic_valid = step.diagnostic.as_ref().is_none_or(|diagnostic| {
             step.state == WorkflowStepStateV1::Failed && valid_failure_diagnostic(diagnostic)
         });
         // Only an ordinary `cmd` or `agent` step that started records the sources its
-        // `firstOf`s took, in order and each binding once (REQ-EVIDENCE-28).
+        // `firstOf`s took, in order and each binding once.
         let input_sources_valid = step.input_sources.is_empty()
             || (expected_role == WorkflowNodeRoleV1::Step
                 && step.kind != "workflow"
@@ -1202,9 +1238,9 @@ fn validate_step_recovery(
     step: &WorkflowStepV1,
     maximum_stream_bytes: u64,
 ) -> Result<(), ResultMetadataError> {
-    // REQ-WFEXEC-79, REQ-WFRECOVERY-42: a step with recovery is classified exactly when its
-    // recovery ended `infrastructure`; a `cmd` step with none only by its exit status
-    // (REQ-WFRECOVERY-66). Only a failed ordinary step is classified.
+    // A step with recovery is classified exactly when its recovery ended `infrastructure`;
+    // a `cmd` step with none only by its exit status. Only a failed ordinary step is
+    // classified.
     let classification_admitted = match step.recovery.as_ref() {
         Some(recovery) => {
             step.failure_class.is_some()
@@ -1423,7 +1459,7 @@ fn validate_step_recovery(
             execution_number: None,
         } if handler_decided_end(*round, RecoveryHandlerOutcomeV1::Infrastructure) => {}
         // The step's exit status names the execution after the last round, every round
-        // having rechecked, and no round (REQ-WFRECOVERY-66).
+        // having rechecked, and no round.
         RecoveryTerminationV1::Infrastructure {
             round: None,
             execution_number: Some(execution_number),
@@ -1471,13 +1507,13 @@ fn validate_step_recovery(
     Ok(())
 }
 
-// An interrupted step is the primary issue whatever its failure policy (REQ-WFEXEC-136).
+// An interrupted step is the primary issue whatever its failure policy.
 fn interrupted(detail: &NodeDetail) -> bool {
     matches!(detail, NodeDetail::Failed(detail) if detail.is_interrupted())
 }
 
 /// Whether the step's failure is one its exit status can classify: a `command_exit` at phase
-/// `execution` with an exit code from 1 to 255 (REQ-WFRECOVERY-66).
+/// `execution` with an exit code from 1 to 255.
 fn exit_status_classifies(step: &WorkflowStepV1) -> bool {
     terminal_failure_detail(step).is_some_and(|detail| exit_status_classifiable(&detail))
 }
@@ -1546,8 +1582,8 @@ fn validate_handler_summary(
 fn valid_handler_failure(failure: &super::publication::RecoveryHandlerFailureV1) -> bool {
     let decision = failure.cause.decision_rejection.is_some();
     let exit = failure.cause.exit_code.is_some();
-    // A `diagnostic` accompanies `command_launch_failed` alone (REQ-WFRECOVERY-62); a result
-    // written before the diagnostic existed carries that code without one and stays valid.
+    // A `diagnostic` accompanies `command_launch_failed` alone; a result written before the
+    // diagnostic existed carries that code without one and stays valid.
     let diagnostic = failure.cause.diagnostic.as_ref();
     match failure.cause.code {
         RecoveryHandlerFailureCodeV1::CommandExitFailed => !decision && diagnostic.is_none(),
@@ -2007,8 +2043,8 @@ pub(super) fn unavailable_export_source_matches(
             Some(super::evidence::InheritedPriorState::Succeeded) | None => false,
         };
     // A `workflow` step commits only the child exports that were available, so an export of
-    // one it left out is `source_failed` though the step succeeded (REQ-WFEXEC-60,
-    // REQ-EXPORTS-3); an inherited one still carries the `outcome` it routed from.
+    // one it left out is `source_failed` though the step succeeded; an inherited one still
+    // carries the `outcome` it routed from.
     let child_export_left_out =
         source_is_workflow_step
             && source.node.role == WorkflowNodeRoleV1::Step
@@ -2273,7 +2309,6 @@ mod waiting_tests {
         super::decode(&bytes).is_ok_and(|decoded| super::validate(&decoded).is_ok())
     }
 
-    // REQ-WFEXEC-15
     #[test]
     fn a_waiting_result_has_only_terminal_success_steps_and_no_finalization() {
         let result = waiting_result();
@@ -2293,8 +2328,8 @@ mod waiting_tests {
         assert!(!validates(&failed));
     }
 
-    // REQ-WFEXEC-15, REQ-WFEXEC-64: a continued attempt, like a waiting one, ran no finalizer,
-    // has no primary issue and leaves every step terminal as in a success.
+    // A continued attempt, like a waiting one, ran no finalizer, has no primary issue and
+    // leaves every step terminal as in a success.
     #[test]
     fn a_continued_result_has_only_terminal_success_steps_and_no_finalization() {
         let mut result = waiting_result();

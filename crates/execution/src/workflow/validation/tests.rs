@@ -45,7 +45,6 @@ fn prerequisite_shape(prerequisites: &[ResolvedDirectPrerequisite]) -> Vec<(&str
         .collect()
 }
 
-// REQ-WFFORMAT-40
 #[test]
 fn failure_policy_defaults_and_typed_data_compatibility_are_resolved() {
     let source = "schemaVersion: 1
@@ -112,7 +111,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-66
 #[test]
 fn advisory_outputs_cannot_be_exported() {
     let source = "schemaVersion: 1
@@ -141,7 +139,6 @@ exports:
     );
 }
 
-// REQ-WFFORMAT-38
 #[test]
 fn dependency_graph_failures_are_classified_at_owned_locations() {
     let missing = format!(
@@ -294,7 +291,6 @@ steps:
     assert_eq!(workflow.presentation_order, ["z", "a", "m"]);
 }
 
-// REQ-WFFORMAT-45, REQ-WFFORMAT-47, REQ-WFFORMAT-51
 #[test]
 fn agent_profiles_resolve_to_pinned_configs_and_missing_references_fail() {
     let source = "schemaVersion: 1
@@ -344,7 +340,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-47, REQ-WFFORMAT-78
 #[test]
 fn claude_code_profiles_resolve_without_installation_or_model_lookup() {
     let source = "schemaVersion: 1
@@ -379,7 +374,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-48, REQ-WFFORMAT-78
 #[test]
 fn codex_profiles_resolve_exact_nonempty_native_strings_without_lookup() {
     let source = "schemaVersion: 1
@@ -414,7 +408,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-55
 #[test]
 fn output_bindings_require_declared_non_self_outputs() {
     let missing_step = "schemaVersion: 1
@@ -485,7 +478,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-39
 #[test]
 fn command_output_references_form_normalized_direct_prerequisites() {
     let source = "schemaVersion: 1
@@ -595,7 +587,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-39
 #[test]
 fn workflow_inputs_and_exports_do_not_create_step_prerequisites() {
     let source = "schemaVersion: 1
@@ -637,7 +628,6 @@ exports:
     assert_eq!(workflow.presentation_order, ["consumer", "producer"]);
 }
 
-// REQ-WFFORMAT-29
 #[test]
 fn undeclared_workflow_input_is_rejected() {
     let source = "schemaVersion: 1
@@ -660,7 +650,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-100
 #[test]
 fn subject_names_a_declared_text_input() {
     let workflow = |subject: &str| {
@@ -672,8 +661,8 @@ fn subject_names_a_declared_text_input() {
     };
     let validated = validate_yaml(&workflow("ticket")).unwrap();
     assert_eq!(validated.subject.as_deref(), Some("ticket"));
-    // Like `name`, `subject` keeps a file from being a `workflow` step's child
-    // (REQ-WFFORMAT-115).
+    // Like `name`, `subject` keeps a file from being a `workflow` step's
+    // child.
     assert!(ChildWorkflowSummary::of(&validated, &[], BTreeSet::new()).has_root_blocks);
     let at_subject = ValidationLocation::Workflow { key: "subject" };
     assert_failure(
@@ -752,7 +741,6 @@ steps:
     )
 }
 
-// REQ-WFCOND-6, REQ-WFCOND-7, REQ-WFCOND-10
 #[test]
 fn named_text_conditions_are_phase_valid_and_non_text_inputs_are_rejected() {
     let source = "schemaVersion: 1
@@ -884,7 +872,6 @@ fn resolved_condition<'a>(workflow: &'a ValidatedWorkflow, step: &str) -> &'a Re
     step.common.condition.as_ref().unwrap()
 }
 
-// REQ-WFCOND-1
 #[test]
 fn a_condition_is_exactly_one_closed_predicate_object() {
     let leaf = TEXT_EQUALS;
@@ -913,7 +900,6 @@ fn a_condition_is_exactly_one_closed_predicate_object() {
     }
 }
 
-// REQ-WFCOND-2
 #[test]
 fn compound_predicates_hold_bounded_ordered_children_and_fixed_arity() {
     let children = |count: usize| {
@@ -957,7 +943,6 @@ fn compound_predicates_hold_bounded_ordered_children_and_fixed_arity() {
     }
 }
 
-// REQ-WFCOND-3
 #[test]
 fn operands_are_a_reference_or_any_json_literal_but_never_two_literals() {
     for literal in [
@@ -987,7 +972,6 @@ fn operands_are_a_reference_or_any_json_literal_but_never_two_literals() {
     );
 }
 
-// REQ-WFCOND-4
 #[test]
 fn exists_requires_a_pointer_into_a_json_value() {
     validate_yaml(&gate_condition(
@@ -1004,7 +988,6 @@ fn exists_requires_a_pointer_into_a_json_value() {
     }
 }
 
-// REQ-WFCOND-8
 #[test]
 fn condition_outputs_must_be_declared_and_steps_cannot_read_the_finalization_context() {
     assert_failure(
@@ -1022,7 +1005,6 @@ fn condition_outputs_must_be_declared_and_steps_cannot_read_the_finalization_con
     validate_yaml(&finish_condition(context)).unwrap();
 }
 
-// REQ-WFCOND-9
 #[test]
 fn dispositions_name_another_node_and_steps_cannot_observe_finalizers() {
     let disposition = |node: &str| format!("{{disposition: {{node: {node}, is: succeeded}}}}");
@@ -1048,7 +1030,6 @@ fn dispositions_name_another_node_and_steps_cannot_observe_finalizers() {
     }
 }
 
-// REQ-WFCOND-11
 #[test]
 fn equals_never_mixes_text_and_json_kinds() {
     for accepted in [
@@ -1075,7 +1056,6 @@ fn equals_never_mixes_text_and_json_kinds() {
     }
 }
 
-// REQ-WFCOND-14
 #[test]
 fn condition_depth_predicate_and_workflow_limits_count_predicates_not_operands() {
     let nested = |levels: usize| {
@@ -1128,7 +1108,6 @@ fn condition_depth_predicate_and_workflow_limits_count_predicates_not_operands()
     );
 }
 
-// REQ-WFCOND-16
 #[test]
 fn every_condition_reference_is_a_prerequisite_even_past_a_short_circuit() {
     let source = "schemaVersion: 1
@@ -1185,7 +1164,6 @@ steps:
     }
 }
 
-// REQ-WFCOND-17
 #[test]
 fn condition_references_obey_failure_impact_and_finalizer_trigger_rules() {
     let source = "schemaVersion: 1
@@ -1238,7 +1216,6 @@ finalizers:
     validate_yaml(&workflow(advisory, within)).unwrap();
 }
 
-// REQ-WFFORMAT-35, REQ-WFFORMAT-49
 #[test]
 fn message_type_table_rejects_every_inverse_destination_without_conversion() {
     let cases = [
@@ -1469,7 +1446,6 @@ exports:
     }
 }
 
-// REQ-WFFORMAT-29, REQ-WFFORMAT-39, REQ-WFFORMAT-55
 #[test]
 fn direct_message_reference_failures_are_reported_at_the_message_location() {
     for (reference, kind) in [
@@ -1506,7 +1482,6 @@ fn direct_message_reference_failures_are_reported_at_the_message_location() {
     );
 }
 
-// REQ-WFFORMAT-43
 #[test]
 fn git_branch_is_exportable_but_rejected_from_every_downstream_binding() {
     let producer = "schemaVersion: 1
@@ -1566,7 +1541,6 @@ steps:
     }
 }
 
-// REQ-WFFORMAT-56
 #[test]
 fn semantic_outputs_definition_rejects_duplicate_paths_and_excess_workspace_sources() {
     let duplicate_path = r#"schemaVersion: 1
@@ -1625,7 +1599,6 @@ steps:
     assert!(validate_yaml(&equal_paths_in_different_nodes).is_ok());
 }
 
-// REQ-WFFORMAT-56
 #[test]
 fn agent_output_cardinality_rules_are_enforced() {
     let two_responses = "schemaVersion: 1
@@ -1690,7 +1663,6 @@ steps:
     );
 }
 
-// REQ-WFFORMAT-65
 #[test]
 fn exports_must_target_declared_outputs() {
     let base = "schemaVersion: 1
@@ -1766,7 +1738,6 @@ fn declared_outcome(from: &str, on_failure: &str) -> String {
     ))
 }
 
-// REQ-WFFORMAT-87, REQ-WFFORMAT-88
 #[test]
 fn outcomes_and_outcome_are_declared_together_with_a_member_failure_name() {
     for source in [
@@ -1803,7 +1774,6 @@ fn outcomes_and_outcome_are_declared_together_with_a_member_failure_name() {
     assert_eq!(undeclared.outcome, None);
 }
 
-// REQ-WFFORMAT-110
 #[test]
 fn on_infrastructure_names_one_of_the_outcomes() {
     let with_infrastructure = |name: &str| {
@@ -1830,7 +1800,6 @@ fn on_infrastructure_names_one_of_the_outcomes() {
     assert_eq!(undeclared.outcome.unwrap().on_infrastructure, None);
 }
 
-// REQ-WFFORMAT-88
 #[test]
 fn the_outcome_source_is_a_text_output_of_a_required_unconditional_step() {
     for from in [
@@ -1903,7 +1872,6 @@ fn first_of_outcome(sources: &str) -> String {
     FIRST_OF_OUTCOME_WORKFLOW.replace("FROM", &format!("{{firstOf: [{sources}]}}"))
 }
 
-// REQ-WFFORMAT-108, REQ-WFFORMAT-106
 #[test]
 fn the_outcome_takes_a_first_of_of_text_outputs_of_required_ordinary_steps() {
     let workflow = validate_yaml(&first_of_outcome(
@@ -2099,7 +2067,6 @@ fn workflow_step<'a>(workflow: &'a ValidatedWorkflow, step: &str) -> &'a Validat
     step
 }
 
-// REQ-WFFORMAT-90
 #[test]
 fn workflow_step_inputs_map_the_child_declaration_with_its_kinds() {
     let workflow = validate_with_children(EDGE_WORKFLOW, &child_summaries()).unwrap();
@@ -2162,7 +2129,6 @@ fn workflow_step_inputs_map_the_child_declaration_with_its_kinds() {
     }
 }
 
-// REQ-WFFORMAT-91
 #[test]
 fn workflow_step_outputs_are_the_child_text_and_json_exports_and_its_outcome() {
     let workflow = validate_with_children(EDGE_WORKFLOW, &child_summaries()).unwrap();
@@ -2215,7 +2181,6 @@ fn workflow_step_outputs_are_the_child_text_and_json_exports_and_its_outcome() {
     }
 }
 
-// REQ-WFFORMAT-92
 #[test]
 fn workflow_step_edges_route_every_child_outcome_to_one_target() {
     for (source, kind, location) in [
@@ -2314,7 +2279,6 @@ fn workflow_step_edges_route_every_child_outcome_to_one_target() {
     );
 }
 
-// REQ-WFFORMAT-118
 #[test]
 fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
     for (source, kind, location) in [
@@ -2388,7 +2352,6 @@ fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
     );
 }
 
-// REQ-WFFORMAT-119
 #[test]
 fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
     let repair_self = edge_workflow(
@@ -2457,7 +2420,6 @@ fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
     );
 }
 
-// REQ-WFFORMAT-96
 #[test]
 fn a_limited_edge_continues_at_a_step_until_its_limit_and_then_takes_else() {
     let limited = |then: &str, else_: &str| {
@@ -2560,7 +2522,6 @@ fn host_wait_summaries() -> BTreeMap<String, ChildWorkflowSummary> {
     .into()
 }
 
-// REQ-WFFORMAT-111, REQ-WFFORMAT-92
 #[test]
 fn a_host_wait_waits_at_its_own_step_under_a_limit_with_an_else() {
     let workflow = validate_with_children(&host_wait_workflow(), &host_wait_summaries()).unwrap();
@@ -2623,7 +2584,6 @@ fn a_host_wait_waits_at_its_own_step_under_a_limit_with_an_else() {
     );
 }
 
-// REQ-WFFORMAT-104, REQ-WFFORMAT-111
 #[test]
 fn a_nested_host_wait_admits_an_else_wait_only_at_its_own_step() {
     let nesting = |source: &str| {
@@ -2738,7 +2698,6 @@ fn external_wait(from: &str, to: &str) -> String {
     EXTERNAL_WAIT_WORKFLOW.replacen(from, to, 1)
 }
 
-// REQ-WFFORMAT-97
 #[test]
 fn an_external_wait_carries_a_rule_over_earlier_text_values() {
     let where_ = "outputs.design.pullRequest and event.state";
@@ -2818,7 +2777,6 @@ fn an_external_wait_carries_a_rule_over_earlier_text_values() {
     .unwrap();
 }
 
-// REQ-WFFORMAT-95
 #[test]
 fn control_references_map_onto_optional_child_inputs_of_their_kind() {
     let ticket_mapping = "    inputs:\n      ticket:\n        ref: inputs.ticket\n";
@@ -2907,7 +2865,6 @@ fn step_for_each(step: &str) -> ValidationLocation {
     }
 }
 
-// REQ-WFFORMAT-98, REQ-WFFORMAT-99
 #[test]
 fn for_each_iterates_a_json_value_and_maps_item_onto_child_inputs() {
     let over_parts = "    forEach: outputs.design.parts\n";
@@ -3028,7 +2985,6 @@ fn for_each_iterates_a_json_value_and_maps_item_onto_child_inputs() {
     );
 }
 
-// REQ-WFFORMAT-93
 #[test]
 fn a_workflow_with_workflow_steps_is_scheduled_by_its_edges() {
     let workflow = validate_with_children(EDGE_WORKFLOW, &child_summaries()).unwrap();
@@ -3084,7 +3040,6 @@ fn a_workflow_with_workflow_steps_is_scheduled_by_its_edges() {
     );
 }
 
-// REQ-WFFORMAT-89, REQ-WFFORMAT-115
 #[test]
 fn a_child_workflow_is_a_readable_stage_without_root_blocks() {
     let design = || ValidationLocation::StepWorkflow {
@@ -3119,7 +3074,6 @@ fn with_design_nesting(nesting: ChildNesting) -> BTreeMap<String, ChildWorkflowS
     children
 }
 
-// REQ-WFFORMAT-104, REQ-WFFORMAT-121
 #[test]
 fn a_nested_child_is_accepted_within_the_bound_unless_it_holds_a_refused_shape() {
     let design = || ValidationLocation::StepWorkflow {
@@ -3148,7 +3102,6 @@ fn a_nested_child_is_accepted_within_the_bound_unless_it_holds_a_refused_shape()
     assert_eq!(failure.unsupported_shape(), Some(&shape));
 }
 
-// REQ-WFFORMAT-121
 #[test]
 fn a_nested_workflows_first_refused_shape_is_its_summary() {
     let nesting = |source: &str, children: &BTreeMap<String, ChildWorkflowSummary>| {
@@ -3263,7 +3216,6 @@ fn structurally_decoded_references_are_not_reparsed_during_validation() {
     );
 }
 
-// REQ-WFFORMAT-9, REQ-WFFORMAT-10
 #[test]
 fn combined_node_limit_and_shared_namespace_are_enforced_before_validation() {
     fn workflow_with_counts(step_count: usize, finalizer_count: usize) -> String {
@@ -3303,7 +3255,6 @@ finalizers:
     );
 }
 
-// REQ-WFFINALIZE-17, REQ-WFEXEC-49
 #[test]
 fn semantic_outputs_ordinary_finalizer_parity() {
     let source = "schemaVersion: 1
@@ -3388,7 +3339,6 @@ exports:
     assert_eq!(workflow.exports["report"].first().node.id, "report");
 }
 
-// REQ-WFFORMAT-62
 #[test]
 fn finalizer_graph_rejects_cross_phase_edges_self_edges_duplicates_and_cycles() {
     let after_step = "schemaVersion: 1
@@ -3468,7 +3418,6 @@ finalizers:
     );
 }
 
-// REQ-WFFORMAT-64, REQ-WFFINALIZE-7
 #[test]
 fn output_references_obey_phase_trigger_and_failure_impact_rules() {
     let ordinary_reads_finalizer = "schemaVersion: 1
@@ -3564,7 +3513,6 @@ finalizers:
     validate_yaml(&control_only).unwrap();
 }
 
-// REQ-WFFORMAT-66
 #[test]
 fn finalizer_exports_require_required_success_eligibility() {
     let base = "schemaVersion: 1
@@ -3613,7 +3561,6 @@ exports:
     );
 }
 
-// REQ-WFFORMAT-63
 #[test]
 fn finalization_context_is_json_in_every_declared_finalizer_position() {
     let source = "schemaVersion: 1
@@ -3822,7 +3769,6 @@ fn first_of_source(
     }
 }
 
-// REQ-WFFORMAT-105, REQ-WFFORMAT-106, REQ-WFFORMAT-39
 #[test]
 fn a_first_of_binds_the_common_kind_and_makes_every_source_a_prerequisite() {
     let (source, _) =
@@ -3915,7 +3861,6 @@ fn a_first_of_binds_the_common_kind_and_makes_every_source_a_prerequisite() {
     );
 }
 
-// REQ-WFFORMAT-106
 #[test]
 fn first_of_sources_that_cannot_stand_in_for_each_other_are_refused_in_place() {
     for (place, sources) in [
@@ -3947,7 +3892,6 @@ fn first_of_sources_that_cannot_stand_in_for_each_other_are_refused_in_place() {
     }
 }
 
-// REQ-WFFORMAT-106, REQ-WFCOND-29
 #[test]
 fn a_first_of_source_that_could_never_be_taken_is_refused_in_place() {
     for (place, sources) in [
@@ -3982,7 +3926,6 @@ fn a_first_of_source_that_could_never_be_taken_is_refused_in_place() {
     }
 }
 
-// REQ-WFFORMAT-106, REQ-WFFORMAT-38, REQ-WFFORMAT-40, REQ-WFFORMAT-43, REQ-WFFORMAT-49, REQ-WFFORMAT-55
 #[test]
 fn each_first_of_source_keeps_the_single_reference_failures() {
     let single = [
@@ -4083,7 +4026,6 @@ fn at_export(name: &str) -> ValidationLocation {
     }
 }
 
-// REQ-WFFORMAT-107, REQ-WFFORMAT-91
 #[test]
 fn a_first_of_export_holds_its_sources_in_order_and_their_kind() {
     let presented = "    presentation:\n      title: {value: Result}\n";
@@ -4131,7 +4073,6 @@ fn a_first_of_export_holds_its_sources_in_order_and_their_kind() {
     );
 }
 
-// REQ-WFFORMAT-107, REQ-WFFORMAT-106, REQ-WFFORMAT-66
 #[test]
 fn a_first_of_export_refuses_sources_at_the_export() {
     for (sources, kind) in [
@@ -4201,7 +4142,6 @@ fn a_first_of_export_refuses_sources_at_the_export() {
     );
 }
 
-// REQ-WFCOND-15
 #[test]
 fn workflow_node_evidence_definition_limit_applies_to_steps_and_finalizers() {
     for finalizer in [false, true] {
@@ -4251,7 +4191,7 @@ fn workflow_node_evidence_definition_limit_applies_to_steps_and_finalizers() {
         }
     }
 
-    // Each source of a `firstOf` counts as a body reference (REQ-WFFORMAT-105).
+    // Each source of a `firstOf` counts as a body reference.
     for count in [1_022, 1_023] {
         let mut outputs = String::new();
         let mut inputs = String::new();
@@ -4342,7 +4282,6 @@ finalizers:
           - file: prompts/message.md
 ";
 
-// REQ-WFFORMAT-52, REQ-AGENT-52, REQ-AGENT-53
 #[test]
 fn agent_profile_replacement_pins_every_reference_as_a_whole_without_translation() {
     let replacement = replacement_profiles(
@@ -4397,7 +4336,6 @@ fn agent_profile_replacement_pins_every_reference_as_a_whole_without_translation
     assert_eq!(unused_only.replaced_agent_profiles.len(), 1);
 }
 
-// REQ-AGENT-54
 #[test]
 fn agent_profile_replacement_rejects_an_undeclared_name_at_the_replacement() {
     let failure = super::validate_with_replacement(
@@ -4419,7 +4357,6 @@ fn agent_profile_replacement_rejects_an_undeclared_name_at_the_replacement() {
     );
 }
 
-// REQ-WFFORMAT-7
 #[test]
 fn description_name_and_version_are_inert_and_a_workflow_declares_no_identifier() {
     let source = format!(
@@ -4453,7 +4390,6 @@ fn description_name_and_version_are_inert_and_a_workflow_declares_no_identifier(
     }
 }
 
-// REQ-WFFORMAT-54
 #[test]
 fn output_kinds_require_their_source_schema_and_media_type_fields() {
     let output = |fields: &str| {
@@ -4505,7 +4441,6 @@ finalizers:
     )
 }
 
-// REQ-WFFORMAT-102
 #[test]
 fn node_environment_passthrough_names_must_be_declared_at_the_root() {
     let root = "environmentPassthrough: [VISIBLE]\n";
@@ -4544,6 +4479,284 @@ fn node_environment_passthrough_names_must_be_declared_at_the_root() {
         ValidationFailureKind::EnvironmentPassthroughUndeclared,
         ValidationLocation::EnvironmentPassthrough {
             step: "check".to_owned(),
+        },
+    );
+}
+
+#[test]
+fn step_workspace_is_resolved_along_prerequisites() {
+    use super::super::validated::StepWorkspace;
+
+    let source = r#"schemaVersion: 1
+agentProfiles:
+  coding:
+    harness: {kind: pi, config: {model: openai/gpt-5, thinking: high}}
+steps:
+  seed:
+    kind: cmd
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  candidate:
+    kind: agent
+    workspace: new
+    agent:
+      profile: coding
+      systemPrompt: prompt.md
+      message:
+        text: [{ref: outputs.seed.value}]
+    outputs: {value: {kind: text, from: agent_response}}
+  check:
+    kind: cmd
+    workspace: write
+    dependsOn: [candidate]
+    command: {argv: ["true"]}
+  read:
+    kind: cmd
+    inputs: {value: {ref: outputs.candidate.value}}
+    command: {argv: ["true"]}
+  join:
+    kind: cmd
+    inputs: {value: {ref: outputs.seed.value}}
+    dependsOn: [candidate]
+    command: {argv: ["true"]}
+  report:
+    kind: cmd
+    condition: {disposition: {node: candidate, is: failed}}
+    command: {argv: ["true"]}
+  again:
+    kind: cmd
+    workspace: new
+    dependsOn: [check, read, join]
+    command: {argv: ["true"]}
+finalizers:
+  cleanup:
+    kind: cmd
+    inputs: {value: {ref: outputs.candidate.value}}
+    command: {argv: ["true"]}
+"#;
+    let workflow = validate_yaml(source).unwrap();
+    assert_eq!(
+        workflow.steps["seed"].common().workspace,
+        StepWorkspace::Starting
+    );
+    for name in ["candidate", "check", "read", "join", "report"] {
+        assert_eq!(
+            workflow.steps[name].common().workspace,
+            StepWorkspace::Established {
+                by: "candidate".into()
+            },
+            "{name}"
+        );
+    }
+    assert_eq!(
+        workflow.steps["again"].common().workspace,
+        StepWorkspace::Established { by: "again".into() }
+    );
+    assert_eq!(
+        workflow.finalizers["cleanup"].body.common().workspace,
+        StepWorkspace::Starting
+    );
+}
+
+#[test]
+fn step_workspace_rejections_name_the_step() {
+    let ambiguous = include_str!(
+        "../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+    );
+    let mixed_controls =
+        ambiguous.replace("  join:\n", "  join:\n    dependsOn: [seed, candidate]\n");
+    for source in [ambiguous, &mixed_controls] {
+        assert_failure(
+            source,
+            ValidationFailureKind::WorkspaceAmbiguous,
+            ValidationLocation::Step {
+                step: "join".into(),
+            },
+        );
+    }
+    assert_failure(
+        include_str!(
+            "../../../tests/fixtures/workflow/v1/resolution-invalid/new-workspace-cwd/workflow.yaml"
+        ),
+        ValidationFailureKind::NewWorkspaceCwd,
+        ValidationLocation::Step {
+            step: "work".into(),
+        },
+    );
+    assert_failure(
+        include_str!(
+            "../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
+        ),
+        ValidationFailureKind::EstablishedWorkspaceGitBranch,
+        ValidationLocation::StepOutput {
+            step: "capture".into(),
+            output: "changes".into(),
+        },
+    );
+}
+
+#[test]
+fn read_and_none_workspaces_are_resolved_and_passed_on() {
+    use super::super::document::DeclaredWorkspace;
+    use super::super::validated::StepWorkspace;
+
+    let source = r#"schemaVersion: 1
+steps:
+  candidate:
+    kind: cmd
+    workspace: new
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  check:
+    kind: cmd
+    workspace: read
+    dependsOn: [candidate]
+    command: {argv: ["true"]}
+  summary:
+    kind: cmd
+    workspace: none
+    inputs: {value: {ref: outputs.candidate.value}}
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  publish:
+    kind: cmd
+    inputs: {value: {ref: outputs.summary.value}}
+    command: {argv: ["true"]}
+  first:
+    kind: cmd
+    workspace: none
+    command: {argv: ["true"]}
+  root:
+    kind: cmd
+    dependsOn: [first]
+    command: {argv: ["true"]}
+  other:
+    kind: cmd
+    workspace: new
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  join:
+    kind: cmd
+    workspace: none
+    inputs: {left: {ref: outputs.candidate.value}, right: {ref: outputs.other.value}}
+    command: {argv: ["true"]}
+    outputs: {value: {kind: text, from: path, path: value}}
+  after:
+    kind: cmd
+    workspace: none
+    dependsOn: [join]
+    command: {argv: ["true"]}
+  fresh:
+    kind: cmd
+    workspace: new
+    dependsOn: [join]
+    command: {argv: ["true"]}
+  settle:
+    kind: cmd
+    dependsOn: [check]
+    inputs: {value: {ref: outputs.join.value}}
+    command: {argv: ["true"]}
+"#;
+    let workflow = validate_yaml(source).unwrap();
+    for (name, by, declared) in [
+        ("candidate", "candidate", DeclaredWorkspace::New),
+        ("check", "candidate", DeclaredWorkspace::Read),
+        ("summary", "summary", DeclaredWorkspace::None),
+        ("publish", "candidate", DeclaredWorkspace::Write),
+        ("first", "first", DeclaredWorkspace::None),
+        ("other", "other", DeclaredWorkspace::New),
+        ("join", "join", DeclaredWorkspace::None),
+        ("after", "after", DeclaredWorkspace::None),
+        ("fresh", "fresh", DeclaredWorkspace::New),
+        ("settle", "candidate", DeclaredWorkspace::Write),
+    ] {
+        assert_eq!(
+            workflow.steps[name].common().workspace_use,
+            declared,
+            "{name}"
+        );
+        assert_eq!(
+            workflow.steps[name].common().workspace,
+            StepWorkspace::Established { by: by.into() },
+            "{name}"
+        );
+    }
+    let root = workflow.steps["root"].common();
+    assert_eq!(root.workspace, StepWorkspace::Starting);
+    assert_eq!(root.workspace_use, DeclaredWorkspace::Write);
+}
+
+#[test]
+fn runs_steps_in_execution_root_uses_resolved_workspaces() {
+    let header = "schemaVersion: 1\nsteps:\n";
+    let root = command_step("root", "");
+    let none = command_step("first", "    workspace: none\n");
+    let established = [
+        header.to_owned(),
+        command_step("candidate", "    workspace: new\n"),
+        command_step("check", "    workspace: read\n    dependsOn: [candidate]\n"),
+        command_step("publish", "    dependsOn: [candidate]\n"),
+        none.clone(),
+    ]
+    .concat();
+    let after_none = command_step("root", "    dependsOn: [first]\n");
+
+    assert!(
+        !validate_yaml(&established)
+            .unwrap()
+            .runs_steps_in_execution_root()
+    );
+    for source in [
+        format!("{header}{root}"),
+        format!("{established}{root}"),
+        format!("{header}{none}{after_none}"),
+    ] {
+        assert!(
+            validate_yaml(&source)
+                .unwrap()
+                .runs_steps_in_execution_root(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn none_workspace_rejections_name_the_step() {
+    let ambiguous = include_str!(
+        "../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+    );
+    let read = ambiguous.replace("  join:\n", "  join:\n    workspace: read\n");
+    let mut after = read.replace("workspace: read", "workspace: none");
+    after.push_str(&command_step("after", "    dependsOn: [join]\n"));
+    for (source, name) in [(read, "join"), (after, "after")] {
+        assert_failure(
+            &source,
+            ValidationFailureKind::WorkspaceAmbiguous,
+            ValidationLocation::Step { step: name.into() },
+        );
+    }
+    assert_failure(
+        include_str!(
+            "../../../tests/fixtures/workflow/v1/resolution-invalid/none-workspace-cwd/workflow.yaml"
+        ),
+        ValidationFailureKind::NoneWorkspaceCwd,
+        ValidationLocation::Step {
+            step: "work".into(),
+        },
+    );
+    // Without its prerequisite `capture` runs in the execution root, where the output is
+    // accepted, so the rejection below is the `none` declaration's alone.
+    let starting = include_str!(
+        "../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
+    ).replace("    dependsOn: [candidate]\n", "");
+    validate_yaml(&starting).unwrap();
+    let capture = starting.replace("  capture:\n", "  capture:\n    workspace: none\n");
+    assert_failure(
+        &capture,
+        ValidationFailureKind::EstablishedWorkspaceGitBranch,
+        ValidationLocation::StepOutput {
+            step: "capture".into(),
+            output: "changes".into(),
         },
     );
 }

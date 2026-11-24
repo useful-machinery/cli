@@ -258,7 +258,6 @@ fn name_lookup_stops_after_ten_pages() {
     assert_eq!(pages, 10);
 }
 
-// REQ-API-37, REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-98
 #[test]
 fn forbidden_reason_narrows_only_the_reason_the_client_names() {
     let forbidden = |reason: Option<&str>| {

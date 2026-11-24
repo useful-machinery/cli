@@ -743,8 +743,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-3
-    // INV-HARNESS-1
     #[test]
     fn stable_release_line_and_schema_construct_the_exact_installation_identity() {
         let executable = std::env::current_exe().unwrap();
@@ -837,7 +835,6 @@ mod tests {
         }
     }
 
-    // INV-HARNESS-2
     #[test]
     fn fixture_version_matches_the_qualification_version() {
         let installation = ValidatedCodexInstallation::fixture(PathBuf::from("/codex"));
@@ -849,8 +846,6 @@ mod tests {
         assert_eq!(installation.version().numeric(), (0, 171, 0));
     }
 
-    // REQ-AGENT-3, REQ-AGENT-5
-    // INV-HARNESS-1
     #[test]
     fn admission_rejects_versions_outside_the_undecorated_stable_release_line() {
         let executable = std::env::current_exe().unwrap();
@@ -897,8 +892,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-3, REQ-AGENT-4, REQ-AGENT-65
-    // INV-HARNESS-1, INV-HARNESS-12
     #[test]
     fn stable_releases_newer_than_the_qualification_release_are_admitted_untested() {
         let executable = std::env::current_exe().unwrap();
@@ -970,8 +963,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-7
-    // INV-HARNESS-1
     #[test]
     fn maintained_schema_probe_is_required_after_version_admission() {
         let executable = std::env::current_exe().unwrap();

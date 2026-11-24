@@ -1,7 +1,6 @@
-//! What every control command shares (REQ-LOCALRUN-181): finding the run `RUN` names, opening
-//! a run under the home, appending one control event, continuing the run a resolving control
-//! completes the wait of (REQ-LOCALRUN-182, REQ-LOCALRUN-183), the run's state and the verbs it
-//! takes (REQ-LOCALRUN-223), and the recorded and refused documents.
+//! What every control command shares: finding the run `RUN` names, opening a run under the
+//! home, appending one control event, continuing the run a resolving control completes the wait
+//! of, the run's state and the verbs it takes, and the recorded and refused documents.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -23,8 +22,7 @@ use crate::cli::context::OrgArgs;
 use crate::cli::{HttpOptions, PrincipalAuthenticationArgs};
 use crate::exit_code::ExitCode;
 
-/// The `after_help` paragraph of `answer`, `approve` and `hand-back` (REQ-LOCALRUN-180,
-/// REQ-LOCALRUN-182, REQ-LOCALRUN-183, REQ-LOCALRUN-210, REQ-LOCALRUN-223).
+/// The `after_help` paragraph of `answer`, `approve` and `hand-back`.
 pub(super) const RESOLVING_AFTER_HELP: &str = "RUN is a run directory, a run ID or a subject. An ID or a subject is looked up under the useful home and, when the home holds no such run, in Cloud in the organization in effect.
 
 answer applies to a run waiting for an answer, and approve and hand-back to a run waiting for approval; in any other state the command changes nothing and names the commands that apply.
@@ -45,7 +43,7 @@ pub(super) struct ControlTarget {
     /// The run's `state.json`, as `useful workflow run show` reads it.
     pub(super) state: Value,
     pub(super) inspection: WaitInspection,
-    /// The run's copy of the tree it was admitted from (REQ-LOCALRUN-170).
+    /// The run's copy of the tree it was admitted from.
     pub(super) tree_copy: PathBuf,
 }
 
@@ -65,7 +63,7 @@ impl Refusal {
     }
 }
 
-/// A run's state as REQ-LOCALRUN-223 names it, which decides the control verbs that apply.
+/// A run's state as the control verbs see it, which decides the verbs that apply.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Standing {
     /// A process or a runner executes the run's steps.
@@ -78,8 +76,8 @@ pub(super) enum Standing {
     Ended { succeeded: bool },
 }
 
-/// Where the run a refusal names executes: Cloud carries no `interrupt` and no `upgrade`
-/// (REQ-LOCALRUN-180, REQ-LOCALRUN-223).
+/// Where the run a refusal names executes: Cloud carries no `interrupt` and no
+/// `upgrade`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Placed {
     Home,
@@ -87,10 +85,10 @@ pub(super) enum Placed {
 }
 
 impl Standing {
-    /// The state of the run under the home `inspection` found (REQ-LOCALRUN-223): a run a live
-    /// process holds is running, a held wait is waiting on its kind, a run whose wait a control
-    /// resolves or whose process is gone is abandoned, and an exited one ended, succeeded when
-    /// `succeeded` says its latest attempt did.
+    /// The state of the run under the home `inspection` found: a run a live process holds is
+    /// running, a held wait is waiting on its kind, a run whose wait a control resolves or
+    /// whose process is gone is abandoned, and an exited one ended, succeeded when `succeeded`
+    /// says its latest attempt did.
     pub(super) fn of(inspection: &WaitInspection, succeeded: impl FnOnce() -> bool) -> Self {
         match inspection {
             WaitInspection::Locked(_) => Self::Running,
@@ -129,8 +127,8 @@ impl Standing {
     }
 
     /// The control verbs of `useful workflow run` that apply to a run in this state where it
-    /// is `placed` (REQ-LOCALRUN-223): the state's own, `pause` in every state but ended, and
-    /// neither `interrupt` nor `upgrade` for a Cloud run.
+    /// is `placed`: the state's own, `pause` in every state but ended, and neither
+    /// `interrupt` nor `upgrade` for a Cloud run.
     pub(super) fn verbs(self, placed: Placed) -> Vec<&'static str> {
         let own: &[&'static str] = match self {
             Self::Running => &["interrupt", "pause", "cancel"],
@@ -155,7 +153,7 @@ impl Standing {
     }
 
     /// The refusal `code` of a verb that does not apply in this state: one sentence naming the
-    /// state and the verbs that apply (REQ-LOCALRUN-223).
+    /// state and the verbs that apply.
     pub(super) fn refusal(self, code: &'static str, placed: Placed) -> Refusal {
         Refusal::new(code, self.message(placed))
     }
@@ -174,8 +172,8 @@ impl Standing {
     }
 }
 
-/// The refusal of an `answer` with no `--question` whose wait leaves several questions
-/// open, naming their ids; nothing is appended or sent (REQ-LOCALRUN-182, REQ-LOCALRUN-210).
+/// The refusal of an `answer` with no `--question` whose wait leaves several questions open,
+/// naming their ids; nothing is appended or sent.
 pub(super) fn question_ambiguous<'a>(ids: impl Iterator<Item = &'a str>) -> Refusal {
     let ids = ids
         .map(|id| normalize_terminal_scalar(id.as_bytes()))
@@ -275,20 +273,20 @@ impl ControlTarget {
         Ok(wait)
     }
 
-    /// The run's state (REQ-LOCALRUN-223).
+    /// The run's state.
     pub(super) fn standing(&self) -> Standing {
         Standing::of(&self.inspection, || latest_attempt_succeeded(&self.state))
     }
 
-    /// The refusal `code` of a verb that does not apply in the run's state (REQ-LOCALRUN-223).
+    /// The refusal `code` of a verb that does not apply in the run's state.
     pub(super) fn refusal(&self, code: &'static str) -> Refusal {
         self.standing().refusal(code, Placed::Home)
     }
 
-    /// The ids a stop may name and the ids the run knows (REQ-LOCALRUN-185), read from the
-    /// workflow resolved again from the run's tree copy, since a nested run may not exist yet
-    /// (REQ-WFEXEC-76). A tree copy that does not resolve holds nothing, so every step the
-    /// latest attempt's progress lists is then known and none holdable.
+    /// The ids a stop may name and the ids the run knows, read from the workflow resolved
+    /// again from the run's tree copy, since a nested run may not exist yet. A tree copy that
+    /// does not resolve holds nothing, so every step the latest attempt's progress lists is
+    /// then known and none holdable.
     pub(super) fn stop_steps(&self) -> StopSteps {
         let progress = self.state["attempts"]
             .as_array()
@@ -363,7 +361,7 @@ fn inspected_wait(inspection: &WaitInspection) -> Option<&WaitRecord> {
 }
 
 /// The current wait of the run at `run_directory`, inspected again without taking the run
-/// lock, for a command that reports where a run it signalled stopped (REQ-LOCALRUN-202).
+/// lock, for a command that reports where a run it signalled stopped.
 pub(super) fn current_wait(run_directory: &Path) -> Result<Option<WaitRecord>, ControlFailure> {
     let probe = inspect_wait(run_directory, &NoConditions)?;
     Ok(inspected_wait(&probe.inspection).cloned())
@@ -377,8 +375,8 @@ pub(super) fn latest_attempt_succeeded(state: &Value) -> bool {
         .is_some_and(|attempt| attempt["state"] == "succeeded")
 }
 
-/// The state of the exited run at `run_directory` (REQ-LOCALRUN-223), succeeded when its
-/// `state.json` says its latest attempt did; a run that cannot be read did not.
+/// The state of the exited run at `run_directory`, succeeded when its `state.json` says
+/// its latest attempt did; a run that cannot be read did not.
 pub(super) fn ended(run_directory: &Path) -> Standing {
     Standing::Ended {
         succeeded: read_local_run_status(run_directory)
@@ -386,19 +384,18 @@ pub(super) fn ended(run_directory: &Path) -> Standing {
     }
 }
 
-/// A run a live process holds, which is running (REQ-LOCALRUN-223).
+/// A run a live process holds, which is running.
 pub(super) fn run_locked() -> Refusal {
     Standing::Running.refusal("run_locked", Placed::Home)
 }
 
 /// A `running` run no live process holds, which is abandoned, refused as `interrupt` and
-/// `retry` refuse it (REQ-LOCALRUN-184, REQ-LOCALRUN-202).
+/// `retry` refuse it.
 pub(super) fn run_not_live() -> Refusal {
     Standing::Abandoned.refusal("run_not_live", Placed::Home)
 }
 
-/// A live run that already holds a withdrawal its process has not yet honored
-/// (REQ-LOCALRUN-186).
+/// A live run that already holds a withdrawal its process has not yet honored.
 pub(super) fn withdraw_pending() -> Refusal {
     Refusal::new(
         "withdraw_pending",
@@ -407,12 +404,12 @@ pub(super) fn withdraw_pending() -> Refusal {
 }
 
 /// A wait a recorded control already resolves, which leaves the run abandoned until it is
-/// resumed (REQ-LOCALRUN-223).
+/// resumed.
 pub(super) fn wait_resolved() -> Refusal {
     Standing::Abandoned.refusal("wait_resolved", Placed::Home)
 }
 
-/// Opens the run at `run_directory` (REQ-LOCALRUN-181): a run without a run record is
+/// Opens the run at `run_directory`: a run without a run record is
 /// `run_record_missing`, and a directory that is not a run `run_directory_invalid`.
 pub(super) fn open(run_directory: &Path) -> Result<ControlTarget, Refusal> {
     fn invalid<E>(_: E) -> Refusal {
@@ -440,7 +437,7 @@ pub(super) fn open(run_directory: &Path) -> Result<ControlTarget, Refusal> {
     })
 }
 
-/// The steps of a run `ControlTarget::stop_steps` read (REQ-LOCALRUN-185).
+/// The steps of a run `ControlTarget::stop_steps` read.
 pub(super) struct StopSteps {
     /// Every step of the run's own workflow and of its latest attempt's progress, and the
     /// `holdable` ones: a stop naming any other is `step_unknown`.
@@ -450,10 +447,10 @@ pub(super) struct StopSteps {
     pub(super) holdable: BTreeSet<String>,
 }
 
-/// The steps of `workflow` a stop may name, the only steps the engine holds before
-/// (REQ-LOCALRUN-185, REQ-WFEXEC-62, REQ-WFEXEC-76): its own `workflow` steps and the
-/// `workflow` steps of the nested workflows they name (`nested_step_ids`). A step of
-/// `workflow` outside them is `step_not_holdable`.
+/// The steps of `workflow` a stop may name, the only steps the engine holds before:
+/// its own `workflow` steps and the `workflow` steps of the nested workflows they
+/// name (`nested_step_ids`). A step of `workflow` outside them is
+/// `step_not_holdable`.
 pub(super) fn holdable_step_ids(workflow: &ResolvedWorkflow) -> Vec<String> {
     workflow
         .definition
@@ -465,8 +462,7 @@ pub(super) fn holdable_step_ids(workflow: &ResolvedWorkflow) -> Vec<String> {
         .collect()
 }
 
-/// A stop before a step of the run's workflow the engine does not hold before
-/// (REQ-LOCALRUN-185).
+/// A stop before a step of the run's workflow the engine does not hold before.
 pub(super) fn step_not_holdable() -> Refusal {
     Refusal::new(
         "step_not_holdable",
@@ -474,10 +470,10 @@ pub(super) fn step_not_holdable() -> Refusal {
     )
 }
 
-/// The ids of the `workflow` steps of each nested workflow `workflow`'s `workflow` steps name
-/// (REQ-WFEXEC-76, REQ-LOCALRUN-185): each child resolved from `workflow`'s source root, and
-/// only a child that is itself edge-scheduled, so it has `workflow` steps of its own. A child
-/// that does not resolve contributes none.
+/// The ids of the `workflow` steps of each nested workflow `workflow`'s `workflow` steps
+/// name: each child resolved from `workflow`'s source root, and only a child that is itself
+/// edge-scheduled, so it has `workflow` steps of its own. A child that does not resolve
+/// contributes none.
 pub(super) fn nested_step_ids(workflow: &ResolvedWorkflow) -> Vec<String> {
     let root = &workflow.source.source_root;
     workflow
@@ -505,8 +501,7 @@ pub(super) fn nested_step_ids(workflow: &ResolvedWorkflow) -> Vec<String> {
 
 /// The state of the run at `run_directory` when it waits, as `inspect_wait` reads it without
 /// the run lock: its wait's kind, or abandoned for a wait a recorded control resolves; `None`
-/// when it does not wait or cannot be probed. `retry --all` refuses a run that waits
-/// (REQ-LOCALRUN-78).
+/// when it does not wait or cannot be probed. `retry --all` refuses a run that waits.
 pub(super) fn waiting(run_directory: &Path) -> Option<Standing> {
     let probe = inspect_wait(run_directory, &NoConditions).ok()?;
     match probe.inspection {
@@ -520,10 +515,10 @@ pub(super) fn waiting(run_directory: &Path) -> Option<Standing> {
     }
 }
 
-/// Runs control command `command` on `RUN`, looked up under the home alone (REQ-LOCALRUN-180),
-/// and prints its document: `act` appends the control or refuses, after `RUN` resolves and the
-/// run opens. A `RUN` the home does not hold is `run_not_found`, its message ending with
-/// `elsewhere`, which says that a Cloud run takes no such command.
+/// Runs control command `command` on `RUN`, looked up under the home alone, and prints its
+/// document: `act` appends the control or refuses, after `RUN` resolves and the run opens. A
+/// `RUN` the home does not hold is `run_not_found`, its message ending with `elsewhere`, which
+/// says that a Cloud run takes no such command.
 pub(super) fn execute_at_home(
     command: &'static str,
     run: &RunArg,
@@ -546,7 +541,7 @@ pub(super) fn execute_at_home(
 }
 
 /// `error`, the lookup under the home alone, with `elsewhere` added to a `run_not_found`: the
-/// sentence that says a Cloud run takes no such command (REQ-LOCALRUN-180).
+/// sentence that says a Cloud run takes no such command.
 pub(super) fn home_miss(mut error: RunAddressError, elsewhere: &str) -> RunAddressError {
     if error.code == RUN_NOT_FOUND {
         error.message.push(' ');
@@ -555,10 +550,10 @@ pub(super) fn home_miss(mut error: RunAddressError, elsewhere: &str) -> RunAddre
     error
 }
 
-/// The run control command `command` names, found under the home and then in Cloud
-/// (REQ-LOCALRUN-180): a lookup that found none ends the leaf with its `refused` document,
-/// exit 1, or, when Cloud failed a read the lookup made, with that failure's code and exit
-/// status, and nothing is appended (REQ-LOCALRUN-181).
+/// The run control command `command` names, found under the home and then in Cloud: a
+/// lookup that found none ends the leaf with its `refused` document, exit 1, or, when
+/// Cloud failed a read the lookup made, with that failure's code and exit status, and
+/// nothing is appended.
 pub(super) fn find(
     command: &'static str,
     run: &RunArg,
@@ -615,12 +610,12 @@ pub(super) struct Resolved {
     pub(super) completes: bool,
 }
 
-/// Runs `control` on the run at `run_directory` (REQ-LOCALRUN-182, REQ-LOCALRUN-183): `act`
-/// appends the control or refuses, and a control that completes the wait continues the run
-/// in this command as `useful workflow run resume` would, from the wait the control
-/// resolved, in the previous attempt's execution root, its documents naming `control`'s
-/// command. With `record_only`, and for a control that leaves the wait open, the command
-/// prints the `recorded` document and continues nothing.
+/// Runs `control` on the run at `run_directory`: `act` appends the control or refuses, and
+/// a control that completes the wait continues the run in this command as `useful workflow
+/// run resume` would, from the wait the control resolved, in the previous attempt's
+/// execution root, its documents naming `control`'s command. With `record_only`, and for a
+/// control that leaves the wait open, the command prints the `recorded` document and
+/// continues nothing.
 pub(super) fn resolve(
     control: ContinuingControl,
     run_directory: &Path,

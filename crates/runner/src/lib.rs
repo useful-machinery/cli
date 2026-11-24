@@ -87,7 +87,7 @@ impl std::error::Error for ServiceError {
 }
 
 /// Serves the runner of `config` until a stop signal or an end
-/// `join_key`'s mode decides (INV-RUNNER-35).
+/// `join_key`'s mode decides.
 pub fn run(
     config: Config,
     service_version: &str,
@@ -133,6 +133,7 @@ fn is_loopback(endpoint: &url::Url) -> bool {
 /// in time and in answer size; an answer that carries a body must be private
 /// and JSON.
 mod runner_http {
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
     use reqwest::StatusCode;
@@ -161,6 +162,60 @@ mod runner_http {
         endpoint.set_fragment(None);
         endpoint.set_path(path);
         Ok(endpoint)
+    }
+
+    /// The private HTTP base and bearer from one enrolled credential.
+    #[derive(Clone)]
+    pub(crate) struct Target {
+        base: Url,
+        credential: Credential,
+    }
+
+    impl Target {
+        pub(crate) fn new(endpoint: &Url, credential: &Credential) -> Option<Self> {
+            Some(Self {
+                base: private_runner_http_endpoint(endpoint, "/").ok()?,
+                credential: credential.clone(),
+            })
+        }
+
+        pub(crate) fn url(&self, path: &str) -> Url {
+            let mut url = self.base.clone();
+            url.set_path(path);
+            url
+        }
+
+        pub(crate) fn credential(&self) -> &Credential {
+            &self.credential
+        }
+    }
+
+    /// All serving broker clients share the target installed by a committed promotion.
+    #[derive(Clone)]
+    pub(crate) struct ServingTarget(Arc<Mutex<Target>>);
+
+    impl ServingTarget {
+        pub(crate) fn new(target: Target) -> Self {
+            Self(Arc::new(Mutex::new(target)))
+        }
+
+        pub(crate) fn current(&self) -> Target {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        pub(crate) fn replace(&self, target: Target) {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = target;
+        }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn serving_target_refuses_an_https_runner_endpoint() {
+        let endpoint = Url::parse("https://localhost/v1/runner/connect").unwrap();
+        assert!(Target::new(&endpoint, &crate::credential::test_credential()).is_none());
     }
 
     /// A secret JSON string, cleared when dropped.
@@ -321,6 +376,34 @@ mod runner_http {
             pub(crate) body: String,
         }
 
+        /// Build a client while the original endpoint is unreachable, then observe its
+        /// first request at the replacement endpoint with the replacement bearer.
+        pub(crate) fn assert_promoted_bearer<B>(
+            build: impl FnOnce(super::ServingTarget) -> B,
+            request: impl FnOnce(B),
+        ) {
+            use super::{ServingTarget, Target};
+            use crate::credential::{second_test_credential, test_credential};
+
+            let initial = Url::parse("ws://127.0.0.1:1/v1/runner/connect").unwrap();
+            let target = ServingTarget::new(Target::new(&initial, &test_credential()).unwrap());
+            let broker = build(target.clone());
+            let (endpoint, received, server) =
+                respond_once("409 Conflict", "Cache-Control: private, no-store\r\n", "");
+            let credential = second_test_credential();
+            target.replace(Target::new(&endpoint, &credential).unwrap());
+            request(broker);
+            let head = received.try_recv().unwrap().head;
+            assert_eq!(
+                head.lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                    .and_then(|(_, value)| value.trim().strip_prefix("Bearer ")),
+                Some(credential.bearer_value())
+            );
+            server.join().unwrap();
+        }
+
         /// Serves one request on a fresh loopback port, answering with
         /// `status`, exactly `headers` and `body`; returns the runner's `ws`
         /// endpoint on that port and the request it read.
@@ -364,7 +447,7 @@ mod runner_http {
         }
 
         /// Frames one request with the shared loopback reader
-        /// (INV-TESTING-25) and splits it at its blank line.
+        /// and splits it at its blank line.
         pub(crate) fn read_request(stream: &mut TcpStream) -> RecordedRequest {
             let request = useful_test_support::read_request(stream);
             let (head, body) = useful_test_support::split_request(&request)

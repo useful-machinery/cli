@@ -1,8 +1,7 @@
-//! `useful workflow run publication` (REQ-PUBLISH-13, REQ-PUBLISH-54, REQ-PUBLISH-56,
-//! REQ-PUBLISH-59): a Cloud run's Publications, which `create`, `list` and `show` reach through
-//! the run `RUN` or `--run RUN` names in Cloud alone in the organization in effect
-//! (REQ-LOCALRUN-180), reading nothing under the `useful` home. `create` and `show` take the run
-//! as `--run`, since a creation has no existing subject and a Publication is read under its run.
+//! `useful workflow run publication`: a Cloud run's Publications, which `create`, `list` and
+//! `show` reach through the run `RUN` or `--run RUN` names in Cloud alone in the organization in
+//! effect, reading nothing under the `useful` home. `create` and `show` take the run as `--run`,
+//! since a creation has no existing subject and a Publication is read under its run.
 
 use std::io::{self, Write};
 use std::time::Duration;
@@ -1428,7 +1427,6 @@ mod tests {
         )
     }
 
-    // REQ-PUBLISH-95
     #[test]
     fn existing_request_flags_require_an_export_and_number() {
         const HASH: &str = "0123456789abcdef0123456789abcdef01234567";

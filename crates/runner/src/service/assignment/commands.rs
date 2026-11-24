@@ -370,8 +370,8 @@ impl AssignmentManager {
             .or_default()
             .clone();
         let lease_loss = LeaseLoss::new(cancellation.clone(), run_event.clone());
-        // The run's view, which the manager's reads and the run's observer share
-        // (REQ-RUNNERENROLL-147); none for a tree run.
+        // The run's view, which the manager's reads and the run's observer
+        // share; none for a tree run.
         let view = match &accepted.execution {
             AcceptedExecution::Engine(admitted) => Some(AssignmentRunView::new(
                 admitted.workflow(),
@@ -420,7 +420,7 @@ impl AssignmentManager {
             },
         );
         // The engine of a single-workflow run holds its steps while the monitor's reading is
-        // low (REQ-RUNNERENROLL-155); without a monitor the reading is empty and holds none.
+        // low; without a monitor the reading is empty and holds none.
         let job = job.with_start_gate(Arc::new(self.disk_reading.clone()));
         Ok(Some(match view {
             Some(view) => job.feeding(view),
@@ -921,8 +921,8 @@ impl AssignmentManager {
     }
 
     /// Once a failed cleanup has fenced the boot, interrupts every assignment it still holds
-    /// as a graceful stop does, once, so the exit the fence leads to waits for them
-    /// (REQ-RUNNERENROLL-71). One that only releases its root holds no process.
+    /// as a graceful stop does, once, so the exit the fence leads to waits for them. One
+    /// that only releases its root holds no process.
     pub(super) fn interrupt_held_after_cleanup_failure(&mut self) {
         if !self.cleanup_failed
             || self.shutting_down

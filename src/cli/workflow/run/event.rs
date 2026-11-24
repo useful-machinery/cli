@@ -1,11 +1,10 @@
-//! `useful workflow run event` (REQ-LOCALRUN-208): applies a delivered provider event to the
-//! run's control trigger. The event acts only when its `issueUpdatedAt` is strictly later
-//! than the claim's admission observation; the issue is then read fresh through the mirror's
-//! Linear target, and the fresh state, never the event's own `to`, is `event.to` for the
-//! control's `when`, read from the run's revision tree against the revision's resolution
-//! record. `then` or `else` ends the run through `end.rs`'s `cancel` or `withdraw` path. The
-//! command is hidden: the runner passes it a run directory under its home, which is looked up
-//! there alone (REQ-LOCALRUN-180).
+//! `useful workflow run event`: applies a delivered provider event to the run's control
+//! trigger. The event acts only when its `issueUpdatedAt` is strictly later than the claim's
+//! admission observation; the issue is then read fresh through the mirror's Linear target,
+//! and the fresh state, never the event's own `to`, is `event.to` for the control's `when`,
+//! read from the run's revision tree against the revision's resolution record. `then` or
+//! `else` ends the run through `end.rs`'s `cancel` or `withdraw` path. The command is hidden:
+//! the runner passes it a run directory under its home, which is looked up there alone.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -31,7 +30,7 @@ use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str = "Apply a delivered provider event to a run's control trigger";
 const COMMAND: &str = "useful workflow run event";
-/// What a `RUN` the home does not hold is told (REQ-LOCALRUN-180).
+/// What a `RUN` the home does not hold is told.
 const ELSEWHERE: &str = "A Cloud run's events are applied by the runner executing it.";
 /// The most bytes the command reads of the event or the claim file.
 const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024;
@@ -60,8 +59,8 @@ pub(super) struct Command {
     output: super::control::JsonOutput,
 }
 
-/// The shared event `{source, event, at, payload}` (REQ-TRIGGER-124); the command reads its
-/// `event` and `payload`.
+/// The shared event `{source, event, at, payload}`; the command reads its `event` and
+/// `payload`.
 #[derive(Deserialize)]
 struct DeliveredEvent {
     event: String,
@@ -272,8 +271,8 @@ impl Command {
             .into());
         }
 
-        // REQ-WFDEF-32: with a resolution record, `event.to` and each binding are state ids;
-        // without one, names as the bindings snapshot holds them.
+        // With a resolution record, `event.to` and each binding are state ids; without one,
+        // names as the bindings snapshot holds them.
         let to = if revision.resolution.is_some() {
             &observation.state
         } else {
@@ -305,7 +304,7 @@ impl Command {
 
 /// The run's revision as the control trigger reads it: the root workflow of its tree and the
 /// bound value of each binding, by resolved id or by name, each by the key a reference names
-/// after `$`, `<id>.<name>` for an integration binding (REQ-WFDEF-37).
+/// after `$`, `<id>.<name>` for an integration binding.
 struct Revision {
     workflow: ResolvedWorkflow,
     resolution: Option<BTreeMap<String, String>>,

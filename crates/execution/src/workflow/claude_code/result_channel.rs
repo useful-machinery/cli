@@ -1,6 +1,6 @@
-//! The adapter's end of the Claude Code result tool (INV-HARNESS-23): the private socket the
-//! relay reaches, the MCP configuration file that tells Claude Code to start the relay, the
-//! hello record, and the judgement of each submission.
+//! The adapter's end of the Claude Code result tool: the private socket the relay reaches,
+//! the MCP configuration file that tells Claude Code to start the relay, the hello record,
+//! and the judgement of each submission.
 
 use std::io;
 use std::num::NonZeroU64;
@@ -184,8 +184,8 @@ pub(super) enum SubmissionJudgement {
     Cancelled(CancellationReason),
 }
 
-/// The submissions of one invocation: the last one accepted is the step's value
-/// (REQ-AGENT-85).
+/// The submissions of one invocation: the last one accepted is the step's
+/// value.
 pub(super) struct ResultSubmissions {
     accepted: Option<CapturedJson>,
     maximum_feedback_bytes: NonZeroU64,
@@ -204,8 +204,8 @@ impl ResultSubmissions {
     }
 
     /// Judges one request. A submission's `submission.result` goes to the validator as
-    /// received; accepted, it replaces the value held, and rejected, the value held stands
-    /// (REQ-AGENT-94, REQ-AGENT-85).
+    /// received; accepted, it replaces the value held, and rejected, the value held
+    /// stands.
     pub(super) async fn judge<Clock, Worker>(
         &mut self,
         request: &ResultChannelRequest,
@@ -361,7 +361,6 @@ mod tests {
         );
     }
 
-    // REQ-AGENT-85
     #[tokio::test]
     async fn the_last_accepted_submission_is_held_and_a_later_rejection_leaves_it() {
         let validator = positive_integers();
@@ -384,7 +383,6 @@ mod tests {
         assert_eq!(submissions.accepted().unwrap().value(), &json!(5));
     }
 
-    // REQ-AGENT-94, REQ-AGENT-32
     #[tokio::test]
     async fn a_string_and_null_are_judged_and_held_as_written() {
         let cancellation = CancellationSource::new();
@@ -402,7 +400,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-93, REQ-AGENT-29
     #[tokio::test]
     async fn arguments_without_submission_result_are_rejected_before_the_validator() {
         // A validator reached would answer Fatal: this worker cannot start.
@@ -434,7 +431,6 @@ mod tests {
         assert!(submissions.accepted().is_none());
     }
 
-    // REQ-AGENT-30
     #[tokio::test]
     async fn a_value_above_the_result_limit_is_rejected_with_feedback() {
         let validator = validator(
@@ -456,7 +452,6 @@ mod tests {
         assert!(submissions.accepted().is_none());
     }
 
-    // REQ-AGENT-46
     #[tokio::test]
     async fn a_cancelled_invocation_judges_nothing() {
         let validator = positive_integers();
@@ -473,7 +468,6 @@ mod tests {
         assert!(submissions.accepted().is_none());
     }
 
-    // REQ-AGENT-34
     #[tokio::test]
     async fn a_validator_deadline_is_the_fatal_cause() {
         let stopped = Arc::new(AtomicBool::new(false));

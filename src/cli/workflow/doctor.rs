@@ -1,10 +1,11 @@
-//! `useful workflow doctor PATH... [--runner RUNNER]` (REQ-CREDREADY-1 to REQ-CREDREADY-23,
-//! REQ-CREDREADY-26 to REQ-CREDREADY-30): what the named workflows need and what meets each
-//! need. It derives the requirements, then, when a workflow calls for a kind, reads the
-//! organization and the project in effect (INV-CLI-20), the organization's connections and,
-//! with a human session, the member's grants, and judges each requirement on them. It sends
-//! reads alone: the grant flow is `useful account integration connect --workflow`'s (INV-CLI-15).
+//! `useful workflow doctor PATH... [--runner RUNNER]`: what the named workflows need and what
+//! meets each need. It derives the requirements, then, when a workflow calls for a kind, reads
+//! the organization and the project in effect, the organization's connections, with `--runner`
+//! and a project the GitHub connection authorization in force for them and, with a human
+//! session, the member's grants, and judges each requirement on them. It sends reads alone: the
+//! grant flow is `useful account integration connect --workflow`'s.
 
+mod authorizations;
 mod grants;
 mod readiness;
 pub(in crate::cli) mod report;
@@ -25,7 +26,7 @@ use crate::cli::{
 use crate::exit_code::ExitCode;
 use useful_api::{CommonOrganizationFailure, MemberGrantFailure};
 use useful_human_auth::Deployment;
-use useful_runner::{DerivedCredentials, RepositorySource, UnknownDeclaration};
+use useful_runner::{CredentialKind, DerivedCredentials, RepositorySource, UnknownDeclaration};
 
 use grants::Held;
 use readiness::{Ending, Readiness};
@@ -49,7 +50,7 @@ pub(super) struct Command {
     )]
     paths: Vec<PathBuf>,
 
-    // The runner each requirement is judged on (REQ-CREDREADY-23, REQ-CREDREADY-26).
+    // The runner each requirement is judged on.
     #[arg(long, value_name = "RUNNER", help = grant::RUNNER_HELP)]
     runner: Option<String>,
 
@@ -72,11 +73,11 @@ pub(super) struct Command {
 
 impl Command {
     /// Derives the requirements with the `origin` remote naming the repository's provider. A
-    /// tree that calls for no kind is reported without loading anything (REQ-CREDREADY-13);
-    /// any other is checked against the deployment.
+    /// tree that calls for no kind is reported without loading anything; any other is
+    /// checked against the deployment.
     pub(super) fn execute(self) -> CommandResult {
-        // A runner is judged by the member's own grants, which a service API key cannot read
-        // (REQ-CREDREADY-13).
+        // A runner is judged by the member's own grants, which a service API key cannot
+        // read.
         if self.runner.is_some() && self.options.authentication.api_key_file.is_some() {
             return Err(CommandFailure::with_exit_code(
                 anyhow!(
@@ -102,12 +103,11 @@ impl Command {
         )
     }
 
-    /// Resolves `--runner`, the organization and the project in effect, makes the connection
-    /// reads and, with a human session, the grants read, and writes the report. A caller who is
-    /// not signed in gets the report of `derived` unless `--runner` was given
-    /// (REQ-CREDREADY-7, REQ-CREDREADY-14); any other failure ends the command with no report.
-    /// Workflows that call for token services alone are reported with nothing read
-    /// (REQ-CREDREADY-29).
+    /// Resolves `--runner`, the organization and the project in effect, makes the connection reads, with
+    /// `--runner` and a project the GitHub connection authorization read and, with a human session, the
+    /// grants read, and writes the report. A caller who is not signed in gets the report of `derived` unless
+    /// `--runner` was given; any other failure ends the command with no report. Workflows that call for
+    /// token services alone are reported with nothing read.
     fn check(
         self,
         deployment: &Deployment,
@@ -131,9 +131,9 @@ impl Command {
             json,
         };
         // Nothing is asked of Cloud about a token service, so workflows that call for no
-        // other kind ask Cloud nothing, with or without `--runner` (REQ-CREDREADY-29), unless
-        // the repository is unknown, which the project in effect may name: its repository's
-        // provider can add a requirement (REQ-CREDREADY-21).
+        // other kind ask Cloud nothing, with or without `--runner`, unless the repository is
+        // unknown, which the project in effect may name: its repository's provider can add a
+        // requirement.
         let repository_unknown = derived
             .reported
             .unknown
@@ -142,7 +142,7 @@ impl Command {
         if !repository_unknown && token_services_alone(&derived) {
             return Report::unread(derived).write(json).map_err(Into::into);
         }
-        // The runner is named before anything else is read (REQ-CREDREADY-23).
+        // The runner is named before anything else is read.
         let runner = match &runner {
             Some(runner) => {
                 // The runners are read with the member's human session, as the grant leaves
@@ -218,7 +218,7 @@ impl Command {
             ending => ending.write(api_url, authentication, json),
         };
         // The project in effect, not the `origin` remote, names the repository's provider, so
-        // the files are derived again with its repository (REQ-CREDREADY-21).
+        // the files are derived again with its repository.
         let (mut reported, repository) = match &project {
             Some(project) => match session.read_project(project)? {
                 Ok(repository) => {
@@ -233,7 +233,7 @@ impl Command {
             },
             None => (derived.clone(), None),
         };
-        // The project named no other kind: nothing more is asked of Cloud (REQ-CREDREADY-29).
+        // The project named no other kind: nothing more is asked of Cloud.
         if token_services_alone(&reported) {
             return Report {
                 deployment: project.is_some().then_some(api_url),
@@ -257,8 +257,25 @@ impl Command {
                 Err(ending) => return ended(ending, derived).map_err(Into::into),
             }
         }
-        // The member's grants, of the coding agents those of the organization in effect
-        // (REQ-CREDREADY-22); a service principal holds none.
+        // The GitHub connection authorization in force for the project on the runner, shown
+        // beside `github`.
+        let authorization = match (&project, &runner) {
+            (Some(project), Some(runner))
+                if reported
+                    .reported
+                    .requirements
+                    .iter()
+                    .any(|requirement| requirement.kind == CredentialKind::Github) =>
+            {
+                match authorizations::read(&session, project, runner)? {
+                    Ok(authorization) => authorization,
+                    Err(ending) => return ended(ending, derived).map_err(Into::into),
+                }
+            }
+            _ => None,
+        };
+        // The member's grants, of the coding agents those of the organization in
+        // effect; a service principal holds none.
         let held = if human {
             match grant::held(deployment, policy, Some(&organization))? {
                 Ok(grants) => Some(Held::new(grants, runner.as_deref())),
@@ -277,6 +294,7 @@ impl Command {
             differences: reported.differences,
             organization: Some(&organization),
             project: project.as_deref(),
+            authorization,
             grants: held,
             deployment: Some(api_url),
         }
@@ -285,8 +303,8 @@ impl Command {
     }
 }
 
-/// Whether the workflows call for token services alone, of which Cloud is asked nothing
-/// (REQ-CREDREADY-29).
+/// Whether the workflows call for token services alone, of which Cloud is asked
+/// nothing.
 fn token_services_alone(derived: &DerivedCredentials) -> bool {
     let requirements = &derived.reported.requirements;
     !requirements.is_empty()
@@ -305,9 +323,9 @@ struct SignedOut<'a> {
 }
 
 impl SignedOut<'_> {
-    /// With `--runner`, as `useful account integration list` ends for a caller who is not signed in,
-    /// exit 3 (REQ-CREDREADY-14); otherwise the report of `derived`, of which Cloud was asked
-    /// nothing, after one line on standard error that says so (REQ-CREDREADY-7).
+    /// With `--runner`, as `useful account integration list` ends for a caller who is not signed
+    /// in, exit 3; otherwise the report of `derived`, of which Cloud was asked nothing, after one
+    /// line on standard error that says so.
     fn end(self, derived: DerivedCredentials) -> anyhow::Result<ExitCode> {
         if self.runner {
             return output::failure(

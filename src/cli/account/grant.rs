@@ -1,13 +1,12 @@
 //! `useful account integration`: what Useful Machinery may do as the member at other providers, a
-//! grant of either kind over the grants resource (REQ-GRANT-64 to REQ-GRANT-74), and the member's
-//! token of a token service (REQ-INTEGRATION-16 to REQ-INTEGRATION-20), which a leaf reaches
-//! through `integration_token`. The resources admit only active humans, so every leaf takes a
-//! human session only.
+//! grant of either kind over the grants resource, and the member's token of a token service,
+//! which a leaf reaches through `integration_token`. The resources admit only active humans, so
+//! every leaf takes a human session only.
 
 mod accounts;
 pub(in crate::cli) mod authorization;
 pub(in crate::cli) mod authorize;
-mod browser;
+pub(in crate::cli) mod browser;
 mod claude_setup_token;
 pub(super) mod codex_login;
 pub(in crate::cli) mod confirmation;
@@ -46,6 +45,18 @@ use confirmation::Stated;
 pub(in crate::cli) use create::host_supplies;
 
 pub(super) const ABOUT: &str = "Manage what Useful Machinery may do as you at other providers";
+
+/// Acting as the GitHub App, which an owner of the organization chooses with a connection
+/// authorization: the other choice the consent's report, the plan of `connect --workflow` and the
+/// `connect` and `reconnect` steps of `github` name wherever the member's own GitHub sign-in is
+/// missing, failed or cannot be made. Nothing takes it for the member.
+const ACT_AS_GITHUB_APP: &str =
+    "useful org integration authorize github --runner RUNNER --project PROJECT --runs all";
+
+/// [`ACT_AS_GITHUB_APP`] where `provider` is `github`, and nothing for any other provider.
+fn github_app_alternative(provider: &str) -> Option<&'static str> {
+    (provider == "github").then_some(ACT_AS_GITHUB_APP)
+}
 
 // The grants resource admits only active humans, so these leaves take no service API key.
 type Options =
@@ -160,12 +171,12 @@ const GROUP: &str = "useful account integration";
 
 const GRANT_HELP: &str =
     "Provider you hold one grant of, a grant's ID, or a token service you hold a token of";
-// As the `useful runner` commands word a runner they take by ID or name (REQ-RUNNERPOOL-47).
+// As the `useful runner` commands word a runner they take by ID or name.
 pub(in crate::cli) const RUNNER_HELP: &str = "Runner ID or exact name";
 
-/// A grant as a command names it (REQ-GRANT-65): its ID, `pgr_` for an OAuth grant and `agl_`
-/// for a native one, or the wire name of a provider the member holds one grant of, which is
-/// any provider id or `claude_code` (REQ-GRANT-96).
+/// A grant as a command names it: its ID, `pgr_` for an OAuth grant and `agl_` for a native
+/// one, or the wire name of a provider the member holds one grant of, which is any provider
+/// id or `claude_code`.
 #[derive(Clone, Debug)]
 enum GrantArg {
     Id(String),
@@ -240,9 +251,9 @@ fn resolve(api: &MemberGrantApi, grant: &GrantArg) -> Result<Resolved, MemberGra
     }
 }
 
-/// The signed-in member's unrevoked grants of both kinds, read as `useful account integration list` reads
-/// them with the human session alone; with `organization`, an ID or a slug, only that
-/// organization's among the coding agents' grants (REQ-CREDREADY-22).
+/// The signed-in member's unrevoked grants of both kinds, read as `useful account integration list`
+/// reads them with the human session alone; with `organization`, an ID or a slug, only that
+/// organization's among the coding agents' grants.
 pub(in crate::cli) fn held(
     deployment: &Deployment,
     policy: useful_api::HttpTransportPolicy,
@@ -287,11 +298,10 @@ enum Found {
     Token(Box<IntegrationToken>),
 }
 
-/// Finds what `name` names (REQ-INTEGRATION-20): among the member's grants first, so a name that
-/// names a grant sends what it sent before tokens were in reach, and a name that names none and
-/// can name a token service among the member's tokens, once the served read names a token
-/// service, so that against a deployment that serves none no token list is read. Not found is
-/// `grant_not_found`.
+/// Finds what `name` names: among the member's grants first, so a name that names a grant sends
+/// what it sent before tokens were in reach, and a name that names none and can name a token
+/// service among the member's tokens, once the served read names a token service, so that
+/// against a deployment that serves none no token list is read. Not found is `grant_not_found`.
 fn lookup(api: &MemberGrantApi, name: &GrantArg) -> Result<Found, MemberGrantFailure> {
     match (resolve(api, name), name.token_service()) {
         (Err(MemberGrantFailure::GrantNotFound), Some(service)) => {
@@ -317,9 +327,9 @@ pub(in crate::cli) fn replayed<T>(
     }
 }
 
-/// What a mutating leaf acts on (REQ-INTEGRATION-20): a grant of either kind, or the member's
-/// token of a token service. The helpers below read of it only its ID, the kind its statement
-/// depends on, its authorizations in force and the organizations whose runners it may serve.
+/// What a mutating leaf acts on: a grant of either kind, or the member's token of a token
+/// service. The helpers below read of it only its ID, the kind its statement depends on, its
+/// authorizations in force and the organizations whose runners it may serve.
 pub(in crate::cli) enum Subject {
     Grant(Box<MemberGrant>),
     Token(Box<IntegrationToken>),
@@ -367,7 +377,7 @@ impl Subject {
         }
     }
 
-    /// Its authorizations in force: a grant lists only those (REQ-GRANT-58), and so does a token.
+    /// Its authorizations in force: a grant lists only those, and so does a token.
     pub(in crate::cli) fn in_force(&self) -> Vec<InForce<'_>> {
         match self {
             Self::Grant(grant) => grant
@@ -474,7 +484,7 @@ fn act_on<C: Stated, T>(
 }
 
 /// States on standard error under `heading` what the leaf `C` does to `subject`, asks whether to
-/// go on when `asks` (REQ-GRANT-82), then acts and reports the result, or the failure.
+/// go on when `asks`, then acts and reports the result, or the failure.
 fn state_then_act<C: Stated, T>(
     deployment: &Deployment,
     options: &Options,
@@ -511,12 +521,12 @@ struct Target {
     asks: bool,
 }
 
-/// Reads what `name` names and the runner the leaf `C` acts on, the one `--runner` names
-/// (REQ-GRANT-65): an ID as given, or a name looked up among the runners `candidates` reads
-/// for the subject. Without `--yes` it asks before acting where it can, and elsewhere refuses
-/// before anything is read (REQ-GRANT-82). Given no runner it names those `offered` reads for
-/// the subject, under `purpose`, and exits (REQ-GRANT-81). A provider name that names several
-/// grants is refused, naming them, before any runner is read.
+/// Reads what `name` names and the runner the leaf `C` acts on, the one `--runner` names: an
+/// ID as given, or a name looked up among the runners `candidates` reads for the subject.
+/// Without `--yes` it asks before acting where it can, and elsewhere refuses before anything
+/// is read. Given no runner it names those `offered` reads for the subject, under `purpose`,
+/// and exits. A provider name that names several grants is refused, naming them, before any
+/// runner is read.
 fn subject_and_runner<C: Stated>(
     deployment: &Deployment,
     options: &Options,

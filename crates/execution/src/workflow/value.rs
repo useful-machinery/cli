@@ -239,6 +239,19 @@ pub enum CapturedValue {
 }
 
 impl CapturedValue {
+    /// Equality across attempts ignores the identity and location of each capture.
+    pub(super) fn same_content(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(left), Self::Text(right)) => left.carrier() == right.carrier(),
+            (Self::Json(left), Self::Json(right)) => left.carrier() == right.carrier(),
+            (Self::File(left), Self::File(right)) => {
+                left.media_type() == right.media_type() && left.sha256() == right.sha256()
+            }
+            (Self::GitBranch(left), Self::GitBranch(right)) => left.metadata() == right.metadata(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn text(value: Arc<str>) -> Self {
         Self::Text(CapturedText::new(value))
     }

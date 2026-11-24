@@ -92,7 +92,6 @@ impl FixtureBundle {
     }
 }
 
-// REQ-WFFORMAT-53
 #[test]
 fn semantic_outputs_definition_accepts_exact_six_rows_and_retains_json_schemas() {
     let bundle = FixtureBundle::new();
@@ -478,7 +477,6 @@ fn finalizer_static_sources_join_the_same_immutable_closure() {
     );
 }
 
-// REQ-WFFORMAT-23
 #[test]
 fn oversized_retained_source_is_rejected_before_it_can_exhaust_the_closure_budget() {
     let bundle = FixtureBundle::new();
@@ -518,8 +516,6 @@ fn shared_cloud_and_runner_rejection_fixtures_fail_resolution() {
     }
 }
 
-// REQ-WFFORMAT-24, REQ-WFFORMAT-25, REQ-WFFORMAT-27
-// REQ-COMPAT-8
 #[test]
 fn shared_cloud_and_runner_closure_fixture_has_the_normative_digest() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -553,8 +549,6 @@ fn shared_cloud_and_runner_closure_fixture_has_the_normative_digest() {
     );
 }
 
-// REQ-WFFORMAT-24, REQ-WFFORMAT-26
-// REQ-COMPAT-8
 #[test]
 fn digest_has_a_normative_known_answer_and_is_sensitive_to_paths() {
     let mut closure = BTreeMap::new();
@@ -579,7 +573,6 @@ fn digest_has_a_normative_known_answer_and_is_sensitive_to_paths() {
     assert_ne!(digest_source_closure(&closure).unwrap(), digest);
 }
 
-// REQ-WFFORMAT-26
 #[test]
 fn profile_declarations_and_references_are_pinned_by_resolution() {
     let renamed = FixtureBundle::new();
@@ -616,7 +609,6 @@ fn profile_declarations_and_references_are_pinned_by_resolution() {
     );
 }
 
-// REQ-WFFORMAT-25, REQ-WFFORMAT-26
 #[test]
 fn digest_is_portable_across_source_roots_and_changes_with_retained_bytes() {
     let first = FixtureBundle::new();
@@ -642,7 +634,6 @@ fn digest_is_portable_across_source_roots_and_changes_with_retained_bytes() {
     assert_ne!(changed.content_digest, first_resolved.content_digest);
 }
 
-// REQ-WFFORMAT-15, REQ-WFFORMAT-17, REQ-WFFORMAT-18
 #[test]
 fn missing_non_regular_and_lexically_escaping_sources_are_rejected() {
     let missing = FixtureBundle::new();
@@ -736,7 +727,6 @@ fn a_symbolic_link_source_root_normalizes_an_absolute_selected_path() {
     );
 }
 
-// REQ-WFFORMAT-18
 #[cfg(unix)]
 #[test]
 fn a_missing_workflow_file_is_named_under_the_canonical_source_root() {
@@ -794,7 +784,6 @@ fn an_absolute_selected_path_cannot_hide_a_symbolic_link_escape_with_parent_trav
     ));
 }
 
-// REQ-WFFORMAT-14, REQ-WFFORMAT-17
 #[cfg(unix)]
 #[test]
 fn symbolic_link_escapes_are_rejected() {
@@ -826,7 +815,6 @@ fn symbolic_link_escapes_are_rejected() {
 }
 
 // Darwin filesystems reject non-UTF-8 names before the resolver can inspect them.
-// REQ-WFFORMAT-20
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn non_utf8_canonical_components_are_rejected() {
@@ -855,7 +843,6 @@ fn non_utf8_canonical_components_are_rejected() {
     );
 }
 
-// REQ-WFFORMAT-19, REQ-WFFORMAT-57
 #[test]
 fn required_text_and_json_schema_contracts_are_validated() {
     let system_encoding = FixtureBundle::new();
@@ -901,7 +888,6 @@ fn required_text_and_json_schema_contracts_are_validated() {
     }
 }
 
-// REQ-WFFORMAT-58, REQ-WFFORMAT-59, REQ-WFFORMAT-60
 #[test]
 fn self_contained_schema_resources_and_fragment_references_resolve() {
     let accepted = [
@@ -955,7 +941,6 @@ fn self_contained_schema_resources_and_fragment_references_resolve() {
     }
 }
 
-// REQ-WFFORMAT-58
 #[test]
 fn unsupported_schema_resources_and_references_fail_at_the_json_schema_location() {
     let invalid_references = [
@@ -982,7 +967,6 @@ fn unsupported_schema_resources_and_references_fail_at_the_json_schema_location(
     }
 }
 
-// REQ-WFFORMAT-59, REQ-WFFORMAT-60
 #[test]
 fn nested_dialects_vocabularies_and_unsupported_patterns_are_rejected() {
     let invalid_dialects = [
@@ -1047,7 +1031,6 @@ fn write_json_schema(bundle: &FixtureBundle, schema: &Value) {
     .unwrap();
 }
 
-// REQ-WFFORMAT-21
 #[test]
 fn structurally_invalid_source_and_runtime_paths_fail_during_definition_resolution() {
     for invalid_workflow in [
@@ -1067,7 +1050,6 @@ fn structurally_invalid_source_and_runtime_paths_fail_during_definition_resoluti
     }
 }
 
-// REQ-WFFORMAT-28, REQ-WFFORMAT-30, REQ-WFCOND-6
 #[test]
 fn input_json_schema_is_confined_retained_and_compiled() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1162,7 +1144,6 @@ fn input_schema_enforces_the_shared_parser_depth() {
     );
 }
 
-// REQ-WFFORMAT-24, REQ-WFFORMAT-83
 #[test]
 fn json_input_defaults_are_confined_strict_and_checked_against_the_input_schema() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1223,7 +1204,6 @@ fn json_input_defaults_are_confined_strict_and_checked_against_the_input_schema(
     assert_rejected("null", "invalid_input_default");
 }
 
-// REQ-WFFORMAT-22
 #[cfg(unix)]
 #[test]
 fn runtime_paths_are_not_resolved_against_a_source_or_execution_root() {
@@ -1333,7 +1313,6 @@ fn step_workflow(step: &str) -> ResolutionLocation {
     })
 }
 
-// REQ-WFFORMAT-89, REQ-WFFORMAT-116
 #[test]
 fn a_child_workflow_resolves_beside_the_root_and_joins_its_closure() {
     let bundle = ChildBundle::new(PARENT_WORKFLOW);
@@ -1372,7 +1351,6 @@ fn a_child_workflow_resolves_beside_the_root_and_joins_its_closure() {
     assert_ne!(changed.content_digest, resolved.content_digest);
 }
 
-// REQ-WFFORMAT-89
 #[test]
 fn a_child_workflow_outside_the_tree_missing_or_invalid_fails_at_its_step() {
     for (path, selected) in [
@@ -1516,7 +1494,6 @@ fn nested_variant(from: &str, to: &str) -> String {
     NESTED_WORKFLOW.replacen(from, to, 1)
 }
 
-// REQ-WFFORMAT-122, REQ-WFFORMAT-24
 #[test]
 fn a_nested_workflow_resolves_its_stages_into_the_closure_of_each_file_reaching_them() {
     let bundle = ChildBundle::nesting(NESTED_WORKFLOW);
@@ -1557,7 +1534,6 @@ fn a_nested_workflow_resolves_its_stages_into_the_closure_of_each_file_reaching_
         .unwrap_or_else(|diagnostics| panic!("the tree validates: {diagnostics:?}"));
 }
 
-// REQ-WFFORMAT-104
 #[test]
 fn a_chain_three_workflow_steps_deep_is_nested_at_the_outermost_step() {
     // workflow.yaml -> part.yaml -> deeper.yaml -> design.yaml.
@@ -1612,7 +1588,6 @@ fn a_chain_three_workflow_steps_deep_is_nested_at_the_outermost_step() {
     );
 }
 
-// REQ-WFFORMAT-104
 #[test]
 fn two_files_that_name_each_other_are_nested_whichever_is_validated() {
     let bundle = ChildBundle::new(PARENT_WORKFLOW);
@@ -1634,7 +1609,6 @@ fn two_files_that_name_each_other_are_nested_whichever_is_validated() {
     }
 }
 
-// REQ-WFFORMAT-121
 #[test]
 fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
     let for_each = nested_variant(
@@ -1695,9 +1669,9 @@ fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
         .unwrap();
 }
 
-// REQ-WFFORMAT-81: the re-check after opening a source file compares the file the path names
-// with the opened one by identity, so a file replaced under its path is a different file while
-// an in-place edit of the opened file is the same one.
+// The re-check after opening a source file compares the file the path names with the opened
+// one by identity, so a file replaced under its path is a different file while an in-place
+// edit of the opened file is the same one.
 #[cfg(unix)]
 #[test]
 fn a_replaced_source_file_no_longer_identifies_the_opened_one() {

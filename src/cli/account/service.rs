@@ -1048,7 +1048,6 @@ mod tests {
         }
     }
 
-    // REQ-SERVICEPRINCIPAL-12
     #[test]
     fn uncertain_delivery_cleanup_retains_metadata_without_the_secret() {
         let outcome = IssueServiceCredentialOutcome::Issued(IssuedServiceCredential {

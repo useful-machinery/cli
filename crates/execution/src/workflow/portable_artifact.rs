@@ -2151,7 +2151,6 @@ mod tests {
         ));
     }
 
-    // REQ-EXPORTS-3
     #[test]
     fn succeeded_source_failed_shape_requires_a_workflow_step_source() {
         let source = super::super::publication::ExportSourceV1 {
@@ -2180,7 +2179,6 @@ mod tests {
         assert!(valid_unavailable_entry(&entry, origin(true)));
     }
 
-    // REQ-ARTIFACTSET-19, REQ-ARTIFACTSET-20
     #[test]
     fn real_bundle_failures_emit_their_portable_diagnostic_codes() {
         let fixture = RealBundleFixture::new();

@@ -1,10 +1,8 @@
-//! The kept-run pass (REQ-WORKSPACE-44, REQ-WORKSPACE-45, REQ-RUNNERENROLL-159,
-//! REQ-RUNNERENROLL-165, INV-RUNNER-52): it chooses the kept workspaces the bounds remove,
-//! or every one under an operator's `all`, removes each through the work root lease and
-//! records each removal or failure; the service's kept-run schedule runs it
-//! (REQ-RUNNERENROLL-158). The kept report (REQ-RUNNERENROLL-164) states what a pass would
+//! The kept-run pass: it chooses the kept workspaces the bounds remove, or every one under an
+//! operator's `all`, removes each through the work root lease and records each removal or
+//! failure; the service's kept-run schedule runs it. The kept report states what a pass would
 //! remove now and removes nothing. The control socket's `kept` and `prune` requests reach the
-//! schedule as a `KeptRunRequest` (INV-RUNNER-54).
+//! schedule as a `KeptRunRequest`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -94,15 +92,15 @@ pub(super) struct ReportedWorkspace {
     pub(super) state: ReportedState,
 }
 
-/// A control socket request the kept-run schedule serves between its passes
-/// (INV-RUNNER-54). An answer's sender dropped unanswered closes the connection unanswered.
+/// A control socket request the kept-run schedule serves between its passes. An answer's
+/// sender dropped unanswered closes the connection unanswered.
 pub(super) enum KeptRunRequest {
-    /// The `kept` report (REQ-RUNNERENROLL-164).
+    /// The `kept` report.
     Report {
         scope: PruneScope,
         answer: oneshot::Sender<KeptRunReport>,
     },
-    /// The `prune` pass (REQ-RUNNERENROLL-165), refused while a held run is working.
+    /// The `prune` pass, refused while a held run is working.
     Prune {
         scope: PruneScope,
         answer: oneshot::Sender<Result<KeptRunPrune, Busy>>,
@@ -318,14 +316,14 @@ pub(super) fn prune_kept_runs(
     outcomes
 }
 
-/// What a pass under `scope` would do now with each of the lease's kept workspaces
-/// (REQ-RUNNERENROLL-164), removing nothing and writing no record: those a pass may take,
-/// each measured and chosen as the pass would choose them, and those a continuation holds,
-/// never measured since it is writing to them, oldest first, ties by first path; then each
-/// directory whose removal failed, a workspace of its own. A failed directory that is no
-/// longer the one the inventory recorded is left out. It answers none once `may_continue`
-/// has answered false, asked before each directory is measured. It blocks on the file
-/// system, as the pass does.
+/// What a pass under `scope` would do now with each of the lease's kept workspaces,
+/// removing nothing and writing no record: those a pass may take, each measured and chosen
+/// as the pass would choose them, and those a continuation holds, never measured since it
+/// is writing to them, oldest first, ties by first path; then each directory whose removal
+/// failed, a workspace of its own. A failed directory that is no longer the one the
+/// inventory recorded is left out. It answers none once `may_continue` has answered false,
+/// asked before each directory is measured. It blocks on the file system, as the pass
+/// does.
 pub(super) fn kept_report(
     lease: &WorkRootLease,
     bounds: KeptRunBounds,
@@ -395,7 +393,7 @@ pub(super) fn kept_report(
 }
 
 /// Writes the outcome as `record_retention` writes `runner.workspace_retained`, its IDs
-/// only when the directory's attempt record gave them (REQ-RUNNERENROLL-159).
+/// only when the directory's attempt record gave them.
 fn record_pruned(recorder: &Recorder, outcome: &PruneOutcome) {
     let mut attributes = Vec::with_capacity(7);
     if let Some(attempt) = &outcome.attempt {
@@ -451,7 +449,6 @@ mod tests {
         }
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn selection_chooses_past_the_age_bound_even_the_only_and_newest_group() {
         let now = now();
@@ -470,7 +467,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn selection_chooses_the_oldest_beyond_the_size_bound_and_never_the_newest() {
         let now = now();
@@ -501,7 +497,6 @@ mod tests {
         assert!(select(&[(now - DAY, 100)], now, bounds(None, Some(50))).is_empty());
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn selection_applies_only_the_bounds_set_and_age_before_size() {
         let now = now();
@@ -530,7 +525,6 @@ mod tests {
         );
     }
 
-    // REQ-WORKSPACE-44
     #[test]
     fn selection_ages_a_modification_time_after_now_as_zero() {
         let now = now();
@@ -545,7 +539,6 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-159
     #[test]
     fn a_pass_writes_one_pruned_record_per_removal_and_none_when_it_removes_nothing() {
         const BOOT: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -722,8 +715,8 @@ mod tests {
         fn before_child_enumeration(&self) {}
     }
 
-    // REQ-RUNNERENROLL-164: the report states what each scope would remove, never measures
-    // a workspace a continuation holds, and removes nothing.
+    // The report states what each scope would remove, never measures a workspace a
+    // continuation holds, and removes nothing.
     #[test]
     fn a_report_lists_what_each_scope_would_remove_and_removes_nothing() {
         let now = now();
@@ -821,8 +814,8 @@ mod tests {
         assert!(kept_report(&owner, bounds, PruneScope::Bounds, now, &|| false).is_none());
     }
 
-    // REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-159, REQ-RUNNERENROLL-164: an operator's pass
-    // removes every kept workspace, the newest included, but one whose removal failed.
+    // An operator's pass removes every kept workspace, the newest included, but one whose
+    // removal failed.
     #[test]
     fn an_operator_pass_removes_every_kept_workspace_but_one_that_failed() {
         let now = now();

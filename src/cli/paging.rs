@@ -37,8 +37,8 @@ mod tests {
         Looped,
     }
 
-    // REQ-GRANT-64: the command reads every page, and a server whose cursors come back round
-    // to one already followed ends the read with a failure rather than paging forever.
+    // The command reads every page, and a server whose cursors come back round to one
+    // already followed ends the read with a failure rather than paging forever.
     #[test]
     fn a_cursor_seen_before_ends_the_read_with_a_failure() {
         let mut reads = Vec::new();

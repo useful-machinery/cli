@@ -103,7 +103,6 @@ def expect_refusal(
         fail(f"{description} made calls other than the one listing: {calls}")
 
 
-# INV-TESTING-24
 def main() -> None:
     if not SCRIPT.is_file():
         fail(f"{SCRIPT} is missing")

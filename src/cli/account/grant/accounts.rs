@@ -1,5 +1,5 @@
 //! The names `useful account integration list` and `show` print for the account each grant is held
-//! for (REQ-GRANT-64): an organization by its slug, a linked identity by its email or subject.
+//! for: an organization by its slug, a linked identity by its email or subject.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};

@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -15,7 +15,7 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// ConnectionAuthorization : An owner's permission for one runner to use one connection of the organization at one provider for the app runs of one project; it holds no credential (REQ-INTEGRATION-26).
+/// ConnectionAuthorization : An owner's permission for one runner to use one connection of the organization at one provider for the runs of one project that its `runs` names; it holds no credential.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionAuthorization {
     /// The authorization's opaque identifier.
@@ -27,7 +27,7 @@ pub struct ConnectionAuthorization {
     /// The provider of the connection, named as the provider table names it.
     #[serde(rename = "provider")]
     pub provider: String,
-    /// The project whose app runs the authorization is for.
+    /// The project whose runs the authorization is for.
     #[serde(rename = "projectId")]
     pub project_id: String,
     /// The project's name.
@@ -45,6 +45,12 @@ pub struct ConnectionAuthorization {
     /// The account the connection's own read names, for `github` the installation's account login. Mutable provider display metadata only; never an identity or authorization key.
     #[serde(rename = "connectionAccount")]
     pub connection_account: String,
+    /// The full name of the project's repository where it is an `active` repository of the authorization's connection, and null otherwise. Provider display metadata only; never an authorization key.
+    #[serde(rename = "repository", deserialize_with = "Option::deserialize")]
+    pub repository: Option<String>,
+    /// Which runs of the project on the runner the authorization covers. `app` covers the app runs alone and `all` every run, whoever its actor is.
+    #[serde(rename = "runs")]
+    pub runs: Runs,
     /// The member who made the authorization; a record that confers nothing.
     #[serde(rename = "authorizedBy")]
     pub authorized_by: String,
@@ -56,7 +62,7 @@ pub struct ConnectionAuthorization {
 }
 
 impl ConnectionAuthorization {
-    /// An owner's permission for one runner to use one connection of the organization at one provider for the app runs of one project; it holds no credential (REQ-INTEGRATION-26).
+    /// An owner's permission for one runner to use one connection of the organization at one provider for the runs of one project that its `runs` names; it holds no credential.
     pub fn new(
         id: String,
         organization_id: String,
@@ -67,6 +73,8 @@ impl ConnectionAuthorization {
         runner_name: String,
         connection_id: String,
         connection_account: String,
+        repository: Option<String>,
+        runs: Runs,
         authorized_by: String,
         created_at: String,
         scope: models::ConnectionAuthorizationScope,
@@ -81,9 +89,25 @@ impl ConnectionAuthorization {
             runner_name,
             connection_id,
             connection_account,
+            repository,
+            runs,
             authorized_by,
             created_at,
             scope: Box::new(scope),
         }
+    }
+}
+/// Which runs of the project on the runner the authorization covers. `app` covers the app runs alone and `all` every run, whoever its actor is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Runs {
+    #[serde(rename = "app")]
+    ConnectionAuthorizationRunsApp,
+    #[serde(rename = "all")]
+    ConnectionAuthorizationRunsAll,
+}
+
+impl Default for Runs {
+    fn default() -> Runs {
+        Self::ConnectionAuthorizationRunsApp
     }
 }

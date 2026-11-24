@@ -62,7 +62,7 @@ pub(in crate::service) fn validate_effective_spec(
     execution_spec: &ExecutionSpecV1RunnerProjection,
     continuation: bool,
 ) -> Result<(), AssignmentDecline> {
-    if !matches!(execution_spec.schema_version, 1..=3) {
+    if !matches!(execution_spec.schema_version, 1..=4) {
         return Err(AssignmentDecline::ExecutionSpecInvalid(
             ExecutionSpecInvalidReason::UnsupportedSchemaVersion,
         ));
@@ -97,9 +97,71 @@ pub(in crate::service) fn validate_effective_spec(
     {
         return Err(invalid_execution_limits());
     }
-    let workflow = &execution_spec.workflow_definition_source;
-    let primary = &execution_spec.primary_workspace_source;
     let capacity = &execution_spec.capacity;
+    match (execution_spec.schema_version, &execution_spec.source) {
+        (4, None) => {
+            if !execution_spec.workflow_tree.as_ref().is_some_and(|tree| {
+                tree.digest.strip_prefix("sha256:")
+                    == Some(capacity.source_closure_digest.value.as_str())
+            }) || capacity.source_closure_digest.algorithm != "sha256"
+                || execution_spec.source_display_snapshot.is_some()
+                || execution_spec.workspace_branch.is_some()
+                || execution_spec.workspace_membership.is_some()
+            {
+                return Err(invalid_source_projection());
+            }
+        }
+        (1..=3, Some(source)) => validate_repository_source(execution_spec, source, continuation)?,
+        _ => return Err(invalid_source_projection()),
+    }
+    if capacity.execution_contract != "workflow_v1_cloud_inputs_artifacts@1"
+        || capacity.general_maximum_transitions == 0
+        || capacity.general_maximum_transitions > MAXIMUM_GENERAL_TRANSITIONS
+        || capacity.selected_maximum_transitions == 0
+        || capacity.selected_maximum_transitions > MAXIMUM_SELECTED_TRANSITIONS
+        || capacity.maximum_invocations == 0
+        || capacity.maximum_invocations > MAXIMUM_INVOCATIONS
+        || capacity.maximum_retained_bytes_per_invocation == 0
+        || capacity.maximum_retained_bytes_per_invocation > MAXIMUM_RETAINED_BYTES_PER_INVOCATION
+        || capacity.diagnostic_retention_bytes < capacity.maximum_retained_bytes_per_invocation
+        || capacity.diagnostic_retention_bytes > MAXIMUM_DIAGNOSTIC_RETENTION_BYTES
+        || capacity.native_session_retention_bytes < capacity.maximum_retained_bytes_per_invocation
+        || capacity.native_session_retention_bytes > MAXIMUM_NATIVE_SESSION_RETENTION_BYTES
+        || capacity
+            .diagnostic_retention_bytes
+            .checked_add(capacity.native_session_retention_bytes)
+            != Some(capacity.aggregate_retention_bytes)
+        || capacity.aggregate_retention_bytes > MAXIMUM_AGGREGATE_RETENTION_BYTES
+        || !valid_condition_capacity(ConditionCapacityBounds::from_parts(
+            capacity.selected_maximum_transitions,
+            (
+                capacity.condition_transition_count,
+                capacity.aggregate_condition_transition_bytes,
+            ),
+            (
+                capacity.terminal_result_structure_bytes,
+                capacity.presentation_result_bytes,
+                capacity.portable_result_bytes,
+                capacity.encoded_outbox_bytes,
+            ),
+        ))
+    {
+        return Err(invalid_source_projection());
+    }
+    Ok(())
+}
+
+pub(super) fn invalid_source_projection() -> AssignmentDecline {
+    AssignmentDecline::ExecutionSpecInvalid(ExecutionSpecInvalidReason::InvalidSourceProjection)
+}
+
+fn validate_repository_source(
+    execution_spec: &ExecutionSpecV1RunnerProjection,
+    source: &useful_runner_protocol::RepositorySourcesV1RunnerProjection,
+    continuation: bool,
+) -> Result<(), AssignmentDecline> {
+    let workflow = &source.workflow_definition_source;
+    let primary = &source.primary_workspace_source;
     if workflow.object_format != "sha1" || primary.object_format != "sha1" {
         return Err(AssignmentDecline::ExecutionSpecInvalid(
             ExecutionSpecInvalidReason::UnsupportedSourceObjectFormat,
@@ -117,8 +179,8 @@ pub(in crate::service) fn validate_effective_spec(
             .workflow_path
             .split('/')
             .all(|component| !matches!(component, "" | "." | ".."));
-    if execution_spec.source_branch.is_empty()
-        || execution_spec.source_branch.chars().count() > MAXIMUM_SOURCE_BRANCH_CHARACTERS
+    if source.source_branch.is_empty()
+        || source.source_branch.chars().count() > MAXIMUM_SOURCE_BRANCH_CHARACTERS
         || primary.kind != "connected_repository"
         || !matches!(primary.provider_kind.as_str(), "github" | "gitlab")
         || (execution_spec.schema_version == 3 && primary.provider_kind != "github")
@@ -176,42 +238,9 @@ pub(in crate::service) fn validate_effective_spec(
             &workflow.workflow_source_closure_digest.value,
             SHA256_HEX_CHARACTERS,
         )
-        || capacity.execution_contract != "workflow_v1_cloud_inputs_artifacts@1"
-        || capacity.source_closure_digest != workflow.workflow_source_closure_digest
-        || capacity.general_maximum_transitions == 0
-        || capacity.general_maximum_transitions > MAXIMUM_GENERAL_TRANSITIONS
-        || capacity.selected_maximum_transitions == 0
-        || capacity.selected_maximum_transitions > MAXIMUM_SELECTED_TRANSITIONS
-        || capacity.maximum_invocations == 0
-        || capacity.maximum_invocations > MAXIMUM_INVOCATIONS
-        || capacity.maximum_retained_bytes_per_invocation == 0
-        || capacity.maximum_retained_bytes_per_invocation > MAXIMUM_RETAINED_BYTES_PER_INVOCATION
-        || capacity.diagnostic_retention_bytes < capacity.maximum_retained_bytes_per_invocation
-        || capacity.diagnostic_retention_bytes > MAXIMUM_DIAGNOSTIC_RETENTION_BYTES
-        || capacity.native_session_retention_bytes < capacity.maximum_retained_bytes_per_invocation
-        || capacity.native_session_retention_bytes > MAXIMUM_NATIVE_SESSION_RETENTION_BYTES
-        || capacity
-            .diagnostic_retention_bytes
-            .checked_add(capacity.native_session_retention_bytes)
-            != Some(capacity.aggregate_retention_bytes)
-        || capacity.aggregate_retention_bytes > MAXIMUM_AGGREGATE_RETENTION_BYTES
-        || !valid_condition_capacity(ConditionCapacityBounds::from_parts(
-            capacity.selected_maximum_transitions,
-            (
-                capacity.condition_transition_count,
-                capacity.aggregate_condition_transition_bytes,
-            ),
-            (
-                capacity.terminal_result_structure_bytes,
-                capacity.presentation_result_bytes,
-                capacity.portable_result_bytes,
-                capacity.encoded_outbox_bytes,
-            ),
-        ))
+        || execution_spec.capacity.source_closure_digest != workflow.workflow_source_closure_digest
     {
-        return Err(AssignmentDecline::ExecutionSpecInvalid(
-            ExecutionSpecInvalidReason::InvalidSourceProjection,
-        ));
+        return Err(invalid_source_projection());
     }
     Ok(())
 }

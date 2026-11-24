@@ -1,6 +1,6 @@
 //! `useful workflow definition`: the definitions under the `useful` home and those of the
-//! project in effect, each named by its ID or its name (REQ-CLOUDDEF-42). The Cloud leaves
-//! share one client of the public API (REQ-CLOUDDEF-1) and its resend rule.
+//! project in effect, each named by its ID or its name. The Cloud leaves share one client
+//! of the public API and its resend rule.
 
 mod change;
 mod cloud_report;
@@ -75,8 +75,7 @@ impl Command {
 }
 
 /// Writes the outcome of a definition command over the home: `write` with the result and
-/// whether `--json` was given, exit 0, or the refusal headed by `refused` (REQ-WFDEF-27),
-/// exit 1.
+/// whether `--json` was given, exit 0, or the refusal headed by `refused`, exit 1.
 fn finish<T>(
     command: &'static str,
     refused: &str,
@@ -101,8 +100,8 @@ fn yes_no(value: bool) -> &'static str {
 }
 
 /// Sends a keyed request, and sends it once more, at once, when Cloud does not answer or
-/// answers with a transient problem (REQ-CLOUDDEF-25): the caller keeps the key, so a request
-/// Cloud applied before its answer was lost is answered again, not applied twice.
+/// answers with a transient problem: the caller keeps the key, so a request Cloud applied
+/// before its answer was lost is answered again, not applied twice.
 fn resend_once<T>(
     mut send: impl FnMut() -> Result<T, WorkflowDefinitionFailure>,
 ) -> Result<T, WorkflowDefinitionFailure> {

@@ -47,8 +47,8 @@ fn continue_args(run: &Path, from: &[&str]) -> Vec<String> {
     args
 }
 
-// REQ-WFFORMAT-84, REQ-CONTINUE-9, REQ-CONTINUE-15: a child's admitted empty JSON
-// survives the retained-record round trip without applying its object schema to null.
+// A child's admitted empty JSON survives the retained-record round trip without
+// applying its object schema to null.
 #[test]
 fn continuation_preserves_an_omitted_schema_constrained_child_input() {
     let bundle = TreeBundle::new(
@@ -121,8 +121,8 @@ steps:
     assert!(!explicit_run.join("state.json").exists());
 }
 
-// REQ-CONTINUE-9, REQ-CONTINUE-10: recovering an omitted empty value must not
-// waive a replacement's changed schema, requiredness or default.
+// Recovering an omitted empty value must not waive a replacement's changed
+// schema, requiredness or default.
 #[test]
 fn continuation_rejects_incompatible_replacements_of_optional_json_inputs() {
     for (name, original_schema, explicit_null, replacement_declaration, replacement_schema) in [
@@ -207,10 +207,10 @@ fn continuation_rejects_incompatible_replacements_of_optional_json_inputs() {
     }
 }
 
-// REQ-CONTINUE-9, REQ-CONTINUE-11, REQ-WFFORMAT-84: a replacement that adds an optional
-// or defaulted input the run lacks continues with the empty value or the default, and a
-// later resume without a replacement inherits that definition and sees the same values,
-// while the run's own definition and inputs stay as retained.
+// A replacement that adds an optional or defaulted input the run lacks continues with
+// the empty value or the default, and a later resume without a replacement inherits
+// that definition and sees the same values, while the run's own definition and inputs
+// stay as retained.
 #[test]
 fn continuation_completes_an_optional_or_defaulted_input_the_replacement_adds() {
     let bundle = RunBundle::new(
@@ -277,7 +277,6 @@ steps:
     assert_eq!(result["outcome"], "succeeded", "{result}");
 }
 
-// REQ-CONTINUE-10, REQ-CONTINUE-13
 #[test]
 fn continuation_collects_all_missing_candidate_harness_profiles() {
     let bundle = RunBundle::new(
@@ -380,7 +379,6 @@ steps:
     assert_eq!(state["attempts"].as_array().unwrap().len(), 1);
 }
 
-// REQ-CONTINUE-9, REQ-CONTINUE-10
 #[test]
 fn continuation_reports_every_immutable_input_constraint_failure() {
     let bundle = RunBundle::new(
@@ -472,7 +470,6 @@ steps:
     assert_eq!(state["attempts"].as_array().unwrap().len(), 1);
 }
 
-// REQ-CONTINUE-27
 #[test]
 fn continuation_acquires_after_pre_rename_publication_crash() {
     let bundle = RunBundle::new(
@@ -511,7 +508,6 @@ fn continuation_acquires_after_pre_rename_publication_crash() {
     );
 }
 
-// REQ-CONTINUE-1, REQ-CONTINUE-27, REQ-CONTINUE-28
 #[test]
 fn replacement_resolution_failure_uses_the_continuation_diagnostic_vocabulary() {
     let bundle = RunBundle::new(
@@ -546,7 +542,6 @@ fn replacement_resolution_failure_uses_the_continuation_diagnostic_vocabulary() 
     assert_eq!(state["attempts"].as_array().unwrap().len(), 1);
 }
 
-// REQ-CONTINUE-10, REQ-CONTINUE-28
 #[test]
 fn invalid_selection_keeps_independent_immutable_input_diagnostics() {
     let bundle = RunBundle::new(
@@ -782,7 +777,6 @@ steps:
     assert!(!run.join("attempts/000004").exists());
 }
 
-// REQ-CONTINUE-8, REQ-CONTINUE-10
 #[test]
 fn continuation_accumulates_inheritance_and_executed_git_admission_failures() {
     let bundle = RunBundle::new(
@@ -857,7 +851,6 @@ steps:
     assert_eq!(state["attempts"].as_array().unwrap().len(), 1);
 }
 
-// REQ-CONTINUE-27
 #[test]
 fn invalid_selection_does_not_claim_an_attempt() {
     let bundle = RunBundle::new(
@@ -895,9 +888,9 @@ fn invalid_selection_does_not_claim_an_attempt() {
     }
 }
 
-// REQ-CONTINUE-4, REQ-CONTINUE-6: a step the prior attempt did not settle cannot be
-// inherited, and an admitted resume lists the re-executed and the inherited steps in the
-// order the workflow would start them, not in name order.
+// A step the prior attempt did not settle cannot be inherited, and an admitted resume
+// lists the re-executed and the inherited steps in the order the workflow would start
+// them, not in name order.
 #[test]
 fn continuation_inherits_only_settled_steps_and_lists_them_in_start_order() {
     let bundle = RunBundle::new(
@@ -960,9 +953,9 @@ fn continuation_inherits_only_settled_steps_and_lists_them_in_start_order() {
     );
 }
 
-// REQ-CONTINUE-7: a required re-executed step that consumes an output of an inherited step
-// that was skipped is refused naming consumer and producer; an advisory consumer is admitted
-// and blocks when it runs.
+// A required re-executed step that consumes an output of an inherited step that was skipped
+// is refused naming consumer and producer; an advisory consumer is admitted and blocks when
+// it runs.
 #[test]
 fn continuation_refuses_a_required_consumer_of_a_skipped_inherited_output() {
     let workflow = |policy: &str| {
@@ -1019,9 +1012,9 @@ fn continuation_refuses_a_required_consumer_of_a_skipped_inherited_output() {
     }
 }
 
-// SC-WFCOND-5, REQ-CONTINUE-7, REQ-WFCOND-45: a continuation re-executes a `firstOf`
-// consumer, which chooses again from re-executed and inherited sources, and is refused only
-// when every source was inherited skipped.
+// SC-WFCOND-5: a continuation re-executes a `firstOf` consumer, which chooses again from
+// re-executed and inherited sources, and is refused only when every source was inherited
+// skipped.
 #[test]
 fn continuation_chooses_a_first_of_again_and_refuses_it_when_every_source_was_skipped() {
     let bundle = RunBundle::new(&format!(
@@ -1127,8 +1120,8 @@ fn continuation_chooses_a_first_of_again_and_refuses_it_when_every_source_was_sk
     assert!(!neither.join("attempts/000002").exists());
 }
 
-// REQ-CONTINUE-17, REQ-EXPORTS-2: an inherited source of a `firstOf` export keeps the
-// attempt that produced its value, and the result names it as the export's source.
+// An inherited source of a `firstOf` export keeps the attempt that produced its
+// value, and the result names it as the export's source.
 #[test]
 fn a_continuation_names_the_inherited_source_a_first_of_export_took() {
     let bundle = RunBundle::new(&FIRST_OF_EXPORT_WORKFLOW.replace(
@@ -1192,9 +1185,8 @@ fn a_continuation_names_the_inherited_source_a_first_of_export_took() {
     assert_run_view_accepts(&run);
 }
 
-// REQ-WFEXEC-57, REQ-CONTINUE-16: an inherited outcome source that nothing re-executed reads
-// still names the continuation's outcome, as one reference and as a `firstOf` whose first
-// source was inherited as skipped.
+// An inherited outcome source that nothing re-executed reads still names the continuation's
+// outcome, as one reference and as a `firstOf` whose first source was inherited as skipped.
 #[test]
 fn a_continuation_takes_its_outcome_from_an_inherited_source() {
     let source = r#"schemaVersion: 1
@@ -1271,7 +1263,6 @@ steps:
     }
 }
 
-// REQ-CONTINUE-17
 #[test]
 fn inherited_zero_delta_git_keeps_original_producer_without_carrier() {
     let bundle = RunBundle::new(GIT_CONTINUATION_SOURCE);
@@ -1326,7 +1317,6 @@ fn inherited_zero_delta_git_keeps_original_producer_without_carrier() {
     assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&view));
 }
 
-// REQ-CONTINUE-18
 #[test]
 fn continuation_git_capture_uses_initial_baseline_after_head_advances() {
     let bundle = RunBundle::new(GIT_CONTINUATION_SOURCE);
@@ -1376,7 +1366,6 @@ fn continuation_git_capture_uses_initial_baseline_after_head_advances() {
     assert!(result["exports"]["branch"]["carrier"].is_object());
 }
 
-// REQ-CONTINUE-5, REQ-CONTINUE-14
 #[test]
 fn retry_after_failed_continuation_reruns_the_initial_definition_without_context() {
     let bundle = RunBundle::new(
@@ -1473,7 +1462,6 @@ finalizers:
     );
 }
 
-// REQ-CONTINUE-16
 #[test]
 fn inherited_json_and_file_values_stage_from_original_producer() {
     let bundle = RunBundle::new(
@@ -1540,7 +1528,6 @@ exports:
     );
 }
 
-// REQ-WFRECOVERY-55
 #[test]
 fn continuation_recovery_handler_reads_bound_context_and_starts_fresh() {
     let bundle = RunBundle::new(
@@ -1617,7 +1604,6 @@ steps:
     );
 }
 
-// REQ-CONTINUE-11, REQ-CONTINUE-12, REQ-CONTINUE-23, REQ-CONTINUE-25
 #[test]
 fn replacement_definition_and_root_are_selected_independently() {
     let bundle = RunBundle::new(
@@ -1701,8 +1687,6 @@ fn replacement_definition_and_root_are_selected_independently() {
     );
 }
 
-// REQ-WFFINALIZE-22
-// REQ-CONTINUE-5, REQ-CONTINUE-15, REQ-CONTINUE-16, REQ-CONTINUE-17
 #[test]
 fn chained_continuation_keeps_original_producer_and_reruns_finalizers() {
     let bundle = RunBundle::new(
@@ -1793,7 +1777,6 @@ fn chained_continuation_keeps_original_producer_and_reruns_finalizers() {
     assert!(!run.join("attempts/000003/values/step/producer").exists());
 }
 
-// REQ-CONTINUE-1, REQ-CONTINUE-2, REQ-CONTINUE-3, REQ-CONTINUE-15, REQ-CONTINUE-19, REQ-CONTINUE-20, REQ-CONTINUE-21, REQ-CONTINUE-26, REQ-CONTINUE-28, REQ-CONTINUE-29, REQ-CONTINUE-31, REQ-LOCALRUN-127
 #[test]
 fn workflow_continue_inherits_prior_output_and_executes_only_downstream() {
     let bundle = RunBundle::new(
@@ -1988,11 +1971,11 @@ fn retry_args(run: &Path) -> Vec<String> {
     ]
 }
 
-// REQ-LOCALRUN-236, REQ-CONTINUE-81: `retry RUN` of an exited run whose latest attempt failed
-// continues it, reexecuting the steps the attempt left other than `succeeded`, `skipped` or
-// `inherited` and inheriting the rest, its documents naming `retry`; a run that names no step
-// to continue from, whose failure was a finalizer's alone, is refused
-// `continuation_step_required`, naming `--from` and `--all`, with nothing written.
+// `retry RUN` of an exited run whose latest attempt failed continues it, reexecuting the
+// steps the attempt left other than `succeeded`, `skipped` or `inherited` and inheriting the
+// rest, its documents naming `retry`; a run that names no step to continue from, whose
+// failure was a finalizer's alone, is refused `continuation_step_required`, naming `--from`
+// and `--all`, with nothing written.
 #[test]
 fn retry_of_an_ended_run_continues_from_the_steps_its_attempt_left() {
     let bundle = RunBundle::new(
@@ -2060,9 +2043,9 @@ fn retry_of_an_ended_run_continues_from_the_steps_its_attempt_left() {
     );
 }
 
-// REQ-LOCALRUN-311, REQ-LOCALRUN-236: `retry RUN` of a `running` run whose process is gone is refused
-// `run_not_live`, naming `resume`; once the run ended, an edge-scheduled run continues from
-// the stage its latest attempt started last, which its record's `position` named.
+// `retry RUN` of a `running` run whose process is gone is refused `run_not_live`, naming `resume`;
+// once the run ended, an edge-scheduled run continues from the stage its latest attempt started
+// last, which its record's `position` named.
 #[test]
 fn retry_of_an_ended_edge_scheduled_run_continues_from_its_position() {
     let bundle = wait_tree();
@@ -2112,9 +2095,9 @@ fn retry_of_an_ended_edge_scheduled_run_continues_from_its_position() {
     assert_eq!(attempt_count(&run), 2);
 }
 
-// REQ-LOCALRUN-184, REQ-LOCALRUN-186: a run withdrawn at the wait after a later stage is
-// continued by `retry RUN` from that stage, the step its latest attempt started last, and
-// the stages before it are not run again.
+// A run withdrawn at the wait after a later stage is continued by `retry RUN` from that
+// stage, the step its latest attempt started last, and the stages before it are not run
+// again.
 #[test]
 fn retry_of_a_run_withdrawn_past_its_first_stage_continues_from_the_stage_it_stood_at() {
     let bundle = wait_tree();
@@ -2139,7 +2122,6 @@ fn retry_of_a_run_withdrawn_past_its_first_stage_continues_from_the_stage_it_sto
     assert_eq!(attempt_count(&run), attempts + 1);
 }
 
-// REQ-AGENT-59
 #[test]
 fn continuation_applies_the_retained_profile_replacement_to_every_attempt() {
     // The replaced profile is unused, so no harness installation is required.
@@ -2229,7 +2211,6 @@ fn continuation_applies_the_retained_profile_replacement_to_every_attempt() {
     }
 }
 
-// REQ-LOCALRUN-171, REQ-LOCALRUN-175, REQ-CONTINUE-1, REQ-CONTINUE-28
 #[test]
 fn a_continuation_of_a_tree_run_verifies_and_rebinds_the_copy() {
     let script = "#!/bin/sh\nset -eu\nprintf '%s' \"$USEFUL_WORKFLOW_ROOT\" > workflow-root\ntest \"$PHASE\" = continuation\n";
@@ -2297,8 +2278,8 @@ fn a_continuation_of_a_tree_run_verifies_and_rebinds_the_copy() {
     assert_eq!(resumed["id"], record["id"]);
 }
 
-// REQ-LOCALRUN-217: a continuation attempt's step sees the revision the run was created with,
-// whatever the launching environment holds.
+// A continuation attempt's step sees the revision the run was created with, whatever the
+// launching environment holds.
 #[test]
 fn a_continuation_sees_the_source_revision_the_run_was_created_with() {
     let (_bundle, run_directory, observed) = failed_source_revision_run("source-continuation");
@@ -2313,9 +2294,8 @@ fn a_continuation_sees_the_source_revision_the_run_was_created_with() {
 
 /// A root whose `design` waits for answers when blocked and for a repair when it fails,
 /// each continuing at `design` itself with the answers given so far, whose `review` waits
-/// for an approval or a hand-back to `fix` (SC-CONTINUE-7, REQ-WFFORMAT-118), and whose
-/// `merge`, once admitted to the queue, waits for the pull request `design` exported to
-/// leave it (REQ-WFFORMAT-97, REQ-WFEXEC-124).
+/// for an approval or a hand-back to `fix` (SC-CONTINUE-7), and whose `merge`, once
+/// admitted to the queue, waits for the pull request `design` exported to leave it.
 pub(super) const WAIT_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -2545,7 +2525,7 @@ pub(super) fn resume(run: &Path) -> std::process::Output {
     isolated_command(&continue_args(run, &[])).output().unwrap()
 }
 
-/// Appends `control` to the run as `controls/<NNNN>-<event>.json` (REQ-LOCALRUN-178).
+/// Appends `control` to the run as `controls/<NNNN>-<event>.json`.
 pub(super) fn append_control(run: &Path, control: &serde_json::Value) {
     let directory = run.join("controls");
     if !directory.exists() {
@@ -2635,8 +2615,7 @@ pub(super) fn waiting_run(
     (fs::canonicalize(&destination).unwrap(), terminal)
 }
 
-// SC-CONTINUE-7, REQ-WFEXEC-61, REQ-WFEXEC-63, REQ-CONTINUE-74, REQ-CONTINUE-102,
-// REQ-CONTINUE-75, REQ-CONTINUE-77, REQ-LOCALRUN-127, REQ-LOCALRUN-178, REQ-CONTINUE-29
+// SC-CONTINUE-7
 #[test]
 fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     let bundle = wait_tree();
@@ -2667,7 +2646,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
         assert_eq!(step["detail"]["code"], "not_reached", "{terminal}");
     }
 
-    // REQ-CONTINUE-102: a held wait changes nothing and answers quickly.
+    // A held wait changes nothing and answers quickly.
     let before = fs::read(run.join("run.json")).unwrap();
     let started = crate::monotonic_now();
     let held = completed(&resume(&run));
@@ -2681,9 +2660,8 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     assert_eq!(attempt_count(&run), 1);
     assert_eq!(fs::read(run.join("run.json")).unwrap(), before);
 
-    // REQ-CONTINUE-75, REQ-WFEXEC-63, REQ-WFFORMAT-119: the answer continues from `design`
-    // itself, whose second child receives the answers as JSON, and `review` enters an
-    // approval wait.
+    // The answer continues from `design` itself, whose second child receives the answers
+    // as JSON, and `review` enters an approval wait.
     append_control(
         &run,
         &control(
@@ -2728,8 +2706,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     assert!(run.join("attempts/000001/wait.json").is_file());
     assert_eq!(read_json(&run.join("wait.json")), *approval);
 
-    // REQ-CONTINUE-75, REQ-CONTINUE-104, REQ-WFFORMAT-95: a hand-back continues from `fix` with
-    // the notes.
+    // A hand-back continues from `fix` with the notes.
     append_control(
         &run,
         &control(
@@ -2771,7 +2748,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
     assert_eq!(record["outcome"], "landed");
     assert_eq!(record["attempts"], 3);
 
-    // REQ-CONTINUE-29: an exited run is not resumed without `--from`.
+    // An exited run is not resumed without `--from`.
     let before = fs::read(run.join("run.json")).unwrap();
     let refused = resume(&run);
     assert_eq!(refused.status.code(), Some(1));
@@ -2786,7 +2763,7 @@ fn an_answered_and_handed_back_run_continues_through_its_waits_to_landing() {
 }
 
 /// A root whose `build` step fans out over the parts `design` exports and then lands
-/// through `merge` (REQ-WFFORMAT-98, REQ-WFFORMAT-99).
+/// through `merge`.
 pub(super) const FAN_OUT_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -2930,7 +2907,6 @@ pub(super) fn fan_out_tree() -> TreeBundle {
     bundle
 }
 
-// REQ-WFEXEC-66, REQ-WFEXEC-68, REQ-WFEXEC-96, REQ-CONTINUE-106, REQ-LOCALRUN-177, REQ-WFDEF-48:
 // a fan-out waits at the element whose child blocked, and the answered run resumes at that element,
 // reruns only it with the answers and continues with the rest to landing.
 #[test]
@@ -2957,7 +2933,7 @@ fn a_fan_out_waits_at_its_element_and_resumes_the_same_element() {
     );
     assert!(!run.join("children/build/000003").exists());
 
-    // The answer completes the wait and continues the run itself (REQ-LOCALRUN-182).
+    // The answer completes the wait and continues the run itself.
     fs::write(root.join("verdict-build-b"), "built").unwrap();
     let terminal = completed(&run_control(None, "answer", &run, &["--text", "split"]));
     assert_eq!(terminal["command"], "useful workflow run answer");
@@ -3009,13 +2985,11 @@ fn a_fan_out_waits_at_its_element_and_resumes_the_same_element() {
     );
 }
 
-// REQ-CONTINUE-107, REQ-CONTINUE-108, REQ-CONTINUE-81, REQ-CONTINUE-115, REQ-WFEXEC-96,
-// REQ-LOCALRUN-184: a repair retry consumes
-// a child completed independently after the wait, preserving earlier elements and continuing
-// the remaining fan-out, and, when the child's repair attempt failed again, continues that
-// child with a new attempt rather than adopting it.
-// A repaired child whose status cannot be read fails the retry before an attempt begins, and
-// the recorded retry adopts it once it reads again.
+// A repair retry consumes a child completed independently after the wait, preserving earlier
+// elements and continuing the remaining fan-out, and, when the child's repair attempt failed
+// again, continues that child with a new attempt rather than adopting it. A repaired child
+// whose status cannot be read fails the retry before an attempt begins, and the recorded
+// retry adopts it once it reads again.
 #[test]
 fn a_repair_retry_adopts_its_independently_completed_child() {
     for mode in [
@@ -3207,8 +3181,8 @@ steps:
         path: verdict-build.txt
 ";
 
-// REQ-CONTINUE-16, REQ-WFEXEC-60: a json export an inherited `workflow` step committed reaches
-// the `workflow` step a resume re-executes, reloaded from the prior attempt.
+// A json export an inherited `workflow` step committed reaches the `workflow` step a resume
+// re-executes, reloaded from the prior attempt.
 #[test]
 fn a_resumed_workflow_step_receives_an_inherited_childs_json_export() {
     let bundle = TreeBundle::new(JSON_EXPORT_TREE_ROOT);
@@ -3264,9 +3238,8 @@ pub(super) fn ordinals_of(directory: &Path) -> Vec<String> {
     names
 }
 
-// REQ-CONTINUE-75, REQ-CONTINUE-105, REQ-CONTINUE-109, REQ-CONTINUE-77: a `control.retry`
-// continues a repair wait with reason `retry` and resolves `then`'s child with its agent-profile
-// replacement; a `control.withdraw` ends a run without another attempt.
+// A `control.retry` continues a repair wait with reason `retry` and resolves `then`'s child with
+// its agent-profile replacement; a `control.withdraw` ends a run without another attempt.
 #[test]
 fn a_repair_wait_is_retried_with_replaced_profiles_or_withdrawn() {
     let bundle = wait_tree();
@@ -3325,8 +3298,8 @@ fn a_repair_wait_is_retried_with_replaced_profiles_or_withdrawn() {
     assert!(!run.join("wait.json").exists());
 }
 
-// REQ-WFEXEC-61, REQ-WFEXEC-62: a stop control in force before `review` makes the run wait
-// `stop` there, and only a lift naming that stop continues it from `review`.
+// A stop control in force before `review` makes the run wait `stop` there, and only a lift
+// naming that stop continues it from `review`.
 #[test]
 fn a_stop_before_a_step_waits_until_it_is_lifted() {
     let bundle = wait_tree();
@@ -3403,8 +3376,8 @@ fn a_stop_before_a_step_waits_until_it_is_lifted() {
 }
 
 /// A root whose `review` hands back to `fix` under a limit of one, after which it waits for a
-/// repair at `review`, and whose `fix` builds back to `review` (REQ-WFEXEC-64,
-/// REQ-WFFORMAT-119, REQ-WFFORMAT-96). `fix` reads the review's `findings`.
+/// repair at `review`, and whose `fix` builds back to `review`. `fix` reads the review's
+/// `findings`.
 pub(super) const LOOP_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -3573,7 +3546,7 @@ steps:
 pub(super) const HOST_FAILING_PROGRAM: &str =
     "#!/bin/sh\nset -eu\nprintf planned > verdict.txt\nexit \"$(cat exit-code)\"\n";
 
-/// The rule a `host` wait derives (REQ-WFEXEC-80).
+/// The rule a `host` wait derives.
 pub(super) fn host_rule() -> serde_json::Value {
     serde_json::json!({
         "source": "host",
@@ -3582,9 +3555,8 @@ pub(super) fn host_rule() -> serde_json::Value {
     })
 }
 
-// REQ-WFEXEC-80, REQ-WFDEF-4, REQ-WFDEF-5: a stage that fails on its host takes its host
-// wait: the run waits on a `host` wait at the stage with the derived rule, and the `run.json`
-// write that reads `waiting` counts the edge.
+// A stage that fails on its host takes its host wait: the run waits on a `host` wait at the
+// stage with the derived rule, and the `run.json` write that reads `waiting` counts the edge.
 #[test]
 fn a_host_failed_stage_enters_a_host_wait_counted_in_the_run_record() {
     let bundle = TreeBundle::new(
@@ -3652,7 +3624,7 @@ steps:
 
 /// A root whose `build` stage (`HOST_FAILING_STAGE`) routes `host_failed` to a host wait
 /// under a limit of two, then to a `repair` wait, and whose `requires.check` is
-/// `HOST_CHECK_PROGRAM` (REQ-WFEXEC-80, REQ-WFEXEC-81).
+/// `HOST_CHECK_PROGRAM`.
 pub(super) const HOST_CHECK_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 requires:
@@ -3702,10 +3674,10 @@ pub(super) fn host_waiting_run(bundle: &TreeBundle, name: &str) -> std::path::Pa
     fs::canonicalize(&destination).unwrap()
 }
 
-// REQ-WFEXEC-81, REQ-CONTINUE-74, REQ-CONTINUE-77: `resume` evaluates a host wait through the
-// root's `requires.check`: while it fails the wait holds and nothing in the run directory
-// changes; once it passes the run continues at the stage with reason `host`. A host that
-// stays failing takes the edge's `else` once the limit is reached.
+// `resume` evaluates a host wait through the root's `requires.check`: while it fails the wait
+// holds and nothing in the run directory changes; once it passes the run continues at the
+// stage with reason `host`. A host that stays failing takes the edge's `else` once the limit
+// is reached.
 #[test]
 fn a_host_wait_holds_while_the_check_fails_and_continues_once_it_passes() {
     let bundle = host_check_tree();
@@ -3760,9 +3732,9 @@ fn a_host_wait_holds_while_the_check_fails_and_continues_once_it_passes() {
     assert_eq!(reasons, ["host", "host"], "{status}");
 }
 
-// REQ-CONTINUE-93, REQ-CONTINUE-75: a failed child continued by hand to success after the host
-// wait began is adopted when the host condition resolves the wait: the stage does not run
-// again, here where it would now fail, and the run lands with reason `host`.
+// A failed child continued by hand to success after the host wait began is adopted when the
+// host condition resolves the wait: the stage does not run again, here where it would now
+// fail, and the run lands with reason `host`.
 #[test]
 fn a_resolved_host_wait_adopts_its_independently_completed_child() {
     let bundle = host_check_tree();
@@ -3790,14 +3762,9 @@ fn a_resolved_host_wait_adopts_its_independently_completed_child() {
     assert_eq!(attempt_count(&child), 2);
 }
 
-// REQ-WFEXEC-64, REQ-CONTINUE-77, REQ-LOCALRUN-126: a limited hand-back ends the attempt
-// `continued` and the same command continues from `fix` with the edge counted; `fix`'s backward
-// edge continues at `review` uncounted; the review proceeds and the run lands, and `--json`
-// writes one document per chained attempt.
-// REQ-WFEXEC-132, REQ-WFEXEC-133, REQ-CONTINUE-77, REQ-LOCALRUN-126: a limited hand-back ends the
-// attempt `continued` and the same command continues from `fix` with the edge counted; `fix`'s
-// backward edge continues at `review` uncounted; the review proceeds and the run lands, and
-// `--json` writes one document per chained attempt.
+// A limited hand-back ends the attempt `continued` and the same command continues from `fix` with
+// the edge counted; `fix`'s backward edge continues at `review` uncounted; the review proceeds
+// and the run lands, and `--json` writes one document per chained attempt.
 #[test]
 fn a_limited_hand_back_and_a_backward_edge_chain_attempts_to_landing() {
     let bundle = loop_tree();
@@ -3884,8 +3851,8 @@ fn exhausted_loop(bundle: &TreeBundle, name: &str) -> (std::path::PathBuf, serde
     (run, wait)
 }
 
-// REQ-WFEXEC-133, REQ-CONTINUE-75: once the limit is reached the hand-back takes its `else`,
-// a repair wait at `review` that a `control.retry` continues from `review`.
+// Once the limit is reached the hand-back takes its `else`, a repair wait at `review` that a
+// `control.retry` continues from `review`.
 #[test]
 fn an_exhausted_limit_waits_for_a_repair_that_a_retry_continues() {
     let bundle = loop_tree();
@@ -3912,8 +3879,8 @@ fn an_exhausted_limit_waits_for_a_repair_that_a_retry_continues() {
     assert_eq!(record["edges"], serde_json::json!({"review.hand_back": 1}));
 }
 
-// REQ-WFEXEC-57, REQ-WFEXEC-83, REQ-WFEXEC-133: once the limit is reached the hand-back takes its
-// `else`, here an exit, and the run records that exit's outcome.
+// Once the limit is reached the hand-back takes its `else`, here an exit, and the run records
+// that exit's outcome.
 #[test]
 fn an_exhausted_limit_whose_else_is_an_exit_records_that_exit() {
     const OUTCOMES: &str = "outcomes: [landed, failed]\n";
@@ -3992,8 +3959,8 @@ fn interrupted_chain(bundle: &TreeBundle, name: &str) -> std::path::PathBuf {
     run
 }
 
-// REQ-CONTINUE-78: a run whose process ended after an attempt ended `continued` and before
-// the next began is continued by `resume` from the recorded edge's target, uncounted.
+// A run whose process ended after an attempt ended `continued` and before the next began
+// is continued by `resume` from the recorded edge's target, uncounted.
 #[test]
 fn resume_continues_a_run_whose_latest_attempt_continued() {
     let bundle = loop_tree();
@@ -4020,9 +3987,9 @@ fn resume_continues_a_run_whose_latest_attempt_continued() {
     assert_eq!(record["edges"], serde_json::json!({"review.hand_back": 1}));
 }
 
-// REQ-LOCALRUN-211, REQ-LOCALRUN-186, REQ-WFEXEC-73: a withdrawal of a run whose process ended
-// between chained attempts ends it `withdrawn` and spends the withdrawal it records, so a later
-// `retry` of the run is not withdrawn by it: the retry's attempt runs its stages.
+// A withdrawal of a run whose process ended between chained attempts ends it `withdrawn` and
+// spends the withdrawal it records, so a later `retry` of the run is not withdrawn by it: the
+// retry's attempt runs its stages.
 #[test]
 fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
     let bundle = loop_tree();
@@ -4073,11 +4040,11 @@ fn withdraw_of_a_run_whose_latest_attempt_continued_is_spent() {
     assert!(record["attempts"].as_u64().unwrap() >= 3, "{record}");
 }
 
-// REQ-LOCALRUN-214, INV-ENGINE-60, REQ-LOCALRUN-240, REQ-WFEXEC-73: a withdrawal that arrives
-// after the process released the run for one chained attempt and before it took the run for the
-// next waits for the process, which keeps the run's controls lock across that gap; it then finds
-// the run held, appends `control.withdraw` naming no wait and answers `recorded`, and the chained
-// attempt honors it: the run ends `withdrawn` after 2 attempts, never by the `withdraw` itself.
+// A withdrawal that arrives after the process released the run for one chained attempt and before
+// it took the run for the next waits for the process, which keeps the run's controls lock across
+// that gap; it then finds the run held, appends `control.withdraw` naming no wait and answers
+// `recorded`, and the chained attempt honors it: the run ends `withdrawn` after 2 attempts, never
+// by the `withdraw` itself.
 #[cfg_attr(
     not(feature = "candidate-checkpoints"),
     ignore = "requires workflow qualification checkpoints"
@@ -4164,12 +4131,11 @@ pub(super) enum QueueAnswer {
     Failing,
 }
 
-/// A loopback stand-in for the GitHub and Mergify APIs the `github` /
-/// `pull_request.queue_settled` condition reads (REQ-WFEXEC-125): it serves
-/// `GET /repos/useful-machinery/platform/pulls/3958` and
-/// `GET /v1/repos/useful-machinery/platform/merge-queue/pull/3958` as its answer says and
-/// records each request's head. `command` points a `useful` invocation at it with the GitHub token
-/// `test` and no `MERGIFY_TOKEN`.
+/// A loopback stand-in for the GitHub and Mergify APIs the `github` / `pull_request.queue_settled`
+/// condition reads: it serves `GET /repos/useful-machinery/platform/pulls/3958` and `GET
+/// /v1/repos/useful-machinery/platform/merge-queue/pull/3958` as its answer says and records each
+/// request's head. `command` points a `useful` invocation at it with the GitHub token `test` and
+/// no `MERGIFY_TOKEN`.
 pub(super) struct QueueStub {
     base: String,
     answer: std::sync::Arc<std::sync::Mutex<QueueAnswer>>,
@@ -4190,7 +4156,7 @@ impl QueueStub {
                 let Ok(mut stream) = stream else { continue };
                 // As in `LinearStub`: the thread is detached and holds the listener for the whole
                 // test, so a connection it cannot read is skipped, where a panic would release
-                // the address the test's `useful` processes still aim at (INV-TESTING-22).
+                // the address the test's `useful` processes still aim at.
                 let request = match useful_test_support::try_read_request(&mut stream) {
                     Ok(request) => request,
                     Err(error) => {
@@ -4286,11 +4252,10 @@ impl QueueStub {
     }
 }
 
-// REQ-WFEXEC-65, REQ-WFEXEC-125, REQ-CONTINUE-74, REQ-CONTINUE-102, REQ-CONTINUE-103,
-// REQ-CONTINUE-111: `merge` admitted to the queue waits for
-// the pull request `design` exported; `resume` holds while it is queued, reading Mergify with
-// `MERGIFY_TOKEN` when it is set and else with the GitHub token, refuses a condition it cannot
-// read, and continues at `merge` once the pull request is merged.
+// `merge` admitted to the queue waits for the pull request `design` exported; `resume` holds
+// while it is queued, reading Mergify with `MERGIFY_TOKEN` when it is set and else with the
+// GitHub token, refuses a condition it cannot read, and continues at `merge` once the pull
+// request is merged.
 #[test]
 fn an_external_wait_holds_while_queued_and_continues_once_merged() {
     let stub = QueueStub::start(QueueAnswer::Queued);
@@ -4326,7 +4291,7 @@ fn an_external_wait_holds_while_queued_and_continues_once_merged() {
     };
     assert_eq!(stub.bearers(), sent("test", "test"));
 
-    // REQ-WFEXEC-127: with `MERGIFY_TOKEN` in the CLI's environment, Mergify is read with it.
+    // With `MERGIFY_TOKEN` in the CLI's environment, Mergify is read with it.
     let mut command = stub.command(&continue_args(&run, &[]));
     command.env("MERGIFY_TOKEN", "mergify-key");
     let held = completed(&command.output().unwrap());
@@ -4384,10 +4349,10 @@ fn admitted_to_the_queue(stub: &QueueStub) -> (TreeBundle, std::path::PathBuf) {
     (bundle, run)
 }
 
-// REQ-WFEXEC-126: the queue is read with the first GitHub token the CLI's environment offers:
-// the trimmed token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`, else `GITHUB_TOKEN`,
-// else `gh auth token`, which runs only when no variable answers; with no `MERGIFY_TOKEN`,
-// Mergify is read with that same token.
+// The queue is read with the first GitHub token the CLI's environment offers: the trimmed
+// token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`, else `GITHUB_TOKEN`, else `gh
+// auth token`, which runs only when no variable answers; with no `MERGIFY_TOKEN`, Mergify is
+// read with that same token.
 #[test]
 fn an_external_wait_reads_the_queue_with_the_offered_github_token_first() {
     let stub = QueueStub::start(QueueAnswer::Queued);
@@ -4543,10 +4508,10 @@ fn chained_outcomes(output: &std::process::Output) -> Vec<String> {
         .collect()
 }
 
-// SC-CONTINUE-8, REQ-WFEXEC-64, REQ-WFEXEC-65, REQ-CONTINUE-16: the review hands back to `fix`
-// twice under its limit and the third time waits for a repair; the retried review proceeds,
-// `merge` repairs itself twice and is admitted to the queue with the inherited `design`'s pull
-// request, and the run lands once it merges, every attempt shown with its reason and edge.
+// SC-CONTINUE-8: the review hands back to `fix` twice under its limit and the third time waits
+// for a repair; the retried review proceeds, `merge` repairs itself twice and is admitted to
+// the queue with the inherited `design`'s pull request, and the run lands once it merges,
+// every attempt shown with its reason and edge.
 #[test]
 fn the_engineering_shape_loops_repairs_and_lands_through_the_queue() {
     let bundle = loop_tree_with(
@@ -4679,7 +4644,7 @@ fn the_engineering_shape_loops_repairs_and_lands_through_the_queue() {
 
 /// `useful workflow run retry RUN --org ORGANIZATION --from STEP…` and `useful workflow run
 /// resume RUN --org ORGANIZATION` of a Cloud run against the scripted Cloud the Cloud
-/// continuation tests use (REQ-CONTINUE-55, REQ-CONTINUE-85).
+/// continuation tests use.
 mod cloud {
     use std::process::Output;
 
@@ -4715,7 +4680,6 @@ mod cloud {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
-    // REQ-CONTINUE-55, REQ-CONTINUE-56
     #[test]
     fn named_steps_post_one_inherited_continuation_and_report_its_receipt() {
         let (output, requests) = resume(&["submitted"], &["build", "review"], true);
@@ -4754,7 +4718,7 @@ mod cloud {
         }
     }
 
-    // REQ-CONTINUE-85: `resume` of a Cloud run sends the continuation request with no step.
+    // `resume` of a Cloud run sends the continuation request with no step.
     #[test]
     fn resume_requests_a_continuation_naming_no_step_and_the_home_stays_empty() {
         let home = tempfile::tempdir().unwrap();
@@ -4772,7 +4736,6 @@ mod cloud {
 
     // Cloud answers each refusal under a problem type of its own with no
     // violation list; the CLI still names it by the code of the same name.
-    // REQ-CONTINUE-85, REQ-CONTINUE-59, REQ-CONTINUE-84, REQ-COMPAT-43
     #[test]
     fn an_admission_refusal_names_its_violation() {
         for (slug, code) in [
@@ -4802,7 +4765,6 @@ mod cloud {
         }
     }
 
-    // REQ-CONTINUE-87
     #[test]
     fn a_path_run_retired_answer_is_reported_as_path_run_retired() {
         for (step, code) in [
@@ -4819,7 +4781,6 @@ mod cloud {
         }
     }
 
-    // REQ-CONTINUE-55, REQ-CONTINUE-57
     #[test]
     fn a_lost_response_leaves_acceptance_unknown_under_one_key() {
         let (output, requests) = resume(&["lost", "lost"], &["build"], true);
@@ -4833,11 +4794,228 @@ mod cloud {
         assert!(result["request"].is_null());
     }
 
-    // REQ-CONTINUE-55
     #[test]
     fn a_malformed_step_is_a_usage_error_before_any_request() {
         let (output, requests) = resume(&[], &["Build"], true);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(requests.is_empty());
     }
+}
+
+// A continuation inherits the files of its established workspace.
+#[test]
+fn a_continuation_keeps_an_established_workspace() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE]
+steps:
+  first:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'touch kept.txt']}
+  second:
+    kind: cmd
+    workspace: write
+    dependsOn: [first]
+    command: {argv: [sh, -c, 'test "$PHASE" = continuation && test -f kept.txt']}
+"#,
+    );
+    let directory = bundle.result("continue-workspace");
+    let first = isolated_command(&bundle.args(&directory))
+        .env("PHASE", "initial")
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(1), "{first:?}");
+    assert!(directory.join("workspaces/first/kept.txt").is_file());
+    let output = isolated_command(&continue_args(&directory, &["second"]))
+        .env("PHASE", "continuation")
+        .output()
+        .unwrap();
+    let terminal = completed(&output);
+    assert_eq!(terminal["outcome"], "succeeded");
+    assert!(
+        !terminal["result"]["continuation"]
+            .as_object()
+            .unwrap()
+            .contains_key("rebuiltWorkspaces")
+    );
+    assert!(
+        terminal["result"]["continuation"]
+            .get("revalidatedSteps")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_continuation_rebuilds_a_missing_established_workspace() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE]
+steps:
+  first: {kind: cmd, workspace: new, command: {argv: [touch, kept.txt]}}
+  second:
+    kind: cmd
+    workspace: write
+    dependsOn: [first]
+    command: {argv: [sh, -c, 'test "$PHASE" = continuation && test -f kept.txt']}
+"#,
+    );
+    let run = bundle.result("rebuild-workspace");
+    let initial = isolated_command(&bundle.args(&run))
+        .env("PHASE", "initial")
+        .output()
+        .unwrap();
+    assert_eq!(initial.status.code(), Some(1), "{initial:?}");
+    let file = run.join("workspaces/first/kept.txt");
+    assert!(file.is_file());
+    fs::remove_dir_all(run.join("workspaces")).unwrap();
+
+    let retry = isolated_command(&continue_args(&run, &["second"]))
+        .env("PHASE", "continuation")
+        .output()
+        .unwrap();
+    let terminal = completed(&retry);
+    assert_eq!(terminal["outcome"], "succeeded");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.join("state.json")).unwrap()).unwrap();
+    let attempt = &state["attempts"][1];
+    let event = partition_event(&retry);
+    let show = status_document(&run);
+    for record in [
+        &event["continuation"],
+        &attempt["continuation"],
+        &terminal["result"]["continuation"],
+        &show["state"]["attempts"][1]["continuation"],
+    ] {
+        assert_eq!(record["rebuiltWorkspaces"], serde_json::json!(["first"]));
+    }
+    assert_eq!(
+        attempt["continuation"]["reexecutedSteps"],
+        serde_json::json!(["first", "second"])
+    );
+    assert_eq!(attempt["progress"]["steps"][0]["state"], "succeeded");
+    assert_eq!(attempt["progress"]["steps"][1]["state"], "succeeded");
+    assert!(file.is_file());
+}
+
+// SC-CONTINUE-17
+#[test]
+fn a_revalidated_step_runs_again_only_when_its_input_changes() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE, LOG]
+steps:
+  plan:
+    kind: cmd
+    command: {argv: [cp, input.txt, planned.txt]}
+    outputs:
+      value: {kind: text, from: path, path: planned.txt}
+  notify:
+    kind: cmd
+    workspace: none
+    inputs:
+      value: {ref: outputs.plan.value}
+    command: {argv: [sh, -c, 'cat "$USEFUL_STEP_INPUTS/values/value" >> "$LOG"']}
+  finish:
+    kind: cmd
+    dependsOn: [notify]
+    command: {argv: [sh, -c, 'test "$PHASE" = pass']}
+"#,
+    );
+    let run = bundle.result("revalidate");
+    let log = bundle.result("notifications");
+    let input = bundle.execution_root().join("input.txt");
+    fs::write(&input, "one\n").unwrap();
+    let execute = |args: Vec<String>, phase: &str| {
+        isolated_command(&args)
+            .env("PHASE", phase)
+            .env("LOG", &log)
+            .output()
+            .unwrap()
+    };
+    let initial = execute(bundle.args(&run), "initial");
+    assert_eq!(initial.status.code(), Some(1), "{initial:?}");
+    assert_eq!(fs::read_to_string(&log).unwrap(), "one\n");
+
+    let retry = execute(continue_args(&run, &["plan"]), "initial");
+    assert_eq!(retry.status.code(), Some(1), "{retry:?}");
+    let show = status_document(&run);
+    let attempt = &show["state"]["attempts"][1];
+    assert_eq!(attempt["progress"]["steps"][1]["state"], "inherited");
+    assert_eq!(attempt["progress"]["steps"][2]["state"], "failed");
+    assert_eq!(
+        attempt["continuation"]["revalidatedSteps"],
+        serde_json::json!(["notify"])
+    );
+    assert_eq!(
+        attempt["continuation"]["reexecutedSteps"],
+        serde_json::json!(["plan", "finish"])
+    );
+    assert_eq!(fs::read_to_string(&log).unwrap(), "one\n");
+
+    fs::write(input, "two\n").unwrap();
+    let retry = execute(continue_args(&run, &["plan"]), "pass");
+    assert_eq!(completed(&retry)["outcome"], "succeeded");
+    let show = status_document(&run);
+    let attempts = show["state"]["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 3);
+    assert_eq!(attempts[2]["progress"]["steps"][1]["state"], "succeeded");
+    assert_eq!(fs::read_to_string(log).unwrap(), "one\ntwo\n");
+}
+
+#[test]
+fn a_kept_steps_attempt_stays_readable_and_continuable() {
+    let bundle = RunBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE]
+steps:
+  base:
+    kind: cmd
+    command: {argv: [sh, -c, 'printf base > base.txt']}
+    outputs:
+      value: {kind: text, from: path, path: base.txt}
+  plan:
+    kind: cmd
+    command: {argv: [sh, -c, 'printf plan > plan.txt']}
+    outputs:
+      value: {kind: text, from: path, path: plan.txt}
+  notify:
+    kind: cmd
+    workspace: none
+    inputs:
+      base: {ref: outputs.base.value}
+      plan: {ref: outputs.plan.value}
+    command: {argv: [sh, -c, 'printf sent > receipt.txt']}
+    outputs:
+      receipt: {kind: text, from: path, path: receipt.txt}
+  finish:
+    kind: cmd
+    dependsOn: [notify]
+    command: {argv: [sh, -c, 'test "$PHASE" = pass']}
+"#,
+    );
+    let run = bundle.result("kept");
+    let execute = |args: Vec<String>, phase: &str| {
+        isolated_command(&args)
+            .env("PHASE", phase)
+            .output()
+            .unwrap()
+    };
+    let initial = execute(bundle.args(&run), "initial");
+    assert_eq!(initial.status.code(), Some(1), "{initial:?}");
+
+    // `notify` is kept, first from its own success and then from the kept result. It holds
+    // an output no step that runs reads, and it alone reads the inherited `base`.
+    for attempt in [1, 2] {
+        let retry = execute(continue_args(&run, &["plan"]), "initial");
+        assert_eq!(retry.status.code(), Some(1), "{retry:?}");
+        let show = status_document(&run);
+        let steps = &show["state"]["attempts"][attempt]["progress"]["steps"];
+        assert_eq!(steps[2]["state"], "inherited", "{steps}");
+        assert_run_view_accepts(&run);
+    }
+
+    let retry = execute(continue_args(&run, &["finish"]), "pass");
+    assert_eq!(completed(&retry)["outcome"], "succeeded", "{retry:?}");
+    assert_run_view_accepts(&run);
 }

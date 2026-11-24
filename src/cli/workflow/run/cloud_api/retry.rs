@@ -16,9 +16,9 @@ use super::{
     Missed, RunOptions, RunReference, failure_code, finish_operation, start_cloud_observation,
 };
 
-/// A Cloud retry request, a new attempt of every step of the run (REQ-RETRY-30), with how it
-/// is followed until it resolves and reported: what `useful workflow run retry --all` of a
-/// Cloud run submits through [`Request::execute`].
+/// A Cloud retry request, a new attempt of every step of the run, with how it is followed
+/// until it resolves and reported: what `useful workflow run retry --all` of a Cloud run
+/// submits through [`Request::execute`].
 pub(in crate::cli) struct Request {
     run: RunReference,
     expected_version: Option<i64>,
@@ -45,14 +45,14 @@ struct ResultDocument<'a> {
     idempotency_key: Option<&'a str>,
     receipt: Option<&'a RunRetryReceipt>,
     code: Option<&'a str>,
-    /// The run holding the subject, present only for a subject refusal (REQ-RETRY-35).
+    /// The run holding the subject, present only for a subject refusal.
     #[serde(skip_serializing_if = "Option::is_none")]
     holder_run_id: Option<&'a str>,
 }
 
 impl Request {
     /// The retry of run `run_id` of `organization`, requiring `expected_version` when given and
-    /// followed within `timeout` (REQ-RETRY-44).
+    /// followed within `timeout`.
     pub(in crate::cli) fn new(
         (organization, run_id): (String, String),
         expected_version: Option<i64>,
@@ -71,7 +71,7 @@ impl Request {
     }
 
     /// Sends the request under one fresh key and follows it; `missed` is the lookup's miss a
-    /// failure of the request stands for (REQ-LOCALRUN-180).
+    /// failure of the request stands for.
     pub(in crate::cli) fn execute(
         self,
         deployment: Deployment,
@@ -439,7 +439,7 @@ fn submission_failure(
     auth: crate::cli::PrincipalAuthenticationKind,
 ) -> (&'static str, &'static str, ExitCode) {
     match failure {
-        // A state conflict is its own outcome; a key conflict is an error (REQ-RETRY-35).
+        // A state conflict is its own outcome; a key conflict is an error.
         RunFailure::RetryConflict(conflict) => {
             let (code, exit) = failure_code(failure, auth);
             let outcome = if *conflict == RetryConflict::Idempotency {

@@ -260,7 +260,16 @@
             "install_failed"
           ]
         },
-        "grantId": { "type": "string", "pattern": "^pgr_[0-7][0-9a-hjkmnp-tv-z]{25}$" },
+        "grantId": {
+          "description": "The grant a ready token was issued from, as the readiness document records it.",
+          "type": "string",
+          "pattern": "^pgr_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "connectionAuthorizationId": {
+          "description": "The connection authorization a ready github token was issued under, in place of a grant, as the readiness document records it; absent where a serving process that predates it answers.",
+          "type": "string",
+          "pattern": "^cna_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
         "generation": { "type": "integer", "minimum": 1 },
         "expiresAt": { "type": "string", "format": "date-time" },
         "checkedAt": { "type": "string", "format": "date-time" },
@@ -279,8 +288,8 @@
           "format": "date-time"
         },
         "source": {
-          "description": "Where the provider's credential came from for that assignment, as the readiness document records it; absent where it records none, and where a serving process that predates it answers.",
-          "enum": ["host", "grant"]
+          "description": "Where the provider's credential came from for that assignment, as the readiness document records it: host, grant, or on github's entry alone org_connection, the organization's GitHub App installation under a connection authorization; absent where it records none, and where a serving process that predates it answers.",
+          "enum": ["host", "grant", "org_connection"]
         }
       },
       "dependentRequired": {
@@ -288,11 +297,32 @@
         "endedAt": ["checkedAt"],
         "source": ["runId"]
       },
-      "if": { "properties": { "state": { "const": "ready" } } },
-      "then": { "required": ["grantId", "generation", "expiresAt"] },
-      "else": {
-        "properties": { "grantId": false, "generation": false, "expiresAt": false }
-      }
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "ready" } } },
+          "then": {
+            "required": ["generation", "expiresAt"],
+            "oneOf": [{ "required": ["grantId"] }, { "required": ["connectionAuthorizationId"] }]
+          },
+          "else": {
+            "properties": {
+              "grantId": false,
+              "connectionAuthorizationId": false,
+              "generation": false,
+              "expiresAt": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "github" } } },
+          "else": {
+            "properties": {
+              "connectionAuthorizationId": false,
+              "source": { "enum": ["host", "grant"] }
+            }
+          }
+        }
+      ]
     },
     "statusResponse": {
       "type": "object",

@@ -139,8 +139,8 @@ pub(super) enum StepWork<'a> {
     Workflow {
         file: &'a str,
     },
-    /// A kind this release does not know: its own word, with no work fields
-    /// (REQ-RUNNERENROLL-135).
+    /// A kind this release does not know: its own word, with no work
+    /// fields.
     Unknown,
 }
 
@@ -185,7 +185,7 @@ pub(super) trait StepProjection {
     /// The state word when it is one this release has no `StepStateKind` for. Such a step's
     /// `state` answers `Pending`, so that it is drawn muted, without a start time and never
     /// as in flight, and the widgets draw the neutral mark and this word in place of that
-    /// state's symbol and label (REQ-RUNNERENROLL-135).
+    /// state's symbol and label.
     fn unknown_state(&self) -> Option<&str> {
         None
     }

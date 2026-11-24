@@ -138,8 +138,8 @@ fn execute_signup(command: SignupCommand, deployment: &Deployment) -> super::Com
         return signup::write_outcome(json, deployment.fingerprint().api_url(), &outcome)
             .map_err(Into::into);
     }
-    // REQ-ACCOUNT-16: a person without a sign-in signs in as `account login`
-    // does and then asks once more.
+    // A person without a sign-in signs in as `account login` does and then asks
+    // once more.
     let deployment = deployment.clone();
     super::execute_cancellable_with_signals("sign-in", move |cancellation| {
         match login::sign_in_first(&deployment, transport_policy, cancellation)? {

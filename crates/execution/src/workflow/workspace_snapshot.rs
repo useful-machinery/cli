@@ -333,8 +333,8 @@ fn run_git(
 }
 
 /// The engine variables a snapshot's Git inherits: the program search path, and the
-/// user's home and configuration directories, through which `git ls-files
-/// --exclude-standard` reads the user's own ignore file (INV-ENGINE-38).
+/// user's home and configuration directories, through which
+/// `git ls-files --exclude-standard` reads the user's own ignore file.
 const SNAPSHOT_INHERITED_GIT_ENVIRONMENT: &[&str] = &["PATH", "HOME", "XDG_CONFIG_HOME"];
 
 /// Refuses every fetch. Git 2.45 and later read `GIT_NO_LAZY_FETCH`; an empty
@@ -695,7 +695,6 @@ mod tests {
         (outside, program, marker)
     }
 
-    // REQ-COMPAT-14
     #[test]
     fn snapshot_digest_keeps_the_retained_domain_framing() {
         let temporary = tempfile::tempdir().unwrap();
@@ -706,7 +705,6 @@ mod tests {
         assert_eq!(empty, lowercase_hex(framing.finish().as_ref()));
     }
 
-    // REQ-CONTINUE-89, INV-ENGINE-38
     #[test]
     fn snapshot_git_environment_removes_repository_routing_and_configuration() {
         let inherited = [
@@ -755,7 +753,6 @@ mod tests {
         assert_eq!(environment, expected);
     }
 
-    // REQ-CONTINUE-23
     #[test]
     fn continuation_comparison_requires_same_root_and_engine_settlement() {
         use super::super::publication::{WorkspaceModifiedUnknownV1, WorkspaceModifiedV1};
@@ -797,7 +794,6 @@ mod tests {
         );
     }
 
-    // REQ-CONTINUE-24
     #[test]
     fn cloud_preparation_records_unavailable_snapshot_instead_of_missing_evidence() {
         let prior = serde_json::to_value(capture_settlement_snapshot(
@@ -814,7 +810,6 @@ mod tests {
         assert_eq!(observed.modified, serde_json::json!("unknown"));
     }
 
-    // REQ-CONTINUE-24
     #[test]
     fn snapshot_distinguishes_content_modes_untracked_and_symlinks() {
         let repository = repository();
@@ -878,7 +873,6 @@ mod tests {
         }
     }
 
-    // REQ-CONTINUE-68
     #[test]
     fn snapshot_reports_mutation_around_read_without_using_time_for_synchronization() {
         let repository = repository();
@@ -996,7 +990,6 @@ mod tests {
         assert!(snapshot.validate(true));
     }
 
-    // REQ-CONTINUE-88, INV-ENGINE-37
     #[test]
     fn snapshot_runs_no_repository_configured_fsmonitor() {
         let repository = repository();
@@ -1014,7 +1007,6 @@ mod tests {
         assert!(!marker.exists());
     }
 
-    // REQ-CONTINUE-88, REQ-CONTINUE-89
     #[test]
     fn snapshot_starts_no_lazy_fetch_for_a_sparse_index_missing_a_tree() {
         let repository = repository();

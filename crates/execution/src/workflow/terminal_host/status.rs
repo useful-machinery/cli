@@ -183,7 +183,7 @@ pub(super) fn workflow_tone<Deadline>(workflow: &WorkflowState<Deadline>) -> Ton
     }
 }
 
-/// The mark of a step whose state word this release has no kind for (REQ-RUNNERENROLL-135).
+/// The mark of a step whose state word this release has no kind for.
 pub(super) const UNKNOWN_STATE_MARK: &str = "·";
 
 /// The symbol the graph and the inspector's title draw for a step: its state's, or the

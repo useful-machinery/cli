@@ -10,10 +10,20 @@ use crate::runner_http::test_server::{self, RecordedRequest};
 const AGENT_LOGIN: &str = "agl_01k0z6r1w8f4jy2m7q9v3x5abc";
 const GRANT_ID: &str = "pgr_01k0z6r1w8f4jy2m7q9v3x5abc";
 const INTEGRATION_TOKEN_ID: &str = "itk_01k0z6r1w8f4jy2m7q9v3x5abc";
+const CONNECTION_AUTHORIZATION_ID: &str = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
 const MATERIAL: &str = r#"{"tokens":{"access_token":"sentinel-agent-login-material"}}"#;
 
 fn client(endpoint: &Url) -> HttpAgentLoginCloud {
-    HttpAgentLoginCloud::new(endpoint, &test_credential()).unwrap()
+    HttpAgentLoginCloud::new(ServingTarget::new(
+        runner_http::Target::new(endpoint, &test_credential()).unwrap(),
+    ))
+}
+
+#[test]
+fn agent_login_requests_follow_the_serving_target() {
+    test_server::assert_promoted_bearer(HttpAgentLoginCloud::new, |cloud| {
+        let _ = cloud.status(&status_request());
+    });
 }
 
 /// What `ask` answers of a client whose Cloud reads its one request and
@@ -95,7 +105,6 @@ fn delivery_answer() -> String {
     )
 }
 
-// REQ-GRANT-25
 #[test]
 fn status_posts_the_runner_report_with_its_bearer_and_reads_each_provider() {
     let answer = format!(
@@ -144,7 +153,6 @@ fn status_posts_the_runner_report_with_its_bearer_and_reads_each_provider() {
     );
 }
 
-// REQ-GRANT-25
 #[test]
 fn status_omits_what_the_runner_has_not_got_and_derives_the_https_base() {
     let (endpoint, request, server) = test_server::respond_once(
@@ -170,25 +178,17 @@ fn status_omits_what_the_runner_has_not_got_and_derives_the_https_base() {
     );
 
     let secure = client(&Url::parse("wss://cloud.example/v1/runner/connect?boot=1").unwrap());
-    let secure = secure.target();
+    let secure = secure.target.current();
     assert_eq!(
-        secure.status_endpoint.as_str(),
+        secure.url(STATUS_PATH).as_str(),
         "https://cloud.example/v1/runner/agent-logins/status"
     );
     assert_eq!(
-        secure.delivery_endpoint.as_str(),
+        secure.url(DELIVERY_PATH).as_str(),
         "https://cloud.example/v1/runner/agent-logins/delivery"
-    );
-    assert!(
-        HttpAgentLoginCloud::new(
-            &Url::parse("https://cloud.example/").unwrap(),
-            &test_credential()
-        )
-        .is_none()
     );
 }
 
-// REQ-GRANT-25, REQ-GRANT-44
 #[test]
 fn status_names_claude_code_with_the_record_schema_versions_this_build_installs() {
     let (endpoint, request, server) = test_server::respond_once(
@@ -218,7 +218,6 @@ fn status_names_claude_code_with_the_record_schema_versions_this_build_installs(
     );
 }
 
-// REQ-GRANT-108, REQ-GRANT-109, REQ-GRANT-52
 #[test]
 fn status_states_the_last_use_and_its_time_only_of_a_ready_install() {
     let installed = || {
@@ -301,7 +300,6 @@ fn status_states_the_last_use_and_its_time_only_of_a_ready_install() {
     }
 }
 
-// REQ-GRANT-107
 #[test]
 fn status_drops_a_provider_this_build_does_not_know_and_reads_each_refusal_state() {
     let answer = format!(
@@ -338,7 +336,6 @@ fn status_drops_a_provider_this_build_does_not_know_and_reads_each_refusal_state
     }
 }
 
-// REQ-GRANT-25
 #[test]
 fn status_refuses_an_answer_that_is_not_private_or_not_the_closed_shape() {
     let entry = format!(
@@ -383,7 +380,6 @@ fn status_refuses_an_answer_that_is_not_private_or_not_the_closed_shape() {
     }
 }
 
-// REQ-GRANT-26
 #[test]
 fn delivery_posts_the_generation_asked_for_and_yields_the_decoded_material() {
     let answer = delivery_answer();
@@ -420,7 +416,6 @@ fn delivery_posts_the_generation_asked_for_and_yields_the_decoded_material() {
     assert_eq!(delivery.material.as_bytes(), MATERIAL.as_bytes());
 }
 
-// REQ-GRANT-26
 #[test]
 fn delivery_refusal_yields_exactly_the_reason_cloud_names() {
     for (reason, refusal) in [
@@ -482,7 +477,6 @@ fn answer_grant_token(
     result
 }
 
-// REQ-GRANT-86, REQ-GRANT-89
 #[test]
 fn a_grant_token_request_posts_the_pinned_body_and_reads_the_issued_token() {
     let issued = grant_token_fixture("issued.json");
@@ -509,7 +503,7 @@ fn a_grant_token_request_posts_the_pinned_body_and_reads_the_issued_token() {
         serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
         serde_json::from_str::<serde_json::Value>(&grant_token_fixture("request.json")).unwrap()
     );
-    assert_eq!(token.grant_id, GRANT_ID);
+    assert_eq!(token.issuer, Issuer::Grant(GRANT_ID.to_owned()));
     assert_eq!(token.generation, 4);
     assert_eq!(
         token.access_token.as_bytes(),
@@ -534,7 +528,6 @@ fn a_grant_token_request_posts_the_pinned_body_and_reads_the_issued_token() {
     );
 }
 
-// REQ-GRANT-86
 #[test]
 fn a_grant_token_refusal_yields_exactly_the_reason_cloud_names() {
     let pinned = grant_token_fixture("refusal.json");
@@ -583,7 +576,6 @@ fn a_grant_token_refusal_yields_exactly_the_reason_cloud_names() {
     );
 }
 
-// REQ-GRANT-148
 #[test]
 fn a_cloud_without_the_grant_token_route_authorizes_nothing_and_a_failing_one_is_unavailable() {
     assert_eq!(
@@ -608,7 +600,6 @@ fn a_cloud_without_the_grant_token_route_authorizes_nothing_and_a_failing_one_is
     );
 }
 
-// REQ-GRANT-86
 #[test]
 fn a_grant_token_answer_of_another_shape_or_an_unusable_token_is_invalid() {
     let valid = grant_token_fixture("issued.json");
@@ -698,7 +689,6 @@ fn provider_entry(provider: &str) -> String {
     )
 }
 
-// REQ-GRANT-97
 #[test]
 fn a_provider_list_request_posts_the_pinned_body_and_reads_each_listed_provider() {
     let pinned = grant_providers_fixture("listed.json");
@@ -745,7 +735,6 @@ fn a_provider_list_request_posts_the_pinned_body_and_reads_each_listed_provider(
     );
 }
 
-// REQ-GRANT-97
 #[test]
 fn a_provider_list_refusal_is_assignment_not_current_and_any_other_refusal_is_invalid() {
     let pinned = grant_providers_fixture("refusal.json");
@@ -775,7 +764,6 @@ fn a_provider_list_refusal_is_assignment_not_current_and_any_other_refusal_is_in
     }
 }
 
-// REQ-GRANT-97
 #[test]
 fn a_cloud_without_the_provider_list_route_is_no_route_and_a_failing_one_is_unavailable() {
     assert_eq!(
@@ -799,7 +787,6 @@ fn a_cloud_without_the_provider_list_route_is_no_route_and_a_failing_one_is_unav
     );
 }
 
-// REQ-GRANT-97
 #[test]
 fn a_provider_list_of_another_shape_or_with_an_unusable_id_is_invalid() {
     let valid = grant_providers_fixture("listed.json");
@@ -869,7 +856,6 @@ fn a_provider_list_of_another_shape_or_with_an_unusable_id_is_invalid() {
     );
 }
 
-// REQ-GRANT-84
 #[test]
 fn a_token_request_for_a_configured_provider_names_its_id_and_reads_only_its_answer() {
     let example = GrantProvider::listed("example").unwrap();
@@ -893,7 +879,7 @@ fn a_token_request_for_a_configured_provider_names_its_id_and_reads_only_its_ans
         serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
         expected
     );
-    assert_eq!(token.grant_id, GRANT_ID);
+    assert_eq!(token.issuer, Issuer::Grant(GRANT_ID.to_owned()));
 
     // An answer for another provider, even one of the runner's three, is
     // not the configured provider's token.
@@ -937,7 +923,6 @@ fn answer_token_services(
     result
 }
 
-// REQ-INTEGRATION-12
 #[test]
 fn a_token_service_list_request_posts_the_pinned_body_and_reads_each_token_service() {
     let pinned = grant_providers_fixture("token-services.json");
@@ -977,7 +962,6 @@ fn a_token_service_list_request_posts_the_pinned_body_and_reads_each_token_servi
     );
 }
 
-// REQ-INTEGRATION-48
 #[test]
 fn a_token_service_list_is_no_route_assignment_not_current_or_invalid_as_cloud_answers_it() {
     assert_eq!(
@@ -1025,7 +1009,6 @@ fn a_token_service_list_is_no_route_assignment_not_current_or_invalid_as_cloud_a
     }
 }
 
-// REQ-INTEGRATION-46
 #[test]
 fn a_token_request_for_a_token_service_reads_only_an_integration_tokens_answer() {
     let mergify = GrantTokenRequest {
@@ -1047,7 +1030,10 @@ fn a_token_request_for_a_token_service_reads_only_an_integration_tokens_answer()
         serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
         expected
     );
-    assert_eq!(token.grant_id, INTEGRATION_TOKEN_ID);
+    assert_eq!(
+        token.issuer,
+        Issuer::IntegrationToken(INTEGRATION_TOKEN_ID.to_owned())
+    );
     assert_eq!(token.generation, 2);
     assert_eq!(
         token.access_token.as_bytes(),
@@ -1105,6 +1091,112 @@ fn a_token_request_for_a_token_service_reads_only_an_integration_tokens_answer()
     assert_eq!(service.agent_login_provider(), None);
 }
 
+/// What `request` is answered with `body`.
+fn answer_token_request(
+    request: &GrantTokenRequest,
+    body: &str,
+) -> Result<IssuedToken, GrantTokenFailure> {
+    let (endpoint, _request, server) =
+        test_server::respond_once("200 OK", &test_server::broker_headers("", body), body);
+    let result = client(&endpoint).grant_token(request);
+    server.join().unwrap();
+    result
+}
+
+/// The pinned answer, for the provider Cloud names `provider` and issued
+/// under `id`.
+fn issued_for(provider: &str, id: &str) -> String {
+    grant_token_fixture("issued.json")
+        .replace(
+            r#""provider": "gitlab.com""#,
+            &format!(r#""provider": "{provider}""#),
+        )
+        .replace(GRANT_ID, id)
+}
+
+#[test]
+fn a_github_answer_is_read_as_issued_under_the_connection_authorization_or_grant_it_names() {
+    let github = GrantTokenRequest {
+        provider: GrantProvider::try_from(AgentLoginProvider::Github).unwrap(),
+        ..grant_token_request()
+    };
+
+    let token =
+        answer_token_request(&github, &issued_for("github", CONNECTION_AUTHORIZATION_ID)).unwrap();
+
+    assert_eq!(
+        token.issuer,
+        Issuer::ConnectionAuthorization(CONNECTION_AUTHORIZATION_ID.to_owned())
+    );
+    assert_eq!(token.generation, 4);
+    assert_eq!(
+        token.access_token.as_bytes(),
+        b"synthetic-grant-access-token"
+    );
+    assert_eq!(
+        answer_token_request(&github, &issued_for("github", GRANT_ID))
+            .unwrap()
+            .issuer,
+        Issuer::Grant(GRANT_ID.to_owned())
+    );
+    // An ID of neither kind is not `github`'s.
+    for id in [INTEGRATION_TOKEN_ID, AGENT_LOGIN, "cna_short"] {
+        assert_eq!(
+            answer_token_request(&github, &issued_for("github", id)).unwrap_err(),
+            GrantTokenFailure::Cloud(CloudFailure::InvalidResponse),
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn a_connection_authorizations_answer_is_invalid_for_any_provider_but_github() {
+    for (provider, id) in [
+        (
+            GrantProvider::try_from(AgentLoginProvider::Gitlab).unwrap(),
+            "gitlab.com",
+        ),
+        (
+            GrantProvider::try_from(AgentLoginProvider::Linear).unwrap(),
+            "linear",
+        ),
+        (GrantProvider::listed("example").unwrap(), "example"),
+    ] {
+        let request = GrantTokenRequest {
+            provider,
+            ..grant_token_request()
+        };
+        assert_eq!(
+            answer_token_request(&request, &issued_for(id, CONNECTION_AUTHORIZATION_ID))
+                .unwrap_err(),
+            GrantTokenFailure::Cloud(CloudFailure::InvalidResponse),
+            "{id}"
+        );
+        // The same answer naming a grant is that provider's.
+        assert_eq!(
+            answer_token_request(&request, &issued_for(id, GRANT_ID))
+                .unwrap()
+                .issuer,
+            Issuer::Grant(GRANT_ID.to_owned()),
+            "{id}"
+        );
+    }
+    // A token service's answer names an integration token and nothing else.
+    let mergify = GrantTokenRequest {
+        provider: GrantProvider::token_service("mergify").unwrap(),
+        ..grant_token_request()
+    };
+    let integration = grant_token_fixture("issued-integration-token.json");
+    for id in [GRANT_ID, CONNECTION_AUTHORIZATION_ID] {
+        assert_eq!(
+            answer_token_request(&mergify, &integration.replace(INTEGRATION_TOKEN_ID, id))
+                .unwrap_err(),
+            GrantTokenFailure::Cloud(CloudFailure::InvalidResponse),
+            "{id}"
+        );
+    }
+}
+
 const BOOT: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abe";
 const ASSIGNMENT: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abc";
 
@@ -1117,6 +1209,7 @@ fn credential_sources_request() -> CredentialSourcesRequest {
             provider,
             source,
             grant_id: grant_id.map(str::to_owned),
+            connection_authorization_id: None,
             agent_login_id: agent_login_id.map(str::to_owned),
         };
     CredentialSourcesRequest {
@@ -1159,7 +1252,6 @@ fn answer_credential_sources(status: &str, headers: &str) -> Result<(), Credenti
     result
 }
 
-// REQ-GRANT-93
 #[test]
 fn a_credential_source_report_posts_the_closed_body_and_a_204_records_it() {
     let (endpoint, request, server) =
@@ -1199,7 +1291,6 @@ fn a_credential_source_report_posts_the_closed_body_and_a_204_records_it() {
     );
 }
 
-// REQ-INTEGRATION-49, REQ-GRANT-93
 #[test]
 fn a_credential_source_report_names_each_token_service_after_the_providers_by_its_listed_id() {
     let (endpoint, request, server) =
@@ -1245,7 +1336,39 @@ fn a_credential_source_report_names_each_token_service_after_the_providers_by_it
     );
 }
 
-// REQ-GRANT-93
+#[test]
+fn a_credential_source_report_names_githubs_org_connection_by_its_connection_authorization() {
+    let (endpoint, request, server) =
+        test_server::respond_once("204 No Content", "Cache-Control: private, no-store\r\n", "");
+    let mut report = credential_sources_request();
+    report.sources[2] = ReportedSource {
+        provider: AgentLoginProvider::Github,
+        source: CredentialSource::OrgConnection,
+        grant_id: None,
+        connection_authorization_id: Some(CONNECTION_AUTHORIZATION_ID.to_owned()),
+        agent_login_id: None,
+    };
+
+    client(&endpoint).credential_sources(&report).unwrap();
+
+    let request = request.recv().unwrap();
+    server.join().unwrap();
+    let body = serde_json::from_str::<serde_json::Value>(&request.body).unwrap();
+    assert_eq!(
+        body["sources"][2],
+        serde_json::json!({
+            "provider": "github",
+            "source": "org_connection",
+            "connectionAuthorizationId": CONNECTION_AUTHORIZATION_ID,
+        })
+    );
+    // Every other entry is as it is without one.
+    assert_eq!(
+        body["sources"][3],
+        serde_json::json!({"provider": "gitlab.com", "source": "grant", "grantId": GRANT_ID})
+    );
+}
+
 #[test]
 fn a_cloud_without_the_credential_source_route_is_no_route_and_any_other_answer_a_failure() {
     assert_eq!(
@@ -1276,7 +1399,6 @@ fn a_cloud_without_the_credential_source_route_is_no_route_and_any_other_answer_
     );
 }
 
-// REQ-GRANT-151
 #[test]
 fn a_grant_access_token_never_appears_in_debug() {
     let issued = grant_token_fixture("issued.json");
@@ -1295,7 +1417,6 @@ fn a_grant_access_token_never_appears_in_debug() {
     }
 }
 
-// REQ-GRANT-26
 #[test]
 fn delivery_refuses_an_answer_for_another_generation_or_with_unusable_material() {
     let valid = delivery_answer();
@@ -1326,9 +1447,6 @@ fn delivery_refuses_an_answer_for_another_generation_or_with_unusable_material()
     );
 }
 
-// REQ-GRANT-25
-// REQ-GRANT-26
-// REQ-TELEMETRY-69
 #[test]
 fn a_cloud_without_the_routes_or_failing_is_unavailable_with_its_status() {
     for (status, code, headers) in [
@@ -1373,9 +1491,6 @@ fn a_cloud_without_the_routes_or_failing_is_unavailable_with_its_status() {
     );
 }
 
-// REQ-GRANT-25
-// REQ-GRANT-26
-// REQ-TELEMETRY-69
 #[test]
 fn a_request_cloud_does_not_answer_in_time_fails_in_transport() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1407,7 +1522,6 @@ fn a_request_cloud_does_not_answer_in_time_fails_in_transport() {
     server.join().unwrap();
 }
 
-// REQ-GRANT-26
 #[test]
 fn material_never_appears_in_debug() {
     let answer = delivery_answer();

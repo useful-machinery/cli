@@ -14,7 +14,7 @@ use super::{Found, GRANT_HELP, GrantArg, Options, Resolved, accounts, lookup, ou
 pub(super) const ABOUT: &str = "Show one of your grants with its runners and uses, or a token";
 
 // The tokens issued from an OAuth grant that its detail shows unless `--uses` names another
-// number (REQ-GRANT-64).
+// number.
 const USES_SHOWN: u16 = 20;
 
 #[derive(Debug, Args)]
@@ -35,11 +35,10 @@ pub(super) struct Command {
 }
 
 impl Command {
-    /// Reads the one grant `INTEGRATION` names (REQ-GRANT-65), and for an OAuth grant the newest
-    /// tokens issued from it (REQ-GRANT-8), with no read of the providers the deployment
-    /// serves; or, where a provider name names no grant, the member's token of the token
-    /// service it names, read once the served read names a token service (REQ-INTEGRATION-19).
-    /// `--uses` is refused for a token, exit 2, once it is found.
+    /// Reads the one grant `INTEGRATION` names, and for an OAuth grant the newest tokens issued
+    /// from it, with no read of the providers the deployment serves; or, where a provider name
+    /// names no grant, the member's token of the token service it names, read once the served
+    /// read names a token service. `--uses` is refused for a token, exit 2, once it is found.
     pub(super) fn run(self, deployment: &Deployment) -> CommandResult {
         let json = self.options.json;
         let read = super::with_api(deployment, &self.options, |api| {
@@ -80,7 +79,7 @@ impl Command {
             }
             Err(failure) => return Ok(output::failure(api_url, &failure, json)?),
         };
-        // A native grant issues no token, so Cloud records no use of it (REQ-GRANT-62).
+        // A native grant issues no token, so Cloud records no use of it.
         let uses = if grant.kind == MemberGrantKind::GrantKindOAuth {
             let limit = self.uses.unwrap_or(USES_SHOWN);
             match read_uses(deployment, &self.options, &grant.id, limit)? {
@@ -107,8 +106,8 @@ impl Command {
 }
 
 /// The newest `limit` tokens issued from the OAuth grant `grant_id`, newest first: one page,
-/// since the uses grow with every assignment (REQ-GRANT-8). A failed read is reported as a
-/// failed read of the grant.
+/// since the uses grow with every assignment. A failed read is reported as a failed read of
+/// the grant.
 fn read_uses(
     deployment: &Deployment,
     options: &Options,

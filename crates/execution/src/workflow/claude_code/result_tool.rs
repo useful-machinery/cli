@@ -1,8 +1,8 @@
 //! The Claude Code result tool: the `useful` executable in this worker role is the stdio MCP
-//! server `useful_workflow_result` that Claude Code starts from the invocation's
-//! `--mcp-config` file. It serves the one tool `submit` and relays each call to the
-//! invocation's result channel, where the adapter judges it (INV-HARNESS-23). It holds no state
-//! of its own, so a Claude Code that starts it again loses nothing (INV-HARNESS-31).
+//! server `useful_workflow_result` that Claude Code starts from the invocation's `--mcp-config`
+//! file. It serves the one tool `submit` and relays each call to the invocation's result
+//! channel, where the adapter judges it. It holds no state of its own, so a Claude Code that
+//! starts it again loses nothing.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::num::NonZeroU64;
@@ -23,7 +23,7 @@ pub(super) const SOCKET_ENVIRONMENT: &str = "USEFUL_INTERNAL_RESULT_TOOL_SOCKET"
 pub(super) const SERVER_NAME: &str = "useful_workflow_result";
 pub(super) const TOOL_NAME: &str = "submit";
 /// The largest request frame the result channel reads: twice the 8 MiB result limit, so the
-/// validator, not the channel, rejects a value above that limit (REQ-AGENT-30).
+/// validator, not the channel, rejects a value above that limit.
 pub(super) const MAXIMUM_REQUEST_FRAME_BYTES: NonZeroU64 = match NonZeroU64::new(16 * 1024 * 1024) {
     Some(bytes) => bytes,
     None => NonZeroU64::MIN,
@@ -109,7 +109,7 @@ pub(super) fn tool_definition() -> Value {
 }
 
 /// Whether this process was launched as the Claude Code result tool. Asking also records that
-/// the executable dispatches the worker roles (INV-TESTING-20), as the other roles' do.
+/// the executable dispatches the worker roles, as the other roles' do.
 pub fn internal_worker_requested() -> bool {
     crate::process::record_internal_worker_dispatch();
     std::env::var(ROLE_ENVIRONMENT).as_deref() == Ok(ROLE_VALUE)
@@ -676,7 +676,6 @@ mod tests {
         assert!(response.get("result").is_none());
     }
 
-    // REQ-AGENT-84, INV-HARNESS-23, INV-HARNESS-31, INV-HARNESS-32, INV-HARNESS-33
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_relay_serves_the_tool_and_relays_each_call_to_the_channel() {
         let mut channel = Channel::prepare();
@@ -783,7 +782,6 @@ mod tests {
         channel.channel.shutdown().await.unwrap();
     }
 
-    // INV-HARNESS-23, INV-HARNESS-33
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn without_its_socket_the_relay_fails_initialize_and_every_call() {
         let channel = Channel::prepare();

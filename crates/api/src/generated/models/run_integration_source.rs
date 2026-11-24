@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -15,19 +15,19 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// RunIntegrationSource : Where the credential of one integration the run's workflow declares came from. Cloud records `host`, `grant` and `token` sources, `actedAs` `member` for a grant and the token's side for a token, and a token version for a token alone.
+/// RunIntegrationSource : Where the credential of one integration the run's workflow declares came from. Cloud records `host`, `grant`, `org_connection` and `token` sources, `actedAs` `member` for a grant, `org` for an organization's connection and the token's side for a token, and a token version for a token alone.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunIntegrationSource {
     /// The provider id the workflow declares, such as `github` or `claude_code`; providers are added over time, so a reader must accept an id it does not know.
     #[serde(rename = "integration")]
     pub integration: String,
-    /// Whom the run acted as for the integration, `member` or `org`; null where Cloud recorded none, as for `host` and for an integration with no source. Cloud records `member` for a grant and the token's side, `member` or `org`, for a token.
+    /// Whom the run acted as for the integration, `member` or `org`; null where Cloud recorded none, as for `host` and for an integration with no source. Cloud records `member` for a grant, `org` for `org_connection` and the token's side, `member` or `org`, for a token.
     #[serde(rename = "actedAs", deserialize_with = "Option::deserialize")]
     pub acted_as: Option<ActedAs>,
-    /// The member who connected the credential, such as the member whose grant a `grant` source is or the member who stored the version of a `token` source that was issued; null where Cloud recorded none, as for `host`.
+    /// The member who connected the credential, such as the member whose grant a `grant` source is, the member who made the connection authorization of an `org_connection` source or the member who stored the version of a `token` source that was issued; null where Cloud recorded none, as for `host`.
     #[serde(rename = "connectedBy", deserialize_with = "Option::deserialize")]
     pub connected_by: Option<String>,
-    /// Where the credential came from: `grant` for a member's grant, `org_connection` for an organization's connection, `token` for a stored token, and `host` for a credential the runner's host provides; null where none provided one. Cloud records `host`, `grant` and `token`, and no `org_connection`.
+    /// Where the credential came from: `grant` for a member's grant, `org_connection` for an organization's connection, `token` for a stored token, and `host` for a credential the runner's host provides; null where none provided one. Cloud records `org_connection` for `github` alone, for the organization's GitHub App installation that a connection authorization issued to the run's runner.
     #[serde(rename = "source", deserialize_with = "Option::deserialize")]
     pub source: Option<Source>,
     /// The version of the token the run was issued, the newest issued the run's assignment before its runner's report; null for every source but `token`.
@@ -36,7 +36,7 @@ pub struct RunIntegrationSource {
 }
 
 impl RunIntegrationSource {
-    /// Where the credential of one integration the run's workflow declares came from. Cloud records `host`, `grant` and `token` sources, `actedAs` `member` for a grant and the token's side for a token, and a token version for a token alone.
+    /// Where the credential of one integration the run's workflow declares came from. Cloud records `host`, `grant`, `org_connection` and `token` sources, `actedAs` `member` for a grant, `org` for an organization's connection and the token's side for a token, and a token version for a token alone.
     pub fn new(
         integration: String,
         acted_as: Option<ActedAs>,
@@ -53,7 +53,7 @@ impl RunIntegrationSource {
         }
     }
 }
-/// Whom the run acted as for the integration, `member` or `org`; null where Cloud recorded none, as for `host` and for an integration with no source. Cloud records `member` for a grant and the token's side, `member` or `org`, for a token.
+/// Whom the run acted as for the integration, `member` or `org`; null where Cloud recorded none, as for `host` and for an integration with no source. Cloud records `member` for a grant, `org` for `org_connection` and the token's side, `member` or `org`, for a token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ActedAs {
     #[serde(rename = "member")]
@@ -67,7 +67,7 @@ impl Default for ActedAs {
         Self::RunIntegrationActedAsMember
     }
 }
-/// Where the credential came from: `grant` for a member's grant, `org_connection` for an organization's connection, `token` for a stored token, and `host` for a credential the runner's host provides; null where none provided one. Cloud records `host`, `grant` and `token`, and no `org_connection`.
+/// Where the credential came from: `grant` for a member's grant, `org_connection` for an organization's connection, `token` for a stored token, and `host` for a credential the runner's host provides; null where none provided one. Cloud records `org_connection` for `github` alone, for the organization's GitHub App installation that a connection authorization issued to the run's runner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Source {
     #[serde(rename = "grant")]

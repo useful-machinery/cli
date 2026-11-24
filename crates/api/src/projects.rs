@@ -42,11 +42,33 @@ pub enum ProjectRepositorySelector<'a> {
     GitLab(&'a str),
 }
 
+impl ProjectRepositorySelector<'_> {
+    pub fn select(
+        self,
+        repository_id: &str,
+        default_branch: Option<&str>,
+    ) -> models::ProjectRepositorySelection {
+        use models::project_repository_selection::ProviderKind;
+
+        let mut repository = models::ProjectRepositorySelection::new(repository_id.to_owned());
+        match self {
+            Self::GitHub(id) => {
+                repository.provider_kind = Some(ProviderKind::Github);
+                repository.installation_binding_id = Some(id.to_owned());
+            }
+            Self::GitLab(id) => {
+                repository.provider_kind = Some(ProviderKind::Gitlab);
+                repository.gitlab_connection_id = Some(id.to_owned());
+            }
+        }
+        repository.default_branch = default_branch.map(str::to_owned);
+        repository
+    }
+}
+
 pub struct CreateProjectInput<'a> {
     pub name: &'a str,
-    pub repository: ProjectRepositorySelector<'a>,
-    pub repository_id: &'a str,
-    pub default_branch: Option<&'a str>,
+    pub repository: Option<models::ProjectRepositorySelection>,
     pub runner_pool_id: Option<&'a str>,
 }
 
@@ -89,26 +111,8 @@ impl ProjectApi {
         idempotency_key: &str,
         input: CreateProjectInput<'_>,
     ) -> Result<Project, ProjectFailure> {
-        let mut repository = match input.repository {
-            ProjectRepositorySelector::GitHub(id) => {
-                let mut selection =
-                    models::ProjectRepositorySelection::new(input.repository_id.to_owned());
-                selection.provider_kind =
-                    Some(models::project_repository_selection::ProviderKind::Github);
-                selection.installation_binding_id = Some(id.to_owned());
-                selection
-            }
-            ProjectRepositorySelector::GitLab(id) => {
-                let mut selection =
-                    models::ProjectRepositorySelection::new(input.repository_id.to_owned());
-                selection.provider_kind =
-                    Some(models::project_repository_selection::ProviderKind::Gitlab);
-                selection.gitlab_connection_id = Some(id.to_owned());
-                selection
-            }
-        };
-        repository.default_branch = input.default_branch.map(str::to_owned);
-        let mut request = models::CreateProjectRequest::new(input.name.to_owned(), repository);
+        let mut request = models::CreateProjectRequest::new(input.name.to_owned());
+        request.repository = input.repository.map(Box::new);
         request.runner_pool_id = input.runner_pool_id.map(str::to_owned);
         let body = serialize_request(&request)?;
         let (project, locations) = self.request_json(JsonRequest {
@@ -782,28 +786,15 @@ fn validate_project(mut project: Project) -> Result<Project, ProjectFailure> {
                     .iter()
                     .all(|earlier| earlier.id != pool.id)
         });
-    let expected_blockers = match (project.runner_pool.is_none(), project.repository.as_deref()) {
-        (true, None) => vec![
-            models::ProjectReadinessBlocker::RunnerPoolUnassigned,
-            models::ProjectReadinessBlocker::RepositoryDetached,
-        ],
-        (true, Some(repository))
-            if repository.availability == models::project_repository::Availability::Unavailable =>
-        {
-            vec![
-                models::ProjectReadinessBlocker::RunnerPoolUnassigned,
-                models::ProjectReadinessBlocker::RepositoryUnavailable,
-            ]
-        }
-        (true, Some(_)) => vec![models::ProjectReadinessBlocker::RunnerPoolUnassigned],
-        (false, None) => vec![models::ProjectReadinessBlocker::RepositoryDetached],
-        (false, Some(repository))
-            if repository.availability == models::project_repository::Availability::Unavailable =>
-        {
-            vec![models::ProjectReadinessBlocker::RepositoryUnavailable]
-        }
-        (false, Some(_)) => Vec::new(),
-    };
+    let mut expected_blockers = Vec::new();
+    if project.runner_pool.is_none() {
+        expected_blockers.push(models::ProjectReadinessBlocker::RunnerPoolUnassigned);
+    }
+    if project.repository.as_deref().is_some_and(|repository| {
+        repository.availability == models::project_repository::Availability::Unavailable
+    }) {
+        expected_blockers.push(models::ProjectReadinessBlocker::RepositoryUnavailable);
+    }
     let timestamps_valid = OffsetDateTime::parse(&project.created_at, &Rfc3339)
         .ok()
         .zip(OffsetDateTime::parse(&project.updated_at, &Rfc3339).ok())
@@ -947,7 +938,7 @@ mod tests {
             "runnerPool": pool(0),
             "runnerPools": pools,
             "repository": null,
-            "executionReadiness": {"ready": false, "blockers": ["repository_detached"]},
+            "executionReadiness": {"ready": true, "blockers": []},
             "createdAt": "2026-01-01T00:00:00Z",
             "updatedAt": "2026-01-01T00:00:00Z",
         }))
@@ -955,8 +946,8 @@ mod tests {
         validate_project(project)
     }
 
-    // REQ-COMPAT-20: the pool-set limit is the server's, so a published CLI
-    // keeps reading a project whatever number of pools a later Cloud allows.
+    // The pool-set limit is the server's, so a published CLI keeps reading a
+    // project whatever number of pools a later Cloud allows.
     #[test]
     fn a_project_with_any_number_of_pools_decodes_and_malformed_sets_are_refused() {
         let pools: Vec<_> = (0..21).map(pool).collect();
@@ -977,8 +968,8 @@ mod tests {
         }
     }
 
-    // REQ-PROJECT-91: a project decodes with or without `archivedAt`, keeps the
-    // time it carries, and a member that is not a time is refused.
+    // A project decodes with or without `archivedAt`, keeps the time it
+    // carries, and a member that is not a time is refused.
     #[test]
     fn a_project_decodes_with_or_without_archived_at() {
         let decode = |archived_at: Option<&str>| {

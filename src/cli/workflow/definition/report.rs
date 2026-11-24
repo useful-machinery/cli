@@ -1,6 +1,6 @@
 //! Reports shared by the `useful workflow definition` leaves and the tree form of `useful
 //! workflow validate`: an invalid tree exactly as `useful workflow validate DIR` prints it
-//! (REQ-WFDEF-15) and a refused definition command (REQ-WFDEF-27).
+//! and a refused definition command.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -224,7 +224,7 @@ pub(super) fn write_refused(
 }
 
 /// `outcome` `refused` with `definition_not_found`: what was named, the home the lookup looked
-/// under, and whether it asked Cloud, in which project, or why not (REQ-CLOUDDEF-42).
+/// under, and whether it asked Cloud, in which project, or why not.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NotFoundReport<'a> {
@@ -295,8 +295,8 @@ pub(super) fn write_not_found(
 const NOT_FOUND: &str = "definition_not_found";
 
 /// Writes that `command`, which acts on a Cloud definition alone, refused definition `id` under
-/// the home at `path` with `definition_local` (REQ-CLOUDDEF-42), in the form `json` selects, as
-/// [`write_refused`] writes a refusal; `summary` heads the human form.
+/// the home at `path` with `definition_local`, in the form `json` selects, as [`write_refused`]
+/// writes a refusal; `summary` heads the human form.
 pub(super) fn write_local(
     command: &'static str,
     summary: &str,

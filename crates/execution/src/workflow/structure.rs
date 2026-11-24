@@ -1,4 +1,4 @@
-//! The field and the rule a structurally invalid document breaks (REQ-WFFORMAT-103).
+//! The field and the rule a structurally invalid document breaks.
 //!
 //! A document the embedded schema refuses is reduced to one violation: the first error
 //! the validator reports, followed through a `oneOf` or `anyOf` into the one form the

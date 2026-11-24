@@ -27,7 +27,6 @@ impl ArchivedTerminalBoundary for ScriptedTerminalBoundary {
     }
 }
 
-// REQ-LOCALRUN-64, REQ-LOCALRUN-65, REQ-LOCALRUN-68
 #[test]
 fn frozen_archive_renders_context_dag_inspector_and_declarations() {
     let view = ArchivedTerminalView::new(archived_attempt(Some(hostile_output())));
@@ -77,9 +76,9 @@ fn frozen_archive_renders_context_dag_inspector_and_declarations() {
     );
 }
 
-// REQ-LOCALRUN-294: the archived interface draws a stage whose child failed with the failed
-// state's symbol, names the child's failing node in its graph detail and gives its failure
-// in the inspector, while its recorded state stays `succeeded`.
+// The archived interface draws a stage whose child failed with the failed state's symbol,
+// names the child's failing node in its graph detail and gives its failure in the
+// inspector, while its recorded state stays `succeeded`.
 #[test]
 fn archived_stage_whose_child_failed_is_drawn_failed() {
     let mut attempt = archived_attempt(None);
@@ -155,7 +154,6 @@ fn hostile_node_evidence_is_safe_in_live_and_archived_presentations() {
     }
 }
 
-// REQ-LOCALRUN-66, REQ-LOCALRUN-69, REQ-LOCALRUN-75
 #[test]
 fn retained_prefixes_are_independent_safe_documents_with_exact_facts() {
     let view = ArchivedTerminalView::new(archived_attempt(Some(hostile_output())));
@@ -215,7 +213,6 @@ fn retained_prefixes_are_independent_safe_documents_with_exact_facts() {
     assert!(!full.contains("F follow"));
 }
 
-// REQ-LOCALRUN-67
 #[test]
 fn empty_and_missing_command_output_remain_distinct() {
     let empty = ArchivedCommandOutput {
@@ -270,7 +267,6 @@ fn archived_command_arguments_keep_scalar_normalization_unambiguous() {
     assert_eq!(command.value, expected);
 }
 
-// REQ-LOCALRUN-69
 #[test]
 fn archived_navigation_help_and_resize_preserve_static_viewport() {
     let view = ArchivedTerminalView::new(archived_attempt(Some(multiline_output(80))));
@@ -318,7 +314,6 @@ fn archived_navigation_help_and_resize_preserve_static_viewport() {
     assert_eq!(interaction.surface, HostSurface::FullLog);
 }
 
-// REQ-LOCALRUN-69
 #[test]
 fn archived_help_requested_while_too_small_opens_after_resize() {
     let view = ArchivedTerminalView::new(archived_attempt(None));
@@ -340,7 +335,6 @@ fn archived_help_requested_while_too_small_opens_after_resize() {
     assert!(resized.contains("? — all commands"));
 }
 
-// REQ-LOCALRUN-70
 #[tokio::test]
 async fn archived_host_quit_interrupt_and_termination_restore_without_a_summary() {
     for (input, expected) in [
@@ -420,7 +414,6 @@ async fn archived_host_resize_uses_boundary_area_and_redraws() {
     wait_for_action(&mut actions, BoundaryAction::Restore).await;
 }
 
-// REQ-LOCALRUN-72
 #[tokio::test]
 async fn archived_widget_panics_restore_and_carry_diagnostics() {
     let (boundary, _sender, mut actions) = ScriptedTerminalBoundary::new(
@@ -456,7 +449,6 @@ async fn archived_widget_panics_restore_and_carry_diagnostics() {
     wait_for_action(&mut actions, BoundaryAction::Restore).await;
 }
 
-// REQ-LOCALRUN-72
 #[tokio::test]
 async fn archived_host_failures_restore_and_preserve_failure_precedence() {
     for (failures, input, expected_operation) in [

@@ -520,7 +520,6 @@ async fn wait_for_renewal_requests(outbox: &ObservationOutbox, count: usize) -> 
     .expect("the lease supervision did not ask for the next lease")
 }
 
-// REQ-RUNNERENROLL-150
 #[tokio::test]
 async fn unanswered_renewal_is_asked_again_each_lead_from_the_first_basis() {
     let (lease_clock, _control, mut waits) = controlled_lease_clock();
@@ -619,7 +618,6 @@ async fn sixty_second_lease_grace_allows_clean_exit_after_thirty_seconds() {
     assert!(!supervised.guards.forced_containment_started());
 }
 
-// REQ-RUNNERENROLL-73
 #[tokio::test]
 async fn runner_shutdown_is_retained_separately_from_sticky_user_cancellation() {
     let (lease_clock, _control, _waits) = controlled_lease_clock();
@@ -655,7 +653,6 @@ async fn runner_shutdown_is_retained_separately_from_sticky_user_cancellation() 
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_loss_is_retained_separately_from_sticky_user_cancellation() {
     let mut fixture = supervised_lease_fixture();
@@ -694,7 +691,6 @@ async fn lease_loss_is_retained_separately_from_sticky_user_cancellation() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn supervision_started_after_cancellation_deadline_names_start_late() {
     let (clock, control, _waits) = controlled_lease_clock();
@@ -708,7 +704,6 @@ async fn supervision_started_after_cancellation_deadline_names_start_late() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn unnumberable_renewal_request_names_unreachable() {
     let (clock, _control, mut waits) = controlled_lease_clock();
@@ -730,7 +725,6 @@ async fn unnumberable_renewal_request_names_unreachable() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn closed_authority_channel_names_authority_missing() {
     let (clock, _control, _waits) = controlled_lease_clock();
@@ -749,7 +743,6 @@ async fn closed_authority_channel_names_authority_missing() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn renewal_deadline_preserves_earlier_cloud_revocation() {
     let mut fixture = supervised_lease_fixture();
@@ -768,7 +761,6 @@ async fn renewal_deadline_preserves_earlier_cloud_revocation() {
     );
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn lease_timer_failure_contains_without_accepting_ready_progress() {
     let (lease_clock, authority) = unavailable_timer_fixture();
@@ -847,7 +839,6 @@ async fn exact_stop_boundary_fences_before_a_ready_late_result() {
     ));
 }
 
-// REQ-RUNNERENROLL-156
 #[tokio::test]
 async fn overlong_suspend_contains_before_ready_completion() {
     let (lease_clock, control, mut waits) = controlled_lease_clock();
@@ -1627,9 +1618,6 @@ fn is_step_execution_attribute(key: &str) -> bool {
     key.starts_with("um.") || key == "error.type"
 }
 
-// REQ-TELEMETRY-41
-// REQ-TELEMETRY-42
-// REQ-TELEMETRY-43
 #[tokio::test]
 async fn settled_step_executions_are_root_records_on_both_sinks() {
     let (run_event, capture) = step_execution_run_event();
@@ -1744,7 +1732,6 @@ async fn settled_step_executions_are_root_records_on_both_sinks() {
     assert_eq!(first_implement[0]["um.outcome"], "failure");
 }
 
-// REQ-TELEMETRY-41
 #[tokio::test]
 async fn unexecuted_steps_and_starts_without_an_execution_write_nothing() {
     use StepStateKind::{Blocked, NotRun, Pending, Skipped, Starting};
@@ -1795,7 +1782,6 @@ async fn unexecuted_steps_and_starts_without_an_execution_write_nothing() {
     assert_eq!(capture.span_count("runner.step_execution"), 0);
 }
 
-// REQ-TELEMETRY-43
 #[tokio::test]
 async fn step_execution_outcome_follows_the_settlement_kind() {
     let cancelled = |code| {
@@ -1873,7 +1859,6 @@ async fn step_execution_outcome_follows_the_settlement_kind() {
     }
 }
 
-// REQ-TELEMETRY-41
 #[tokio::test]
 async fn step_executions_without_a_recorder_leave_the_transition_stream_unchanged() {
     let transitions = finalizer_and_recovered_step();
@@ -1912,9 +1897,9 @@ fn step_execution_attributes_written(
         .collect()
 }
 
-// INV-RUNNER-47: the transitions fed to the runner's observer through the pair over a run's
-// view queue exactly the workflow events, and write exactly the step execution records, that
-// they do fed to the runner's observer alone; and the view sees them.
+// The transitions fed to the runner's observer through the pair over a run's view queue
+// exactly the workflow events, and write exactly the step execution records, that they do
+// fed to the runner's observer alone; and the view sees them.
 #[tokio::test]
 async fn a_viewed_runs_observer_queues_and_records_what_it_does_alone() {
     let transitions = finalizer_and_recovered_step();
@@ -1972,8 +1957,8 @@ impl ExecutionObserver<RunnerExecutionInstant> for CountedSequences {
     }
 }
 
-// INV-RUNNER-47: the pair calls its second observer with each transition only after the
-// runner's observer has counted it.
+// The pair calls its second observer with each transition only after the runner's
+// observer has counted it.
 #[tokio::test]
 async fn the_pairs_second_observer_sees_a_transition_after_the_runners_counted_it() {
     let observer = step_execution_observer(RunEvent::default(), ObservationOutbox::new());
@@ -2027,19 +2012,30 @@ fn single_workflow_fixture(workflow: &str) -> tree_fixture::Fixture {
     let commit = run_fixture_git(&fixture.source, &["rev-parse", "HEAD"]);
     let spec = &mut fixture.offer.execution_spec;
     spec.workflow_tree = None;
-    spec.workflow_definition_source.workflow_path = "workflow.yaml".to_owned();
-    spec.workflow_definition_source
+    spec.source
+        .as_mut()
+        .unwrap()
+        .workflow_definition_source
+        .workflow_path = "workflow.yaml".to_owned();
+    spec.source
+        .as_mut()
+        .unwrap()
+        .workflow_definition_source
         .commit_oid
         .clone_from(&commit);
-    spec.primary_workspace_source.commit_oid = commit;
+    spec.source
+        .as_mut()
+        .unwrap()
+        .primary_workspace_source
+        .commit_oid = commit;
     let resolved = useful_execution::resolve(&fixture.source, Path::new("workflow.yaml")).unwrap();
     align_fixture_capacity(spec, &resolved);
     fixture
 }
 
-// REQ-RUNNERENROLL-155: the engine of a single-workflow assignment consults the gate its job
-// carries; while the gate finds the disk low the first step stays `starting` with its command
-// not run, and cancelling the assignment ends it without the step ever having started.
+// The engine of a single-workflow assignment consults the gate its job carries; while the
+// gate finds the disk low the first step stays `starting` with its command not run, and
+// cancelling the assignment ends it without the step ever having started.
 #[tokio::test]
 async fn a_single_workflow_runs_first_step_waits_at_a_low_disk_gate_until_cancelled() {
     let mut fixture = single_workflow_fixture(

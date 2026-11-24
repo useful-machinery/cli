@@ -138,7 +138,7 @@ impl Drop for HostRun {
     }
 }
 
-/// The `host` wait the run waits on, as an edge enters it (REQ-WFEXEC-80).
+/// The `host` wait the run waits on, as an edge enters it.
 fn host_wait() -> WaitRecord {
     WaitRecord {
         kind: WaitKind::Host,
@@ -163,15 +163,15 @@ fn resume_environment(extra: &[(&str, &str)]) -> EnvironmentSnapshot {
     EnvironmentSnapshot::new(variables)
 }
 
-// REQ-WFEXEC-81: a root that declares neither tools nor a check is healthy at once.
+// A root that declares neither tools nor a check is healthy at once.
 #[test]
 fn a_root_without_tools_or_a_check_is_healthy() {
     let run = HostRun::create("", &[]);
     assert!(run.healthy(&resume_environment(&[])));
 }
 
-// REQ-WFEXEC-81, REQ-WFEXEC-55: each required tool resolves on the run's copy of its
-// programs or on the given `PATH`; one that resolves on neither holds the wait.
+// Each required tool resolves on the run's copy of its programs or on the given
+// `PATH`; one that resolves on neither holds the wait.
 #[test]
 fn a_required_tool_missing_from_the_copy_and_path_holds() {
     let run = HostRun::create(
@@ -190,7 +190,7 @@ fn a_required_tool_missing_from_the_copy_and_path_holds() {
     assert!(!run.healthy(&resume_environment(&[])));
 }
 
-// REQ-WFEXEC-81: the check's exit status decides, and a check that cannot be launched holds.
+// The check's exit status decides, and a check that cannot be launched holds.
 #[test]
 fn the_check_is_healthy_only_when_it_exits_zero() {
     let run = HostRun::create(
@@ -206,8 +206,8 @@ fn the_check_is_healthy_only_when_it_exits_zero() {
     assert!(!missing.healthy(&environment));
 }
 
-// REQ-WFEXEC-81: a check that outlives its bound holds the wait, and its process group is
-// killed, so a process it started does nothing after the bound.
+// A check that outlives its bound holds the wait, and its process group is killed, so a
+// process it started does nothing after the bound.
 #[test]
 fn a_check_past_its_bound_holds_and_its_process_group_is_killed() {
     let run = HostRun::create(
@@ -229,8 +229,8 @@ fn a_check_past_its_bound_holds_and_its_process_group_is_killed() {
     assert!(!run.execution_root.join("late").exists());
 }
 
-// REQ-WFEXEC-81, REQ-WFEXEC-53, REQ-WFEXEC-71: the check runs in the execution root with a
-// root step's environment, the copy's programs leading `PATH`, and its standard input closed.
+// The check runs in the execution root with a root step's environment, the copy's programs
+// leading `PATH`, and its standard input closed.
 #[test]
 fn the_check_runs_in_the_execution_root_with_a_root_steps_environment() {
     let run = HostRun::create(

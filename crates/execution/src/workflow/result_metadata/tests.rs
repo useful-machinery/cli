@@ -109,7 +109,6 @@ fn cloud_result_fixture() -> Value {
     result
 }
 
-// REQ-WORKSPACE-30, REQ-WORKSPACE-31
 #[test]
 fn cloud_gitlab_snapshot_round_trips_exact_boundary_and_rejects_malformed_names() {
     for length in [256, 8192] {
@@ -256,7 +255,6 @@ fn encode(value: &Value) -> Vec<u8> {
     bytes
 }
 
-// REQ-CONTINUE-21
 #[test]
 fn result_reader_declares_no_recovery_member() {
     let mut cloud_continuation = continuation_result_fixture();
@@ -351,6 +349,36 @@ fn inherited_result_metadata_validates_producers_and_workspace_comparison() {
         validate_with_invariant(&unflattened_chain),
         Err(RunResultInvariant::Continuation)
     );
+}
+
+#[test]
+fn revalidated_steps_have_unique_identifiers_disjoint_from_the_other_lists() {
+    let mut record = continuation_result_fixture()["continuation"].clone();
+    for (ids, valid) in [
+        (json!(["check"]), true),
+        (json!(["check", "check"]), false),
+        (json!(["rerun"]), false),
+        (json!(["produce"]), false),
+        (json!(["."]), false),
+    ] {
+        record["revalidatedSteps"] = ids;
+        let parsed = serde_json::from_value(record.clone()).unwrap();
+        assert_eq!(validate_continuation_record(&parsed), valid, "{record}");
+    }
+}
+
+#[test]
+fn rebuilt_workspaces_are_unique_reexecuted_steps() {
+    let mut record = continuation_result_fixture()["continuation"].clone();
+    for (ids, valid) in [
+        (json!(["rerun"]), true),
+        (json!(["produce"]), false),
+        (json!(["rerun", "rerun"]), false),
+    ] {
+        record["rebuiltWorkspaces"] = ids;
+        let parsed = serde_json::from_value(record.clone()).unwrap();
+        assert_eq!(validate_continuation_record(&parsed), valid, "{record}");
+    }
 }
 
 #[test]
@@ -471,7 +499,6 @@ fn unavailable_inherited_exports_require_a_resolved_skipped_source() {
     );
 }
 
-// REQ-EXPORTS-3
 #[test]
 fn continuation_export_of_a_blocked_finalizer_is_source_blocked() {
     let mut document = continuation_result_fixture();
@@ -522,7 +549,6 @@ fn continuation_export_of_a_blocked_finalizer_is_source_blocked() {
     );
 }
 
-// REQ-EXPORTS-3
 #[test]
 fn continuation_source_failed_export_of_a_succeeded_step_requires_a_workflow_step() {
     let mut document = continuation_result_fixture();
@@ -974,7 +1000,6 @@ fn accepts_stream_truncated_at_the_declared_admitted_limit() {
     assert_eq!(decode(&encode(&result)), Err(ResultMetadataError));
 }
 
-// REQ-WFRECOVERY-41
 #[test]
 fn recovery_version_dispatch_precedes_nested_interpretation() {
     let mut result = result_fixture();
@@ -1119,7 +1144,6 @@ fn handler_decided_result(outcome: &str, termination: Value) -> Value {
     result
 }
 
-// REQ-WFRECOVERY-42
 #[test]
 fn infrastructure_termination_requires_the_round_handler_that_decided_it() {
     let result_with = handler_decided_result;
@@ -1155,7 +1179,6 @@ fn infrastructure_termination_requires_the_round_handler_that_decided_it() {
     }
 }
 
-// REQ-WFRECOVERY-42, REQ-WFEXEC-79
 #[test]
 fn failure_class_agrees_with_the_steps_termination() {
     let decided = handler_decided_result(
@@ -1190,8 +1213,8 @@ fn failure_class_agrees_with_the_steps_termination() {
     }
 }
 
-/// A failed `cmd` step whose command exited 71, classified by its exit status
-/// (REQ-WFRECOVERY-66), with no recovery.
+/// A failed `cmd` step whose command exited 71, classified by its exit
+/// status, with no recovery.
 fn exit_classified_result() -> Value {
     let mut result = failed_result_fixture(
         "execution",
@@ -1269,7 +1292,6 @@ fn exit_classified_after_a_round(handler: bool, termination: Value) -> Value {
     result
 }
 
-// REQ-WFRECOVERY-42, REQ-WFRECOVERY-66, REQ-WFEXEC-79
 #[test]
 fn exit_status_classification_validates_after_rechecked_rounds_or_without_recovery() {
     let execution_form = json!({ "kind": "infrastructure", "executionNumber": 2 });
@@ -1326,7 +1348,6 @@ fn exit_status_classification_validates_after_rechecked_rounds_or_without_recove
     }
 }
 
-// REQ-WFRECOVERY-60, REQ-WFRECOVERY-62
 #[test]
 fn handler_launch_diagnostic_accompanies_only_command_launch_failed() {
     let spawn = json!({ "launchFailure": "spawn", "osError": 35 });
@@ -1385,7 +1406,6 @@ fn handler_launch_diagnostic_accompanies_only_command_launch_failed() {
     }
 }
 
-// REQ-DIAG-38, REQ-WFRECOVERY-62
 #[test]
 fn handler_launch_refusal_projects_its_cause_and_operating_system_error() {
     use crate::workflow::recovery::RecoveryHandlerFailure;
@@ -1468,7 +1488,6 @@ fn recovered_summary_accepts_schema_length_non_ascii_text() {
     assert!(decode(&encode(&result)).is_ok());
 }
 
-// REQ-WFRECOVERY-42
 #[test]
 fn recovered_summary_rejects_a_handler_that_gave_up() {
     let mut result = recovered_result_fixture();
@@ -1492,7 +1511,6 @@ fn recovered_summary_rejects_a_handler_that_gave_up() {
     );
 }
 
-// REQ-WFRECOVERY-42
 #[test]
 fn handlerless_summary_rejects_a_phantom_handler_invocation() {
     let mut result = recovered_result_fixture();
@@ -1617,7 +1635,6 @@ fn advisory_issue_is_valid_on_success_but_cannot_be_primary() {
     assert_eq!(decode(&encode(&advisory)), Err(ResultMetadataError));
 }
 
-// REQ-WFEXEC-136
 #[test]
 fn an_interrupted_step_is_the_primary_issue_whatever_its_failure_policy() {
     for phase in ["start", "execution"] {
@@ -1638,7 +1655,6 @@ fn an_interrupted_step_is_the_primary_issue_whatever_its_failure_policy() {
     assert_eq!(decode(&encode(&at_capture)), Err(ResultMetadataError));
 }
 
-// REQ-WFEXEC-134
 #[test]
 fn a_recovery_round_an_interruption_stopped_ends_failed_and_cancelled() {
     let interrupted = |code: &str| {
@@ -1777,7 +1793,6 @@ fn cancelled_fixture(reason: &str) -> Value {
     result
 }
 
-// REQ-EVIDENCE-1
 #[test]
 fn only_nodes_that_started_record_timing_and_command_output() {
     let started = stopped_downstream_fixture();
@@ -1828,7 +1843,6 @@ fn only_nodes_that_started_record_timing_and_command_output() {
     }
 }
 
-// REQ-EVIDENCE-4
 #[test]
 fn node_detail_is_present_exactly_for_states_that_need_explaining() {
     let mut explained_success = result_fixture();
@@ -1861,7 +1875,6 @@ fn node_detail_is_present_exactly_for_states_that_need_explaining() {
     }
 }
 
-// REQ-EVIDENCE-8
 #[test]
 fn cancelled_node_detail_is_the_closed_authoritative_stop_reason() {
     for reason in [
@@ -1909,7 +1922,6 @@ fn with_input_sources(mut result: Value, pointer: &str, sources: Value) -> Value
     result
 }
 
-// REQ-EVIDENCE-28
 #[test]
 fn only_an_ordinary_step_that_started_records_input_sources() {
     let sources = json!([{ "message": "text", "index": 0, "ref": "outputs.a.result" }]);
@@ -1939,7 +1951,6 @@ fn only_an_ordinary_step_that_started_records_input_sources() {
     }
 }
 
-// REQ-EVIDENCE-28
 #[test]
 fn input_sources_name_output_references_once_each_in_binding_order() {
     let entry = |binding: Value, reference: &str| {

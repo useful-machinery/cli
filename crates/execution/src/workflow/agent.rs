@@ -982,8 +982,8 @@ pub(crate) struct HarnessFailureDiagnostic {
     pub(crate) harness_error: Option<&'static str>,
     pub(crate) http_status: Option<u16>,
     /// The provider's reset time, Unix seconds, kept for a `rate_limited` or
-    /// `usage_limit_exceeded` class only (REQ-AGENT-72). The recovery and finalization
-    /// contexts carry it; the closed runner diagnostic never does.
+    /// `usage_limit_exceeded` class only. The recovery and finalization contexts carry
+    /// it; the closed runner diagnostic never does.
     pub(crate) resets_at: Option<u64>,
 }
 
@@ -1102,7 +1102,7 @@ impl AgentProtocolRejectionDiagnostic {
         }
     }
 
-    /// The closed `snake_case` name of the adapter's rejection reason (REQ-AGENT-42).
+    /// The closed `snake_case` name of the adapter's rejection reason.
     pub(crate) fn reason_name(&self) -> Option<String> {
         match &self.profile {
             AgentProtocolRejectionProfile::PiJsonV1(rejection) => {
@@ -1216,8 +1216,7 @@ pub enum AgentOutcome {
 impl AgentOutcome {
     /// What this outcome says of the login the invocation's harness received: accepted when
     /// the invocation succeeded, refused when it failed with the harness error class
-    /// `unauthorized` (REQ-AGENT-45), and nothing for any other failure or a cancellation
-    /// (INV-ENGINE-36).
+    /// `unauthorized`, and nothing for any other failure or a cancellation.
     pub(crate) fn harness_login_outcome(&self) -> Option<HarnessLoginOutcome> {
         match self {
             Self::Completed(_) => Some(HarnessLoginOutcome::Accepted),

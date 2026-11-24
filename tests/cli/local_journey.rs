@@ -2,7 +2,6 @@ use super::workflow_run::isolated_command;
 use serde_json::Value;
 use std::fs;
 
-// INV-CLI-20, REQ-LOCALRUN-175, REQ-LOCALRUN-189, REQ-LOCALRUN-203
 #[test]
 fn validate_create_list_show_and_view_follow_the_same_local_run() {
     let directory = tempfile::tempdir().unwrap();

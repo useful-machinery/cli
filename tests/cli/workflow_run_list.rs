@@ -36,7 +36,7 @@ fn list_at(home: &Path, args: &[&str]) -> Output {
 }
 
 /// The `useful workflow run list ARGS --json` document, checked: with nobody signed in each row
-/// is a local run and Cloud was not asked (REQ-RUN-127).
+/// is a local run and Cloud was not asked.
 fn document(home: &Home, args: &[&str]) -> Value {
     let output = list(home, &[args, &["--json"]].concat());
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -55,8 +55,8 @@ fn listed(home: &Home, args: &[&str]) -> Vec<Value> {
     document(home, args)["runs"].as_array().unwrap().clone()
 }
 
-/// The ids `useful workflow run list ARGS --json` lists and the exited runs it says it left out
-/// (REQ-LOCALRUN-203).
+/// The ids `useful workflow run list ARGS --json` lists and the exited runs it says it left
+/// out.
 fn selected(home: &Home, args: &[&str]) -> (Vec<String>, u64) {
     let document = document(home, args);
     let ids = ids(document["runs"].as_array().unwrap())
@@ -77,7 +77,7 @@ fn ids(runs: &[Value]) -> Vec<&str> {
     runs.iter().map(|run| run["id"].as_str().unwrap()).collect()
 }
 
-/// The questions `design` asks, so one answer leaves the wait open (REQ-LOCALRUN-182).
+/// The questions `design` asks, so one answer leaves the wait open.
 fn two_questions() -> Value {
     json!([
         {"id": "q1", "text": "keep the cache?"},
@@ -85,9 +85,9 @@ fn two_questions() -> Value {
     ])
 }
 
-// REQ-LOCALRUN-188, REQ-LOCALRUN-296, REQ-LOCALRUN-297, REQ-LOCALRUN-203: `list` lists the live runs under the home in id order
-// with their record and wait and counts the exited runs it left out, `--all` lists every run,
-// the filters select in memory, and an unreadable entry is named on stderr.
+// `list` lists the live runs under the home in id order with their record and wait and counts the
+// exited runs it left out, `--all` lists every run, the filters select in memory, and an unreadable
+// entry is named on stderr.
 #[test]
 fn list_shows_the_live_runs_or_with_all_every_run() {
     let published = PublishedWaitTree::with_json_questions(&two_questions());
@@ -297,9 +297,8 @@ fn list_shows_the_live_runs_or_with_all_every_run() {
     assert_eq!(selected(&empty, &["--all"]), (vec![], 0));
 }
 
-// REQ-LOCALRUN-188, REQ-LOCALRUN-190, REQ-LOCALRUN-203: each run lists its subject, the one
-// exited run is counted as hidden, and `--drift` keeps the live runs behind their
-// definition's current revision, each with that revision.
+// Each run lists its subject, the one exited run is counted as hidden, and `--drift` keeps
+// the live runs behind their definition's current revision, each with that revision.
 #[test]
 fn list_shows_the_subject_and_the_drifted_runs() {
     let published = PublishedWaitTree::with_subject();
@@ -406,8 +405,8 @@ fn shown(home: &PublishedWaitTree, run: impl AsRef<std::ffi::OsStr>) -> Value {
     document
 }
 
-// REQ-LOCALRUN-189, REQ-LOCALRUN-298, REQ-LOCALRUN-301: `show` prints one run's record, position, wait, attempts, children and
-// controls without taking its lock or changing its directory.
+// `show` prints one run's record, position, wait, attempts, children and controls without taking
+// its lock or changing its directory.
 #[test]
 fn show_prints_a_run_with_its_children_and_controls() {
     let published = PublishedWaitTree::with_json_questions(&two_questions());
@@ -436,7 +435,7 @@ fn show_prints_a_run_with_its_children_and_controls() {
     assert_eq!(snapshot(&run), before);
     assert_eq!(document["runDirectory"], run.to_str().unwrap());
     assert_eq!(document["record"], run_record(&run));
-    // REQ-WFDEF-48: the record's position names the step whose child last started.
+    // The record's position names the step whose child last started.
     assert_eq!(document["record"]["position"], json!(["design"]));
     assert_eq!(document["position"], "design");
     assert_eq!(document["wait"], wait);
@@ -513,8 +512,8 @@ pub(super) fn shown_plain(run: &Path) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-// REQ-LOCALRUN-189: `show` prints the run's `edges` counts and, for an attempt a backward or
-// limited edge started, the edge it took beside its `reason`.
+// `show` prints the run's `edges` counts and, for an attempt a backward or limited edge
+// started, the edge it took beside its `reason`.
 #[test]
 fn show_prints_the_edges_a_run_took() {
     let bundle = loop_tree();
@@ -640,10 +639,10 @@ fn placed(item: &Value, on: &str) -> Value {
     row
 }
 
-// REQ-RUN-127, REQ-RUN-66: `list` prints the runs under the home and then one page of the Cloud
-// runs of the organization in effect, each saying where it executes, asks for the live ones
-// unless `--all`, keeps the waiting ones under `--waiting`, sends the project in effect, prints
-// no local row after the first page, and asks no Cloud under a filter only a local record holds.
+// `list` prints the runs under the home and then one page of the Cloud runs of the organization
+// in effect, each saying where it executes, asks for the live ones unless `--all`, keeps the
+// waiting ones under `--waiting`, sends the project in effect, prints no local row after the
+// first page, and asks no Cloud under a filter only a local record holds.
 #[test]
 fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
     let published = PublishedWaitTree::new();
@@ -776,9 +775,9 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
     );
 }
 
-// REQ-RUN-127: with nobody signed in `list` prints the home's runs, says on standard error that
-// Cloud was not asked and exits 0, `--on local` asks no Cloud and says nothing of it, a Cloud
-// place fails as a Cloud read does, and options of another place are usage errors.
+// With nobody signed in `list` prints the home's runs, says on standard error that Cloud was
+// not asked and exits 0, `--on local` asks no Cloud and says nothing of it, a Cloud place fails
+// as a Cloud read does, and options of another place are usage errors.
 #[test]
 fn list_without_cloud_prints_the_home_and_says_why() {
     let published = PublishedWaitTree::new();

@@ -186,15 +186,13 @@ fn download_capability_response(result: &[u8], url: &str) -> Vec<u8> {
     )
 }
 
-// REQ-ARTIFACTSET-35, REQ-ARTIFACTSET-38
 #[test]
 fn artifact_download_json_reports_only_the_verified_committed_set() {
     downloads_the_committed_set(false);
 }
 
-// REQ-ARTIFACTSET-12, REQ-ARTIFACTSET-29, REQ-ARTIFACTSET-35, REQ-ARTIFACTSET-38: `download`
-// takes the run `list` printed and receives the set `list` named, and `validate` accepts the
-// directory the download receipt names.
+// `download` takes the run `list` printed and receives the set `list` named, and `validate`
+// accepts the directory the download receipt names.
 #[test]
 fn a_listed_artifact_set_downloads_to_a_directory_that_validates() {
     downloads_the_committed_set(true);
@@ -321,7 +319,6 @@ fn downloads_the_committed_set(journey: bool) {
     assert!(useful_test_support::request_header(&download, "authorization").is_none());
 }
 
-// REQ-ARTIFACTSET-36
 #[test]
 fn artifact_download_verification_failure_emits_no_receipt_or_destination() {
     let expected = portable_result_bytes();
@@ -371,7 +368,6 @@ fn artifact_download_verification_failure_emits_no_receipt_or_destination() {
     storage.finish();
 }
 
-// REQ-ARTIFACTSET-29, REQ-ARTIFACTSET-30, REQ-ARTIFACTSET-31
 #[test]
 fn artifact_list_reports_one_inventory_page_without_download_authority_or_files() {
     for json in [false, true] {
@@ -446,7 +442,6 @@ fn artifact_list_reports_one_inventory_page_without_download_authority_or_files(
     }
 }
 
-// REQ-ARTIFACTSET-31
 #[test]
 fn artifact_list_accepts_a_short_final_continuation_page() {
     let response = inventory_response(serde_json::json!({
@@ -481,7 +476,6 @@ fn artifact_list_accepts_a_short_final_continuation_page() {
     assert!(requests[0].contains("cursor=current-page"));
 }
 
-// REQ-ARTIFACTSET-34
 #[test]
 fn artifact_list_reports_unsealed_or_missing_sets_as_unavailable_in_human_mode() {
     let (server, _credential_directory, credential_path) =
@@ -513,7 +507,6 @@ fn artifact_list_reports_unsealed_or_missing_sets_as_unavailable_in_human_mode()
     assert!(!requests[0].contains("download-capabilities"));
 }
 
-// REQ-ARTIFACTSET-32
 #[test]
 fn artifact_list_rejects_inventory_pages_that_ignore_request_bounds() {
     let mut body = inventory_body();
@@ -556,7 +549,6 @@ fn artifact_list_rejects_inventory_pages_that_ignore_request_bounds() {
     }
 }
 
-// REQ-ARTIFACTSET-33
 #[test]
 fn artifact_list_escapes_untrusted_remote_text_only_in_human_output() {
     let media_type = "text/plain\nforged: value\u{1b}[2J";
@@ -585,7 +577,6 @@ fn artifact_list_escapes_untrusted_remote_text_only_in_human_output() {
     }
 }
 
-// REQ-ARTIFACTSET-34
 #[test]
 fn artifact_list_json_preserves_meaningful_api_failure_classes() {
     let unauthenticated = run(&[
@@ -718,7 +709,6 @@ fn artifact_list_json_preserves_meaningful_api_failure_classes() {
 const SERVICE_API_KEY: &str =
     "crd_01k0z6r1w8f4jy2m7q9v3x5abc.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-// REQ-ARTIFACTSET-29
 #[test]
 fn artifact_list_and_download_authenticate_with_a_service_api_key_file() {
     let directory = private_credential_directory();
@@ -811,7 +801,6 @@ fn artifact_list_and_download_authenticate_with_a_service_api_key_file() {
     assert!(!missing_human_store.exists());
 }
 
-// REQ-ARTIFACTSET-37
 #[test]
 fn artifact_download_refuses_an_existing_output_path() {
     let result = portable_result_bytes();

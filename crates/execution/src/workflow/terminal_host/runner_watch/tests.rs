@@ -45,7 +45,6 @@ impl RunnerWatchBoundary for ScriptedTerminalBoundary {
     }
 }
 
-// REQ-RUNNERENROLL-140, REQ-LOCALRUN-6
 #[test]
 fn overview_draws_each_fact_whole_and_without_color_at_the_minimum_size() {
     let mut screen = RunnerWatchScreen::new(overview(BOOT_A), observed_at(0));
@@ -130,7 +129,6 @@ fn overview_draws_each_fact_whole_and_without_color_at_the_minimum_size() {
     assert!(scrolled.contains("AUTO-112"), "{scrolled:?}");
 }
 
-// REQ-RUNNERENROLL-140
 #[test]
 fn a_recent_entry_gives_up_no_more_than_the_row_needs() {
     let mut screen = RunnerWatchScreen::new(overview(BOOT_A), observed_at(0));
@@ -156,7 +154,6 @@ fn a_recent_entry_gives_up_no_more_than_the_row_needs() {
     }
 }
 
-// REQ-RUNNERENROLL-141
 #[tokio::test]
 async fn host_keeps_the_last_overview_while_the_runner_is_away() {
     let area = Rect::new(0, 0, 100, 30);
@@ -194,7 +191,6 @@ async fn host_keeps_the_last_overview_while_the_runner_is_away() {
     assert_eq!(host.wait().await.unwrap(), ArchivedTerminalHostExit::Quit);
 }
 
-// REQ-RUNNERENROLL-143, REQ-LOCALRUN-70
 #[tokio::test]
 async fn host_endings_restore_and_the_source_is_only_read() {
     for (input, expected) in [
@@ -238,7 +234,6 @@ async fn host_endings_restore_and_the_source_is_only_read() {
     }
 }
 
-// REQ-LOCALRUN-72
 #[tokio::test]
 async fn host_draw_failure_restores_and_answers_a_presentation_failure() {
     let (boundary, _input, mut actions) = ScriptedTerminalBoundary::new(
@@ -265,7 +260,6 @@ async fn host_draw_failure_restores_and_answers_a_presentation_failure() {
     wait_for_action(&mut actions, BoundaryAction::Restore).await;
 }
 
-// REQ-RUNNERENROLL-142
 #[tokio::test]
 async fn an_operation_runs_off_the_draw_loop_and_its_outcome_stays_shown() {
     let area = Rect::new(0, 0, 100, 30);
@@ -316,9 +310,9 @@ async fn an_operation_runs_off_the_draw_loop_and_its_outcome_stays_shown() {
     assert_eq!(host.wait().await.unwrap(), ArchivedTerminalHostExit::Quit);
 }
 
-// REQ-RUNNERENROLL-140, REQ-LOCALRUN-6: the disk reading sits on the identity line, and
-// while the disk is low a warning with the minimum takes the line under it instead, told
-// by its mark and words rather than by color.
+// The disk reading sits on the identity line, and while the disk is low a warning with
+// the minimum takes the line under it instead, told by its mark and words rather than by
+// color.
 #[test]
 fn the_disk_reading_and_its_low_warning_are_drawn_without_color() {
     const GIB: u64 = 1 << 30;
@@ -384,7 +378,6 @@ fn the_disk_reading_and_its_low_warning_are_drawn_without_color() {
     }
 }
 
-// REQ-RUNNERENROLL-142
 #[test]
 fn an_outcome_shows_each_fact_whole_or_counts_it_at_the_minimum_size() {
     let facts = [
@@ -428,7 +421,6 @@ fn an_outcome_shows_each_fact_whole_or_counts_it_at_the_minimum_size() {
     }
 }
 
-// REQ-RUNNERENROLL-143
 #[tokio::test]
 async fn quitting_never_waits_for_an_operation_in_flight() {
     let area = Rect::new(0, 0, 100, 30);
@@ -466,7 +458,6 @@ async fn quitting_never_waits_for_an_operation_in_flight() {
     wait_for_action(&mut actions, BoundaryAction::Restore).await;
 }
 
-// REQ-RUNNERENROLL-146, REQ-LOCALRUN-6
 #[test]
 fn a_run_given_as_words_draws_its_graph_and_inspector_without_color() {
     let run = five_step_run();
@@ -577,7 +568,6 @@ fn a_run_given_as_words_draws_its_graph_and_inspector_without_color() {
     }
 }
 
-// REQ-RUNNERENROLL-135
 #[test]
 fn each_state_word_reads_as_its_kind_and_another_word_as_none() {
     for word in [
@@ -599,9 +589,8 @@ fn each_state_word_reads_as_its_kind_and_another_word_as_none() {
     assert_eq!(step_state_kind("paused_by_moon"), None);
 }
 
-// REQ-RUNNERENROLL-146: an opened assignment draws its facts, its URL whole or the width
-// that shows it, and its run's graph and inspector at both layouts, and below the minimum
-// size the notice alone.
+// An opened assignment draws its facts, its URL whole or the width that shows it, and its
+// run's graph and inspector at both layouts, and below the minimum size the notice alone.
 #[test]
 fn an_opened_assignment_draws_its_facts_url_and_run() {
     let ids = ["plan", "implement", "review", "odd", "cleanup"];
@@ -658,9 +647,9 @@ fn an_opened_assignment_draws_its_facts_url_and_run() {
     }
 }
 
-// REQ-RUNNERENROLL-146: Enter asks for the selected entry's root, a `workflow` step in
-// flight is never named, and the step selected is asked for without another's output
-// shown under it until its answer comes.
+// Enter asks for the selected entry's root, a `workflow` step in flight is never
+// named, and the step selected is asked for without another's output shown under it
+// until its answer comes.
 #[tokio::test]
 async fn enter_asks_for_the_assignment_and_the_selected_step_for_its_output() {
     let (gate, gated) = std::sync::mpsc::channel::<()>();
@@ -723,7 +712,7 @@ async fn enter_asks_for_the_assignment_and_the_selected_step_for_its_output() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: the step wanted is asked for at once, with no second passing.
+// The step wanted is asked for at once, with no second passing.
 #[tokio::test]
 async fn a_newly_selected_step_is_asked_for_at_once() {
     let source = ScriptedSource::new([Ok(overview(BOOT_A))]).with_assignments(|query| {
@@ -748,8 +737,8 @@ async fn a_newly_selected_step_is_asked_for_at_once() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: Enter on a `workflow` step opens its child run, Esc returns to the
-// parent with the step selected and then to the overview, which alone is asked for then.
+// Enter on a `workflow` step opens its child run, Esc returns to the parent with the step
+// selected and then to the overview, which alone is asked for then.
 #[tokio::test]
 async fn enter_walks_into_a_child_run_and_esc_walks_back() {
     let source = ScriptedSource::new([Ok(overview(BOOT_A))]).with_assignments(|query| {
@@ -818,8 +807,8 @@ async fn enter_walks_into_a_child_run_and_esc_walks_back() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: the selection is held by step ID when a step changes state and
-// another appears before it.
+// The selection is held by step ID when a step changes state and another appears
+// before it.
 #[tokio::test]
 async fn the_selection_follows_its_step_through_an_answer() {
     let source = ScriptedSource::new([Ok(overview(BOOT_A))]).with_assignments(|query| {
@@ -864,8 +853,8 @@ async fn the_selection_follows_its_step_through_an_answer() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: a run absent from an answer keeps the one drawn, and an assignment
-// never given a run draws its facts and no graph.
+// A run absent from an answer keeps the one drawn, and an assignment never given a run
+// draws its facts and no graph.
 #[tokio::test]
 async fn a_run_absent_from_an_answer_keeps_the_last_one_drawn() {
     let ids = ["plan", "implement", "review", "odd", "cleanup"];
@@ -899,8 +888,8 @@ async fn a_run_absent_from_an_answer_keeps_the_last_one_drawn() {
     }
 }
 
-// REQ-RUNNERENROLL-146: an assignment the runner holds no longer shows its result from the
-// overview's recent list beside the last run drawn, and is asked for no more.
+// An assignment the runner holds no longer shows its result from the overview's recent
+// list beside the last run drawn, and is asked for no more.
 #[tokio::test]
 async fn an_assignment_no_longer_held_shows_its_result_and_is_asked_for_no_more() {
     let mut ended = overview(BOOT_A);
@@ -944,8 +933,8 @@ async fn an_assignment_no_longer_held_shows_its_result_and_is_asked_for_no_more(
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-141: an assignment read the runner does not answer keeps the run drawn
-// under the last-known banner, and the reads go on.
+// An assignment read the runner does not answer keeps the run drawn under the last-known
+// banner, and the reads go on.
 #[tokio::test]
 async fn an_unanswered_assignment_read_keeps_the_run_drawn() {
     let mut answered = 0;
@@ -977,8 +966,8 @@ async fn an_unanswered_assignment_read_keeps_the_run_drawn() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-142, REQ-RUNNERENROLL-143: with an assignment open the operation keys
-// reach the runner with nothing, and `q` never waits for an assignment read.
+// With an assignment open the operation keys reach the runner with nothing, and `q`
+// never waits for an assignment read.
 #[tokio::test]
 async fn an_open_assignment_sends_no_operation_and_quits_without_waiting() {
     let (gate, gated) = std::sync::mpsc::channel::<()>();
@@ -1010,10 +999,9 @@ async fn an_open_assignment_sends_no_operation_and_quits_without_waiting() {
     assert_eq!(count_calls(&calls, SourceCall::SetUpAgentLogins), 0);
 }
 
-// REQ-RUNNERENROLL-146: Enter on a settled step opens its output full-screen under the
-// inspector at the newest line, following it; a movement key pauses it on a line that later
-// answers keep at the top, `F` follows again, Left and Right pan, and leaving it forgets the
-// position.
+// Enter on a settled step opens its output full-screen under the inspector at the newest
+// line, following it; a movement key pauses it on a line that later answers keep at the top,
+// `F` follows again, Left and Right pan, and leaving it forgets the position.
 #[tokio::test]
 async fn a_full_screen_output_follows_pauses_on_a_line_and_forgets_it_on_leaving() {
     let log = Arc::new(Mutex::new(numbered_output(1..=40, 3)));
@@ -1122,9 +1110,9 @@ async fn a_full_screen_output_follows_pauses_on_a_line_and_forgets_it_on_leaving
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: `o` on a `workflow` step opens the run log full-screen and Esc
-// returns to the run's split view; an answer with no log draws none and every movement key
-// leaves the viewer drawing.
+// `o` on a `workflow` step opens the run log full-screen and Esc returns to the run's
+// split view; an answer with no log draws none and every movement key leaves the viewer
+// drawing.
 #[tokio::test]
 async fn o_opens_the_run_log_full_screen_with_or_without_a_log() {
     let without_log = Arc::new(AtomicBool::new(false));
@@ -1196,9 +1184,9 @@ async fn o_opens_the_run_log_full_screen_with_or_without_a_log() {
     watch.quit().await;
 }
 
-// REQ-RUNNERENROLL-146: at the minimum size the full-screen output still draws its newest
-// line under an inspector that takes every row it may, with and without the status row: the
-// stream headings give way to the line.
+// At the minimum size the full-screen output still draws its newest line under an inspector
+// that takes every row it may, with and without the status row: the stream headings give
+// way to the line.
 #[test]
 fn a_full_screen_output_keeps_its_newest_line_under_the_tallest_inspector() {
     for (declared_outputs, ended) in [(2, false), (3, true)] {
@@ -1251,8 +1239,8 @@ fn a_full_screen_output_keeps_its_newest_line_under_the_tallest_inspector() {
     }
 }
 
-// REQ-RUNNERENROLL-146: once the runner holds the assignment no longer it is asked for no
-// more, so the log pane of a step whose output was never read stops saying it is asked for.
+// Once the runner holds the assignment no longer it is asked for no more, so the log pane
+// of a step whose output was never read stops saying it is asked for.
 #[test]
 fn a_step_never_read_is_not_drawn_as_asked_for_once_the_assignment_ended() {
     let entry = assignment("AUTO-751");
@@ -1286,11 +1274,10 @@ fn a_step_never_read_is_not_drawn_as_asked_for_once_the_assignment_ended() {
     assert_ne!(asked_for.trim(), ended.trim());
 }
 
-// REQ-RUNNERENROLL-146, REQ-RUNNERENROLL-135: a step's records draw in the log pane under a
-// first row naming the step and the older records and bytes not shown, one row per record
-// in the order given, each beginning with the run interface's label for its source, a
-// continuation under the split record's marker and a word this release does not know under
-// the word as received.
+// A step's records draw in the log pane under a first row naming the step and the older
+// records and bytes not shown, one row per record in the order given, each beginning with
+// the run interface's label for its source, a continuation under the split record's marker
+// and a word this release does not know under the word as received.
 #[test]
 fn a_step_s_records_draw_in_order_under_the_run_interface_s_labels() {
     let area = Rect::new(0, 0, 120, 40);
@@ -1374,8 +1361,8 @@ fn a_step_s_records_draw_in_order_under_the_run_interface_s_labels() {
     }
 }
 
-// REQ-RUNNERENROLL-146: a step with no records says no output has been received, as one row
-// of its own and not as an empty pane.
+// A step with no records says no output has been received, as one row of its own and not as
+// an empty pane.
 #[test]
 fn a_step_with_no_records_says_so_in_one_row() {
     let area = Rect::new(0, 0, 120, 40);
@@ -1402,8 +1389,8 @@ fn a_step_with_no_records_says_so_in_one_row() {
     );
 }
 
-// REQ-RUNNERENROLL-146: a records log naming no step draws its own heading and no row, and
-// the pane is drawn neither as a log asked for nor as one yet to come.
+// A records log naming no step draws its own heading and no row, and the pane is drawn
+// neither as a log asked for nor as one yet to come.
 #[test]
 fn a_records_log_naming_no_step_is_drawn_as_its_own_and_not_as_one_to_come() {
     let area = Rect::new(0, 0, 120, 40);
@@ -1441,8 +1428,8 @@ fn a_records_log_naming_no_step_is_drawn_as_its_own_and_not_as_one_to_come() {
     assert_ne!(no_step, no_log);
 }
 
-// REQ-RUNNERENROLL-146: an answer whose records name another step than the one asked about
-// is not drawn under the step selected, which keeps the records it was given.
+// An answer whose records name another step than the one asked about is not drawn under
+// the step selected, which keeps the records it was given.
 #[test]
 fn records_of_another_step_are_not_drawn_under_the_step_selected() {
     let area = Rect::new(0, 0, 120, 40);
@@ -1475,9 +1462,8 @@ fn records_of_another_step_are_not_drawn_under_the_step_selected() {
     );
 }
 
-// REQ-RUNNERENROLL-146, REQ-LOCALRUN-47: in the full-screen log, paused on a record, an
-// answer that left three more older records out and added two newer ones keeps the same
-// record at the top.
+// In the full-screen log, paused on a record, an answer that left three more older
+// records out and added two newer ones keeps the same record at the top.
 #[test]
 fn a_paused_full_screen_log_keeps_its_top_record_through_older_records_left_out() {
     let area = Rect::new(0, 0, 120, 30);

@@ -1,9 +1,9 @@
 //! `useful workflow definition archive`, `unarchive`, `delete` and `update DEFINITION --run-as
-//! SERVICE`, and `enable` and `disable` of a Cloud definition (REQ-CLOUDDEF-15): each a keyed
-//! change to, or the delete of, a definition of the project in effect through the public API
-//! (REQ-CLOUDDEF-1), with the CLI's session handling and each refusal's problem type. The definition is named as REQ-CLOUDDEF-42
-//! states, and an ID the home holds is refused with `definition_local`, except by `enable` and
-//! `disable`, which act on such a definition themselves (REQ-WFDEF-24).
+//! SERVICE`, and `enable` and `disable` of a Cloud definition: each a keyed change to, or the
+//! delete of, a definition of the project in effect through the public API, with the CLI's session
+//! handling and each refusal's problem type. The definition is named by its ID or its name, and an
+//! ID the home holds is refused with `definition_local`, except by `enable` and `disable`, which
+//! act on such a definition themselves.
 
 use std::io::{self, Write};
 
@@ -151,9 +151,8 @@ impl Target {
 }
 
 impl Delete {
-    /// Deletes the archived Cloud definition the leaf names (REQ-CLOUDDEF-40) under one fresh
-    /// key, sent again once when the response is lost or is a transient problem
-    /// (REQ-CLOUDDEF-25).
+    /// Deletes the archived Cloud definition the leaf names under one fresh key, sent again
+    /// once when the response is lost or is a transient problem.
     pub(super) fn execute(self) -> CommandResult {
         let Target {
             definition,
@@ -232,7 +231,7 @@ pub(super) fn send(
 }
 
 /// Applies `change` to definition `id` under one fresh key, sent again once when the response is
-/// lost or is a transient problem (REQ-CLOUDDEF-25).
+/// lost or is a transient problem.
 fn apply(
     deployment: &Deployment,
     options: &Options,
@@ -261,9 +260,9 @@ fn keyed<T>(
     with_api(deployment, options, |api| resend_once(|| send(api, &key)))
 }
 
-/// The principal ID `run_as` names (REQ-CLOUDDEF-15): a `prn_` ID as given, and otherwise the
-/// one service principal of the organization with that display name, read from its member
-/// directory; or the result that ends the leaf before any change is sent.
+/// The principal ID `run_as` names: a `prn_` ID as given, and otherwise the one service
+/// principal of the organization with that display name, read from its member directory; or
+/// the result that ends the leaf before any change is sent.
 fn service(
     run_as: &str,
     deployment: &Deployment,

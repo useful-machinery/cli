@@ -178,7 +178,6 @@ def expect_verification_failure(verifier: Path, archive_path: Path, description:
         fail(f"{description} unexpectedly passed release-package verification")
 
 
-# REQ-ONBOARD-2
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="scherzo-release-package-test-") as temporary:
         root = Path(temporary)
@@ -222,7 +221,7 @@ def main() -> None:
             verifier, state_write, "state-writing packaged authoring command"
         )
 
-        # INV-RELEASE-42: a release version refuses a `useful` that names a test
+        # A release version refuses a `useful` that names a test
         # variable; the development version `check-suite` packs its test-built
         # debug binary at accepts the same executable.
         write_binary(binary, "test-build")

@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -246,6 +246,20 @@ pub enum PreviewInvitationError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`report_unreadable_records`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ReportUnreadableRecordsError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status413(models::Problem),
+    Status415(models::Problem),
+    Status500(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`request_organization_deletion`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -426,7 +440,7 @@ pub fn accept_invitation(
     }
 }
 
-/// Authorizes one runner registration of the organization to use one of the organization's integration tokens, and answers 201 with the authorization (REQ-INTEGRATION-5). A token is used on no runner until an owner authorizes that runner. Only an owner may authorize (REQ-INTEGRATION-3): another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. A token that is unknown, revoked, a member's or another organization's is `integration-token-not-found`; a runner that is unknown, deleted or of another organization is `integration-token-runner-not-found`; a token already authorized for the runner is `integration-token-already-authorized`. A token whose provider the deployment no longer serves as a token service is refused `provider-unavailable`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId and runnerId. Exact replay returns the original created response. Reusing the key for another request conflicts.  Problem types: 404 `integration-token-not-found`, `integration-token-runner-not-found`; 409 `integration-token-already-authorized`; 503 `provider-unavailable`.
+/// Authorizes one runner registration of the organization to use one of the organization's integration tokens, and answers 201 with the authorization. A token is used on no runner until an owner authorizes that runner. Only an owner may authorize: another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. A token that is unknown, revoked, a member's or another organization's is `integration-token-not-found`; a runner that is unknown, deleted or of another organization is `integration-token-runner-not-found`; a token already authorized for the runner is `integration-token-already-authorized`. A token whose provider the deployment no longer serves as a token service is refused `provider-unavailable`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId and runnerId. Exact replay returns the original created response. Reusing the key for another request conflicts.  Problem types: 404 `integration-token-not-found`, `integration-token-runner-not-found`; 409 `integration-token-already-authorized`; 503 `provider-unavailable`.
 pub fn authorize_organization_integration_token_runner(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -565,7 +579,7 @@ pub fn cancel_organization_deletion(
     }
 }
 
-/// Authorizes one runner of the organization to use one of the organization's connections at one provider for the app runs of one of its projects, and answers 201 with the authorization (REQ-INTEGRATION-26, REQ-INTEGRATION-27). An authorization holds no credential and delivers none: Cloud delivers an organization's connection to no step (REQ-INTEGRATION-24).  The answer's `scope` is what the provider grants the connection, read from the provider for this answer (REQ-INTEGRATION-32). It is the connection's whole reach at the provider, and the authorization narrows it to neither its project nor its runner. A provider that cannot be read makes the `scope` `unavailable` and fails nothing: the authorization is made and answered as it would have been.  Only an active human who is an owner of the organization may authorize: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them, each before anything else about the request is judged. Then, in this order: a provider that is not eligible, today any but `github`, is `connection-authorization-provider-ineligible`; a project that is unknown or another organization's is `connection-authorization-project-not-found`; a runner that is unknown, deleted or another organization's is `connection-authorization-runner-not-found`; a `connectionId` that names no connection of the organization at the provider is `connection-authorization-connection-not-found`; a connection that is not `active` is `connection-authorization-connection-inactive`; and where an authorization is already in force for the project, runner and provider, for this connection or another, the request is `connection-authorization-already-authorized`. A body without one of its four members is 400. Every refusal changes nothing. An archived project is authorized as any other.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing projectId, runnerId, provider and connectionId. Exact replay returns the original created response with the authorization as it now is, its `scope` read again for the replay. Reusing the key for another request conflicts.  Problem types: 404 `connection-authorization-connection-not-found`, `connection-authorization-project-not-found`, `connection-authorization-runner-not-found`; 409 `connection-authorization-already-authorized`, `connection-authorization-connection-inactive`, `connection-authorization-provider-ineligible`.
+/// Authorizes one runner of the organization to use one of the organization's connections at one provider for the runs of one of its projects that `runs` names, and answers 201 with the authorization. `runs` is `app`, the app runs alone, where the body omits it, or `all`, every run, whoever its actor is; any other value is 400. An authorization holds no credential: for a run it covers, Cloud issues the runner a token of the connection's GitHub App installation for that run's one repository at each request.  The answer's `scope` is what the provider grants the connection, read from the provider for this answer. It is the connection's whole reach at the provider, and the authorization narrows it to neither its project nor its runner. A provider that cannot be read makes the `scope` `unavailable` and fails nothing: the authorization is made and answered as it would have been.  Only an active human who is an owner of the organization may authorize: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them, each before anything else about the request is judged. Then, in this order: a provider that is not eligible, today any but `github`, is `connection-authorization-provider-ineligible`; a project that is unknown or another organization's is `connection-authorization-project-not-found`; a runner that is unknown, deleted or another organization's is `connection-authorization-runner-not-found`; a `connectionId` that names no connection of the organization at the provider is `connection-authorization-connection-not-found`; a connection that is not `active` is `connection-authorization-connection-inactive`; an `active` connection whose authority was never verified (`authorityVerifiedAt` null) is `connection-authorization-connection-unverified`; and where an authorization is already in force for the project, runner and provider, for this connection or another and whatever its `runs`, the request is `connection-authorization-already-authorized`. A body without one of its four required members is 400. Every refusal changes nothing. An archived project is authorized as any other.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing projectId, runnerId, provider, connectionId and runs as resolved, so an omitted runs and `app` are the same request. Exact replay returns the original created response with the authorization as it now is, its `scope` read again for the replay. Reusing the key for another request conflicts.  Problem types: 404 `connection-authorization-connection-not-found`, `connection-authorization-project-not-found`, `connection-authorization-runner-not-found`; 409 `connection-authorization-already-authorized`, `connection-authorization-connection-inactive`, `connection-authorization-connection-unverified`, `connection-authorization-provider-ineligible`.
 pub fn create_connection_authorization(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -961,7 +975,7 @@ pub fn leave_organization(
     }
 }
 
-/// Returns one page of the organization's connection authorizations in force, oldest first by creation time and opaque authorization ID (REQ-INTEGRATION-28), each with its ID, the organization's ID, its provider, its project's ID and name, its runner's ID and name, its connection's ID and the account that connection's own read names, the member who made it and when, and its `scope`. `projectId`, `runnerId`, `provider` and `connectionId` each keep the authorizations that name exactly that value, and a value that is not of its member's form is 400. An authorization that has ended is not listed; the organization's audit history holds it (REQ-INTEGRATION-30). The cursor is opaque and may be used only with this operation.  Each authorization's `scope` is what the provider grants its connection, read from the provider for this answer, once for each connection the page names (REQ-INTEGRATION-32). It is the connection's whole reach at the provider, and no authorization narrows it to its project or its runner. A provider that cannot be read makes that `scope` `unavailable` and fails nothing: the page is answered as it would have been.  Only an active human who is an owner of the organization is served: another active member is answered 403, and a caller who is not an active member is answered as any other read of the organization answers them.
+/// Returns one page of the organization's connection authorizations in force, oldest first by creation time and opaque authorization ID, each with its ID, the organization's ID, its provider, its project's ID and name, its runner's ID and name, its connection's ID and the account that connection's own read names, the member who made it and when, and its `scope`. `projectId`, `runnerId`, `provider` and `connectionId` each keep the authorizations that name exactly that value, and a value that is not of its member's form is 400. An authorization that has ended is not listed; the organization's audit history holds it. The cursor is opaque and may be used only with this operation.  Each authorization's `scope` is what the provider grants its connection, read from the provider for this answer, once for each connection the page names. It is the connection's whole reach at the provider, and no authorization narrows it to its project or its runner. A provider that cannot be read makes that `scope` `unavailable` and fails nothing: the page is answered as it would have been.  Only an active human who is an owner of the organization is served: another active member is answered 403, and a caller who is not an active member is answered as any other read of the organization answers them.
 pub fn list_connection_authorizations(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1124,7 +1138,7 @@ pub fn list_organization_audit_records(
     }
 }
 
-/// Returns one page of the organization's unrevoked integration tokens to any active member of it, oldest first by creation time and opaque token ID, each with its ID, provider, side `org`, the organization's ID, version, the member who stored the current version and when, its creation time and its authorizations in force, each with its runner's ID and name and that runner's organization (REQ-INTEGRATION-4). No answer carries a token, and no member's own token is listed. A caller who is not an active member is answered as any other read of the organization answers them. The cursor is opaque and may be used only with this operation. A deployment configured without the integration credential key answers `provider-unavailable` (REQ-INTEGRATION-1).  Problem types: 503 `provider-unavailable`.
+/// Returns one page of the organization's unrevoked integration tokens to any active member of it, oldest first by creation time and opaque token ID, each with its ID, provider, side `org`, the organization's ID, version, the member who stored the current version and when, its creation time and its authorizations in force, each with its runner's ID and name and that runner's organization. No answer carries a token, and no member's own token is listed. A caller who is not an active member is answered as any other read of the organization answers them. The cursor is opaque and may be used only with this operation. A deployment configured without the integration credential key answers `provider-unavailable`.  Problem types: 503 `provider-unavailable`.
 pub fn list_organization_integration_tokens(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1467,6 +1481,51 @@ pub fn preview_invitation(
     }
 }
 
+/// An active human member reports records the web app left out of a list. The Gateway records the report in the request's telemetry, stores nothing and takes no Idempotency-Key.
+pub fn report_unreadable_records(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    unreadable_record_report: models::UnreadableRecordReport,
+) -> Result<(), Error<ReportUnreadableRecordsError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_body_unreadable_record_report = unreadable_record_report;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/unreadable-record-reports",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+    req_builder = req_builder.json(&p_body_unreadable_record_report);
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+
+    if !status.is_client_error() && !status.is_server_error() {
+        Ok(())
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ReportUnreadableRecordsError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
 /// The schedule durably binds the owner's linked identity, the SHA-256 fingerprint of this verified bearer, and this bearer's issuer `iat`. The bearer itself and the retained proof are never exposed.  Problem types: 409 `lifecycle-transition-unavailable`.
 pub fn request_organization_deletion(
     configuration: &configuration::Configuration,
@@ -1531,7 +1590,7 @@ pub fn request_organization_deletion(
     }
 }
 
-/// Ends one of the organization's connection authorizations and answers 204; one already ended, whatever ended it, answers 204 too (REQ-INTEGRATION-29). The request accepts no body. Ending one asks no run to stop, and the same project, runner and provider may then be authorized again, for that connection or another, as a new authorization. An authorization that is unknown or another organization's is `connection-authorization-not-found`.  Only an active human who is an owner of the organization may end one: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing authorizationId. Exact replay returns the original 204 response. Reusing the key for another authorization conflicts.  Problem types: 404 `connection-authorization-not-found`.
+/// Ends one of the organization's connection authorizations and answers 204; one already ended, whatever ended it, answers 204 too. The request accepts no body. Ending one asks no run to stop, and the same project, runner and provider may then be authorized again, for that connection or another, as a new authorization. An authorization that is unknown or another organization's is `connection-authorization-not-found`.  Only an active human who is an owner of the organization may end one: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing authorizationId. Exact replay returns the original 204 response. Reusing the key for another authorization conflicts.  Problem types: 404 `connection-authorization-not-found`.
 pub fn revoke_connection_authorization(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1628,7 +1687,7 @@ pub fn revoke_invitation(
     }
 }
 
-/// Revokes one of the organization's integration tokens and answers 204; a token already revoked answers 204 too (REQ-INTEGRATION-6). The request accepts no body. The token is erased, every authorization of it ends and it is no longer listed; a token stored for the same provider afterwards is a new record at version 1. Revoking serves every provider, whether or not the deployment's table still holds it, and does not end the token at its service. Only an owner may revoke (REQ-INTEGRATION-3): another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. A token that is unknown, a member's or another organization's is `integration-token-not-found`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId. Exact replay returns the original 204 response. Reusing the key for another token conflicts.  Problem types: 404 `integration-token-not-found`; 503 `provider-unavailable`.
+/// Revokes one of the organization's integration tokens and answers 204; a token already revoked answers 204 too. The request accepts no body. The token is erased, every authorization of it ends and it is no longer listed; a token stored for the same provider afterwards is a new record at version 1. Revoking serves every provider, whether or not the deployment's table still holds it, and does not end the token at its service. Only an owner may revoke: another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. A token that is unknown, a member's or another organization's is `integration-token-not-found`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId. Exact replay returns the original 204 response. Reusing the key for another token conflicts.  Problem types: 404 `integration-token-not-found`; 503 `provider-unavailable`.
 pub fn revoke_organization_integration_token(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1677,7 +1736,7 @@ pub fn revoke_organization_integration_token(
     }
 }
 
-/// Ends one authorization in force of one of the organization's integration tokens and answers 204; an authorization already ended answers 204 too (REQ-INTEGRATION-5). The request accepts no body. Ending one serves every provider, whether or not the deployment's table still holds it, and asks no run to stop. Only an owner may end one (REQ-INTEGRATION-3): another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. An authorization that is unknown or not on one of the organization's tokens is `integration-token-authorization-not-found`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId and authorizationId. Exact replay returns the original 204 response. Reusing the key for another authorization conflicts.  Problem types: 404 `integration-token-authorization-not-found`; 503 `provider-unavailable`.
+/// Ends one authorization in force of one of the organization's integration tokens and answers 204; an authorization already ended answers 204 too. The request accepts no body. Ending one serves every provider, whether or not the deployment's table still holds it, and asks no run to stop. Only an owner may end one: another active member is answered 403 and a caller who is not an active member as any other read of the organization answers them. An authorization that is unknown or not on one of the organization's tokens is `integration-token-authorization-not-found`.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing integrationTokenId and authorizationId. Exact replay returns the original 204 response. Reusing the key for another authorization conflicts.  Problem types: 404 `integration-token-authorization-not-found`; 503 `provider-unavailable`.
 pub fn revoke_organization_integration_token_authorization(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1729,7 +1788,7 @@ pub fn revoke_organization_integration_token_authorization(
     }
 }
 
-/// Stores the organization's token for one token service of the deployment's provider table, held sealed in Cloud custody, and answers 201 with the token's record at version 1, on side `org` with the organization's ID (REQ-INTEGRATION-3). The body and its rules are storeIntegrationToken's: a token outside the form is refused `integration-token-invalid` and no answer repeats it; where the organization already holds an unrevoked token of the provider, a request without `replace` true is refused `integration-token-exists` with nothing changed, and one with it stores the next version and answers 200. A provider that is not a token service of the deployment's table, and every request to a deployment without the integration credential key, is refused `provider-unavailable` (REQ-INTEGRATION-1).  Only an active human who is an owner of the organization may store or replace its token: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them. The token is the organization's, never the member's who stored it; `connectedBy` records who stored the current version and confers nothing.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing provider, replace and a keyed digest of the token. Exact replay returns the original status with the token's record as it now is. Reusing the key for another request conflicts.  Problem types: 400 `integration-token-invalid`; 409 `integration-token-exists`; 503 `provider-unavailable`.
+/// Stores the organization's token for one token service of the deployment's provider table, held sealed in Cloud custody, and answers 201 with the token's record at version 1, on side `org` with the organization's ID. The body and its rules are storeIntegrationToken's: a token outside the form is refused `integration-token-invalid` and no answer repeats it; where the organization already holds an unrevoked token of the provider, a request without `replace` true is refused `integration-token-exists` with nothing changed, and one with it stores the next version and answers 200. A provider that is not a token service of the deployment's table, and every request to a deployment without the integration credential key, is refused `provider-unavailable`.  Only an active human who is an owner of the organization may store or replace its token: another active member is answered 403 with nothing changed, and a caller who is not an active member is answered as any other read of the organization answers them. The token is the organization's, never the member's who stored it; `connectedBy` records who stored the current version and confers nothing.  Idempotency-Key is scoped to the exact acting OIDC identity, the organization and a semantic fingerprint containing provider, replace and a keyed digest of the token. Exact replay returns the original status with the token's record as it now is. Reusing the key for another request conflicts.  Problem types: 400 `integration-token-invalid`; 409 `integration-token-exists`; 503 `provider-unavailable`.
 pub fn store_organization_integration_token(
     configuration: &configuration::Configuration,
     organization_ref: &str,

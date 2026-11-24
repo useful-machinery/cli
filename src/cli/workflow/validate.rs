@@ -1,6 +1,6 @@
-//! `useful workflow validate PATH` (REQ-WFFORMAT-12): a workflow file, bounded by
-//! `--source-root` or by the root of the Git repository that holds it, or, for a directory, the
-//! tree it holds (REQ-WFDEF-9), each with its own report.
+//! `useful workflow validate PATH`: a workflow file, bounded by `--source-root` or by the root
+//! of the Git repository that holds it, or, for a directory, the tree it holds, each with its
+//! own report.
 
 mod tree;
 

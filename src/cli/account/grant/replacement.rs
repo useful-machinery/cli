@@ -1,7 +1,7 @@
-//! The grants of a provider the member already holds, which `useful account integration connect` never
-//! replaces (REQ-GRANT-73): `create PROVIDER` refuses to start a sign-in while one is held, naming
-//! `useful account integration reconnect` for each, and `create --workflow` passes over a provider whose
-//! every held grant needs reconnecting (REQ-GRANT-79).
+//! The grants of a provider the member already holds, which `useful account integration connect`
+//! never replaces: `create PROVIDER` refuses to start a sign-in while one is held, naming `useful
+//! account integration reconnect` for each, and `create --workflow` passes over a provider whose
+//! every held grant needs reconnecting.
 
 use anyhow::anyhow;
 
@@ -49,8 +49,8 @@ pub(super) fn holds(grant: &MemberGrant, provider: &str, organization_id: Option
         )
 }
 
-/// Whether `grant`, one the member holds, needs reconnecting (REQ-GRANT-79): its state is
-/// `reconnect_required`, or its status on a runner it is authorized for is (REQ-GRANT-53).
+/// Whether `grant`, one the member holds, needs reconnecting: its state is
+/// `reconnect_required`, or its status on a runner it is authorized for is.
 pub(super) fn needs_reconnecting(grant: &MemberGrant) -> bool {
     grant.state == MemberGrantState::GrantStateReconnectRequired
         || grant.authorizations.iter().any(|authorization| {
@@ -61,10 +61,10 @@ pub(super) fn needs_reconnecting(grant: &MemberGrant) -> bool {
         })
 }
 
-/// Refuses `useful account integration connect PROVIDER` when the member already holds grants `held` of
-/// the provider `provider` names: `create` never replaces (REQ-GRANT-73). Exit 2, naming each
-/// held grant with the `useful account integration reconnect` that signs in to it again; nothing held
-/// lets the command go on.
+/// Refuses `useful account integration connect PROVIDER` when the member already holds grants
+/// `held` of the provider `provider` names: `create` never replaces. Exit 2, naming each held grant
+/// with the `useful account integration reconnect` that signs in to it again; nothing held lets the
+/// command go on.
 pub(super) fn refuse_held(provider: &str, held: &[MemberGrant]) -> Result<(), CommandFailure> {
     let Some(first) = held.first() else {
         return Ok(());

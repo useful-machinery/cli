@@ -53,7 +53,6 @@ fn created_response() -> Vec<u8> {
     )
 }
 
-// REQ-ACCOUNT-16, REQ-ACCOUNT-17
 #[test]
 fn human_signup_creates_and_reports_the_account() {
     let (server, _directory, _path, credential_path) = prepared_signup(
@@ -99,7 +98,6 @@ fn human_signup_creates_and_reports_the_account() {
     );
 }
 
-// REQ-ACCOUNT-18
 #[test]
 fn structured_signup_reports_the_authenticated_principal() {
     let (server, _directory, _path, credential_path) = prepared_signup(
@@ -133,7 +131,6 @@ fn structured_signup_reports_the_authenticated_principal() {
     server.finish();
 }
 
-// REQ-ACCOUNT-18, REQ-ACCOUNT-19
 #[test]
 fn signup_reports_policy_denial_without_claiming_a_principal() {
     let response = problem_http_response(
@@ -169,7 +166,6 @@ fn signup_reports_policy_denial_without_claiming_a_principal() {
     server.finish();
 }
 
-// REQ-ACCOUNT-70
 #[test]
 fn signup_reports_a_refused_account_as_forbidden_and_names_deletion_cancel() {
     let (server, _directory, _path, credential_path) = prepared_signup(
@@ -213,7 +209,6 @@ fn signup_reports_a_refused_account_as_forbidden_and_names_deletion_cancel() {
     server.finish();
 }
 
-// REQ-ACCOUNT-20
 #[test]
 fn already_provisioned_signup_directs_the_human_to_status() {
     let response = problem_http_response(
@@ -254,7 +249,6 @@ fn signed_out_signup(responses: Vec<Vec<u8>>) -> (ScriptedServer, tempfile::Temp
     (server, credential_directory, credential_path)
 }
 
-// REQ-ACCOUNT-16
 #[test]
 fn signed_out_signup_signs_in_first_and_then_creates_the_account() {
     let (server, _directory, credential_path) = signed_out_signup(vec![
@@ -313,7 +307,6 @@ fn signed_out_signup_signs_in_first_and_then_creates_the_account() {
     );
 }
 
-// REQ-ACCOUNT-16
 #[test]
 fn structured_signed_out_signup_reports_unauthenticated_without_signing_in() {
     let (server, _directory, credential_path) = signed_out_signup(Vec::new());
@@ -337,7 +330,6 @@ fn structured_signed_out_signup_reports_unauthenticated_without_signing_in() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-ACCOUNT-16
 #[test]
 fn denied_sign_in_ends_signup_without_asking() {
     let (server, _directory, credential_path) = signed_out_signup(vec![
@@ -379,7 +371,6 @@ fn rate_limit_response(problem_type: &str, retry_after: Option<&str>) -> Vec<u8>
 
 const RATE_LIMIT_EXCEEDED: &str = "https://api.usefulmachinery.com/problems/rate-limit-exceeded";
 
-// REQ-ACCOUNT-79
 #[test]
 fn rate_limited_signup_reports_the_wait_without_retrying() {
     let (server, _directory, _path, credential_path) = prepared_signup(
@@ -425,7 +416,6 @@ fn rate_limited_signup_reports_the_wait_without_retrying() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-ACCOUNT-79
 #[test]
 fn signup_rate_limit_without_a_usable_wait_or_problem_is_a_protocol_failure() {
     for (problem_type, retry_after) in [

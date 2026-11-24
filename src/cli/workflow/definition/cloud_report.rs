@@ -1,8 +1,8 @@
-//! What the `useful workflow definition` leaves print of a Cloud definition (REQ-CLOUDDEF-15):
-//! with `--json`, one document naming the command, the organization and project, the `outcome`
-//! and the result, or for a failure the failure name with a refusal's status, problem slug and
-//! `workflow` safe facts or an invalid response's `diagnostic` (REQ-CLOUDDEF-28); without it, a
-//! plain report on stdout or the failure on stderr with the same facts as labelled lines.
+//! What the `useful workflow definition` leaves print of a Cloud definition: with `--json`, one
+//! document naming the command, the organization and project, the `outcome` and the result, or
+//! for a failure the failure name with a refusal's status, problem slug and `workflow` safe
+//! facts or an invalid response's `diagnostic`; without it, a plain report on stdout or the
+//! failure on stderr with the same facts as labelled lines.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -180,9 +180,8 @@ pub(super) fn shown(scope: &Scope<'_>, shown: &Shown) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Each integration's resolution in id order (REQ-CLOUDDEF-58): its account under its id, then
-/// each binding as `<id>.<name>` in the line form of a flat one; nothing for a revision that
-/// holds none.
+/// Each integration's resolution in id order: its account under its id, then each binding as
+/// `<id>.<name>` in the line form of a flat one; nothing for a revision that holds none.
 fn write_integration_resolution(
     out: &mut impl Write,
     revision: &WorkflowDefinitionRevision,
@@ -241,8 +240,8 @@ pub(super) fn changed(
     Ok(())
 }
 
-/// The delete of `definition` (REQ-CLOUDDEF-40): with `--json` the group's document with its
-/// `definitionId`, without it one line naming the id.
+/// The delete of `definition`: with `--json` the group's document with its `definitionId`,
+/// without it one line naming the id.
 fn deleted(scope: &Scope<'_>, definition: &str) -> anyhow::Result<()> {
     if scope.json {
         return scope.write(

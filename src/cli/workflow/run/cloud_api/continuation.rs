@@ -51,8 +51,8 @@ struct ResultDocument<'a> {
 
 /// A Cloud continuation request, always under the run's inherited definition, with how its
 /// submission is observed and reported: what `useful workflow run retry --from` and `retry`
-/// of an ended run (REQ-CONTINUE-55) and `useful workflow run resume` (REQ-CONTINUE-85) of a
-/// Cloud run submit through [`Submission::submit`].
+/// of an ended run and `useful workflow run resume` of a Cloud run submit through
+/// [`Submission::submit`].
 pub(in crate::cli) struct Submission {
     run: RunReference,
     from_steps: Vec<String>,
@@ -85,7 +85,7 @@ impl Submission {
     }
 
     /// Sends the request under one fresh key and reports it; `missed` is the lookup's miss a
-    /// failure of the request stands for (REQ-LOCALRUN-180).
+    /// failure of the request stands for.
     pub(in crate::cli) fn submit(
         self,
         deployment: Deployment,
@@ -605,7 +605,6 @@ pub(super) fn write_run_continuation(out: &mut impl Write, run: &Run) -> anyhow:
 mod tests {
     use super::*;
 
-    // REQ-CONTINUE-61
     #[test]
     fn human_continuation_prints_no_workspace_recovery() {
         let mut value: serde_json::Value = serde_json::from_str(include_str!(

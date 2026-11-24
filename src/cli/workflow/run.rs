@@ -16,6 +16,7 @@ mod list;
 mod mirror;
 mod pause;
 mod publication;
+mod record;
 mod resume;
 mod retry;
 mod show;
@@ -54,7 +55,7 @@ enum RunCommand {
     Cancel(end::Cancel),
     #[command(about = create::ABOUT, after_help = create::AFTER_HELP)]
     Create(Box<create::Command>),
-    // The runner's own, hidden: it applies a delivered provider event (INV-CLI-21).
+    // The runner's own, hidden: it applies a delivered provider event.
     #[command(about = event::ABOUT, hide = true)]
     Event(event::Command),
     #[command(about = approve::HAND_BACK_ABOUT, after_help = control::RESOLVING_AFTER_HELP)]
@@ -71,6 +72,8 @@ enum RunCommand {
     Pause(pause::Pause),
     #[command(about = publication::ABOUT)]
     Publication(publication::Command),
+    #[command(about = record::ABOUT)]
+    Record(record::Command),
     #[command(about = end::RELEASE_ABOUT, after_help = end::RELEASE_AFTER_HELP)]
     Release(end::Release),
     #[command(about = resume::ABOUT, after_help = resume::AFTER_HELP)]
@@ -104,6 +107,7 @@ impl Command {
             Some(RunCommand::List(command)) => command.execute(),
             Some(RunCommand::Pause(command)) => command.execute(),
             Some(RunCommand::Publication(command)) => command.execute(),
+            Some(RunCommand::Record(command)) => command.execute(),
             Some(RunCommand::Release(command)) => command.execute(),
             Some(RunCommand::Resume(command)) => command.execute(),
             Some(RunCommand::Retry(command)) => command.execute(),

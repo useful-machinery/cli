@@ -1,6 +1,6 @@
-//! An opened assignment (REQ-RUNNERENROLL-146): the run levels the keys walked from the root,
-//! each with its selected step, and what the runner last answered, which an answer replaces
-//! only for the query it answered.
+//! An opened assignment: the run levels the keys walked from the root, each with its selected
+//! step, and what the runner last answered, which an answer replaces only for the query it
+//! answered.
 
 use super::log_document::{LogDocument, LogPlace};
 use super::run_steps::{phase_boundary, step_state_kind};
@@ -136,9 +136,8 @@ impl OpenAssignment {
         true
     }
 
-    /// The full-screen log's keys (REQ-LOCALRUN-44 to REQ-LOCALRUN-46): the movement keys,
-    /// any of which pauses, `F` to follow again, Left and Right to pan, and Esc to leave,
-    /// which forgets the position (REQ-LOCALRUN-49).
+    /// The full-screen log's keys: the movement keys, any of which pauses, `F` to follow
+    /// again, Left and Right to pan, and Esc to leave, which forgets the position.
     fn handle_full_log_key(&mut self, event: TerminalInputEvent, shown: &AssignmentScreen) {
         if event == TerminalInputEvent::Escape {
             self.full_log = None;

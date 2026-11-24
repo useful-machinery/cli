@@ -75,9 +75,8 @@ impl Published {
         self.command(args).output().unwrap()
     }
 
-    /// The `useful workflow run ARGS` command against the home. The root mirrors to Linear
-    /// (REQ-LOCALRUN-191), so the command carries no Linear key or endpoint unless the test
-    /// sets its own.
+    /// The `useful workflow run ARGS` command against the home. The root mirrors to Linear,
+    /// so the command carries no Linear key or endpoint unless the test sets its own.
     pub(super) fn command(&self, args: &[&str]) -> Command {
         let mut full = vec!["workflow".to_owned(), "run".to_owned()];
         full.extend(args.iter().map(|arg| (*arg).to_owned()));
@@ -164,7 +163,7 @@ impl Published {
         names
     }
 
-    /// The definition's slot file for `subject` (REQ-WFDEF-28).
+    /// The definition's slot file for `subject`.
     fn slot(&self, subject: &str) -> PathBuf {
         self.home
             .definition_directory(&self.id)
@@ -197,7 +196,7 @@ fn retained_input(run_directory: &Path, name: &str) -> Vec<u8> {
     fs::read(run_directory.join("workflow").join(file)).unwrap()
 }
 
-// REQ-LOCALRUN-173, REQ-LOCALRUN-175, REQ-LOCALRUN-76, SC-LOCALRUN-9
+// SC-LOCALRUN-9
 #[test]
 fn a_definition_run_starts_the_current_revision_under_the_home() {
     let published = Published::engineering();
@@ -227,7 +226,7 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
     assert_eq!(stage["parent"], Value::Null);
     assert_eq!(stage["definition"], published.id.as_str());
 
-    // `--on local`, the default, takes the definition by its name too (REQ-LOCALRUN-76).
+    // `--on local`, the default, takes the definition by its name too.
     let by_name = succeeded(&published.create(
         "engineering",
         &["--on", "local", "--input-text", "ticket", "AUTO-3"],
@@ -236,7 +235,7 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
         read_json(&PathBuf::from(by_name["runDirectory"].as_str().unwrap()).join("run.json"));
     assert_eq!(by_name["definition"], published.id.as_str());
 
-    // The first run still holds the slot for AUTO-1 (REQ-WFDEF-28).
+    // The first run still holds the slot for AUTO-1.
     published.home.json(&["disable", &published.id]);
     let (_, disabled) = published.created(&["--input-text", "ticket", "AUTO-2"]);
     assert_eq!(disabled["revision"], 1);
@@ -260,7 +259,6 @@ fn a_definition_run_starts_the_current_revision_under_the_home() {
 
 const MARKING_ROOT_WORKFLOW: &str = "schemaVersion: 1\nname: marking\nsteps:\n  mark:\n    kind: cmd\n    command:\n      argv: [\"touch\", \"marked\"]\n";
 
-// REQ-LOCALRUN-76
 #[test]
 fn a_run_given_no_execution_root_executes_in_the_working_directory() {
     let tree = Tree::engineering();
@@ -285,7 +283,6 @@ fn a_run_given_no_execution_root_executes_in_the_working_directory() {
     assert!(working.path().join("marked").is_file(), "{terminal}");
 }
 
-// INV-TESTING-20
 #[test]
 fn the_useful_binary_of_a_test_build_is_its_own_worker_when_none_is_supplied() {
     let published = Published::engineering();
@@ -316,7 +313,6 @@ fn the_useful_binary_of_a_test_build_is_its_own_worker_when_none_is_supplied() {
     );
 }
 
-// REQ-LOCALRUN-173, REQ-LOCALRUN-229, REQ-CLOUDDEF-42
 #[test]
 fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     let published = Published::engineering();
@@ -325,7 +321,7 @@ fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     let unknown = "def_01jzzzzzzzzzzzzzzzzzzzzzzz";
     let not_found = published.refused(unknown, &ticket, "definition_not_found");
     assert_eq!(not_found["definition"], unknown);
-    // A name is read under the home alone (REQ-CLOUDDEF-42): one nobody has is
+    // A name is read under the home alone: one nobody has is
     // `definition_not_found` saying Cloud was not asked.
     let output = published.create("review", &ticket);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -366,7 +362,7 @@ fn a_definition_run_is_refused_at_phase_definition_without_a_run_directory() {
     assert_eq!(missing["revision"], 1);
 }
 
-// REQ-LOCALRUN-176, REQ-LOCALRUN-91, SC-LOCALRUN-9
+// SC-LOCALRUN-9
 #[test]
 fn a_definition_run_completes_omitted_inputs_from_the_published_tree() {
     let published = Published::engineering();
@@ -382,7 +378,7 @@ fn a_definition_run_completes_omitted_inputs_from_the_published_tree() {
     assert_eq!(retained, policy);
 
     // The default is read from the home's copy, never from the source checkout. The first
-    // run holds AUTO-1's slot (REQ-WFDEF-28), so this run is for another ticket.
+    // run holds AUTO-1's slot, so this run is for another ticket.
     fs::remove_file(Path::new(published.tree.path()).join("policy/engineering.json")).unwrap();
     let (run_directory, _) = published.created(&["--input-text", "ticket", "AUTO-2"]);
     let retained: Value =
@@ -403,7 +399,7 @@ fn a_definition_run_completes_omitted_inputs_from_the_published_tree() {
     );
 }
 
-// REQ-LOCALRUN-173, REQ-LOCALRUN-230, REQ-LOCALRUN-175, REQ-LOCALRUN-187, REQ-WFDEF-28, SC-LOCALRUN-11
+// SC-LOCALRUN-11
 #[test]
 fn a_definition_run_holds_its_subjects_slot_until_released() {
     let published = Published::engineering();
@@ -492,7 +488,6 @@ fn a_definition_run_holds_its_subjects_slot_until_released() {
 const CLOSURE_WORKFLOW: &str =
     "schemaVersion: 1\nsteps:\n  work:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n";
 
-// REQ-LOCALRUN-209, REQ-LOCALRUN-175, REQ-LOCALRUN-280, REQ-LOCALRUN-80, REQ-WFDEF-4
 #[test]
 fn a_created_run_records_the_owner_and_external_references_it_is_given() {
     let published = Published::engineering();
@@ -573,7 +568,6 @@ fn a_created_run_records_the_owner_and_external_references_it_is_given() {
     }
 }
 
-// REQ-LOCALRUN-231, REQ-LOCALRUN-80
 #[test]
 fn a_malformed_source_revision_is_a_usage_error_that_creates_no_run() {
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -623,7 +617,7 @@ fn a_malformed_source_revision_is_a_usage_error_that_creates_no_run() {
 }
 
 /// `useful workflow run create DEFINITION --on personal|project` against a scripted Cloud, in the
-/// organization and project in effect (REQ-RUN-94).
+/// organization and project in effect.
 mod cloud {
     use std::path::Path;
     use std::process::Output;
@@ -724,7 +718,7 @@ mod cloud {
     }
 
     /// `DEFINITION --on PLACE --org ORGANIZATION --project PROJECT OPTIONS`: the organization
-    /// and a project ID given cost no request (INV-CLI-20).
+    /// and a project ID given cost no request.
     fn on_args<'a>(definition: &'a str, place: &'a str, options: &[&'a str]) -> Vec<&'a str> {
         let mut args = vec![
             definition,
@@ -767,7 +761,6 @@ mod cloud {
         )
     }
 
-    // REQ-RUN-94, REQ-RUN-55, REQ-RUN-56
     #[test]
     fn a_definition_run_posts_one_definition_request_and_prints_the_acceptance() {
         let cloud = Cloud::respond(vec![accepted()]);
@@ -821,7 +814,6 @@ mod cloud {
         assert_eq!(cloud.finish().len(), 1);
     }
 
-    // REQ-RUN-94, REQ-RUN-84, REQ-WORKSPACE-7
     #[test]
     fn the_workflow_file_and_the_cloud_options_reach_the_request_as_given() {
         let cloud = Cloud::respond(vec![accepted()]);
@@ -856,7 +848,6 @@ mod cloud {
         );
     }
 
-    // REQ-RUN-94, REQ-RUN-97, REQ-RUN-99
     #[test]
     fn on_project_asks_for_an_unowned_run_and_on_personal_leaves_the_owner_to_cloud() {
         for (place, owner) in [
@@ -879,7 +870,6 @@ mod cloud {
         }
     }
 
-    // REQ-RUN-94, REQ-CLOUDDEF-42
     #[test]
     fn a_name_is_the_one_definition_of_the_project_with_it() {
         let cloud = Cloud::respond(vec![
@@ -922,7 +912,6 @@ mod cloud {
         assert!(requests[0].starts_with("GET "), "{}", requests[0]);
     }
 
-    // REQ-RUN-94, REQ-PROJECT-100, INV-CLI-20
     #[test]
     fn a_cloud_place_with_no_project_in_effect_exits_2_before_a_request_of_its_own() {
         let cloud = Cloud::respond(Vec::new());
@@ -939,7 +928,6 @@ mod cloud {
         assert!(cloud.finish().is_empty());
     }
 
-    // REQ-RUN-94, REQ-LOCALRUN-76, REQ-CLOUDDEF-42
     #[test]
     fn a_name_without_on_is_read_under_the_home_alone() {
         let cloud = Cloud::respond(Vec::new());
@@ -961,7 +949,6 @@ mod cloud {
         assert!(cloud.finish().is_empty());
     }
 
-    // REQ-RUN-94, REQ-LOCALRUN-80, REQ-LOCALRUN-231
     #[test]
     fn a_local_option_beside_a_cloud_place_or_a_cloud_option_without_one_is_a_usage_error() {
         let scratch = tempfile::tempdir().unwrap();
@@ -1037,10 +1024,9 @@ mod cloud {
 }
 
 /// What `useful workflow run create --on personal` does around acceptance, driven against the
-/// scripted Cloud of `cli/tests/cli/run.rs`: one idempotency key per invocation and the single resend
-/// (REQ-RUN-55 to REQ-RUN-57), `--wait` (REQ-RUN-58), the definite source-admission rejection
-/// (REQ-RUN-80), the named inputs staged and sealed before creation (REQ-RUNINPUT-53,
-/// REQ-RUNINPUT-54, REQ-RUNINPUT-76) and the integration context (REQ-TRIGGER-54).
+/// scripted Cloud of `cli/tests/cli/run.rs`: one idempotency key per invocation and the single
+/// resend, `--wait`, the definite source-admission rejection, the named inputs staged and sealed
+/// before creation and the integration context.
 mod cloud_acceptance {
     use base64::Engine as _;
 
@@ -1146,7 +1132,6 @@ mod cloud_acceptance {
         assert_eq!(result["error"]["code"], "invalid_input");
     }
 
-    // REQ-RUN-62
     #[cfg(target_os = "linux")]
     #[test]
     fn create_signal_after_acceptance_stops_only_observation_and_keeps_replay() {
@@ -1203,7 +1188,6 @@ mod cloud_acceptance {
         assert_eq!(server.finish().len(), 0);
     }
 
-    // REQ-RUN-58
     #[test]
     fn create_wait_preserves_authoritative_replay_through_failed_execution() {
         let mut body = run_body_with_state("failed");
@@ -1231,7 +1215,6 @@ mod cloud_acceptance {
         assert!(requests[1].contains(&format!("/runs/{RUN_ID} HTTP/1.1")));
     }
 
-    // REQ-RUN-58
     #[test]
     fn create_wait_displays_failed_primary_issue() {
         let mut body = run_body_with_state("failed");
@@ -1253,8 +1236,6 @@ mod cloud_acceptance {
         assert_eq!(server.finish().len(), 2);
     }
 
-    // REQ-WORKSPACE-7
-    // REQ-RUN-55
     #[test]
     fn run_create_sends_inputless_request_and_reports_plain_and_json_receipts() {
         for json in [false, true] {
@@ -1321,7 +1302,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-TRIGGER-54
     #[test]
     fn run_create_sends_integration_context_from_regular_file_and_standard_input() {
         for source in ["file", "stdin"] {
@@ -1366,7 +1346,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-53
     #[test]
     fn run_create_reads_named_text_and_json_from_standard_input() {
         for (flag, kind, input_bytes) in [
@@ -1413,7 +1392,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-56
     #[test]
     fn competing_standard_input_claims_reject_before_cloud_access() {
         for input_flag in ["--input-text-file", "--input-json-file"] {
@@ -1439,7 +1417,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-TRIGGER-54
     #[test]
     fn invalid_integration_context_rejects_before_cloud_access() {
         let mut too_many = serde_json::Map::new();
@@ -1476,7 +1453,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-TRIGGER-54
     #[test]
     fn invalid_integration_context_plain_output_redacts_caller_values() {
         const PRIVATE_VALUE: &str = "private-parser-value-sentinel";
@@ -1500,7 +1476,6 @@ mod cloud_acceptance {
         assert!(server.finish().is_empty());
     }
 
-    // REQ-TRIGGER-54
     #[test]
     fn oversized_integration_context_standard_input_rejects_before_cloud_access() {
         let (server, _credentials, credential_path) = prepared_run(Vec::new());
@@ -1516,7 +1491,6 @@ mod cloud_acceptance {
         assert!(server.finish().is_empty());
     }
 
-    // REQ-TRIGGER-54
     #[test]
     fn unreadable_integration_context_rejects_before_cloud_access() {
         let directory = tempfile::tempdir().unwrap();
@@ -1536,7 +1510,6 @@ mod cloud_acceptance {
         assert!(server.finish().is_empty());
     }
 
-    // REQ-RUNINPUT-57
     #[test]
     fn run_create_consumes_an_explicit_sealed_input_set_without_restaging() {
         let (server, _directory, credential_path) = prepared_run(vec![acceptance_response(false)]);
@@ -1558,7 +1531,6 @@ mod cloud_acceptance {
         assert_eq!(request_body(&request)["inputSetId"], INPUT_SET_ID);
     }
 
-    // REQ-RUNINPUT-59, REQ-RUNINPUT-72
     #[test]
     fn create_json_input_rejected_by_file_workflow_reports_safe_binding_diagnostic() {
         let directory = tempfile::tempdir().unwrap();
@@ -1613,7 +1585,6 @@ mod cloud_acceptance {
         storage.finish();
     }
 
-    // REQ-RUNINPUT-59
     #[test]
     fn create_input_admission_json_keeps_cloud_envelope_and_safe_diagnostic() {
         let (server, _directory, credential_path) = prepared_run(vec![problem_http_response(
@@ -1647,7 +1618,6 @@ mod cloud_acceptance {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-RUNINPUT-59, REQ-RUNINPUT-76, REQ-RUNINPUT-77
     #[test]
     fn create_input_set_rejections_without_diagnostic_retain_safe_http_facts() {
         for (status, kind, remedy) in [
@@ -1722,7 +1692,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-57
     #[test]
     fn explicit_input_set_conflicts_with_acquired_inputs_before_cloud_access() {
         let output = Command::new(crate::executable())
@@ -1751,7 +1720,6 @@ mod cloud_acceptance {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("private argument sentinel"));
     }
 
-    // REQ-RUNINPUT-54
     #[test]
     fn run_create_stages_present_named_text_input_files_before_binding_the_sealed_set() {
         for input_bytes in [b"".as_slice(), b"Write a concise limerick.\n".as_slice()] {
@@ -1889,7 +1857,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-54
     #[test]
     fn run_create_stages_named_json_sources_without_rewriting_bytes() {
         let input_bytes = b"{\n  \"enabled\": true, \"ratio\": 1.00\n}\n";
@@ -1969,7 +1936,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-53, REQ-RUNINPUT-54
     #[test]
     fn run_create_stages_named_file_with_exact_media_type_and_bytes() {
         let input_bytes = *b"exact file bytes";
@@ -2034,7 +2000,6 @@ mod cloud_acceptance {
         assert_eq!(header_value(&upload, "content-type"), media_type);
     }
 
-    // REQ-RUNINPUT-53, REQ-RUNINPUT-54, REQ-RUNINPUT-71
     #[test]
     fn run_create_stages_mixed_values_ordered_attachments_and_present_empty_collections() {
         let directory = tempfile::tempdir().unwrap();
@@ -2224,7 +2189,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-55
     #[test]
     fn named_file_parameter_controls_stop_before_cloud_input_set_allocation() {
         let input_directory = tempfile::tempdir().unwrap();
@@ -2304,7 +2268,6 @@ mod cloud_acceptance {
         ));
     }
 
-    // REQ-RUNINPUT-55, REQ-RUNINPUT-72
     #[test]
     fn invalid_and_oversized_named_text_input_files_stop_before_cloud_access() {
         let input_directory = tempfile::tempdir().unwrap();
@@ -2350,7 +2313,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUNINPUT-55
     #[test]
     fn exactly_one_mib_text_input_reaches_input_set_creation() {
         let input_directory = tempfile::tempdir().unwrap();
@@ -2390,7 +2352,6 @@ mod cloud_acceptance {
         );
     }
 
-    // REQ-RUN-56
     #[test]
     fn credential_rejection_reuses_the_create_key_and_reports_the_server_replay() {
         let server = ScriptedServer::respond(vec![
@@ -2517,7 +2478,6 @@ mod cloud_acceptance {
         server.finish();
     }
 
-    // REQ-RUN-56
     #[test]
     fn ambiguous_transport_retry_reuses_the_create_key_and_request() {
         let directory = tempfile::tempdir().unwrap();
@@ -2758,7 +2718,6 @@ mod cloud_acceptance {
         assert!(useful_test_support::request_header(&upload, "authorization").is_none());
     }
 
-    // REQ-RUNINPUT-58
     #[test]
     fn failed_staging_reports_allocated_input_set_in_human_mode() {
         let input_directory = tempfile::tempdir().unwrap();
@@ -2796,7 +2755,6 @@ mod cloud_acceptance {
         )));
     }
 
-    // REQ-RUNINPUT-60
     #[test]
     fn precondition_replay_is_resolved_by_authoritative_sealing() {
         let input_bytes = b"already uploaded named input sentinel\n";
@@ -2873,7 +2831,6 @@ mod cloud_acceptance {
         )
     }
 
-    // REQ-RUN-80, REQ-RUN-163, REQ-RUN-164, REQ-PROJECT-71
     #[test]
     fn project_not_ready_is_a_definite_admission_rejection_with_its_blockers() {
         const PROJECT_NOT_READY: &str =
@@ -2936,7 +2893,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUN-80, REQ-RUN-165
     #[test]
     fn unsupported_workspace_selection_is_a_definite_admission_rejection() {
         for json in [false, true] {
@@ -2985,7 +2941,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUN-80
     #[test]
     fn admission_rejection_without_request_id_omits_correlation_id() {
         let (server, _directory, credential_path) = prepared_run(vec![create_problem_response(
@@ -3011,7 +2966,6 @@ mod cloud_acceptance {
         assert_eq!(server.finish().len(), 1);
     }
 
-    // REQ-RUN-57
     #[test]
     fn create_server_error_after_dispatch_remains_acceptance_unknown() {
         let (server, _directory, credential_path) = prepared_run(vec![create_problem_response(
@@ -3035,7 +2989,6 @@ mod cloud_acceptance {
         );
     }
 
-    // REQ-RUN-57
     #[test]
     fn invalid_create_acceptance_in_plain_mode_retains_reconciliation_key() {
         let (server, _directory, credential_path) = prepared_run(vec![acceptance_response_for(
@@ -3123,7 +3076,6 @@ mod cloud_acceptance {
         }
     }
 
-    // REQ-RUN-57
     #[cfg(target_os = "linux")]
     #[test]
     fn signalled_create_reports_unknown_commitment_without_exposing_credentials() {

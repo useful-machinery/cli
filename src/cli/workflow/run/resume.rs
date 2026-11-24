@@ -46,8 +46,7 @@ pub(super) fn command_name(leaf: ExecutionLeaf) -> &'static str {
 
 /// The output a refused continuation of the run at `run_directory` is reported on: as
 /// `useful workflow run resume` reports it, under `retry`'s, `upgrade`'s or the
-/// continuing control command's name for those (REQ-LOCALRUN-182, REQ-LOCALRUN-183,
-/// REQ-LOCALRUN-184, REQ-LOCALRUN-194, REQ-LOCALRUN-197).
+/// continuing control command's name for those.
 pub(super) fn continuation_output(
     config: useful_execution::PresentationConfig,
     leaf: ExecutionLeaf,
@@ -64,7 +63,7 @@ pub(super) fn continuation_output(
 
 /// What the blocking closure that begins a continuation's or a retry's attempt hands back: the
 /// attempt it began, or the pending value it did not begin because a withdrawal is unhonored
-/// over the run (REQ-LOCALRUN-213), with the controls lock already dropped.
+/// over the run, with the controls lock already dropped.
 pub(super) enum Begun<P> {
     Owned(Box<LocalAttemptOwner>),
     Withdrawn(Box<P>),
@@ -74,26 +73,26 @@ pub(super) enum Begun<P> {
 enum Selection {
     /// `--from`, as named.
     Explicit(Vec<String>),
-    /// A wait a control resolved (REQ-CONTINUE-75): continue at `target` once the run still
-    /// waits on the wait whose identity is `wait`.
+    /// A wait a control resolved: continue at `target` once the run still waits on the wait
+    /// whose identity is `wait`.
     Wait {
         wait: String,
         target: String,
         reason: ContinuationReasonV1,
     },
-    /// A wait a `control.withdraw` resolved (REQ-CONTINUE-109).
+    /// A wait a `control.withdraw` resolved.
     Withdraw { wait: String },
-    /// A backward or limited edge the prior attempt took (REQ-WFEXEC-64, REQ-CONTINUE-78):
-    /// continue at its target once the run's latest attempt still ended `continued` on it.
+    /// A backward or limited edge the prior attempt took: continue at its target once the
+    /// run's latest attempt still ended `continued` on it.
     Edge(ContinuationEdgeV1),
-    /// A run whose process died while it ran (REQ-CONTINUE-76).
+    /// A run whose process died while it ran.
     Abandoned,
-    /// An ended run `retry` continues with neither `--from` nor `--all` (REQ-LOCALRUN-184):
-    /// from the stage it stood at, read under the continuation's lock.
+    /// An ended run `retry` continues with neither `--from` nor `--all`: from the stage it
+    /// stood at, read under the continuation's lock.
     Ended,
 }
 
-/// The documents of a resume that creates no attempt (REQ-CONTINUE-102, REQ-CONTINUE-109).
+/// The documents of a resume that creates no attempt.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UnattemptedDocument<'a> {
@@ -135,9 +134,8 @@ pub(super) struct Command {
 
 impl Command {
     /// Finds the run and continues it: a run under the home as `continue_run` continues it
-    /// without `--from` (REQ-CONTINUE-74 to REQ-CONTINUE-78), and a Cloud run through the
-    /// continuation request naming no step (REQ-CONTINUE-85), for which `--workflow` and
-    /// `--execution-root` are usage errors, exit 2.
+    /// without `--from`, and a Cloud run through the continuation request naming no step,
+    /// for which `--workflow` and `--execution-root` are usage errors, exit 2.
     pub(super) fn execute(self) -> super::super::super::CommandResult {
         let found = match super::control::find(
             COMMAND,
@@ -217,9 +215,9 @@ impl Command {
 /// What a continuation continues: the run, `--from`, `--workflow` and `--execution-root`, and
 /// the leaf whose command its documents name. `edge` is the backward or limited edge the
 /// attempt that just ended `continued` took, which the attempt loop continues from without
-/// probing the run (REQ-WFEXEC-64), and `bridge` the run's controls lock that attempt took
-/// before it released the run lock, held until this continuation tried the run lock again
-/// (REQ-LOCALRUN-214, INV-ENGINE-60); a command's own continuation carries none.
+/// probing the run, and `bridge` the run's controls lock that attempt took before it released
+/// the run lock, held until this continuation tried the run lock again; a command's own
+/// continuation carries none.
 pub(super) struct Continuation {
     pub(super) run_directory: PathBuf,
     pub(super) from_steps: Vec<String>,
@@ -230,14 +228,12 @@ pub(super) struct Continuation {
     pub(super) bridge: Option<ControlsLock>,
 }
 
-/// Continues the run as `useful workflow run resume` does (REQ-CONTINUE-74 to REQ-CONTINUE-78):
-/// without `from_steps`, from the wait a control resolves, the step an abandoned attempt was
-/// running or the target of the edge a `continued` attempt took, reporting a held wait
-/// unchanged, and for `retry` from the stage an ended run stood at; with them, from the steps
-/// `retry --from` names (REQ-CONTINUE-1). `useful workflow run retry` on a repair wait
-/// continues through here once it recorded its control (REQ-LOCALRUN-184), and the attempt
-/// loop continues here from the edge an attempt ended `continued` on (REQ-WFEXEC-64), so every
-/// command chains.
+/// Continues the run as `useful workflow run resume` does: without `from_steps`, from the wait
+/// a control resolves, the step an abandoned attempt was running or the target of the edge a
+/// `continued` attempt took, reporting a held wait unchanged, and for `retry` from the stage an
+/// ended run stood at; with them, from the steps `retry --from` names. `useful workflow run
+/// retry` on a repair wait continues through here once it recorded its control, and the attempt
+/// loop continues here from the edge an attempt ended `continued` on, so every command chains.
 pub(super) async fn continue_run(
     continuation: Continuation,
     config: useful_execution::PresentationConfig,
@@ -253,10 +249,10 @@ pub(super) async fn continue_run(
         edge,
         bridge,
     } = continuation;
-    // REQ-LOCALRUN-135: a signal reads the run's control journal.
+    // A signal reads the run's control journal.
     let _journal = signal_task.watch(&run_directory);
-    // REQ-LOCALRUN-196: a successor whose move did not finish is settled before anything
-    // else; an edge continuation chains inside the process that already settled it.
+    // A successor whose move did not finish is settled before anything else; an edge
+    // continuation chains inside the process that already settled it.
     if edge.is_none() {
         let lineage_directory = run_directory.clone();
         match super::create::blocking_operation(move || {
@@ -322,8 +318,8 @@ pub(super) async fn continue_run(
             .map_err(|error| anyhow::anyhow!("finalize workflow result publication: {error:?}"))?;
         // A test seam between the probe and the lock; nothing outside `test-fixtures`.
         await_run_lock_gate()?;
-        // REQ-LOCALRUN-214: the bridge a chaining attempt carried is dropped once the run lock
-        // was tried, and on every return before; the chained `begin` takes no controls lock.
+        // The bridge a chaining attempt carried is dropped once the run lock was tried, and on
+        // every return before; the chained `begin` takes no controls lock.
         acquire_local_continuation_bridged(&run_directory, bridge).map_err(anyhow::Error::new)
     })
     .await
@@ -338,11 +334,10 @@ pub(super) async fn continue_run(
             );
         }
     };
-    // REQ-LOCALRUN-186, REQ-LOCALRUN-213: a withdrawal no process honored over the run's open
-    // latest attempt ends the run `withdrawn` without another attempt, as `cancel` of the waiting
-    // run would, whatever the continuation starts from; settling the attempt for one would spend it.
-    // An edge continuation begins the chained attempt, which honors it at its first step
-    // boundary (REQ-CONTINUE-78).
+    // A withdrawal no process honored over the run's open latest attempt ends the run `withdrawn`
+    // without another attempt, as `cancel` of the waiting run would, whatever the continuation
+    // starts from; settling the attempt for one would spend it. An edge continuation begins the
+    // chained attempt, which honors it at its first step boundary.
     if !matches!(selection, Selection::Edge(_))
         && matches!(pending.withdrawal_unhonored(), Ok(true))
     {
@@ -353,8 +348,7 @@ pub(super) async fn continue_run(
     }
     // The probe ran without the lock: the wait it evaluated must still be the run's. The reason
     // is the command's intent; `begin` records `restart` for any run-definition continuation,
-    // including a `retry --from` that finishes an interrupted `upgrade --from`
-    // (REQ-CONTINUE-98).
+    // including a `retry --from` that finishes an interrupted `upgrade --from`.
     let (from, reason) = match &selection {
         Selection::Explicit(from) if leaf == ExecutionLeaf::Restart => {
             (from.clone(), ContinuationReasonV1::Restart)
@@ -370,7 +364,7 @@ pub(super) async fn continue_run(
                 "wait_changed",
                 "The run's wait changed while the command inspected it; run the command again.",
             );
-            return reject_after_settlement(pending, &signal_task, result).await;
+            return reject_continuation(pending, &signal_task, result);
         }
         Selection::Withdraw { .. } => {
             return end_continuation_withdrawn(
@@ -391,7 +385,7 @@ pub(super) async fn continue_run(
                 "wait_changed",
                 "The run's latest attempt changed while the command inspected it; run the command again.",
             );
-            return reject_after_settlement(pending, &signal_task, result).await;
+            return reject_continuation(pending, &signal_task, result);
         }
         Selection::Edge(edge) => (vec![edge.target.clone()], ContinuationReasonV1::Edge),
         Selection::Abandoned => match pending.abandoned_steps().as_slice() {
@@ -404,10 +398,10 @@ pub(super) async fn continue_run(
                     "continuation_definition_invalid",
                     "The abandoned attempt left no single running step to continue from; rerun it from a step with useful workflow run retry RUN --from STEP.",
                 );
-                return reject_after_settlement(pending, &signal_task, result).await;
+                return reject_continuation(pending, &signal_task, result);
             }
         },
-        // REQ-LOCALRUN-184: an ended run continues from the stage it stood at.
+        // An ended run continues from the stage it stood at.
         Selection::Ended => {
             let steps = pending.ended_attempt_restart();
             if steps.is_empty() {
@@ -418,21 +412,20 @@ pub(super) async fn continue_run(
                     "continuation_step_required",
                     "The run names no stage it stood at; name the steps to rerun with --from STEP, or rerun every step with --all.",
                 );
-                return reject_after_settlement(pending, &signal_task, result).await;
+                return reject_continuation(pending, &signal_task, result);
             }
             (steps, ContinuationReasonV1::Resume)
         }
     };
-    // REQ-CONTINUE-112, REQ-WFEXEC-96: the child run the abandoned step left, for a fan-out
-    // that of the element the run's `position` names, is adopted or retried, a nested run's
-    // retry settled by its record once the run is admitted (REQ-CONTINUE-91); a repair retry,
-    // or a host wait's resolution, adopts the child an independent repair completed
-    // (REQ-CONTINUE-107, REQ-CONTINUE-93).
+    // The child run the abandoned step left, for a fan-out that of the element the run's
+    // `position` names, is adopted or retried, a nested run's retry settled by its record
+    // once the run is admitted; a repair retry, or a host wait's resolution, adopts the child
+    // an independent repair completed.
     let child_recovery = match (&selection, from.as_slice()) {
         (Selection::Abandoned, [step]) => {
             let run_directory = pending.run_directory().to_owned();
             let step = step.clone();
-            // An element whose child was never created runs afresh (REQ-WFEXEC-96).
+            // An element whose child was never created runs afresh.
             let latest = tokio::task::spawn_blocking(move || {
                 let latest = latest_child_run(&run_directory, &step)?;
                 let fresh = match latest {
@@ -465,12 +458,11 @@ pub(super) async fn continue_run(
                 }),
                 Ok(Ok((_, None, None))) => None,
                 Ok(Err(_)) | Err(_) => {
-                    return fail_after_settlement(
+                    return fail_continuation(
                         pending,
                         &signal_task,
                         "read the abandoned step's child run",
-                    )
-                    .await;
+                    );
                 }
             }
         }
@@ -485,12 +477,12 @@ pub(super) async fn continue_run(
         {
             match repaired_child(&pending, step) {
                 Ok(recovery) => recovery,
-                Err(error) => return error_after_settlement(pending, &signal_task, error).await,
+                Err(error) => return fail_with_error(pending, &signal_task, error),
             }
         }
         _ => None,
     };
-    // REQ-LOCALRUN-171: a run admitted from a tree continues only from an unchanged copy.
+    // A run admitted from a tree continues only from an unchanged copy.
     let (pending, verified) = match tokio::task::spawn_blocking(move || {
         let verified = pending.verify_tree_copy();
         (pending, verified)
@@ -512,13 +504,13 @@ pub(super) async fn continue_run(
                     &pending.previous_definition().source.workflow_path,
                     &mismatch,
                 );
-            return reject_after_settlement(pending, &signal_task, result).await;
+            return reject_continuation(pending, &signal_task, result);
         }
     };
     let tree_copy = pending.tree_copy().map(|(copy_root, _)| copy_root);
     let original_root = pending.previous_definition().source.source_root.clone();
-    // REQ-CONTINUE-97: a successor's first own attempt runs under the successor's own
-    // definition, the run's, rather than the imported prior attempt's.
+    // A successor's first own attempt runs under the successor's own definition, the
+    // run's, rather than the imported prior attempt's.
     let run_definition = replacement_workflow.is_none() && pending.imported_prior().is_some();
     let workflow = if let Some(path) = &replacement_workflow {
         let root = original_root.clone();
@@ -543,15 +535,10 @@ pub(super) async fn continue_run(
                         pending.prior_attempt_number(),
                         &failure,
                     );
-                return reject_after_settlement(pending, &signal_task, result).await;
+                return reject_continuation(pending, &signal_task, result);
             }
             Err(super::create::BlockingOperationError::WorkerUnavailable) => {
-                return fail_after_settlement(
-                    pending,
-                    &signal_task,
-                    "resolve continuation definition",
-                )
-                .await;
+                return fail_continuation(pending, &signal_task, "resolve continuation definition");
             }
         }
     } else if run_definition {
@@ -572,35 +559,34 @@ pub(super) async fn continue_run(
         match admit_continuation(&pending, candidate, &cancellation, (&config, leaf)).await {
             Ok(admitted) => admitted,
             Err(Unadmitted::Rejected(result)) => {
-                return reject_after_settlement(pending, &signal_task, result).await;
+                return reject_continuation(pending, &signal_task, result);
             }
             Err(Unadmitted::Failed(message)) => {
-                return fail_after_settlement(pending, &signal_task, message).await;
+                return fail_continuation(pending, &signal_task, message);
             }
         };
     let admitted = match tree_copy {
         Some(copy_root) => match super::create::bind_tree_copy(admitted, &copy_root) {
             Ok(admitted) => admitted,
             Err(_) => {
-                return fail_after_settlement(
+                return fail_continuation(
                     pending,
                     &signal_task,
                     super::create::TREE_COPY_PATH_FAILURE,
-                )
-                .await;
+                );
             }
         },
         None => admitted,
     };
     super::create::write_untested_advisories(&untested_advisories);
     if let Err(error) = pending.validate_execution_root(&admitted) {
-        return diagnose_after_settlement(pending, &signal_task, error).await;
+        return diagnose_continuation(pending, &signal_task, error);
     }
-    // REQ-CONTINUE-81, REQ-CONTINUE-82, INV-ENGINE-27, INV-ENGINE-52: a repair wait's retry at the
-    // waiting step continues the failed child the wait names, and a wait carried from a nested run
-    // continues that nested run (REQ-CONTINUE-92), verified and admitted here, under both locks,
-    // before `begin` consumes the parent's wait. REQ-CONTINUE-91: an abandoned step's nested run is
-    // settled by its record, under both locks, before `begin` settles the abandoned attempt.
+    // A repair wait's retry at the waiting step continues the failed child the wait names, and a
+    // wait carried from a nested run continues that nested run, verified and admitted here, under
+    // both locks, before `begin` consumes the parent's wait. An abandoned step's
+    // nested run is settled by its record, under both locks, before `begin` settles the abandoned
+    // attempt.
     let prepared = match (child_recovery, &selection_edge) {
         (Some(recovery @ ChildRecovery::Retry { .. }), Selection::Abandoned) => {
             super::child_recovery::prepare_abandoned(
@@ -628,13 +614,13 @@ pub(super) async fn continue_run(
     let child_recovery = match prepared {
         Ok(recovery) => recovery,
         Err(super::child_recovery::Unprepared::Rejected(result)) => {
-            return reject_after_settlement(pending, &signal_task, result).await;
+            return reject_continuation(pending, &signal_task, result);
         }
         Err(super::child_recovery::Unprepared::Failed(message)) => {
-            return fail_after_settlement(pending, &signal_task, message).await;
+            return fail_continuation(pending, &signal_task, message);
         }
         Err(super::child_recovery::Unprepared::Diagnosed(error)) => {
-            return diagnose_after_settlement(pending, &signal_task, error).await;
+            return diagnose_continuation(pending, &signal_task, error);
         }
     };
     let definition_mode = if replacement_workflow.is_some() {
@@ -644,20 +630,20 @@ pub(super) async fn continue_run(
     } else {
         ContinuationDefinitionMode::Inherited
     };
-    // REQ-LOCALRUN-135: an interruption held before the attempt begins starts none; the run,
-    // its wait and a control the command recorded stay as they are. A signal that carries a
-    // recorded `control.cancel` is a cancellation, which begins the attempt and cancels it.
+    // An interruption held before the attempt begins starts none; the run, its wait and a
+    // control the command recorded stay as they are. A signal that carries a recorded
+    // `control.cancel` is a cancellation, which begins the attempt and cancels it.
     if cancellation.interruption_requested() {
         drop(child_recovery);
-        settle(pending, &signal_task).await?;
+        drop_continuation(pending, &signal_task);
         return Err(super::create::signalled_before_attempt(
             cancellation.cancellation_reason(),
         ));
     }
     let admitted_for_begin = admitted.clone();
-    // REQ-WFEXEC-72: an attempt a resolved wait starts, whatever resolved it and a successor's
-    // carried wait included, continues from that wait and keeps it when an interruption stops
-    // it before any step has started; `--from`, an edge and an abandoned run start from none.
+    // An attempt a resolved wait starts, whatever resolved it and a successor's carried wait
+    // included, continues from that wait and keeps it when an interruption stops it before any
+    // step has started; `--from`, an edge and an abandoned run start from none.
     let mut pending = pending;
     if matches!(selection_edge, Selection::Wait { .. }) {
         pending.keep_resolved_wait();
@@ -666,9 +652,9 @@ pub(super) async fn continue_run(
         Selection::Edge(edge) => Some(edge),
         _ => None,
     };
-    // REQ-LOCALRUN-213: unless it continues an edge, the attempt begins under the controls lock
-    // only once no withdrawal is unhonored over the run, one recorded since the check above
-    // included; otherwise the continuation is handed back to end the run `withdrawn`.
+    // Unless it continues an edge, the attempt begins under the controls lock only once no
+    // withdrawal is unhonored over the run, one recorded since the check above included;
+    // otherwise the continuation is handed back to end the run `withdrawn`.
     let edge_continuation = taken_edge.is_some();
     let begun = tokio::task::spawn_blocking(move || {
         let controls = if edge_continuation {
@@ -722,9 +708,21 @@ pub(super) async fn continue_run(
             serde_json::to_writer(&mut stderr, &event).map_err(anyhow::Error::new)?;
             writeln!(stderr).map_err(anyhow::Error::new)?;
         } else {
+            let revalidated = record.revalidated_steps();
+            let revalidate = if revalidated.is_empty() {
+                String::new()
+            } else {
+                format!(", revalidate [{}]", revalidated.join(", "))
+            };
+            let rebuilt = record.rebuilt_workspaces();
+            let rebuild = if rebuilt.is_empty() {
+                String::new()
+            } else {
+                format!(", rebuild [{}]", rebuilt.join(", "))
+            };
             writeln!(
                 stderr,
-                "Continuation attempt {attempt_number}: reexecute [{}], inherit [{}]",
+                "Continuation attempt {attempt_number}: reexecute [{}], inherit [{}]{revalidate}{rebuild}",
                 record.reexecuted_steps().join(", "),
                 record.inherited_step_ids().collect::<Vec<_>>().join(", ")
             )
@@ -756,9 +754,8 @@ enum Probed {
     Finished(super::super::super::CommandResult),
 }
 
-/// Evaluates the run without taking its lock (REQ-CONTINUE-74): a held wait is reported and
-/// the command ends, a resolved wait or an abandoned run continues, and anything else is
-/// refused.
+/// Evaluates the run without taking its lock: a held wait is reported and the command ends,
+/// a resolved wait or an abandoned run continues, and anything else is refused.
 async fn probe(
     config: useful_execution::PresentationConfig,
     requested: &Path,
@@ -802,8 +799,8 @@ async fn probe(
         } if control.event == CONTROL_WITHDRAW => {
             Ok(Probed::Continue(Selection::Withdraw { wait: wait.id() }))
         }
-        // REQ-CONTINUE-111, REQ-CONTINUE-77: an observed external event continues at the
-        // wait's `then`, with reason `host` when the host condition observed it.
+        // An observed external event continues at the wait's `then`, with reason `host`
+        // when the host condition observed it.
         WaitInspection::Satisfied {
             wait,
             by: ResolvedBy::External(_),
@@ -841,13 +838,13 @@ async fn probe(
             useful_execution::RuleError::CODE,
             "The wait's rule is not a conjunction of supported equalities; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
-        // REQ-CONTINUE-103: a condition that cannot be read is refused, never reported held.
+        // A condition that cannot be read is refused, never reported held.
         WaitInspection::ConditionUnavailable { error, .. } => refuse(error.code, &error.message),
         WaitInspection::NoWait {
             state: Some(RunState::Running),
             ..
         } => Ok(Probed::Continue(Selection::Abandoned)),
-        // REQ-CONTINUE-29: a superseded run's refusal names its successor.
+        // A superseded run's refusal names its successor.
         WaitInspection::NoWait {
             state: Some(RunState::Exited),
             successor: Some(successor),
@@ -855,8 +852,8 @@ async fn probe(
             "continuation_disposition_ineligible",
             &superseded_rejection_message(Some(&successor)),
         ),
-        // REQ-LOCALRUN-223: `retry` continues an ended run that did not succeed, and `resume`
-        // continues no ended run; each refusal names the state and the verbs that apply.
+        // `retry` continues an ended run that did not succeed, and `resume` continues no
+        // ended run; each refusal names the state and the verbs that apply.
         WaitInspection::NoWait {
             state: Some(RunState::Exited),
             successor: None,
@@ -883,7 +880,7 @@ async fn probe(
             "The run reads waiting but holds no wait record; rerun it from a step with useful workflow run retry RUN --from STEP.",
         ),
         // A run admitted from a workflow file's closure has no record: `retry` continues it
-        // from the steps its latest attempt left (REQ-LOCALRUN-184).
+        // from the steps its latest attempt left.
         WaitInspection::NoWait { state: None, .. } if leaf == ExecutionLeaf::Retry => {
             Ok(Probed::Continue(Selection::Ended))
         }
@@ -895,7 +892,7 @@ async fn probe(
 }
 
 /// Whether the run's latest attempt, under the continuation's lock, still ended `continued`
-/// on `edge` (REQ-CONTINUE-78), for a root or a nested run (REQ-WFEXEC-105).
+/// on `edge`, for a root or a nested run.
 pub(super) fn still_continues(
     pending: &PendingLocalContinuation,
     edge: &ContinuationEdgeV1,
@@ -910,9 +907,9 @@ fn still_waits(pending: &PendingLocalContinuation, wait: &str) -> bool {
     matches!(pending.wait(), Ok(Some(current)) if current.id() == wait)
 }
 
-/// REQ-CONTINUE-107: consume an independently completed repair only for the exact child
-/// named by this wait. A normal retry or requested profile replacement still runs afresh.
-/// The host condition that resolved a host wait recorded no control (REQ-CONTINUE-93).
+/// Consume an independently completed repair only for the exact child named by this wait.
+/// A normal retry or requested profile replacement still runs afresh. The host condition
+/// that resolved a host wait recorded no control.
 fn repaired_child(
     pending: &PendingLocalContinuation,
     step: &str,
@@ -925,9 +922,9 @@ fn repaired_child(
 }
 
 /// `repaired_child` for the run `pending` holds waiting on `wait`, which `control` resolved:
-/// recorded on the run itself or, for a nested run, on its root (REQ-CONTINUE-92). A `host`
-/// wait without a control was resolved by the host condition and counts as a retry without
-/// an agent-profile replacement (REQ-CONTINUE-93).
+/// recorded on the run itself or, for a nested run, on its root. A `host` wait without a
+/// control was resolved by the host condition and counts as a retry without an agent-profile
+/// replacement.
 pub(super) fn adopted_repair(
     pending: &PendingLocalContinuation,
     step: &str,
@@ -1005,8 +1002,8 @@ fn refusal(
     )
 }
 
-/// Reports a resume that created no attempt and exits 0: a held wait (REQ-CONTINUE-102),
-/// with `--json` the waiting document, or a withdrawn run (REQ-CONTINUE-109).
+/// Reports a resume that created no attempt and exits 0: a held wait, with `--json` the
+/// waiting document, or a withdrawn run.
 fn write_unattempted(
     config: &useful_execution::PresentationConfig,
     command: &'static str,
@@ -1070,11 +1067,10 @@ pub(super) enum Unadmitted {
     Failed(&'static str),
 }
 
-/// Admits `candidate` as the continuation of `pending` (REQ-CONTINUE-3, REQ-CONTINUE-9,
-/// REQ-CONTINUE-13): the partition, the projected inputs, the harness installations and the
-/// workflow's admission, every failure reported together at phase `continuation`. The
-/// admitted workflow is not bound to a tree copy; the advisories are for the caller to print
-/// once it goes on.
+/// Admits `candidate` as the continuation of `pending`: the partition, the projected inputs,
+/// the harness installations and the workflow's admission, every failure reported together
+/// at phase `continuation`. The admitted workflow is not bound to a tree copy; the
+/// advisories are for the caller to print once it goes on.
 pub(super) async fn admit_continuation(
     pending: &PendingLocalContinuation,
     candidate: ContinuationCandidate<'_>,
@@ -1085,7 +1081,7 @@ pub(super) async fn admit_continuation(
 }
 
 /// `admit_continuation` launched from `environment` rather than the host's: a child's repair
-/// continuation keeps its parent's admitted environment (REQ-WFEXEC-89, INV-ENGINE-27).
+/// continuation keeps its parent's admitted environment.
 pub(super) async fn admit_continuation_in(
     pending: &PendingLocalContinuation,
     candidate: ContinuationCandidate<'_>,
@@ -1110,7 +1106,6 @@ pub(super) async fn admit_continuation_in(
     let baseline = pending.git_baseline();
     let workflow_for_context = workflow.clone();
     let context_cancellation = cancellation.clone();
-    // Discovery is shared with retry, while rejection here must settle abandonment.
     let (context, installation_failures) = tokio::task::spawn_blocking(move || {
         super::create::continuation_execution_context(
             &workflow_for_context,
@@ -1131,8 +1126,8 @@ pub(super) async fn admit_continuation_in(
         Some(tree) => context.with_tree(tree),
         None => context,
     };
-    // REQ-LOCALRUN-217: every continuation, a successor's and a child's repair continuation
-    // included, sets the revision the run was created with.
+    // Every continuation, a successor's and a child's repair continuation included, sets
+    // the revision the run was created with.
     let context = match pending.source_revision() {
         Some(source_revision) => context.with_source_revision(source_revision.clone()),
         None => context,
@@ -1192,30 +1187,30 @@ pub(super) async fn admit_continuation_in(
         .ok_or(Unadmitted::Failed("complete continuation admission"))
 }
 
-async fn fail_after_settlement(
+fn fail_continuation(
     pending: PendingLocalContinuation,
     signal_task: &super::create::SignalObservation,
     message: &'static str,
 ) -> super::super::super::CommandResult {
-    error_after_settlement(pending, signal_task, anyhow::anyhow!(message)).await
+    fail_with_error(pending, signal_task, anyhow::anyhow!(message))
 }
 
-/// `fail_after_settlement` with the cause the caller read.
-async fn error_after_settlement(
+/// `fail_continuation` with the cause the caller read.
+fn fail_with_error(
     pending: PendingLocalContinuation,
     signal_task: &super::create::SignalObservation,
     error: anyhow::Error,
 ) -> super::super::super::CommandResult {
-    settle(pending, signal_task).await?;
+    drop_continuation(pending, signal_task);
     Err(error.into())
 }
 
-async fn diagnose_after_settlement(
+fn diagnose_continuation(
     pending: PendingLocalContinuation,
     signal_task: &super::create::SignalObservation,
     error: useful_execution::LocalRunDirectoryError,
 ) -> super::super::super::CommandResult {
-    settle(pending, signal_task).await?;
+    drop_continuation(pending, signal_task);
     super::create::diagnose(error)
 }
 
@@ -1272,11 +1267,11 @@ async fn end_continuation_withdrawn(
 }
 
 /// Ends the run `withdrawn` without an attempt through `end`, which consumes the pending
-/// continuation or retry, then performs the root's `onOutcome.withdrawn` (REQ-LOCALRUN-191),
-/// read before `end` and written once the record reads `exited`, and reports the unattempted
-/// command under `command_name(leaf)`. A mirrored run whose write has no credentials is refused
-/// first (REQ-LOCALRUN-204), and an `end` refused `OwnershipUnproven` is reported as a retry
-/// rejection; neither changes the run. The caller holds no controls lock.
+/// continuation or retry, then performs the root's `onOutcome.withdrawn`, read before `end` and
+/// written once the record reads `exited`, and reports the unattempted command under
+/// `command_name(leaf)`. A mirrored run whose write has no credentials is refused first, and an
+/// `end` refused `OwnershipUnproven` is reported as a retry rejection; neither changes the run.
+/// The caller holds no controls lock.
 pub(super) async fn end_withdrawn<P: Send + 'static>(
     pending: P,
     unattempted: Unattempted,
@@ -1291,9 +1286,9 @@ pub(super) async fn end_withdrawn<P: Send + 'static>(
         mirror,
         output,
     } = unattempted;
-    // REQ-LOCALRUN-204: a write without credentials refuses before the run changes. The
-    // pending value is dropped unsettled, as `end.rs` drops its own: a waiting run's attempt is
-    // already settled, and an abandoned attempt stays as the command found it.
+    // A write without credentials refuses before the run changes. The pending value is dropped
+    // unsettled, as `end.rs` drops its own: a waiting run's attempt is already settled, and an
+    // abandoned attempt stays as the command found it.
     if let Err(failure) = super::mirror::outcome_credentials(mirror.as_ref(), WITHDRAWN_OUTCOME) {
         let result = output.render_continuation_refusal(
             &run_directory,
@@ -1336,23 +1331,20 @@ pub(super) async fn end_withdrawn<P: Send + 'static>(
     )
 }
 
-async fn reject_after_settlement(
+fn reject_continuation(
     pending: PendingLocalContinuation,
     signal_task: &super::create::SignalObservation,
     result: WorkflowRunPresentationResult,
 ) -> super::super::super::CommandResult {
-    settle(pending, signal_task).await?;
+    drop_continuation(pending, signal_task);
     super::create::rejection_exit(result)
 }
 
-/// Settles an abandoned owner for a continuation that ends without claiming an attempt.
-async fn settle(
+/// Releases the run lock with the abandoned attempt intact.
+fn drop_continuation(
     pending: PendingLocalContinuation,
     signal_task: &super::create::SignalObservation,
-) -> anyhow::Result<()> {
-    let settlement = tokio::task::spawn_blocking(move || pending.settle_abandoned()).await;
+) {
+    drop(pending);
     signal_task.abort();
-    settlement
-        .map_err(anyhow::Error::new)?
-        .map_err(anyhow::Error::new)
 }

@@ -42,7 +42,7 @@ pub(super) const NO_WAIT_HELP: &str =
     "Return after starting a consent instead of waiting for the callback; OAuth providers only";
 
 // One of PROVIDER, `--all` and `--workflow` says what to sign in to; without one the command is
-// refused before any request (REQ-GRANT-75).
+// refused before any request.
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("source").multiple(false)))]
 #[command(group(
@@ -75,7 +75,7 @@ pub(super) struct Command {
 
     // Clap waives `requires` where the option required conflicts with one given, as `--workflow`
     // does with PROVIDER and `--all`, so those conflicts are stated here too, as they are for
-    // each option below that needs one selector (REQ-GRANT-75, REQ-GRANT-76).
+    // each option below that needs one selector.
     #[arg(
         long,
         value_name = "ROOT",
@@ -85,8 +85,8 @@ pub(super) struct Command {
     )]
     source_root: Option<PathBuf>,
 
-    // The runner whose host's own coding agent sign-ins the workflows' sign-ins pass over
-    // (REQ-GRANT-76).
+    // The runner whose host's own coding agent sign-ins the workflows' sign-ins pass
+    // over.
     #[arg(
         long,
         value_name = "RUNNER",
@@ -135,9 +135,9 @@ pub(super) struct Command {
     options: Options,
 }
 
-/// What the flow of `useful account integration connect` reads of the command that runs it, besides the
-/// providers: `create` builds it from its options and `reconnect` from its own, taking the
-/// defaults for the rest (INV-CLI-15).
+/// What the flow of `useful account integration connect` reads of the command that runs it, besides
+/// the providers: `create` builds it from its options and `reconnect` from its own, taking the
+/// defaults for the rest.
 #[derive(Clone, Copy, Default)]
 pub(in crate::cli) struct Flow<'a> {
     /// Whether each line printed is a JSON event.
@@ -146,7 +146,7 @@ pub(in crate::cli) struct Flow<'a> {
     pub(in crate::cli) allow_insecure_http: bool,
     /// The organization a coding agent's grant is for, by ID or exact slug, as `--org` or
     /// `USEFUL_ORG` named it; without one, the checkout or the member's only active membership
-    /// names it (REQ-GRANT-72).
+    /// names it.
     pub(in crate::cli) organization: Option<&'a str>,
     /// Whether Codex signs in by device code even where this machine has a browser.
     pub(in crate::cli) device: bool,
@@ -155,7 +155,7 @@ pub(in crate::cli) struct Flow<'a> {
     /// How long a consent is waited for, when not its default.
     pub(in crate::cli) timeout: Option<Duration>,
     /// The `rnr_` ID of the runner `--runner` named, whose host's own sign-in of a coding agent
-    /// the flow over workflow files passes over (REQ-GRANT-76).
+    /// the flow over workflow files passes over.
     pub(in crate::cli) runner: Option<&'a str>,
 }
 
@@ -169,9 +169,9 @@ pub(super) enum ProviderArg {
     Codex,
 }
 
-/// The `PROVIDER` `useful account integration connect` is given (REQ-GRANT-69): one of the five it has a
-/// built-in name for, or any other provider id, taken for an OAuth provider the deployment serves,
-/// which the command reads before it begins anything.
+/// The `PROVIDER` `useful account integration connect` is given: one of the five it has a built-in
+/// name for, or any other provider id, taken for an OAuth provider the deployment serves, which the
+/// command reads before it begins anything.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProviderName {
     BuiltIn(ProviderArg),
@@ -194,9 +194,8 @@ fn parse_provider(value: &str) -> Result<ProviderName, String> {
     )
 }
 
-/// An OAuth provider beyond `github`, `gitlab.com` and `linear` that the deployment serves
-/// (REQ-GRANT-78): its id, and its title, the display name the deployment serves for it or else
-/// its id (REQ-GRANT-96).
+/// An OAuth provider beyond `github`, `gitlab.com` and `linear` that the deployment serves: its
+/// id, and its title, the display name the deployment serves for it or else its id.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NamedProvider {
     name: String,
@@ -235,8 +234,8 @@ fn served_oauth(served: &[ServedGrantProvider], name: &str) -> Option<NamedProvi
         .find(|provider| provider.name == name)
 }
 
-/// A provider in the order `useful account integration connect` signs in to several in: one of the five it
-/// has a built-in name for, or another OAuth provider the deployment serves (REQ-GRANT-75).
+/// A provider in the order `useful account integration connect` signs in to several in: one of the
+/// five it has a built-in name for, or another OAuth provider the deployment serves.
 enum Ordered {
     BuiltIn(ProviderArg),
     Served(NamedProvider),
@@ -260,10 +259,10 @@ impl Ordered {
     }
 }
 
-/// The order `useful account integration connect` signs in to several providers in (REQ-GRANT-75), that of
-/// [`projection::providers`] for the providers `served` names: the OAuth providers first,
-/// whose consents need only a browser anywhere, the deployment's other OAuth providers after
-/// the built-in ones, then the coding agents, whose sign-ins run on this machine.
+/// The order `useful account integration connect` signs in to several providers in, that of
+/// [`projection::providers`] for the providers `served` names: the OAuth providers first, whose
+/// consents need only a browser anywhere, the deployment's other OAuth providers after the built-in
+/// ones, then the coding agents, whose sign-ins run on this machine.
 fn order(served: &[ServedGrantProvider]) -> Vec<Ordered> {
     projection::providers(served)
         .into_iter()
@@ -285,10 +284,10 @@ fn order(served: &[ServedGrantProvider]) -> Vec<Ordered> {
 /// What a selection chooses among.
 #[derive(Clone, Copy)]
 enum Wanted<'a> {
-    /// Every provider of the [`order`], the deployment's other OAuth providers among them
-    /// (REQ-GRANT-75).
+    /// Every provider of the [`order`], the deployment's other OAuth providers among
+    /// them.
     Every,
-    /// Only these of the five, as workflows call for them (REQ-GRANT-76).
+    /// Only these of the five, as workflows call for them.
     Only(&'a [ProviderArg]),
 }
 
@@ -342,8 +341,8 @@ impl ProviderArg {
         self.consent().is_none()
     }
 
-    /// The provider whose grant a kind a workflow calls for names; `gitlab` is GitLab.com
-    /// (REQ-GRANT-76). A token service has none (REQ-CREDREADY-29).
+    /// The provider whose grant a kind a workflow calls for names; `gitlab` is
+    /// GitLab.com. A token service has none.
     const fn of_kind(kind: CredentialKind) -> Option<Self> {
         Some(match kind {
             CredentialKind::Github => Self::Github,
@@ -351,7 +350,9 @@ impl ProviderArg {
             CredentialKind::Linear => Self::Linear,
             CredentialKind::ClaudeCode => Self::ClaudeCode,
             CredentialKind::Codex => Self::Codex,
-            CredentialKind::Mergify | CredentialKind::Buildkite => return None,
+            CredentialKind::Mergify | CredentialKind::Buildkite | CredentialKind::Cloudflare => {
+                return None;
+            }
         })
     }
 }
@@ -366,7 +367,7 @@ enum SignIn {
 
 /// A coding agent's login: read from a file or stream the member names, before any network
 /// use, or made by a sign-in `useful` runs in a directory it made once the command has settled
-/// where the login is stored (INV-CLI-13).
+/// where the login is stored.
 pub(super) enum Login {
     Read(Zeroizing<Vec<u8>>),
     /// `codex` with these arguments.
@@ -386,12 +387,12 @@ struct Selection {
     consents: Vec<String>,
     natives: Option<Natives>,
     /// The coding agents passed over without a sign-in because the deployment does not serve
-    /// them (REQ-GRANT-75, REQ-GRANT-78).
+    /// them.
     unavailable: Vec<ProviderArg>,
-    /// The providers whose every held grant needs reconnecting, in [`order`] (REQ-GRANT-79).
+    /// The providers whose every held grant needs reconnecting, in [`order`].
     reconnects: Vec<Reconnect>,
     /// The coding agents the host of the runner [`Flow::runner`] names supplies, which get no
-    /// step (REQ-GRANT-76).
+    /// step.
     host: Vec<ProviderArg>,
 }
 
@@ -400,7 +401,7 @@ enum Natives {
     /// Signed in to for the one organization their grants are for.
     For(Organization, Vec<ProviderArg>),
     /// Passed over, since no organization was resolved: the refusal that says why and names
-    /// how to name one (REQ-GRANT-75).
+    /// how to name one.
     Unresolved(String, Vec<ProviderArg>),
 }
 
@@ -413,7 +414,7 @@ impl Natives {
 }
 
 /// A provider every grant of which the member holds needs reconnecting, and those grants' IDs,
-/// which the summary names with `useful account integration reconnect` (REQ-GRANT-79).
+/// which the summary names with `useful account integration reconnect`.
 struct Reconnect {
     provider: ProviderArg,
     grants: Vec<String>,
@@ -467,7 +468,7 @@ impl Selection {
             })
     }
 
-    /// What the plan says the run does about `provider` (REQ-GRANT-76, REQ-GRANT-79).
+    /// What the plan says the run does about `provider`.
     fn planned(&self, provider: ProviderArg) -> workflow::State {
         if self.host.contains(&provider) {
             return workflow::State::Host;
@@ -489,7 +490,7 @@ enum Step<'a> {
     PassedOver(ProviderArg, &'a str),
     /// A coding agent passed over because the deployment does not serve it.
     Unavailable(ProviderArg),
-    /// A provider whose grants, these, need reconnecting, passed over (REQ-GRANT-79).
+    /// A provider whose grants, these, need reconnecting, passed over.
     Kept(ProviderArg, &'a [String]),
 }
 
@@ -515,7 +516,7 @@ enum Outcome {
     Unavailable,
     /// A coding agent passed over because no organization was resolved for its grant.
     OrganizationRequired,
-    /// A provider passed over because its grants need reconnecting (REQ-GRANT-185).
+    /// A provider passed over because its grants need reconnecting.
     ReconnectRequired,
     Failed,
     /// A signal ended the command with this status.
@@ -531,9 +532,9 @@ pub(super) struct Imported {
 /// Where an import stores a coding agent's login.
 #[derive(Clone, Copy)]
 pub(super) enum Store<'a> {
-    /// As a new grant of the provider for the organization (REQ-GRANT-70 to REQ-GRANT-72).
+    /// As a new grant of the provider for the organization.
     New(ProviderArg, &'a Organization),
-    /// As the next generation of the member's grant, in its own organization (REQ-GRANT-73).
+    /// As the next generation of the member's grant, in its own organization.
     Next(&'a MemberGrant),
 }
 
@@ -589,8 +590,8 @@ fn unsuited(option: &str, name: &str, remedy: &str) -> CommandFailure {
 }
 
 /// The refusal of `name`, which the deployment serves as neither an OAuth provider nor a token
-/// service (REQ-GRANT-69, REQ-INTEGRATION-16), exit 2, naming the providers `served` lists, the
-/// built-in ones first, then the coding agents, then `token_services`.
+/// service, exit 2, naming the providers `served` lists, the built-in ones first, then the
+/// coding agents, then `token_services`.
 fn not_served(
     name: &str,
     served: &[ServedGrantProvider],
@@ -621,9 +622,9 @@ pub(super) fn first_given<const N: usize>(
         .find_map(|(given, option)| given.then_some(option))
 }
 
-/// The exit status of several sign-ins (REQ-GRANT-183): a signal's when one stopped them, 1 when
-/// any failed or when every one was passed over, as unavailable, for want of an organization or
-/// as needing reconnecting (REQ-GRANT-185), and otherwise 0, as when there were none.
+/// The exit status of several sign-ins: a signal's when one stopped them, 1 when any failed or
+/// when every one was passed over, as unavailable, for want of an organization or as needing
+/// reconnecting, and otherwise 0, as when there were none.
 fn summary_code(outcomes: impl Iterator<Item = Outcome> + Clone) -> ExitCode {
     if let Some(code) = outcomes.clone().find_map(|outcome| match outcome {
         Outcome::Stopped(code) => Some(code),
@@ -649,11 +650,10 @@ fn summary_code(outcomes: impl Iterator<Item = Outcome> + Clone) -> ExitCode {
     }
 }
 
-/// Whether the host of the runner `runner_id` supplies the coding agent `provider` itself
-/// (REQ-GRANT-76): an unrevoked grant of it among `grants` has an authorization in force for that
-/// runner on which the runner last reported `foreign_login`, its host's own sign-in, which it uses
-/// in place of the grant (REQ-GRANT-27, REQ-GRANT-51). Cloud serves a runner's report there
-/// alone, so nothing else is read for it.
+/// Whether the host of the runner `runner_id` supplies the coding agent `provider` itself: an
+/// unrevoked grant of it among `grants` has an authorization in force for that runner on which the
+/// runner last reported `foreign_login`, its host's own sign-in, which it uses in place of the
+/// grant. Cloud serves a runner's report there alone, so nothing else is read for it.
 fn supplied_on(grants: &[MemberGrant], provider: ProviderArg, runner_id: &str) -> bool {
     grants
         .iter()
@@ -668,7 +668,7 @@ fn supplied_on(grants: &[MemberGrant], provider: ProviderArg, runner_id: &str) -
 }
 
 /// Whether the host of the runner `runner_id` supplies the coding agent `kind` names itself, as
-/// [`supplied_on`] reads it, for `useful workflow doctor --runner` (REQ-CREDREADY-26).
+/// [`supplied_on`] reads it, for `useful workflow doctor --runner`.
 pub(in crate::cli) fn host_supplies(
     grants: &[MemberGrant],
     kind: CredentialKind,
@@ -678,14 +678,12 @@ pub(in crate::cli) fn host_supplies(
 }
 
 impl Command {
-    /// With `PROVIDER`, checks which options suit it before anything is run, read or sent
-    /// (REQ-GRANT-70 to REQ-GRANT-72), then makes its grant: by the provider's consent, for a
-    /// provider outside the five once the deployment is found to serve it (REQ-GRANT-69), or by
-    /// importing a coding agent's login (REQ-GRANT-70, REQ-GRANT-71).
-    /// With `--all`, makes a grant of each provider the member lacks (REQ-GRANT-75), and with
-    /// `--workflow` of each the workflows call for (REQ-GRANT-76). The organization `--org` or
-    /// `USEFUL_ORG` names is read before any request, except for an OAuth `PROVIDER`, whose
-    /// grant is the member's alone.
+    /// With `PROVIDER`, checks which options suit it before anything is run, read or sent, then
+    /// makes its grant: by the provider's consent, for a provider outside the five once the
+    /// deployment is found to serve it, or by importing a coding agent's login. With `--all`,
+    /// makes a grant of each provider the member lacks, and with `--workflow` of each the
+    /// workflows call for. The organization `--org` or `USEFUL_ORG` names is read before any
+    /// request, except for an OAuth `PROVIDER`, whose grant is the member's alone.
     pub(super) fn run(self, deployment: &Deployment) -> super::super::super::CommandResult {
         let Some(provider) = &self.provider else {
             let named = self.org.named_in_process()?;
@@ -709,7 +707,7 @@ impl Command {
                 let named = self.org.named_in_process()?;
                 let flow = self.flow(named.as_ref());
                 // A Claude Code sign-in the member could not answer is refused before the first
-                // request (REQ-GRANT-71).
+                // request.
                 if matches!(login, Login::ClaudeCode)
                     && let Some(failure) = claude_setup_token::unanswerable()
                 {
@@ -747,7 +745,7 @@ impl Command {
     /// The sign-in the provider and options name; a file or stream is read here, so that an
     /// insecurely held or malformed one is refused with exit 2 before any network use, as is an
     /// option that does not suit the provider: a source of another provider, or for a coding
-    /// agent, whose sign-in has no consent, `--no-wait` or `--timeout` (REQ-GRANT-178).
+    /// agent, whose sign-in has no consent, `--no-wait` or `--timeout`.
     fn sign_in(&self, provider: ProviderArg) -> Result<SignIn, CommandFailure> {
         let name = provider.grant().as_str();
         let unsuited = |option: &str, remedy: &str| unsuited(option, name, remedy);
@@ -838,11 +836,10 @@ impl Command {
     }
 
     /// Connects `name`, a provider id outside the five, once one read of what the deployment
-    /// serves says what it is (REQ-GRANT-69, REQ-INTEGRATION-16): a token service's token, once
-    /// the options of a sign-in are refused; or an OAuth provider's consent. Any other name, on
-    /// a deployment that predates the read included, is refused with exit 2, naming the
-    /// providers and token services that can be given, before anything is read from a file,
-    /// standard input or the terminal.
+    /// serves says what it is: a token service's token, once the options of a sign-in are
+    /// refused; or an OAuth provider's consent. Any other name, on a deployment that predates
+    /// the read included, is refused with exit 2, naming the providers and token services that
+    /// can be given, before anything is read from a file, standard input or the terminal.
     fn connect_served(
         &self,
         deployment: &Deployment,
@@ -866,10 +863,10 @@ impl Command {
         flow.consent_unheld(deployment, provider.consent())
     }
 
-    /// Connects the member's token of `service` (REQ-INTEGRATION-16), once the options of a
-    /// sign-in are refused with exit 2: reads the member's tokens, refuses with exit 2 naming
-    /// `reconnect` where one of the service is held, before any token is read, and otherwise
-    /// reads the token and stores it.
+    /// Connects the member's token of `service`, once the options of a sign-in are refused
+    /// with exit 2: reads the member's tokens, refuses with exit 2 naming `reconnect` where
+    /// one of the service is held, before any token is read, and otherwise reads the token
+    /// and stores it.
     fn connect_token(
         &self,
         deployment: &Deployment,
@@ -919,12 +916,12 @@ impl Command {
         )
     }
 
-    /// Signs in to what the `--workflow` files call for (REQ-GRANT-76) through the flow over
-    /// their derivation. The files are derived before any request, so a file that does not
-    /// resolve, or one in no Git repository without `--source-root`, ends the command before any
-    /// sign-in. The runner `--runner` names is resolved next, before the plan: an ID as given,
-    /// a name among the runners of every organization the member is an active member of
-    /// (REQ-GRANT-65), its refusals printed as the summary event that ends the stream.
+    /// Signs in to what the `--workflow` files call for through the flow over their derivation.
+    /// The files are derived before any request, so a file that does not resolve, or one in no
+    /// Git repository without `--source-root`, ends the command before any sign-in. The runner
+    /// `--runner` names is resolved next, before the plan: an ID as given, a name among the
+    /// runners of every organization the member is an active member of, its refusals printed as
+    /// the summary event that ends the stream.
     fn run_workflows(
         &self,
         deployment: &Deployment,
@@ -962,14 +959,14 @@ impl Command {
             runner: runner.as_deref(),
             ..*flow
         };
-        // The sign-ins select by the inference, not by a declared block (REQ-GRANT-76).
+        // The sign-ins select by the inference, not by a declared block.
         flow.run_workflows(deployment, &derived.inferred, output::Scope::Workflows)
     }
 }
 
 impl Flow<'_> {
     /// Codex's own sign-in: by device code with `--device` or where this machine has no
-    /// browser, and otherwise in this machine's browser (REQ-GRANT-70).
+    /// browser, and otherwise in this machine's browser.
     pub(super) fn codex_sign_in(&self) -> Login {
         if self.device || !browser::available(|name| std::env::var_os(name)) {
             Login::Codex(codex_login::DEVICE)
@@ -978,12 +975,12 @@ impl Flow<'_> {
         }
     }
 
-    /// The flow over a derivation of workflow files, which `useful account integration connect --workflow`
-    /// runs and nothing else does (INV-CLI-15): signs in to the providers the files call for that the member lacks (REQ-GRANT-76), and passes over those
-    /// whose every held grant needs reconnecting, which it never signs in to (REQ-GRANT-79), and
-    /// with [`Flow::runner`] each coding agent that runner's host supplies (REQ-GRANT-76). It
-    /// asks nothing. A tree that calls for no provider is not taken to Cloud. The plan is printed
-    /// once the grants are read and before any sign-in; then the selection runs as without
+    /// The flow over a derivation of workflow files, which `useful account integration connect
+    /// --workflow` runs and nothing else does: signs in to the providers the files call for that
+    /// the member lacks, and passes over those whose every held grant needs reconnecting, which it
+    /// never signs in to, and with [`Flow::runner`] each coding agent that runner's host supplies.
+    /// It asks nothing. A tree that calls for no provider is not taken to Cloud. The plan is
+    /// printed once the grants are read and before any sign-in; then the selection runs as without
     /// `--workflow`, its summary naming the command of `scope` to run again. Returns its status.
     pub(in crate::cli) fn run_workflows(
         &self,
@@ -1027,25 +1024,24 @@ impl Flow<'_> {
 
     /// Selects, among `wanted` and in [`order`], the providers the member lacks: those it holds no
     /// grant of that is `active` or `reconnect_required`, for a native provider in the organization
-    /// a new grant would be for (REQ-GRANT-180). The member's grants of both kinds are read once.
-    /// With every provider wanted, the providers the deployment serves are read next, every time,
-    /// and each other OAuth provider among them is wanted after the built-in ones; with only some
-    /// of the five wanted, they are read next only where a coding agent might be signed in to
-    /// (REQ-GRANT-78). A coding agent the deployment does not serve is selected to be passed over
-    /// without a sign-in; a deployment that predates that read is taken to serve each one and no
-    /// other OAuth provider. The organization in effect is resolved once, and only for the native
-    /// providers it serves, when [`Flow::organization`] names it or one of those in `wanted` is
-    /// held in no organization (REQ-GRANT-72), so a member who holds every provider wanted is
-    /// asked for nothing more and no `git` runs. When neither the checkout nor an only active
-    /// membership names one, each native provider held in no organization is selected to be passed
-    /// over with the refusal, which names the command of `scope` with an organization, and the
-    /// consents are selected as ever. With `reconnect`, a provider held, a coding agent in that organization when one was
-    /// resolved and in any otherwise, every grant of which so held needs reconnecting is selected
-    /// to be passed over (REQ-GRANT-79), a coding agent the deployment serves only, with the IDs
-    /// of those grants. With [`Flow::runner`], a coding agent wanted that the runner's host
-    /// supplies ([`supplied_on`]) is set apart before all of this, as if not wanted: no
-    /// organization or served provider is read for it (REQ-GRANT-76). The inner error is the exit
-    /// status of a reported failure.
+    /// a new grant would be for. The member's grants of both kinds are read once. With every
+    /// provider wanted, the providers the deployment serves are read next, every time, and each
+    /// other OAuth provider among them is wanted after the built-in ones; with only some of the
+    /// five wanted, they are read next only where a coding agent might be signed in to. A coding
+    /// agent the deployment does not serve is selected to be passed over without a sign-in; a
+    /// deployment that predates that read is taken to serve each one and no other OAuth provider.
+    /// The organization in effect is resolved once, and only for the native providers it serves,
+    /// when [`Flow::organization`] names it or one of those in `wanted` is held in no organization,
+    /// so a member who holds every provider wanted is asked for nothing more and no `git` runs.
+    /// When neither the checkout nor an only active membership names one, each native provider held
+    /// in no organization is selected to be passed over with the refusal, which names the command
+    /// of `scope` with an organization, and the consents are selected as ever. With `reconnect`, a
+    /// provider held, a coding agent in that organization when one was resolved and in any
+    /// otherwise, every grant of which so held needs reconnecting is selected to be passed over, a
+    /// coding agent the deployment serves only, with the IDs of those grants. With
+    /// [`Flow::runner`], a coding agent wanted that the runner's host supplies ([`supplied_on`]) is
+    /// set apart before all of this, as if not wanted: no organization or served provider is read
+    /// for it. The inner error is the exit status of a reported failure.
     fn select(
         &self,
         deployment: &Deployment,
@@ -1068,7 +1064,7 @@ impl Flow<'_> {
         let read = self.with_api(deployment, |api| {
             let grants = super::every_grant(api)?;
             // With every provider wanted, what the deployment serves names the other OAuth
-            // providers too, so it is read every time, right after the grants (REQ-GRANT-181).
+            // providers too, so it is read every time, right after the grants.
             let every = match wanted {
                 Wanted::Every => Some(api.served_providers()?),
                 Wanted::Only(_) => None,
@@ -1197,18 +1193,17 @@ impl Flow<'_> {
         }))
     }
 
-    /// Runs the sign-in of each selected provider in turn, naming the provider on standard
-    /// error before its prompts, then prints one outcome per provider (REQ-GRANT-75). A held
-    /// provider is never selected, and one whose grants need reconnecting is passed over as
-    /// `reconnect_required`, the summary naming `useful account integration reconnect` with each of
-    /// those grants' IDs (REQ-GRANT-185). A sign-in that fails
-    /// does not stop the ones after it; a signal does, whether `useful` received it or it ended a
-    /// coding agent's sign-in on its own terminal. A coding agent the deployment does not serve,
-    /// or one no organization was resolved for, is reported and passed over without a sign-in.
-    /// Exits 0 when each provider ended with a grant or was passed over, as unavailable, for
-    /// want of an organization or as needing reconnecting, and at least one grant was made or
-    /// none was to be, 1 when any sign-in failed or nothing was made, and the signal's status
-    /// when one stopped the command.
+    /// Runs the sign-in of each selected provider in turn, naming the provider on standard error
+    /// before its prompts, then prints one outcome per provider. A held provider is never selected,
+    /// and one whose grants need reconnecting is passed over as `reconnect_required`, the summary
+    /// naming `useful account integration reconnect` with each of those grants' IDs. A sign-in that
+    /// fails does not stop the ones after it; a signal does, whether `useful` received it or it
+    /// ended a coding agent's sign-in on its own terminal. A coding agent the deployment does not
+    /// serve, or one no organization was resolved for, is reported and passed over without a
+    /// sign-in. Exits 0 when each provider ended with a grant or was passed over, as unavailable,
+    /// for want of an organization or as needing reconnecting, and at least one grant was made or
+    /// none was to be, 1 when any sign-in failed or nothing was made, and the signal's status when
+    /// one stopped the command.
     fn run_selection(
         &self,
         deployment: &Deployment,
@@ -1308,7 +1303,7 @@ impl Flow<'_> {
 
     /// Runs the consent once the member's grants of the provider are read in the member's
     /// session and none is held: `create` never replaces one, and refuses, naming `useful
-    /// account integration reconnect` for each (REQ-GRANT-73, REQ-GRANT-179).
+    /// account integration reconnect` for each.
     fn consent_unheld(
         &self,
         deployment: &Deployment,
@@ -1326,8 +1321,8 @@ impl Flow<'_> {
     }
 
     /// The title of `name`, an OAuth provider with no built-in name: the display name the
-    /// deployment serves for it, read first, and otherwise its id (REQ-GRANT-96). A failed read
-    /// is reported as the consent's result, and its exit status is the inner error.
+    /// deployment serves for it, read first, and otherwise its id. A failed read is reported as
+    /// the consent's result, and its exit status is the inner error.
     pub(super) fn served_title(
         &self,
         deployment: &Deployment,
@@ -1352,7 +1347,7 @@ impl Flow<'_> {
     }
 
     /// Runs the consent with no identity named, opening its URL when this machine has a
-    /// browser (REQ-GRANT-69).
+    /// browser.
     pub(super) fn consent(
         &self,
         deployment: &Deployment,
@@ -1374,11 +1369,11 @@ impl Flow<'_> {
         .run_to_end(deployment)
     }
 
-    /// Imports a coding agent's login where `store` says: as a new grant for an organization
-    /// (REQ-GRANT-70 to REQ-GRANT-72), or as the next generation of the member's grant
-    /// (REQ-GRANT-73). The session, and the organization or the grant, are settled before this
-    /// is called, so a refusal leaves no provider session behind. A sign-in a signal ended is
-    /// reported as one that failed, with the signal's stop besides.
+    /// Imports a coding agent's login where `store` says: as a new grant for an organization,
+    /// or as the next generation of the member's grant. The session, and the organization or
+    /// the grant, are settled before this is called, so a refusal leaves no provider session
+    /// behind. A sign-in a signal ended is reported as one that failed, with the signal's stop
+    /// besides.
     pub(super) fn import(
         &self,
         deployment: &Deployment,
@@ -1448,12 +1443,11 @@ impl Flow<'_> {
     /// Establishes the session, resolves the organization in effect and reads the grants of the
     /// provider held there, returning the exit status of a reported refusal instead; when no
     /// source names an organization it refuses with exit 2, naming `--org` and the member's
-    /// organizations (REQ-GRANT-72). Before a sign-in,
-    /// `signs_in`, the providers the deployment serves are read first, and one it does not serve
-    /// is refused as unavailable before anything else is asked or run (REQ-GRANT-75,
-    /// REQ-GRANT-78); a deployment that predates that read is taken to serve it. A grant held
-    /// there is refused, naming `useful account integration reconnect` for each: `create` never
-    /// replaces one (REQ-GRANT-73).
+    /// organizations. Before a sign-in, `signs_in`, the providers the deployment serves are read
+    /// first, and one it does not serve is refused as unavailable before anything else is asked
+    /// or run; a deployment that predates that read is taken to serve it. A grant held there is
+    /// refused, naming `useful account integration reconnect` for each: `create` never replaces
+    /// one.
     fn settle(
         &self,
         deployment: &Deployment,
@@ -1490,7 +1484,7 @@ impl Flow<'_> {
         }
     }
 
-    /// The organization in effect a coding agent's grant is for (REQ-GRANT-72): the one
+    /// The organization in effect a coding agent's grant is for: the one
     /// [`Flow::organization`] names, or else the one the checkout or the member's only active
     /// membership names, or else the member's active organizations, none or several.
     fn resolve_organization(
@@ -1507,8 +1501,8 @@ impl Flow<'_> {
     }
 
     /// Refuses as unavailable a coding agent, by its wire name `name`, that the providers the
-    /// deployment serves do not name, before its sign-in runs (REQ-GRANT-75, REQ-GRANT-78); a
-    /// deployment that predates that read is taken to serve it.
+    /// deployment serves do not name, before its sign-in runs; a deployment that predates
+    /// that read is taken to serve it.
     pub(super) fn check_served(api: &MemberGrantApi, name: &str) -> Result<(), MemberGrantFailure> {
         if api
             .served_providers()?

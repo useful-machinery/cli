@@ -1,10 +1,9 @@
-//! A run named by `RUN` wherever it executes (REQ-LOCALRUN-180, INV-CLI-20): a run directory,
-//! a run ID or a subject, looked up under the `useful` home without a request and, when the
-//! home holds none, in Cloud in the organization in effect (REQ-ORG-87). [`RunArg::everywhere`]
-//! looks in both places and [`RunArg::home_only`] under the home alone; [`CloudRunArg`], the
-//! `RUN` of a leaf that acts on a Cloud run alone, looks in Cloud alone and reads nothing under
-//! the home. Under the home the lookup is `resolve_under_home`'s, and only its `run_not_found`
-//! goes on to Cloud. In
+//! A run named by `RUN` wherever it executes: a run directory, a run ID or a subject, looked up
+//! under the `useful` home without a request and, when the home holds none, in Cloud in the
+//! organization in effect. [`RunArg::everywhere`] looks in both places and
+//! [`RunArg::home_only`] under the home alone; [`CloudRunArg`], the `RUN` of a leaf that acts
+//! on a Cloud run alone, looks in Cloud alone and reads nothing under the home. Under the home
+//! the lookup is `resolve_under_home`'s, and only its `run_not_found` goes on to Cloud. In
 //! Cloud an ID is not read here: the leaf's first read of the run ([`InCloud::first_read`]) is
 //! the lookup, and a read Cloud answers 404, or one nobody is signed in to send, is the miss. A
 //! subject is read from the organization's runs listing, newest first, its live runs before its
@@ -37,7 +36,7 @@ const GROUPS: [(&str, &str); 2] = [("active", "live"), ("terminal", "ended")];
 const DEPLOYMENT_CONTEXT: &str = "configure Useful Machinery runs";
 
 /// Where a run executes, as `--on` names it: under the `useful` home, or in Cloud with an owner
-/// or with none (REQ-RUN-127).
+/// or with none.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(super) enum Place {
     /// The useful home
@@ -150,8 +149,8 @@ fn find_in_cloud(
         })
 }
 
-/// The lookup's refusal (REQ-LOCALRUN-180) as `command` writes it: under `--json` the `error`
-/// document with its code and no `runDirectory`, otherwise the error on standard error; exit 1.
+/// The lookup's refusal as `command` writes it: under `--json` the `error` document with its
+/// code and no `runDirectory`, otherwise the error on standard error; exit 1.
 pub(super) fn write_refused(
     error: RunAddressError,
     command: &'static str,

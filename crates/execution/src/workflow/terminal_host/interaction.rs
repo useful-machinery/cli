@@ -467,8 +467,8 @@ impl HostInteraction {
 
         if event == TerminalInputEvent::Cancel {
             match finalization_signal_action(snapshot) {
-                // REQ-LOCALRUN-53: an interruption, which acts as a cancellation once
-                // finalization is armed (REQ-LOCALRUN-54).
+                // An interruption, which acts as a cancellation once finalization is
+                // armed.
                 FinalizationSignalAction::Graceful => {
                     cancellation.request_interruption(CancellationReason::UserRequest);
                 }

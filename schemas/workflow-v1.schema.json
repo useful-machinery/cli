@@ -465,6 +465,10 @@
       "default": "required",
       "description": "Controls workflow impact when this node fails or is blocked. Omission resolves to required."
     },
+    "StepWorkspace": {
+      "enum": ["new", "write", "read", "none"],
+      "description": "new starts a workspace. write (also the default when omitted) and read share the inherited workspace. read declares that later steps rely on no changes left there. none runs from declared inputs in its own empty directory and passes on the workspace of its prerequisites."
+    },
     "Dependencies": {
       "type": "array",
       "uniqueItems": true,
@@ -786,6 +790,7 @@
         "kind": { "const": "cmd" },
         "failurePolicy": { "$ref": "#/$defs/FailurePolicy" },
         "dependsOn": { "$ref": "#/$defs/Dependencies" },
+        "workspace": { "$ref": "#/$defs/StepWorkspace" },
         "cwd": { "$ref": "#/$defs/RuntimeRelativePath" },
         "recovery": { "$ref": "#/$defs/Recovery" },
         "infrastructureExitCodes": { "$ref": "#/$defs/InfrastructureExitCodes" },
@@ -804,6 +809,7 @@
         "kind": { "const": "agent" },
         "failurePolicy": { "$ref": "#/$defs/FailurePolicy" },
         "dependsOn": { "$ref": "#/$defs/Dependencies" },
+        "workspace": { "$ref": "#/$defs/StepWorkspace" },
         "cwd": { "$ref": "#/$defs/RuntimeRelativePath" },
         "recovery": { "$ref": "#/$defs/Recovery" },
         "condition": { "$ref": "#/$defs/OrdinaryCondition" },
@@ -1114,7 +1120,7 @@
     },
     "IntegrationProvider": {
       "description": "A provider id: the reviewed provider table's OAuth rows, then the coding agents a member signs in, then the reviewed token services.",
-      "enum": ["github", "gitlab.com", "linear", "claude_code", "codex", "mergify", "buildkite"]
+      "enum": ["github", "gitlab.com", "linear", "claude_code", "codex", "mergify", "buildkite", "cloudflare"]
     },
     "IntegrationAs": {
       "description": "Whose credentials act for an integration: a member's or the organization's.",

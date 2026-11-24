@@ -169,8 +169,8 @@ struct MembershipTarget {
     member: Member,
 }
 
-/// A member as a person names one (REQ-MEMBER-48): an exact membership ID, or an email address
-/// that the directory resolves to one.
+/// A member as a person names one: an exact membership ID, or an email address that the
+/// directory resolves to one.
 #[derive(Clone, Debug)]
 pub(crate) enum Member {
     Id(String),
@@ -271,7 +271,7 @@ impl Member {
     /// The directory row of the member this names in `organization`, read to its last page
     /// under `authentication`: the row of the membership ID, or of the one member who holds
     /// the address verified. `useful runner join-key issue --member` reads it for the
-    /// member's principal ID (REQ-RUNNERENROLL-1).
+    /// member's principal ID.
     pub(crate) fn directory_row(
         &self,
         deployment: &Deployment,
@@ -298,8 +298,8 @@ impl Member {
 
 /// The principal ID of the one service principal of `organization` whose display name is `name`
 /// exactly, read from the whole directory under `authentication`; `useful workflow definition
-/// update --run-as` names a service principal so (REQ-CLOUDDEF-15). A name several service
-/// principals have is refused as a usage error naming their principal IDs.
+/// update --run-as` names a service principal so. A name several service principals have is
+/// refused as a usage error naming their principal IDs.
 pub(crate) fn service_principal(
     deployment: &Deployment,
     transport_policy: useful_api::HttpTransportPolicy,
@@ -390,9 +390,9 @@ fn read_directory(
 }
 
 /// The membership whose human row holds `address` as a verified linked address, compared
-/// without regard to ASCII case. Only an owner's read carries linked addresses
-/// (REQ-MEMBER-6), so a directory whose human rows carry none was read by a caller who may
-/// not change a member, and the change would be refused as forbidden.
+/// without regard to ASCII case. Only an owner's read carries linked addresses, so a
+/// directory whose human rows carry none was read by a caller who may not change a member,
+/// and the change would be refused as forbidden.
 fn holder(
     rows: Vec<OrganizationMembershipDirectoryEntry>,
     address: &str,

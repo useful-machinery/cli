@@ -1,4 +1,4 @@
-# requires declares integrations and their acting identity with no tools (REQ-WFFORMAT-82).
+# requires declares integrations and their acting identity with no tools.
 schemaVersion: 1
 steps:
   prepare:

@@ -151,8 +151,6 @@ fn lower_bound_and_intervening_patches_retain_exact_versions() {
     }
 }
 
-// REQ-AGENT-1, REQ-AGENT-7
-// INV-HARNESS-1
 #[test]
 fn version_range_and_capabilities_are_both_required() {
     let executable = std::env::current_exe().unwrap();
@@ -256,8 +254,6 @@ fn validate_with(
     (result, invocations)
 }
 
-// REQ-AGENT-1, REQ-AGENT-4, REQ-AGENT-5, REQ-AGENT-7, REQ-AGENT-65
-// INV-HARNESS-1, INV-HARNESS-12
 #[test]
 fn stable_releases_newer_than_the_qualification_release_are_admitted_untested() {
     let both_probes = [
@@ -333,7 +329,6 @@ fn stable_releases_newer_than_the_qualification_release_are_admitted_untested() 
     }
 }
 
-// INV-HARNESS-12
 #[test]
 fn version_fixtures_derive_the_qualification_by_the_admission_policy() {
     let anchor = ValidatedPiInstallation::fixture(PathBuf::from("/pi"));

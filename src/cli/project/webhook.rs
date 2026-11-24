@@ -45,7 +45,7 @@ enum Leaf {
     #[command(about = "Replace selected filters or context keys")]
     Update(Update),
 }
-/// The organization and the project in effect every leaf acts in (REQ-WEBHOOK-71).
+/// The organization and the project in effect every leaf acts in.
 #[derive(Debug, Args)]
 struct InEffect {
     #[command(flatten)]
@@ -132,7 +132,7 @@ struct SecretCommand {
     command: Option<SecretLeaf>,
 }
 // `revoke` ends only the overlap of a secret a rotation already replaced, so it asks for no
-// confirmation (REQ-WEBHOOK-75).
+// confirmation.
 #[derive(Debug, Subcommand)]
 enum SecretLeaf {
     #[command(about = "Stop accepting the secret the last rotation replaced")]
@@ -203,7 +203,7 @@ impl Leaf {
     fn execute(self, deployment: &Deployment) -> CommandResult {
         match self {
             // The configuration is read and checked before the context is resolved, so a bad
-            // file is `invalid_input` with no credential used and no request (REQ-WEBHOOK-73).
+            // file is `invalid_input` with no credential used and no request.
             Self::Create(cmd) => {
                 let config = match acquire(
                     &cmd.source.config_file,

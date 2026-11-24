@@ -1,9 +1,9 @@
-//! The host condition (REQ-WFEXEC-81): what `useful workflow run resume` evaluates for a run
-//! waiting on `host`. It observes `host.healthy` once every `requires.tools` name of the
-//! run's root resolves, as admission resolves it, and the root's `requires.check`, when
-//! declared, exits zero within its bound. It reads the run's own records and tree copy, runs
-//! the check in the latest attempt's execution root with the environment a root step has,
-//! and writes nothing in the run directory.
+//! The host condition: what `useful workflow run resume` evaluates for a run waiting on
+//! `host`. It observes `host.healthy` once every `requires.tools` name of the run's root
+//! resolves, as admission resolves it, and the root's `requires.check`, when declared, exits
+//! zero within its bound. It reads the run's own records and tree copy, runs the check in
+//! the latest attempt's execution root with the environment a root step has, and writes
+//! nothing in the run directory.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -21,22 +21,22 @@ use super::resolution::{ResolvedWorkflow, resolve};
 use super::wait::{ExternalEvent, HOST_HEALTHY, HOST_SOURCE, WaitRecord};
 use crate::process::ManagedProcessGroup;
 
-/// How long `requires.check` may run before its process group is killed and the wait holds
-/// (REQ-WFEXEC-81).
+/// How long `requires.check` may run before its process group is killed and the wait
+/// holds.
 pub const HOST_CHECK_BOUND: Duration = Duration::from_secs(60);
 
 /// How often a running check is polled for its exit.
 const CHECK_POLL: Duration = Duration::from_millis(20);
 
-/// The root workflow file of a tree copy (REQ-WFDEF-8).
+/// The root workflow file of a tree copy.
 const ROOT_WORKFLOW: &str = "workflow.yaml";
 
 /// Evaluates the host condition for the run at `run_directory`, waiting on the `host` wait
 /// `wait`, from `environment`, the environment `resume` was given, with `bound` on the
 /// check (`HOST_CHECK_BOUND`). A healthy host answers one `host.healthy` event naming the
-/// run and the wait, which the wait's derived rule matches (REQ-WFEXEC-80); a host that is
-/// not answers none, so the wait holds. A run whose records or tree copy cannot be read is
-/// the run's own error.
+/// run and the wait, which the wait's derived rule matches; a host that is not answers
+/// none, so the wait holds. A run whose records or tree copy cannot be read is the run's
+/// own error.
 pub fn observe_host_condition(
     run_directory: &Path,
     wait: &WaitRecord,
@@ -67,9 +67,9 @@ struct HostContext<'a> {
     /// The run's copy of each `programs` directory, in declared order.
     programs: Vec<PathBuf>,
     execution_root: &'a Path,
-    /// The environment `resume` was given, narrowed as a root step's is (REQ-WFEXEC-71).
+    /// The environment `resume` was given, narrowed as a root step's is.
     inherited: EnvironmentSnapshot,
-    /// `inherited` with the tree copy's `PATH` and `USEFUL_WORKFLOW_ROOT` (REQ-WFEXEC-53).
+    /// `inherited` with the tree copy's `PATH` and `USEFUL_WORKFLOW_ROOT`.
     check_environment: EnvironmentSnapshot,
 }
 
@@ -170,7 +170,7 @@ fn run_check(
     }
 }
 
-/// `{source: host, event: host.healthy, payload: {run, wait}}` (REQ-WFEXEC-80).
+/// `{source: host, event: host.healthy, payload: {run, wait}}`.
 fn healthy_event(run_id: &str, wait: &WaitRecord) -> ExternalEvent {
     let mut payload = Map::new();
     payload.insert("run".to_owned(), Value::String(run_id.to_owned()));

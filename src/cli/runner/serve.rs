@@ -311,7 +311,7 @@ fn finished_service(end: ServiceEnd) -> Option<super::super::CommandResult> {
 impl Command {
     /// `--replace-credential`: the key is `--join-key-file`'s alone, so the
     /// variable beside it is a usage error, and the command exits without
-    /// serving (REQ-RUNNERENROLL-48).
+    /// serving.
     fn replace_credential(self) -> super::super::CommandResult {
         if std::env::var_os(JOIN_KEY_VARIABLE).is_some() {
             return Err(super::super::CommandFailure::with_exit_code(
@@ -330,10 +330,9 @@ impl Command {
     }
 }
 
-/// A start on a host that holds no enrolled state, has no enrollment staged
-/// and was given neither a key nor a registration mode
-/// (REQ-RUNNERENROLL-30). The commands it names repeat `--config` when the
-/// start was given it.
+/// A start on a host that holds no enrolled state, has no enrollment staged and
+/// was given neither a key nor a registration mode. The commands it names
+/// repeat `--config` when the start was given it.
 fn not_enrolled(config_path: &Path, explicit_config: bool) -> anyhow::Error {
     let config = if explicit_config {
         format!(" --config {}", config_path.display())
@@ -368,8 +367,8 @@ fn report_enrollment(outcome: EnrollmentOutcome) -> Result<(), super::super::Com
 
 const ENROLL_RUNNER: &str = "enroll the runner with its single-runner key";
 
-/// Cloud's 410 to an activation, or a start given the key whose activation
-/// the host's receipt records as gone (REQ-RUNNERENROLL-23).
+/// Cloud's 410 to an activation, or a start given the key whose activation the
+/// host's receipt records as gone.
 fn gone_activation(operation: &str, activation_id: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{operation}: Cloud reports activation {activation_id} revoked, expired or already used\n\nThe enrollment did not commit, and its journal was replaced with a terminal receipt. Start the runner with another single-runner key, which useful runner join-key issue --runner RUNNER issues."
@@ -377,7 +376,7 @@ fn gone_activation(operation: &str, activation_id: &str) -> anyhow::Error {
 }
 
 /// Whether `error` leaves an enrollment journal whose request a later start
-/// resends as it was staged (REQ-RUNNERENROLL-21).
+/// resends as it was staged.
 const fn resendable(error: &EnrollmentError) -> bool {
     matches!(
         error,
@@ -398,9 +397,9 @@ fn with_cause_and_remedy(operation: &str, error: &EnrollmentError, remedy: &str)
     anyhow::anyhow!("{operation}: {error}{cause}\n\n{remedy}")
 }
 
-/// A first enrollment with a single-runner key that did not complete: a
-/// kept journal is resent by the next start, with the key or with none, and
-/// a journal another start staged is resolved first (REQ-RUNNERENROLL-24).
+/// A first enrollment with a single-runner key that did not complete: a kept
+/// journal is resent by the next start, with the key or with none, and a
+/// journal another start staged is resolved first.
 fn enrollment_failure(error: EnrollmentError) -> anyhow::Error {
     let remedy = match error {
         ref error if resendable(error) => {
@@ -527,8 +526,8 @@ impl SignedInRegistration {
 
     /// Confirms the mode against an enrolled host's registration record,
     /// completing a record whose runner the state holds; it reads no sign-in,
-    /// resolves no organization and sends nothing (REQ-RUNNERENROLL-118). The
-    /// organization is compared only when `--org` or `USEFUL_ORG` names one.
+    /// resolves no organization and sends nothing. The organization is compared
+    /// only when `--org` or `USEFUL_ORG` names one.
     fn confirm(&self, config_path: &Path) -> Result<(), super::super::CommandFailure> {
         let named = self.org.named_in_process()?;
         let organization = named.as_ref().map(|named| named.organization.as_str());
@@ -543,11 +542,10 @@ impl SignedInRegistration {
         }
     }
 
-    /// Registers, enrolls and records the host's runner as the signed-in
-    /// person in the organization in effect, and reports it; the authority,
-    /// and with it the human session, is dropped before this returns. The
-    /// organization is resolved first (INV-CLI-20), so a start in none
-    /// registers and writes nothing.
+    /// Registers, enrolls and records the host's runner as the signed-in person
+    /// in the organization in effect, and reports it; the authority, and with
+    /// it the human session, is dropped before this returns. The organization
+    /// is resolved first, so a start in none registers and writes nothing.
     fn register(self, config_path: &Path, deployment: &Deployment) -> super::super::CommandResult {
         let authentication = PrincipalAuthenticationArgs::default();
         let organization = match context::organization_in_effect(
@@ -1001,14 +999,12 @@ fn join_failure(join_key_id: &str, error: EnrollmentError) -> anyhow::Error {
     }
 }
 
-/// The join key mode of an enrolled host's start (REQ-RUNNERENROLL-127,
-/// REQ-RUNNERENROLL-247, REQ-RUNNERENROLL-248). A key given by file or variable
-/// is read only when the host's credential came from a join key, which is asked
-/// under the state lock; the prompt is never asked for. A key in the variable is then handed unjudged to a new image on a pipe,
-/// a key in a file is read and held, and a key that does not read, does not
-/// parse, or has expired with no rejoin staged for it is unusable: it never
-/// stops the start. A failure to read the state fails the start through
-/// `state_failure`; a successful `exec` does not return.
+/// The join key mode of an enrolled host's start. A key given by file or variable is read only when
+/// the host's credential came from a join key, which is asked under the state lock; the prompt is
+/// never asked for. A key in the variable is then handed unjudged to a new image on a pipe, a key
+/// in a file is read and held, and a key that does not read, does not parse, or has expired with no
+/// rejoin staged for it is unusable: it never stops the start. A failure to read the state fails
+/// the start through `state_failure`; a successful `exec` does not return.
 fn enrolled_join_key_mode(
     config_path: &Path,
     config: &Config,
@@ -1070,9 +1066,8 @@ fn unusable_join_key(path: &Path, error: &EnrollmentError) -> JoinKeyMode {
 }
 
 /// The rejoin of a host whose credential came from a join key, once Cloud has
-/// refused that credential (REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-245). Each
-/// attempt and retry is reported on standard error, which never carries the
-/// key's token.
+/// refused that credential. Each attempt and retry is reported on standard
+/// error, which never carries the key's token.
 struct HostRejoin {
     key: HeldJoinKey,
     join_key_id: String,
@@ -1296,7 +1291,6 @@ mod tests {
     use super::*;
     use useful_execution::ClaudeCodeIncompatibility;
 
-    // REQ-RUNNERENROLL-32
     #[test]
     fn startup_retains_each_available_harness_snapshot_independently() {
         for (pi_available, claude_code_available, codex_available) in [
@@ -1366,14 +1360,12 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-38
     #[test]
     fn recovery_requirement_selects_the_supervisor_stopping_exit_code() {
         assert_eq!(service_exit_code(true), ExitCode::RunnerRecoveryRequired);
         assert_eq!(service_exit_code(false), ExitCode::GeneralFailure);
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-128
     #[test]
     fn a_refused_credential_exits_one_and_a_stop_succeeds() {
         let Some(Err(refused)) = finished_service(ServiceEnd::CredentialRefused) else {
@@ -1388,7 +1380,6 @@ mod tests {
         assert!(finished_service(ServiceEnd::Rejoined).is_none());
     }
 
-    // REQ-RUNNERENROLL-32
     #[test]
     fn incompatible_claude_code_and_missing_codex_do_not_remove_compatible_pi() {
         let pi = ValidatedPiInstallation::fixture(PathBuf::from("/validated/pi"));
@@ -1421,7 +1412,6 @@ mod tests {
         assert_eq!(config.codex_installation(), None);
     }
 
-    // REQ-RUNNERENROLL-113
     #[test]
     fn a_join_retry_report_names_the_key_its_cause_and_the_delay_handed_over() {
         let join_key_id = "rjk_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1460,8 +1450,6 @@ mod tests {
         assert!(output.contains("40ms"), "{output}");
     }
 
-    // REQ-RUNNERENROLL-237
-    // REQ-RUNNERENROLL-127
     #[test]
     fn a_rejoin_that_meets_another_staged_enrollment_names_what_resolves_it() {
         const JOIN_KEY_ID: &str = "rjk_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1538,9 +1526,9 @@ mod tests {
         assert!(!failure.contains(NO_RUNNER_REGISTERED), "{failure}");
     }
 
-    // REQ-RUNNERENROLL-307: a refused registration says that no runner was
-    // registered; a start that stopped before it read the host's
-    // registration record cannot know that of an earlier start.
+    // A refused registration says that no runner was registered; a start that
+    // stopped before it read the host's registration record cannot know that of
+    // an earlier start.
     #[test]
     fn a_stopped_registration_claims_no_runner_only_once_it_has_read_the_record() {
         let refused = RegistrationError::Authority {
@@ -1568,7 +1556,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-234
     #[test]
     fn a_join_key_variable_is_handed_to_a_new_image_without_it_on_standard_input() {
         let (reader, _writer) = io::pipe().unwrap();
@@ -1603,8 +1590,8 @@ mod tests {
         );
     }
 
-    // REQ-RUNNERENROLL-234, REQ-RUNNERENROLL-248: a host whose credential came
-    // from an activation restarts without the variable and hands on no key.
+    // A host whose credential came from an activation restarts without the
+    // variable and hands on no key.
     #[test]
     fn an_enrolled_host_restarts_without_the_join_key_variable_and_hands_on_no_key() {
         let command = join_key_handoff_command(

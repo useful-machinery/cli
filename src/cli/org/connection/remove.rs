@@ -1,6 +1,5 @@
-//! `useful org integration disconnect`: disconnects a GitHub binding, a GitLab connection or a Linear
-//! connection, or deletes a Linear connection and releases its workspace (REQ-CONNECTION-16,
-//! REQ-CONNECTION-39, REQ-CONNECTION-56).
+//! `useful org integration disconnect`: disconnects a GitHub binding, a GitLab connection or a
+//! Linear connection, or deletes a Linear connection and releases its workspace.
 use clap::Args;
 use useful_human_auth::Deployment;
 

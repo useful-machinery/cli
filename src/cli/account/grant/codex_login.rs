@@ -1,5 +1,5 @@
-//! A fresh Codex sign-in in a private temporary Codex home, which `useful account integration connect
-//! codex` runs (REQ-GRANT-70, REQ-GRANT-74, INV-CLI-13).
+//! A fresh Codex sign-in in a private temporary Codex home, which `useful account integration
+//! connect codex` runs.
 //!
 //! Only the provider's documented names are used: `codex login`, its device-code form
 //! `codex login --device-auth`, `CODEX_HOME`, the `cli_auth_credentials_store = "file"`

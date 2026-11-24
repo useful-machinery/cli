@@ -56,7 +56,6 @@ fn json_document(output: &Output) -> serde_json::Value {
         .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)))
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_asks_kept_without_yes_and_prune_with_it_for_the_scope_all_gives() {
     let kept = fixture("kept-idle-response.json");
@@ -81,7 +80,6 @@ fn prune_asks_kept_without_yes_and_prune_with_it_for_the_scope_all_gives() {
     }
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_without_yes_prints_the_kept_report_and_exits_0() {
     let (output, _) = prune_against(fixture("kept-response.json"), &[]);
@@ -127,7 +125,6 @@ fn answer_bytes(answer: &serde_json::Value) -> Vec<u8> {
     bytes
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_with_yes_prints_the_result_and_exits_by_what_failed_and_whether_it_finished() {
     let clean = clean_pruned_response();
@@ -167,7 +164,6 @@ fn prune_with_yes_prints_the_result_and_exits_by_what_failed_and_whether_it_fini
     }
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_refused_runner_busy_exits_4_having_printed_no_result() {
     for extra in [&["--yes"][..], &["--yes", "--json"][..]] {
@@ -180,7 +176,6 @@ fn prune_refused_runner_busy_exits_4_having_printed_no_result() {
     }
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_against_an_earlier_runner_exits_1_naming_useful_runner_serve() {
     for extra in [&[][..], &["--yes"][..], &["--json"][..]] {
@@ -192,7 +187,6 @@ fn prune_against_an_earlier_runner_exits_1_naming_useful_runner_serve() {
     }
 }
 
-// REQ-RUNNERENROLL-166
 #[test]
 fn prune_with_no_live_runner_exits_4() {
     let directory = private_credential_directory();
@@ -218,9 +212,9 @@ fn entries(directory: &Path) -> Vec<String> {
     names
 }
 
-// REQ-RUNNERENROLL-166, REQ-RUNNERENROLL-165, SC-RUNNERENROLL-13: a live runner reports its
-// build cache measured with nothing due, and an operator's `--all --yes` empties it but for
-// its `CACHEDIR.TAG`, after which another removes nothing.
+// SC-RUNNERENROLL-13: a live runner reports its build cache measured with nothing due, and
+// an operator's `--all --yes` empties it but for its `CACHEDIR.TAG`, after which another
+// removes nothing.
 #[test]
 fn prune_reports_and_empties_a_live_runners_build_cache() {
     // Cloud accepts the connection and never answers it; the control socket serves

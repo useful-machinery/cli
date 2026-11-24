@@ -1,6 +1,6 @@
 //! Reading a coding agent's login: a Codex `auth.json` or a Claude Code token, from a file or
-//! stream the member names or from the private home of a sign-in `useful` ran (REQ-GRANT-12,
-//! REQ-GRANT-32, REQ-GRANT-33, INV-CLI-13), which `useful account integration connect` reads through.
+//! stream the member names or from the private home of a sign-in `useful` ran, which `useful
+//! account integration connect` reads through.
 
 use std::path::Path;
 
@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use super::super::super::secret_file::{FileMode, SecretInput, one_line};
 
-// The bounds Cloud enforces on material (REQ-GRANT-12).
+// The bounds Cloud enforces on material.
 const CODEX_LOGIN: SecretInput = SecretInput {
     name: "Codex login",
     max_bytes: 32 * 1024,

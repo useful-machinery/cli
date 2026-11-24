@@ -1,4 +1,4 @@
-# A definition rule's list of outcomes names at least one (REQ-WFDEF-39, REQ-WFFORMAT-82).
+# A definition rule's list of outcomes names at least one.
 schemaVersion: 1
 inputs:
   ticket:

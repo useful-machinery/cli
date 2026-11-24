@@ -5,11 +5,11 @@ pub struct CodexConfig {
     pub(crate) effort: String,
 }
 
-/// The model a login check asks for (INV-HARNESS-18), which has no workflow profile. The
-/// adapter names the model when it starts a thread and checks the thread's answer against
-/// it, so the installation's configured default cannot stand in: this is the fast,
-/// lowest-cost model of the GPT-5.6 family and the model the live login smoke pins.
-/// A login whose account may not use it is refused.
+/// The model a login check asks for, which has no workflow profile. The adapter names the
+/// model when it starts a thread and checks the thread's answer against it, so the
+/// installation's configured default cannot stand in: this is the fast, lowest-cost model
+/// of the GPT-5.6 family and the model the live login smoke pins. A login whose account
+/// may not use it is refused.
 pub(crate) const LOGIN_CHECK_MODEL: &str = "gpt-5.6-luna";
 /// The lowest effort the adapter is qualified with.
 pub(crate) const LOGIN_CHECK_EFFORT: &str = "low";
@@ -750,7 +750,7 @@ impl CodexAppServerV1Parser {
                 self.apply_frame(&frame, &mut progress, &mut observe)?;
                 if self.state != SetupState::TurnStart {
                     // Frames held while the `turn/start` response was outstanding are
-                    // parsed directly after it, in arrival order (INV-HARNESS-20).
+                    // parsed directly after it, in arrival order.
                     while let Some(held) = self.held_turn_frames.pop_front() {
                         self.apply_frame(&held, &mut progress, &mut observe)?;
                     }
@@ -866,7 +866,7 @@ impl CodexAppServerV1Parser {
     }
 
     /// Holds a frame of the started turn that overtook the `turn/start` response; the
-    /// held frames together stay within the frame limit (INV-HARNESS-30).
+    /// held frames together stay within the frame limit.
     fn hold_turn_frame(&mut self, frame: &[u8]) -> Result<ParserProgress, AgentFailureCause> {
         let Some(held_bytes) = u64::try_from(frame.len())
             .ok()
@@ -1021,7 +1021,7 @@ impl CodexAppServerV1Parser {
             })?;
         }
         // The adapter closes Codex's input once the invocation is terminal, so a request
-        // that arrives then is recorded and gets no answer (INV-HARNESS-6).
+        // that arrives then is recorded and gets no answer.
         if self.state != SetupState::Terminal {
             match response {
                 Some(response) => self.queue_server_response(&id, response)?,
@@ -1222,7 +1222,7 @@ impl CodexAppServerV1Parser {
         value: &Value,
     ) -> Result<ParserProgress, AgentFailureCause> {
         // Only an `agentMessage` completion decides. A completion of any other type is
-        // progress, whatever else it carries or omits (INV-HARNESS-27).
+        // progress, whatever else it carries or omits.
         let message = if method == "item/completed" {
             let (item, kind) = self.required_item(params)?;
             if kind != "agentMessage" {

@@ -1,8 +1,7 @@
-//! `useful workflow run list` (REQ-RUN-127): the runs under the `useful` home, the live ones or
-//! every run under `--all` (REQ-LOCALRUN-188, REQ-LOCALRUN-203), read without taking a run lock
-//! or changing a directory, and then one page of the Cloud runs of the organization in effect,
-//! those of the project in effect when one is (REQ-RUN-66), in one listing whose every row says
-//! where the run executes.
+//! `useful workflow run list`: the runs under the `useful` home, the live ones or every run
+//! under `--all`, read without taking a run lock or changing a directory, and then one page of
+//! the Cloud runs of the organization in effect, those of the project in effect when one is, in
+//! one listing whose every row says where the run executes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -123,7 +122,7 @@ pub(super) struct Command {
 }
 
 /// The local rows: each run with its definition's current revision under `--drift`, and the
-/// exited runs the default left out (REQ-LOCALRUN-203).
+/// exited runs the default left out.
 #[derive(Default)]
 struct Local {
     runs: Vec<(ListedRun, Option<u64>)>,
@@ -244,7 +243,7 @@ impl Command {
             })
     }
 
-    /// The runs under `home` that the local filters select (REQ-LOCALRUN-188, REQ-LOCALRUN-203).
+    /// The runs under `home` that the local filters select.
     fn local(&self, home: &WorkflowHome) -> anyhow::Result<Local> {
         let listing = list_runs(home)
             .map_err(|error| anyhow!(error).context("list the runs under the useful home"))?;
@@ -276,8 +275,8 @@ impl Command {
             .into_iter()
             .filter(|run| self.all || run.record.state != RunState::Exited)
             .collect::<Vec<_>>();
-        // `--waiting` and `--drift` select among the live runs, so they hide none
-        // (REQ-LOCALRUN-203).
+        // `--waiting` and `--drift` select among the live runs, so they hide
+        // none.
         let hidden = if self.all || self.waiting || self.drift {
             0
         } else {
@@ -550,9 +549,9 @@ fn write_unreadable(unreadable: &[(std::path::PathBuf, LocalRunDirectoryError)])
     stderr.flush()
 }
 
-/// The current revision of each definition `runs` names, each record read once
-/// (REQ-LOCALRUN-190); a definition whose record cannot be read is named on stderr with its
-/// code and left out, so its runs are omitted.
+/// The current revision of each definition `runs` names, each record read once; a
+/// definition whose record cannot be read is named on stderr with its code and left out, so
+/// its runs are omitted.
 fn current_revisions(home: &WorkflowHome, runs: &[ListedRun]) -> io::Result<BTreeMap<String, u64>> {
     let definitions = runs
         .iter()
@@ -587,7 +586,7 @@ pub(super) fn or_dash(value: Option<&str>) -> String {
 
 /// The listing's lines, each led by where its run executes: the local runs, then the Cloud
 /// runs, then the next cursor of the Cloud page and, when `hidden` exited local runs were left
-/// out, an empty line and their count (REQ-LOCALRUN-203).
+/// out, an empty line and their count.
 fn write_plain(
     local: &Local,
     cloud: &[(Place, Value)],
@@ -661,9 +660,8 @@ fn write_local(out: &mut impl Write, run: &ListedRun, current: Option<u64>) -> i
     }
 }
 
-/// A Cloud run led by its place, then its name, project, workflow, update time, wait,
-/// placement and integration context on lines of their own (REQ-RUN-66, REQ-RUN-116); `item` is
-/// the run as Cloud returned it.
+/// A Cloud run led by its place, then its name, project, workflow, update time, wait, placement
+/// and integration context on lines of their own; `item` is the run as Cloud returned it.
 fn write_cloud(out: &mut impl Write, place: Place, item: &Value) -> io::Result<()> {
     let text = |value: &Value| value.as_str().map_or_else(|| "—".to_owned(), visible_text);
     writeln!(
@@ -743,7 +741,7 @@ fn listed(run: &ListedRun, current: Option<u64>) -> Listed<'_> {
 struct ListDocument<'a> {
     schema_version: u8,
     command: &'static str,
-    /// The exited local runs the default left out (REQ-LOCALRUN-203).
+    /// The exited local runs the default left out.
     exited_hidden: usize,
     runs: Vec<Row<'a>>,
     cloud: Asked<'a>,

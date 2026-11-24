@@ -1,5 +1,4 @@
-# A definition rule holds only definition and outcome: a where beside them is refused
-# (REQ-WFDEF-39, REQ-WFFORMAT-82).
+# A definition rule holds only definition and outcome: a where beside them is refused.
 schemaVersion: 1
 inputs:
   ticket:

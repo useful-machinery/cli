@@ -94,11 +94,11 @@ impl FixtureSignal {
     }
 }
 
-/// The case's side of a fixture's `release` FIFO (INV-TESTING-29): a non-blocking read/write
-/// handle held from creation to drop, through which each release is written on the caller's
-/// thread. Because the case always holds a writer, a fixture that opens the FIFO to wait for a
-/// release never waits for a writer and never reads end of file while the case lives, and a
-/// release never waits for the fixture to open the FIFO.
+/// The case's side of a fixture's `release` FIFO: a non-blocking read/write handle held from
+/// creation to drop, through which each release is written on the caller's thread. Because the
+/// case always holds a writer, a fixture that opens the FIFO to wait for a release never waits
+/// for a writer and never reads end of file while the case lives, and a release never waits
+/// for the fixture to open the FIFO.
 pub(crate) struct FixtureRelease {
     writer: fs::File,
 }
@@ -136,7 +136,7 @@ pub(super) use crate::workflow::test_support::{
 /// `host_scaled_watchdog_with_diagnosis` for the Claude Code conformance case whose synthetic
 /// MCP server records what it read to `observation`: an expiry ends with that record as it
 /// stood, so it shows whether the server saw the tool call and its cancellation. A plain
-/// function, not an `async fn`, so the body reaches the watchdog's heap pin (INV-TESTING-18).
+/// function, not an `async fn`, so the body reaches the watchdog's heap pin.
 pub(super) fn native_resource_watchdog<Output>(
     observation: PathBuf,
     base: Duration,
@@ -155,7 +155,7 @@ pub(super) fn native_resource_watchdog<Output>(
     host_scaled_watchdog_with_diagnosis("pinned Claude Code conformance", base, diagnosis, future)
 }
 
-/// The result tool as the agent sees it (REQ-AGENT-93).
+/// The result tool as the agent sees it.
 pub(super) const RESULT_TOOL: &str = "mcp__useful_workflow_result__submit";
 
 pub(super) fn invocation_identity(run: &str, step: &str) -> AgentInvocationIdentity {
@@ -556,7 +556,7 @@ impl ControlledProviderRequest {
         self.release_blocks(vec![LoopbackBlock::tool_use(name, input)]);
     }
 
-    /// Answers with one call of the result tool submitting `value` (REQ-AGENT-93).
+    /// Answers with one call of the result tool submitting `value`.
     pub(super) fn release_submission(self, value: Value) {
         self.release_tool_use(RESULT_TOOL, submission(value));
     }
@@ -1071,7 +1071,7 @@ pub(super) fn conformance_limits() -> AgentInvocationLimits<ClaudeCodeStreamJson
 }
 
 /// Records the process group the adapter registers for its Claude Code, so a case can see
-/// the group gone once the invocation has ended (INV-HARNESS-8).
+/// the group gone once the invocation has ended.
 #[derive(Clone, Default)]
 pub(super) struct RecordedProcessGroup(Arc<std::sync::Mutex<Option<Pid>>>);
 

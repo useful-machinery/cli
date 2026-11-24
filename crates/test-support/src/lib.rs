@@ -274,7 +274,7 @@ pub fn split_request(request: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 /// [`try_read_request_within`] at the shared 128 KiB bound, for a serve loop
-/// that must keep its listener for the whole test (INV-TESTING-22).
+/// that must keep its listener for the whole test.
 pub fn try_read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     try_read_request_within(stream, MAX_REQUEST_BYTES)
 }
@@ -414,7 +414,6 @@ mod tests {
         assert_eq!(request_header(request, "Idempotency-Key"), None);
     }
 
-    // INV-TESTING-22
     #[test]
     fn a_held_refused_port_refuses_connects_and_cannot_be_bound() -> rustix::io::Result<()> {
         let refused = RefusedPort::hold();
@@ -451,7 +450,6 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-37
     #[test]
     fn an_echo_response_rejects_a_keyless_request_by_its_request_line() {
         let response =
@@ -472,7 +470,6 @@ mod tests {
         );
     }
 
-    // INV-TESTING-39, INV-TESTING-40
     #[test]
     fn a_request_declaring_a_body_past_the_bound_is_an_error_not_a_panic() -> std::io::Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -488,7 +485,6 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-25
     #[test]
     fn a_request_ends_at_its_declared_length_while_the_peer_stays_open() -> std::io::Result<()> {
         let head = b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\n\r\n";
@@ -504,7 +500,6 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-25
     #[test]
     fn a_request_past_the_shared_bound_is_read_whole_within_a_bound_its_caller_names()
     -> std::io::Result<()> {
@@ -527,7 +522,6 @@ mod tests {
         Ok(())
     }
 
-    // INV-TESTING-39
     #[test]
     fn a_request_past_the_bound_its_caller_names_is_an_error() -> std::io::Result<()> {
         let head = b"PUT /upload HTTP/1.1\r\nContent-Length: 64\r\n\r\n";

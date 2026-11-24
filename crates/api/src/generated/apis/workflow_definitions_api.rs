@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -169,11 +169,35 @@ pub enum ListWorkflowDefinitionEvaluationsError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`list_workflow_definition_revision_triggers`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ListWorkflowDefinitionRevisionTriggersError {
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`list_workflow_definition_revisions`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ListWorkflowDefinitionRevisionsError {
     Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`list_workflow_definition_schedules`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ListWorkflowDefinitionSchedulesError {
     Status401(models::Problem),
     Status403(models::Problem),
     Status404(models::Problem),
@@ -190,6 +214,20 @@ pub enum ListWorkflowDefinitionsError {
     Status401(models::Problem),
     Status403(models::Problem),
     Status404(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`pause_workflow_definition_schedule`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PauseWorkflowDefinitionScheduleError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status409(models::Problem),
     Status500(models::Problem),
     Status503(models::Problem),
     UnknownValue(serde_json::Value),
@@ -212,10 +250,38 @@ pub enum PublishWorkflowDefinitionRevisionError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`resume_workflow_definition_schedule`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResumeWorkflowDefinitionScheduleError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status409(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`retry_workflow_definition_evaluation`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RetryWorkflowDefinitionEvaluationError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status409(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`run_workflow_definition_schedule_once`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RunWorkflowDefinitionScheduleOnceError {
     Status400(models::Problem),
     Status401(models::Problem),
     Status403(models::Problem),
@@ -341,7 +407,7 @@ pub fn archive_workflow_definition(
     }
 }
 
-/// Owner only. Answers 201 with the created definition and revision 1, or, when `reuseIdentical` is true and exactly one of the project's active definitions has a current revision identical to the publication, 200 with that definition and its current revision as they stand, writing nothing. The bindings snapshot takes each value `bindings` and `integrationBindings` name, and the root's default for a binding they do not name or name `null`, and is resolved before revision 1 is recorded. The definition starts active with automatic starts disabled and no execution principal. `executablePaths`, when given, are the tree's files revision 1 runs executable in place of the bits the tree was sealed with; a list that is unsorted, repeats a path or names a path that is not a file of the tree is 400, and bits whose file list the assignment offer could not carry are 422 `workflow-tree-too-large-for-delivery`. So, storing nothing, are a revision whose bindings snapshot holds more than the 256 keys an offer carries, one for each binding the root declares, and a revision whose whole tree block (the files, the bindings snapshot, its resolution and the run facts an offer adds, each at its longest) would exceed the 163,840 bytes an offer allows. Refusals name their slug: `workflow-tree-unavailable`, `binding-missing` and `binding-unresolved` (422, with `workflow.bindingKey`), `definition-reuse-ambiguous` (409, with `workflow.definitionIds`) when more than one active definition is identical, and `idempotency-conflict` (409). While the project is archived a create is 409 `project-archived` with `reason` `project-archived` and records nothing; a completed request repeated with its key returns its recorded result.
+/// Owner only. Answers 201 with the created definition and revision 1, or, when `reuseIdentical` is true and exactly one of the project's active definitions has a current revision identical to the publication, 200 with that definition and its current revision as they stand, writing nothing. The bindings snapshot takes each value `bindings` and `integrationBindings` name, and the root's default for a binding they do not name or name `null`, and is resolved before revision 1 is recorded. The definition starts active with automatic starts disabled and no execution principal. `executablePaths`, when given, are the tree's files revision 1 runs executable in place of the bits the tree was sealed with; a list that is unsorted, repeats a path or names a path that is not a file of the tree is 400, and bits whose file list the assignment offer could not carry are 422 `workflow-tree-too-large-for-delivery`. So, storing nothing, are a revision whose bindings snapshot holds more than the 256 keys an offer carries, one for each binding the root declares, and a revision whose whole tree block (the files, the bindings snapshot, its resolution and the run facts an offer adds, each at its longest) would exceed the 163,840 bytes an offer allows. Refusals name their slug: `workflow-tree-unavailable`, `binding-missing` and `binding-unresolved` (422, with `workflow.bindingKey`), `definition-reuse-ambiguous` (409, with `workflow.definitionIds`) when more than one active definition is identical, and `idempotency-conflict` (409). In a project with no repository, a `github` integration that needs an account is 422 `binding-unresolved` with `workflow.integration` `github` and `reason` `project-repository-not-bound`. While the project is archived a create is 409 `project-archived` with `reason` `project-archived` and records nothing; a completed request repeated with its key returns its recorded result.  Problem types: 503 `binding-resolution-unavailable`.
 pub fn create_workflow_definition(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -411,7 +477,7 @@ pub fn create_workflow_definition(
     }
 }
 
-/// Owner only. No Idempotency-Key is accepted: the tree is keyed by its digest, and every success is a fresh database-time-bounded issuance. One capability is issued per file content the organization does not already retain; a sealed tree answers with none. A digest that already names a sealed manifest of other paths, sizes or SHA-256s is 409 `workflow-tree-manifest-conflict`; one that differs only in executable bits answers the sealed tree as it is, and a publication's `executablePaths` carry the new bits. With no publication validator configured the operation is 503 `workflow-validator-unavailable`. A manifest outside its bounds, a path segment over 255 bytes of UTF-8 included, is 400 `bad-request` and records nothing.
+/// Owner only. No Idempotency-Key is accepted: the tree is keyed by its digest, and every success is a fresh database-time-bounded issuance. One capability is issued per file content the organization does not already retain; a sealed tree answers with none. A digest that already names a sealed manifest of other paths, sizes or SHA-256s is 409 `workflow-tree-manifest-conflict`; one that differs only in executable bits answers the sealed tree as it is, and a publication's `executablePaths` carry the new bits. With no publication validator configured the operation is 503 `workflow-validator-unavailable`. A manifest outside its bounds, a path segment over 255 bytes of UTF-8 included, is 400 `bad-request` and records nothing.  Problem types: 503 `workflow-tree-storage-unavailable`.
 pub fn create_workflow_tree_upload(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -596,7 +662,7 @@ pub fn disable_workflow_definition(
     }
 }
 
-/// Owner only. The execution principal, every bound connection and each trigger of the current revision are checked; a failing check is 409 `definition-not-startable` naming it in `workflow.startCheck`. An archived definition is 409 `definition-archived`. While the project is archived the change is 409 `project-archived` with `reason` `project-archived` and changes nothing; a completed request repeated with its key returns its recorded result.
+/// Owner only. The execution principal, every bound connection and each trigger of the current revision are checked; a failing check is 409 `definition-not-startable` naming it in `workflow.startCheck`. In a project with no repository, a refused start trigger on a GitHub installation carries `reason` `project-repository-not-bound`. An archived definition is 409 `definition-archived`. While the project is archived the change is 409 `project-archived` with `reason` `project-archived` and changes nothing; a completed request repeated with its key returns its recorded result.
 pub fn enable_workflow_definition(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -955,7 +1021,7 @@ pub fn get_workflow_definition_revision_outline(
     }
 }
 
-/// Ordered by acceptance then id, newest first. `state` and `runId` filter exactly; an unknown state is 400, and a cursor is bound to its definition and filters. An evaluation of an event outside the requested `vocabulary` is left out of the listing, so a client is never sent a value it cannot decode; the cursor is independent of `vocabulary`.
+/// Ordered by acceptance then id, newest first. `state`, `runId` and `triggerName` filter exactly. An unknown state is 400, and a cursor is bound to its definition and filters. An evaluation of an event outside the requested `vocabulary` is left out of the listing, so a client is never sent a value it cannot decode; the cursor is independent of `vocabulary`.
 pub fn list_workflow_definition_evaluations(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -965,6 +1031,7 @@ pub fn list_workflow_definition_evaluations(
     cursor: Option<&str>,
     state: Option<&str>,
     run_id: Option<&str>,
+    trigger_name: Option<&str>,
     representation: Option<i32>,
     vocabulary: Option<i32>,
 ) -> Result<models::WorkflowDefinitionEvaluationList, Error<ListWorkflowDefinitionEvaluationsError>>
@@ -977,6 +1044,7 @@ pub fn list_workflow_definition_evaluations(
     let p_query_cursor = cursor;
     let p_query_state = state;
     let p_query_run_id = run_id;
+    let p_query_trigger_name = trigger_name;
     let p_query_representation = representation;
     let p_query_vocabulary = vocabulary;
 
@@ -1000,6 +1068,9 @@ pub fn list_workflow_definition_evaluations(
     }
     if let Some(ref param_value) = p_query_run_id {
         req_builder = req_builder.query(&[("runId", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_trigger_name {
+        req_builder = req_builder.query(&[("triggerName", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_representation {
         req_builder = req_builder.query(&[("representation", &param_value.to_string())]);
@@ -1043,6 +1114,78 @@ pub fn list_workflow_definition_evaluations(
     } else {
         let content = resp.text()?;
         let entity: Option<ListWorkflowDefinitionEvaluationsError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Any active member can read the root's triggers in name order. Sources are resolved using this revision's binding snapshot. The list includes triggers with no evaluations.
+pub fn list_workflow_definition_revision_triggers(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    project_id: &str,
+    definition_id: &str,
+    revision: i32,
+) -> Result<
+    models::WorkflowDefinitionRevisionTriggerList,
+    Error<ListWorkflowDefinitionRevisionTriggersError>,
+> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_project_id = project_id;
+    let p_path_definition_id = definition_id;
+    let p_path_revision = revision;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/projects/{projectId}/workflow-definitions/{definitionId}/revisions/{revision}/triggers",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        projectId = crate::generated::apis::urlencode(p_path_project_id),
+        definitionId = crate::generated::apis::urlencode(p_path_definition_id),
+        revision = p_path_revision
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::WorkflowDefinitionRevisionTriggerList`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::WorkflowDefinitionRevisionTriggerList`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ListWorkflowDefinitionRevisionTriggersError> =
             serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
@@ -1133,6 +1276,72 @@ pub fn list_workflow_definition_revisions(
     }
 }
 
+/// Any active member can list the schedule triggers in name order. A schedule's next due time is null while paused, while automatic starts are off, or while the definition or project is archived.
+pub fn list_workflow_definition_schedules(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    project_id: &str,
+    definition_id: &str,
+) -> Result<models::WorkflowDefinitionScheduleList, Error<ListWorkflowDefinitionSchedulesError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_project_id = project_id;
+    let p_path_definition_id = definition_id;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/projects/{projectId}/workflow-definitions/{definitionId}/schedules",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        projectId = crate::generated::apis::urlencode(p_path_project_id),
+        definitionId = crate::generated::apis::urlencode(p_path_definition_id)
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::WorkflowDefinitionScheduleList`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::WorkflowDefinitionScheduleList`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ListWorkflowDefinitionSchedulesError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
 pub fn list_workflow_definitions(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1204,7 +1413,81 @@ pub fn list_workflow_definitions(
     }
 }
 
-/// Owner only. A stale `expectedCurrentRevision` is 409 `definition-revision-conflict` carrying `workflow.currentRevision`, and creates nothing. An omitted `treeDigest` reuses the current revision's tree. `bindings` and `integrationBindings` name the bindings the publication sets, each with a value or with `null` for its declared default; every other binding the tree declares keeps the current revision's value when that revision holds it with the kind the tree declares, and otherwise takes its default. A binding of the current revision that the tree no longer declares is dropped, and the snapshot so made is resolved and checked whole. `executablePaths` are refused as on create, and so is a revision whose whole tree block an offer could not carry (422 `workflow-tree-too-large-for-delivery`). Omitted `executablePaths` keep the current revision's when `treeDigest` is omitted too, and otherwise the bits the named tree was sealed with. An archived definition is 409 `definition-archived`; on an enabled definition the new revision must pass the enablement checks (409 `definition-not-startable`). While the project is archived a publication is 409 `project-archived` with `reason` `project-archived` and creates nothing; a completed request repeated with its key returns its recorded result.
+/// Owner only. A missing schedule is 404. An archived definition is 409 `definition-archived`. While the project is archived the change is 409 `project-archived` with `reason` `project-archived` and changes nothing; a completed request repeated with its key returns its recorded result.
+pub fn pause_workflow_definition_schedule(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    project_id: &str,
+    definition_id: &str,
+    trigger_name: &str,
+    idempotency_key: &str,
+) -> Result<models::WorkflowDefinitionSchedule, Error<PauseWorkflowDefinitionScheduleError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_project_id = project_id;
+    let p_path_definition_id = definition_id;
+    let p_path_trigger_name = trigger_name;
+    let p_header_idempotency_key = idempotency_key;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/projects/{projectId}/workflow-definitions/{definitionId}/schedules/{triggerName}/pause",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        projectId = crate::generated::apis::urlencode(p_path_project_id),
+        definitionId = crate::generated::apis::urlencode(p_path_definition_id),
+        triggerName = crate::generated::apis::urlencode(p_path_trigger_name)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.header("Idempotency-Key", p_header_idempotency_key.to_string());
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::WorkflowDefinitionSchedule`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::WorkflowDefinitionSchedule`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<PauseWorkflowDefinitionScheduleError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Owner only. A stale `expectedCurrentRevision` is 409 `definition-revision-conflict` carrying `workflow.currentRevision`, and creates nothing. An omitted `treeDigest` reuses the current revision's tree. `bindings` and `integrationBindings` name the bindings the publication sets, each with a value or with `null` for its declared default; every other binding the tree declares keeps the current revision's value when that revision holds it with the kind the tree declares, and otherwise takes its default. A binding of the current revision that the tree no longer declares is dropped, and the snapshot so made is resolved and checked whole. `executablePaths` are refused as on create, and so is a revision whose whole tree block an offer could not carry (422 `workflow-tree-too-large-for-delivery`). Omitted `executablePaths` keep the current revision's when `treeDigest` is omitted too, and otherwise the bits the named tree was sealed with. An archived definition is 409 `definition-archived`; on an enabled definition the new revision must pass the enablement checks (409 `definition-not-startable`). In a project with no repository, a `github` integration that needs an account is 422 `binding-unresolved`, and a start trigger on a GitHub installation on an enabled definition is 409 `definition-not-startable`. Both carry `reason` `project-repository-not-bound`. While the project is archived a publication is 409 `project-archived` with `reason` `project-archived` and creates nothing; a completed request repeated with its key returns its recorded result.  Problem types: 503 `binding-resolution-unavailable`.
 pub fn publish_workflow_definition_revision(
     configuration: &configuration::Configuration,
     organization_ref: &str,
@@ -1270,6 +1553,80 @@ pub fn publish_workflow_definition_revision(
     } else {
         let content = resp.text()?;
         let entity: Option<PublishWorkflowDefinitionRevisionError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Owner only. A missing schedule is 404. An archived definition is 409 `definition-archived`. While the project is archived the change is 409 `project-archived` with `reason` `project-archived` and changes nothing; a completed request repeated with its key returns its recorded result.
+pub fn resume_workflow_definition_schedule(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    project_id: &str,
+    definition_id: &str,
+    trigger_name: &str,
+    idempotency_key: &str,
+) -> Result<models::WorkflowDefinitionSchedule, Error<ResumeWorkflowDefinitionScheduleError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_project_id = project_id;
+    let p_path_definition_id = definition_id;
+    let p_path_trigger_name = trigger_name;
+    let p_header_idempotency_key = idempotency_key;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/projects/{projectId}/workflow-definitions/{definitionId}/schedules/{triggerName}/resume",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        projectId = crate::generated::apis::urlencode(p_path_project_id),
+        definitionId = crate::generated::apis::urlencode(p_path_definition_id),
+        triggerName = crate::generated::apis::urlencode(p_path_trigger_name)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.header("Idempotency-Key", p_header_idempotency_key.to_string());
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::WorkflowDefinitionSchedule`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::WorkflowDefinitionSchedule`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ResumeWorkflowDefinitionScheduleError> =
             serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
@@ -1363,7 +1720,91 @@ pub fn retry_workflow_definition_evaluation(
     }
 }
 
-/// Owner only. Every file object is confirmed (409 `workflow-tree-upload-incomplete` naming `workflow.missingPaths`), the stored files are rebuilt and validated as `useful workflow validate` of a tree does (422 `workflow-tree-invalid` with the first diagnostic's `workflow.diagnosticCode`), and the rebuilt tree's digest must be the one uploaded (409 `workflow-tree-digest-mismatch`). A validator that reaches no decision is 503 `workflow-validator-unavailable` naming `workflow.validatorFailure`. Before any object is confirmed, a tree whose file list, encoded as a run's assignment offer carries it, exceeds 147,456 bytes is refused 422 `workflow-tree-too-large-for-delivery`, so that every run of a sealed tree reaches its runner in one frame. An upload recorded with a path segment over 255 bytes of UTF-8 cannot be rebuilt: it is refused 400 `bad-request` before any object is confirmed and stays unsealed. Sealing a sealed tree answers it as it is.
+/// Owner only. Accept one pending schedule.due evaluation, even while the schedule is paused. Its due time is the acceptance time. The schedule keeps its pause and next due time. An unknown schedule is 404. An archived definition is 409 `definition-archived`. An archived project is 409 `project-archived` with `reason` `project-archived`. A definition with automatic starts disabled or without an execution principal is 409 `schedule-not-runnable`. An exact key replay returns its retained evaluation.
+pub fn run_workflow_definition_schedule_once(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    project_id: &str,
+    definition_id: &str,
+    trigger_name: &str,
+    idempotency_key: &str,
+    representation: Option<i32>,
+    vocabulary: Option<i32>,
+) -> Result<models::WorkflowDefinitionEvaluation, Error<RunWorkflowDefinitionScheduleOnceError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_path_project_id = project_id;
+    let p_path_definition_id = definition_id;
+    let p_path_trigger_name = trigger_name;
+    let p_header_idempotency_key = idempotency_key;
+    let p_query_representation = representation;
+    let p_query_vocabulary = vocabulary;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/projects/{projectId}/workflow-definitions/{definitionId}/schedules/{triggerName}/run-once",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref),
+        projectId = crate::generated::apis::urlencode(p_path_project_id),
+        definitionId = crate::generated::apis::urlencode(p_path_definition_id),
+        triggerName = crate::generated::apis::urlencode(p_path_trigger_name)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref param_value) = p_query_representation {
+        req_builder = req_builder.query(&[("representation", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_vocabulary {
+        req_builder = req_builder.query(&[("vocabulary", &param_value.to_string())]);
+    }
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.header("Idempotency-Key", p_header_idempotency_key.to_string());
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::WorkflowDefinitionEvaluation`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::WorkflowDefinitionEvaluation`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<RunWorkflowDefinitionScheduleOnceError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Owner only. Every file object is confirmed (409 `workflow-tree-upload-incomplete` naming `workflow.missingPaths`), the stored files are rebuilt and validated as `useful workflow validate` of a tree does (422 `workflow-tree-invalid` with the first diagnostic's `workflow.diagnosticCode`), and the rebuilt tree's digest must be the one uploaded (409 `workflow-tree-digest-mismatch`). A validator that reaches no decision is 503 `workflow-validator-unavailable` naming `workflow.validatorFailure`. Before any object is confirmed, a tree whose file list, encoded as a run's assignment offer carries it, exceeds 147,456 bytes is refused 422 `workflow-tree-too-large-for-delivery`, so that every run of a sealed tree reaches its runner in one frame. An upload recorded with a path segment over 255 bytes of UTF-8 cannot be rebuilt: it is refused 400 `bad-request` before any object is confirmed and stays unsealed. Sealing a sealed tree answers it as it is.  Problem types: 409 `workflow-tree-object-conflict`; 503 `workflow-tree-storage-unavailable`.
 pub fn seal_workflow_tree(
     configuration: &configuration::Configuration,
     organization_ref: &str,

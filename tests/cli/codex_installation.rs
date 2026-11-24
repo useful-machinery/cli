@@ -170,7 +170,6 @@ fn report(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-// REQ-AGENT-3, REQ-AGENT-6, REQ-AGENT-13, REQ-AGENT-48, REQ-AGENT-49
 #[test]
 fn doctor_reports_exact_codex_identity_without_credentials_or_native_configuration() {
     let codex_home = tempfile::tempdir().unwrap();
@@ -226,7 +225,6 @@ fn doctor_reports_exact_codex_identity_without_credentials_or_native_configurati
     assert!(unselected.recorded_probes().is_empty());
 }
 
-// REQ-AGENT-3, REQ-AGENT-68
 #[test]
 fn doctor_accepts_the_reviewed_codex_range_endpoints() {
     // The in-process installation unit test admits every reviewed minor line;
@@ -247,7 +245,6 @@ fn doctor_accepts_the_reviewed_codex_range_endpoints() {
     }
 }
 
-// REQ-AGENT-3, REQ-AGENT-65, REQ-AGENT-68
 #[test]
 fn doctor_passes_a_newer_codex_as_untested_and_reports_qualification() {
     for (version, qualification) in [
@@ -271,8 +268,6 @@ fn doctor_passes_a_newer_codex_as_untested_and_reports_qualification() {
     }
 }
 
-// REQ-AGENT-6
-// INV-HARNESS-11
 #[test]
 fn doctor_does_not_fall_back_after_the_first_path_candidate_fails() {
     let incompatible = CodexFixture::new("0.146.99", true, true);
@@ -291,8 +286,6 @@ fn doctor_does_not_fall_back_after_the_first_path_candidate_fails() {
     assert!(fallback.recorded_probes().is_empty());
 }
 
-// REQ-AGENT-49
-// INV-HARNESS-11
 #[test]
 fn human_doctor_reports_codex_range_and_qualification_when_missing() {
     let missing = tempfile::tempdir().expect("missing Codex directory should be created");
@@ -315,7 +308,6 @@ fn human_doctor_reports_codex_range_and_qualification_when_missing() {
     );
 }
 
-// REQ-AGENT-7, REQ-AGENT-50
 #[test]
 fn doctor_retains_probed_identity_when_schema_admission_fails() {
     let fixture = CodexFixture::new("0.147.23", false, true);
@@ -341,7 +333,6 @@ fn doctor_retains_probed_identity_when_schema_admission_fails() {
     );
 }
 
-// REQ-AGENT-3, REQ-AGENT-5, REQ-AGENT-50
 #[test]
 fn doctor_rejects_out_of_range_decorated_and_schema_incompatible_codex() {
     for (version, schema_compatible, capability_success, expected_code, expected_probes) in [

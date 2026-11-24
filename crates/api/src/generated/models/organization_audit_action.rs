@@ -5,7 +5,7 @@
 /*
  * Useful Machinery API
  *
- * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An operation tagged Principals, Organizations or Delegations names every other slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
+ * The public programmatic API for Useful Machinery.  This contract exposes authenticated principal lookup, explicit human signup, self-service human profile and identity management, and the initial organization tenant boundary. A caller authenticates with an OAuth 2.0 access token issued by an authorization server configured for the deployment and intended for this API.  A failure is `application/problem+json` whose `type` is `https://api.usefulmachinery.com/problems/` followed by a stable slug. Any operation may answer the shared slugs `bad-request`, `idempotency-key-required`, `unauthorized`, `forbidden`, `not-found`, `idempotency-conflict`, `request-body-too-large`, `unsupported-media-type`, `retryable-conflict` and `internal-server-error` under the statuses it declares. An unsupported method is answered 405 `method-not-allowed`. This contract names every problem slug a public operation answers. Each operation tagged Principals, Organizations or Delegations names every non-shared slug it answers in its description. `project-archived`, with `reason` `project-archived`, refuses a change an archived project does not take until it is unarchived; each operation that answers it names it.
  *
  * The version of the OpenAPI document: 0.1.0
  *
@@ -85,6 +85,10 @@ pub enum OrganizationAuditAction {
     RunInputSetDownloadCapabilitiesIssued,
     #[serde(rename = "run_input_set.deleted")]
     RunInputSetDeleted,
+    #[serde(rename = "run_record.deleted")]
+    RunRecordDeleted,
+    #[serde(rename = "run_record.download_capabilities_issued")]
+    RunRecordDownloadCapabilitiesIssued,
     #[serde(rename = "membership.created")]
     MembershipCreated,
     #[serde(rename = "membership.role_changed")]
@@ -163,6 +167,8 @@ pub enum OrganizationAuditAction {
     ConnectionAuthorizationAuthorized,
     #[serde(rename = "connection_authorization.revoked")]
     ConnectionAuthorizationRevoked,
+    #[serde(rename = "connection_authorization.credential_issued")]
+    ConnectionAuthorizationCredentialIssued,
     #[serde(rename = "github_installation.connected")]
     GithubInstallationConnected,
     #[serde(rename = "github_installation.reactivated")]
@@ -171,6 +177,8 @@ pub enum OrganizationAuditAction {
     GithubInstallationDisconnected,
     #[serde(rename = "github_installation.revoked")]
     GithubInstallationRevoked,
+    #[serde(rename = "github_installation.authority_verified")]
+    GithubInstallationAuthorityVerified,
     #[serde(rename = "gitlab_connection.create")]
     GitlabConnectionCreate,
     #[serde(rename = "gitlab_connection.disconnect")]
@@ -297,6 +305,12 @@ pub enum OrganizationAuditAction {
     WorkflowDefinitionExecutionPrincipalChanged,
     #[serde(rename = "workflow_definition.deleted")]
     WorkflowDefinitionDeleted,
+    #[serde(rename = "workflow_definition.schedule_paused")]
+    WorkflowDefinitionSchedulePaused,
+    #[serde(rename = "workflow_definition.schedule_resumed")]
+    WorkflowDefinitionScheduleResumed,
+    #[serde(rename = "workflow_definition.schedule_run_requested")]
+    WorkflowDefinitionScheduleRunRequested,
 }
 
 impl std::fmt::Display for OrganizationAuditAction {
@@ -343,6 +357,10 @@ impl std::fmt::Display for OrganizationAuditAction {
                 write!(f, "run_input_set.download_capabilities_issued")
             }
             Self::RunInputSetDeleted => write!(f, "run_input_set.deleted"),
+            Self::RunRecordDeleted => write!(f, "run_record.deleted"),
+            Self::RunRecordDownloadCapabilitiesIssued => {
+                write!(f, "run_record.download_capabilities_issued")
+            }
             Self::MembershipCreated => write!(f, "membership.created"),
             Self::MembershipRoleChanged => write!(f, "membership.role_changed"),
             Self::MembershipSuspended => write!(f, "membership.suspended"),
@@ -390,10 +408,16 @@ impl std::fmt::Display for OrganizationAuditAction {
                 write!(f, "connection_authorization.authorized")
             }
             Self::ConnectionAuthorizationRevoked => write!(f, "connection_authorization.revoked"),
+            Self::ConnectionAuthorizationCredentialIssued => {
+                write!(f, "connection_authorization.credential_issued")
+            }
             Self::GithubInstallationConnected => write!(f, "github_installation.connected"),
             Self::GithubInstallationReactivated => write!(f, "github_installation.reactivated"),
             Self::GithubInstallationDisconnected => write!(f, "github_installation.disconnected"),
             Self::GithubInstallationRevoked => write!(f, "github_installation.revoked"),
+            Self::GithubInstallationAuthorityVerified => {
+                write!(f, "github_installation.authority_verified")
+            }
             Self::GitlabConnectionCreate => write!(f, "gitlab_connection.create"),
             Self::GitlabConnectionDisconnect => write!(f, "gitlab_connection.disconnect"),
             Self::GitlabCandidateSubmitted => write!(f, "gitlab_candidate.submitted"),
@@ -471,6 +495,15 @@ impl std::fmt::Display for OrganizationAuditAction {
                 write!(f, "workflow_definition.execution_principal_changed")
             }
             Self::WorkflowDefinitionDeleted => write!(f, "workflow_definition.deleted"),
+            Self::WorkflowDefinitionSchedulePaused => {
+                write!(f, "workflow_definition.schedule_paused")
+            }
+            Self::WorkflowDefinitionScheduleResumed => {
+                write!(f, "workflow_definition.schedule_resumed")
+            }
+            Self::WorkflowDefinitionScheduleRunRequested => {
+                write!(f, "workflow_definition.schedule_run_requested")
+            }
         }
     }
 }

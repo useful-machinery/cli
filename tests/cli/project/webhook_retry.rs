@@ -1,6 +1,5 @@
 use super::*;
 
-// REQ-WEBHOOK-79, REQ-WEBHOOK-80
 #[test]
 fn lost_mutation_response_reuses_identity_and_bytes_without_reporting_success() {
     let input = private_credential_directory();
@@ -42,7 +41,6 @@ fn lost_mutation_response_reuses_identity_and_bytes_without_reporting_success() 
     assert!(document.get("webhookId").is_none());
 }
 
-// REQ-WEBHOOK-76, REQ-WEBHOOK-80
 #[test]
 fn human_uncertainty_and_metadata_only_use_safe_known_identity() {
     let directory = private_credential_directory();
@@ -84,7 +82,6 @@ fn human_uncertainty_and_metadata_only_use_safe_known_identity() {
     assert!(!stderr.contains("receiver.example.com"));
 }
 
-// REQ-WEBHOOK-82
 #[test]
 fn webhook_generic_conflict_and_rate_limit_preserve_structured_outcomes() {
     for (status, code, problem_type, outcome, retry_after) in [
@@ -143,7 +140,6 @@ fn webhook_generic_conflict_and_rate_limit_preserve_structured_outcomes() {
     }
 }
 
-// REQ-WEBHOOK-79
 #[test]
 fn credential_refresh_keeps_one_mutation_key_and_body() {
     let input = private_credential_directory();
@@ -206,7 +202,6 @@ fn credential_refresh_keeps_one_mutation_key_and_body() {
     );
 }
 
-// REQ-WEBHOOK-76, REQ-WEBHOOK-79, REQ-WEBHOOK-85
 #[test]
 fn lost_success_body_returns_metadata_without_revealing_original_secret() {
     let input = private_credential_directory();
@@ -240,7 +235,6 @@ fn lost_success_body_returns_metadata_without_revealing_original_secret() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("DO_NOT_DISCLOSE"));
 }
 
-// REQ-WEBHOOK-76, REQ-WEBHOOK-82
 #[test]
 fn metadata_only_mutation_and_authorization_failures_do_not_reveal_secrets() {
     let input = private_credential_directory();

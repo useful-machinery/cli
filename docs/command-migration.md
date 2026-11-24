@@ -437,12 +437,13 @@ Retired, with no option in their place:
   one, is the project's ID or its exact name.
 - `useful project show [PROJECT]` prints the repository binding in full, with no `PROJECT`
   shows the project in effect, and replaces `project repository show`: a script that read
-  `.repository` of `repository show --json` reads `.project.repository` of `show --json`. A
-  project with no repository is no longer an exit 1: `show` prints `repository: none` and the
-  `repository_detached` blocker.
-- `useful project create NAME --repository REPOSITORY` takes the project's name as its
-  argument, where the earlier command took `--name`, and `REPOSITORY` as `owner/name`, a GitLab
-  project's full path or the provider's repository ID. It finds the connection that reaches the
+  `.repository` of `repository show --json` reads `.project.repository` of `show --json`. For a
+  project with no repository, `show` prints `repository: none`, and its readiness is
+  `ready` when it has a runner pool.
+- `useful project create NAME [--repository REPOSITORY]` takes the project's name as its
+  argument, where the earlier command took `--name`. Omit `--repository` to create a project
+  with no repository. With `--repository`, pass `owner/name`, a GitLab project's full path or
+  the provider's repository ID. The command finds the connection that reaches the
   repository: a GitHub binding in use whose installation grants it, or a GitLab connection in
   use that has it selected. When several do it exits 2 and creates nothing, and
   `--integration INTEGRATION`, by ID or as `github` or `gitlab`, replaces `--installation-id` and

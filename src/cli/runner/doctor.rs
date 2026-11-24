@@ -12,10 +12,9 @@ use useful_support::{Availability, CredentialStatus, NextAction};
 pub(super) const ABOUT: &str = "Check local runner prerequisites";
 const COMMAND_NAME: &str = "useful runner doctor";
 
-// What a workflow needs is `useful workflow doctor` (REQ-CREDREADY-1); this command checks the
-// host alone and makes no request, so it takes no authentication or HTTP option
-// (REQ-RUNNERENROLL-45). Its report names every check, run or not, so nothing else lists them
-// (REQ-RUNNERENROLL-47).
+// What a workflow needs is `useful workflow doctor`; this command checks the host alone and
+// makes no request, so it takes no authentication or HTTP option. Its report names every
+// check, run or not, so nothing else lists them.
 #[derive(Debug, Args)]
 pub(super) struct Command {
     #[arg(long = "check", value_name = "ID", help = "Run only the named check")]
@@ -117,8 +116,8 @@ fn write_harness_compatibility_details(
     Ok(())
 }
 
-/// Writes each provider's availability and next action, with the step it
-/// names, where a result's details carry them (REQ-GRANT-53).
+/// Writes each provider's availability and next action, with the step it names,
+/// where a result's details carry them.
 fn write_agent_login_details(
     output: &mut impl Write,
     details: &std::collections::BTreeMap<String, String>,
@@ -222,7 +221,7 @@ impl<'a> JsonCheck<'a> {
     }
 }
 
-/// A check the run did not select (REQ-RUNNERENROLL-47).
+/// A check the run did not select.
 #[derive(Serialize)]
 struct JsonNotRun {
     id: &'static str,
@@ -262,7 +261,6 @@ mod tests {
         }
     }
 
-    // REQ-AGENT-49, REQ-AGENT-68
     #[test]
     fn human_harness_details_render_structured_compatibility_policy() {
         let report = Report {

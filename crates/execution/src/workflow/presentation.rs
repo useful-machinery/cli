@@ -60,9 +60,8 @@ const RETRY_COMMAND: &str = "useful workflow run retry";
 const RESUME_COMMAND: &str = "useful workflow run resume";
 const UPGRADE_COMMAND: &str = "useful workflow run upgrade";
 
-/// A control command that continues the run whose wait it resolves, as `useful workflow run
-/// resume` would, and names itself on the continuation's documents (REQ-LOCALRUN-182,
-/// REQ-LOCALRUN-183).
+/// A control command that continues the run whose wait it resolves, as
+/// `useful workflow run resume` would, and names itself on the continuation's documents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContinuingControl {
     Answer,
@@ -371,7 +370,7 @@ where
     }
 
     /// The documents of `useful workflow run retry --all` of the run at `run_directory`, a
-    /// new attempt of every step (REQ-LOCALRUN-78): phase `retry`.
+    /// new attempt of every step: phase `retry`.
     pub fn for_retry(mut self, run_directory: &Path) -> Self {
         self.command = RETRY_COMMAND;
         self.retry_run_directory = run_directory.to_str().map(str::to_owned);
@@ -379,8 +378,8 @@ where
     }
 
     /// The documents of `useful workflow run retry` continuing the run at `run_directory`
-    /// from named steps, the stage an ended run stood at or a wait for repair
-    /// (REQ-LOCALRUN-184): reported as `resume` reports a continuation, under `retry`'s name.
+    /// from named steps, the stage an ended run stood at or a wait for repair: reported as
+    /// `resume` reports a continuation, under `retry`'s name.
     pub fn for_retry_continuation(mut self, run_directory: &Path) -> Self {
         self.command = RETRY_COMMAND;
         self.continuing = true;
@@ -396,8 +395,7 @@ where
     }
 
     /// The documents of `useful workflow run upgrade` of the run at `run_directory`, with or
-    /// without `--from`, the predecessor until the successor exists (REQ-LOCALRUN-194,
-    /// REQ-LOCALRUN-197).
+    /// without `--from`, the predecessor until the successor exists.
     pub fn for_upgrade(mut self, run_directory: &Path) -> Self {
         self.command = UPGRADE_COMMAND;
         self.continuing = true;
@@ -405,8 +403,8 @@ where
         self
     }
 
-    /// The documents of `control`'s continuation of the run at `run_directory`
-    /// (REQ-LOCALRUN-182, REQ-LOCALRUN-183).
+    /// The documents of `control`'s continuation of the run at
+    /// `run_directory`.
     pub fn for_control(mut self, control: ContinuingControl, run_directory: &Path) -> Self {
         self.command = control.command();
         self.continuing = true;
@@ -416,8 +414,7 @@ where
 
     /// The command a continuation's refusal names: the continuing command's own, and
     /// `resume`'s for a command that does not continue the run itself, whose attempt chained
-    /// into a continuation (REQ-LOCALRUN-182, REQ-LOCALRUN-183, REQ-LOCALRUN-184,
-    /// REQ-LOCALRUN-194, REQ-LOCALRUN-197).
+    /// into a continuation.
     fn continuation_command(&self) -> &'static str {
         if self.continuing {
             self.command
@@ -486,8 +483,8 @@ where
         )
     }
 
-    /// A source root that is a tree and failed validation (REQ-LOCALRUN-169): phase `tree`
-    /// with every failure the validator found (REQ-LOCALRUN-128).
+    /// A source root that is a tree and failed validation: phase `tree` with every failure
+    /// the validator found.
     pub fn render_tree_rejection(
         self,
         workflow_path: Option<&str>,
@@ -524,7 +521,7 @@ where
     }
 
     /// A retry or continuation whose run copy no longer has the digest the manifest
-    /// recorded (REQ-LOCALRUN-171).
+    /// recorded.
     pub fn render_tree_copy_rejection(
         self,
         workflow_path: &str,
@@ -546,8 +543,8 @@ where
         )
     }
 
-    /// A definition run refused before admission (REQ-LOCALRUN-173): phase `definition`
-    /// with the one code and the definition, revision and path it concerns.
+    /// A definition run refused before admission: phase `definition` with the one code
+    /// and the definition, revision and path it concerns.
     pub fn render_definition_rejection(
         self,
         error: &DefinitionError,
@@ -563,9 +560,9 @@ where
         })
     }
 
-    /// A run refused for its subject (REQ-LOCALRUN-173, REQ-WFDEF-28): phase `definition`
-    /// with `code` (`subject_invalid`, `subject_busy` or `subject_settled`), the definition
-    /// and revision, and `run`, the id of the run that holds the slot.
+    /// A run refused for its subject: phase `definition` with `code` (`subject_invalid`,
+    /// `subject_busy` or `subject_settled`), the definition and revision, and `run`, the id
+    /// of the run that holds the slot.
     pub fn render_subject_rejection(
         self,
         code: &'static str,
@@ -585,8 +582,8 @@ where
     }
 
     /// A run refused before admission for the step its `--pause-before` names, which the
-    /// engine does not hold before (REQ-LOCALRUN-185): phase `definition` with the one
-    /// `code`, its `message`, and the definition and revision when the run is of one.
+    /// engine does not hold before: phase `definition` with the one `code`, its
+    /// `message`, and the definition and revision when the run is of one.
     pub fn render_stop_rejection(
         self,
         code: &'static str,
@@ -598,8 +595,8 @@ where
     }
 
     /// A `useful workflow run upgrade`, with or without `--from`, refused before the successor
-    /// exists (REQ-LOCALRUN-194, REQ-LOCALRUN-197): phase `successor` with the one `code`, its
-    /// `message` and `run`, the predecessor's id when it has a run record.
+    /// exists: phase `successor` with the one `code`, its `message` and `run`, the
+    /// predecessor's id when it has a run record.
     pub fn render_successor_refusal(
         self,
         code: &'static str,
@@ -623,9 +620,9 @@ where
     }
 
     /// A `useful workflow run upgrade` refused before the successor exists because the run's
-    /// carried state does not resolve against the current revision (REQ-LOCALRUN-197): phase
-    /// `successor` with one diagnostic per miss, each carrying its `code`, `message` and
-    /// `run`, the predecessor's id.
+    /// carried state does not resolve against the current revision: phase `successor` with
+    /// one diagnostic per miss, each carrying its `code`, `message` and `run`, the
+    /// predecessor's id.
     pub fn render_successor_refusals(
         mut self,
         misses: &[CarryMiss],
@@ -846,9 +843,9 @@ where
         self.write_rejection(&terminal, &human)
     }
 
-    /// A `useful workflow run resume` without `--from` refused at the run's latest attempt
-    /// (REQ-CONTINUE-29, REQ-CONTINUE-103, REQ-CONTINUE-113): phase `continuation` and one
-    /// diagnostic with `code`, `message` and the attempt.
+    /// A `useful workflow run resume` without `--from` refused at the run's latest
+    /// attempt: phase `continuation` and one diagnostic with `code`, `message` and the
+    /// attempt.
     pub fn render_continuation_refusal(
         mut self,
         run_directory: &Path,
@@ -1109,8 +1106,8 @@ where
     }
 }
 
-/// The rejection document of REQ-LOCALRUN-128: one diagnostic for resolution,
-/// installation and admission, every failure for phase `tree`.
+/// The rejection document: one diagnostic for a resolution, installation or admission
+/// rejection, every failure for phase `tree`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TerminalRejectionV1<'a, Diagnostics> {
@@ -1135,7 +1132,7 @@ struct DefinitionRejectionDiagnosticV1<'a> {
     revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    /// The run that holds the subject's slot (REQ-WFDEF-28).
+    /// The run that holds the subject's slot.
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<&'a str>,
 }
@@ -1309,7 +1306,7 @@ fn human_retry_rejection(rejection: &LocalRetryRejection) -> String {
 }
 
 /// The diagnostic message for a superseded run, naming its successor and the outcome
-/// `superseded` (REQ-CONTINUE-29, REQ-LOCALRUN-129).
+/// `superseded`.
 pub fn superseded_rejection_message(successor: Option<&str>) -> String {
     let successor = successor.unwrap_or("its successor");
     format!("The run was superseded by run {successor}; address the successor instead.")
@@ -1769,8 +1766,8 @@ where
         }
     }
 
-    /// The presentation of the child run `step` started, for element `item` of a fan-out
-    /// (REQ-WFEXEC-66), whose resolved file is `workflow` (REQ-LOCALRUN-200).
+    /// The presentation of the child run `step` started, for element `item` of a
+    /// fan-out, whose resolved file is `workflow`.
     pub fn child_scope(
         &self,
         workflow: &ResolvedWorkflow,
@@ -1782,12 +1779,12 @@ where
     }
 }
 
-/// A running child run's view of its root's presentation (REQ-LOCALRUN-200,
-/// INV-ENGINE-28): the child's step and finalizer state records enqueue on the root's
-/// queue, in observation order with the root's own, scoped by the child step's position
-/// path from the root. The child's output, agent events and workflow records present
-/// nothing, and a failed write is the root's presentation failure. A nested run
-/// (REQ-WFEXEC-74) presents no step record of its own; its stages present through it.
+/// A running child run's view of its root's presentation: the child's step and
+/// finalizer state records enqueue on the root's queue, in observation order with the
+/// root's own, scoped by the child step's position path from the root. The child's
+/// output, agent events and workflow records present nothing, and a failed write is the
+/// root's presentation failure. A nested run presents no step record of its own; its
+/// stages present through it.
 pub struct ChildRunPresentation<StandardOutput, StandardError, Clock> {
     parent: WorkflowRunPresentation<StandardOutput, StandardError, Clock>,
     /// The child run's position path from the root: `[<step>]` or `[<step>, {item: n}]`,
@@ -1802,9 +1799,9 @@ impl<StandardOutput, StandardError, Clock>
 where
     Clock: Clone,
 {
-    /// The presentation of the stage `step` of this nested run started, for element `item`
-    /// of a fan-out, whose resolved file is `workflow`: its records' scope extends this run's
-    /// path by the nested step (REQ-LOCALRUN-200).
+    /// The presentation of the stage `step` of this nested run started, for element `item` of
+    /// a fan-out, whose resolved file is `workflow`: its records' scope extends this run's
+    /// path by the nested step.
     pub fn child_scope(
         &self,
         workflow: &ResolvedWorkflow,
@@ -2420,7 +2417,7 @@ where
                     PresentationFailureOperation::InvalidTerminalResult,
                 ));
             };
-            // A failed stage the attempt waits at gives the wait's kind (REQ-LOCALRUN-220).
+            // A failed stage the attempt waits at gives the wait's kind.
             if let (StepState::Succeeded { .. }, Some(_), RunOutcome::Waiting { wait }) =
                 (&step.state, &step.failed_child, &run.outcome)
                 && wait.step() == step.id
@@ -2581,7 +2578,7 @@ where
                 );
                 self.write_line_bytes(line.as_bytes())?;
                 // A failed result that records a later cancellation or an interruption
-                // (REQ-WFEXEC-17, REQ-WFEXEC-69) names its reason too.
+                // names its reason too.
                 if let Some(reason) = later_cancellation {
                     self.write_cancellation_line(*reason)?;
                 }
@@ -2724,7 +2721,7 @@ where
         }
     }
 
-    /// The summary's `cancellation:` line for `reason` (REQ-LOCALRUN-123).
+    /// The summary's `cancellation:` line for `reason`.
     fn write_cancellation_line(
         &mut self,
         reason: CancellationReason,
@@ -2816,7 +2813,7 @@ struct SummaryRow {
 /// One state record of a step: its token, detail and role.
 type StepRecord = (&'static str, String, TokenRole);
 
-/// The one record of a start held at the start gate (REQ-LOCALRUN-222).
+/// The one record of a start held at the start gate.
 fn start_held_records(held: &StartHeldObservation) -> Vec<StepRecord> {
     vec![(
         "held",
@@ -2829,9 +2826,9 @@ fn start_held_records(held: &StartHeldObservation) -> Vec<StepRecord> {
     )]
 }
 
-/// The state records of one workflow's steps and finalizers, rendered against that
-/// workflow's definitions and the starts observed for its steps: the root's own, or a
-/// running child's (REQ-LOCALRUN-200), whose `output` records the parent's stream leaves out.
+/// The state records of one workflow's steps and finalizers, rendered against that workflow's
+/// definitions and the starts observed for its steps: the root's own, or a running child's,
+/// whose `output` records the parent's stream leaves out.
 struct StepRecords<'a> {
     workflow: &'a WorkflowPresentationDefinition,
     definition: &'a PresentationDefinition,
@@ -2883,7 +2880,7 @@ impl StepRecords<'_> {
                     }));
                 }
                 // A stage whose child failed completes `failed` with the child's failing node
-                // (REQ-LOCALRUN-220) and the outputs it committed (REQ-OUTPUTS-17).
+                // and the outputs it committed.
                 if let Some(failed_child) = failed_child {
                     let detail = failed_stage_detail(step, &failed_child, outputs.len());
                     let detail = completion_detail(detail, self.finish(step, observed_at));
@@ -3196,8 +3193,8 @@ pub(crate) fn finalization_trigger(
     }
 }
 
-/// A failed step's detail with its failure's class appended, when it has one
-/// (REQ-WFEXEC-79).
+/// A failed step's detail with its failure's class appended, when it has
+/// one.
 pub(crate) fn classified_failure_detail(
     detail: String,
     failure_class: Option<FailureClass>,
@@ -3255,10 +3252,9 @@ pub(crate) fn canonical_blocked_detail(detail: &BlockedDetail) -> String {
     format!("prerequisites_unsatisfied · {prerequisites}")
 }
 
-/// The detail of the `workflow` step `step` whose child failed (REQ-LOCALRUN-220,
-/// REQ-LOCALRUN-221), which every reader that shows the step failed gives: the failed child
-/// as `failed_child_detail` gives it under the stage's path, with the `committed` outputs the
-/// step committed (REQ-OUTPUTS-17).
+/// The detail of the `workflow` step `step` whose child failed, which every reader that shows
+/// the step failed gives: the failed child as `failed_child_detail` gives it under the
+/// stage's path, with the `committed` outputs the step committed.
 pub(crate) fn failed_stage_detail(
     step: &str,
     failed_child: &FailedChild,
@@ -3271,10 +3267,10 @@ pub(crate) fn failed_stage_detail(
     )
 }
 
-/// A stage's failed child (REQ-LOCALRUN-220): the outcome the child recorded and its failing
-/// node by its path under the stage at `stage`, `<stage>.<node>` (REQ-LOCALRUN-200), with the
-/// node's state and failure detail as the `primary issue:` line gives them. `stage` is the
-/// stage's full path, a fan-out's element and a carried wait's nested path included.
+/// A stage's failed child: the outcome the child recorded and its failing node by its path
+/// under the stage at `stage`, `<stage>.<node>`, with the node's state and failure detail as
+/// the `primary issue:` line gives them. `stage` is the stage's full path, a fan-out's
+/// element and a carried wait's nested path included.
 pub fn failed_child_detail(stage: &str, failed_child: &FailedChild) -> String {
     let issue = failed_child.primary_issue();
     let (state, detail) = match &issue.detail {
@@ -3298,11 +3294,10 @@ fn failed_node_path(stage: &str, failed_child: &FailedChild) -> String {
     )
 }
 
-/// The failed stage at which the attempt waits and its child's failure (REQ-LOCALRUN-220):
-/// read from the published wait record's payload, whose `step` is the stage's full path, a
-/// carried wait's included (REQ-WFEXEC-75), or, when publication failed, from the waiting
-/// step's own record. A payload without the record, or one that does not read as one, names
-/// none.
+/// The failed stage at which the attempt waits and its child's failure: read from the
+/// published wait record's payload, whose `step` is the stage's full path, a carried wait's
+/// included, or, when publication failed, from the waiting step's own record. A payload
+/// without the record, or one that does not read as one, names none.
 fn waiting_failed_stage(
     run: &WorkflowRunResult,
     wait: &EnteredWait,
@@ -3333,7 +3328,7 @@ fn summary_step(
     success: StepSuccessPresentation,
 ) -> Option<(&'static str, String, TokenRole)> {
     let (state, mut detail, role) = match &step.state {
-        // A stage whose child failed is shown failed (REQ-LOCALRUN-220).
+        // A stage whose child failed is shown failed.
         StepState::Succeeded { outputs } => Some(match &step.failed_child {
             Some(failed_child) => (
                 "failed",
@@ -3512,7 +3507,7 @@ fn terminal_counts(run: &WorkflowRunResult) -> [(&'static str, usize); 7] {
             .flat_map(|finalization| &finalization.finalizers),
     ) {
         let index = match step.state {
-            // A stage whose child failed counts as failed (REQ-WFEXEC-41, REQ-LOCALRUN-220).
+            // A stage whose child failed counts as failed.
             StepState::Succeeded { .. } if step.failed_child.is_some() => Some(1),
             StepState::Succeeded { .. } | StepState::Inherited { .. } => Some(0),
             StepState::Failed { .. } => Some(1),
@@ -3542,7 +3537,8 @@ fn terminal_counts(run: &WorkflowRunResult) -> [(&'static str, usize); 7] {
     counts
 }
 
-/// A duration in the form REQ-LOCALRUN-124 states.
+/// A duration in milliseconds under one second, in seconds with one decimal under one
+/// minute, and then as minutes and seconds or hours, minutes and seconds.
 pub fn human_duration(duration: Duration) -> String {
     let milliseconds = duration.as_millis();
     if milliseconds < 1000 {
@@ -3586,7 +3582,6 @@ mod untested_advisory_tests {
     use crate::claude_code::ValidatedClaudeCodeInstallation;
     use crate::pi::ValidatedPiInstallation;
 
-    // REQ-AGENT-66
     #[test]
     fn each_untested_harness_advisory_is_one_stderr_line() {
         let advisories = [

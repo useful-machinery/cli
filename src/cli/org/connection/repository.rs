@@ -1,5 +1,5 @@
 //! `useful org integration repository`: the repositories a GitHub binding or a GitLab connection
-//! reaches, and the GitLab repositories a GitLab connection selects (REQ-CONNECTION-73).
+//! reaches, and the GitLab repositories a GitLab connection selects.
 use clap::{Args, Subcommand};
 use useful_human_auth::Deployment;
 
@@ -88,8 +88,8 @@ struct Removal {
 }
 
 impl Selection {
-    /// Adds the repositories to the connection's selection, or with `add` false removes them
-    /// (REQ-CONNECTION-73, REQ-CONNECTION-74).
+    /// Adds the repositories to the connection's selection, or with `add` false removes
+    /// them.
     fn execute(self, deployment: &Deployment, command: &str, add: bool) -> CommandResult {
         let Self {
             repositories,

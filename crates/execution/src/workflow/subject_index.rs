@@ -1,12 +1,12 @@
-//! A definition's subject index (REQ-WFDEF-28): `workflows/<id>/subjects/<subject>` under the
-//! `useful` home names the run that holds the definition's slot for that subject. `claim` takes
-//! the slot under an exclusive lock on `subjects/` and keeps the lock until the claim is
-//! dropped, so the caller creates the claimant's run directory while no other claim can read
-//! the slot; `SubjectClaim::take` and `name` split the claim so a successor's directory is
-//! published under the lock before the slot names it (INV-ENGINE-26). The slot's state is decided from the holder's `run.json` and its controls alone
-//! (INV-ENGINE-24): busy while the record reads `running` or `waiting`, settled once it reads
-//! `exited` until a `control.release` is appended, and free when no file exists, when the
-//! named run's directory is gone, or after the release.
+//! A definition's subject index: `workflows/<id>/subjects/<subject>` under the `useful` home names
+//! the run that holds the definition's slot for that subject. `claim` takes the slot under an
+//! exclusive lock on `subjects/` and keeps the lock until the claim is dropped, so the caller
+//! creates the claimant's run directory while no other claim can read the slot;
+//! `SubjectClaim::take` and `name` split the claim so a successor's directory is published under
+//! the lock before the slot names it. The slot's state is decided from the holder's `run.json` and
+//! its controls alone: busy while the record reads `running` or `waiting`, settled once it reads
+//! `exited` until a `control.release` is appended, and free when no file exists, when the named
+//! run's directory is gone, or after the release.
 
 use std::fmt;
 use std::io;
@@ -31,8 +31,9 @@ const SUBJECTS_DIRECTORY: &str = "subjects";
 const SLOT_TEMPORARY_FILE: &str = "slot.tmp";
 const MAXIMUM_SUBJECT_LENGTH: usize = 128;
 
-/// Whether `value` has the subject form `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`
-/// (REQ-WFDEF-28), so it is its slot's file name as it stands.
+/// Whether `value` has the subject form
+/// `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, so it is its slot's file name as it
+/// stands.
 pub fn is_subject(value: &str) -> bool {
     let mut bytes = value.bytes();
     value.len() <= MAXIMUM_SUBJECT_LENGTH
@@ -67,8 +68,7 @@ impl SlotHolder {
 
 impl SlotHolder {
     /// Every definition's holder of the slot for `subject` under `home`, in definition-id
-    /// order, read without a lock as `slot` reads one (REQ-LOCALRUN-180): the runs the
-    /// subject addresses.
+    /// order, read without a lock as `slot` reads one: the runs the subject addresses.
     pub fn of_subject(home: &WorkflowHome, subject: &str) -> Result<Vec<Self>, SubjectError> {
         if !is_subject(subject) {
             return Err(SubjectError::Invalid);
@@ -156,8 +156,8 @@ pub enum SubjectError {
 }
 
 impl SubjectError {
-    /// The refusal code `useful workflow run create` reports (REQ-LOCALRUN-173), `None` for a
-    /// failure of the store.
+    /// The refusal code `useful workflow run create` reports, `None` for a failure of the
+    /// store.
     pub fn code(&self) -> Option<&'static str> {
         match self {
             Self::Invalid => Some("subject_invalid"),
@@ -243,12 +243,12 @@ pub fn check(
     }
 }
 
-/// Takes definition `definition`'s slot for `subject` for the run `run` (REQ-WFDEF-28):
-/// `subjects/` is created owner-only on first use and locked exclusively, the slot is decided
-/// as `check` decides it (`SubjectClaim::take`), and `<subject>` is replaced with `run` and a
-/// newline, written whole under `subjects/.private/` and renamed into place
-/// (`SubjectClaim::name`). The lock is held until the returned claim drops. A claimant whose
-/// `predecessor` names the holder takes the slot in any state.
+/// Takes definition `definition`'s slot for `subject` for the run `run`: `subjects/` is
+/// created owner-only on first use and locked exclusively, the slot is decided as `check`
+/// decides it (`SubjectClaim::take`), and `<subject>` is replaced with `run` and a newline,
+/// written whole under `subjects/.private/` and renamed into place (`SubjectClaim::name`).
+/// The lock is held until the returned claim drops. A claimant whose `predecessor` names the
+/// holder takes the slot in any state.
 pub fn claim(
     home: &WorkflowHome,
     definition: &str,
@@ -418,7 +418,6 @@ mod tests {
         }
     }
 
-    // REQ-WFDEF-28
     #[test]
     fn a_first_claim_writes_the_slot_owner_only() {
         let fixture = Fixture::new();
@@ -436,8 +435,8 @@ mod tests {
         assert_eq!(holder.record.id, first);
     }
 
-    // REQ-WFDEF-74, REQ-WFDEF-76, INV-ENGINE-24: busy while the holder is live, settled once it exits,
-    // free after a release, decided from the holder's record and controls alone.
+    // Busy while the holder is live, settled once it exits, free after a release, decided from the
+    // holder's record and controls alone.
     #[test]
     fn the_slot_follows_the_holders_record_and_controls() {
         let fixture = Fixture::new();
@@ -471,9 +470,9 @@ mod tests {
         assert_eq!(fixture.holder(DEFINITION), format!("{second}\n"));
     }
 
-    // REQ-LOCALRUN-196, INV-ENGINE-26: a taken claim holds the lock and writes nothing until
-    // it names the successor, so a successor whose creation dies after the take leaves the
-    // predecessor as the holder and the subject busy, never a slot naming a missing run.
+    // A taken claim holds the lock and writes nothing until it names the successor, so a
+    // successor whose creation dies after the take leaves the predecessor as the holder and
+    // the subject busy, never a slot naming a missing run.
     #[test]
     fn a_taken_claim_names_the_slot_only_once_asked() {
         let fixture = Fixture::new();
@@ -500,7 +499,7 @@ mod tests {
         ));
     }
 
-    // REQ-WFDEF-75: a successor takes the slot over from its live predecessor.
+    // A successor takes the slot over from its live predecessor.
     #[test]
     fn a_claimant_naming_the_holder_as_predecessor_takes_the_slot() {
         let fixture = Fixture::new();
@@ -513,7 +512,6 @@ mod tests {
         assert_eq!(fixture.holder(DEFINITION), format!("{successor}\n"));
     }
 
-    // REQ-WFDEF-28
     #[test]
     fn a_holder_whose_directory_is_gone_leaves_the_slot_free() {
         let fixture = Fixture::new();
@@ -527,7 +525,6 @@ mod tests {
         assert_eq!(fixture.holder(DEFINITION), format!("{second}\n"));
     }
 
-    // REQ-WFDEF-28
     #[test]
     fn a_value_outside_the_subject_form_is_invalid_and_writes_nothing() {
         let fixture = Fixture::new();
@@ -548,8 +545,8 @@ mod tests {
         assert!(is_subject("AUTO-1.retry_2"));
     }
 
-    // REQ-LOCALRUN-180: a subject's holders are read from every definition's slot under the
-    // home, in definition order, without a slot whose run is gone.
+    // A subject's holders are read from every definition's slot under the home, in
+    // definition order, without a slot whose run is gone.
     #[test]
     fn a_subjects_holders_span_the_homes_definitions() {
         let fixture = Fixture::new();
@@ -585,7 +582,7 @@ mod tests {
         ));
     }
 
-    // REQ-WFDEF-76: definitions share nothing.
+    // Definitions share nothing.
     #[test]
     fn another_definitions_slot_for_the_subject_is_unaffected() {
         let fixture = Fixture::new();

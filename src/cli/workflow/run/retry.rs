@@ -100,18 +100,18 @@ pub(super) struct Command {
 
 /// What a local `retry` reruns.
 enum Rerun {
-    /// `--from`: a continuation from the named steps (REQ-CONTINUE-1).
+    /// `--from`: a continuation from the named steps.
     From(Vec<String>),
-    /// `--all`: a new attempt of every step (REQ-LOCALRUN-78).
+    /// `--all`: a new attempt of every step.
     All,
-    /// Neither: a repair wait's retry or an ended run's continuation (REQ-LOCALRUN-184).
+    /// Neither: a repair wait's retry or an ended run's continuation.
     Default,
 }
 
 impl Command {
     /// Finds the run and reruns it: a run under the home as `rerun` selects, and a Cloud run
-    /// through the API (REQ-LOCALRUN-210, REQ-CONTINUE-55, REQ-RETRY-30). An option the place
-    /// the run is found in does not read is a usage error, exit 2.
+    /// through the API. An option the place the run is found in does not read is a usage
+    /// error, exit 2.
     pub(super) fn execute(mut self) -> super::super::super::CommandResult {
         let json = self.presentation.output.json;
         let found = match super::control::find(
@@ -173,8 +173,7 @@ impl Command {
                  Leave out {option}: the runner executing the Cloud run reruns it."
             )));
         }
-        // REQ-RETRY-44: a retry of every step is always followed; a continuation only with
-        // `--wait`.
+        // A retry of every step is always followed; a continuation only with `--wait`.
         if !self.all && self.timeout.is_some() && !self.wait {
             return Err(usage(
                 "--timeout bounds --wait, and --wait is not given\n\n\
@@ -244,7 +243,7 @@ impl Command {
                             .await
                     }
                     WaitInspection::Locked(_) => refuse(&super::control::run_locked()),
-                    // REQ-LOCALRUN-184: a run whose process is gone continues with `resume`.
+                    // A run whose process is gone continues with `resume`.
                     WaitInspection::NoWait {
                         state: Some(RunState::Running),
                         ..
@@ -264,8 +263,8 @@ impl Command {
                 };
             }
         }
-        // REQ-LOCALRUN-78: `--all` of a run that waits is refused before anything is written,
-        // naming its state and the verbs that apply (REQ-LOCALRUN-223).
+        // `--all` of a run that waits is refused before anything is written, naming its state
+        // and the verbs that apply.
         let waiting = {
             let run_directory = run_directory.clone();
             tokio::task::spawn_blocking(move || super::control::waiting(&run_directory))
@@ -286,8 +285,8 @@ impl Command {
             cancellation.clone(),
             super::create::UnixSignals::new()?,
         );
-        // REQ-LOCALRUN-135: a signal reads the run's control journal from here on, before the
-        // attempt begins, as `continue_run` does for a resume.
+        // A signal reads the run's control journal from here on, before the attempt begins,
+        // as `continue_run` does for a resume.
         let _journal = signal_task.watch(&run_directory);
         let opened = match tokio::task::spawn_blocking(move || {
             reconcile_current_result_publication(&run_directory).map_err(|error| {
@@ -316,8 +315,8 @@ impl Command {
                 return Err(error.into());
             }
         };
-        // REQ-LOCALRUN-78: with no `--execution-root` the attempt runs where the previous one
-        // ran, which the reuse warning then names (REQ-LOCALRUN-79).
+        // With no `--execution-root` the attempt runs where the previous one ran, which the
+        // reuse warning then names.
         let execution_root = match execution_root {
             Some(execution_root) => execution_root,
             None => match pending.prior_execution_root() {
@@ -328,9 +327,9 @@ impl Command {
                 }
             },
         };
-        // REQ-LOCALRUN-213, REQ-LOCALRUN-186: a withdrawal no process honored over the run's
-        // open latest attempt ends the run `withdrawn` without an attempt, as `resume` ends it;
-        // the settlement `begin` makes would spend it.
+        // A withdrawal no process honored over the run's open latest attempt ends the run
+        // `withdrawn` without an attempt, as `resume` ends it; the settlement `begin` makes
+        // would spend it.
         if matches!(pending.withdrawal_unhonored(), Ok(true)) {
             return end_withdrawn(pending, &signal_task, &presentation_config).await;
         }
@@ -338,7 +337,7 @@ impl Command {
             let (workflow, inputs, maximum_parallel_steps) = pending.execution_specification();
             (workflow.clone(), inputs.clone(), maximum_parallel_steps)
         };
-        // REQ-LOCALRUN-171: a run admitted from a tree retries only from an unchanged copy.
+        // A run admitted from a tree retries only from an unchanged copy.
         let (pending, verified) = match tokio::task::spawn_blocking(move || {
             let verified = pending.verify_tree_copy();
             (pending, verified)
@@ -398,7 +397,7 @@ impl Command {
         if let Some(tree) = tree {
             context = context.with_tree(tree);
         }
-        // REQ-LOCALRUN-217: the revision the run was created with.
+        // The revision the run was created with.
         if let Some(source_revision) = pending.source_revision() {
             context = context.with_source_revision(source_revision.clone());
         }
@@ -458,9 +457,9 @@ impl Command {
                 .into());
         }
 
-        // REQ-LOCALRUN-135: an interruption held before the attempt begins starts none, and the
-        // run is released as it was; a signal that carries a recorded `control.cancel` is a
-        // cancellation, which begins the attempt and cancels it.
+        // An interruption held before the attempt begins starts none, and the run is released
+        // as it was; a signal that carries a recorded `control.cancel` is a cancellation, which
+        // begins the attempt and cancels it.
         if cancellation.interruption_requested() {
             drop(pending);
             signal_task.abort();
@@ -469,9 +468,9 @@ impl Command {
             ));
         }
         let admitted_for_begin = admitted.clone();
-        // REQ-LOCALRUN-213: the attempt begins under the controls lock only once no withdrawal
-        // is unhonored over the run, one recorded since the check above included; otherwise the
-        // retry is handed back to end the run `withdrawn`.
+        // The attempt begins under the controls lock only once no withdrawal is unhonored over
+        // the run, one recorded since the check above included; otherwise the retry is handed
+        // back to end the run `withdrawn`.
         let begun = tokio::task::spawn_blocking(move || {
             // A test seam before the controls lock; nothing outside `test-fixtures`.
             await_begin_gate()?;
@@ -517,9 +516,9 @@ impl Command {
 }
 
 impl Command {
-    /// `retry --from` (REQ-CONTINUE-1), or `retry` of an ended run with `from_steps` empty,
-    /// which continues from the stage it stood at (REQ-LOCALRUN-184): the continuation
-    /// `resume::continue_run` starts, its documents naming `retry`.
+    /// `retry --from`, or `retry` of an ended run with `from_steps` empty, which continues
+    /// from the stage it stood at: the continuation `resume::continue_run` starts, its
+    /// documents naming `retry`.
     async fn continue_from(
         &self,
         run_directory: PathBuf,
@@ -555,8 +554,8 @@ impl Command {
         .await
     }
 
-    /// `retry` on a waiting run (REQ-LOCALRUN-184): on a `repair` or `host` wait, records
-    /// `control.retry` naming it and continues the run as `resume` does.
+    /// `retry` on a waiting run: on a `repair` or `host` wait, records `control.retry`
+    /// naming it and continues the run as `resume` does.
     async fn retry_wait(
         &self,
         run_directory: &Path,
@@ -642,7 +641,7 @@ fn usage(message: String) -> super::super::super::CommandFailure {
     super::super::super::CommandFailure::with_exit_code(anyhow!(message), ExitCode::UsageError)
 }
 
-/// The `control.retry` payload for the replacement document at `path` (REQ-AGENT-57): its
+/// The `control.retry` payload for the replacement document at `path`: its
 /// `agentProfiles` member as `agentProfiles`.
 fn replacement_payload(
     path: &Path,

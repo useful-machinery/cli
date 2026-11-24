@@ -170,7 +170,7 @@ pub(super) fn write_update(
     }
 }
 
-/// `useful org list`'s page, marking the organization in effect when one is (REQ-ORG-88).
+/// `useful org list`'s page, marking the organization in effect when one is.
 pub(super) fn write_list(
     deployment: &str,
     outcome: &ListCurrentPrincipalMembershipsOutcome,
@@ -374,9 +374,9 @@ pub(super) fn write_member_removal(
     )
 }
 
-/// The failure of `member update` or `member remove` whose address named no membership
-/// (REQ-MEMBER-48): the `not_found` or common failure each writes when the change itself is
-/// answered so, which keeps both documents.
+/// The failure of `member update` or `member remove` whose address named no membership: the
+/// `not_found` or common failure each writes when the change itself is answered so, which
+/// keeps both documents.
 pub(super) fn write_member_unresolved(
     deployment: &str,
     unresolved: &super::member::Unresolved,
@@ -629,9 +629,9 @@ fn write_membership_termination(
     }
 }
 
-/// A failed read of the organization in effect (REQ-ORG-87), written as every leaf of the family
-/// writes a common failure: JSON on standard output, the diagnostic on standard error, and the
-/// outcome's exit code.
+/// A failed read of the organization in effect, written as every leaf of the family writes a
+/// common failure: JSON on standard output, the diagnostic on standard error, and the outcome's
+/// exit code.
 pub(super) fn write_context_failure(
     deployment: &str,
     failure: &CommonOrganizationFailure,

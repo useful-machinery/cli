@@ -255,7 +255,7 @@ pub(crate) use fixtures::{
     pi_validation, step_clock, validation_fixtures,
 };
 
-// The host-scaled watchdog lives in `useful_test_support::watchdog` (INV-TESTING-18).
+// The host-scaled watchdog lives in `useful_test_support::watchdog`.
 pub(crate) use useful_test_support::watchdog::{
     host_scaled_watchdog, host_scaled_watchdog_with_diagnosis,
 };
@@ -294,7 +294,7 @@ fn last_fixture_progress() -> Option<String> {
 /// `host_scaled_watchdog_with_diagnosis` for a harness adapter case, whose expiry names the
 /// last fixture progress recorded since the case started. A plain function, not an
 /// `async fn`: the body reaches the watchdog's heap pin before the block that clears the cell
-/// exists (INV-TESTING-18).
+/// exists.
 pub(crate) fn fixture_progress_watchdog<Output>(
     case: impl Into<String>,
     base: Duration,

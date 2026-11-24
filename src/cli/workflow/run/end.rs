@@ -1,8 +1,7 @@
-//! `useful workflow run cancel` and `release` (REQ-LOCALRUN-186, REQ-LOCALRUN-187): each acts on
-//! the run `RUN` names wherever it executes, found under the `useful` home and then in Cloud
-//! (REQ-LOCALRUN-180). `cancel` ends it, a Cloud run through the API (REQ-LOCALRUN-218), and
-//! `release` records the release of an ended run under the home or releases a Cloud run's
-//! subject claim (REQ-CLOUDDEF-97).
+//! `useful workflow run cancel` and `release`: each acts on the run `RUN` names wherever it
+//! executes, found under the `useful` home and then in Cloud. `cancel` ends it, a Cloud run
+//! through the API, and `release` records the release of an ended run under the home or releases
+//! a Cloud run's subject claim.
 
 use std::path::Path;
 use std::time::Duration;
@@ -43,16 +42,15 @@ For a Cloud run the command asks Cloud, as an organization owner, to release the
 const CANCEL_COMMAND: &str = "useful workflow run cancel";
 const RELEASE_COMMAND: &str = "useful workflow run release";
 
-/// How long `cancel` and `interrupt` wait for the process they signalled to release the run
-/// (REQ-LOCALRUN-186, REQ-LOCALRUN-202): `RELEASE_POLLS` probes `RELEASE_POLL` apart, 60
-/// seconds at the production cadence. A `test-fixtures` build lets an end-to-end test
-/// shorten the cadence, and the wait with it (`useful_support::poll_interval`).
+/// How long `cancel` and `interrupt` wait for the process they signalled to release the
+/// run: `RELEASE_POLLS` probes `RELEASE_POLL` apart, 60 seconds at the production cadence.
+/// A `test-fixtures` build lets an end-to-end test shorten the cadence, and the wait with
+/// it (`useful_support::poll_interval`).
 const RELEASE_POLL: Duration = Duration::from_millis(200);
 const RELEASE_POLLS: u32 = 300;
 
-/// The one transition `cancel --control` applies to a run under the home whatever its state
-/// (REQ-LOCALRUN-186): the runner passes it for a Cloud cancellation and a carried withdrawal
-/// (REQ-RUNNERENROLL-123).
+/// The one transition `cancel --control` applies to a run under the home whatever its state:
+/// the runner passes it for a Cloud cancellation and a carried withdrawal.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Transition {
     /// End the run canceled, as cancel_run does
@@ -195,9 +193,8 @@ pub(super) struct Release {
 }
 
 impl Release {
-    /// Finds the run and releases it (REQ-LOCALRUN-187): a run under the home by recording
-    /// `control.release`, and a Cloud run by asking Cloud to release its subject claim
-    /// (REQ-CLOUDDEF-19).
+    /// Finds the run and releases it: a run under the home by recording `control.release`,
+    /// and a Cloud run by asking Cloud to release its subject claim.
     pub(super) fn execute(self) -> super::super::super::CommandResult {
         let json = self.output.json;
         let found = match super::control::find(
@@ -228,8 +225,8 @@ impl Release {
     }
 }
 
-/// Records the release of the ended run `target` opened, once (REQ-LOCALRUN-187): a run that
-/// has not ended is `run_live`, naming its state and the verbs that apply (REQ-LOCALRUN-223).
+/// Records the release of the ended run `target` opened, once: a run that has not ended is
+/// `run_live`, naming its state and the verbs that apply.
 fn release(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     if !matches!(
         target.inspection,
@@ -250,8 +247,8 @@ fn release(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     Ok(Acted::recorded(control, None))
 }
 
-/// Ends the run `target` opened as `useful workflow run cancel` does with no `--control`
-/// (REQ-LOCALRUN-186): a run a live process holds through `cancel_live`, a waiting run
+/// Ends the run `target` opened as `useful workflow run cancel` does with no
+/// `--control`: a run a live process holds through `cancel_live`, a waiting run
 /// `withdrawn` at its wait, and anything else as `end_unheld` ends it `canceled`.
 fn cancel(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     match &target.inspection {
@@ -268,11 +265,11 @@ fn cancel(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     }
 }
 
-/// Withdraws the run `target` opened, as `useful workflow run cancel --control withdraw` does
-/// (REQ-LOCALRUN-186); `useful workflow run event` applies a control trigger's `withdraw`
-/// through it (REQ-LOCALRUN-208). A run a live process holds goes to `withdraw_live`, and so does a
-/// `running` one found without a lock holder, which may be a process between the attempts it
-/// chains (REQ-LOCALRUN-214); anything else is ended as `end_unheld` does.
+/// Withdraws the run `target` opened, as `useful workflow run cancel --control withdraw` does;
+/// `useful workflow run event` applies a control trigger's `withdraw` through it. A run a live
+/// process holds goes to `withdraw_live`, and so does a `running` one found without a lock holder,
+/// which may be a process between the attempts it chains; anything else is ended as `end_unheld`
+/// does.
 pub(super) fn withdraw_run(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     match &target.inspection {
         WaitInspection::Locked(_)
@@ -285,9 +282,9 @@ pub(super) fn withdraw_run(target: &ControlTarget) -> Result<Acted, ControlFailu
     }
 }
 
-/// Cancels the run `target` opened, as `useful workflow run cancel --control cancel` does
-/// (REQ-LOCALRUN-186); `useful workflow run event` applies a control trigger's `cancel` through it
-/// (REQ-LOCALRUN-208): a live one through `cancel_live`, and otherwise as `end_unheld` does.
+/// Cancels the run `target` opened, as `useful workflow run cancel --control cancel` does; `useful
+/// workflow run event` applies a control trigger's `cancel` through it: a live one through
+/// `cancel_live`, and otherwise as `end_unheld` does.
 pub(super) fn cancel_run(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     match &target.inspection {
         WaitInspection::Locked(_) => cancel_live(target),
@@ -340,9 +337,9 @@ fn acquire(run_directory: &Path) -> Result<PendingLocalContinuation, ControlFail
     }
 }
 
-/// Ends a waiting run with `outcome` (REQ-CONTINUE-109): under the run lock, once the run
-/// still waits on `wait` and the mirror's write has its credentials (REQ-LOCALRUN-204),
-/// appends `event` naming the wait and marks the record `exited`.
+/// Ends a waiting run with `outcome`: under the run lock, once the run still waits on
+/// `wait` and the mirror's write has its credentials, appends `event` naming the wait and
+/// marks the record `exited`.
 fn end_waiting(
     target: &ControlTarget,
     wait: &WaitRecord,
@@ -351,7 +348,6 @@ fn end_waiting(
 ) -> Result<Acted, ControlFailure> {
     let pending = acquire(&target.run_directory)?;
     if !matches!(pending.wait(), Ok(Some(current)) if current.id() == wait.id()) {
-        pending.settle_abandoned()?;
         return Err(Refusal::new(
             "wait_changed",
             "The run's wait changed while the command inspected it; run the command again.",
@@ -370,13 +366,12 @@ fn end_waiting(
     })
 }
 
-/// Ends a run whose record reads `running` but whose process is gone with `outcome`
-/// (REQ-LOCALRUN-186): under the run lock, once the mirror's write has its credentials
-/// (REQ-LOCALRUN-204), appends `event` naming no wait and ends the run through
-/// `PendingLocalContinuation::end_running`, which marks the record `exited` and settles the
-/// abandoned attempt (REQ-CONTINUE-2) or, for a run interrupted between chained attempts, spends
-/// the withdrawals recorded for it (REQ-LOCALRUN-211), creating no attempt. It takes the
-/// controls lock itself, so this command holds none here.
+/// Ends a run whose record reads `running` but whose process is gone with `outcome`: under the
+/// run lock, once the mirror's write has its credentials, appends `event` naming no wait and
+/// ends the run through `PendingLocalContinuation::end_running`, which marks the record `exited`
+/// and settles the abandoned attempt or, for a run interrupted between chained attempts, spends
+/// the withdrawals recorded for it, creating no attempt. It takes the controls lock itself, so
+/// this command holds none here.
 fn end_abandoned(
     target: &ControlTarget,
     event: &str,
@@ -396,9 +391,9 @@ fn end_abandoned(
 }
 
 /// Refuses `mirror_credentials_unavailable` when the run's mirror would write `onOutcome` for
-/// `outcome` without a key (REQ-LOCALRUN-204). The caller drops its continuation unsettled on
-/// the refusal, which releases the lock and leaves the run's record, wait, controls and
-/// `mirror/` as the command found them.
+/// `outcome` without a key. The caller drops its continuation unsettled on the refusal, which
+/// releases the lock and leaves the run's record, wait, controls and `mirror/` as the command
+/// found them.
 fn outcome_credentials(mirror: Option<&Mirror>, outcome: &str) -> Result<(), ControlFailure> {
     super::mirror::outcome_credentials(mirror, outcome)
         .map_err(|failure| Refusal::new(failure.code, super::mirror::CREDENTIALS_REFUSAL).into())
@@ -415,8 +410,8 @@ fn mirror(target: &ControlTarget, pending: &PendingLocalContinuation) -> Option<
     )
 }
 
-/// The root's `onOutcome` for `outcome`, once the record reads `exited` (REQ-LOCALRUN-186,
-/// REQ-LOCALRUN-191); its result never changes the command's.
+/// The root's `onOutcome` for `outcome`, once the record reads `exited`; its result never
+/// changes the command's.
 fn write_outcome(mirror: Option<&Mirror>, outcome: &'static str) {
     if let Some(mirror) = mirror {
         super::mirror::perform(
@@ -426,16 +421,15 @@ fn write_outcome(mirror: Option<&Mirror>, outcome: &'static str) {
     }
 }
 
-/// Withdraws a run a live process holds (REQ-LOCALRUN-186, INV-ENGINE-39): under the run's
-/// controls lock, which that process takes for its last read of the withdrawals and keeps
-/// until it releases the run, and which a process that chains attempts keeps from the release
-/// of one until it holds the run for the next (REQ-LOCALRUN-214), the command opens the run
-/// again. When a lock holds the run, whether or not the system reports its holder's process,
-/// it appends `control.withdraw` naming no wait, so the holder honors it before its next
-/// `workflow` step starts or, when it reaches none, as its attempt settles (REQ-WFEXEC-73);
-/// `withdraw_pending` when one it has not honored is already recorded. A run no lock holds
-/// has been released for the last time, or its process is gone, so the command appends
-/// nothing there and ends the run as it finds it again (`end_unheld`).
+/// Withdraws a run a live process holds: under the run's controls lock, which that process
+/// takes for its last read of the withdrawals and keeps until it releases the run, and which
+/// a process that chains attempts keeps from the release of one until it holds the run for
+/// the next, the command opens the run again. When a lock holds the run, whether or not the
+/// system reports its holder's process, it appends `control.withdraw` naming no wait, so the
+/// holder honors it before its next `workflow` step starts or, when it reaches none, as its
+/// attempt settles; `withdraw_pending` when one it has not honored is already recorded. A run
+/// no lock holds has been released for the last time, or its process is gone, so the command
+/// appends nothing there and ends the run as it finds it again (`end_unheld`).
 fn withdraw_live(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     // A test seam between the inspection and the controls lock; nothing outside
     // `test-fixtures`.
@@ -456,8 +450,8 @@ fn withdraw_live(target: &ControlTarget) -> Result<Acted, ControlFailure> {
 }
 
 /// Cancels a run a live process holds: signals that process to terminate, whose own
-/// cancellation marks the record `exited` `canceled` (REQ-LOCALRUN-175), and waits for it
-/// to release the run; `cancel_pending` when it has not within the wait.
+/// cancellation marks the record `exited` `canceled`, and waits for it to release the
+/// run; `cancel_pending` when it has not within the wait.
 fn cancel_live(target: &ControlTarget) -> Result<Acted, ControlFailure> {
     let control = target.record(CONTROL_CANCEL, None, None)?;
     if let Some(pid) = lock_holder(&target.run_directory)?
@@ -484,8 +478,8 @@ fn cancel_live(target: &ControlTarget) -> Result<Acted, ControlFailure> {
 }
 
 /// Sends `signal` to `pid`, the process that holds the run at `run_directory`, and waits for
-/// it to release the run (REQ-LOCALRUN-186, REQ-LOCALRUN-202): false when it still holds the
-/// run after the wait. A process that exited before the signal has released the run.
+/// it to release the run: false when it still holds the run after the wait. A process that
+/// exited before the signal has released the run.
 pub(super) fn signal_and_await_release(
     run_directory: &Path,
     pid: Pid,

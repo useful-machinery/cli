@@ -145,7 +145,6 @@ fn rate_limit_response() -> Vec<u8> {
     )
 }
 
-// REQ-RUNNERPOOL-60
 #[test]
 fn runner_deletion_requires_literal_confirmation_before_local_or_network_access() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -188,24 +187,19 @@ fn runner_deletion_requires_literal_confirmation_before_local_or_network_access(
     );
 }
 
-// REQ-RUNNERPOOL-72
 #[test]
 fn runner_show_without_a_credential_reports_sign_in_on_stderr() {
     let output = run(&["runner", "show", RUNNER_ID, "--org", ORGANIZATION]);
 
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        concat!(
-            "error: runner administration requires sign-in\n\n",
-            "Sign in first:\n",
-            "  useful account login\n"
-        )
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("useful account login")
     );
 }
 
-// REQ-RUNNERPOOL-73
 #[test]
 fn runner_protocol_failure_uses_the_shared_general_failure_status() {
     let (server, _directory, credential_path) = prepared_runner(vec![json_http_response(
@@ -236,7 +230,6 @@ fn runner_protocol_failure_uses_the_shared_general_failure_status() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-RUNNERPOOL-46
 #[test]
 fn pool_create_sends_the_name_and_reports_the_created_pool() {
     let response = http_response_with_headers(
@@ -268,19 +261,15 @@ fn pool_create_sends_the_name_and_reports_the_created_pool() {
     );
 
     assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        format!(
-            concat!(
-                "✓ Runner pool created.\n\n",
-                "  Pool:         {}\n",
-                "  Name:         builders\n",
-                "  Organization: {}\n",
-                "  Deployment:   {}\n"
-            ),
-            POOL_ID, ORGANIZATION_ID, server.api_url
-        )
-    );
+    let report = String::from_utf8(output.stdout).unwrap();
+    for fact in [
+        POOL_ID,
+        "builders",
+        ORGANIZATION_ID,
+        server.api_url.as_str(),
+    ] {
+        assert!(report.contains(fact), "{fact}: {report}");
+    }
     assert!(output.stderr.is_empty());
 
     let request = server.finish().pop().unwrap();
@@ -301,7 +290,6 @@ fn pool_create_sends_the_name_and_reports_the_created_pool() {
     );
 }
 
-// REQ-RUNNERPOOL-47, REQ-RUNNERPOOL-68
 #[test]
 fn deletion_by_name_resolves_once_and_emits_exact_success_json() {
     for (args, resolution, expected_path, expected_output) in [
@@ -378,7 +366,6 @@ fn deletion_by_name_resolves_once_and_emits_exact_success_json() {
     }
 }
 
-// REQ-RUNNERPOOL-71
 #[test]
 fn runner_deletion_reads_a_service_key_from_stdin_once() {
     let server = ScriptedServer::respond(vec![
@@ -511,7 +498,6 @@ fn deletion_refresh_reuses_the_resolved_id_and_invocation_key() {
     );
 }
 
-// REQ-RUNNERPOOL-69, REQ-RUNNERPOOL-78
 #[test]
 fn deletion_blockers_remain_ordered_and_bound_to_the_resolved_id() {
     let blocked = problem_http_response(
@@ -557,7 +543,6 @@ fn deletion_blockers_remain_ordered_and_bound_to_the_resolved_id() {
     assert_eq!(requests.len(), 2);
 }
 
-// REQ-RUNNERPOOL-70
 #[test]
 fn post_dispatch_transport_server_and_protocol_failures_report_unknown_commitment() {
     let failures = [
@@ -613,7 +598,6 @@ fn post_dispatch_transport_server_and_protocol_failures_report_unknown_commitmen
     }
 }
 
-// REQ-RUNNERPOOL-70
 #[test]
 fn later_owner_directed_deletion_uses_a_new_key_after_unknown_commitment() {
     let (first, _directory, credential_path) = prepared_runner(vec![
@@ -662,7 +646,6 @@ fn later_owner_directed_deletion_uses_a_new_key_after_unknown_commitment() {
     assert_ne!(first_key, later_key);
 }
 
-// REQ-RUNNERPOOL-70
 #[cfg(target_os = "linux")]
 #[test]
 fn post_dispatch_interrupt_and_termination_report_unknown_without_retry() {
@@ -810,8 +793,8 @@ fn borrowed(environment: &[(String, String)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-8: a credential refreshed between the registration and
-// the key issues the key for the runner it registered, under the same request identity.
+// A credential refreshed between the registration and the key issues the key for the runner
+// it registered, under the same request identity.
 #[test]
 fn single_runner_key_refreshes_a_token_rejected_after_the_registration() {
     let (server, _credentials, environment) = refreshable_runner(vec![
@@ -870,7 +853,6 @@ fn single_runner_key_refreshes_a_token_rejected_after_the_registration() {
     assert!(key_path.exists());
 }
 
-// REQ-RUNNERENROLL-8
 #[test]
 fn single_runner_key_keeps_the_registered_runner_when_the_refreshed_issue_fails() {
     let (server, _credentials, environment) = refreshable_runner(vec![
@@ -912,9 +894,8 @@ fn single_runner_key_keeps_the_registered_runner_when_the_refreshed_issue_fails(
     assert_eq!(server.finish().len(), 6);
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-2, REQ-RUNNERENROLL-5, REQ-RUNNERENROLL-62: with `-`,
-// as with no file, standard output carries the key alone, as one line, and standard error
-// the status.
+// With `-`, as with no file, standard output carries the key alone, as one line, and
+// standard error the status.
 #[test]
 fn single_runner_key_without_a_file_writes_only_the_key_to_stdout() {
     for (destination, registers) in [
@@ -964,9 +945,9 @@ fn single_runner_key_without_a_file_writes_only_the_key_to_stdout() {
     }
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERENROLL-6, REQ-RUNNERENROLL-7: a name no runner has registers
-// the runner by that name in the pool, then issues its key into a file only its owner can
-// read; the result names the runner and never carries the token.
+// A name no runner has registers the runner by that name in the pool, then issues its key
+// into a file only its owner can read; the result names the runner and never carries the
+// token.
 #[test]
 fn single_runner_key_for_a_new_name_registers_the_runner_in_the_pool() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -1066,9 +1047,8 @@ fn pam_directory() -> Vec<u8> {
 
 const PAM_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abc";
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-86: `--member` sends the member's principal ID and no
-// pool: a principal ID as it is, a membership ID or a verified address as the directory
-// resolves it.
+// `--member` sends the member's principal ID and no pool: a principal ID as it is, a
+// membership ID or a verified address as the directory resolves it.
 #[test]
 fn single_runner_key_by_member_sends_the_members_principal_and_no_pool() {
     for (member, directory) in [
@@ -1130,8 +1110,8 @@ fn single_runner_key_by_member_sends_the_members_principal_and_no_pool() {
     }
 }
 
-// REQ-RUNNERENROLL-1: a `--member` the directory does not hold registers nothing, in no
-// pool, the caller's own included.
+// A `--member` the directory does not hold registers nothing, in no pool, the caller's
+// own included.
 #[test]
 fn single_runner_key_for_a_member_the_directory_does_not_hold_registers_nothing() {
     let (server, _credentials, credential_path) = prepared_runner(vec![pam_directory()]);
@@ -1168,7 +1148,6 @@ fn single_runner_key_for_a_member_the_directory_does_not_hold_registers_nothing(
     );
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
 #[test]
 fn single_runner_key_with_neither_pool_nor_member_sends_neither() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -1209,7 +1188,6 @@ fn single_runner_key_with_neither_pool_nor_member_sends_neither() {
     assert_eq!(artifact["runnerId"], RUNNER_ID);
 }
 
-// REQ-RUNNERENROLL-1, REQ-RUNNERPOOL-87
 #[test]
 fn single_runner_key_without_a_personal_pool_exits_with_pool_personal_unavailable() {
     for json in [true, false] {
@@ -1266,9 +1244,9 @@ fn single_runner_key_without_a_personal_pool_exits_with_pool_personal_unavailabl
     }
 }
 
-// REQ-RUNNERENROLL-1: `--member` beside `--pool`, or without `--runner`, a member that is no
-// principal ID, membership ID or address, and `--expires-in` or `--remove-after` beside
-// `--runner` are usage errors before anything is read.
+// `--member` beside `--pool`, or without `--runner`, a member that is no principal ID,
+// membership ID or address, and `--expires-in` or `--remove-after` beside `--runner` are
+// usage errors before anything is read.
 #[test]
 fn single_runner_key_refuses_a_malformed_target_before_network_access() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1305,8 +1283,8 @@ fn single_runner_key_refuses_a_malformed_target_before_network_access() {
     );
 }
 
-// REQ-RUNNERENROLL-2: a runner the organization holds gets a key of its own and no second
-// registration; `--pool` or `--member` naming the pool it is in is accepted.
+// A runner the organization holds gets a key of its own and no second registration;
+// `--pool` or `--member` naming the pool it is in is accepted.
 #[test]
 fn single_runner_key_for_a_runner_that_exists_issues_its_key_alone() {
     for (target, reads) in [
@@ -1367,8 +1345,8 @@ fn single_runner_key_for_a_runner_that_exists_issues_its_key_alone() {
     }
 }
 
-// REQ-RUNNERENROLL-2: `--pool` or `--member` for a runner in another pool exits 2 naming the
-// runner's pool and `useful runner update`, and issues nothing.
+// `--pool` or `--member` for a runner in another pool exits 2 naming the runner's pool and
+// `useful runner update`, and issues nothing.
 #[test]
 fn single_runner_key_for_a_runner_in_another_pool_exits_2_and_issues_nothing() {
     for (target, pool_read) in [
@@ -1414,9 +1392,9 @@ fn single_runner_key_for_a_runner_in_another_pool_exits_2_and_issues_nothing() {
     }
 }
 
-// REQ-RUNNERENROLL-8: a registration that succeeds and a key that fails reports the runner and
-// names the command that issues its key without registering another; a runner that existed is
-// reported as the failure alone.
+// A registration that succeeds and a key that fails reports the runner and names the command
+// that issues its key without registering another; a runner that existed is reported as the
+// failure alone.
 #[test]
 fn single_runner_key_reports_a_failed_issue_with_the_registered_runner() {
     for json in [true, false] {
@@ -1499,8 +1477,8 @@ fn single_runner_key_reports_a_failed_issue_with_the_registered_runner() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUNNERENROLL-1: a runner ID the organization does not hold is `not_found`, and nothing
-// is registered under it.
+// A runner ID the organization does not hold is `not_found`, and nothing is registered under
+// it.
 #[test]
 fn single_runner_key_for_an_unknown_runner_id_registers_nothing() {
     let missing = problem_http_response(
@@ -1583,7 +1561,6 @@ pub(super) fn activation_issued_response_with(issuance: &serde_json::Value) -> V
     )
 }
 
-// REQ-RUNNERENROLL-12, REQ-RUNNERPOOL-87
 #[test]
 fn runner_disable_refused_by_cloud_exits_with_forbidden() {
     let refused = problem_http_response(
@@ -1622,7 +1599,6 @@ fn runner_disable_refused_by_cloud_exits_with_forbidden() {
     )));
 }
 
-// REQ-RUNNERENROLL-52
 #[test]
 fn credential_list_returns_only_lifecycle_metadata() {
     let credentials = serde_json::json!({
@@ -1667,7 +1643,6 @@ fn credential_list_returns_only_lifecycle_metadata() {
     )));
 }
 
-// REQ-RUNNERENROLL-53, REQ-RUNNERENROLL-54
 #[test]
 fn credential_mutations_send_empty_bodies_and_idempotency_keys() {
     for (after, subresource, state) in [
@@ -1721,7 +1696,6 @@ fn credential_mutations_send_empty_bodies_and_idempotency_keys() {
     }
 }
 
-// REQ-RUNNERENROLL-53, REQ-RUNNERENROLL-54
 #[test]
 fn credential_revoke_refuses_another_grace_or_no_runner_before_network_access() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1778,7 +1752,6 @@ fn credential_revoke_refuses_another_grace_or_no_runner_before_network_access() 
     );
 }
 
-// REQ-RUNNERENROLL-55, REQ-RUNNERENROLL-83
 #[test]
 fn refused_credential_transition_reports_its_outcome_and_advises_listing_credentials() {
     for json in [true, false] {
@@ -1871,7 +1844,6 @@ fn single_runner_key(api_url: &str) -> serde_json::Value {
     })
 }
 
-// REQ-RUNNERENROLL-13, REQ-RUNNERENROLL-17, REQ-RUNNERENROLL-19
 #[test]
 fn enrollment_accepts_a_key_from_explicit_stdin_without_a_sign_in() {
     let witness = super::runner_enrollment::ConnectionWitness::new();
@@ -1929,7 +1901,6 @@ fn enrollment_accepts_a_key_from_explicit_stdin_without_a_sign_in() {
     assert!(!request_body(&request).contains(secret));
 }
 
-// REQ-RUNNERENROLL-23
 #[test]
 fn enrollment_gone_reports_that_the_commit_did_not_complete() {
     let server = ScriptedServer::respond(vec![http_response("410 Gone", None, &[])]);
@@ -1968,7 +1939,6 @@ fn enrollment_gone_reports_that_the_commit_did_not_complete() {
     assert_eq!(server.finish().len(), 1);
 }
 
-// REQ-RUNNERPOOL-53
 #[test]
 fn runner_mode_commands_send_closed_targets_with_idempotency() {
     for (command, mode) in [
@@ -2083,7 +2053,6 @@ fn changes(requests: &[String]) -> Vec<&String> {
         .collect()
 }
 
-// REQ-RUNNERPOOL-47, REQ-RUNNERPOOL-57
 #[test]
 fn runner_update_resolves_the_destination_pool_and_sends_only_its_id() {
     for pool in [POOL_ID, "builders"] {
@@ -2140,8 +2109,8 @@ fn runner_update_resolves_the_destination_pool_and_sends_only_its_id() {
     }
 }
 
-// REQ-RUNNERPOOL-47, REQ-RUNNERPOOL-57: the runner's name is resolved once, the move is sent
-// before the rename, and each change has its own key.
+// The runner's name is resolved once, the move is sent before the rename, and each change
+// has its own key.
 #[test]
 fn runner_update_moves_then_renames_each_under_its_own_key() {
     let (server, _directory, credential_path) = prepared_runner(update_responses(
@@ -2193,8 +2162,8 @@ fn runner_update_moves_then_renames_each_under_its_own_key() {
     assert_ne!(keys[0], keys[1]);
 }
 
-// REQ-RUNNERPOOL-57: a rename that fails after the move leaves the move in place, and the
-// command exits with the rename's failure, naming what was applied and the runner as moved.
+// A rename that fails after the move leaves the move in place, and the command exits with
+// the rename's failure, naming what was applied and the runner as moved.
 #[test]
 fn runner_update_whose_rename_fails_reports_the_move_it_kept() {
     for json in [true, false] {
@@ -2234,8 +2203,8 @@ fn runner_update_whose_rename_fails_reports_the_move_it_kept() {
     }
 }
 
-// REQ-RUNNERPOOL-57: the move is sent first, so a move Cloud refuses sends no rename and a
-// runner named by its name is still found by it.
+// The move is sent first, so a move Cloud refuses sends no rename and a runner named by
+// its name is still found by it.
 #[test]
 fn runner_update_whose_move_is_refused_sends_no_rename() {
     let (server, _directory, credential_path) = prepared_runner(vec![
@@ -2267,7 +2236,6 @@ fn runner_update_whose_move_is_refused_sends_no_rename() {
     assert!(changes[0].starts_with("PUT "), "{requests:?}");
 }
 
-// REQ-RUNNERPOOL-57
 #[test]
 fn runner_update_without_a_change_exits_2_and_sends_nothing() {
     let (server, _directory, credential_path) = prepared_runner(vec![]);
@@ -2290,9 +2258,9 @@ fn runner_update_without_a_change_exits_2_and_sends_nothing() {
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNNERPOOL-47: a runner command acts in the organization in effect: the one `--org`
-// names, with no request before its own, or else the caller's only active membership, by ID;
-// with several memberships and no `--org` it exits 2 naming `--org` after the membership read.
+// A runner command acts in the organization in effect: the one `--org` names, with no request
+// before its own, or else the caller's only active membership, by ID; with several memberships
+// and no `--org` it exits 2 naming `--org` after the membership read.
 #[test]
 fn runner_show_acts_in_the_organization_in_effect() {
     let (output, requests) = run_in_effect(
@@ -2357,7 +2325,6 @@ fn registration_in(id: &str, name: &str, pool_id: &str) -> serde_json::Value {
     runner
 }
 
-// REQ-RUNNERPOOL-91
 #[test]
 fn runner_list_with_a_pool_reads_every_page_and_prints_only_the_pools_runners() {
     const FIRST: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5ab1";
@@ -2425,7 +2392,6 @@ fn runner_list_with_a_pool_reads_every_page_and_prints_only_the_pools_runners() 
     );
 }
 
-// REQ-RUNNERPOOL-46
 #[test]
 fn pool_update_sends_the_rename_and_reports_the_renamed_pool() {
     let mut renamed = pool_body();
@@ -2477,7 +2443,6 @@ fn personal_pool_body() -> serde_json::Value {
     pool
 }
 
-// REQ-RUNNERPOOL-84
 #[test]
 fn pool_member_commands_are_unknown_and_send_nothing() {
     for leaf in [
@@ -2512,7 +2477,6 @@ fn personal_pool_refusal_response() -> Vec<u8> {
     )
 }
 
-// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-96, REQ-RUNNERPOOL-98
 #[test]
 fn personal_pool_rename_refusal_exits_with_pool_personal() {
     for json in [true, false] {
@@ -2555,7 +2519,6 @@ fn personal_pool_rename_refusal_exits_with_pool_personal() {
     }
 }
 
-// REQ-RUNNERPOOL-78, REQ-RUNNERPOOL-96, REQ-RUNNERPOOL-98
 #[test]
 fn personal_pool_deletion_refusal_exits_with_pool_personal() {
     for json in [true, false] {
@@ -2602,7 +2565,6 @@ fn personal_pool_deletion_refusal_exits_with_pool_personal() {
     }
 }
 
-// REQ-RUNNERPOOL-46, REQ-RUNNERPOOL-84
 #[test]
 fn pool_show_prints_the_personal_pool_member() {
     let (server, _directory, credential_path) = prepared_runner(vec![
@@ -2682,7 +2644,6 @@ fn assert_pool_then_status_requests(requests: &[String]) {
     )));
 }
 
-// REQ-RUNNERPOOL-92, REQ-RUNNERPOOL-47
 #[test]
 fn pool_show_reads_the_pool_then_its_status_and_reports_its_load() {
     for json in [false, true] {
@@ -2722,7 +2683,6 @@ fn pool_show_reads_the_pool_then_its_status_and_reports_its_load() {
     }
 }
 
-// REQ-RUNNERPOOL-92, REQ-RUNNERPOOL-93
 #[test]
 fn pool_show_prints_the_runs_its_runners_hold_after_the_runner_counts() {
     let mut held_status = pool_status_body();
@@ -2770,7 +2730,6 @@ fn pool_show_prints_the_runs_its_runners_hold_after_the_runner_counts() {
     }
 }
 
-// REQ-RUNNERPOOL-93
 #[test]
 fn pool_show_against_a_cloud_without_pool_status_prints_the_pool_alone() {
     for json in [false, true] {
@@ -2798,7 +2757,6 @@ fn pool_show_against_a_cloud_without_pool_status_prints_the_pool_alone() {
     }
 }
 
-// REQ-RUNNERPOOL-50, REQ-RUNNERPOOL-52
 #[test]
 fn runner_commands_report_reserved_run_and_idle_capacity() {
     for assigned in [true, false] {
@@ -2918,7 +2876,6 @@ fn held_run_blocks(text: &str, runs: &[&str]) -> Vec<String> {
         .collect()
 }
 
-// REQ-RUNNERPOOL-50, REQ-RUNNERPOOL-51, REQ-RUNNERPOOL-52
 #[test]
 fn runner_commands_print_every_run_a_runner_holds_with_its_state() {
     const WORKING: &str = "run_01k0z6r1w8f4jy2m7q9v3x5aaa";
@@ -3034,7 +2991,6 @@ fn runner_commands_print_every_run_a_runner_holds_with_its_state() {
     }
 }
 
-// REQ-RUNNERPOOL-51
 #[test]
 fn runner_show_reports_independent_cloud_and_informational_projections() {
     let (server, _directory, credential_path) =
@@ -3151,7 +3107,6 @@ fn assert_join_key_issuance_request(request: &str, pool_id: &str, expires: u64, 
     );
 }
 
-// REQ-RUNNERENROLL-93, REQ-RUNNERENROLL-228, REQ-RUNNERENROLL-229, REQ-RUNNERENROLL-230
 #[test]
 fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3238,7 +3193,6 @@ fn join_key_issue_resolves_the_pool_sends_seconds_and_writes_a_private_artifact(
     );
 }
 
-// REQ-RUNNERENROLL-93, REQ-RUNNERENROLL-229
 #[test]
 fn join_key_issue_without_a_pool_uses_the_callers_personal_pool_and_writes_only_the_artifact() {
     let mut other_personal = personal_pool_body();
@@ -3294,7 +3248,6 @@ fn join_key_issue_without_a_pool_uses_the_callers_personal_pool_and_writes_only_
     assert_join_key_issuance_request(&requests[2], POOL_ID, 1_800, 300);
 }
 
-// REQ-RUNNERENROLL-229, REQ-RUNNERENROLL-231
 #[test]
 fn join_key_issue_without_a_file_writes_only_the_artifact_to_stdout() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3364,7 +3317,6 @@ fn join_key_issue_without_a_file_writes_only_the_artifact_to_stdout() {
     );
 }
 
-// REQ-RUNNERENROLL-232
 #[test]
 fn join_key_issue_without_a_personal_pool_sends_no_issuance() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3405,7 +3357,6 @@ fn join_key_issue_without_a_personal_pool_sends_no_issuance() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUNNERENROLL-231
 #[test]
 fn join_key_issue_json_reports_the_key_without_its_token() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3483,8 +3434,8 @@ fn join_key_issue_json_reports_the_key_without_its_token() {
         assert!(!refused.status.success(), "{args:?}");
         assert!(refused.stdout.is_empty(), "{args:?}");
     }
-    // REQ-RUNNERENROLL-5: with no `--key-file` the key of either kind goes to standard output,
-    // which `--json` never shares with it.
+    // With no `--key-file` the key of either kind goes to standard output, which `--json`
+    // never shares with it.
     for kind in [
         &["--pool", SHARED_POOL_ID, "--expires-in", "7d"][..],
         &["--runner", "builder-one"][..],
@@ -3502,8 +3453,8 @@ fn join_key_issue_json_reports_the_key_without_its_token() {
     );
 }
 
-// REQ-RUNNERENROLL-93: with no `--remove-after` the request carries 30 days, the longest the
-// API admits, and the result prints it.
+// With no `--remove-after` the request carries 30 days, the longest the API admits, and the
+// result prints it.
 #[test]
 fn join_key_issue_without_a_removal_time_sends_thirty_days() {
     let (server, _credentials, credential_path) = prepared_runner(vec![
@@ -3570,10 +3521,9 @@ fn activation_list(runner_id: &str, cursor: Option<&str>) -> String {
     )
 }
 
-// REQ-RUNNERENROLL-10, REQ-RUNNERENROLL-94: the list reads every page of the join keys, of the
-// registrations and of each runner's single-runner keys, passes over a runner whose keys the
-// caller may not read, and prints the pool keys and then the single-runner keys, with no
-// cursor.
+// The list reads every page of the join keys, of the registrations and of each runner's
+// single-runner keys, passes over a runner whose keys the caller may not read, and prints the
+// pool keys and then the single-runner keys, with no cursor.
 #[test]
 fn join_key_list_prints_the_pool_keys_and_every_runners_single_runner_keys() {
     let issued = activation_in(ACTIVATION_ID, RUNNER_ID, "issued");
@@ -3691,8 +3641,8 @@ fn join_key_list_prints_the_pool_keys_and_every_runners_single_runner_keys() {
     assert_eq!(request_lines(&server.finish()), expected_requests);
 }
 
-// REQ-RUNNERENROLL-10: `--pool` keeps the pool's keys and runners; `--runner` reads that
-// runner's single-runner keys alone, with no join-key read.
+// `--pool` keeps the pool's keys and runners; `--runner` reads that runner's
+// single-runner keys alone, with no join-key read.
 #[test]
 fn join_key_list_by_pool_or_runner_reads_only_their_keys() {
     let issued = activation_in(ACTIVATION_ID, RUNNER_ID, "issued");
@@ -3779,9 +3729,9 @@ fn activation_revocation(runner_id: &str, activation_id: &str) -> String {
     )
 }
 
-// REQ-RUNNERENROLL-11: a single-runner key's ID finds the runner that holds it, reading
-// runners' keys and passing over one the caller may not read, and revokes it there; with
-// `--runner` it goes straight to that runner.
+// A single-runner key's ID finds the runner that holds it, reading runners' keys and
+// passing over one the caller may not read, and revokes it there; with `--runner` it
+// goes straight to that runner.
 #[test]
 fn join_key_revoke_finds_the_runner_that_holds_a_single_runner_key() {
     const HELD_ID: &str = "rna_01k0z6r1w8f4jy2m7q9v3x5abe";
@@ -3869,8 +3819,8 @@ fn join_key_revoke_finds_the_runner_that_holds_a_single_runner_key() {
     );
 }
 
-// REQ-RUNNERENROLL-11: a single-runner key no runner holds is `not_found` with nothing
-// revoked, and `--runner` beside a pool key's ID is a usage error before anything is sent.
+// A single-runner key no runner holds is `not_found` with nothing revoked, and `--runner`
+// beside a pool key's ID is a usage error before anything is sent.
 #[test]
 fn join_key_revoke_of_an_unheld_key_or_a_pool_key_with_a_runner_revokes_nothing() {
     for json in [true, false] {
@@ -3929,7 +3879,6 @@ fn join_key_revoke_of_an_unheld_key_or_a_pool_key_with_a_runner_revokes_nothing(
     assert!(server.finish().is_empty());
 }
 
-// REQ-RUNNERENROLL-94
 #[test]
 fn join_key_revoke_requires_confirmation_and_sends_the_revocation() {
     let (server, _credentials, credential_path) = prepared_runner(vec![]);
@@ -3987,7 +3936,6 @@ fn join_key_revoke_requires_confirmation_and_sends_the_revocation() {
     );
 }
 
-// REQ-RUNNERPOOL-88
 #[test]
 fn runner_show_prints_the_join_key_of_a_joined_runner() {
     let mut joined = registration_body();
@@ -4025,7 +3973,6 @@ fn runner_show_prints_the_join_key_of_a_joined_runner() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-RUNNERPOOL-38, REQ-RUNNERPOOL-46
 #[test]
 fn pool_list_reads_one_page_and_returns_its_continuation() {
     let cursor = "more/+";

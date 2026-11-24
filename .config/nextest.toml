@@ -18,13 +18,19 @@ retries = 0
 slow-timeout = { period = "30s", terminate-after = 2 }
 
 [[profile.default.overrides]]
-# Start the two CPU-heavy maximum-size archive fixtures first and give each
-# two thread slots, so they neither finish last nor share a CPU with a full
-# set of other tests. They took 35-39 s this way, against 47-58 s when they
-# started late beside the rest of the suite. Host load from other work can
-# still stretch them past the ordinary 60-second limit (52-60 s and timeouts
-# at load 30-40), so they receive the integration-test backstop.
-filter = "package(useful-execution) & (test(=workflow::local_run::tests::artifact_set_carrier_boundary_is_shared_by_archive_and_portable_inspection) | test(=workflow::local_run::tests::archived_attempt_loads_valid_result_larger_than_state_document_limit))"
+# Start both CPU-bound archive fixtures first with two thread slots each.
+# Alone on 8-CPU x86_64 Linux at load 1-4, the archived-result fixture takes
+# about 14 s. A larger result on a loaded host took 71.8 s with three test
+# threads and exceeded 120 s at default concurrency. Thread slots cannot reserve CPU against
+# other work. The fixture waits on nothing, so allow it 240 s under load.
+filter = "package(useful-execution) & test(=workflow::local_run::tests::archived_attempt_loads_valid_result_larger_than_state_document_limit)"
+priority = 100
+threads-required = 2
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+# The carrier fixture took 6.7 s alone on the same host.
+filter = "package(useful-execution) & test(=workflow::local_run::tests::artifact_set_carrier_boundary_is_shared_by_archive_and_portable_inspection)"
 priority = 100
 threads-required = 2
 slow-timeout = { period = "60s", terminate-after = 2 }

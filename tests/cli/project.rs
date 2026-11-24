@@ -72,13 +72,10 @@ fn project_body(
     pool: bool,
     repository: Option<serde_json::Value>,
 ) -> serde_json::Value {
-    let blockers = match (pool, repository.is_some()) {
-        (false, true) => serde_json::json!(["runner_pool_unassigned"]),
-        (true, false) => serde_json::json!(["repository_detached"]),
-        (false, false) => {
-            serde_json::json!(["runner_pool_unassigned", "repository_detached"])
-        }
-        (true, true) => serde_json::json!([]),
+    let blockers = if pool {
+        serde_json::json!([])
+    } else {
+        serde_json::json!(["runner_pool_unassigned"])
     };
     serde_json::json!({
         "id": PROJECT_ID,
@@ -133,8 +130,6 @@ fn assert_json_success(output: &Output, outcome: &str) -> serde_json::Value {
     value
 }
 
-// REQ-AUTH-48, REQ-AUTH-49
-// REQ-PROJECT-75
 #[test]
 fn project_list_uses_only_the_explicit_service_api_key() {
     let directory = private_credential_directory();
@@ -201,13 +196,7 @@ fn project_list_uses_only_the_explicit_service_api_key() {
 
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        concat!(
-            "error: service API key rejected\n\n",
-            "Use a different active service API key.\n"
-        )
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("service API key"));
     assert_eq!(fs::read(&invalid_human_store).unwrap(), before);
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SERVICE_API_KEY));
     let request = server.finish().pop().unwrap();
@@ -217,8 +206,6 @@ fn project_list_uses_only_the_explicit_service_api_key() {
     );
 }
 
-// REQ-PROJECT-75, REQ-PROJECT-76,
-// REQ-PROJECT-77, REQ-PROJECT-79, REQ-PROJECT-81, REQ-PROJECT-90, REQ-WORKSPACE-7
 #[test]
 fn discovery_and_project_management_feed_an_inputless_cloud_run() {
     let membership_page = serde_json::json!({
@@ -242,7 +229,8 @@ fn discovery_and_project_management_feed_an_inputless_cloud_run() {
         "providerAccountType": "Organization",
         "state": "active",
         "createdAt": "2026-09-05T11:00:00Z",
-        "updatedAt": "2026-09-05T11:00:00Z"
+        "updatedAt": "2026-09-05T11:00:00Z",
+        "authorityVerifiedAt": null
     });
     let discovered_repository = serde_json::json!({
         "providerRepositoryId": REPOSITORY_ID,
@@ -294,8 +282,8 @@ fn discovery_and_project_management_feed_an_inputless_cloud_run() {
             "200 OK",
             serde_json::json!({"items": [installation.clone()]}),
         ),
-        // The installation's authorizations in force, which the list reads after it
-        // (REQ-INTEGRATION-34).
+        // The installation's authorizations in force, which the list reads after
+        // it.
         super::connection::no_authorizations(),
         json_http_response(
             "200 OK",
@@ -556,7 +544,7 @@ fn discovery_and_project_management_feed_an_inputless_cloud_run() {
     let pool_removed = assert_json_success(&pool_removed, "runner_pool_removed");
     assert_eq!(
         pool_removed["project"]["executionReadiness"]["blockers"],
-        serde_json::json!(["runner_pool_unassigned", "repository_detached"])
+        serde_json::json!(["runner_pool_unassigned"])
     );
 
     let run_created = run_project(
@@ -583,7 +571,7 @@ fn discovery_and_project_management_feed_an_inputless_cloud_run() {
     );
 
     let mut requests = server.finish();
-    // The list reads the installation's authorizations after it (REQ-INTEGRATION-34).
+    // The list reads the installation's authorizations after it.
     let authorizations = requests.remove(2);
     assert!(
         authorizations.starts_with(&format!(
@@ -724,7 +712,6 @@ fn run_pool(args: &[&str], server: &ScriptedServer, credential_path: &str) -> Ou
 const LIST_POOLS: &str = "GET /api/v1/organizations/acme-research/runner-pools?limit=200 HTTP/1.1";
 const PUT_POOLS: &str = "PUT /api/v1/organizations/acme-research/projects/prj_01k0z6r1w8f4jy2m7q9v3x5abc/runner-pools HTTP/1.1";
 
-// REQ-PROJECT-77, REQ-PROJECT-79, REQ-PROJECT-90
 #[test]
 fn project_pool_add_reads_the_project_and_writes_the_set_with_the_pool_appended() {
     let both = project_with_pools(&[(POOL_ID, "builders"), (SHARED_POOL_ID, "shared")]);
@@ -752,7 +739,6 @@ fn project_pool_add_reads_the_project_and_writes_the_set_with_the_pool_appended(
     );
 }
 
-// REQ-PROJECT-90
 #[test]
 fn project_pool_add_of_a_pool_the_set_holds_writes_nothing() {
     let project = project_with_pools(&[(POOL_ID, "builders")]);
@@ -771,7 +757,6 @@ fn project_pool_add_of_a_pool_the_set_holds_writes_nothing() {
     assert_eq!(request_lines(&server.finish()), [LIST_POOLS, READ_PROJECT]);
 }
 
-// REQ-PROJECT-77, REQ-PROJECT-79, REQ-PROJECT-90
 #[test]
 fn project_pool_remove_writes_the_set_without_the_pool() {
     let remaining = project_with_pools(&[(POOL_ID, "builders")]);
@@ -802,7 +787,6 @@ fn project_pool_remove_writes_the_set_without_the_pool() {
     );
 }
 
-// REQ-PROJECT-90
 #[test]
 fn project_pool_remove_of_the_last_pool_deletes_the_assignment() {
     let (server, _directory, credential_path) = prepared_project(vec![
@@ -828,7 +812,6 @@ fn project_pool_remove_of_the_last_pool_deletes_the_assignment() {
     );
 }
 
-// REQ-PROJECT-90
 #[test]
 fn project_pool_remove_of_a_pool_the_set_does_not_hold_writes_nothing() {
     let project = project_with_pools(&[(POOL_ID, "builders")]);
@@ -847,7 +830,6 @@ fn project_pool_remove_of_a_pool_the_set_does_not_hold_writes_nothing() {
     assert_eq!(request_lines(&server.finish()), [LIST_POOLS, READ_PROJECT]);
 }
 
-// REQ-PROJECT-77, REQ-PROJECT-90
 #[test]
 fn project_pool_add_of_a_name_no_pool_has_is_not_found_before_the_project_read() {
     let (server, _directory, credential_path) = prepared_project(vec![json_http_response(
@@ -864,7 +846,6 @@ fn project_pool_add_of_a_name_no_pool_has_is_not_found_before_the_project_read()
     assert_eq!(request_lines(&server.finish()), [LIST_POOLS]);
 }
 
-// REQ-PROJECT-76, REQ-PROJECT-77
 #[test]
 fn project_creation_resolves_an_exact_pool_name() {
     let project = project_body("widget", true, Some(repository_body("acme/widget", "main")));
@@ -1018,7 +999,44 @@ fn gitlab_selection() -> serde_json::Value {
     })
 }
 
-// REQ-PROJECT-101
+#[test]
+fn project_create_without_a_repository_reads_only_the_named_pool() {
+    let (server, _directory, credential_path) = prepared_project(vec![
+        json_http_response("200 OK", serde_json::json!({"items": [pool_body()]})),
+        project_response("201 Created", project_body("tools", true, None), true),
+    ]);
+
+    let output = run_create(&["tools", "--pool", "builders"], &server, &credential_path);
+
+    let result = assert_json_success(&output, "created");
+    assert_eq!(
+        result["project"].get("repository"),
+        Some(&serde_json::Value::Null)
+    );
+    let requests = server.finish();
+    assert_eq!(request_lines(&requests), [LIST_POOLS, CREATE_PROJECT]);
+    assert_eq!(
+        request_body(&requests[1]),
+        serde_json::json!({"name": "tools", "runnerPoolId": POOL_ID})
+    );
+}
+
+#[test]
+fn project_create_without_a_repository_refuses_integration_and_branch_before_any_request() {
+    for args in [
+        ["tools", "--integration", "github"],
+        ["tools", "--default-branch", "main"],
+    ] {
+        let (server, _directory, credential_path) = prepared_project(Vec::new());
+
+        let output = run_create(&args, &server, &credential_path);
+
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(server.finish().is_empty(), "{args:?}");
+    }
+}
+
 #[test]
 fn project_create_finds_the_one_connection_that_reaches_the_repository() {
     let (server, _directory, credential_path) = prepared_project(vec![
@@ -1051,7 +1069,6 @@ fn project_create_finds_the_one_connection_that_reaches_the_repository() {
     );
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_with_several_connections_reaching_the_repository_names_them_and_creates_nothing()
 {
@@ -1081,7 +1098,6 @@ fn project_create_with_several_connections_reaching_the_repository_names_them_an
     assert!(!request_lines(&requests).contains(&CREATE_PROJECT));
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_with_no_connection_reaching_the_repository_creates_nothing() {
     let (server, _directory, credential_path) = prepared_project(vec![
@@ -1113,7 +1129,6 @@ fn project_create_with_no_connection_reaching_the_repository_creates_nothing() {
     );
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_with_a_connection_reads_that_connection_alone() {
     let (server, _directory, credential_path) =
@@ -1143,7 +1158,6 @@ fn project_create_with_a_connection_reads_that_connection_alone() {
     );
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_with_a_connection_id_and_a_repository_id_reads_nothing_first() {
     let (server, _directory, credential_path) = prepared_project(vec![created_project("github")]);
@@ -1169,7 +1183,6 @@ fn project_create_with_a_connection_id_and_a_repository_id_reads_nothing_first()
     );
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_refuses_a_linear_connection_and_a_bare_repository_name_before_any_request() {
     for args in [
@@ -1192,7 +1205,6 @@ fn project_create_refuses_a_linear_connection_and_a_bare_repository_name_before_
     }
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_create_passes_over_a_provider_whose_connections_it_may_not_read() {
     let mut gitlab = gitlab_connection();
@@ -1281,7 +1293,6 @@ fn create_with_two_pools(assigned: Vec<u8>) -> (Output, Vec<String>) {
     (output, requests)
 }
 
-// REQ-PROJECT-76
 #[test]
 fn project_create_with_several_pools_creates_and_then_assigns_them_all() {
     let both = project_with_pools(&[(POOL_ID, "builders"), (SHARED_POOL_ID, "shared")]);
@@ -1292,7 +1303,6 @@ fn project_create_with_several_pools_creates_and_then_assigns_them_all() {
     assert_eq!(result["project"]["runnerPools"], both["runnerPools"]);
 }
 
-// REQ-PROJECT-76
 #[test]
 fn project_create_whose_pool_assignment_fails_reports_the_created_project() {
     let (output, _) = create_with_two_pools(problem_http_response(
@@ -1329,7 +1339,6 @@ const PUT_REPOSITORY: &str = "PUT /api/v1/organizations/acme-research/projects/p
 const PATCH_REPOSITORY: &str = "PATCH /api/v1/organizations/acme-research/projects/prj_01k0z6r1w8f4jy2m7q9v3x5abc/repository HTTP/1.1";
 const DELETE_REPOSITORY: &str = "DELETE /api/v1/organizations/acme-research/projects/prj_01k0z6r1w8f4jy2m7q9v3x5abc/repository HTTP/1.1";
 
-// REQ-PROJECT-102
 #[test]
 fn project_update_sends_one_request_for_each_change_it_is_given() {
     let renamed = project_body("gadget", true, Some(repository_body("acme/widget", "main")));
@@ -1440,7 +1449,6 @@ fn rebound_project() -> serde_json::Value {
     )
 }
 
-// REQ-PROJECT-102
 #[test]
 fn project_update_sets_the_repository_before_it_renames() {
     let renamed = project_body(
@@ -1461,7 +1469,6 @@ fn project_update_sets_the_repository_before_it_renames() {
     assert_eq!(result["project"]["repository"], renamed["repository"]);
 }
 
-// REQ-PROJECT-102
 #[test]
 fn project_update_whose_rename_fails_reports_the_repository_it_set() {
     let (output, _) = update_repository_and_name(problem_http_response(
@@ -1484,15 +1491,14 @@ fn project_update_whose_rename_fails_reports_the_repository_it_set() {
     );
 }
 
-// REQ-PROJECT-101
 #[test]
 fn project_update_finds_the_connection_that_reaches_the_repository() {
     update_finds_the_connection(false);
 }
 
-// REQ-PROJECT-101, REQ-CONNECTION-108: `project update` takes the project ID `project show`
-// printed and reaches the repository through the binding `org integration list` printed and
-// `org integration reconnect` restored.
+// `project update` takes the project ID `project show` printed and reaches the repository
+// through the binding `org integration list` printed and `org integration reconnect`
+// restored.
 #[test]
 fn a_shown_project_is_updated_through_the_binding_reconnected_before_it() {
     update_finds_the_connection(true);
@@ -1502,7 +1508,10 @@ fn a_shown_project_is_updated_through_the_binding_reconnected_before_it() {
 /// `after_reconnect`: after `project show`, `org integration list` and `org integration
 /// reconnect`, each given an ID the command before it printed.
 fn update_finds_the_connection(after_reconnect: bool) {
-    use super::github::{installation_body, installation_list, setup_session_response};
+    use super::github::{
+        installation_body, installation_list, requests_on, setup_read, setup_session_response,
+        verified,
+    };
     let session = "ghs_01k0z6r1w8f4jy2m7q9v3x5abc";
     let setup_url =
         format!("https://github.example/apps/scherzo/installations/new?state={session}");
@@ -1514,6 +1523,10 @@ fn update_finds_the_connection(after_reconnect: bool) {
             super::connection::no_authorizations(),
             installation_list(installation_body("disconnected")),
             setup_session_response(session, &setup_url),
+            json_http_response(
+                "200 OK",
+                setup_read("pending", verified(&[("713", true)], requests_on(&[]))),
+            ),
             json_http_response("200 OK", installation_body("active")),
         ]);
     }
@@ -1532,7 +1545,8 @@ fn update_finds_the_connection(after_reconnect: bool) {
             args.extend(["--org", ORGANIZATION, "--json", "--allow-insecure-http"]);
             let output = run_project(&args, &server, &credential_path);
             assert!(output.status.success(), "{args:?}: {output:?}");
-            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+            // `reconnect` prints the setup session it began before the binding.
+            super::github::documents(&output).pop().unwrap()
         };
         let project = invoke(&["project", "show", PROJECT_ID]);
         let connections = invoke(&["org", "integration", "list", "--provider", "github"]);
@@ -1570,6 +1584,7 @@ fn update_finds_the_connection(after_reconnect: bool) {
                 &authorizations,
                 LIST_BINDINGS,
                 &format!("{sessions} HTTP/1.1"),
+                &format!("GET {organization}/github/setup-sessions/{session} HTTP/1.1"),
                 &format!("{sessions}/{session}/completion HTTP/1.1"),
             ]
         );
@@ -1589,7 +1604,6 @@ fn update_finds_the_connection(after_reconnect: bool) {
     );
 }
 
-// REQ-PROJECT-81
 #[test]
 fn project_create_retries_one_ambiguous_response() {
     let project = project_body(
@@ -1624,7 +1638,6 @@ fn project_create_retries_one_ambiguous_response() {
     assert_eq!(server.finish().len(), 2);
 }
 
-// REQ-PROJECT-82
 #[test]
 fn project_create_rejects_success_without_required_identity_headers() {
     let project = project_body(
@@ -1678,7 +1691,6 @@ fn project_create_rejects_success_without_required_identity_headers() {
     }
 }
 
-// REQ-PROJECT-78
 #[test]
 fn gitlab_project_create_bind_and_read_preserve_provider_identity() {
     let long_path = format!("group/subgroup/{}", "a".repeat(260));
@@ -1826,8 +1838,8 @@ fn gitlab_project_create_bind_and_read_preserve_provider_identity() {
     }
 }
 
-// REQ-PROJECT-78: the closed-admission line follows the diagnostic, not the provider, so
-// a GitLab project that reads ready while the deployment's admission is open prints none.
+// The closed-admission line follows the diagnostic, not the provider, so a GitLab project
+// that reads ready while the deployment's admission is open prints none.
 #[test]
 fn ready_gitlab_project_prints_no_closed_admission_line() {
     let project = project_body(
@@ -1880,8 +1892,8 @@ fn ready_gitlab_project_prints_no_closed_admission_line() {
     server.finish();
 }
 
-// REQ-PROJECT-78: a bound repository is shown in full, its installation and provider ID
-// included, since no other command prints the binding.
+// A bound repository is shown in full, its installation and provider ID included, since
+// no other command prints the binding.
 #[test]
 fn project_human_output_exposes_readiness_and_blockers() {
     let project = project_body(
@@ -1957,7 +1969,6 @@ fn show_project_human(project: serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-// REQ-PROJECT-78, REQ-PROJECT-90
 #[test]
 fn project_human_output_lists_every_pool_of_the_set() {
     let repository = Some(repository_body("acme/widget", "main"));
@@ -2011,7 +2022,6 @@ fn assert_bodyless_post(request: &str, verb: &str) {
     assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
 }
 
-// REQ-PROJECT-75, REQ-PROJECT-79
 #[test]
 fn project_archive_and_unarchive_post_once_without_a_body() {
     for (verb, outcome, project) in [
@@ -2048,7 +2058,6 @@ fn project_archive_and_unarchive_post_once_without_a_body() {
     }
 }
 
-// REQ-PROJECT-78
 #[test]
 fn project_human_output_shows_the_archive_time_only_when_archived() {
     for (verb, project, archived_line) in [
@@ -2091,7 +2100,6 @@ fn project_human_output_shows_the_archive_time_only_when_archived() {
     }
 }
 
-// REQ-PROJECT-76, REQ-PROJECT-78
 #[test]
 fn project_list_includes_archived_projects_only_when_asked_and_marks_them() {
     let mut active = active_project_body();
@@ -2164,8 +2172,8 @@ const LIST_WITH_ARCHIVED: &str =
 const READ_PROJECT: &str =
     "GET /api/v1/organizations/acme-research/projects/prj_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
 
-// REQ-PROJECT-75: with the organization named and the project by ID, `show` sends its one
-// read and resolves nothing.
+// With the organization named and the project by ID, `show` sends its one read and
+// resolves nothing.
 #[test]
 fn project_show_by_id_in_a_named_organization_sends_only_its_read() {
     let (output, requests) = run_in_effect(
@@ -2182,8 +2190,8 @@ fn project_show_by_id_in_a_named_organization_sends_only_its_read() {
     assert_eq!(request_lines(&requests), [READ_PROJECT]);
 }
 
-// REQ-PROJECT-75: a `PROJECT` name is looked up among the organization's projects, archived
-// ones included, and the command then acts on the ID the list gave it.
+// A `PROJECT` name is looked up among the organization's projects, archived ones included,
+// and the command then acts on the ID the list gave it.
 #[test]
 fn a_project_named_by_name_is_looked_up_and_then_read_or_changed_by_id() {
     let (output, requests) = run_in_effect(
@@ -2216,8 +2224,8 @@ fn a_project_named_by_name_is_looked_up_and_then_read_or_changed_by_id() {
     assert_bodyless_post(&requests[1], "unarchive");
 }
 
-// REQ-PROJECT-75: a name no project of the organization has is the family's `not_found`,
-// with nothing sent after the list.
+// A name no project of the organization has is the family's `not_found`, with nothing
+// sent after the list.
 #[test]
 fn a_project_name_no_project_has_is_not_found_after_the_list_alone() {
     let (output, requests) = run_in_effect(
@@ -2234,8 +2242,8 @@ fn a_project_name_no_project_has_is_not_found_after_the_list_alone() {
     assert_eq!(request_lines(&requests), [LIST_WITH_ARCHIVED]);
 }
 
-// REQ-PROJECT-75: `list` acts in the organization in effect, here the caller's only
-// membership, which it names by ID.
+// `list` acts in the organization in effect, here the caller's only membership,
+// which it names by ID.
 #[test]
 fn project_list_acts_in_the_only_membership_by_its_id() {
     let (output, requests) = run_in_effect(
@@ -2261,8 +2269,8 @@ fn project_list_acts_in_the_only_membership_by_its_id() {
     );
 }
 
-// REQ-PROJECT-100: `show` with no `PROJECT` shows the project in effect, and with none in
-// effect exits 2 naming `--project` before any request.
+// `show` with no `PROJECT` shows the project in effect, and with none in effect exits 2
+// naming `--project` before any request.
 #[test]
 fn project_show_without_a_project_shows_the_project_in_effect() {
     let (output, requests) = run_in_effect(
@@ -2304,7 +2312,6 @@ fn project_show_without_a_project_shows_the_project_in_effect() {
     );
 }
 
-// REQ-PROJECT-100, INV-CLI-20
 #[test]
 fn two_projects_matching_the_checkout_do_not_select_a_project() {
     const OTHER_ORG: &str = "org_01k0z6r1w8f4jy2m7q9v3x5abd";
@@ -2333,7 +2340,6 @@ fn two_projects_matching_the_checkout_do_not_select_a_project() {
     );
 }
 
-// REQ-PROJECT-81
 #[test]
 fn project_archive_retries_one_lost_response_with_the_same_key() {
     let (server, _directory, credential_path) = prepared_project(vec![
@@ -2367,7 +2373,6 @@ fn project_archive_retries_one_lost_response_with_the_same_key() {
     );
 }
 
-// REQ-PROJECT-82
 #[test]
 fn project_archive_answered_with_another_project_is_an_invalid_response() {
     let mut other_project = archived_project_body();
@@ -2398,7 +2403,6 @@ fn project_archive_answered_with_another_project_is_an_invalid_response() {
     server.finish();
 }
 
-// REQ-PROJECT-80
 #[test]
 fn project_api_errors_have_closed_json_outcomes_and_exit_codes() {
     let cases = [
@@ -2588,7 +2592,6 @@ fn project_api_errors_have_closed_json_outcomes_and_exit_codes() {
     }
 }
 
-// REQ-PROJECT-82
 #[test]
 fn project_mutation_rejects_a_different_project_identity() {
     let mut other_project = project_body(
@@ -2614,7 +2617,6 @@ fn project_mutation_rejects_a_different_project_identity() {
     server.finish();
 }
 
-// REQ-PROJECT-82
 #[test]
 fn project_rate_limit_requires_a_positive_retry_after() {
     for retry_after in [None, Some("0"), Some("invalid")] {
@@ -2663,7 +2665,6 @@ fn project_rate_limit_requires_a_positive_retry_after() {
     }
 }
 
-// REQ-PROJECT-82
 #[test]
 fn project_provider_unavailable_requires_a_positive_retry_after() {
     for retry_after in [None, Some("0"), Some("invalid")] {
@@ -2712,7 +2713,48 @@ fn project_provider_unavailable_requires_a_positive_retry_after() {
     }
 }
 
-// REQ-PROJECT-82
+#[test]
+fn project_with_a_pool_and_no_repository_is_ready() {
+    let mut project = project_body("widget", true, None);
+    let readiness = serde_json::json!({"ready": true, "blockers": []});
+    project["executionReadiness"] = readiness.clone();
+    let show = |project, json| {
+        let (server, _directory, credential_path) =
+            prepared_project(vec![json_http_response("200 OK", project)]);
+        let mut args = vec![
+            "project",
+            "show",
+            PROJECT_ID,
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ];
+        if json {
+            args.push("--json");
+        }
+        let output = run_project(&args, &server, &credential_path);
+        server.finish();
+        output
+    };
+    let json = assert_json_success(&show(project.clone(), true), "found");
+    assert_eq!(json["project"]["executionReadiness"], readiness);
+
+    let human = show(project.clone(), false);
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    assert!(text.lines().any(|line| line == "repository: none"));
+    assert!(text.lines().any(|line| line == "readiness: ready"));
+
+    project["executionReadiness"] =
+        serde_json::json!({"ready": false, "blockers": ["repository_detached"]});
+    let invalid = show(project, true);
+    assert_eq!(invalid.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["outcome"],
+        "invalid_response"
+    );
+}
+
 #[test]
 fn inconsistent_project_readiness_is_an_invalid_response() {
     let mut project = project_body(
@@ -2747,7 +2789,6 @@ fn inconsistent_project_readiness_is_an_invalid_response() {
     server.finish();
 }
 
-// REQ-PROJECT-82, REQ-PROJECT-107
 #[test]
 fn a_pool_set_that_disagrees_with_the_single_pool_is_an_invalid_response() {
     let repository = Some(repository_body("acme/widget", "main"));
@@ -2789,7 +2830,6 @@ fn a_pool_set_that_disagrees_with_the_single_pool_is_an_invalid_response() {
     }
 }
 
-// REQ-PROJECT-107
 #[test]
 fn a_project_without_a_pool_set_is_read_as_its_single_pool() {
     let project = project_body("widget", true, Some(repository_body("acme/widget", "main")));

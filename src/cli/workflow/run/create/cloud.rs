@@ -1,10 +1,8 @@
-//! `useful workflow run create DEFINITION --on personal|project` (REQ-RUN-94): a Cloud run of the
-//! Cloud definition `DEFINITION` in the organization and project in effect (REQ-ORG-87,
-//! REQ-PROJECT-100), created and reported as every Cloud run creation is: one idempotency key
-//! for the invocation and the single resend (REQ-RUN-55 to REQ-RUN-57), the named inputs staged
-//! and sealed first (REQ-RUNINPUT-53, REQ-RUNINPUT-54), `--wait` (REQ-RUN-58, REQ-RUN-61) and
-//! the `create` document. What a Cloud `cancel`, `resume` and `retry` share with it lives in
-//! `src/cli/workflow/run/cloud_api.rs`.
+//! `useful workflow run create DEFINITION --on personal|project`: a Cloud run of the Cloud
+//! definition `DEFINITION` in the organization and project in effect, created and reported as
+//! every Cloud run creation is: one idempotency key for the invocation and the single resend, the
+//! named inputs staged and sealed first, `--wait` and the `create` document. What a Cloud
+//! `cancel`, `resume` and `retry` share with it lives in `src/cli/workflow/run/cloud_api.rs`.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -30,11 +28,11 @@ use crate::cli::{
 };
 use crate::exit_code::ExitCode;
 
-/// The most simultaneous steps a Cloud run admits (REQ-RUN-84).
+/// The most simultaneous steps a Cloud run admits.
 const MAXIMUM_CLOUD_PARALLEL_STEPS: usize = 64;
 
-/// The options only a Cloud creation reads; each needs `--on personal` or `--on project`
-/// (REQ-LOCALRUN-80).
+/// The options only a Cloud creation reads; each needs `--on personal` or `--on
+/// project`.
 #[derive(Debug, Args)]
 pub(super) struct Options {
     #[command(flatten)]
@@ -60,8 +58,8 @@ pub(super) struct Options {
 }
 
 impl Options {
-    /// The first Cloud-only option given, by its flag, which `--on local` refuses
-    /// (REQ-LOCALRUN-80).
+    /// The first Cloud-only option given, by its flag, which `--on local`
+    /// refuses.
     pub(super) fn given(&self) -> Option<&'static str> {
         [
             (self.org.given(), "--org"),
@@ -90,9 +88,9 @@ impl Options {
 impl super::Command {
     /// Asks Cloud, in the organization and project in effect, to create a run of the Cloud
     /// definition `DEFINITION` and the workflow file `--workflow` names in its tree: an ID is
-    /// sent as given and a name is the project's one definition of that name (REQ-CLOUDDEF-42).
-    /// `--on project` asks for a run with no owner (REQ-RUN-99). Nothing under the `useful` home
-    /// and no execution root is read.
+    /// sent as given and a name is the project's one definition of that name. `--on project`
+    /// asks for a run with no owner. Nothing under the `useful` home and no execution root is
+    /// read.
     pub(super) fn create_in_cloud(self, place: Place) -> CommandResult {
         let usage = |error| CommandFailure::with_exit_code(error, ExitCode::UsageError);
         let named = self
@@ -164,7 +162,7 @@ impl super::Command {
 const INTEGRATION_CONTEXT_FILE_HELP: &str =
     "Read private immutable integration context from a JSON file, or - for standard input";
 
-/// The source, workspace, name and input-set options of a Cloud run's creation (REQ-RUN-94).
+/// The source, workspace, name and input-set options of a Cloud run's creation.
 #[derive(Debug, Args)]
 struct CreationOptions {
     #[arg(
@@ -230,21 +228,21 @@ impl CreationOptions {
 }
 
 /// One Cloud run creation and what follows its acceptance: one idempotency key for the
-/// invocation, the single resend, the input staging, `--wait` and the `create` document
-/// (REQ-RUN-55 to REQ-RUN-58, REQ-RUN-61, REQ-RUN-80).
+/// invocation, the single resend, the input staging, `--wait` and the `create`
+/// document.
 struct Creation {
     /// The organization reference sent, as the organization in effect resolved it.
     organization: String,
     /// The project in effect's ID.
     project_id: String,
-    /// The Cloud definition id as given, and a workflow file of its tree or none for the root
-    /// (REQ-RUN-94).
+    /// The Cloud definition id as given, and a workflow file of its tree or none for the
+    /// root.
     definition: RunDefinitionSelection,
     selection: CreationOptions,
     inputs: crate::cli::NamedInputArgs,
     integration_context_file: Option<PathBuf>,
     max_parallel: Option<u8>,
-    /// `--on project`: the run starts with no owner (REQ-RUN-94, REQ-RUN-99).
+    /// `--on project`: the run starts with no owner.
     unowned: bool,
     wait: RunWaitArgs,
     options: RunOptions,
@@ -779,8 +777,8 @@ fn write_create(
         }
         return Ok(ExitCode::GeneralFailure);
     }
-    // REQ-RUN-80: a definite admission rejection is rendered before the
-    // dispatched-failure arm below, so it can never be reported as acceptance_unknown.
+    // A definite admission rejection is rendered before the dispatched-failure arm
+    // below, so it can never be reported as acceptance_unknown.
     if let Err(RunFailure::AdmissionRejected {
         status,
         problem_type,

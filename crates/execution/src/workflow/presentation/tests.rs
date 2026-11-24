@@ -439,7 +439,6 @@ fn step_transition(
     }))
 }
 
-// REQ-LOCALRUN-118
 #[tokio::test]
 async fn plain_blocked_evidence_never_writes_terminal_controls() {
     use crate::workflow::evidence::{BlockedDetail, Prerequisite};
@@ -476,7 +475,6 @@ async fn plain_blocked_evidence_never_writes_terminal_controls() {
     assert!(!output.contains('\u{1b}'), "{output:?}");
 }
 
-// REQ-LOCALRUN-1, REQ-LOCALRUN-2
 #[test]
 fn capability_matrix_selects_one_mode_without_consulting_runtime_state() {
     for stdin in [false, true] {
@@ -536,7 +534,6 @@ fn capability_matrix_selects_one_mode_without_consulting_runtime_state() {
     }
 }
 
-// REQ-LOCALRUN-5, REQ-LOCALRUN-119, REQ-LOCALRUN-120
 #[test]
 fn color_selection_uses_the_human_destination_and_environment_matrix() {
     for (mode, stdout_terminal, stderr_terminal, expected) in [
@@ -591,7 +588,6 @@ fn color_selection_uses_the_human_destination_and_environment_matrix() {
     );
 }
 
-// REQ-LOCALRUN-103, REQ-LOCALRUN-126, REQ-LOCALRUN-128
 #[test]
 fn rejection_json_is_one_pretty_document_without_stderr_prose() {
     let temporary = tempfile::tempdir().unwrap();
@@ -674,7 +670,6 @@ fn rejection_json_writer_failure_is_returned_without_local_rendering() {
     assert!(stderr.text().is_empty());
 }
 
-// REQ-LOCALRUN-91, REQ-LOCALRUN-128
 #[test]
 fn contracted_admission_rejection_has_the_resolved_workflow_identity() {
     let temporary = tempfile::tempdir().unwrap();
@@ -729,7 +724,6 @@ steps:
     assert!(!stdout.text().contains('\u{1b}'));
 }
 
-// REQ-LOCALRUN-104, REQ-LOCALRUN-105, REQ-LOCALRUN-106, REQ-LOCALRUN-107, REQ-LOCALRUN-110, REQ-LOCALRUN-114
 // An accepted cancellation and an accepted interruption are the same `CancellationAccepted`
 // transition, so one `@workflow cancelling` record precedes the step's for either.
 #[tokio::test]
@@ -822,7 +816,6 @@ async fn live_stream_labels_normalized_output_and_orders_cancellation_acknowledg
     assert!(stderr.text().is_empty());
 }
 
-// REQ-LOCALRUN-112
 #[tokio::test]
 async fn tty_events_wrap_details_with_hanging_and_stacked_layouts() {
     let inline = render_start(
@@ -876,7 +869,6 @@ async fn tty_events_wrap_details_with_hanging_and_stacked_layouts() {
     assert!(event_lines.iter().all(|line| display_width(line) <= 60));
 }
 
-// REQ-LOCALRUN-112
 #[tokio::test]
 async fn redirected_events_remain_one_logical_record_per_line() {
     let mut redirected = config(RequestedPresentationMode::Plain, ColorChoice::Never);
@@ -891,7 +883,6 @@ async fn redirected_events_remain_one_logical_record_per_line() {
     assert!(!output.contains(VISUAL_CONTINUATION_MARKER));
 }
 
-// REQ-LOCALRUN-113
 #[tokio::test]
 async fn safety_fragmentation_keeps_its_own_prefixed_records_when_redirected() {
     let fixture = Fixture::new(workflow_source());
@@ -936,7 +927,6 @@ async fn safety_fragmentation_keeps_its_own_prefixed_records_when_redirected() {
     assert!(!output.contains(VISUAL_CONTINUATION_MARKER));
 }
 
-// REQ-LOCALRUN-112
 #[test]
 fn detail_wrapping_prefers_words_and_hard_wraps_by_display_cells() {
     assert_eq!(
@@ -953,7 +943,6 @@ fn detail_wrapping_prefers_words_and_hard_wraps_by_display_cells() {
     );
 }
 
-// REQ-OUTPUTS-16, REQ-OUTPUTS-17, REQ-LOCALRUN-109
 #[tokio::test]
 async fn committed_outputs_render_before_the_terminal_step_record() {
     let fixture = Fixture::new(
@@ -1012,7 +1001,6 @@ steps:
     );
 }
 
-// REQ-OUTPUTS-16, REQ-OUTPUTS-17
 #[tokio::test]
 async fn agent_success_uses_semantic_output_count_in_live_and_summary_details() {
     let temporary = tempfile::tempdir().unwrap();
@@ -1101,7 +1089,6 @@ steps:
     assert_eq!(summary_detail, "1 output committed");
 }
 
-// REQ-LOCALRUN-102, REQ-LOCALRUN-122, REQ-LOCALRUN-123
 #[tokio::test]
 async fn plain_and_json_route_live_records_summaries_and_terminal_json() {
     let fixture = Fixture::new(workflow_source());
@@ -1255,7 +1242,6 @@ async fn plain_and_json_route_live_records_summaries_and_terminal_json() {
     );
 }
 
-// REQ-LOCALRUN-125
 #[test]
 fn tui_handoff_uses_the_standard_summary_without_reopening_live_output() {
     let fixture = Fixture::new(workflow_source());
@@ -1293,7 +1279,6 @@ fn tui_handoff_uses_the_standard_summary_without_reopening_live_output() {
     assert!(!summary.contains("started 2026"));
 }
 
-// REQ-EVIDENCE-16, REQ-LOCALRUN-123
 #[tokio::test]
 async fn failed_and_cancelled_summaries_use_authoritative_terminal_facts() {
     let fixture = Fixture::new(workflow_source());
@@ -1425,9 +1410,8 @@ async fn failed_and_cancelled_summaries_use_authoritative_terminal_facts() {
     );
 }
 
-// SC-LOCALRUN-6, REQ-LOCALRUN-123, REQ-LOCALRUN-136, REQ-WFEXEC-136: the summary of a failed
-// result an interruption ended names the interrupted step as its primary issue and ends in its
-// `cancellation:` line.
+// SC-LOCALRUN-6: the summary of a failed result an interruption ended names the interrupted
+// step as its primary issue and ends in its `cancellation:` line.
 #[tokio::test]
 async fn an_interrupted_failed_summary_ends_in_its_cancellation() {
     let fixture = Fixture::new(workflow_source());
@@ -1500,7 +1484,6 @@ async fn an_interrupted_failed_summary_ends_in_its_cancellation() {
     );
 }
 
-// REQ-LOCALRUN-131, REQ-LOCALRUN-141
 #[tokio::test]
 async fn publication_failure_keeps_factual_human_summary_and_omits_json() {
     let fixture = Fixture::new(workflow_source());
@@ -1537,7 +1520,6 @@ async fn publication_failure_keeps_factual_human_summary_and_omits_json() {
     assert!(!stderr.text().contains("run result succeeded · exit"));
 }
 
-// REQ-LOCALRUN-139
 #[tokio::test]
 async fn header_writer_failure_is_returned_without_local_rendering() {
     let fixture = Fixture::new(workflow_source());
@@ -1570,8 +1552,6 @@ async fn header_writer_failure_is_returned_without_local_rendering() {
     assert!(stderr.text().is_empty());
 }
 
-// REQ-LOCALRUN-164
-// INV-ENGINE-15
 #[tokio::test(flavor = "current_thread")]
 async fn stalled_writer_applies_backpressure_to_bursts_instead_of_failing() {
     let fixture = Fixture::new(workflow_source());
@@ -1618,8 +1598,6 @@ async fn stalled_writer_applies_backpressure_to_bursts_instead_of_failing() {
     assert!(presentation.failure().is_none());
 }
 
-// REQ-LOCALRUN-138
-// INV-ENGINE-15
 #[tokio::test(flavor = "current_thread")]
 async fn permanently_blocked_writer_fails_without_blocking_cancellation() {
     let fixture = Fixture::new(workflow_source());
@@ -1699,7 +1677,6 @@ async fn live_writer_failure_is_detected_when_the_destination_flush_fails() {
     assert_eq!(failure.error_kind, Some(io::ErrorKind::BrokenPipe));
 }
 
-// REQ-LOCALRUN-137
 #[tokio::test]
 async fn live_writer_failure_notifies_the_adapter_and_stops_further_writes() {
     let fixture = Fixture::new(workflow_source());
@@ -1737,7 +1714,6 @@ async fn live_writer_failure_notifies_the_adapter_and_stops_further_writes() {
     assert!(stderr.text().is_empty());
 }
 
-// REQ-LOCALRUN-140
 #[tokio::test]
 async fn terminal_json_writer_failure_reports_the_published_result_path() {
     let fixture = Fixture::new(workflow_source());
@@ -1784,7 +1760,6 @@ async fn terminal_json_writer_failure_reports_the_published_result_path() {
     assert!(stderr.text().contains("succeeded · exit 0"));
 }
 
-// REQ-LOCALRUN-124
 #[test]
 fn durations_use_compound_units_after_one_minute() {
     assert_eq!(human_duration(Duration::from_millis(999)), "999ms");
@@ -1793,7 +1768,6 @@ fn durations_use_compound_units_after_one_minute() {
     assert_eq!(human_duration(Duration::from_secs(3723)), "1h02m03s");
 }
 
-// REQ-LOCALRUN-121
 #[tokio::test]
 async fn json_color_always_styles_only_the_stderr_presentation() {
     let fixture = Fixture::new(workflow_source());
@@ -1830,7 +1804,6 @@ async fn json_color_always_styles_only_the_stderr_presentation() {
     let _: Value = serde_json::from_str(&stdout.text()).unwrap();
 }
 
-// REQ-LOCALRUN-108
 #[tokio::test]
 async fn agent_start_records_name_the_profile_harness_and_level_without_prompts() {
     const SYSTEM_SENTINEL: &str = "system-prompt-sentinel";
@@ -1919,9 +1892,9 @@ steps:
     assert!(!output.contains("message.md"));
 }
 
-// REQ-LOCALRUN-200, REQ-LOCALRUN-286, INV-ENGINE-28: a child scope writes the child's step state records into
-// the parent's stream under `<step>[n].<child step>`, after the parent's own, and drops the
-// child's output, committed-output and workflow records.
+// A child scope writes the child's step state records into the parent's stream under
+// `<step>[n].<child step>`, after the parent's own, and drops the child's output, committed-output
+// and workflow records.
 #[tokio::test]
 async fn a_child_scope_writes_only_step_state_records_under_its_position() {
     let parent = Fixture::new(workflow_source());
@@ -2017,9 +1990,9 @@ fn start_held(step: &str) -> ExecutionObservation<OffsetDateTime> {
     })
 }
 
-// REQ-LOCALRUN-222, REQ-LOCALRUN-200: a held start writes one `held` record after the step's
-// `start` record, giving the space available and the minimum as `format_bytes` writes them;
-// a child step's is forwarded under `<step>.<child step>`.
+// A held start writes one `held` record after the step's `start` record, giving the space
+// available and the minimum as `format_bytes` writes them; a child step's is forwarded under
+// `<step>.<child step>`.
 #[tokio::test]
 async fn a_held_start_writes_one_held_record_for_a_root_or_child_step() {
     let parent = Fixture::new(workflow_source());
@@ -2120,7 +2093,7 @@ steps:
         path: verdict.txt
 ";
 
-/// A nested workflow (REQ-WFEXEC-74) whose stages `ask` and `work` are each `NESTED_STAGE`.
+/// A nested workflow whose stages `ask` and `work` are each `NESTED_STAGE`.
 fn nested_fixture() -> Fixture {
     Fixture::with_files(
         "schemaVersion: 1
@@ -2143,9 +2116,9 @@ steps:
     )
 }
 
-// REQ-LOCALRUN-200: a stage of a nested run under element 2 of `outer` presents its step
-// records at its path from the root, `outer[2].work.<stage step>`; the nested run's own steps
-// present nothing, and a plain child's scope keeps `<step>[n].<child step>`.
+// A stage of a nested run under element 2 of `outer` presents its step records at its path
+// from the root, `outer[2].work.<stage step>`; the nested run's own steps present nothing,
+// and a plain child's scope keeps `<step>[n].<child step>`.
 #[tokio::test]
 async fn a_nested_runs_stage_writes_its_step_records_under_its_full_path() {
     let parent = Fixture::new(workflow_source());
@@ -2210,9 +2183,8 @@ steps:
     assert!(presentation.failure().is_none());
 }
 
-// REQ-LOCALRUN-286, INV-ENGINE-28: a destination that fails on a child's record is the
-// parent's presentation failure, the one its failure watcher cancels the run on
-// (REQ-LOCALRUN-137).
+// A destination that fails on a child's record is the parent's presentation failure,
+// the one its failure watcher cancels the run on.
 #[tokio::test]
 async fn a_failed_write_of_a_childs_record_is_the_parents_presentation_failure() {
     let parent = Fixture::new(workflow_source());
@@ -2264,7 +2236,7 @@ steps:
     )
 }
 
-/// The failure of a child whose `decide` the interruption stopped (REQ-WFEXEC-77).
+/// The failure of a child whose `decide` the interruption stopped.
 fn failed_child_record() -> crate::workflow::evidence::FailedChild {
     crate::workflow::evidence::FailedChild {
         outcome: "failed".to_owned(),
@@ -2279,9 +2251,9 @@ fn failed_child_record() -> crate::workflow::evidence::FailedChild {
     }
 }
 
-// REQ-LOCALRUN-220, REQ-OUTPUTS-16, REQ-OUTPUTS-17: a stage that succeeded on a failed child
-// writes its `output` records and then one `failed` record naming the child's failing node by
-// its path under the stage, in place of `done`; without the record the stage reads `done`.
+// A stage that succeeded on a failed child writes its `output` records and then one `failed`
+// record naming the child's failing node by its path under the stage, in place of `done`;
+// without the record the stage reads `done`.
 #[tokio::test]
 async fn a_stage_whose_child_failed_completes_with_a_failed_record() {
     let fixture = failed_stage_fixture();
@@ -2331,10 +2303,10 @@ async fn a_stage_whose_child_failed_completes_with_a_failed_record() {
     }
 }
 
-// REQ-LOCALRUN-287, REQ-WFEXEC-41, REQ-OUTPUTS-17: the summary's row of a stage that waits on
-// its failed child reads `failed`, the outcome line counts it failed and not succeeded, and
-// the wait line names the failing node from the step's own record when publication failed;
-// without the record the stage's summary is what an agent's success renders.
+// The summary's row of a stage that waits on its failed child reads `failed`, the outcome
+// line counts it failed and not succeeded, and the wait line names the failing node from the
+// step's own record when publication failed; without the record the stage's summary is what
+// an agent's success renders.
 #[tokio::test]
 async fn a_waiting_stage_whose_child_failed_is_summarized_as_failed() {
     let fixture = failed_stage_fixture();

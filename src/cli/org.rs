@@ -109,8 +109,8 @@ impl LeafOptions {
         )
     }
 
-    /// Runs `run` in the organization in effect (REQ-ORG-87); a failed read of it is written by
-    /// this family's common-failure writer.
+    /// Runs `run` in the organization in effect; a failed read of it is written by this
+    /// family's common-failure writer.
     fn execute_in(
         self,
         org: OrgArgs,

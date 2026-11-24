@@ -1,10 +1,9 @@
 # The Sketches engineering root workflow: name, version, subject, the root-only blocks with
-# mirror and optional or defaulted inputs (REQ-WFFORMAT-1, REQ-WFFORMAT-28, REQ-WFFORMAT-82,
-# REQ-WFFORMAT-100, REQ-WFFORMAT-101).
+# mirror and optional or defaulted inputs.
 schemaVersion: 1
 name: engineering
 version: "1.0.0"
-subject: ticket                     # the input whose value is a run's subject (REQ-WFFORMAT-100)
+subject: ticket                     # the input whose value is a run's subject
 programs: [scripts]                 # first on PATH for cmd steps and handlers; argv names programs bare
 exclude: [tests/, "**/__pycache__/"] # in the tree, outside the digest and the pinned copy
 
@@ -72,7 +71,7 @@ steps:
         kind: text
         from: path
         path: verdict.txt
-outcomes: [landed, failed]          # the outcomes the mirror maps besides the engine's (REQ-WFFORMAT-87)
+outcomes: [landed, failed]          # the outcomes the mirror maps besides the engine's
 outcome:
   from: outputs.prepare.verdict
   onFailure: failed

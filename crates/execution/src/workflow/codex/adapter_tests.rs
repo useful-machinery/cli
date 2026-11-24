@@ -787,7 +787,6 @@ fn with_scenario_watchdog<Output>(
     )
 }
 
-// INV-TESTING-34
 #[tokio::test]
 async fn fixture_watchdog_expiry_names_the_last_fixture_progress() {
     let expired = tokio::spawn(with_watchdog_limit(
@@ -2550,7 +2549,6 @@ pub(super) mod normal {
         .await;
     }
 
-    // INV-HARNESS-3, INV-HARNESS-9
     #[test]
     fn launch_is_strict_stdio_with_invocation_scoped_project_and_hook_trust() {
         let fixture = ProcessFixture::new("absent", AgentValueMode::None, 1024);
@@ -2591,8 +2589,6 @@ pub(super) mod normal {
         );
     }
 
-    // REQ-AGENT-24
-    // INV-HARNESS-9
     #[test]
     fn transient_sqlite_state_is_never_nested_in_codex_home() {
         let fixture = ProcessFixture::with_codex_home_containing_staging();
@@ -2608,7 +2604,6 @@ pub(super) mod normal {
         }
     }
 
-    // REQ-AGENT-18, REQ-AGENT-19
     #[tokio::test]
     async fn ordered_attachments_use_exact_wrappers_native_images_and_sealed_notices() {
         let canonical_json = br#"{"a":1,"z":2}"#;
@@ -3294,9 +3289,9 @@ pub(super) mod exact_binary {
     /// The next request at `provider`, raced against the production adapter's invocation, or
     /// what the invocation ended with when it ends first. Every provider wait of a case whose
     /// invocation runs in a task of its own goes through this race, so a stopped Codex fails
-    /// the case at once rather than as the watchdog expiry of a request it cannot make
-    /// (INV-TESTING-28). The provider is polled first: a request it already holds is the
-    /// answer even when the invocation that made it has ended since.
+    /// the case at once rather than as the watchdog expiry of a request it cannot make. The
+    /// provider is polled first: a request it already holds is the answer even when the
+    /// invocation that made it has ended since.
     async fn next_request_unless_ended<Ended: Future>(
         provider: &mut LoopbackResponsesProvider,
         invocation: Ended,
@@ -3352,7 +3347,6 @@ pub(super) mod exact_binary {
         );
     }
 
-    // INV-TESTING-28
     #[tokio::test]
     async fn an_invocation_that_ends_before_a_provider_request_fails_the_wait_at_once() {
         let failed = tokio::spawn(with_watchdog(async {
@@ -3635,7 +3629,6 @@ for line in sys.stdin:
         .await;
     }
 
-    // REQ-AGENT-4, REQ-AGENT-22, REQ-AGENT-60
     #[tokio::test]
     #[ignore = "requires pinned harness"]
     async fn pinned_real_codex_handshake_completed_turn_and_native_resources_conform() {
@@ -4582,8 +4575,7 @@ pub(super) mod structured_result {
         })
     }
 
-    // SC-AGENT-11, REQ-AGENT-91, REQ-AGENT-90, REQ-AGENT-38, REQ-AGENT-33
-    // INV-HARNESS-6
+    // SC-AGENT-11
     #[tokio::test]
     async fn a_lead_result_settles_through_progress_noise_and_builder_traffic() {
         for scenario in [
@@ -4637,7 +4629,6 @@ pub(super) mod structured_result {
         }
     }
 
-    // REQ-AGENT-32
     #[tokio::test]
     async fn authoritative_validation_accepts_every_json_root_category() {
         for (scenario, root_type, expected) in [
@@ -4703,7 +4694,6 @@ pub(super) mod structured_result {
         .await;
     }
 
-    // REQ-AGENT-29, REQ-AGENT-31
     #[tokio::test]
     async fn invalid_results_are_corrected_once_on_the_same_thread() {
         for scenario in ["result-correction", "result-envelope-corrected"] {
@@ -4763,8 +4753,6 @@ pub(super) mod structured_result {
         }
     }
 
-    // REQ-AGENT-33
-    // INV-HARNESS-7
     #[tokio::test]
     async fn accepted_result_that_misses_settlement_grace_is_discarded_after_quiescence() {
         with_watchdog(async {
@@ -4799,7 +4787,6 @@ pub(super) mod structured_result {
         .await;
     }
 
-    // REQ-AGENT-30, REQ-AGENT-31
     #[tokio::test]
     async fn oversized_exhausted_missing_and_failed_corrections_commit_no_candidate() {
         with_scenario_watchdog("result-oversized", async {
@@ -4870,8 +4857,6 @@ pub(super) mod start_failure {
         assert!(!error.is_empty());
     }
 
-    // REQ-AGENT-40
-    // INV-HARNESS-5
     #[tokio::test]
     async fn every_launch_and_setup_stage_is_typed_and_quiescent() {
         with_scenario_watchdog("launch-failure", async {
@@ -4966,8 +4951,6 @@ pub(super) mod start_failure {
 pub(super) mod unattended_requests {
     use super::*;
 
-    // REQ-AGENT-25
-    // INV-HARNESS-6
     #[tokio::test]
     async fn known_requests_receive_only_the_fixed_unattended_response() {
         for scenario in [
@@ -5009,8 +4992,6 @@ pub(super) mod unattended_requests {
         }
     }
 
-    // REQ-AGENT-25, REQ-AGENT-38
-    // INV-HARNESS-6
     #[tokio::test]
     async fn unknown_request_is_declined_and_observed_without_failing() {
         with_watchdog(async {
@@ -5129,7 +5110,6 @@ pub(super) mod failure_ordering {
         .await;
     }
 
-    // REQ-AGENT-37
     #[tokio::test]
     async fn native_retry_can_recover_without_a_harness_retry() {
         with_watchdog(async {
@@ -5182,8 +5162,6 @@ pub(super) mod adversarial_lifecycle {
         }
     }
 
-    // REQ-AGENT-24
-    // INV-HARNESS-9
     #[tokio::test]
     async fn transient_sqlite_home_uses_an_ordinary_staging_path_and_is_removed() {
         with_watchdog(async {
@@ -5249,7 +5227,6 @@ pub(super) mod adversarial_lifecycle {
         .await;
     }
 
-    // REQ-AGENT-43
     #[tokio::test]
     async fn stderr_flood_is_fully_drained_but_retained_only_to_its_limit() {
         with_watchdog(async {
@@ -5414,8 +5391,6 @@ pub(super) mod cancellation {
         .await;
     }
 
-    // REQ-AGENT-46
-    // INV-HARNESS-8
     #[tokio::test]
     async fn cancellation_discards_partial_output_and_force_cleans_stubborn_descendants() {
         assert_active_cancellation_discards_response("cancellation-after-output").await;

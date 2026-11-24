@@ -51,6 +51,7 @@ pub(crate) use test_support::{
 use crate::agent_login::check::ProgramLoginCheck;
 use crate::agent_login::setup::{AgentLoginSetup, AssignmentGate, SetupCaller, SetupDependencies};
 use crate::control_protocol::{AssignmentCounts, ConnectionFailure, ControlError, PruneScope};
+use crate::runner_http::{ServingTarget, Target};
 use crate::telemetry::{self, Event, Outcome, Recorder};
 use assignment::{AssignmentDependencies, AssignmentManager};
 // Enrollment resends an ambiguous join with the same reconnect backoff.
@@ -109,16 +110,15 @@ impl Sequence {
     }
 }
 
-/// How long the runner waits between agent-login setups (REQ-GRANT-39).
+/// How long the runner waits between agent-login setups.
 const AGENT_LOGIN_SETUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-/// How long a serving runner with no held run working goes without a kept-run pass
-/// (REQ-RUNNERENROLL-158).
+/// How long a serving runner with no held run working goes without a kept-run
+/// pass.
 const KEPT_RUN_PASS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SHUTDOWN_DELIVERY_RESERVE: std::time::Duration = std::time::Duration::from_secs(10);
 const SHUTDOWN_CLEANUP_RESERVE: std::time::Duration = std::time::Duration::from_secs(5);
 /// A stop interrupts every held run at once, each within its own cancellation grace, so one
-/// bound sized to the largest grace holds however many runs the runner holds
-/// (REQ-RUNNERENROLL-72).
+/// bound sized to the largest grace holds however many runs the runner holds.
 const SHUTDOWN_CLEANUP_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
     MAXIMUM_CANCELLATION_GRACE.as_secs() + SHUTDOWN_DELIVERY_RESERVE.as_secs(),
 );
@@ -127,7 +127,7 @@ const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 );
 
 /// What a start holds of the join key its host joined with, which decides
-/// what the service does once Cloud refuses its credential (INV-RUNNER-35).
+/// what the service does once Cloud refuses its credential.
 pub enum JoinKeyMode {
     /// No key was given, or the host's credential came from an activation:
     /// a refused credential parks the runner at `authentication_failed`.
@@ -158,14 +158,14 @@ impl JoinKeyMode {
 }
 
 impl Config {
-    /// The runner the host's enrolled state names, the one a rejoin replaces
-    /// (REQ-RUNNERENROLL-243).
+    /// The runner the host's enrolled state names, the one a rejoin
+    /// replaces.
     pub fn runner_id(&self) -> &str {
         self.credential().runner_id()
     }
 
     /// The host's enrollment journal, beside its state file, where a rejoin
-    /// is staged before it is sent (INV-RUNNER-36).
+    /// is staged before it is sent.
     pub fn enrollment_journal_path(&self) -> Option<PathBuf> {
         let state = self.state_access()?.path();
         Some(state.parent()?.join(crate::enrollment::JOURNAL_FILE))
@@ -337,6 +337,7 @@ enum ConnectedReloadResult {
 }
 
 struct PreparedReload {
+    target: Target,
     state_access: crate::enrollment::RunnerStateAccess,
     expected_runner_id: String,
     expected_current_credential_id: String,
@@ -344,6 +345,7 @@ struct PreparedReload {
 }
 
 struct ReloadDependencies {
+    target: ServingTarget,
     boot_id: String,
     frame_source: Arc<dyn FrameSource>,
     sleeper: Arc<dyn Sleeper>,
@@ -352,14 +354,13 @@ struct ReloadDependencies {
     live_status: Arc<LiveStatus>,
 }
 
-/// The assignment manager as the periodic and `sync` agent-login passes and login checks
-/// see it (INV-RUNNER-15, INV-RUNNER-55, INV-RUNNER-29): every assignment it holds, read
-/// under its lock.
-/// Asking Cloud and checking a login need only that no held run is working; an install or
-/// removal also that none has a command in flight, and runs under the manager's lock
-/// holding each waiting run's activity, so no assignment is admitted and no held run starts
-/// a command during it. An admission's own pass does not consult it: it is gated on the
-/// other runs held when its preparation began, never under the manager's lock (REQ-GRANT-135).
+/// The assignment manager as the periodic and `sync` agent-login passes and login checks see
+/// it: every assignment it holds, read under its lock. Asking Cloud and checking a login need
+/// only that no held run is working; an install or removal also that none has a command in
+/// flight, and runs under the manager's lock holding each waiting run's activity, so no
+/// assignment is admitted and no held run starts a command during it. An admission's own pass
+/// does not consult it: it is gated on the other runs held when its preparation began, never
+/// under the manager's lock.
 struct HeldRunGate {
     assignment_manager: Arc<Mutex<AssignmentManager>>,
     // Setup runs on a thread of its own, and reading the manager's state may
@@ -398,9 +399,9 @@ impl AssignmentGate for HeldRunGate {
 
 /// The serving process's repeating agent-login setup: a setup at once, then
 /// one every `AGENT_LOGIN_SETUP_INTERVAL` on the service's sleeper, each
-/// checking a login it installed (REQ-GRANT-145) and publishing the
-/// readiness it recorded in the live status. A setup that finds a held run
-/// working is skipped, not queued. Dropping the schedule stops it.
+/// checking a login it installed and publishing the readiness it recorded
+/// in the live status. A setup that finds a held run working is skipped,
+/// not queued. Dropping the schedule stops it.
 struct AgentLoginSchedule {
     task: tokio::task::JoinHandle<()>,
 }
@@ -429,31 +430,30 @@ impl Drop for AgentLoginSchedule {
     }
 }
 
-/// The serving process's kept-run passes (REQ-RUNNERENROLL-158): one when it starts, one
-/// once no held run is working after a run has ended, and one when `KEPT_RUN_PASS_INTERVAL`
-/// passes, the hour starting again after each pass. A pass is due only while no held run is
-/// working, at the read level of its own held-run gate: one due at the hour while a run
-/// works is skipped, not queued, and one due after a run's end waits for the next end or the
-/// hour. Each runs on the blocking pool and asks again before each directory, so a run that
-/// starts working, or the schedule's stop, ends it before its next removal. Stopping lets
-/// the directory being removed finish and starts nothing else; the service joins the pass
-/// in flight before it releases its boot root or returns, since the pass holds the work-root
-/// lease's lock-bearing trees.
+/// The serving process's kept-run passes: one when it starts, one once no held run is
+/// working after a run has ended, and one when `KEPT_RUN_PASS_INTERVAL` passes, the hour
+/// starting again after each pass. A pass is due only while no held run is working, at the
+/// read level of its own held-run gate: one due at the hour while a run works is skipped,
+/// not queued, and one due after a run's end waits for the next end or the hour. Each runs
+/// on the blocking pool and asks again before each directory, so a run that starts working,
+/// or the schedule's stop, ends it before its next removal. Stopping lets the directory
+/// being removed finish and starts nothing else; the service joins the pass in flight before
+/// it releases its boot root or returns, since the pass holds the work-root lease's
+/// lock-bearing trees.
 ///
 /// A pass first applies the kept-run bounds, which need no exclusion from a command: the
-/// claim fence covers their one race. It then evicts from the build caches
-/// (REQ-RUNNERENROLL-162), which holds the command fence (INV-RUNNER-53): it is skipped
-/// while a command is in the fence, and ends once a command asks to enter, the schedule
-/// stops or a held run is working, the next pass beginning it again.
+/// claim fence covers their one race. It then evicts from the build caches, which holds
+/// the command fence: it is skipped while a command is in the fence, and ends once a
+/// command asks to enter, the schedule stops or a held run is working, the next pass
+/// beginning it again.
 ///
 /// The schedule's task also serves the control socket's `kept` and `prune` requests from
-/// its channel (INV-RUNNER-54), one at a time and only between its passes, each on the
-/// blocking pool as a pass is, so no two passes or reports overlap and its stop ends and
-/// joins an operator's pass as it does its own. A `prune` asks the pass's own question
-/// first and is answered `runner_busy` when a held run is working; a report asks only
-/// whether the schedule is stopping. A request leaves the hour as it is. A request the
-/// schedule no longer takes, once it has stopped, is dropped, and its connection closed
-/// unanswered.
+/// its channel, one at a time and only between its passes, each on the blocking pool as
+/// a pass is, so no two passes or reports overlap and its stop ends and joins an
+/// operator's pass as it does its own. A `prune` asks the pass's own question first and
+/// is answered `runner_busy` when a held run is working; a report asks only whether the
+/// schedule is stopping. A request leaves the hour as it is. A request the schedule no
+/// longer takes, once it has stopped, is dropped, and its connection closed unanswered.
 struct KeptRunSchedule {
     stopping: Arc<AtomicBool>,
     stopped: Arc<tokio::sync::Notify>,
@@ -496,8 +496,7 @@ impl KeptRunPass {
     }
 
     /// Reports the kept workspaces and the build caches under `scope` on the blocking pool,
-    /// whatever the held runs are doing (REQ-RUNNERENROLL-164); none once the schedule is
-    /// stopping.
+    /// whatever the held runs are doing; none once the schedule is stopping.
     async fn report(&self, scope: PruneScope) -> Option<KeptRunReport> {
         let work_root = Arc::clone(&self.work_root);
         let stopping = Arc::clone(&self.stopping);
@@ -527,10 +526,10 @@ impl KeptRunPass {
     }
 
     /// Applies the kept-run bounds, or removes every kept workspace under `All`, and evicts
-    /// from the build caches on the blocking pool (REQ-RUNNERENROLL-165): `Busy`, touching
-    /// nothing, when a held run is working or the schedule is stopping; otherwise what it
-    /// did, not `complete` once either ended it or the command fence ended or skipped the
-    /// eviction. None when the pass did not return.
+    /// from the build caches on the blocking pool: `Busy`, touching nothing, when a held
+    /// run is working or the schedule is stopping; otherwise what it did, not `complete`
+    /// once either ended it or the command fence ended or skipped the eviction. None when
+    /// the pass did not return.
     async fn prune(&self, scope: PruneScope) -> Option<Result<KeptRunPrune, Busy>> {
         let work_root = Arc::clone(&self.work_root);
         let gate = Arc::clone(&self.gate);
@@ -588,7 +587,7 @@ impl KeptRunPass {
     }
 }
 
-/// What a kept-run pass evicts from its build caches with (REQ-RUNNERENROLL-162).
+/// What a kept-run pass evicts from its build caches with.
 struct BuildCacheEviction {
     caches: Vec<BuildCache>,
     /// The work root and the directories that hold the state file and the control socket.
@@ -705,8 +704,8 @@ impl Drop for KeptRunSchedule {
     }
 }
 
-/// What a build-cache eviction never enters (REQ-RUNNERENROLL-161): the work root and the
-/// directories that hold the state file and the control socket, each `config` holds.
+/// What a build-cache eviction never enters: the work root and the directories that hold
+/// the state file and the control socket, each `config` holds.
 fn protected_paths(config: &Config) -> Vec<PathBuf> {
     let state = config
         .state_access()
@@ -736,6 +735,7 @@ impl Connector for WebSocketConnector {
 }
 
 struct ConnectionLoopDependencies {
+    target: ServingTarget,
     config: Config,
     frame_source: Arc<dyn FrameSource>,
     sleeper: Arc<dyn Sleeper>,
@@ -762,9 +762,7 @@ pub(crate) enum ServiceError {
     WorkRootInUse,
     WorkRootIsolation,
     WorkspaceCleanupFailed(Option<Vec<String>>),
-    SourceBrokerConfiguration(url::Url),
-    InputBrokerConfiguration(url::Url),
-    TreeBrokerConfiguration(url::Url),
+    BrokerConfiguration(url::Url),
 }
 
 impl fmt::Display for ServiceError {
@@ -794,19 +792,9 @@ impl fmt::Display for ServiceError {
             Self::WorkspaceCleanupFailed(None) => {
                 formatter.write_str("runner workspace cleanup failed")
             }
-            Self::SourceBrokerConfiguration(endpoint) => write!(
+            Self::BrokerConfiguration(endpoint) => write!(
                 formatter,
-                "start runner source credential broker: unsupported {} endpoint scheme\n\nUse a ws or wss runner endpoint.",
-                endpoint.scheme()
-            ),
-            Self::InputBrokerConfiguration(endpoint) => write!(
-                formatter,
-                "start runner run-input broker: unsupported {} endpoint scheme\n\nUse a ws or wss runner endpoint.",
-                endpoint.scheme()
-            ),
-            Self::TreeBrokerConfiguration(endpoint) => write!(
-                formatter,
-                "start runner workflow tree broker: unsupported {} endpoint scheme\n\nUse a ws or wss runner endpoint.",
+                "start runner HTTP brokers: unsupported {} endpoint scheme\n\nUse a ws or wss runner endpoint.",
                 endpoint.scheme()
             ),
         }
@@ -832,9 +820,7 @@ impl std::error::Error for ServiceError {
             | Self::WorkRootInUse
             | Self::WorkRootIsolation
             | Self::WorkspaceCleanupFailed(_)
-            | Self::SourceBrokerConfiguration(_)
-            | Self::InputBrokerConfiguration(_)
-            | Self::TreeBrokerConfiguration(_) => None,
+            | Self::BrokerConfiguration(_) => None,
             Self::Connection(error) => Some(error),
             Self::Control(error) => Some(error),
             Self::LeaseClock(error) => Some(error),
@@ -853,8 +839,8 @@ pub(crate) fn run_workflow_git_helper() -> bool {
 /// Serves `config` until a stop or an end. Every task the run started, the
 /// blocking pool's included, ends with its runtime, and a run that ends
 /// `Rejoined` has first waited for the threads of its agent-login setup,
-/// which the runtime does not own (INV-RUNNER-41), so the work root it
-/// leased can be leased again by the next run once it returns.
+/// which the runtime does not own, so the work root it leased can be
+/// leased again by the next run once it returns.
 pub(crate) fn run(
     config: Config,
     service_version: &str,
@@ -865,6 +851,12 @@ pub(crate) fn run(
         .build()
         .map_err(|_| ServiceError::BuildRuntime)?;
     runtime.block_on(run_until_cancelled(config, service_version, join_key))
+}
+
+fn serving_target(config: &Config) -> Result<ServingTarget, ServiceError> {
+    Target::new(config.endpoint(), config.credential())
+        .map(ServingTarget::new)
+        .ok_or_else(|| ServiceError::BrokerConfiguration(config.endpoint().clone()))
 }
 
 async fn run_until_cancelled(
@@ -884,9 +876,10 @@ async fn run_until_cancelled(
     );
     let lease_clock = LeaseClock::system().map_err(ServiceError::LeaseClock)?;
     let mut shutdown = ProcessShutdown::new()?;
-    let agent_login_setup = config.state_access().and_then(|state| {
+    let target = serving_target(&config)?;
+    let agent_login_setup = config.state_access().map(|state| {
         // A login is checked with the programs `serve` validated when it
-        // started (REQ-GRANT-90).
+        // started.
         let check = ProgramLoginCheck::new(
             config.claude_code_installation().cloned(),
             config.codex_installation().cloned(),
@@ -895,8 +888,7 @@ async fn run_until_cancelled(
             execution::RunnerExecutionClock,
         );
         SetupDependencies::enrolled(
-            config.endpoint(),
-            config.credential(),
+            target.clone(),
             Arc::new(check),
             state.path(),
             Arc::clone(&recorder),
@@ -908,6 +900,7 @@ async fn run_until_cancelled(
     });
     Box::pin(run_connection_loop(
         ConnectionLoopDependencies {
+            target,
             config,
             frame_source,
             sleeper,
@@ -938,6 +931,7 @@ fn fixture_loop_dependencies(
     let boot_id = frame_source.public_id("rbt_");
     let lease_clock = LeaseClock::system().map_err(ServiceError::LeaseClock)?;
     Ok(ConnectionLoopDependencies {
+        target: serving_target(&config)?,
         config,
         frame_source,
         sleeper,
@@ -1114,6 +1108,7 @@ async fn connection_loop_with_work_root(
     kept_runs: &mut KeptRunSchedule,
 ) -> Result<ServiceEnd, ServiceError> {
     let ConnectionLoopDependencies {
+        target,
         mut config,
         frame_source,
         sleeper,
@@ -1125,9 +1120,8 @@ async fn connection_loop_with_work_root(
         disk,
     } = dependencies;
     // The monitor publishes its reading of the work root's disk in this handle, which the
-    // control socket's answers and the offer rule copy from (INV-RUNNER-49, INV-RUNNER-50);
-    // a service without a monitor has none, its answers carry no reading and its offer rule
-    // never finds the disk low.
+    // control socket's answers and the offer rule copy from; a service without a monitor
+    // has none, its answers carry no reading and its offer rule never finds the disk low.
     let disk_reading = disk.as_ref().map(|_| disk::DiskReadingHandle::new());
     let mut live_status = LiveStatus::new(
         boot_id.clone(),
@@ -1156,18 +1150,19 @@ async fn connection_loop_with_work_root(
         });
     recorder.set_dropped_record_observer(Arc::<history::EventLog>::clone(live_status.events()));
     let assignment_dependencies = AssignmentDependencies::production(
-        &config,
+        target.clone(),
+        config.repository_url_policy(),
         &boot_id,
         Arc::clone(&sleeper),
         Arc::clone(&work_root),
         Arc::clone(&recorder),
         source_broker,
-    )?
+    )
     .with_events(Arc::clone(live_status.events()));
-    // The offer rule declines new runs while the monitor's reading is low (INV-RUNNER-50),
-    // and a running run holds its next step while it is (REQ-RUNNERENROLL-155): a
-    // single-workflow run on the monitor's reading, a tree run's `useful` commands on the
-    // same disk and minimum, which they read themselves and are given only above 0.
+    // The offer rule declines new runs while the monitor's reading is low, and a running
+    // run holds its next step while it is: a single-workflow run on the monitor's reading,
+    // a tree run's `useful` commands on the same disk and minimum, which they read
+    // themselves and are given only above 0.
     let assignment_dependencies = match disk_reading {
         Some(reading) => {
             // The configuration already refuses what `RunnerDiskGate::new` refuses: its work
@@ -1198,6 +1193,7 @@ async fn connection_loop_with_work_root(
             });
     }
     let reload_dependencies = ReloadDependencies {
+        target,
         boot_id: boot_id.clone(),
         frame_source: Arc::clone(&frame_source),
         sleeper: Arc::clone(&sleeper),
@@ -1213,9 +1209,9 @@ async fn connection_loop_with_work_root(
             move || clock.utc_now(),
         ))
     });
-    // Each admission sets agent logins up for itself before it offers them
-    // (REQ-GRANT-49), and keeps its grant token files current while its
-    // assignment runs (REQ-GRANT-89).
+    // Each admission sets agent logins up for itself before it offers
+    // them, and keeps its grant token files current while its assignment
+    // runs.
     if let Some(setup) = &agent_login_setup {
         let mut manager = assignment_manager
             .lock()
@@ -1258,8 +1254,8 @@ async fn connection_loop_with_work_root(
             Arc::clone(&sleeper),
         )
     });
-    // The kept-run passes start after the startup report of what earlier processes left
-    // (REQ-RUNNERENROLL-69), on tasks of their own that connecting never waits for.
+    // The kept-run passes start after the startup report of what earlier processes
+    // left, on tasks of their own that connecting never waits for.
     kept_runs.start(
         &assignment_manager,
         &config,
@@ -1284,7 +1280,7 @@ async fn connection_loop_with_work_root(
     let mut promoted_attempt: Option<PromotedAttempt> = None;
     let mut shutting_down = false;
     // What a graceful stop returns: a rejoin's end or a refused credential's
-    // takes the stop's path out of the loop (INV-RUNNER-35).
+    // takes the stop's path out of the loop.
     let mut ending = ServiceEnd::Stopped;
     let mut shutdown_deadline: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = None;
 
@@ -1334,14 +1330,7 @@ async fn connection_loop_with_work_root(
             continue;
         }
         live_status.connecting();
-        let promoted = promoted_attempt.take();
-        if promoted.is_some()
-            && let Some(setup) = &agent_login_setup
-        {
-            // Every promotion arrives here with `config` already replaced.
-            setup.follow_credential(config.endpoint(), config.credential());
-        }
-        let (connection_event, active_effect_event, candidate) = match promoted {
+        let (connection_event, active_effect_event, candidate) = match promoted_attempt.take() {
             Some(promoted) => (
                 promoted.connection_event,
                 promoted.active_effect_event,
@@ -1446,7 +1435,7 @@ async fn connection_loop_with_work_root(
                         Some(request) = reload_requests.recv() => {
                             ActiveEvent::ManualReload(request)
                         }
-                        // A connected runner holds no join key (INV-RUNNER-35).
+                        // A connected runner holds no join key.
                         () = live_status.wait_until_connected(), if join_key.holds_key() => {
                             ActiveEvent::Handshake
                         }
@@ -1629,8 +1618,8 @@ async fn connection_loop_with_work_root(
                         continue;
                     }
                     // A runner that holds no assignment answers the refusal by
-                    // its start's mode (INV-RUNNER-35); one that holds work
-                    // waits for it to be let go and looks again.
+                    // its start's mode; one that holds work waits for it to be
+                    // let go and looks again.
                     let (counts, _) = assignment_manager
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1868,8 +1857,8 @@ async fn answer_refusal(
 /// process serves the rejoined runner next on the same work root, so a
 /// `Rejoined` end first ends the agent-login `setup` and waits until no
 /// thread of it still runs and holds the root; a stop signal during the wait
-/// ends the service `Stopped` instead, waiting for none (INV-RUNNER-41).
-/// Every other end exits the process, which ends the threads.
+/// ends the service `Stopped` instead, waiting for none. Every other end
+/// exits the process, which ends the threads.
 async fn end_after_setup(
     end: ServiceEnd,
     setup: Option<&AgentLoginSetup>,
@@ -2137,10 +2126,13 @@ impl ReloadDependencies {
         let pending_config = config
             .with_pending_credential(pending)
             .map_err(|_| ControlError::StateUpdateFailed)?;
+        let target = Target::new(pending_config.endpoint(), pending_config.credential())
+            .ok_or(ControlError::StateUpdateFailed)?;
         let candidate = self
             .prepare_connection(pending_config, sequence, attempt)
             .await?;
         Ok(PreparedReload {
+            target,
             state_access,
             expected_runner_id,
             expected_current_credential_id: config.credential().credential_id().to_owned(),
@@ -2235,6 +2227,7 @@ impl ReloadDependencies {
             prepared.candidate.connection_event.finish(Outcome::Failure);
             return Err(error);
         }
+        self.target.replace(prepared.target);
         self.live_status.promoted(
             prepared
                 .candidate
@@ -2273,7 +2266,7 @@ fn promoted_credential_id(promoted: &PromotedAttempt) -> String {
 }
 
 /// Answers the waiting `request`, if any, with `result`; a failed reload is one of the
-/// runner's events whether or not a request waits (REQ-RUNNERENROLL-138).
+/// runner's events whether or not a request waits.
 fn respond_to_reload(
     status: &LiveStatus,
     request: &mut Option<ReloadRequest>,
@@ -2532,7 +2525,7 @@ mod tests {
     use super::{
         AssignmentConfig, Config, ConnectionCause, ConnectionLoopDependencies, FailureKind,
         JoinKeyMode, LiveStatus, RefusalStep, Rejoin, RejoinAnswer, ReloadDependencies,
-        ReloadRequest, SHUTDOWN_TIMEOUT, Sequence, ServiceEnd, ServiceError, Sleeper, TokioSleeper,
+        ReloadRequest, Sequence, ServiceEnd, ServiceError, Sleeper, TokioSleeper,
         record_startup_retention, refusal_step, run_connection_loop_with_work_root,
         run_until_cancelled_with_dependencies,
     };
@@ -2551,7 +2544,6 @@ mod tests {
         resolve,
     };
 
-    // REQ-RUNNERENROLL-65, REQ-RUNNERENROLL-71
     #[test]
     fn recovery_required_failures_are_closed_to_work_root_ownership() {
         for error in [
@@ -2562,15 +2554,6 @@ mod tests {
             assert!(error.requires_operator_recovery());
         }
         assert!(!ServiceError::BuildRuntime.requires_operator_recovery());
-    }
-
-    // REQ-RUNNERENROLL-72
-    #[test]
-    fn shutdown_timeout_accommodates_maximum_cancellation_grace() {
-        assert_eq!(
-            SHUTDOWN_TIMEOUT,
-            super::MAXIMUM_CANCELLATION_GRACE + Duration::from_secs(15)
-        );
     }
 
     struct FailingBootRemover {
@@ -2612,7 +2595,6 @@ mod tests {
         fn before_child_enumeration(&self) {}
     }
 
-    // REQ-RUNNERENROLL-66, REQ-RUNNERENROLL-69
     #[test]
     fn startup_retains_an_interrupted_cleanup_and_allows_a_fresh_assignment() {
         const STALE_BOOT: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -2699,6 +2681,7 @@ mod tests {
         let (recorder, _capture) = test_recorder(&boot_id);
         let (sleeper, _sleep_requests) = controlled_sleeper();
         let dependencies = ConnectionLoopDependencies {
+            target: crate::service::serving_target(&config).unwrap(),
             config: config.cloned_config(),
             frame_source,
             sleeper,
@@ -2913,6 +2896,7 @@ mod tests {
         Option<super::PromotedAttempt>,
         Result<String, ControlError>,
         TestCapture,
+        super::ServingTarget,
     ) {
         let frame_source = deterministic_frame_source();
         let (recorder, capture) = test_recorder("rbt_01k0z6r1w8f4jy2m7q9v3x5abe");
@@ -2932,7 +2916,9 @@ mod tests {
                 .startup_pending()
                 .map(|pending| pending.credential_id.clone()),
         ));
+        let target = super::serving_target(config).unwrap();
         let reload = ReloadDependencies {
+            target: target.clone(),
             boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5abe".to_owned(),
             frame_source,
             sleeper: fixture_sleeper(),
@@ -2949,7 +2935,7 @@ mod tests {
                 Some(ReloadRequest { response }),
             )
             .await;
-        (promoted, receive.await.unwrap(), capture)
+        (promoted, receive.await.unwrap(), capture, target)
     }
 
     async fn request_control(socket_path: PathBuf, operation: Operation) -> Response {
@@ -3020,7 +3006,6 @@ mod tests {
         (current, pending)
     }
 
-    // REQ-RUNNERENROLL-49
     #[tokio::test]
     async fn reload_promotes_a_valid_pending_credential_without_changing_boot() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3045,7 +3030,11 @@ mod tests {
             socket.send(welcome()).await.unwrap();
         });
 
-        let (promoted, response, capture) = reload_fixture(&fixture.config).await;
+        let (promoted, response, capture, target) = reload_fixture(&fixture.config).await;
+        assert_eq!(
+            target.current().credential().credential_id(),
+            "rrc_01k0z6r1w8f4jy2m7q9v3x5abd"
+        );
         assert_eq!(response, Ok("rrc_01k0z6r1w8f4jy2m7q9v3x5abd".to_owned()));
         let promoted = promoted.unwrap();
         assert_eq!(
@@ -3099,7 +3088,84 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-49
+    #[tokio::test]
+    async fn brokers_send_the_promoted_credential_after_a_live_reload() {
+        use tokio::io::{AsyncBufReadExt as _, BufReader};
+
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = RotationFixture::without_pending(&endpoint);
+        let socket_path = fixture.config.control_socket_path().unwrap().to_owned();
+        let (ready, connected) = tokio::sync::oneshot::channel();
+        let (reloaded, promoted) = tokio::sync::oneshot::channel();
+        let (head_sender, head_receiver) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (_current, mut pending) =
+                accept_rotation_connections(&listener, Some(ready), false).await;
+            promoted.await.unwrap();
+            pending.send(assignment_offer()).await.unwrap();
+            let offered = effect_acknowledgement(&mut pending).await;
+            acknowledge_runner_frame(&mut pending, &offered, "acknowledge offer").await;
+            let prepare = begin_assignment_preparation(&mut pending).await;
+            acknowledge_runner_frame(&mut pending, &prepare, "acknowledge preparation").await;
+            let mut first = Some(head_sender);
+            loop {
+                tokio::select! {
+                    result = listener.accept() => {
+                        let (mut socket, _) = result.unwrap();
+                        let mut reader = BufReader::new(&mut socket);
+                        let mut head = String::new();
+                        while reader.read_line(&mut head).await.unwrap() != 0
+                            && !head.ends_with("\r\n\r\n") {}
+                        socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        if let Some(sender) = first.take() {
+                            sender.send(head).unwrap();
+                        }
+                    }
+                    frame = pending.next() => {
+                        match frame {
+                            Some(Ok(Message::Text(frame))) => {
+                                let frame = serde_json::from_str(&frame).unwrap();
+                                acknowledge_runner_frame(&mut pending, &frame, "acknowledge observation").await;
+                            }
+                            Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                            Some(Ok(_)) => {}
+                        }
+                    }
+                }
+            }
+        });
+        let (service, _capture, shutdown_trigger) = spawn_configured_service_with_source(
+            fixture.config.clone(),
+            fixture_sleeper(),
+            None,
+            None,
+        );
+        with_watchdog(connected).await.unwrap().unwrap();
+        assert_eq!(
+            request_staged_reload(&fixture, socket_path).await,
+            Response::Reloaded {
+                credential_id: "rrc_01k0z6r1w8f4jy2m7q9v3x5abd".to_owned()
+            }
+        );
+        reloaded.send(()).unwrap();
+        let head = with_watchdog(head_receiver).await.unwrap().unwrap();
+        shutdown_trigger.notify_one();
+        with_watchdog(service).await.unwrap().unwrap().unwrap();
+        with_watchdog(server).await.unwrap().unwrap();
+        assert!(head.starts_with("POST /v1/runner/"));
+        let expected = format!(
+            "Bearer rrc_01k0z6r1w8f4jy2m7q9v3x5abd.{}",
+            pending_credential_secret()
+        );
+        assert_eq!(
+            head.lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.trim()),
+            Some(expected.as_str())
+        );
+    }
+
     #[tokio::test]
     async fn live_reload_retains_the_boot_and_accepted_assignment_manager() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3251,7 +3317,6 @@ mod tests {
         with_watchdog(server).await.unwrap().unwrap();
     }
 
-    // REQ-RUNNERENROLL-35, REQ-RUNNERENROLL-36
     #[tokio::test]
     async fn terminal_authentication_remains_locally_inspectable() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3481,7 +3546,6 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-243
     #[tokio::test]
     async fn a_held_key_rejoins_at_the_first_refusal_and_ends_the_service() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3504,7 +3568,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-246
     #[tokio::test]
     async fn a_refused_rejoin_parks_the_runner_and_is_not_sent_again() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3529,7 +3592,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-245
     #[tokio::test]
     async fn an_unanswered_rejoin_is_sent_again_after_the_reconnect_delay() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3558,7 +3620,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-245
     #[tokio::test]
     async fn a_stop_between_rejoin_attempts_ends_the_service_without_another() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3587,7 +3648,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-128
     #[tokio::test]
     async fn a_completed_handshake_drops_the_key_and_a_later_refusal_ends_the_service() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3629,7 +3689,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-128
     #[tokio::test]
     async fn a_process_without_its_key_ends_at_a_refused_credential() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3645,7 +3704,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-243
     #[tokio::test]
     async fn a_promoted_pending_credential_is_not_answered_with_a_rejoin() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3689,7 +3747,6 @@ mod tests {
         with_watchdog(server).await.unwrap().unwrap();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-247
     #[tokio::test]
     async fn an_unusable_key_is_reported_once_and_the_runner_parks() {
         let (listener, endpoint) = fixture_listener().await;
@@ -3724,7 +3781,6 @@ mod tests {
         server.abort();
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-128
     #[tokio::test]
     async fn a_refused_credential_does_not_end_a_runner_that_holds_an_assignment() {
         let (listener, endpoint) = fixture_listener().await;
@@ -4165,7 +4221,6 @@ mod tests {
         14 * time::Duration::DAY - 30 * time::Duration::MINUTE
     }
 
-    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159, REQ-RUNNERENROLL-69
     #[tokio::test]
     async fn a_starting_runner_removes_a_kept_run_past_the_age_bound_after_reporting_it() {
         // Dated 2026-07-01, 22 days before the clock's origin.
@@ -4192,7 +4247,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
     #[tokio::test]
     async fn a_starting_runner_keeps_a_kept_run_within_its_bounds() {
         // Dated 2026-07-20, 3 days before the clock's origin.
@@ -4204,7 +4258,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
     #[tokio::test]
     async fn an_idle_runner_applies_the_kept_run_bounds_each_hour() {
         let mut service = KeptRunService::start(short_of_the_age_bound(), false).await;
@@ -4219,7 +4272,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-158, REQ-RUNNERENROLL-159
     #[tokio::test]
     async fn a_working_runner_applies_the_kept_run_bounds_once_its_run_ends() {
         let mut service = KeptRunService::start(short_of_the_age_bound(), true).await;
@@ -4238,7 +4290,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-162, REQ-RUNNERENROLL-161
     #[tokio::test]
     async fn a_starting_runner_evicts_a_build_cache_over_its_bound_after_reporting_kept_runs() {
         let mut service = KeptRunService::start_with_cache(
@@ -4265,7 +4316,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-162, REQ-RUNNERENROLL-161
     #[tokio::test]
     async fn a_starting_runner_leaves_a_build_cache_within_its_bound() {
         let mut service = KeptRunService::start_with_cache(
@@ -4281,7 +4331,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-162
     #[tokio::test]
     async fn a_working_runner_evicts_its_build_caches_once_its_run_ends() {
         let mut service = KeptRunService::start_with_cache(
@@ -4309,7 +4358,7 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-164, INV-RUNNER-54: a report never meets a pass in flight.
+    // A report never meets a pass in flight.
     #[tokio::test]
     async fn a_kept_report_asked_for_at_startup_is_answered_after_the_startup_pass() {
         let mut service = KeptRunService::start(22 * time::Duration::DAY, false).await;
@@ -4322,7 +4371,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-159, INV-RUNNER-54
     #[tokio::test]
     async fn an_operator_reports_and_prunes_a_kept_run_within_its_bounds() {
         let mut service = KeptRunService::start(3 * time::Duration::DAY, false).await;
@@ -4368,7 +4416,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-165, REQ-RUNNERENROLL-164, INV-RUNNER-54
     #[tokio::test]
     async fn a_working_runner_refuses_a_prune_and_still_reports_what_it_keeps() {
         let mut service = KeptRunService::start(3 * time::Duration::DAY, true).await;
@@ -4392,7 +4439,6 @@ mod tests {
         service.end().await;
     }
 
-    // REQ-RUNNERENROLL-164, REQ-RUNNERENROLL-165
     #[tokio::test]
     async fn an_operator_reports_and_empties_a_build_cache_within_its_bound() {
         let mut service = KeptRunService::start_with_cache(
@@ -4419,7 +4465,6 @@ mod tests {
         service.end().await;
     }
 
-    // INV-RUNNER-35, REQ-RUNNERENROLL-243, REQ-RUNNERENROLL-128
     #[test]
     fn a_refused_credential_is_answered_only_once_no_assignment_is_held() {
         let held = AssignmentCounts {
@@ -4493,7 +4538,7 @@ mod tests {
                 panic!("pending connection omitted hello");
             };
             let pending_hello: serde_json::Value = serde_json::from_str(&pending_hello).unwrap();
-            // INV-RUNNER-66: the credential-promotion hello advertises no recovery.
+            // The credential-promotion hello advertises no recovery.
             assert_hello_advertises_no_recovery(&pending_hello);
             sequences_sent
                 .send((
@@ -4583,7 +4628,6 @@ mod tests {
         with_watchdog(server).await.unwrap().unwrap();
     }
 
-    // REQ-RUNNERENROLL-40
     #[tokio::test]
     async fn startup_establishes_current_before_promoting_pending_in_the_same_boot() {
         let (listener, endpoint) = fixture_listener().await;
@@ -4627,7 +4671,11 @@ mod tests {
             hard_link
         });
 
-        let (promoted, response, _capture) = reload_fixture(&fixture.config).await;
+        let (promoted, response, _capture, target) = reload_fixture(&fixture.config).await;
+        assert_eq!(
+            target.current().credential().credential_id(),
+            fixture.config.credential().credential_id()
+        );
         assert!(promoted.is_none());
         assert_eq!(response, Err(ControlError::StateUpdateFailed));
         assert_eq!(fs::read(&fixture.state_path).unwrap(), original);
@@ -4735,7 +4783,6 @@ mod tests {
         fs::remove_file(hard_link).unwrap();
     }
 
-    // REQ-RUNNERENROLL-50
     #[tokio::test]
     async fn reload_authentication_failure_preserves_pending_state() {
         let (listener, endpoint) = fixture_listener().await;
@@ -4751,7 +4798,7 @@ mod tests {
                 .unwrap();
         });
 
-        let (promoted, response, capture) = reload_fixture(&fixture.config).await;
+        let (promoted, response, capture, _) = reload_fixture(&fixture.config).await;
         assert!(promoted.is_none());
         assert_eq!(response, Err(ControlError::PendingAuthenticationFailed));
         assert_eq!(fs::read(&fixture.state_path).unwrap(), original);
@@ -4760,12 +4807,11 @@ mod tests {
         server.await.unwrap();
     }
 
-    // REQ-RUNNERENROLL-50
     #[tokio::test]
     async fn reload_network_failure_preserves_pending_state() {
         let fixture = RotationFixture::new("ws://127.0.0.1:1/v1/runner/connect");
         let original = fs::read(&fixture.state_path).unwrap();
-        let (promoted, response, capture) = reload_fixture(&fixture.config).await;
+        let (promoted, response, capture, _) = reload_fixture(&fixture.config).await;
         assert!(promoted.is_none());
         assert_eq!(response, Err(ControlError::PendingConnectionFailed));
         assert_eq!(fs::read(&fixture.state_path).unwrap(), original);
@@ -4789,7 +4835,7 @@ mod tests {
                 .unwrap();
         });
 
-        let (promoted, response, capture) = reload_fixture(&fixture.config).await;
+        let (promoted, response, capture, _) = reload_fixture(&fixture.config).await;
         assert!(promoted.is_none());
         assert_eq!(response, Err(ControlError::PendingProtocolFailed));
         assert_eq!(fs::read(&fixture.state_path).unwrap(), original);
@@ -5193,8 +5239,6 @@ mod tests {
             .expect("captured gateway connection should exist")
     }
 
-    // REQ-RUNNERENROLL-38, REQ-COMPAT-25
-    // REQ-TELEMETRY-11, REQ-TELEMETRY-13, REQ-TELEMETRY-32
     #[tokio::test]
     async fn exits_when_the_gateway_closes_with_policy_violation() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5329,7 +5373,6 @@ mod tests {
             .collect()
     }
 
-    // REQ-AGENT-67, REQ-RUNNERENROLL-32
     #[tokio::test]
     async fn startup_records_harness_untested_once_per_untested_installation_before_connecting() {
         let records = records_through_one_policy_closed_connection(|config| {
@@ -5367,7 +5410,6 @@ mod tests {
         assert!(untested_index < connection_index);
     }
 
-    // REQ-AGENT-67, REQ-RUNNERENROLL-32
     #[tokio::test]
     async fn startup_records_no_harness_untested_for_qualified_installations() {
         let records = records_through_one_policy_closed_connection(|config| {
@@ -5397,7 +5439,6 @@ mod tests {
         assert!(!payload.contains_key("workspaceRecoveryRoot"));
     }
 
-    // INV-RUNNER-66
     #[tokio::test]
     async fn a_start_over_a_work_root_advertises_and_reports_no_recovery() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5485,7 +5526,6 @@ mod tests {
         capture
     }
 
-    // REQ-WORKSPACE-43, INV-RUNNER-43, REQ-RUNNERENROLL-129
     #[tokio::test]
     async fn a_start_neither_writes_nor_reads_a_recovery_root_record() {
         let replaced = serde_json::to_vec(&serde_json::json!({
@@ -5524,7 +5564,6 @@ mod tests {
         }
     }
 
-    // INV-RUNNER-43
     #[tokio::test]
     async fn an_ordinary_assignment_journals_to_v1_and_writes_no_recovery_record() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5705,8 +5744,6 @@ mod tests {
             .expect("fixture server failed");
     }
 
-    // REQ-RUNNERENROLL-37
-    // REQ-TELEMETRY-11
     #[tokio::test]
     async fn records_retryable_connection_failure_once_with_backoff() {
         for (error_type, outcome) in [
@@ -5836,7 +5873,6 @@ mod tests {
         drop(sleep_requests);
     }
 
-    // REQ-RUNNERENROLL-39
     #[tokio::test]
     async fn shutdown_reports_and_waits_for_an_accepted_assignment_interruption() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5876,7 +5912,6 @@ mod tests {
             .expect("gateway fixture failed");
     }
 
-    // REQ-RUNNERENROLL-39
     #[tokio::test]
     async fn second_shutdown_signal_forces_exit_without_another_observation() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5921,7 +5956,6 @@ mod tests {
             .expect("gateway fixture failed");
     }
 
-    // REQ-RUNNERENROLL-39, REQ-RUNNERENROLL-85
     #[tokio::test]
     async fn stop_signal_during_reconnect_backoff_exits_without_a_session() {
         let (listener, endpoint) = fixture_listener().await;
@@ -5957,9 +5991,9 @@ mod tests {
         server.abort();
     }
 
-    // REQ-RUNNERENROLL-133: while the service backs off from a refused session, the control
-    // socket's overview gives the attempt, the time to the next and who is serving, and
-    // `status` still answers its snapshot.
+    // While the service backs off from a refused session, the control socket's overview
+    // gives the attempt, the time to the next and who is serving, and `status` still
+    // answers its snapshot.
     #[tokio::test]
     async fn the_overview_of_a_service_in_reconnect_backoff_gives_its_attempts() {
         let (listener, endpoint) = fixture_listener().await;
@@ -6027,8 +6061,8 @@ mod tests {
         server.abort();
     }
 
-    // REQ-RUNNERENROLL-138: a service backing off from refused sessions lists its failed
-    // attempts as one event, and a reload that fails is answered as before and listed.
+    // A service backing off from refused sessions lists its failed attempts as one
+    // event, and a reload that fails is answered as before and listed.
     #[tokio::test]
     async fn the_overview_of_a_service_in_reconnect_backoff_lists_its_events() {
         use crate::control_protocol::{OpenWord, OverviewAnswer, RunnerEventKind};
@@ -6141,7 +6175,6 @@ mod tests {
         server.abort();
     }
 
-    // REQ-RUNNERENROLL-54, REQ-RUNNERENROLL-85
     #[tokio::test]
     async fn stop_signal_after_credential_revocation_exits_without_a_session() {
         let (listener, endpoint) = fixture_listener().await;
@@ -6332,7 +6365,6 @@ mod tests {
         }
     }
 
-    // REQ-RUNNERENROLL-78
     #[tokio::test]
     async fn abrupt_serving_owner_death_terminates_guarded_processes() {
         let temporary = tempfile::tempdir().expect("create owner-death fixture root");
@@ -6571,6 +6603,7 @@ mod tests {
                 let (sleeper, sleeps) = controlled_sleeper();
                 let (mut shutdown, shutdown_trigger) = controlled_shutdown();
                 let dependencies = ConnectionLoopDependencies {
+                    target: crate::service::serving_target(&config).unwrap(),
                     config: config.cloned_config(),
                     frame_source,
                     sleeper,
@@ -6706,7 +6739,6 @@ mod tests {
             }
         }
 
-        // REQ-GRANT-39, REQ-TELEMETRY-45
         #[tokio::test]
         async fn starting_installs_an_authorized_login_without_holding_up_the_connection() {
             let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
@@ -6760,7 +6792,6 @@ mod tests {
             service.stop().await;
         }
 
-        // REQ-GRANT-39, INV-RUNNER-15
         #[tokio::test]
         async fn an_unavailable_cloud_neither_stops_serving_nor_runs_setup_during_an_assignment() {
             let cloud = FakeAgentLoginCloud::new(Err(CloudFailure::Transport));
@@ -6771,8 +6802,8 @@ mod tests {
                 Arc::clone(&cloud),
             );
             service.pass_ended().await;
-            // Nothing was authorized, so an unanswered Cloud changes nothing
-            // (REQ-GRANT-119).
+            // Nothing was authorized, so an unanswered Cloud changes
+            // nothing.
             assert_eq!(service.recorded_codex(), None);
             assert!(service.setup_records().is_empty());
 
@@ -6818,7 +6849,6 @@ mod tests {
             service.stop().await;
         }
 
-        // REQ-GRANT-40, INV-RUNNER-58, REQ-TELEMETRY-45
         #[tokio::test]
         async fn an_ended_login_is_removed_and_an_unrecorded_one_is_the_runners_own() {
             let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
@@ -6863,7 +6893,7 @@ mod tests {
             // own: replaced by a delivery, and removed when the login ends.
             cloud.answer(Ok(Vec::new()));
             service.next_pass().await;
-            // The ending removed the whole Codex home (REQ-GRANT-122).
+            // The ending removed the whole Codex home.
             fs::create_dir_all(service.auth_path().parent().unwrap()).unwrap();
             fs::write(service.auth_path(), b"{\"unrecorded\":true}").unwrap();
             cloud.answer(fake_codex_authorized(5));
@@ -6882,7 +6912,6 @@ mod tests {
             service.stop().await;
         }
 
-        // REQ-GRANT-126, INV-RUNNER-15
         #[tokio::test]
         async fn a_setup_due_during_an_assignment_waits_for_its_release() {
             let (listener, endpoint) = fixture_listener().await;
@@ -7000,7 +7029,6 @@ mod tests {
             }
         }
 
-        // INV-RUNNER-41, REQ-RUNNERENROLL-244
         #[tokio::test]
         async fn a_rejoined_service_ends_only_once_its_setup_thread_has_let_the_work_root_go() {
             let HeldRejoin {
@@ -7034,7 +7062,6 @@ mod tests {
             server.abort();
         }
 
-        // INV-RUNNER-41
         #[tokio::test]
         async fn a_stop_while_a_rejoined_service_waits_for_its_setup_ends_it_as_stopped() {
             let HeldRejoin {

@@ -1,12 +1,11 @@
-//! The organization and the project in effect (REQ-ORG-87, REQ-PROJECT-100, INV-CLI-20): the
-//! organization and the project a command acts in when it is not given them as its own
-//! subject. For the organization the first source that names one wins: `--org ORG`, then
-//! `USEFUL_ORG`, then the checkout, then the caller's only active membership. For the project:
-//! `--project PROJECT`, then `USEFUL_PROJECT`, then the checkout, within the organization in
-//! effect. The options and the variables are read without a request; `git` is run, and the
-//! memberships and projects asked, only when a source left unnamed needs them. Every command
-//! that reads the organization or the project in effect resolves it here, before its own
-//! operation and under its own credential.
+//! The organization and the project in effect: the organization and the project a command acts
+//! in when it is not given them as its own subject. For the organization the first source that
+//! names one wins: `--org ORG`, then `USEFUL_ORG`, then the checkout, then the caller's only
+//! active membership. For the project: `--project PROJECT`, then `USEFUL_PROJECT`, then the
+//! checkout, within the organization in effect. The options and the variables are read without
+//! a request; `git` is run, and the memberships and projects asked, only when a source left
+//! unnamed needs them. Every command that reads the organization or the project in effect
+//! resolves it here, before its own operation and under its own credential.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -130,8 +129,8 @@ impl ProjectArgs {
 }
 
 /// A project as `--project`, `USEFUL_PROJECT` or a command's `PROJECT` names it: its ID, taken
-/// as given, or the exact name of a project of the organization in effect (REQ-PROJECT-11),
-/// which a name never mistakes for an ID.
+/// as given, or the exact name of a project of the organization in effect, which a name never
+/// mistakes for an ID.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ProjectRef {
     Id(String),
@@ -139,7 +138,7 @@ pub(super) enum ProjectRef {
 }
 
 impl ProjectRef {
-    /// The placeholder and the help of a command's own `PROJECT` (REQ-PROJECT-75).
+    /// The placeholder and the help of a command's own `PROJECT`.
     pub(super) const VALUE_NAME: &'static str = "PROJECT";
     pub(super) const HELP: &'static str = "Project ID or exact name";
 }
@@ -158,9 +157,9 @@ impl FromStr for ProjectRef {
     }
 }
 
-/// The organization in effect (REQ-ORG-88): `organization`, the reference a command sends,
-/// which is the value `--org` or `USEFUL_ORG` gave or else the organization's ID, and the
-/// source that named it. Serialized, it is the `organizationInEffect` member of a document.
+/// The organization in effect: `organization`, the reference a command sends, which is the
+/// value `--org` or `USEFUL_ORG` gave or else the organization's ID, and the source that
+/// named it. Serialized, it is the `organizationInEffect` member of a document.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(super) struct InEffect {
     pub(super) organization: String,
@@ -176,8 +175,8 @@ impl InEffect {
     }
 }
 
-/// The project in effect (REQ-PROJECT-100): the project's ID and the source that named it.
-/// Serialized, it is the `projectInEffect` member of a document.
+/// The project in effect: the project's ID and the source that named it. Serialized, it is
+/// the `projectInEffect` member of a document.
 #[derive(Debug, Eq, PartialEq, Serialize)]
 pub(super) struct ProjectInEffect {
     pub(super) project: String,
@@ -207,8 +206,7 @@ impl Source {
     }
 }
 
-/// Why no project is in effect (REQ-PROJECT-100). Each displays as a diagnostic with its
-/// remedy.
+/// Why no project is in effect. Each displays as a diagnostic with its remedy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum NoProject {
     /// No source names a project.
@@ -321,16 +319,16 @@ pub(super) fn active_organizations(
 }
 
 /// The caller's only active organization, or else all of them, none or several, which name no
-/// organization (REQ-ORG-87, REQ-GRANT-72).
+/// organization.
 pub(super) fn only_membership(
     organizations: Vec<Organization>,
 ) -> Result<Organization, Vec<Organization>> {
     <[Organization; 1]>::try_from(organizations).map(|[organization]| organization)
 }
 
-/// Runs `run` with `options` in the organization in effect (REQ-ORG-87). When no source names
-/// one the leaf ends with exit 2, and when a read fails, with the failure `write_failure`
-/// writes as the leaf's own failure is written.
+/// Runs `run` with `options` in the organization in effect. When no source names one the leaf
+/// ends with exit 2, and when a read fails, with the failure `write_failure` writes as the
+/// leaf's own failure is written.
 pub(super) fn execute_in<F: JsonOutputKind>(
     org: OrgArgs,
     options: CommonArgs<F, PrincipalAuthenticationArgs>,
@@ -366,8 +364,8 @@ pub(super) fn execute_in_keeping_exit<F: JsonOutputKind, E: Into<CommandFailure>
     }
 }
 
-/// The project a `useful project` leaf acts on: the project in effect its `ProjectArgs` read
-/// (REQ-PROJECT-100), or the `PROJECT` its command names as its own subject (REQ-PROJECT-75).
+/// The project a `useful project` leaf acts on: the project in effect its `ProjectArgs` read,
+/// or the `PROJECT` its command names as its own subject.
 pub(super) enum ProjectSubject {
     InEffect(ProjectArgs),
     Named(ProjectRef),
@@ -383,12 +381,12 @@ pub(super) enum ContextFailure {
 }
 
 /// Runs `run` with `options`, the organization reference to send (the value `--org` or
-/// `USEFUL_ORG` gave, else the organization's ID) and the project's ID (REQ-PROJECT-75,
-/// REQ-PROJECT-100, INV-CLI-20). A `PROJECT` subject is resolved as `--project` is, a name
-/// among the organization's projects, archived ones included; `--org` or `USEFUL_ORG` with a
-/// project ID costs no request and runs no `git`. With no organization or no project in
-/// effect the leaf ends with exit 2 before a request of its own; a refused read and a subject
-/// name no project has are written by `write_failure`, as the leaf's own failures are.
+/// `USEFUL_ORG` gave, else the organization's ID) and the project's ID. A `PROJECT` subject
+/// is resolved as `--project` is, a name among the organization's projects, archived ones
+/// included; `--org` or `USEFUL_ORG` with a project ID costs no request and runs no `git`.
+/// With no organization or no project in effect the leaf ends with exit 2 before a request of
+/// its own; a refused read and a subject name no project has are written by `write_failure`,
+/// as the leaf's own failures are.
 pub(super) fn execute_in_project<F: JsonOutputKind>(
     org: OrgArgs,
     project: ProjectSubject,
@@ -401,6 +399,24 @@ pub(super) fn execute_in_project<F: JsonOutputKind>(
         bool,
     ) -> anyhow::Result<ExitCode>,
     run: impl FnOnce(CommonArgs<F, PrincipalAuthenticationArgs>, &str, &str) -> anyhow::Result<ExitCode>,
+) -> CommandResult {
+    execute_in_project_keeping_exit(org, project, options, deployment, write_failure, run)
+}
+
+/// [`execute_in_project`] for a `run` whose failure is a [`CommandFailure`] or becomes one: the
+/// failure keeps its exit code.
+pub(super) fn execute_in_project_keeping_exit<F: JsonOutputKind, E: Into<CommandFailure>>(
+    org: OrgArgs,
+    project: ProjectSubject,
+    options: CommonArgs<F, PrincipalAuthenticationArgs>,
+    deployment: &Deployment,
+    write_failure: impl FnOnce(
+        &str,
+        &ContextFailure,
+        PrincipalAuthenticationKind,
+        bool,
+    ) -> anyhow::Result<ExitCode>,
+    run: impl FnOnce(CommonArgs<F, PrincipalAuthenticationArgs>, &str, &str) -> Result<ExitCode, E>,
 ) -> CommandResult {
     let subject = matches!(project, ProjectSubject::Named(_));
     let named = match project {
@@ -494,13 +510,13 @@ fn organization<F: JsonOutputKind>(
     }
 }
 
-/// The organization in effect (REQ-ORG-87) as the reference a command sends, the value `--org`
-/// or `USEFUL_ORG` gave or else the ID of the organization the checkout or the caller's only
+/// The organization in effect as the reference a command sends, the value `--org` or
+/// `USEFUL_ORG` gave or else the ID of the organization the checkout or the caller's only
 /// active membership names, for a command that holds `authentication` and `transport_policy`
 /// rather than `CommonArgs`, as `useful runner serve` does for a registration on a host with no
-/// state (REQ-RUNNERENROLL-115). A refused read of the memberships or projects is the inner
-/// error, for the command to write as its own failures are written; no organization in effect
-/// is the exit 2 of [`unresolved`].
+/// state. A refused read of the memberships or projects is the inner error, for the command to
+/// write as its own failures are written; no organization in effect is the exit 2 of
+/// [`unresolved`].
 pub(super) fn organization_in_effect(
     org: &OrgArgs,
     transport_policy: HttpTransportPolicy,
@@ -574,10 +590,9 @@ pub(super) fn unnamed_organization_as(
     })
 }
 
-/// The organization and the project in effect (REQ-ORG-87, REQ-PROJECT-100) for a leaf run
-/// with `options` that flattens `org` and `project`. Both named, the project by ID, cost no
-/// request and run no `git`; otherwise the reads the unnamed sources need are made under the
-/// leaf's credential.
+/// The organization and the project in effect for a leaf run with `options` that flattens
+/// `org` and `project`. Both named, the project by ID, cost no request and run no `git`;
+/// otherwise the reads the unnamed sources need are made under the leaf's credential.
 pub(super) fn in_effect<F: JsonOutputKind>(
     org: OrgArgs,
     project: ProjectArgs,
@@ -1115,7 +1130,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-20
     #[test]
     fn a_remote_is_its_fetch_address_as_a_host_and_a_path_without_its_user_information() {
         let listing = "origin\thttps://user:synthetic-secret@GitHub.com/Acme/Widgets.git (fetch)\n\
@@ -1150,7 +1164,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20
     #[test]
     fn a_remote_names_a_project_by_the_provider_host_and_the_repository_path() {
         let github = project(
@@ -1188,7 +1201,6 @@ mod tests {
         assert!(!remote("github.com", "acme/widgets").names(&detached));
     }
 
-    // INV-CLI-20
     #[test]
     fn the_checkout_names_an_organization_only_through_exactly_one_project() {
         let widgets = project(
@@ -1236,7 +1248,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20
     #[test]
     fn no_remote_asks_for_no_project_and_one_membership_names_its_organization() {
         let read = unnamed::<()>(
@@ -1251,7 +1262,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20
     #[test]
     fn an_empty_variable_is_unset_and_a_malformed_one_is_refused_naming_it() {
         let unnamed = || OrgArgs { org: None };
@@ -1278,7 +1288,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-20
     #[test]
     fn an_empty_project_variable_is_unset_and_a_malformed_one_names_none_naming_it() {
         let unnamed = || ProjectArgs { project: None };
@@ -1313,7 +1322,6 @@ mod tests {
         }
     }
 
-    // INV-CLI-20
     #[test]
     fn both_named_the_project_by_id_read_nothing() {
         let id = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1337,7 +1345,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20
     #[test]
     fn a_project_name_is_matched_exactly_among_every_project_of_the_organization_in_effect() {
         let widgets = project(
@@ -1388,7 +1395,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20, REQ-PROJECT-75, REQ-PROJECT-100
     #[test]
     fn a_project_leaf_runs_with_both_in_effect_and_a_subject_it_cannot_find_is_not_found() {
         let id = "prj_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -1433,7 +1439,6 @@ mod tests {
         );
     }
 
-    // INV-CLI-20
     #[test]
     fn a_checkout_that_matches_two_projects_names_none() {
         let upstream = remote("github.com", "acme/widgets");
