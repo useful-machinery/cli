@@ -1357,6 +1357,26 @@ fn split_unit_suffix<'a, S: Copy>(value: &'a str, units: &[(&str, S)]) -> Option
         .find_map(|&(suffix, scale)| value.strip_suffix(suffix).map(|quantity| (quantity, scale)))
 }
 
+// Largest first, so a duration can also be displayed in the largest exact unit.
+const DURATION_UNITS: [(&str, u32); 4] = [("d", 86_400), ("h", 3_600), ("m", 60), ("s", 1)];
+
+/// Read a whole number with an explicit unit as seconds.
+fn parse_duration_within(
+    value: &str,
+    minimum_unit_seconds: u32,
+    bounds: std::ops::RangeInclusive<u32>,
+) -> Option<u32> {
+    let (quantity, unit_seconds) = split_unit_suffix(value, &DURATION_UNITS)?;
+    if unit_seconds < minimum_unit_seconds || !quantity.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    quantity
+        .parse::<u32>()
+        .ok()?
+        .checked_mul(unit_seconds)
+        .filter(|seconds| bounds.contains(seconds))
+}
+
 fn parse_wait_timeout(value: &str) -> Result<Duration, String> {
     // `ms` precedes `s`, which it ends with.
     let (quantity, milliseconds) = split_unit_suffix(

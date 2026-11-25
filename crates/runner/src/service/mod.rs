@@ -13,6 +13,7 @@ mod determinism_spike;
 mod disk;
 mod execution;
 mod history;
+mod idle_stop;
 mod kept_runs;
 mod lease_clock;
 mod run_inputs;
@@ -1265,6 +1266,21 @@ async fn connection_loop_with_work_root(
             Arc::clone(&sleeper),
         )
     });
+    let mut idle_stop;
+    let shutdown: &mut dyn Shutdown = match config.idle_timeout() {
+        Some(timeout) => {
+            idle_stop = idle_stop::IdleStop::start(
+                shutdown,
+                timeout,
+                Arc::clone(&assignment_manager),
+                Arc::clone(&live_status),
+                Arc::clone(&sleeper),
+                Arc::clone(&recorder),
+            );
+            &mut idle_stop
+        }
+        None => shutdown,
+    };
     // The kept-run passes start after the startup report of what earlier processes
     // left, on tasks of their own that connecting never waits for.
     kept_runs.start(
@@ -5044,6 +5060,11 @@ mod tests {
         listener: &tokio::net::TcpListener,
         offer: Message,
     ) -> (FixtureSocket, serde_json::Value) {
+        let socket = welcome_assignment_socket(listener).await;
+        prepare_offered_assignment(socket, offer).await
+    }
+
+    async fn welcome_assignment_socket(listener: &tokio::net::TcpListener) -> FixtureSocket {
         let mut socket = accept_opened_fixture_socket(listener).await;
         socket.send(welcome()).await.expect("send welcome");
         socket
@@ -5053,6 +5074,13 @@ mod tests {
             ))
             .await
             .expect("acknowledge opening hello");
+        socket
+    }
+
+    async fn prepare_offered_assignment(
+        mut socket: FixtureSocket,
+        offer: Message,
+    ) -> (FixtureSocket, serde_json::Value) {
         socket.send(offer).await.expect("send assignment offer");
         let effect = effect_acknowledgement(&mut socket).await;
         acknowledge_runner_frame(&mut socket, &effect, "acknowledge offer receipt").await;
@@ -5888,6 +5916,170 @@ mod tests {
         assert_eq!(connection["error.type"], "gateway_liveness_timeout");
 
         drop(sleep_requests);
+    }
+
+    async fn ping_idle_stop_service(socket: &mut FixtureSocket, byte: u8) {
+        let ping = vec![byte];
+        socket
+            .send(Message::Ping(ping.clone().into()))
+            .await
+            .unwrap();
+        let Some(Ok(Message::Pong(pong))) = socket.next().await else {
+            panic!("expected a pong on the open connection");
+        };
+        assert_eq!(pong.as_ref(), ping);
+    }
+
+    #[tokio::test]
+    async fn idle_stop_arms_after_welcome_and_expires_despite_gateway_traffic() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = ConfigFixture::new(&endpoint, test_credential(), true).unwrap();
+        let timeout = Duration::from_secs(17);
+        let config = fixture.cloned_config().with_idle_timeout(Some(timeout));
+        let (sleeper, mut requests) = controlled_sleeper();
+        let (service, capture, _shutdown) = spawn_configured_service(config, sleeper);
+        with_watchdog(async {
+            let mut socket = accept_fixture_socket(&listener).await;
+            expect_opening_hello(&mut socket).await;
+            while let Ok((duration, _)) = requests.try_recv() {
+                assert_ne!(duration, timeout);
+            }
+            socket.send(welcome()).await.unwrap();
+            socket
+                .send(observation_acknowledgement(
+                    "rmsg_00000000000000000000000002",
+                    1,
+                ))
+                .await
+                .unwrap();
+            let release = sleep_request(&mut requests, timeout).await;
+            for byte in [1, 2, 3] {
+                ping_idle_stop_service(&mut socket, byte).await;
+            }
+            while let Ok((duration, _)) = requests.try_recv() {
+                assert_ne!(duration, timeout);
+            }
+            release.release();
+            assert_eq!(service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+        let timeouts: Vec<_> = capture
+            .records()
+            .into_iter()
+            .filter(|r| r["event.name"] == "runner.idle_timeout")
+            .collect();
+        assert_eq!(timeouts.len(), 1);
+        assert_eq!(
+            timeouts[0]["um.runner.idle_timeout_seconds"],
+            timeout.as_secs()
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_stop_expiry_spares_an_accepted_assignment_until_operator_shutdown() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = accepted_assignment_config(&endpoint);
+        let timeout = Duration::from_secs(17);
+        let (sleeper, mut requests) = controlled_sleeper();
+        let (service, capture, stop) = spawn_configured_service_with_source(
+            fixture.config.with_idle_timeout(Some(timeout)),
+            sleeper,
+            Some(fixture.source_broker),
+            None,
+        );
+        with_watchdog(async {
+            let socket = welcome_assignment_socket(&listener).await;
+            let expiry = sleep_request(&mut requests, timeout).await;
+            let (mut socket, accepted) = prepare_offered_assignment(socket, fixture.offer).await;
+            acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance").await;
+            expiry.release();
+            ping_idle_stop_service(&mut socket, 7).await;
+            stop.notify_one();
+            let interrupted =
+                next_semantic_assignment_frame(&mut socket, "assignment_interrupted", true).await;
+            assert_eq!(interrupted["payload"]["reason"], "graceful_shutdown");
+            socket
+                .send(terminal_observation_acknowledgement(
+                    interrupted["messageId"].as_str().unwrap(),
+                    interrupted["sequence"].as_u64().unwrap(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+        assert!(
+            capture
+                .records()
+                .iter()
+                .all(|r| r["event.name"] != "runner.idle_timeout")
+        );
+    }
+
+    // The interval an assignment outlived is gone: the runner stops only for one that
+    // begins once the assignment has ended.
+    #[tokio::test]
+    async fn idle_stop_expires_after_a_new_interval_once_its_assignment_ends() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = accepted_assignment_config(&endpoint);
+        let timeout = Duration::from_secs(17);
+        let (sleeper, mut requests) = controlled_sleeper();
+        let (mut service, capture, _stop) = spawn_configured_service_with_source(
+            fixture.config.with_idle_timeout(Some(timeout)),
+            sleeper,
+            Some(fixture.source_broker),
+            None,
+        );
+        with_watchdog(async {
+            let socket = welcome_assignment_socket(&listener).await;
+            let outlived = sleep_request(&mut requests, timeout).await;
+            let (mut socket, accepted) = prepare_offered_assignment(socket, fixture.offer).await;
+            acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance").await;
+            outlived.release();
+            ping_idle_stop_service(&mut socket, 7).await;
+            socket
+                .send(cloud_frame(
+                    "assignment_release",
+                    "cmsg_01k0z6r1w8f4jy2m7q9v3x5abt",
+                    serde_json::json!({
+                        "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abt",
+                        "assignmentId": accepted["payload"]["assignmentId"],
+                        "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
+                        "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+                        "reason": "stale_or_invalid_acceptance",
+                    }),
+                ))
+                .await
+                .unwrap();
+            // An interval that ends before the runner has sent what the release left it to
+            // send is refused, so every one the runner asks for is let to elapse. The
+            // service's end closes the sleeper, so it is read first.
+            let end = loop {
+                tokio::select! {
+                    biased;
+                    end = &mut service => break end,
+                    interval = sleep_request(&mut requests, timeout) => interval.release(),
+                    Some(Ok(Message::Text(frame))) = socket.next() => {
+                        let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+                        if frame["messageId"].is_string() {
+                            acknowledge_runner_frame(&mut socket, &frame, "acknowledge frame")
+                                .await;
+                        }
+                    }
+                }
+            };
+            assert_eq!(end.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+        let timeouts = capture
+            .records()
+            .into_iter()
+            .filter(|r| r["event.name"] == "runner.idle_timeout")
+            .count();
+        assert_eq!(timeouts, 1);
     }
 
     #[tokio::test]

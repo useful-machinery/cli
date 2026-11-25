@@ -58,6 +58,7 @@ impl AssignmentManager {
             recent_assignments: Ring::new(RECENT_ASSIGNMENTS),
             lease_policy: None,
             held: BTreeMap::new(),
+            holds: 0,
             reporting: BTreeMap::new(),
             decisions: VecDeque::new(),
             cancellations: VecDeque::new(),
@@ -78,6 +79,7 @@ impl AssignmentManager {
             fenced_final_graces: BTreeSet::new(),
             guard_processes,
             run_ended: Arc::new(Notify::new()),
+            idle_run_ended: Arc::new(Notify::new()),
         }
     }
 
@@ -261,6 +263,7 @@ impl AssignmentManager {
                 );
                 continue;
             }
+            self.notify_run_ended();
             // The root is already released. Admission may proceed, but the old
             // grace event must not restore reporting after successor fencing.
             self.fenced_final_graces.insert(FencedFinalGrace {
@@ -343,6 +346,7 @@ impl AssignmentManager {
             let Some(preparing) = self.take_held(&assignment_id, HeldAssignment::preparing) else {
                 return Err(AssignmentManagerFailure::DecisionCapacity);
             };
+            self.notify_run_ended();
             let offer = preparing.offer;
             let decline = environment_unavailable();
             self.reject_offered_run(&offer.assignment_id, &preparing.run_event, &decline);

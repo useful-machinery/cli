@@ -1815,6 +1815,18 @@ useful runner serve --join-key-file /protected/path/builder-one.key
 useful runner show
 ```
 
+On an enrolled host, `useful runner serve --idle-timeout 5m` stops after five idle minutes.
+The option accepts durations from `1s` to `7d`. The interval starts once the runner connects
+and counts only time when it holds no run and owes no report. A waiting run is still held.
+Once the interval expires, the runner logs `runner.idle_timeout`, stops as it would on a
+signal with no work held, and exits 0. It declines an offer arriving as it stops, leaving
+the run queued for another runner or the next start.
+
+Start the same command again to serve as the same runner. If Cloud has since removed a
+key-joined runner after its key's offline removal time, start with a current join key to
+rejoin. A service manager that restarts on any exit starts the runner again after the
+timeout. Configure it to restart only on failure if the runner should stay stopped.
+
 `runner show` with no `RUNNER` prints the live runner's state, one field per line. Its
 `assignments:` line gives the total and the count of each nonzero state, `preparing`,
 `accepted`, `running`, `waiting`, `finishing` and `reporting`, a run the runner last reported

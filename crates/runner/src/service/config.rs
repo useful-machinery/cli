@@ -113,6 +113,7 @@ pub struct Config {
     /// The free space kept on the work root's disk.
     minimum_free_disk_bytes: u64,
     repository_url_policy: RepositoryUrlPolicy,
+    idle_timeout: Option<Duration>,
     pi_installation: Option<ValidatedPiInstallation>,
     claude_code_installation: Option<ValidatedClaudeCodeInstallation>,
     codex_installation: Option<ValidatedCodexInstallation>,
@@ -123,6 +124,7 @@ impl fmt::Debug for Config {
         formatter
             .debug_struct("Config")
             .field("endpoint", &self.endpoint)
+            .field("idle_timeout", &self.idle_timeout())
             .field("credential", &self.credential)
             .field("kept_runs", &self.assignment.kept_runs())
             .field("build_caches", &self.assignment.build_caches())
@@ -265,6 +267,7 @@ impl Config {
             assignment,
             minimum_free_disk_bytes: useful_execution::DEFAULT_MINIMUM_FREE_DISK_BYTES,
             repository_url_policy,
+            idle_timeout: None,
             pi_installation: None,
             claude_code_installation: None,
             codex_installation: None,
@@ -329,6 +332,16 @@ impl Config {
 
     pub(super) fn repository_url_policy(&self) -> RepositoryUrlPolicy {
         self.repository_url_policy
+    }
+
+    /// The idle interval requested for this invocation of the serving process.
+    pub fn with_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.idle_timeout = timeout;
+        self
+    }
+
+    pub(crate) fn idle_timeout(&self) -> Option<Duration> {
+        self.idle_timeout
     }
 
     pub fn pi_installation(&self) -> Option<&ValidatedPiInstallation> {

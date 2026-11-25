@@ -736,7 +736,10 @@ impl AssignmentManager {
                 AssignmentDecline::RunnerUnable(RunnerUnableReason::SourceServiceUnavailable);
             self.reject_offered_run(assignment_id, &preparing.run_event, &decline);
             let response = rejected(&offer, decline);
-            self.retain_decision(offer, response)?;
+            if let Err(failure) = self.retain_decision(offer, response) {
+                self.notify_run_ended();
+                return Err(failure);
+            }
             self.retire_assignment_observations(assignment_id);
             if let Some(root) = preparing.root.take() {
                 self.begin_assignment_cleanup(
@@ -840,7 +843,7 @@ impl AssignmentManager {
                     return;
                 };
                 self.reporting.remove(&assignment_id);
-                self.run_ended.notify_one();
+                self.notify_run_ended();
                 if let Some(root) = finishing.root {
                     self.begin_assignment_finalization(
                         finishing.identity.assignment_id,
@@ -850,9 +853,8 @@ impl AssignmentManager {
                         ReleaseAfter::Idle,
                     );
                 }
-            } else {
-                self.reporting.remove(observation.assignment_id());
-                self.run_ended.notify_one();
+            } else if self.reporting.remove(observation.assignment_id()).is_some() {
+                self.notify_run_ended();
             }
         }
         self.outbox.wake();
@@ -913,6 +915,30 @@ impl AssignmentManager {
                 cancellation.observation_id = None;
             }
         }
+    }
+
+    /// The hold count at the start of an idle interval, after any pending transitions.
+    pub(in crate::service) fn idle_holds(&mut self) -> Option<u64> {
+        self.drain_events();
+        (self.held.is_empty() && self.reporting.is_empty() && self.deferred_successor.is_none())
+            .then_some(self.holds)
+    }
+
+    /// Fence new admissions only if the whole interval was idle and replay is caught up.
+    pub(in crate::service) fn begin_idle_shutdown(
+        &mut self,
+        holds: u64,
+    ) -> Result<bool, AssignmentManagerFailure> {
+        if self.idle_holds() != Some(holds)
+            || self.shutting_down
+            || self.cleanup_failed
+            || self.lease_clock_failed
+            || !self.outbox.replay_obligations_dispatched()
+        {
+            return Ok(false);
+        }
+        self.interrupt_held()?;
+        Ok(true)
     }
 
     pub(in crate::service) fn begin_shutdown(&mut self) -> Result<(), AssignmentManagerFailure> {
@@ -987,6 +1013,7 @@ impl AssignmentManager {
                         .as_ref()
                         .is_some_and(|handoff| handoff.detach());
                 if detached_root_preparation {
+                    self.notify_run_ended();
                     // The offer is given up unanswered.
                     self.finish_offered_run(
                         &preparing.offer.assignment_id,

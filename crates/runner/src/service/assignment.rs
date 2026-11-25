@@ -1230,6 +1230,7 @@ pub(super) struct AssignmentManager {
     lease_policy: Option<ExecutionLeasePolicy>,
     /// The assignments the runner holds, by assignment ID.
     held: BTreeMap<String, HeldAssignment>,
+    holds: u64,
     /// The assignments that have ended and whose last report Cloud has yet to acknowledge,
     /// by assignment ID; an assignment is held or reporting, never both.
     reporting: BTreeMap<String, ReportingAssignment>,
@@ -1255,6 +1256,8 @@ pub(super) struct AssignmentManager {
     /// held or reporting, which is when a run may have stopped working; the kept-run
     /// schedule waits on it.
     run_ended: Arc<Notify>,
+    /// A separate permit for the idle watcher, since the kept-run schedule consumes its own.
+    idle_run_ended: Arc<Notify>,
 }
 
 /// The time an admission's grant-token refresh task waits on, and the live
@@ -1300,8 +1303,18 @@ impl AssignmentManager {
         Arc::clone(&self.run_ended)
     }
 
+    pub(in crate::service) fn idle_run_ended(&self) -> Arc<Notify> {
+        Arc::clone(&self.idle_run_ended)
+    }
+
+    fn notify_run_ended(&self) {
+        self.run_ended.notify_one();
+        self.idle_run_ended.notify_one();
+    }
+
     /// Holds `assignment` under its assignment ID.
     fn hold(&mut self, assignment: HeldAssignment) {
+        self.holds = self.holds.wrapping_add(1);
         self.held
             .insert(assignment.assignment_id().to_owned(), assignment);
     }

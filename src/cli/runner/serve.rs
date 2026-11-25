@@ -4,6 +4,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::{ArgGroup, Args};
@@ -64,6 +65,10 @@ pub(super) struct Command {
     /// runner home under the useful home is the default, created where it is missing.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+
+    /// Stop after holding no run for this long, from 1s to 7d (s, m, h or d).
+    #[arg(long, value_name = "DURATION", value_parser = parse_idle_timeout, conflicts_with = "replace_credential")]
+    idle_timeout: Option<Duration>,
 
     /// Read a single-runner key or a pool's join key from a protected file or
     /// explicit stdin when the host holds no enrolled state, or rejoin the pool
@@ -244,8 +249,20 @@ impl Command {
             claude_code_installation,
             codex_installation,
         );
-        serve(&config_path, config, &installations, join_key)
+        serve(
+            &config_path,
+            config,
+            &installations,
+            join_key,
+            self.idle_timeout,
+        )
     }
+}
+
+fn parse_idle_timeout(value: &str) -> Result<Duration, String> {
+    crate::cli::parse_duration_within(value, 1, 1..=604_800)
+        .map(|seconds| Duration::from_secs(u64::from(seconds)))
+        .ok_or_else(|| "must be a whole number of seconds, minutes, hours or days, from 1s to 7d, such as 90s or 5m".to_owned())
 }
 
 type HarnessInstallations = (
@@ -262,6 +279,7 @@ fn serve(
     mut config: Config,
     installations: &HarnessInstallations,
     mut join_key: JoinKeyMode,
+    idle_timeout: Option<Duration>,
 ) -> super::super::CommandResult {
     loop {
         let (pi_installation, claude_code_installation, codex_installation) = installations.clone();
@@ -272,7 +290,7 @@ fn serve(
             codex_installation,
         );
         let end = useful_runner::run(
-            config_with_installations,
+            config_with_installations.with_idle_timeout(idle_timeout),
             crate::build_info::VERSION,
             join_key,
         )
@@ -1286,10 +1304,25 @@ fn configure_harness_installations(
 mod tests {
     use std::cell::Cell;
     use std::path::PathBuf;
-    use std::time::Duration;
 
     use super::*;
     use useful_execution::ClaudeCodeIncompatibility;
+
+    #[test]
+    fn idle_timeout_reads_seconds_to_days_within_its_bounds() {
+        for (value, seconds) in [
+            ("1s", 1),
+            ("90s", 90),
+            ("5m", 300),
+            ("12h", 43_200),
+            ("7d", 604_800),
+        ] {
+            assert_eq!(parse_idle_timeout(value), Ok(Duration::from_secs(seconds)));
+        }
+        for value in ["", "0s", "5", "1.5m", "+5m", "8d", "604801s"] {
+            assert!(parse_idle_timeout(value).is_err(), "{value:?}");
+        }
+    }
 
     #[test]
     fn startup_retains_each_available_harness_snapshot_independently() {

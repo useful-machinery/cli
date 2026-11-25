@@ -4680,6 +4680,66 @@ fn dispatched_shutdown_complete(manager: &mut AssignmentManager) -> bool {
     manager.shutdown_complete()
 }
 
+#[tokio::test]
+async fn idle_stop_leaves_a_waiting_run_to_continue() {
+    let mut fixture = fixture_with(
+        TREE_DIGEST,
+        "waiting",
+        "null",
+        &[
+            ("TREE_TEST_WAIT_KIND", "external"),
+            ("TREE_TEST_WAIT_SOURCE", "github"),
+        ],
+    );
+    let before = fixture.manager.idle_holds().unwrap();
+    let log = per_run_log(&fixture, &fixture.offer);
+    fs::write(log.join("proceed"), b"").unwrap();
+    start(&mut fixture).await;
+    wait_for_reports(&mut fixture.manager, |reports| {
+        reported_state(reports, "waiting")
+    })
+    .await;
+    assert_eq!(fixture.manager.idle_holds(), None);
+    assert!(!fixture.manager.begin_idle_shutdown(before).unwrap());
+    fs::write(log.join("answer"), "continue").unwrap();
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
+#[tokio::test]
+async fn idle_stop_after_a_finished_run_requires_a_fresh_interval_and_declines_new_work() {
+    let mut fixture = fixture(TREE_DIGEST, "exited", r#""landed""#);
+    let before = fixture.manager.idle_holds().unwrap();
+    start(&mut fixture).await;
+    finished_reports(&mut fixture.manager).await;
+    settled_observations(&mut fixture.manager).await;
+    let after = fixture.manager.idle_holds().unwrap();
+    assert!(!fixture.manager.begin_idle_shutdown(after).unwrap());
+    dispatched_shutdown_complete(&mut fixture.manager);
+    assert!(!fixture.manager.begin_idle_shutdown(before).unwrap());
+    assert!(fixture.manager.begin_idle_shutdown(after).unwrap());
+    let offer = other_offer(&fixture.offer, '6');
+    assert_eq!(
+        start_other(&mut fixture, &offer, '6').await,
+        Some(AssignmentDecline::CapacityUnavailable)
+    );
+    assert!(dispatched_shutdown_complete(&mut fixture.manager));
+}
+
+#[tokio::test]
+async fn idle_stop_loses_to_an_admitted_offer_which_then_lands() {
+    let mut fixture = fixture(TREE_DIGEST, "exited", r#""landed""#);
+    let before = fixture.manager.idle_holds().unwrap();
+    assert_eq!(
+        prepare_offered(&mut fixture.manager, &fixture.offer).await,
+        None
+    );
+    assert!(!fixture.manager.begin_idle_shutdown(before).unwrap());
+    start_offered(&mut fixture.manager, &fixture.offer).spawn();
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
 // A graceful stop interrupts every run the runner holds, a waiting one left waiting for a
 // continuation, and completes once each has reported and released its root.
 #[tokio::test]

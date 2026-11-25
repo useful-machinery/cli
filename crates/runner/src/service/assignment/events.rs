@@ -111,6 +111,7 @@ impl AssignmentManager {
                             }
                         }
                         Err(error) => {
+                            self.notify_run_ended();
                             let cleanup_failed =
                                 error == AssignmentRootCreationError::CleanupFailed;
                             if cleanup_failed {
@@ -401,30 +402,22 @@ impl AssignmentManager {
                                 self.retire_assignment_observations(&assignment_id);
                                 ReleaseAfter::Idle
                             };
-                            if let Some(root) = retained_root {
-                                self.begin_assignment_finalization(
-                                    assignment_id,
-                                    root,
-                                    ProcessQuiescence::Failed,
-                                    workspace_disposition,
-                                    after,
-                                );
-                            } else if let ReleaseAfter::Reporting(identity) = after {
-                                self.report(*identity);
-                            }
+                            self.cleanup_retained_root(
+                                assignment_id,
+                                retained_root,
+                                ProcessQuiescence::Failed,
+                                workspace_disposition,
+                                after,
+                            );
                         }
                         FinishedDisposition::PreExecutionCancellation => {
-                            if let Some(root) = retained_root {
-                                self.begin_assignment_finalization(
-                                    assignment_id,
-                                    root,
-                                    quiescence,
-                                    workspace_disposition,
-                                    ReleaseAfter::PreExecutionCancellation(Box::new(identity)),
-                                );
-                            } else {
-                                self.complete_pre_execution_cancellation(identity);
-                            }
+                            self.cleanup_retained_root(
+                                assignment_id,
+                                retained_root,
+                                quiescence,
+                                workspace_disposition,
+                                ReleaseAfter::PreExecutionCancellation(Box::new(identity)),
+                            );
                         }
                         FinishedDisposition::WithoutReport => {
                             self.lease_clock_failed |= lease_clock_failed;
@@ -485,7 +478,7 @@ impl AssignmentManager {
                         self.cleanup_failure_report = None;
                         self.retire_assignment_observations(&assignment_id);
                         self.reporting.remove(&assignment_id);
-                        self.run_ended.notify_one();
+                        self.notify_run_ended();
                         continue;
                     }
                     if self.fenced_final_graces.remove(&FencedFinalGrace {
@@ -514,17 +507,13 @@ impl AssignmentManager {
                             self.retire_assignment_observations(&assignment_id);
                             ReleaseAfter::Idle
                         };
-                        if let Some(root) = finishing.root {
-                            self.begin_assignment_finalization(
-                                assignment_id,
-                                root,
-                                ProcessQuiescence::Proven,
-                                workspace_disposition,
-                                after,
-                            );
-                        } else if let ReleaseAfter::Reporting(identity) = after {
-                            self.report(*identity);
-                        }
+                        self.cleanup_retained_root(
+                            assignment_id,
+                            finishing.root,
+                            ProcessQuiescence::Proven,
+                            workspace_disposition,
+                            after,
+                        );
                     } else {
                         self.hold(HeldAssignment::Finishing(finishing));
                     }
@@ -630,7 +619,7 @@ impl AssignmentManager {
         for predecessor in predecessors {
             self.retire_assignment_observations(&predecessor);
             self.reporting.remove(&predecessor);
-            self.run_ended.notify_one();
+            self.notify_run_ended();
         }
         let rejected_assignments: Vec<_> = self
             .decisions

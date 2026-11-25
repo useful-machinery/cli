@@ -10,7 +10,7 @@ use serde::Serialize;
 use zeroize::Zeroizing;
 
 use super::{CloudOptions, LIST_PAGE, OrgArgs, PoolArg, cloud, completed_cloud_result};
-use crate::cli::{CommandFailure, CommandResult};
+use crate::cli::{CommandFailure, CommandResult, DURATION_UNITS, parse_duration_within};
 use crate::exit_code::ExitCode;
 use useful_api::{RunnerActivation, RunnerApi, RunnerFailure};
 use useful_human_auth::Deployment;
@@ -22,8 +22,6 @@ const COMMAND_PATH: &[&str] = &["runner", "join-key"];
 // The same help as the `account integration` and `runner credential` leaves' `--runner`, one help
 // class.
 const RUNNER_HELP: &str = "Runner ID or exact name";
-// Largest unit first, so a removal time prints as it is usually written.
-const DURATION_UNITS: [(&str, u32); 3] = [("d", 86_400), ("h", 3_600), ("m", 60)];
 
 // useful-api does not name its join-key models, so these documents borrow them generically.
 #[derive(Serialize)]
@@ -644,35 +642,27 @@ fn write_key(destination: ArtifactDestination, line: &[u8]) -> anyhow::Result<Op
 }
 
 fn parse_expiry(value: &str) -> Result<i32, String> {
-    parse_duration_within(value, 60..=31_536_000, "from 1m to 365d")
+    parse_join_key_duration(value, 60..=31_536_000, "from 1m to 365d")
 }
 
 fn parse_removal_time(value: &str) -> Result<i32, String> {
-    parse_duration_within(value, 300..=2_592_000, "from 5m to 30d")
+    parse_join_key_duration(value, 300..=2_592_000, "from 5m to 30d")
 }
 
 /// Reads a whole number of minutes, hours or days, such as `30m`, `12h` or
 /// `7d`, as seconds within `bounds`.
-fn parse_duration_within(
+fn parse_join_key_duration(
     value: &str,
     bounds: std::ops::RangeInclusive<u32>,
     range: &str,
 ) -> Result<i32, String> {
-    let invalid = || {
-        format!("must be a whole number of minutes, hours or days, {range}, such as 30m, 12h or 7d")
-    };
-    let (quantity, unit_seconds) =
-        super::super::split_unit_suffix(value, &DURATION_UNITS).ok_or_else(invalid)?;
-    if quantity.is_empty() || !quantity.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid());
-    }
-    quantity
-        .parse::<u32>()
-        .ok()
-        .and_then(|quantity| quantity.checked_mul(unit_seconds))
-        .filter(|seconds| bounds.contains(seconds))
+    parse_duration_within(value, 60, bounds)
         .and_then(|seconds| i32::try_from(seconds).ok())
-        .ok_or_else(invalid)
+        .ok_or_else(|| {
+            format!(
+                "must be a whole number of minutes, hours or days, {range}, such as 30m, 12h or 7d"
+            )
+        })
 }
 
 fn duration_text(seconds: i32) -> String {

@@ -1103,6 +1103,62 @@ fn runner_status_reports_absent_and_refused_sockets_as_not_reachable() {
 
 type RunnerSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
+#[tokio::test]
+async fn runner_serve_exits_successfully_after_its_idle_timeout() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
+    let fixture = ServeStatusFixture::new(&endpoint);
+    let home = tempfile::tempdir().unwrap();
+    let command =
+        runner_enrollment::serve_command(&["--config", &fixture.config, "--idle-timeout", "1s"]);
+    let mut serve = tokio::process::Command::from(command)
+        .env("HOME", home.path())
+        .env("USEFUL_HOME", home.path().join("useful"))
+        .env("PATH", "")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut welcomed_at = None;
+    let server = async {
+        let mut socket = accept_runner_socket(accept_runner_connection(&listener).await).await;
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if frame["type"] == "hello" {
+                welcomed_at = Some(monotonic_now());
+                socket.send(cloud_welcome()).await.unwrap();
+            }
+            if let Some(message_id) = frame["messageId"].as_str() {
+                let sequence = frame["sequence"].as_u64().unwrap();
+                socket
+                    .send(cloud_observation_ack(message_id, sequence))
+                    .await
+                    .unwrap();
+            }
+        }
+    };
+    let mut wait_for_exit = tokio::task::spawn_blocking(move || {
+        let status = poll_until(
+            "the idle runner to exit",
+            || serve.try_wait().unwrap(),
+            Option::is_some,
+        )
+        .unwrap();
+        (status, monotonic_now())
+    });
+    let (status, exited_at) = tokio::select! {
+        () = server => wait_for_exit.await.unwrap(),
+        exited = &mut wait_for_exit => exited.unwrap(),
+    };
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        exited_at.duration_since(welcomed_at.expect("the runner said hello"))
+            >= Duration::from_secs(1)
+    );
+}
+
 async fn open_runner_session(
     listener: &tokio::net::TcpListener,
 ) -> (RunnerSocket, serde_json::Value) {

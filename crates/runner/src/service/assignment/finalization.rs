@@ -61,8 +61,17 @@ impl AssignmentManager {
             self.begin_assignment_finalization(assignment_id, root, quiescence, disposition, after);
         } else {
             self.tree_run.forget(&assignment_id);
-            if let ReleaseAfter::Reporting(identity) = after {
-                self.report(*identity);
+            self.after_release(after);
+            self.notify_run_ended();
+        }
+    }
+
+    fn after_release(&mut self, after: ReleaseAfter) {
+        match after {
+            ReleaseAfter::Idle => {}
+            ReleaseAfter::Reporting(identity) => self.report(*identity),
+            ReleaseAfter::PreExecutionCancellation(identity) => {
+                self.complete_pre_execution_cancellation(*identity);
             }
         }
     }
@@ -139,13 +148,7 @@ impl AssignmentManager {
                 {
                     self.cleanup_failed = true;
                 }
-                match releasing.after {
-                    ReleaseAfter::Idle => {}
-                    ReleaseAfter::Reporting(identity) => self.report(*identity),
-                    ReleaseAfter::PreExecutionCancellation(identity) => {
-                        self.complete_pre_execution_cancellation(*identity);
-                    }
-                }
+                self.after_release(releasing.after);
                 if let Some(successor) = self.deferred_successor.take()
                     && let Err(failure) = self.handle_offer_after_drain(successor)
                 {
@@ -163,7 +166,7 @@ impl AssignmentManager {
             }
         }
         // The assignment is held no longer.
-        self.run_ended.notify_one();
+        self.notify_run_ended();
         self.outbox.wake();
     }
 
@@ -288,6 +291,7 @@ impl AssignmentManager {
             self.enqueue_assignment_interruption(&identity, reason, lease_loss)
         else {
             // No report will end the run, and the assignment is given up.
+            self.notify_run_ended();
             self.finish_run_event(&identity.assignment_id, Some("aborted"));
             return Err(AssignmentManagerFailure::DecisionCapacity);
         };
