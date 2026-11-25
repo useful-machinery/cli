@@ -5,7 +5,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 
 use super::Cli;
 
-const LEAVES: &str = "accept add answer approve authorize archive cancel connect create deauthorize decline delete disable disconnect doctor download drain enable end event hand-back interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
+const LEAVES: &str = "accept add answer approve authorize archive cancel connect create credentials deauthorize decline delete disable disconnect doctor download drain enable end event hand-back interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
 const GROUPS: &str = "account artifact audit credential definition delegation delivery event identity input input-set integration invitation join-key key linear member org pool project publication record repository run runner secret service team evaluation webhook workflow";
 const COMMON: [&str; 3] = ["json", "api-key-file", "allow-insecure-http"];
 // These leaves have no limit/cursor contract; see cli/docs/output-style.md.

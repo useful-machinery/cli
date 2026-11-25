@@ -1,9 +1,10 @@
-//! `github` / `pull_request.queue_settled`: whether the pull request an `external` wait's rule
-//! names has left the merge queue. The pull request is read from the GitHub REST API with the
-//! first GitHub token the environment offers (`GH_TOKEN_FILE`'s file, `GH_TOKEN`,
-//! `GITHUB_TOKEN`, else `gh auth token`) and its queue entry from Mergify's, the repository's
-//! merge queue, with `MERGIFY_TOKEN` when the CLI's environment holds one and else with that
-//! GitHub token, through `useful_api::provider_get`. `USEFUL_GITHUB_API_URL` and
+//! `github` / `pull_request.queue_settled`: whether the pull request an
+//! `external` wait's rule names has left the merge queue. The pull request is read from the
+//! GitHub REST API with the first GitHub token the environment offers (`GH_TOKEN_FILE`'s file,
+//! `GH_TOKEN`, `GITHUB_TOKEN`, else `gh auth token`; the first two alone in a command a runner
+//! started in credential mode `cloud`) and its queue entry from Mergify's, the
+//! repository's merge queue, with `MERGIFY_TOKEN` when the CLI's environment holds one and else
+//! with that GitHub token, through `useful_api::provider_get`. `USEFUL_GITHUB_API_URL` and
 //! `USEFUL_MERGIFY_API_URL` override the two base URLs for development and tests, and admit
 //! `http`.
 
@@ -166,13 +167,20 @@ pub(super) fn observe_queue_settled(
     )
 }
 
-/// The first GitHub token the environment offers: the trimmed token in the file
-/// `GH_TOKEN_FILE` names, else `GH_TOKEN`, as `mirror::offered_token` takes the pair, else
-/// `GITHUB_TOKEN` when set and non-empty, else the trimmed output of `gh auth token`. Read
-/// at each observation, so a token file the runner replaced is read anew.
+/// The first GitHub token the environment offers: the trimmed token in the
+/// file `GH_TOKEN_FILE` names, else `GH_TOKEN`, as `mirror::offered_token` takes the pair,
+/// else `GITHUB_TOKEN` when set and non-empty, else the trimmed output of `gh auth token`.
+/// A command a runner started in credential mode `cloud` reads the first two alone and is
+/// unavailable without them. Read at each observation, so a token file the
+/// runner replaced is read anew.
 fn token() -> Result<Zeroizing<String>, ConditionError> {
     if let Some(token) = super::super::mirror::offered_token(TOKEN_FILE_VARIABLE, GRANT_VARIABLE) {
         return Ok(token);
+    }
+    if super::super::mirror::offered_names_only() {
+        return Err(ConditionError::unavailable(format!(
+            "No GitHub token: the file {TOKEN_FILE_VARIABLE} names and {GRANT_VARIABLE} hold none, and a command the runner started in credential mode cloud reads no other source. Connect GitHub for the run's actor so the runner offers one."
+        )));
     }
     if let Some(token) = std::env::var(TOKEN_VARIABLE)
         .ok()

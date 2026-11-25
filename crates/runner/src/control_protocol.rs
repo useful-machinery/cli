@@ -35,6 +35,9 @@ pub enum ControlError {
     InvalidRequest,
     UnsupportedVersion,
     RunnerBusy,
+    /// Agent-login setup asked for before Cloud has first welcomed the
+    /// runner since it started.
+    NotYetConnected,
     NoPendingCredential,
     PendingRegistrationMismatch,
     PendingAuthenticationFailed,
@@ -161,6 +164,11 @@ pub struct StatusSnapshot {
     /// answer of a serving process that predates it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held_runs: Vec<HeldRun>,
+    /// The credential mode the runner goes by.
+    /// Omitted while it goes by none, so a `useful runner status` that predates it reads
+    /// the answer of a runner that goes by none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_mode: Option<CredentialMode>,
 }
 
 /// A reading of the work root's disk as the serving process's monitor judged it. Closed
@@ -305,6 +313,36 @@ impl AgentLoginState {
             Self::InstallFailed => "install_failed",
             Self::NotDelivered => "not_delivered",
             Self::ReconnectRequired => "reconnect_required",
+        }
+    }
+}
+
+/// The credential mode Cloud names for the runner in its last `welcome` or
+/// `assignment_offer`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialMode {
+    /// Cloud's agent logins and grants are the runner's credentials.
+    Cloud,
+    /// The runner's host provides its credentials.
+    Host,
+}
+
+impl CredentialMode {
+    /// The mode's name on the wire.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cloud => "cloud",
+            Self::Host => "host",
+        }
+    }
+}
+
+impl From<useful_runner_protocol::CredentialMode> for CredentialMode {
+    fn from(mode: useful_runner_protocol::CredentialMode) -> Self {
+        match mode {
+            useful_runner_protocol::CredentialMode::Cloud => Self::Cloud,
+            useful_runner_protocol::CredentialMode::Host => Self::Host,
         }
     }
 }
@@ -539,12 +577,14 @@ pub struct UnansweredCheck {
     pub cause: AgentLoginCheckCause,
 }
 
-/// The `synced` answer: the readiness the setup recorded, and each login
-/// whose check in that setup gave no answer.
+/// The `synced` answer: the readiness the setup recorded, each login whose
+/// check in that setup gave no answer, and the credential mode the setup
+/// went by, none where it went by none.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncedAgentLogins {
     pub readiness: AgentLoginReadiness,
     pub unanswered_checks: Vec<UnansweredCheck>,
+    pub credential_mode: Option<CredentialMode>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -579,6 +619,8 @@ enum EncodedResponse<'a> {
         agent_logins: &'a AgentLoginReadiness,
         #[serde(rename = "unansweredChecks", skip_serializing_if = "<[_]>::is_empty")]
         unanswered_checks: &'a [UnansweredCheck],
+        #[serde(rename = "credentialMode", skip_serializing_if = "Option::is_none")]
+        credential_mode: Option<CredentialMode>,
     },
     Error {
         #[serde(rename = "schemaVersion")]
@@ -601,6 +643,8 @@ struct DecodedResponse {
     agent_logins: Option<AgentLoginReadiness>,
     #[serde(default)]
     unanswered_checks: Option<Vec<UnansweredCheck>>,
+    #[serde(default)]
+    credential_mode: Option<CredentialMode>,
     #[serde(default)]
     error: Option<ControlError>,
 }
@@ -776,6 +820,7 @@ pub(crate) fn encode_response(response: &Response) -> Result<Vec<u8>, ProtocolFa
             outcome: "synced",
             agent_logins: &synced.readiness,
             unanswered_checks: &synced.unanswered_checks,
+            credential_mode: synced.credential_mode,
         },
         Response::Error(error) => EncodedResponse::Error {
             schema_version: 1,
@@ -811,17 +856,18 @@ pub(crate) fn decode_response(bytes: &[u8]) -> Result<Response, ProtocolFailure>
         response.credential_id,
         response.agent_logins,
         response.unanswered_checks,
+        response.credential_mode,
         response.error,
     ) {
-        ("ok", Some(status), None, None, None, None) if valid_status(&status) => {
+        ("ok", Some(status), None, None, None, None, None) if valid_status(&status) => {
             Ok(Response::Status(status))
         }
-        ("reloaded", None, Some(credential_id), None, None, None)
+        ("reloaded", None, Some(credential_id), None, None, None, None)
             if super::validation::valid_typed_id(&credential_id, "rrc_") =>
         {
             Ok(Response::Reloaded { credential_id })
         }
-        ("synced", None, None, Some(readiness), unanswered_checks, None)
+        ("synced", None, None, Some(readiness), unanswered_checks, credential_mode, None)
             if valid_readiness(&readiness)
                 && unanswered_checks
                     .as_deref()
@@ -830,9 +876,10 @@ pub(crate) fn decode_response(bytes: &[u8]) -> Result<Response, ProtocolFailure>
             Ok(Response::AgentLoginsSynced(SyncedAgentLogins {
                 readiness,
                 unanswered_checks: unanswered_checks.unwrap_or_default(),
+                credential_mode,
             }))
         }
-        ("error", None, None, None, None, Some(error)) => Ok(Response::Error(error)),
+        ("error", None, None, None, None, None, Some(error)) => Ok(Response::Error(error)),
         _ => Err(ProtocolFailure::Invalid),
     }
 }
@@ -2360,6 +2407,7 @@ mod tests {
             last_connection_failure: None,
             agent_logins: None,
             held_runs: Vec::new(),
+            credential_mode: None,
         });
         let mut encoded = encode_response(&response).unwrap();
         encoded.splice(
@@ -2370,6 +2418,31 @@ mod tests {
         assert_eq!(decode_response(&encoded), Ok(response));
         encoded.insert(encoded.len() - 1, b' ');
         assert_eq!(decode_response(&encoded), Err(ProtocolFailure::Invalid));
+    }
+
+    // a runner that goes by no mode answers without the member, so a
+    // `useful runner status` that predates it reads the answer.
+    #[test]
+    fn a_status_without_a_credential_mode_encodes_no_credential_mode_member() {
+        let encoded = encode_response(&Response::Status(StatusSnapshot {
+            process_state: ProcessState::Running,
+            boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            uptime_milliseconds: 0,
+            connection_state: ConnectionState::Connecting,
+            last_connected_at: None,
+            current_credential_id: None,
+            pending_credential_id: None,
+            assignment_counts: AssignmentCounts::default(),
+            last_connection_failure: None,
+            agent_logins: None,
+            held_runs: Vec::new(),
+            disk: None,
+            log_path: None,
+            credential_mode: None,
+        }))
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(value["status"].get("credentialMode").is_none(), "{value}");
     }
 
     #[test]
@@ -2614,6 +2687,7 @@ mod tests {
         Response::AgentLoginsSynced(SyncedAgentLogins {
             readiness,
             unanswered_checks: Vec::new(),
+            credential_mode: None,
         })
     }
 
@@ -2669,6 +2743,7 @@ mod tests {
                 provider: AgentLoginProvider::Codex,
                 cause: AgentLoginCheckCause::TimedOut,
             }],
+            credential_mode: None,
         });
         let encoded = encode_response(&response).unwrap();
         assert_eq!(decode_response(&encoded), Ok(response));
@@ -3383,6 +3458,7 @@ mod tests {
             (ControlError::InvalidRequest, "invalid_request"),
             (ControlError::UnsupportedVersion, "unsupported_version"),
             (ControlError::RunnerBusy, "runner_busy"),
+            (ControlError::NotYetConnected, "not_yet_connected"),
             (ControlError::NoPendingCredential, "no_pending_credential"),
             (
                 ControlError::PendingRegistrationMismatch,
@@ -3456,6 +3532,7 @@ mod tests {
             last_connection_failure: None,
             agent_logins: None,
             held_runs: Vec::new(),
+            credential_mode: None,
         });
         let encoded = encode_response(&response).unwrap();
         assert_eq!(decode_response(&encoded).unwrap(), response);

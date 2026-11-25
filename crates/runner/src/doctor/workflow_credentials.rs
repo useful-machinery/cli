@@ -36,6 +36,17 @@ pub enum CredentialKind {
 }
 
 impl CredentialKind {
+    /// Every kind, in report order.
+    pub const ALL: [Self; 7] = [
+        Self::Github,
+        Self::Gitlab,
+        Self::Linear,
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::Mergify,
+        Self::Buildkite,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Github => "github",
@@ -95,8 +106,12 @@ impl CredentialKind {
         }
     }
 
-    /// The provider id that declares this kind, the inverse of
-    /// `of_integration`.
+    /// The kind's provider id, the one that declares it: `gitlab` is `gitlab.com`, the id a runner requires a credential of.
+    pub fn provider_id(self) -> &'static str {
+        self.integration().as_str()
+    }
+
+    /// The provider id that declares this kind, the inverse of `of_integration`.
     const fn integration(self) -> IntegrationProvider {
         match self {
             Self::Github => IntegrationProvider::Github,
@@ -659,6 +674,29 @@ pub fn read_workflow_credentials(
     workflow_files: &[PathBuf],
     repository: RepositorySource,
 ) -> Result<DerivedCredentials, ResolutionFailure> {
+    derive(source_root, workflow_files, repository).map(|(derived, _)| derived)
+}
+
+impl DerivedCredentials {
+    /// `read_workflow_credentials`, beside every name the `environmentPassthrough` of a file
+    /// it covers forwards, whether or not the name reads as a credential, which a runner
+    /// checks against the names an assignment blocks. What the doctor reports
+    /// is the same either way.
+    pub fn read_with_forwarded_names(
+        source_root: &Path,
+        workflow_files: &[PathBuf],
+        repository: RepositorySource,
+    ) -> Result<(Self, BTreeSet<String>), ResolutionFailure> {
+        derive(source_root, workflow_files, repository)
+    }
+}
+
+/// The derivation of `read_workflow_credentials`, with the forwarded names.
+fn derive(
+    source_root: &Path,
+    workflow_files: &[PathBuf],
+    repository: RepositorySource,
+) -> Result<(DerivedCredentials, BTreeSet<String>), ResolutionFailure> {
     let mut resolved = BTreeMap::new();
     let mut named = Vec::new();
     for workflow_file in workflow_files {
@@ -734,11 +772,15 @@ pub fn read_workflow_credentials(
     });
 
     let workflows = resolved.into_keys().collect::<Vec<_>>();
-    Ok(DerivedCredentials {
-        inferred: inference.finish(workflows.clone()),
-        reported: report.finish(workflows),
-        differences,
-    })
+    let forwarded = std::mem::take(&mut inference.forwarded);
+    Ok((
+        DerivedCredentials {
+            inferred: inference.finish(workflows.clone()),
+            reported: report.finish(workflows),
+            differences,
+        },
+        forwarded,
+    ))
 }
 
 /// The provider ids a file's `requires.integrations` names; the override of a stage file is
@@ -769,6 +811,8 @@ fn child_workflow_paths(workflow: &ResolvedWorkflow) -> BTreeSet<String> {
 struct Reading {
     origins: BTreeMap<CredentialKind, BTreeSet<CredentialOrigin>>,
     unknown: BTreeSet<UnknownCredential>,
+    /// Every name a file read forwards, a credential or not.
+    forwarded: BTreeSet<String>,
 }
 
 impl Reading {
@@ -801,6 +845,7 @@ impl Reading {
             }
         }
         for name in definition.environment_passthrough() {
+            self.forwarded.insert(name.to_owned());
             match classify_forwarded_variable(name) {
                 ForwardedVariable::Ignored => {}
                 ForwardedVariable::Unknown => self.add_unknown(

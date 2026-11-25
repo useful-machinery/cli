@@ -61,6 +61,9 @@ pub enum RunnerFrame {
         /// Advertises `holdsWaitingRuns: 1`: this runner takes another run while every run it
         /// holds waits, so Cloud may offer it one.
         holds_waiting_runs: bool,
+        /// Advertises `credentialMode: 1`: this runner's release applies the credential mode
+        /// Cloud names, so Cloud may name one.
+        credential_mode: bool,
     },
     WorkspaceRetentionReport {
         envelope: RunnerEnvelope,
@@ -785,6 +788,22 @@ impl RunnerUnableReason {
     }
 }
 
+/// The credential mode Cloud names in a `welcome` or an `assignment_offer`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialMode {
+    Cloud,
+    Host,
+}
+
+impl From<generated::RunnerCredentialMode> for CredentialMode {
+    fn from(mode: generated::RunnerCredentialMode) -> Self {
+        match mode {
+            generated::RunnerCredentialMode::Cloud => Self::Cloud,
+            generated::RunnerCredentialMode::Host => Self::Host,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionSpecInvalidReason {
     UnsupportedSchemaVersion,
@@ -797,6 +816,7 @@ pub enum ExecutionSpecInvalidReason {
     WorkflowSourceDigestMismatch,
     WorkflowSourceInvalid,
     WorkflowAdmissionInvalid,
+    GrantRequired,
     InvalidInputProjection,
     InputManifestMismatch,
     InputContentUnavailable,
@@ -818,6 +838,7 @@ impl ExecutionSpecInvalidReason {
             Self::WorkflowSourceDigestMismatch => "workflow_source_digest_mismatch",
             Self::WorkflowSourceInvalid => "workflow_source_invalid",
             Self::WorkflowAdmissionInvalid => "workflow_admission_invalid",
+            Self::GrantRequired => "grant_required",
             Self::InvalidInputProjection => "invalid_input_projection",
             Self::InputManifestMismatch => "input_manifest_mismatch",
             Self::InputContentUnavailable => "input_content_unavailable",
@@ -906,6 +927,43 @@ fn is_validation_path(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+/// The most provider ids a decline's diagnostic carries.
+const MAXIMUM_DECLINE_PROVIDERS: usize = 32;
+
+/// The providers a `grant_required` decline names in its diagnostic's `providers`: 1 to 32 provider ids, each once, in the order given. Every id is one
+/// Cloud's run read returns, which omits the whole diagnostic when the member is outside
+/// its shape, so a list holding an id outside the grammar is left out rather
+/// than coerced.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclineProviders {
+    ids: Vec<String>,
+}
+
+impl DeclineProviders {
+    /// The providers `ids` names, a repeated id kept once at its first place and only the
+    /// first 32 kept: none when no id is given or one is outside the provider id grammar.
+    pub fn new<I>(ids: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        let mut kept: Vec<String> = Vec::new();
+        for id in ids {
+            let id = id.as_ref();
+            id.parse::<generated::DiagnosticProviderId>().ok()?;
+            if kept.len() < MAXIMUM_DECLINE_PROVIDERS && !kept.iter().any(|held| held == id) {
+                kept.push(id.to_owned());
+            }
+        }
+        (!kept.is_empty()).then_some(Self { ids: kept })
+    }
+
+    /// The provider ids, in the order the diagnostic carries them.
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.ids.iter().map(String::as_str)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AssignmentDecline {
     CapacityUnavailable,
@@ -917,6 +975,8 @@ pub enum AssignmentDecline {
         cause: &'static str,
         /// Boxed so the decline, the error of many runner results, stays small.
         facts: Option<Box<ValidationFacts>>,
+        /// Boxed as `facts` is.
+        providers: Option<Box<DeclineProviders>>,
     },
 }
 
@@ -927,27 +987,31 @@ impl AssignmentDecline {
             stage,
             cause,
             facts: None,
+            providers: None,
         }
     }
 
     /// This diagnosed decline carrying `facts` in its diagnostic; a decline that is not
     /// diagnosed is returned as it is.
     #[must_use]
-    pub fn with_validation_facts(self, facts: Option<ValidationFacts>) -> Self {
-        match self {
-            Self::Diagnosed {
-                decline,
-                stage,
-                cause,
-                ..
-            } => Self::Diagnosed {
-                decline,
-                stage,
-                cause,
-                facts: facts.map(Box::new),
-            },
-            other => other,
+    pub fn with_validation_facts(mut self, facts: Option<ValidationFacts>) -> Self {
+        if let Self::Diagnosed { facts: held, .. } = &mut self {
+            *held = facts.map(Box::new);
         }
+        self
+    }
+
+    /// This diagnosed decline carrying `providers` in its diagnostic; a
+    /// decline that is not diagnosed is returned as it is.
+    #[must_use]
+    pub fn with_providers(mut self, providers: Option<DeclineProviders>) -> Self {
+        if let Self::Diagnosed {
+            providers: held, ..
+        } = &mut self
+        {
+            *held = providers.map(Box::new);
+        }
+        self
     }
 
     pub fn protocol_type_and_reason(&self) -> (&'static str, Option<&'static str>) {
@@ -976,12 +1040,21 @@ impl AssignmentDecline {
         }
     }
 
+    /// The providers a diagnosed decline names, when it names them.
+    pub fn providers(&self) -> Option<&DeclineProviders> {
+        match self {
+            Self::Diagnosed { providers, .. } => providers.as_deref(),
+            _ => None,
+        }
+    }
+
     fn diagnostic(&self) -> Option<Value> {
         match self {
             Self::Diagnosed {
                 stage,
                 cause,
                 facts,
+                providers,
                 ..
             } => {
                 let mut diagnostic = serde_json::Map::new();
@@ -989,6 +1062,9 @@ impl AssignmentDecline {
                 diagnostic.insert("declineCause".to_owned(), json!(cause));
                 if let Some(facts) = facts {
                     facts.insert_into(&mut diagnostic);
+                }
+                if let Some(providers) = providers {
+                    diagnostic.insert("providers".to_owned(), json!(providers.ids));
                 }
                 Some(Value::Object(diagnostic))
             }
@@ -1356,6 +1432,7 @@ pub enum CloudFrame {
         ping_interval_seconds: u64,
         pong_timeout_seconds: u64,
         lease_policy: ExecutionLeasePolicy,
+        credential_mode: Option<CredentialMode>,
     },
     ObservationAck {
         envelope: CloudEnvelope,
@@ -1388,6 +1465,7 @@ pub enum CloudFrame {
         attempt_number: u64,
         execution_spec: Box<ExecutionSpecV1RunnerProjection>,
         continuation: Option<Box<ContinuationOffer>>,
+        credential_mode: Option<CredentialMode>,
     },
     AssignmentPrepare {
         envelope: CloudEnvelope,
@@ -1547,6 +1625,7 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             tree_integration_bindings,
             tree_no_source,
             holds_waiting_runs,
+            credential_mode,
         } => {
             let mut payload = json!({ "runnerVersion": runner_version });
             if *tree_execution {
@@ -1566,6 +1645,9 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }
             if *holds_waiting_runs {
                 payload["holdsWaitingRuns"] = json!(1);
+            }
+            if *credential_mode {
+                payload["credentialMode"] = json!(1);
             }
             runner_frame_value(envelope, "hello", payload)
         }
@@ -2252,6 +2334,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                     lease_duration_milliseconds: policy.lease_duration_milliseconds.0.get(),
                     fencing_margin_milliseconds: policy.fencing_margin_milliseconds.0.get(),
                 },
+                credential_mode: frame.payload.credential_mode.map(CredentialMode::from),
             }))
         }
         generated::RunnerProtocolVersion1::CloudObservationAck(frame) => {
@@ -2432,6 +2515,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 portable_result_bytes,
                 encoded_outbox_bytes,
             };
+            let credential_mode = frame.payload.credential_mode.map(CredentialMode::from);
             let continuation = frame
                 .payload
                 .continuation
@@ -2469,6 +2553,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                     workflow_tree,
                 }),
                 continuation,
+                credential_mode,
             }))
         }
         generated::RunnerProtocolVersion1::CloudAssignmentPrepare(frame) => {
@@ -3362,6 +3447,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeIntegrationBindings",
             "treeNoSource",
             "holdsWaitingRuns",
+            "credentialMode",
         ],
         "execution_transition" => &["diagnostic"],
         "execution_interrupted" | "assignment_interrupted" => &["leaseLoss"],
@@ -3373,7 +3459,8 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "exports",
         ],
         "tree_progress" => &["steps"],
-        "assignment_offer" => &["continuation"],
+        "welcome" => &["credentialMode"],
+        "assignment_offer" => &["continuation", "credentialMode"],
         "workspace_retention_report" => &["settlementSnapshot"],
         "trigger_delivery_applied" => &["action", "code"],
         "run_control_applied" => &["code", "actionOutcome"],
@@ -3503,6 +3590,14 @@ mod tests {
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-rejected-validation-facts.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-rejected-grant-required.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-rejected-grant-required-providers.json"
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -3734,6 +3829,18 @@ mod tests {
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/hello-credential-mode.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-welcome-credential-mode.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-credential-mode.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/run-control-applied.json"
         )),
         include_bytes!(concat!(
@@ -3941,6 +4048,14 @@ mod tests {
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/hello-credential-mode-unknown.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-welcome-credential-mode-unknown.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/run-control-applied-with-code.json"
         )),
         include_bytes!(concat!(
@@ -3954,6 +4069,22 @@ mod tests {
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/runner-assignment-rejected-validation-path-absolute.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/runner-assignment-rejected-providers-empty.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/runner-assignment-rejected-providers-too-many.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/runner-assignment-rejected-providers-repeated.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/runner-assignment-rejected-providers-uppercase.json"
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -4213,6 +4344,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             holds_waiting_runs: false,
+            credential_mode: false,
         };
 
         let encoded = encode_runner_frame(&frame).unwrap();
@@ -4230,6 +4362,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             holds_waiting_runs: false,
+            credential_mode: false,
         };
         let encoded = encode_runner_frame(&continuing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4246,6 +4379,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             holds_waiting_runs: false,
+            credential_mode: false,
         };
         let encoded = encode_runner_frame(&withdrawing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4264,6 +4398,7 @@ mod tests {
             tree_integration_bindings: true,
             tree_no_source: true,
             holds_waiting_runs: false,
+            credential_mode: false,
         };
         let encoded = encode_runner_frame(&integrating).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4273,6 +4408,23 @@ mod tests {
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
 
         let holding = RunnerFrame::Hello {
+            envelope: envelope.clone(),
+            runner_version: "0.2.0".to_owned(),
+            tree_execution: true,
+            tree_continuation: true,
+            tree_withdraw: true,
+            tree_integration_bindings: true,
+            tree_no_source: true,
+            holds_waiting_runs: true,
+            credential_mode: false,
+        };
+        let encoded = encode_runner_frame(&holding).unwrap();
+        assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
+        let value: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(value["payload"]["holdsWaitingRuns"], 1);
+        assert!(value["payload"].get("credentialMode").is_none());
+
+        let crediting = RunnerFrame::Hello {
             envelope,
             runner_version: "0.2.0".to_owned(),
             tree_execution: true,
@@ -4281,11 +4433,12 @@ mod tests {
             tree_integration_bindings: true,
             tree_no_source: true,
             holds_waiting_runs: true,
+            credential_mode: true,
         };
-        let encoded = encode_runner_frame(&holding).unwrap();
+        let encoded = encode_runner_frame(&crediting).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
-        assert_eq!(value["payload"]["holdsWaitingRuns"], 1);
+        assert_eq!(value["payload"]["credentialMode"], 1);
     }
 
     #[test]
@@ -5338,6 +5491,90 @@ mod tests {
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
     }
 
+    // a `grant_required` decline's diagnostic carries the missing providers
+    // beside its stage and closed cause, in the order given, each once, at most 32, and
+    // nothing else.
+    #[test]
+    fn grant_required_decline_carries_its_providers() {
+        let providers = DeclineProviders::new(["gitlab.com", "claude_code"]);
+        let frame = RunnerFrame::AssignmentRejected {
+            envelope: maximal_envelope(),
+            effect_id: "eff_01k0z6r1w8f4jy2m7q9v3x5abg".to_owned(),
+            assignment_id: "asn_01k0z6r1w8f4jy2m7q9v3x5abn".to_owned(),
+            decline: AssignmentDecline::ExecutionSpecInvalid(
+                ExecutionSpecInvalidReason::GrantRequired,
+            )
+            .diagnosed("credential_check", "grant_missing")
+            .with_providers(providers.clone()),
+        };
+        assert_eq!(frame_decline(&frame).providers(), providers.as_ref());
+        let encoded = encode_runner_frame(&frame).unwrap();
+        assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
+        let value: Value = serde_json::from_slice(&encoded).unwrap();
+        let fixture: Value = serde_json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/runner-assignment-rejected-grant-required-providers.json"
+        )))
+        .unwrap();
+        // The fixture's diagnostic holds `providers` alone, so compare members, not bytes.
+        let expected = &fixture["payload"]["decline"];
+        let decline = &value["payload"]["decline"];
+        assert_eq!(decline["type"], expected["type"]);
+        assert_eq!(decline["reason"], expected["reason"]);
+        assert_eq!(
+            decline["diagnostic"],
+            json!({
+                "stage": "credential_check",
+                "declineCause": "grant_missing",
+                "providers": expected["diagnostic"]["providers"],
+            })
+        );
+        assert_eq!(
+            decline["diagnostic"]["providers"],
+            json!(["gitlab.com", "claude_code"])
+        );
+    }
+
+    fn frame_decline(frame: &RunnerFrame) -> &AssignmentDecline {
+        match frame {
+            RunnerFrame::AssignmentRejected { decline, .. } => decline,
+            _ => panic!("an assignment_rejected frame"),
+        }
+    }
+
+    // the providers are none rather than a coerced list when one id
+    // is outside the grammar or none is given; a repeated id is kept once and only the
+    // first 32 are kept.
+    #[test]
+    fn decline_providers_keep_unique_ids_of_their_grammar() {
+        let ids = |providers: Option<DeclineProviders>| {
+            providers.map(|providers| providers.ids().map(str::to_owned).collect::<Vec<_>>())
+        };
+        assert_eq!(ids(DeclineProviders::new(Vec::<&str>::new())), None);
+        for outside in [
+            "",
+            "GitHub",
+            "9github",
+            "git hub",
+            "github/com",
+            &"a".repeat(64),
+        ] {
+            assert_eq!(
+                ids(DeclineProviders::new(["github", outside])),
+                None,
+                "{outside:?}"
+            );
+        }
+        assert_eq!(
+            ids(DeclineProviders::new([
+                "linear", "github", "linear", "github"
+            ])),
+            Some(vec!["linear".to_owned(), "github".to_owned()])
+        );
+        let many = (0..40).map(|n| format!("p{n:02}")).collect::<Vec<_>>();
+        assert_eq!(ids(DeclineProviders::new(&many)), Some(many[..32].to_vec()));
+    }
+
     /// A refused workflow tree's decline carrying `facts`, encoded and checked to decode as
     /// a valid runner frame, answered as its `payload.decline`.
     fn refused_tree_decline(facts: Option<ValidationFacts>) -> Value {
@@ -5529,6 +5766,8 @@ mod tests {
         }
     }
 
+    // the decline reason grant_required is part of the
+    // closed wire vocabulary.
     #[test]
     fn assignment_decisions_encode_only_the_closed_wire_vocabulary() {
         const EFFECT_ID: &str = "eff_01k0z6r1w8f4jy2m7q9v3x5abg";
@@ -5651,6 +5890,15 @@ mod tests {
                 rejected_payload(json!({
                     "type": "execution_spec_invalid",
                     "reason": "source_commit_unavailable",
+                })),
+            ),
+            (
+                rejected(AssignmentDecline::ExecutionSpecInvalid(
+                    ExecutionSpecInvalidReason::GrantRequired,
+                )),
+                rejected_payload(json!({
+                    "type": "execution_spec_invalid",
+                    "reason": "grant_required",
                 })),
             ),
         ];
@@ -6088,6 +6336,58 @@ mod tests {
         assert!(matches!(
             decode_frame(&one_byte_over),
             Err(DecodeError::InvalidFrame("size"))
+        ));
+    }
+
+    #[test]
+    fn welcome_and_offer_carry_the_credential_mode_cloud_names() {
+        let welcome = decode_cloud_frame(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-welcome-credential-mode.json"
+        )))
+        .unwrap();
+        assert!(matches!(
+            welcome,
+            CloudFrame::Welcome {
+                credential_mode: Some(CredentialMode::Cloud),
+                ..
+            }
+        ));
+        let offer = decode_cloud_frame(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer-credential-mode.json"
+        )))
+        .unwrap();
+        assert!(matches!(
+            offer,
+            CloudFrame::AssignmentOffer {
+                credential_mode: Some(CredentialMode::Host),
+                ..
+            }
+        ));
+        let welcome = decode_cloud_frame(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-welcome.json"
+        )))
+        .unwrap();
+        assert!(matches!(
+            welcome,
+            CloudFrame::Welcome {
+                credential_mode: None,
+                ..
+            }
+        ));
+        let offer = decode_cloud_frame(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-assignment-offer.json"
+        )))
+        .unwrap();
+        assert!(matches!(
+            offer,
+            CloudFrame::AssignmentOffer {
+                credential_mode: None,
+                ..
+            }
         ));
     }
 

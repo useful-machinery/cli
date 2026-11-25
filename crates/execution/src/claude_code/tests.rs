@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::Mutex;
 use std::time::Duration;
 
-const COMPLETE_HELP: &str = "Usage: claude [options] [command] [prompt]\nOptions:\n  -p, --print Print response\n  --input-format <format> Input format: stream-json\n  --output-format <format> Output format: stream-json\n  --verbose Verbose mode\n  --include-partial-messages Include chunks\n  --forward-subagent-text Forward text\n  --session-id <uuid> Use session\n  --permission-mode <mode> Permission mode\n  --setting-sources <sources> Setting sources\n  --model <model> Model\n  --effort <level> Effort\n  --bare Context via --append-system-prompt[-file]\n  --mcp-config <configs...> Load MCP servers from JSON files or strings\n";
+const COMPLETE_HELP: &str = "Usage: claude [options] [command] [prompt]\nOptions:\n  -p, --print Print response\n  --input-format <format> Input format: stream-json\n  --output-format <format> Output format: stream-json\n  --verbose Verbose mode\n  --include-partial-messages Include chunks\n  --forward-subagent-text Forward text\n  --session-id <uuid> Use session\n  --permission-mode <mode> Permission mode\n  --setting-sources <sources> Setting sources\n  --model <model> Model\n  --effort <level> Effort\n  --bare Context via --append-system-prompt[-file]\n  --allowedTools, --allowed-tools <tools...> Allow tools\n  --mcp-config <configs...> Load MCP servers from JSON files or strings\n";
 
 struct FakeRunner {
     invocations: Mutex<Vec<Vec<String>>>,
@@ -189,28 +189,30 @@ fn malformed_incompatible_and_missing_capability_outputs_are_distinct() {
         );
     }
 
-    let missing_mcp_config = FakeRunner {
-        invocations: Mutex::new(Vec::new()),
-        version: output(b"2.1.234 (Claude Code)\n"),
-        capabilities: output(
-            COMPLETE_HELP
-                .replace("--mcp-config <configs...>", "--mcp <configs...>")
-                .as_bytes(),
+    for (option, replacement, capability) in [
+        (
+            "--mcp-config <configs...>",
+            "--mcp <configs...>",
+            ClaudeCodeCapability::McpConfig,
         ),
-    };
-    assert_eq!(
-        validate_claude_code_installation_with(
-            &executable,
-            OsStr::new("/controlled/bin"),
-            &missing_mcp_config,
+        (
+            "--allowedTools, --allowed-tools <tools...>",
+            "--tools <tools...>",
+            ClaudeCodeCapability::AllowedTools,
         ),
-        Err(ClaudeCodeInstallationFailure::Unsupported(
-            ClaudeCodeIncompatibility::Capability {
-                capability: ClaudeCodeCapability::McpConfig,
-                version: "2.1.234".to_owned(),
-            }
-        ))
-    );
+    ] {
+        let help = COMPLETE_HELP.replace(option, replacement);
+        let (result, _) = validate_with("2.1.234", &help);
+        assert_eq!(
+            result,
+            Err(ClaudeCodeInstallationFailure::Unsupported(
+                ClaudeCodeIncompatibility::Capability {
+                    capability,
+                    version: "2.1.234".to_owned(),
+                }
+            ))
+        );
+    }
 }
 
 fn validate_with(

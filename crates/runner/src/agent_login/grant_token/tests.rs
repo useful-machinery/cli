@@ -19,7 +19,9 @@ use crate::agent_login::setup::{
     AdmissionSetup, AgentLoginSetup, AssignmentGate, SetupDependencies, SetupOutcome,
 };
 use crate::agent_login::{ProviderSource, ServiceEnvironment};
-use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialSource};
+use crate::control_protocol::{
+    AgentLoginProvider, AgentLoginState, CredentialMode, CredentialSource,
+};
 use crate::service::{
     CountedGate, FAKE_GRANT_ID, FAKE_GRANT_TOKEN_SENTINEL, FakeAgentLoginCloud, FakeGrantToken,
     FakeLoginCheck, SleepRelease, controlled_sleeper, fake_grant_expiry, fake_grant_token,
@@ -147,7 +149,14 @@ impl Fixture {
     }
 
     fn admit_of(&self, run_id: &str, assignment_id: &str) -> AdmissionSetup {
-        self.setup.set_up_admission(BOOT, run_id, assignment_id)
+        self.setup
+            .set_up_admission(None, BOOT, run_id, assignment_id)
+    }
+
+    /// Admits the assignment `assignment_id` of the run `RUN` under the
+    /// credential mode its offer names, `mode`.
+    fn admit_in(&self, mode: Option<CredentialMode>, assignment_id: &str) -> AdmissionSetup {
+        self.setup.set_up_admission(mode, BOOT, RUN, assignment_id)
     }
 
     /// Each OAuth provider's recorded entry, in the document's order.
@@ -307,6 +316,27 @@ impl Fixture {
     fn list_token_services(&self, entries: &[(&str, &str, &str)]) {
         self.cloud
             .answer_token_services(Ok(listed_entries(entries)));
+    }
+
+    /// Leaves what an interrupted runner left in the directory of the
+    /// assignment `ASSIGNMENT`, in a directory that cannot be written, so
+    /// that the admission cannot clear it; answers that directory, which the
+    /// caller makes writable again.
+    fn leave_uncleared_directory(&self) -> PathBuf {
+        let left = self.configured_file("old");
+        let directory = left.parent().unwrap().to_owned();
+        let logins = LoginDirectory::beside(&self.state_path());
+        for private in [
+            logins.path().to_owned(),
+            logins.assignments(),
+            logins.assignment(ASSIGNMENT).unwrap(),
+            directory.clone(),
+        ] {
+            crate::agent_login::directory::ensure_private_directory(&private).unwrap();
+        }
+        fs::write(&left, "earlier-assignment-token").unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+        directory
     }
 }
 
@@ -591,6 +621,249 @@ fn an_admission_asks_for_no_token_of_a_provider_the_host_provides() {
 }
 
 #[test]
+fn a_host_admission_asks_cloud_for_no_list_and_no_token_and_keeps_none() {
+    let fixture = Fixture::serving(&[("GH_TOKEN", "service-github-token")]);
+    // Cloud lists the runner's three and a token service, and would issue
+    // each a token.
+    fixture.list(&["github", "gitlab.com", "linear"]);
+    fixture.list_token_services(&[MERGIFY_ENTRY]);
+    fixture.answer_all(FakeGrantToken::Issue(2));
+    fixture.cloud.answer_grant_token(
+        token_service("mergify"),
+        FakeGrantToken::IssueIntegrationToken(2),
+    );
+    // What an interrupted runner left in the admitted assignment's own
+    // directory.
+    fixture.leave_token_file_of(
+        ASSIGNMENT,
+        AgentLoginProvider::Gitlab,
+        "earlier-assignment-token",
+    );
+
+    let admitted = fixture.admit_in(Some(CredentialMode::Host), ASSIGNMENT);
+
+    assert_eq!(fixture.cloud.grant_providers_requests(), []);
+    assert_eq!(fixture.cloud.token_services_requests(), []);
+    assert!(fixture.cloud.grant_requests().is_empty());
+    // The assignment is held all the same, and its directory was cleared.
+    assert!(admitted.tokens.files.holds(ASSIGNMENT));
+    for provider in brokered_providers() {
+        assert!(!admitted.tokens.holds(provider), "{provider:?}");
+        assert!(!fixture.token_file(provider).exists(), "{provider:?}");
+    }
+    assert!(!fixture.configured_file("mergify").exists());
+    // Each of the three is `not_delivered` for the run, `github`, which the
+    // host provides, with source `host`.
+    assert_eq!(
+        fixture.grants(),
+        [
+            GrantReadiness {
+                source: Some(CredentialSource::Host),
+                ..not_ready(AgentLoginState::NotDelivered)
+            },
+            GrantReadiness {
+                provider: AgentLoginProvider::Gitlab,
+                ..not_ready(AgentLoginState::NotDelivered)
+            },
+            GrantReadiness {
+                provider: AgentLoginProvider::Linear,
+                ..not_ready(AgentLoginState::NotDelivered)
+            },
+        ]
+    );
+    assert!(fixture.records_naming("mergify").is_empty());
+    assert_eq!(admitted.grants, Some(fixture.recorded()));
+}
+
+#[test]
+fn a_cloud_admission_asks_for_every_listed_token_whatever_the_service_carries() {
+    const ISSUED_FROM: &str = "itk_01k0z6r1w8f4jy2m7q9v3x5abe";
+    // The service carries a name of `github`, of `gitlab.com`, of a
+    // configured provider and of a token service.
+    let service = [
+        ("GH_TOKEN", "service-gh-token"),
+        ("GITLAB_TOKEN_FILE", "/service/gitlab-token"),
+        ("EXAMPLE_ACCESS_TOKEN", "service-example-token"),
+        ("MERGIFY_TOKEN_FILE", "/service/mergify-token"),
+    ];
+    let fixture = Fixture::serving(&service);
+    fixture.list_named(&[
+        GITHUB_ENTRY,
+        ("gitlab.com", "GITLAB_TOKEN", "GITLAB_TOKEN_FILE"),
+        EXAMPLE_ENTRY,
+    ]);
+    fixture.list_token_services(&[MERGIFY_ENTRY]);
+    fixture.answer_all(FakeGrantToken::Issue(2));
+    fixture
+        .cloud
+        .answer_grant_token(configured("example"), FakeGrantToken::Issue(2));
+    fixture.cloud.answer_grant_token(
+        token_service("mergify"),
+        FakeGrantToken::IssueFrom(ISSUED_FROM, 2),
+    );
+
+    let admitted = fixture.admit_in(Some(CredentialMode::Cloud), ASSIGNMENT);
+
+    assert_eq!(
+        fixture.asked_ids(),
+        ["example", "github", "gitlab.com", "mergify"]
+    );
+    for provider in [AgentLoginProvider::Github, AgentLoginProvider::Gitlab] {
+        assert!(admitted.tokens.holds(provider), "{provider:?}");
+    }
+    let grants = fixture.grants();
+    assert_eq!(
+        grants
+            .iter()
+            .map(|grant| (grant.provider, grant.state, grant.source))
+            .collect::<Vec<_>>(),
+        [
+            (
+                AgentLoginProvider::Github,
+                AgentLoginState::Ready,
+                Some(CredentialSource::Grant)
+            ),
+            (
+                AgentLoginProvider::Gitlab,
+                AgentLoginState::Ready,
+                Some(CredentialSource::Grant)
+            ),
+            (
+                AgentLoginProvider::Linear,
+                AgentLoginState::NotAuthorized,
+                None
+            ),
+        ]
+    );
+    // Once the blocked names are removed from an environment that carries
+    // the service's values, each token is offered under its two names.
+    let environment = EnvironmentSnapshot::new(service);
+    let blocked = crate::agent_login::blocked::BlockedNames::of_admission(Some(&admitted.tokens));
+    let offered = offer(&blocked.remove_from(&environment), Some(&admitted.tokens));
+    for (provider, variable_name, file_variable, file) in [
+        (
+            GrantProvider::try_from(AgentLoginProvider::Github).unwrap(),
+            "GH_TOKEN",
+            "GH_TOKEN_FILE",
+            fixture.token_file(AgentLoginProvider::Github),
+        ),
+        (
+            GrantProvider::try_from(AgentLoginProvider::Gitlab).unwrap(),
+            "GITLAB_TOKEN",
+            "GITLAB_TOKEN_FILE",
+            fixture.token_file(AgentLoginProvider::Gitlab),
+        ),
+        (
+            configured("example"),
+            "EXAMPLE_ACCESS_TOKEN",
+            "EXAMPLE_ACCESS_TOKEN_FILE",
+            fixture.configured_file("example"),
+        ),
+        (
+            token_service("mergify"),
+            "MERGIFY_TOKEN",
+            "MERGIFY_TOKEN_FILE",
+            fixture.configured_file("mergify"),
+        ),
+    ] {
+        assert_eq!(
+            variable(&offered, variable_name),
+            Some(std::ffi::OsStr::new(&fake_grant_token(provider, 2))),
+            "{variable_name}"
+        );
+        assert_eq!(
+            variable(&offered, file_variable),
+            Some(file.as_os_str()),
+            "{file_variable}"
+        );
+    }
+    assert_eq!(
+        token_service_sources(&blocked.remove_from(&environment), Some(&admitted.tokens)),
+        [ReportedTokenService {
+            provider: "mergify".to_owned(),
+            source: TokenServiceSource::Token {
+                integration_token_id: ISSUED_FROM.to_owned(),
+            },
+        }]
+    );
+}
+
+#[test]
+fn a_cloud_admission_asks_for_the_provider_table_once_beside_the_two_lists_and_keeps_it() {
+    let fixture = Fixture::new();
+    fixture.list_named(&[GITHUB_ENTRY]);
+    fixture.list_token_services(&[MERGIFY_ENTRY]);
+    let table = listed_entries(&[GITHUB_ENTRY, MERGIFY_ENTRY, EXAMPLE_ENTRY]);
+    fixture.cloud.answer_credential_providers(Ok(table.clone()));
+    fixture.answer_all(FakeGrantToken::Issue(1));
+
+    let admitted = fixture.admit_in(Some(CredentialMode::Cloud), ASSIGNMENT);
+
+    // Each list was asked once, all three before any token.
+    let request = GrantProvidersRequest {
+        boot_id: BOOT.to_owned(),
+        assignment_id: ASSIGNMENT.to_owned(),
+    };
+    for (list, requests) in [
+        ("providers", fixture.cloud.grant_providers_requests()),
+        ("token services", fixture.cloud.token_services_requests()),
+        (
+            "credential providers",
+            fixture.cloud.credential_providers_requests(),
+        ),
+    ] {
+        assert_eq!(requests, [(0, request.clone())], "{list}");
+    }
+    assert!(!fixture.cloud.grant_requests().is_empty());
+    assert_eq!(admitted.tokens.credential_providers(), Some(&Ok(table)));
+
+    // A directory it cannot clear asks for no token, and for the table all
+    // the same.
+    let uncleared = Fixture::new();
+    let directory = uncleared.leave_uncleared_directory();
+    uncleared.list_named(&[GITHUB_ENTRY]);
+    uncleared
+        .cloud
+        .answer_credential_providers(Ok(listed_entries(&[GITHUB_ENTRY])));
+    uncleared.answer_all(FakeGrantToken::Issue(1));
+
+    let admitted = uncleared.admit_in(Some(CredentialMode::Cloud), ASSIGNMENT);
+
+    assert_eq!(uncleared.asked_ids(), Vec::<String>::new());
+    assert_eq!(
+        uncleared.cloud.credential_providers_requests(),
+        [(0, request)]
+    );
+    assert!(matches!(
+        admitted.tokens.credential_providers(),
+        Some(Ok(rows)) if rows.len() == 1
+    ));
+    drop(admitted);
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn a_host_admission_and_one_with_no_mode_never_ask_for_the_provider_table() {
+    for mode in [None, Some(CredentialMode::Host)] {
+        let fixture = Fixture::new();
+        fixture.list_named(&[GITHUB_ENTRY]);
+        fixture
+            .cloud
+            .answer_credential_providers(Ok(listed_entries(&[GITHUB_ENTRY])));
+        fixture.answer_all(FakeGrantToken::Issue(1));
+
+        let admitted = fixture.admit_in(mode, ASSIGNMENT);
+
+        assert_eq!(
+            fixture.cloud.credential_providers_requests(),
+            [],
+            "{mode:?}"
+        );
+        assert_eq!(admitted.tokens.credential_providers(), None, "{mode:?}");
+    }
+}
+
+#[test]
 fn an_admission_lists_the_assignments_providers_first_and_asks_for_the_token_of_each_listed() {
     let fixture = Fixture::new();
     fixture.answer_all(FakeGrantToken::Issue(1));
@@ -793,6 +1066,7 @@ fn an_admission_records_each_oauth_providers_source_with_its_run() {
         &EnvironmentSnapshot::new(service),
         Some(&LoginDirectory::beside(&fixture.state_path())),
         Some(&admitted.tokens),
+        None,
     );
     assert_eq!(
         offered.sources,
@@ -1489,6 +1763,7 @@ fn a_listed_configured_providers_token_is_kept_in_a_file_of_its_own_and_offered_
         &EnvironmentSnapshot::new(Vec::<(OsString, OsString)>::new()),
         Some(&LoginDirectory::beside(&fixture.state_path())),
         Some(&admitted.tokens),
+        None,
     )
     .sources;
     assert_eq!(
@@ -1792,22 +2067,7 @@ fn an_idle_pass_removes_a_leftover_configured_token_file_and_asks_cloud_for_none
 #[test]
 fn an_assignments_directory_that_cannot_be_cleared_asks_for_none_of_its_providers() {
     let fixture = Fixture::new();
-    // What an interrupted runner left in the admitted assignment's own
-    // directory, in a directory that cannot be written, so that it cannot be
-    // removed.
-    let left = fixture.configured_file("old");
-    let directory = left.parent().unwrap().to_owned();
-    let logins = LoginDirectory::beside(&fixture.state_path());
-    for private in [
-        logins.path().to_owned(),
-        logins.assignments(),
-        logins.assignment(ASSIGNMENT).unwrap(),
-        directory.clone(),
-    ] {
-        crate::agent_login::directory::ensure_private_directory(&private).unwrap();
-    }
-    fs::write(&left, "earlier-assignment-token").unwrap();
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+    let directory = fixture.leave_uncleared_directory();
     fixture.list_named(&[GITHUB_ENTRY, EXAMPLE_ENTRY]);
     fixture
         .cloud
@@ -3346,6 +3606,7 @@ fn githubs_token_issued_under_a_connection_authorization_is_kept_offered_recorde
         &EnvironmentSnapshot::new(Vec::<(OsString, OsString)>::new()),
         Some(&LoginDirectory::beside(&fixture.state_path())),
         Some(&admitted.tokens),
+        None,
     );
     assert_eq!(
         offer.sources,

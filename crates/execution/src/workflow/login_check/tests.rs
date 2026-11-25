@@ -178,7 +178,7 @@ fn claude_init() -> Value {
         "cwd": "@CWD@",
         "session_id": "@SESSION@",
         "model": "@MODEL@",
-        "permissionMode": "bypassPermissions",
+        "permissionMode": "auto",
         "claude_code_version": CLAUDE_CODE_STREAM_JSON_V1_QUALIFICATION_VERSION,
     })
 }

@@ -396,7 +396,7 @@ fn end_abandoned(
 /// found them.
 fn outcome_credentials(mirror: Option<&Mirror>, outcome: &str) -> Result<(), ControlFailure> {
     super::mirror::outcome_credentials(mirror, outcome)
-        .map_err(|failure| Refusal::new(failure.code, super::mirror::CREDENTIALS_REFUSAL).into())
+        .map_err(|failure| Refusal::new(failure.code, super::mirror::credentials_refusal()).into())
 }
 
 /// The run's mirror, read before the continuation that holds its root workflow is consumed.

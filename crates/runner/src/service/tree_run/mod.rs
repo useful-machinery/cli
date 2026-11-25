@@ -36,6 +36,7 @@ use super::Sleeper;
 use super::command_fence::CommandFence;
 use super::run_inputs::PreparationDeadline;
 use crate::agent_login::CommandEnvironment;
+use crate::agent_login::required::CredentialCheck;
 
 mod activity;
 mod command;
@@ -480,6 +481,8 @@ pub(super) struct TreePreparation<'a> {
     pub(super) private: &'a Path,
     pub(super) workspace: &'a Path,
     pub(super) environment: &'a CommandEnvironment,
+    /// The check of an assignment admitted in `cloud`; none for any other.
+    pub(super) credential_check: Option<&'a CredentialCheck>,
     pub(super) deadline: PreparationDeadline,
     pub(super) cancellation: &'a CaptureCancellation,
     pub(super) sleeper: Arc<dyn Sleeper>,
@@ -490,7 +493,9 @@ pub(super) struct TreePreparation<'a> {
 /// `workflow_source_invalid` (cause `workflow_tree_publication_refused`) with the validation
 /// facts its report gives, the path only when it is one of the offered tree's files; a
 /// published digest other than the spec's declines it `workflow_source_digest_mismatch`
-/// (cause `workflow_tree_digest_mismatch`).
+/// (cause `workflow_tree_digest_mismatch`). Once the digest is verified, an assignment
+/// admitted in `cloud` is checked against the providers the published files call for, and
+/// declined as the check says before anything is created.
 pub(super) fn prepare(
     dependencies: &TreeRunDependencies,
     preparation: &TreePreparation<'_>,
@@ -589,6 +594,9 @@ pub(super) fn prepare(
             ExecutionSpecInvalidReason::WorkflowSourceDigestMismatch,
         )
         .diagnosed("workflow_tree_publication", "workflow_tree_digest_mismatch"));
+    }
+    if let Some(check) = preparation.credential_check {
+        check.check(&layout.tree, &preparation.tree.workflow_path)?;
     }
     let definition = layout.home.join("workflows").join(&published.definition);
     write_private(

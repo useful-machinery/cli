@@ -4236,7 +4236,7 @@ impl QueueStub {
     }
 
     /// `useful` with `args`, its GitHub token `test` in `GITHUB_TOKEN` and no other GitHub token
-    /// name, no `MERGIFY_TOKEN` and both APIs at the stub.
+    /// name, no `MERGIFY_TOKEN`, no runner credential mode and both APIs at the stub.
     pub(super) fn command(&self, args: &[String]) -> std::process::Command {
         let mut command = isolated_command(args);
         command
@@ -4244,6 +4244,7 @@ impl QueueStub {
             .env_remove("GH_TOKEN")
             .env_remove("GH_TOKEN_FILE")
             .env_remove("MERGIFY_TOKEN")
+            .env_remove(CREDENTIAL_MODE.0)
             .env("USEFUL_GITHUB_API_URL", &self.base)
             .env("USEFUL_MERGIFY_API_URL", &self.base)
             .env("NO_PROXY", "127.0.0.1")
@@ -4349,68 +4350,113 @@ fn admitted_to_the_queue(stub: &QueueStub) -> (TreeBundle, std::path::PathBuf) {
     (bundle, run)
 }
 
-// The queue is read with the first GitHub token the CLI's environment offers: the trimmed
-// token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`, else `GITHUB_TOKEN`, else `gh
-// auth token`, which runs only when no variable answers; with no `MERGIFY_TOKEN`, Mergify is
-// read with that same token.
+/// The stub `gh` programs and token files the queue's token reads are given.
+struct GhStubs {
+    /// A directory holding a `gh` that records it ran in `ran` and fails.
+    refusing: std::path::PathBuf,
+    /// A directory holding a `gh` that records it ran in `ran` and answers `auth token` with
+    /// ` gh-token`.
+    answering: std::path::PathBuf,
+    ran: std::path::PathBuf,
+    /// A file holding the GitHub token ` grant-token`.
+    grant: String,
+    /// A path that names no file.
+    missing: String,
+}
+
+impl GhStubs {
+    fn new(tools: &Path) -> Self {
+        let ran = tools.join("gh-ran");
+        let refusing = tools.join("refusing");
+        let answering = tools.join("answering");
+        let record = format!("printf ran > '{}'", ran.display());
+        for (directory, answer) in [
+            (&refusing, "exit 1"),
+            (
+                &answering,
+                "test \"$*\" = 'auth token' && printf ' gh-token\\n'",
+            ),
+        ] {
+            fs::create_dir_all(directory).unwrap();
+            let gh = directory.join("gh");
+            fs::write(&gh, format!("#!/bin/sh\n{record}\n{answer}\n")).unwrap();
+            fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let grant = tools.join("grant-token");
+        fs::write(&grant, " grant-token\n").unwrap();
+        Self {
+            refusing,
+            answering,
+            ran,
+            grant: grant.to_string_lossy().into_owned(),
+            missing: tools.join("missing").to_string_lossy().into_owned(),
+        }
+    }
+}
+
+/// `resume` of `run`, with `gh` first on `PATH` from `gh_directory`, the stub's `GITHUB_TOKEN`
+/// `test` and `set` applied over it.
+fn read_the_queue(
+    stub: &QueueStub,
+    run: &Path,
+    gh_directory: &Path,
+    set: &[(&str, Option<&str>)],
+) -> std::process::Output {
+    let mut command = stub.command(&continue_args(run, &[]));
+    let path = std::env::join_paths(std::iter::once(gh_directory.to_owned()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    command.env("PATH", path);
+    for (name, value) in set {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command.output().unwrap()
+}
+
+/// The bearer each read of `read_the_queue` carries, GitHub's and then Mergify's, once the wait
+/// held.
+fn held_bearers(
+    stub: &QueueStub,
+    run: &Path,
+    gh_directory: &Path,
+    set: &[(&str, Option<&str>)],
+) -> Vec<String> {
+    let before = stub.bearers().len();
+    let held = completed(&read_the_queue(stub, run, gh_directory, set));
+    assert_eq!(held["outcome"], "waiting", "{held}");
+    stub.bearers()[before..]
+        .iter()
+        .map(|(_, bearer)| bearer.clone())
+        .collect()
+}
+
+/// `token` as GitHub's and then Mergify's bearer.
+fn both(token: &str) -> Vec<String> {
+    vec![token.to_owned(), token.to_owned()]
+}
+
+// the queue is read with the first GitHub token the CLI's environment offers:
+// the trimmed token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`, else `GITHUB_TOKEN`,
+// else `gh auth token`, which runs only when no variable answers; with no `MERGIFY_TOKEN`,
+// Mergify is read with that same token.
 #[test]
 fn an_external_wait_reads_the_queue_with_the_offered_github_token_first() {
     let stub = QueueStub::start(QueueAnswer::Queued);
     let (bundle, run) = admitted_to_the_queue(&stub);
-    let tools = bundle.execution_root().join("tools");
-    let gh_ran = tools.join("gh-ran");
-    let refusing = tools.join("refusing");
-    let answering = tools.join("answering");
-    for (directory, body) in [
-        (
-            &refusing,
-            format!("printf ran > '{}'\nexit 1", gh_ran.display()),
-        ),
-        (
-            &answering,
-            "test \"$*\" = 'auth token' && printf ' gh-token\\n'".to_owned(),
-        ),
-    ] {
-        fs::create_dir_all(directory).unwrap();
-        let gh = directory.join("gh");
-        fs::write(&gh, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let grant = tools.join("grant-token");
-    fs::write(&grant, " grant-token\n").unwrap();
-    let grant = grant.to_string_lossy().into_owned();
-    let missing = tools.join("missing").to_string_lossy().into_owned();
-
-    // The bearer each read carries, GitHub's and then Mergify's, with `gh` first on `PATH`
-    // from `gh_directory`, the stub's `GITHUB_TOKEN` `test` and `set` applied over it.
+    let gh = GhStubs::new(&bundle.execution_root().join("tools"));
     let read = |gh_directory: &Path, set: &[(&str, Option<&str>)]| {
-        let before = stub.bearers().len();
-        let mut command = stub.command(&continue_args(&run, &[]));
-        let path = std::env::join_paths(std::iter::once(gh_directory.to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-        ))
-        .unwrap();
-        command.env("PATH", path);
-        for (name, value) in set {
-            match value {
-                Some(value) => command.env(name, value),
-                None => command.env_remove(name),
-            };
-        }
-        let held = completed(&command.output().unwrap());
-        assert_eq!(held["outcome"], "waiting", "{held}");
-        stub.bearers()[before..]
-            .iter()
-            .map(|(_, bearer)| bearer.clone())
-            .collect::<Vec<_>>()
+        held_bearers(&stub, &run, gh_directory, set)
     };
-    let both = |token: &str| vec![token.to_owned(), token.to_owned()];
 
     assert_eq!(
         read(
-            &refusing,
+            &gh.refusing,
             &[
-                ("GH_TOKEN_FILE", Some(&grant)),
+                ("GH_TOKEN_FILE", Some(&gh.grant)),
                 ("GH_TOKEN", Some("gh-variable")),
             ],
         ),
@@ -4418,23 +4464,77 @@ fn an_external_wait_reads_the_queue_with_the_offered_github_token_first() {
     );
     assert_eq!(
         read(
-            &refusing,
+            &gh.refusing,
             &[
-                ("GH_TOKEN_FILE", Some(&missing)),
+                ("GH_TOKEN_FILE", Some(&gh.missing)),
                 ("GH_TOKEN", Some("gh-variable")),
             ],
         ),
         both("gh-variable")
     );
-    assert_eq!(read(&refusing, &[]), both("test"));
+    assert_eq!(read(&gh.refusing, &[]), both("test"));
     assert!(
-        !gh_ran.exists(),
+        !gh.ran.exists(),
         "`gh` ran although a variable held a token"
     );
     assert_eq!(
-        read(&answering, &[("GITHUB_TOKEN", None)]),
+        read(&gh.answering, &[("GITHUB_TOKEN", None)]),
         both("gh-token")
     );
+}
+
+/// The variable through which a runner tells a `useful` command it started that its
+/// assignment was admitted in `cloud`.
+const CREDENTIAL_MODE: (&str, Option<&str>) = ("USEFUL_RUNNER_CREDENTIAL_MODE", Some("cloud"));
+
+// a `useful` command a runner started for an assignment admitted
+// in `cloud` reads the queue with the token in the file `GH_TOKEN_FILE` names, else `GH_TOKEN`,
+// as before; with neither it reads neither `GITHUB_TOKEN` nor `gh auth token`, sends nothing,
+// and the wait stays held as a condition the CLI cannot read leaves it.
+#[test]
+fn a_cloud_runner_command_reads_the_queue_with_the_offered_github_token_alone() {
+    let stub = QueueStub::start(QueueAnswer::Queued);
+    let (bundle, run) = admitted_to_the_queue(&stub);
+    let gh = GhStubs::new(&bundle.execution_root().join("tools"));
+    let read = |set: &[(&str, Option<&str>)]| {
+        held_bearers(
+            &stub,
+            &run,
+            &gh.answering,
+            &[[CREDENTIAL_MODE].as_slice(), set].concat(),
+        )
+    };
+
+    assert_eq!(
+        read(&[
+            ("GH_TOKEN_FILE", Some(&gh.grant)),
+            ("GH_TOKEN", Some("gh-variable")),
+        ]),
+        both("grant-token")
+    );
+    assert_eq!(
+        read(&[
+            ("GH_TOKEN_FILE", Some(&gh.missing)),
+            ("GH_TOKEN", Some("gh-variable")),
+        ]),
+        both("gh-variable")
+    );
+
+    let state = fs::read(run.join("state.json")).unwrap();
+    let requests = stub.requests().len();
+    let refused = read_the_queue(&stub, &run, &gh.answering, &[CREDENTIAL_MODE]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let refusal: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&refusal), "{refusal}");
+    assert_eq!(
+        refusal["diagnostics"][0]["code"],
+        "wait_condition_unavailable"
+    );
+    assert_eq!(stub.requests().len(), requests, "{:?}", stub.requests());
+    assert!(!gh.ran.exists(), "`gh` ran for a command in `cloud`");
+    assert_eq!(fs::read(run.join("state.json")).unwrap(), state);
+    assert_eq!(run_record(&run)["state"], "waiting");
+    assert_eq!(attempt_count(&run), 1);
 }
 
 /// The engineering shape (SC-CONTINUE-8): the loop tree's root with `review` handing back to

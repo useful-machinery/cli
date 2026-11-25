@@ -129,6 +129,8 @@ pub enum OrganizationAuditAction {
     RunnerRegistrationModeChanged,
     #[serde(rename = "runner_registration.pool_changed")]
     RunnerRegistrationPoolChanged,
+    #[serde(rename = "runner_registration.credential_mode_changed")]
+    RunnerRegistrationCredentialModeChanged,
     #[serde(rename = "runner_registration.deleted")]
     RunnerRegistrationDeleted,
     #[serde(rename = "runner_activation.issued")]
@@ -381,6 +383,9 @@ impl std::fmt::Display for OrganizationAuditAction {
             Self::RunnerRegistrationRenamed => write!(f, "runner_registration.renamed"),
             Self::RunnerRegistrationModeChanged => write!(f, "runner_registration.mode_changed"),
             Self::RunnerRegistrationPoolChanged => write!(f, "runner_registration.pool_changed"),
+            Self::RunnerRegistrationCredentialModeChanged => {
+                write!(f, "runner_registration.credential_mode_changed")
+            }
             Self::RunnerRegistrationDeleted => write!(f, "runner_registration.deleted"),
             Self::RunnerActivationIssued => write!(f, "runner_activation.issued"),
             Self::RunnerActivationConsumed => write!(f, "runner_activation.consumed"),

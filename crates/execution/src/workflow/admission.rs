@@ -1209,8 +1209,13 @@ pub const CODEX_LOGIN_VARIABLE: &str = "CODEX_HOME";
 /// The variable that carries a Claude Code login to its harness.
 pub const CLAUDE_CODE_LOGIN_VARIABLE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
-/// How the harness of one agent invocation that received its login variable answered
-/// it.
+/// The variable a runner sets to `cloud` in the environment of each `useful` command it
+/// starts for an assignment admitted in `cloud` mode, and removes from every other: such a
+/// command makes its own provider calls with the names the runner offered alone. It is a `USEFUL_` name, so no step receives it and no workflow can
+/// forward it.
+pub const USEFUL_RUNNER_CREDENTIAL_MODE: &str = "USEFUL_RUNNER_CREDENTIAL_MODE";
+
+/// How the harness of one agent invocation that received its login variable answered it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessLoginOutcome {
     /// The invocation succeeded.

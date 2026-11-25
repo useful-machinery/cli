@@ -36,7 +36,7 @@ use crate::agent_login::cloud::{
 };
 use crate::agent_login::readiness::Installation;
 use crate::agent_login::setup::{AssignmentGate, SetupDependencies};
-use crate::control_protocol::{AgentLoginCheckCause, AgentLoginProvider};
+use crate::control_protocol::{AgentLoginCheckCause, AgentLoginProvider, CredentialMode};
 use crate::credential::Credential;
 use crate::service::config::{AssignmentConfig, Config, ConfigError, RepositoryUrlPolicy};
 use crate::service::connection::{ConnectionError, FrameSource, run_established_shared};
@@ -832,31 +832,41 @@ pub(crate) async fn accept_fixture_socket_with_headers(
 }
 
 pub(crate) fn welcome() -> Message {
-    Message::Text(
-        json!({
-            "protocolVersion": 1,
-            "direction": "cloud_to_runner",
-            "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abc",
-            "sentAt": "2026-07-23T00:00:00Z",
-            "type": "welcome",
-            "payloadVersion": 1,
-            "payload": {
-                "sessionId": "rsn_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "pingIntervalSeconds": 1,
-                "pongTimeoutSeconds": 2,
-                "leasePolicy": {
-                    "schemaVersion": 2,
-                    "forceStopAndReapBudgetMilliseconds": 5000,
-                    "terminalReportDeliveryBudgetMilliseconds": 5000,
-                    "renewalDeliveryBudgetMilliseconds": 5000,
-                    "leaseDurationMilliseconds": 371000,
-                    "fencingMarginMilliseconds": 11000
-                }
+    welcome_with_credential_mode(None)
+}
+
+/// A welcome that names `mode` as the runner's credential mode, or names none.
+pub(crate) fn welcome_with_credential_mode(mode: Option<CredentialMode>) -> Message {
+    let mut frame = json!({
+        "protocolVersion": 1,
+        "direction": "cloud_to_runner",
+        "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "sentAt": "2026-07-23T00:00:00Z",
+        "type": "welcome",
+        "payloadVersion": 1,
+        "payload": {
+            "sessionId": "rsn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "pingIntervalSeconds": 1,
+            "pongTimeoutSeconds": 2,
+            "leasePolicy": {
+                "schemaVersion": 2,
+                "forceStopAndReapBudgetMilliseconds": 5000,
+                "terminalReportDeliveryBudgetMilliseconds": 5000,
+                "renewalDeliveryBudgetMilliseconds": 5000,
+                "leaseDurationMilliseconds": 371000,
+                "fencingMarginMilliseconds": 11000
             }
-        })
-        .to_string()
-        .into(),
-    )
+        }
+    });
+    name_credential_mode(&mut frame, mode);
+    Message::Text(frame.to_string().into())
+}
+
+/// Names `mode` in `frame`'s payload, where it names one.
+fn name_credential_mode(frame: &mut Value, mode: Option<CredentialMode>) {
+    if let Some(mode) = mode {
+        frame["payload"]["credentialMode"] = json!(mode.as_str());
+    }
 }
 
 pub(crate) fn observation_acknowledgement(message_id: &str, sequence: u64) -> Message {
@@ -911,73 +921,76 @@ fn observation_acknowledgement_with_cloud_id(
 }
 
 pub(crate) fn assignment_offer() -> Message {
-    Message::Text(
-        json!({
-            "protocolVersion": 1,
-            "direction": "cloud_to_runner",
-            "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abe",
-            "sentAt": "2026-07-23T00:00:02Z",
-            "type": "assignment_offer",
-            "payloadVersion": 1,
-            "payload": {
-                "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abg",
-                "assignmentId": "asn_01k0z6r1w8f4jy2m7q9v3x5abh",
-                "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
-                "projectId": "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
-                "attemptNumber": 1,
-                "executionSpec": {
-                    "executionSpecId": "xsp_01k0z6r1w8f4jy2m7q9v3x5abc",
-                    "schemaVersion": 1,
-                    "executionLimits": {
-                        "maximumParallelSteps": 1,
-                        "cancellationGraceSeconds": 1
+    assignment_offer_with_credential_mode(None)
+}
+
+/// The assignment offer, naming `mode` as the credential mode or naming none.
+pub(crate) fn assignment_offer_with_credential_mode(mode: Option<CredentialMode>) -> Message {
+    let mut frame = json!({
+        "protocolVersion": 1,
+        "direction": "cloud_to_runner",
+        "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abe",
+        "sentAt": "2026-07-23T00:00:02Z",
+        "type": "assignment_offer",
+        "payloadVersion": 1,
+        "payload": {
+            "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abg",
+            "assignmentId": "asn_01k0z6r1w8f4jy2m7q9v3x5abh",
+            "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
+            "projectId": "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "attemptNumber": 1,
+            "executionSpec": {
+                "executionSpecId": "xsp_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "schemaVersion": 1,
+                "executionLimits": {
+                    "maximumParallelSteps": 1,
+                    "cancellationGraceSeconds": 1
+                },
+                "sourceBranch": "main",
+                "workflowDefinitionSource": {
+                    "repositoryConnectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "objectFormat": "sha1",
+                    "commitOid": "0123456789abcdef0123456789abcdef01234567",
+                    "workflowPath": "workflow.yaml",
+                    "workflowSourceClosureDigest": {
+                        "algorithm": "sha256",
+                        "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }
+                },
+                "primaryWorkspaceSource": {
+                    "kind": "connected_repository",
+                    "providerKind": "github",
+                    "repositoryConnectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
+                    "objectFormat": "sha1",
+                    "commitOid": "0123456789abcdef0123456789abcdef01234567",
+                    "materializationContract": "git_full_clone_v1"
+                },
+                "capacity": {
+                    "executionContract": "workflow_v1_cloud_inputs_artifacts@1",
+                    "sourceClosureDigest": {
+                        "algorithm": "sha256",
+                        "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     },
-                    "sourceBranch": "main",
-                    "workflowDefinitionSource": {
-                        "repositoryConnectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
-                        "objectFormat": "sha1",
-                        "commitOid": "0123456789abcdef0123456789abcdef01234567",
-                        "workflowPath": "workflow.yaml",
-                        "workflowSourceClosureDigest": {
-                            "algorithm": "sha256",
-                            "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        }
-                    },
-                    "primaryWorkspaceSource": {
-                        "kind": "connected_repository",
-                        "providerKind": "github",
-                        "repositoryConnectionId": "rpc_01k0z6r1w8f4jy2m7q9v3x5abc",
-                        "objectFormat": "sha1",
-                        "commitOid": "0123456789abcdef0123456789abcdef01234567",
-                        "materializationContract": "git_full_clone_v1"
-                    },
-                    "capacity": {
-                        "executionContract": "workflow_v1_cloud_inputs_artifacts@1",
-                        "sourceClosureDigest": {
-                            "algorithm": "sha256",
-                            "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        },
-                        "generalMaximumTransitions": 8,
-                        "selectedMaximumTransitions": 7,
-                        "maximumInvocations": 1,
-                        "maximumRetainedBytesPerInvocation": 4194304,
-                        "diagnosticRetentionBytes": 8388608,
-                        "nativeSessionRetentionBytes": 4194304,
-                        "aggregateRetentionBytes": 12582912,
-                        "conditionTransitionCount": 0,
-                        "aggregateConditionTransitionBytes": 0,
-                        "terminalResultStructureBytes": 67108864,
-                        "portableResultBytes": 202027692,
-                        "encodedOutboxBytes": 85458944
-                    },
-                    "runInputs": null
-                }
+                    "generalMaximumTransitions": 8,
+                    "selectedMaximumTransitions": 7,
+                    "maximumInvocations": 1,
+                    "maximumRetainedBytesPerInvocation": 4194304,
+                    "diagnosticRetentionBytes": 8388608,
+                    "nativeSessionRetentionBytes": 4194304,
+                    "aggregateRetentionBytes": 12582912,
+                    "conditionTransitionCount": 0,
+                    "aggregateConditionTransitionBytes": 0,
+                    "terminalResultStructureBytes": 67108864,
+                    "portableResultBytes": 202027692,
+                    "encodedOutboxBytes": 85458944
+                },
+                "runInputs": null
             }
-        })
-        .to_string()
-        .into(),
-    )
+        }
+    });
+    name_credential_mode(&mut frame, mode);
+    Message::Text(frame.to_string().into())
 }
 
 pub(crate) fn assignment_prepare() -> Message {
@@ -1091,21 +1104,49 @@ pub(crate) fn fake_agent_login_material(generation: u64) -> Vec<u8> {
         .into_bytes()
 }
 
-/// Cloud's answer naming the fake agent login for Codex with `status`.
-pub(crate) fn fake_codex_answer(status: LoginStatus) -> Result<Vec<ProviderLogin>, CloudFailure> {
+/// Cloud's answer naming the fake agent login for `provider` with `status`.
+fn fake_answer(
+    provider: AgentLoginProvider,
+    status: LoginStatus,
+) -> Result<Vec<ProviderLogin>, CloudFailure> {
     Ok(vec![ProviderLogin {
-        provider: AgentLoginProvider::Codex,
+        provider,
         agent_login_id: FAKE_AGENT_LOGIN_ID.to_owned(),
         status,
     }])
 }
 
+/// Cloud's answer authorizing the fake agent login for `provider` at `generation`.
+fn fake_authorized(
+    provider: AgentLoginProvider,
+    generation: u64,
+) -> Result<Vec<ProviderLogin>, CloudFailure> {
+    fake_answer(
+        provider,
+        LoginStatus::Authorized {
+            generation,
+            record_schema_version: 1,
+        },
+    )
+}
+
+/// Cloud's answer naming the fake agent login for Codex with `status`.
+pub(crate) fn fake_codex_answer(status: LoginStatus) -> Result<Vec<ProviderLogin>, CloudFailure> {
+    fake_answer(AgentLoginProvider::Codex, status)
+}
+
 /// Cloud's answer authorizing the fake agent login for Codex at `generation`.
 pub(crate) fn fake_codex_authorized(generation: u64) -> Result<Vec<ProviderLogin>, CloudFailure> {
-    fake_codex_answer(LoginStatus::Authorized {
-        generation,
-        record_schema_version: 1,
-    })
+    fake_authorized(AgentLoginProvider::Codex, generation)
+}
+
+/// Cloud's answer authorizing the fake agent login for Claude Code at
+/// `generation`, whose delivered material, `fake_agent_login_material`, is
+/// also a valid token.
+pub(crate) fn fake_claude_code_authorized(
+    generation: u64,
+) -> Result<Vec<ProviderLogin>, CloudFailure> {
+    fake_authorized(AgentLoginProvider::ClaudeCode, generation)
 }
 
 /// The grant the fake Cloud issues tokens from.
@@ -1156,6 +1197,8 @@ enum FakeGrantRequest {
     Providers(GrantProvidersRequest),
     /// A request for an assignment's token services.
     TokenServices(GrantProvidersRequest),
+    /// A request for the names of the provider table's rows.
+    CredentialProviders(GrantProvidersRequest),
     /// A request for one provider's token.
     Token(GrantTokenRequest),
 }
@@ -1209,8 +1252,9 @@ pub(crate) struct FakeAgentLoginCloud {
     grant_terms: Mutex<(Duration, time::OffsetDateTime)>,
     grant_providers_answer: Mutex<Result<Vec<ListedProvider>, GrantProvidersFailure>>,
     token_services_answer: Mutex<Result<Vec<ListedProvider>, GrantProvidersFailure>>,
-    /// Each provider-list, token-service-list and grant-token request, in
-    /// the order they arrived.
+    credential_providers_answer: Mutex<Result<Vec<ListedProvider>, GrantProvidersFailure>>,
+    /// Each provider-list, token-service-list, credential-provider-list and
+    /// grant-token request, in the order they arrived.
     grant_requests: Mutex<Vec<FakeGrantRequest>>,
     grant_request_hook: Mutex<Option<GrantRequestHook>>,
     credential_sources_answer: Mutex<Result<(), CredentialSourcesFailure>>,
@@ -1232,6 +1276,7 @@ impl FakeAgentLoginCloud {
             grant_terms: Mutex::new((FAKE_GRANT_REFRESH_AFTER, fake_grant_expiry())),
             grant_providers_answer: Mutex::new(Err(GrantProvidersFailure::NoRoute)),
             token_services_answer: Mutex::new(Err(GrantProvidersFailure::NoRoute)),
+            credential_providers_answer: Mutex::new(Err(GrantProvidersFailure::NoRoute)),
             grant_requests: Mutex::new(Vec::new()),
             grant_request_hook: Mutex::new(None),
             credential_sources_answer: Mutex::new(Err(CredentialSourcesFailure::NoRoute)),
@@ -1294,6 +1339,18 @@ impl FakeAgentLoginCloud {
             .expect("fake Cloud mutex poisoned") = answer;
     }
 
+    /// What later requests for the provider table's names answer; until a
+    /// test sets one, each is answered as by a Cloud without the route.
+    pub(crate) fn answer_credential_providers(
+        &self,
+        answer: Result<Vec<ListedProvider>, GrantProvidersFailure>,
+    ) {
+        *self
+            .credential_providers_answer
+            .lock()
+            .expect("fake Cloud mutex poisoned") = answer;
+    }
+
     /// The wait before asking again and the expiry each later issued token
     /// carries.
     pub(crate) fn issue_grant_tokens_with(
@@ -1321,7 +1378,9 @@ impl FakeAgentLoginCloud {
             .iter()
             .filter_map(|request| match request {
                 FakeGrantRequest::Token(request) => Some(request.clone()),
-                FakeGrantRequest::Providers(_) | FakeGrantRequest::TokenServices(_) => None,
+                FakeGrantRequest::Providers(_)
+                | FakeGrantRequest::TokenServices(_)
+                | FakeGrantRequest::CredentialProviders(_) => None,
             })
             .collect()
     }
@@ -1332,7 +1391,9 @@ impl FakeAgentLoginCloud {
     pub(crate) fn grant_providers_requests(&self) -> Vec<(usize, GrantProvidersRequest)> {
         self.list_requests(|request| match request {
             FakeGrantRequest::Providers(request) => Some(request),
-            FakeGrantRequest::TokenServices(_) | FakeGrantRequest::Token(_) => None,
+            FakeGrantRequest::TokenServices(_)
+            | FakeGrantRequest::CredentialProviders(_)
+            | FakeGrantRequest::Token(_) => None,
         })
     }
 
@@ -1342,7 +1403,21 @@ impl FakeAgentLoginCloud {
     pub(crate) fn token_services_requests(&self) -> Vec<(usize, GrantProvidersRequest)> {
         self.list_requests(|request| match request {
             FakeGrantRequest::TokenServices(request) => Some(request),
-            FakeGrantRequest::Providers(_) | FakeGrantRequest::Token(_) => None,
+            FakeGrantRequest::Providers(_)
+            | FakeGrantRequest::CredentialProviders(_)
+            | FakeGrantRequest::Token(_) => None,
+        })
+    }
+
+    /// Each request for the provider table's names answered so far, in the
+    /// order they arrived, each with the number of grant-token requests that
+    /// arrived before it.
+    pub(crate) fn credential_providers_requests(&self) -> Vec<(usize, GrantProvidersRequest)> {
+        self.list_requests(|request| match request {
+            FakeGrantRequest::CredentialProviders(request) => Some(request),
+            FakeGrantRequest::Providers(_)
+            | FakeGrantRequest::TokenServices(_)
+            | FakeGrantRequest::Token(_) => None,
         })
     }
 
@@ -1559,6 +1634,20 @@ impl AgentLoginCloud for FakeAgentLoginCloud {
             .clone()
     }
 
+    fn credential_providers(
+        &self,
+        request: &GrantProvidersRequest,
+    ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
+        self.grant_requests
+            .lock()
+            .expect("fake Cloud mutex poisoned")
+            .push(FakeGrantRequest::CredentialProviders(request.clone()));
+        self.credential_providers_answer
+            .lock()
+            .expect("fake Cloud mutex poisoned")
+            .clone()
+    }
+
     fn credential_sources(
         &self,
         request: &CredentialSourcesRequest,
@@ -1625,10 +1714,12 @@ impl AssignmentGate for CountedGate {
 /// A login check for service tests: answers each provider as the test last
 /// set, and until then `program_unavailable`, as a runner without the
 /// coding agents' programs does. It keeps each login it was asked to check,
-/// as its provider and generation.
+/// as its provider and generation, and the credential mode it was asked
+/// under.
 pub(crate) struct FakeLoginCheck {
     answers: Mutex<Vec<(AgentLoginProvider, LoginCheckOutcome)>>,
     checked: Mutex<Vec<(AgentLoginProvider, u64)>>,
+    modes: Mutex<Vec<Option<CredentialMode>>>,
 }
 
 impl FakeLoginCheck {
@@ -1636,6 +1727,7 @@ impl FakeLoginCheck {
         Arc::new(Self {
             answers: Mutex::new(Vec::new()),
             checked: Mutex::new(Vec::new()),
+            modes: Mutex::new(Vec::new()),
         })
     }
 
@@ -1653,14 +1745,31 @@ impl FakeLoginCheck {
             .expect("fake check mutex poisoned")
             .clone()
     }
+
+    /// The credential mode each check so far was asked under, in order.
+    pub(crate) fn checked_modes(&self) -> Vec<Option<CredentialMode>> {
+        self.modes
+            .lock()
+            .expect("fake check mutex poisoned")
+            .clone()
+    }
 }
 
 impl LoginCheck for FakeLoginCheck {
-    fn check(&self, provider: AgentLoginProvider, login: &Installation) -> LoginCheckOutcome {
+    fn check(
+        &self,
+        provider: AgentLoginProvider,
+        login: &Installation,
+        mode: Option<CredentialMode>,
+    ) -> LoginCheckOutcome {
         self.checked
             .lock()
             .expect("fake check mutex poisoned")
             .push((provider, login.generation));
+        self.modes
+            .lock()
+            .expect("fake check mutex poisoned")
+            .push(mode);
         self.answers
             .lock()
             .expect("fake check mutex poisoned")
@@ -2985,6 +3094,7 @@ esac
                 attempt_number,
                 execution_spec,
                 continuation: None,
+                credential_mode: None,
             },
             log,
             capability_requests,

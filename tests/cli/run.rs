@@ -6439,6 +6439,100 @@ fn run_show_json_keeps_workflow_validation_diagnostic() {
     }
 }
 
+/// A run a `cloud` runner rejected because it lacks a grant, its diagnostic naming the
+/// missing providers when `providers` is given.
+fn grant_required_rejection(providers: Option<&[&str]>) -> serde_json::Value {
+    let mut diagnostic =
+        serde_json::json!({"stage": "credential_check", "declineCause": "grant_missing"});
+    if let Some(providers) = providers {
+        diagnostic["providers"] = serde_json::json!(providers);
+    }
+    serde_json::json!({"reason": "grant_required", "diagnostic": diagnostic})
+}
+
+/// The output of `useful run show` for a rejected run whose rejection is `rejection`, with
+/// `--json` when `json` is set.
+fn shown_rejection(rejection: &serde_json::Value, json: bool) -> Output {
+    let mut body = run_body_with_state("rejected");
+    body["rejection"] = rejection.clone();
+    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let environment = deployment_environment(&server.api_url, &credential_path);
+    let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
+    if json {
+        arguments.push("--json");
+    }
+    arguments.push("--allow-insecure-http");
+    let output = run_with_env(&arguments, &environment);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(server.finish().len(), 1);
+    output
+}
+
+/// The trimmed lines of a human report after its `reason: grant_required` line.
+fn lines_under_grant_required(text: &str) -> Vec<&str> {
+    let mut lines = text.lines().map(str::trim);
+    assert!(
+        lines.any(|line| line == "reason: grant_required"),
+        "missing reason in {text}"
+    );
+    lines.collect()
+}
+
+#[test]
+fn run_show_prints_grant_required_providers_with_their_commands() {
+    let rejection = grant_required_rejection(Some(&["gitlab.com", "claude_code"]));
+    let output = shown_rejection(&rejection, true);
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["run"]["rejection"], rejection);
+
+    let text = String::from_utf8(shown_rejection(&rejection, false).stdout).unwrap();
+    let under = lines_under_grant_required(&text);
+    let commands: Vec<&str> = under
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("useful "))
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            "useful account integration connect gitlab.com",
+            "useful account integration authorize gitlab.com --runner RUNNER --yes",
+            "useful account integration connect claude_code",
+            "useful account integration authorize claude_code --runner RUNNER --yes",
+        ],
+        "{text}"
+    );
+    for id in ["gitlab.com", "claude_code"] {
+        let connect = under
+            .iter()
+            .position(|line| *line == format!("useful account integration connect {id}"))
+            .unwrap();
+        assert!(
+            connect > 0 && under[connect - 1].ends_with(id),
+            "{id} not named before its commands in {text}"
+        );
+    }
+
+    let text =
+        String::from_utf8(shown_rejection(&grant_required_rejection(None), false).stdout).unwrap();
+    lines_under_grant_required(&text);
+    assert!(!text.contains("useful integration"), "{text}");
+
+    let hostile = grant_required_rejection(Some(&["gitlab\u{1b}[2J.com"]));
+    let output = shown_rejection(&hostile, false);
+    assert!(!output.stdout.contains(&0x1b), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        lines_under_grant_required(&text)
+            .contains(&"useful account integration connect gitlab\\x1b[2J.com"),
+        "{text}"
+    );
+}
+
 #[test]
 fn run_show_distinguishes_pending_creation_and_creation_rejection() {
     let pending_response = http_response_with_headers(

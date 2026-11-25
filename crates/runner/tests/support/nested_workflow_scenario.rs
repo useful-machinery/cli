@@ -848,6 +848,7 @@ fn offer() -> AssignmentOffer {
             workflow_tree: None,
         },
         continuation: None,
+        credential_mode: None,
     }
 }
 

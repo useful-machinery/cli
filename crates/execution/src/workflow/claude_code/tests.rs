@@ -21,7 +21,7 @@ fn normal_mode_arguments_and_input_frame_are_exact() {
         "--session-id",
         SESSION_ID,
         "--permission-mode",
-        "bypassPermissions",
+        "auto",
         "--setting-sources",
         "user,project,local",
         "--model",
@@ -43,7 +43,15 @@ fn normal_mode_arguments_and_input_frame_are_exact() {
     );
     // `--mcp-config` takes every value after it, so it and its file come last.
     let mut result = normal.to_vec();
-    result.extend(["--mcp-config", "/synthetic/private/result-tool-mcp.json"].map(OsString::from));
+    result.extend(
+        [
+            "--allowedTools",
+            test_support::RESULT_TOOL,
+            "--mcp-config",
+            "/synthetic/private/result-tool-mcp.json",
+        ]
+        .map(OsString::from),
+    );
     assert_eq!(
         result_mode_arguments(
             "claude-profile-model",

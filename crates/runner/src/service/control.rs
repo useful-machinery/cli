@@ -33,6 +33,7 @@ use crate::agent_login::OfferedLogin;
 use crate::agent_login::ReportedSources;
 use crate::agent_login::cloud::CredentialSourcesRequest;
 use crate::agent_login::grant_token::AssignmentGrantTokens;
+use crate::agent_login::mode::CredentialModeCell;
 use crate::agent_login::readiness::ReadinessDocument;
 use crate::agent_login::setup::{
     AgentLoginSetup, AssignmentGate, SYNC_BOUND, SetupAnswer, SetupCaller, SetupOutcome,
@@ -42,8 +43,8 @@ use crate::control_protocol::{
     AssignmentChildRun, AssignmentCommand, AssignmentDetail, AssignmentLog, AssignmentLogRecord,
     AssignmentLogSource, AssignmentLogStream, AssignmentOutput, AssignmentQuery, AssignmentRun,
     AssignmentStep, AssignmentWorkflow, ConnectionFailure, ConnectionState, ControlError,
-    ControlRequest, KeptBound, KeptCache, KeptCacheState, KeptReason, KeptReport, KeptRunsBounds,
-    KeptWorkspace, KeptWorkspaceState, LOG_WINDOW_BYTES, MAXIMUM_KEPT_ENTRIES,
+    ControlRequest, CredentialMode, KeptBound, KeptCache, KeptCacheState, KeptReason, KeptReport,
+    KeptRunsBounds, KeptWorkspace, KeptWorkspaceState, LOG_WINDOW_BYTES, MAXIMUM_KEPT_ENTRIES,
     OVERVIEW_RESPONSE_LIMIT, Operation, Overview, OverviewAssignment, OverviewConnection,
     OverviewDisk, OverviewRunElement, OverviewRunner, OverviewWait, ProcessState, ProtocolFailure,
     PruneReport, PruneScope, PrunedCache, PrunedDirectory, PrunedOutcome, Response, StatusDisk,
@@ -110,7 +111,8 @@ pub(super) struct ControlContext {
 /// Runs one agent-login setup for `caller` and publishes the readiness it
 /// recorded in the live status, also when a held run's work interrupted it
 /// after it had recorded an install or removal: answers that readiness with
-/// each login whose check gave no answer, `runner_busy` when a run the
+/// each login whose check gave no answer and the credential mode the setup
+/// went by, `runner_busy` when a run the
 /// runner holds is working, or has a command in flight where the setup had
 /// a login to install or remove, or once a rejoined service has ended the
 /// setup, and `state_update_failed` when the readiness could not be
@@ -123,6 +125,7 @@ pub(super) async fn set_up_agent_logins(
     let SetupAnswer {
         outcome,
         unanswered,
+        mode,
     } = setup.set_up(caller).await;
     let cause = match caller {
         SetupCaller::Sync => AgentLoginSetupCause::Sync,
@@ -131,6 +134,7 @@ pub(super) async fn set_up_agent_logins(
     publish_pass(cause, outcome, status).map(|readiness| SyncedAgentLogins {
         readiness,
         unanswered_checks: unanswered,
+        credential_mode: mode,
     })
 }
 
@@ -204,16 +208,23 @@ impl AdmissionAgentLogins {
     /// of each; what it fails at or the gate stops is the setup's own record
     /// and never the admission's. It answers what the admission holds of its
     /// assignment's grant tokens, which removes their files when it is
-    /// dropped; `None` when the setup is gone.
+    /// dropped; `None` when the setup is gone. Both go by `mode`, the
+    /// credential mode the assignment's offer named.
     pub(super) fn set_up(
         &self,
         beside: &dyn AssignmentGate,
+        mode: Option<CredentialMode>,
         run_id: &str,
         assignment_id: &str,
     ) -> Option<AssignmentGrantTokens> {
         let setup = self.setup.upgrade()?;
-        let admitted =
-            setup.set_up_admission_beside(beside, self.status.boot_id(), run_id, assignment_id);
+        let admitted = setup.set_up_admission_beside(
+            beside,
+            mode,
+            self.status.boot_id(),
+            run_id,
+            assignment_id,
+        );
         if let Some(outcome) = admitted.agent_logins {
             let _ = publish_pass(AgentLoginSetupCause::Admission, outcome, &self.status);
         }
@@ -291,6 +302,8 @@ pub(super) struct LiveStatus {
     disk: Option<DiskReadingHandle>,
     state: Mutex<LiveStatusState>,
     connected: tokio::sync::Notify,
+    /// The credential mode the runner goes by, which the connection writes.
+    credential_mode: Arc<CredentialModeCell>,
     /// The runner's own events, recorded once the state's lock is released.
     events: Arc<EventLog>,
 }
@@ -319,8 +332,15 @@ impl LiveStatus {
                 stop_began_at: None,
             }),
             connected: tokio::sync::Notify::new(),
+            credential_mode: Arc::default(),
             events: Arc::new(EventLog::new()),
         }
+    }
+
+    /// The cell that holds the credential mode the runner goes by, which every
+    /// `welcome` and `assignment_offer` the runner reads writes.
+    pub(super) fn credential_mode(&self) -> &Arc<CredentialModeCell> {
+        &self.credential_mode
     }
 
     /// The status of a process that writes its log at `log_path`, the path the
@@ -504,6 +524,7 @@ impl LiveStatus {
             last_connection_failure: state.last_connection_failure,
             agent_logins: state.agent_logins.clone(),
             held_runs,
+            credential_mode: self.credential_mode.mode(),
         }
     }
 
@@ -1627,6 +1648,12 @@ async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
             // Every enrolled runner has a setup; one without protected state
             // cannot record readiness.
             None => Response::Error(ControlError::StateUpdateFailed),
+            // Before Cloud's first welcome the runner does not know the
+            // credential mode that governs the setup, so it makes none and
+            // asks Cloud nothing.
+            Some(_) if !status.credential_mode().learned() => {
+                Response::Error(ControlError::NotYetConnected)
+            }
             Some(setup) => {
                 // The pass publishes its readiness even if the answer is
                 // abandoned at the bound.
@@ -1690,7 +1717,7 @@ mod tests {
     use crate::agent_login::readiness::READINESS_FILE;
     use crate::control_protocol::{
         AgentLoginCheckCause, AgentLoginProvider, AgentLoginState, AssignmentAnswer,
-        AssignmentCounts, AssignmentPhase, HeldRunState, KeptAnswer, LiveStepState,
+        AssignmentCounts, AssignmentPhase, CredentialMode, HeldRunState, KeptAnswer, LiveStepState,
         MAXIMUM_KEPT_ENTRIES, OpenWord, OverviewAnswer, OverviewAssignment, OverviewCounts,
         OverviewRunningStep, PruneAnswer, PruneScope, Response, RunnerEventKind, UnansweredCheck,
         decode_assignment_response, decode_kept_response, decode_overview_response,
@@ -1774,6 +1801,17 @@ mod tests {
         exchange_in(context(None), request).await
     }
 
+    /// The context of a runner with `agent_logins` that Cloud has welcomed,
+    /// naming `mode`, so a sync is served.
+    fn welcomed(
+        agent_logins: Arc<AgentLoginSetup>,
+        mode: Option<CredentialMode>,
+    ) -> ControlContext {
+        let context = context(Some(agent_logins));
+        context.status.credential_mode().learn(mode);
+        context
+    }
+
     /// Agent-login setup against `cloud` for a service whose home and state
     /// directory are under `root`.
     fn agent_login_setup(
@@ -1781,13 +1819,24 @@ mod tests {
         root: &Path,
         gate: Arc<CountedGate>,
     ) -> Arc<AgentLoginSetup> {
+        agent_login_setup_reading(cloud, root, gate, Arc::default())
+    }
+
+    /// `agent_login_setup`, going by the credential mode `cell` holds, as
+    /// the setup of `useful runner serve` goes by the live status's.
+    fn agent_login_setup_reading(
+        cloud: Arc<FakeAgentLoginCloud>,
+        root: &Path,
+        gate: Arc<CountedGate>,
+        cell: Arc<CredentialModeCell>,
+    ) -> Arc<AgentLoginSetup> {
         let (home, state) = (root.join("home"), root.join("state"));
         fs::create_dir(&home).unwrap();
         fs::create_dir(&state).unwrap();
         fs::set_permissions(&state, Permissions::from_mode(0o700)).unwrap();
         let (recorder, _capture) = test_recorder("rbt_01k0z6r1w8f4jy2m7q9v3x5abc");
         Arc::new(AgentLoginSetup::new(
-            fake_agent_login_setup(cloud, &home, &state, recorder),
+            fake_agent_login_setup(cloud, &home, &state, recorder).with_credential_mode(cell),
             gate,
             || time::OffsetDateTime::from_unix_timestamp(1_794_450_000).unwrap(),
         ))
@@ -1823,11 +1872,14 @@ mod tests {
     async fn sync_runs_a_pass_and_answers_its_readiness_without_a_path() {
         let root = tempfile::tempdir().unwrap();
         let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(2));
-        let context = context(Some(agent_login_setup(
-            Arc::clone(&cloud),
-            root.path(),
-            Arc::new(CountedGate::idle()),
-        )));
+        let context = welcomed(
+            agent_login_setup(
+                Arc::clone(&cloud),
+                root.path(),
+                Arc::new(CountedGate::idle()),
+            ),
+            None,
+        );
 
         let before = exchange_in(context.clone(), STATUS_REQUEST).await;
         let Response::Status(status) = decode_response(&before).unwrap() else {
@@ -1919,11 +1971,14 @@ mod tests {
     async fn sync_while_a_held_run_is_working_answers_runner_busy_without_asking() {
         let root = tempfile::tempdir().unwrap();
         let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
-        let context = context(Some(agent_login_setup(
-            Arc::clone(&cloud),
-            root.path(),
-            Arc::new(CountedGate::busy()),
-        )));
+        let context = welcomed(
+            agent_login_setup(
+                Arc::clone(&cloud),
+                root.path(),
+                Arc::new(CountedGate::busy()),
+            ),
+            None,
+        );
 
         assert_eq!(
             decode_response(&exchange_in(context.clone(), SYNC_REQUEST).await).unwrap(),
@@ -1965,11 +2020,10 @@ mod tests {
         let gate = Arc::new(CountedGate::idle());
         gate.idle_calls
             .store(3, std::sync::atomic::Ordering::SeqCst);
-        let context = context(Some(agent_login_setup(
-            Arc::clone(&cloud),
-            root.path(),
-            gate,
-        )));
+        let context = welcomed(
+            agent_login_setup(Arc::clone(&cloud), root.path(), gate),
+            None,
+        );
 
         assert_eq!(
             decode_response(&exchange_in(context.clone(), SYNC_REQUEST).await).unwrap(),
@@ -1992,13 +2046,112 @@ mod tests {
         assert_eq!(codex.state, AgentLoginState::Ready);
     }
 
+    // a sync waits for nothing and
+    // asks Cloud nothing before the runner has learned its credential mode
+    // from a welcome; after, its answer names the mode its setup went by, and
+    // in `host` that setup asks Cloud nothing although Cloud would authorize a
+    // login.
+    #[tokio::test]
+    async fn a_sync_before_the_first_welcome_is_refused_and_one_after_answers_its_mode() {
+        let roots = [(); 2].map(|()| tempfile::tempdir().unwrap());
+        let clouds = [(); 2].map(|()| FakeAgentLoginCloud::new(fake_codex_authorized(1)));
+        let [none, host] = [0, 1].map(|index| {
+            let mut context = context(None);
+            context.agent_logins = Some(agent_login_setup_reading(
+                Arc::clone(&clouds[index]),
+                roots[index].path(),
+                Arc::new(CountedGate::idle()),
+                Arc::clone(context.status.credential_mode()),
+            ));
+            context
+        });
+
+        assert_eq!(
+            decode_response(&exchange_in(none.clone(), SYNC_REQUEST).await).unwrap(),
+            Response::Error(ControlError::NotYetConnected)
+        );
+        assert_eq!(
+            (clouds[0].status_requests(), clouds[0].deliveries()),
+            (0, 0)
+        );
+        assert!(!roots[0].path().join("state").join(READINESS_FILE).exists());
+
+        // Learned none: the answer is the base's, with no member for a mode.
+        none.status.credential_mode().learn(None);
+        let response = exchange_in(none, SYNC_REQUEST).await;
+        let Response::AgentLoginsSynced(synced) = decode_response(&response).unwrap() else {
+            panic!("sync request did not return readiness");
+        };
+        assert_eq!(synced.credential_mode, None);
+        assert_eq!(clouds[0].deliveries(), 1);
+        let value: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        let keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                "agentLogins",
+                "outcome",
+                "schemaVersion",
+                "unansweredChecks"
+            ]
+        );
+
+        host.status
+            .credential_mode()
+            .learn(Some(CredentialMode::Host));
+        let response = exchange_in(host, SYNC_REQUEST).await;
+        let Response::AgentLoginsSynced(synced) = decode_response(&response).unwrap() else {
+            panic!("sync request did not return readiness");
+        };
+        assert_eq!(synced.credential_mode, Some(CredentialMode::Host));
+        let value: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(value["credentialMode"], "host");
+        let coding_agents = synced
+            .readiness
+            .providers
+            .iter()
+            .filter(|entry| !entry.provider.is_brokered())
+            .map(|entry| (entry.provider, entry.state, entry.agent_login_id.as_deref()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            coding_agents,
+            [
+                (
+                    AgentLoginProvider::Codex,
+                    AgentLoginState::ForeignLogin,
+                    None
+                ),
+                (
+                    AgentLoginProvider::ClaudeCode,
+                    AgentLoginState::ForeignLogin,
+                    None
+                ),
+            ]
+        );
+        assert_eq!(
+            (clouds[1].status_requests(), clouds[1].deliveries()),
+            (0, 0)
+        );
+        assert!(
+            !roots[1]
+                .path()
+                .join("state/.runner-agent-login/codex/auth.json")
+                .exists()
+        );
+    }
+
     #[tokio::test]
     async fn sync_while_an_admitted_assignment_is_held_answers_runner_busy() {
         let root = tempfile::tempdir().unwrap();
         let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
         let gate = Arc::new(CountedGate::idle());
         let setup = agent_login_setup(Arc::clone(&cloud), root.path(), Arc::clone(&gate));
-        let context = context(Some(Arc::clone(&setup)));
+        let context = welcomed(Arc::clone(&setup), None);
         assert!(matches!(
             decode_response(&exchange_in(context.clone(), SYNC_REQUEST).await).unwrap(),
             Response::AgentLoginsSynced(_)
@@ -2013,6 +2166,7 @@ mod tests {
         let tokens = tokio::task::spawn_blocking(move || {
             admission.set_up(
                 &super::super::tree_run::HeldRuns::Nothing,
+                None,
                 "run_01k0z6r1w8f4jy2m7q9v3x5abc",
                 "asn_01k0z6r1w8f4jy2m7q9v3x5abc",
             )
@@ -2105,6 +2259,31 @@ mod tests {
         ] {
             assert!(!encoded.contains(forbidden));
         }
+    }
+
+    // the status answer names the mode the runner
+    // last learned, and none before it learned one or once it learned none.
+    #[tokio::test]
+    async fn a_status_answers_the_credential_mode_the_runner_last_learned() {
+        async fn answered(context: &ControlContext) -> Option<CredentialMode> {
+            let response = exchange_in(context.clone(), STATUS_REQUEST).await;
+            let Response::Status(status) = decode_response(&response).unwrap() else {
+                panic!("status request did not return a snapshot");
+            };
+            status.credential_mode
+        }
+        let context = context(None);
+        let cell = Arc::clone(context.status.credential_mode());
+
+        assert_eq!(answered(&context).await, None);
+        cell.learn(None);
+        assert_eq!(answered(&context).await, None);
+        cell.learn(Some(CredentialMode::Host));
+        assert_eq!(answered(&context).await, Some(CredentialMode::Host));
+        cell.learn(Some(CredentialMode::Cloud));
+        assert_eq!(answered(&context).await, Some(CredentialMode::Cloud));
+        cell.learn(None);
+        assert_eq!(answered(&context).await, None);
     }
 
     #[test]
@@ -2381,6 +2560,7 @@ mod tests {
             attempt_number,
             execution_spec: *execution_spec,
             continuation: None,
+            credential_mode: None,
         }
     }
 

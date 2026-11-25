@@ -40,6 +40,7 @@ pub(crate) type RunnerActivationList = models::RunnerActivationList;
 pub type RunnerActivationState = models::runner_activation::State;
 pub type RunnerActivationIssuance = models::RunnerActivationIssuance;
 pub type RunnerCredential = models::RunnerCredential;
+pub type RunnerCredentialMode = models::RunnerCredentialMode;
 pub(crate) type RunnerCredentialList = models::RunnerCredentialList;
 pub type RunnerCredentialStoredState = models::runner_credential::StoredState;
 pub type RunnerCredentialEffectiveState = models::runner_credential::EffectiveState;
@@ -470,6 +471,24 @@ impl RunnerApi {
             &runner.id,
             idempotency_key,
             models::UpdateRunnerRegistrationModeRequest::new(mode),
+        )
+        .map_err(classify_runner_error)
+    }
+
+    pub fn update_registration_credential_mode(
+        &self,
+        organization: &str,
+        runner_ref: &str,
+        idempotency_key: &str,
+        mode: RunnerCredentialMode,
+    ) -> Result<RunnerRegistration, RunnerFailure> {
+        let runner = self.get_registration(organization, runner_ref)?;
+        runners_api::update_runner_registration_credential_mode(
+            &self.configuration,
+            organization,
+            &runner.id,
+            idempotency_key,
+            models::UpdateRunnerRegistrationCredentialModeRequest::new(mode),
         )
         .map_err(classify_runner_error)
     }

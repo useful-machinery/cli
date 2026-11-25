@@ -33,7 +33,7 @@ use super::workspace::{
     WorkRootLease, WorkspaceDisposition,
 };
 use crate::agent_login::grant_token::AssignmentGrantTokens;
-use crate::control_protocol::{AssignmentCounts, OverviewRecentAssignment};
+use crate::control_protocol::{AssignmentCounts, CredentialMode, OverviewRecentAssignment};
 use crate::telemetry::{Event as TelemetryEvent, Outcome as TelemetryOutcome};
 #[cfg(test)]
 use useful_execution::RUNNER_TERMINAL_FRAME_BYTES;
@@ -100,6 +100,10 @@ pub(super) struct AssignmentOffer {
     pub(super) attempt_number: u64,
     pub(super) execution_spec: ExecutionSpecV1RunnerProjection,
     pub(super) continuation: Option<Box<ContinuationOffer>>,
+    /// The credential mode the offer names. Not compared by
+    /// `same_assignment`: Cloud names the mode as it stands at each delivery, so a
+    /// redelivery that names another is still the same assignment.
+    pub(super) credential_mode: Option<CredentialMode>,
 }
 
 pub(super) trait AssignmentRootPreparer: Send + Sync {

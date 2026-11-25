@@ -150,6 +150,8 @@ pub enum Field {
     Runs,
     #[serde(rename = "permissions")]
     Permissions,
+    #[serde(rename = "credential_mode")]
+    CredentialMode,
 }
 
 impl Default for Field {

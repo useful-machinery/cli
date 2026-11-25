@@ -21,7 +21,7 @@ const CLAUDE_CODE_STREAM_JSON_V1_MINIMUM_VERSION: (u64, u64, u64) = (2, 1, 234);
 const CLAUDE_CODE_STREAM_JSON_V1_MAXIMUM_VERSION: (u64, u64, u64) = (2, 2, 0);
 const CAPABILITY_PROBE_ARGUMENTS: [&str; 1] = ["--help"];
 
-const REQUIRED_CAPABILITIES: [ClaudeCodeCapability; 13] = [
+const REQUIRED_CAPABILITIES: [ClaudeCodeCapability; 14] = [
     ClaudeCodeCapability::PrintMode,
     ClaudeCodeCapability::StreamJsonInput,
     ClaudeCodeCapability::StreamJsonOutput,
@@ -35,6 +35,7 @@ const REQUIRED_CAPABILITIES: [ClaudeCodeCapability; 13] = [
     ClaudeCodeCapability::Effort,
     ClaudeCodeCapability::AppendSystemPromptFile,
     ClaudeCodeCapability::McpConfig,
+    ClaudeCodeCapability::AllowedTools,
 ];
 
 pub(crate) type ClaudeCodeVersion = StableVersion;
@@ -54,6 +55,7 @@ pub enum ClaudeCodeCapability {
     Effort,
     AppendSystemPromptFile,
     McpConfig,
+    AllowedTools,
 }
 
 impl ClaudeCodeCapability {
@@ -72,6 +74,7 @@ impl ClaudeCodeCapability {
             Self::Effort => "effort",
             Self::AppendSystemPromptFile => "append_system_prompt_file",
             Self::McpConfig => "mcp_config",
+            Self::AllowedTools => "allowed_tools",
         }
     }
 
@@ -90,6 +93,7 @@ impl ClaudeCodeCapability {
             Self::Effort => has_option(help, "--effort <level>"),
             Self::AppendSystemPromptFile => help.contains("--append-system-prompt[-file]"),
             Self::McpConfig => has_option(help, "--mcp-config <configs...>"),
+            Self::AllowedTools => has_option(help, "--allowedTools, --allowed-tools <tools...>"),
         }
     }
 }

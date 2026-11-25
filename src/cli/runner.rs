@@ -12,7 +12,7 @@ mod watch;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use crate::exit_code::ExitCode;
 use useful_human_auth::Deployment;
@@ -32,8 +32,13 @@ pub(super) struct Command {
 
 #[derive(Debug, Subcommand)]
 enum RunnerCommand {
-    #[command(about = credential::ABOUT)]
+    #[command(about = credential::ABOUT, after_help = CREDENTIAL_AFTER_HELP)]
     Credential(credential::Command),
+    #[command(
+        about = "Set whether a runner's runs use Cloud or host credentials",
+        after_help = CREDENTIALS_AFTER_HELP
+    )]
+    Credentials(CredentialsCommand),
     #[command(
         about = "Delete a runner registration",
         after_help = "Eligibility:\n  The runner registration must be quiescent before deletion."
@@ -69,6 +74,11 @@ enum RunnerCommand {
     #[command(about = watch::ABOUT)]
     Watch(watch::Command),
 }
+
+// `runner credential` and `runner credentials` differ by one letter, so each help names
+// the other.
+const CREDENTIAL_AFTER_HELP: &str = "Credential mode:\n  To set where the credentials of a runner's runs come from, use useful runner credentials.";
+const CREDENTIALS_AFTER_HELP: &str = "Credential mode:\n  Once set, the mode can change between cloud and host but cannot be cleared.\n\nEnrollment credentials:\n  To manage the credentials the runner itself authenticates to Cloud with, use useful runner credential.";
 
 type CloudOptions = super::CommonArgs<super::RunnerJson, super::PrincipalAuthenticationArgs>;
 
@@ -129,6 +139,37 @@ struct ModeCommand {
 }
 
 #[derive(Debug, Args)]
+struct CredentialsCommand {
+    #[command(flatten)]
+    target: RunnerTarget,
+
+    #[arg(
+        value_enum,
+        value_name = "MODE",
+        help = "Source of the credentials the runner's runs use"
+    )]
+    mode: CredentialModeArgument,
+
+    #[command(flatten)]
+    options: CloudOptions,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CredentialModeArgument {
+    Cloud,
+    Host,
+}
+
+impl From<CredentialModeArgument> for useful_api::RunnerCredentialMode {
+    fn from(mode: CredentialModeArgument) -> Self {
+        match mode {
+            CredentialModeArgument::Cloud => Self::Cloud,
+            CredentialModeArgument::Host => Self::Host,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
 struct DeleteCommand {
     #[command(flatten)]
     target: RunnerTarget,
@@ -147,6 +188,9 @@ impl Command {
             Some(RunnerCommand::Pool(command)) => command.execute(),
             Some(RunnerCommand::Prune(command)) => command.execute(),
             Some(RunnerCommand::Credential(command)) => command.execute(),
+            Some(RunnerCommand::Credentials(command)) => {
+                execute_in_cloud(command, CredentialsCommand::execute)
+            }
             Some(RunnerCommand::JoinKey(command)) => command.execute(),
             Some(RunnerCommand::List(command)) => execute_in_cloud(command, ListCommand::execute),
             Some(RunnerCommand::Show(command)) => command.execute(),
@@ -411,6 +455,41 @@ impl ModeCommand {
                 &result,
                 outcome,
                 heading,
+                options.authentication.kind(),
+                options.json,
+            )
+        })
+    }
+}
+
+impl CredentialsCommand {
+    fn execute(self, deployment: &Deployment) -> super::CommandResult {
+        let Self {
+            target: RunnerTarget { runner, org },
+            mode,
+            options,
+        } = self;
+        execute_in(org, options, deployment, |options, organization| {
+            let key = generate_idempotency_key()
+                .context("generate runner credential mode request identity")?;
+            let result = cloud::with_api(
+                deployment,
+                options.http.transport_policy(),
+                &options.authentication,
+                |api| {
+                    api.update_registration_credential_mode(
+                        organization,
+                        &runner,
+                        &key,
+                        mode.into(),
+                    )
+                },
+            )?;
+            cloud::write_runner_transition(
+                deployment.fingerprint().api_url(),
+                &result,
+                "credential_mode_set",
+                "✓ Runner credential mode set.",
                 options.authentication.kind(),
                 options.json,
             )

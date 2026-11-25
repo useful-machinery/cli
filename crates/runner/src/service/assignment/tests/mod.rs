@@ -228,7 +228,7 @@ for argument in "$@"; do
   previous=$argument
 done
 IFS= read -r _ || :
-printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"bypassPermissions","claude_code_version":"2.1.321"}\n' "$PWD" "$session" "$model"
+printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"auto","claude_code_version":"2.1.321"}\n' "$PWD" "$session" "$model"
 if [ "${CLAUDE_FIXTURE_FAIL-}" = 1 ]; then exit 23; fi
 printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-runner","type":"message","role":"assistant","content":[],"model":"%s","usage":{"input_tokens":1,"output_tokens":0}}},"session_id":"%s","parent_tool_use_id":null}\n' "$model" "$session"
 printf '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"session_id":"%s","parent_tool_use_id":null}\n' "$session"
@@ -759,6 +759,7 @@ fn offer(suffix: &str) -> AssignmentOffer {
             workflow_tree: None,
         },
         continuation: None,
+        credential_mode: None,
     }
 }
 
@@ -2055,6 +2056,7 @@ fn decoded_offer_from_frame(bytes: &[u8]) -> AssignmentOffer {
         attempt_number,
         execution_spec: *execution_spec,
         continuation: None,
+        credential_mode: None,
     }
 }
 

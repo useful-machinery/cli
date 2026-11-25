@@ -1294,7 +1294,7 @@ pub(super) async fn end_withdrawn<P: Send + 'static>(
             &run_directory,
             attempt_number,
             failure.code,
-            super::mirror::CREDENTIALS_REFUSAL,
+            super::mirror::credentials_refusal(),
         );
         drop(pending);
         signal_task.abort();

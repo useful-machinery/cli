@@ -711,7 +711,7 @@ set -- "$config"/projects/*
 native_project=$1
 printf '{malformed retained transcript' > "$native_project/$session.jsonl"
 IFS= read -r _ || :
-printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"bypassPermissions","claude_code_version":"2.1.300"}\n' "$PWD" "$session" "$model"
+printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"auto","claude_code_version":"2.1.300"}\n' "$PWD" "$session" "$model"
 printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-local","type":"message","role":"assistant","content":[],"model":"%s","usage":{"input_tokens":1,"output_tokens":0}}},"session_id":"%s","parent_tool_use_id":null}\n' "$model" "$session"
 printf '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"session_id":"%s","parent_tool_use_id":null}\n' "$session"
 printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"claude response"}},"session_id":"%s","parent_tool_use_id":null}\n' "$session"
@@ -792,7 +792,7 @@ done
 IFS= read -r _
 printf '%s\n' "$$" > "$CLAUDE_FIXTURE_PID"
 trap 'exit 130' INT TERM
-printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"bypassPermissions","claude_code_version":"2.1.300"}\n' "$PWD" "$session" "$model"
+printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"auto","claude_code_version":"2.1.300"}\n' "$PWD" "$session" "$model"
 printf '\001' > "$WORKFLOW_READY_FIFO"
 IFS= read -r _ < "$WORKFLOW_RELEASE_FIFO"
 exit 23"#
@@ -2789,6 +2789,13 @@ fn claude_code_only_run_pins_the_validated_executable_without_pi_or_path_fallbac
     let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes).unwrap();
     assert_eq!(metadata["profile"], "ClaudeCodeStreamJsonV1");
     assert_eq!(metadata["claudeCodeVersion"], "2.1.235");
+    let permission_mode: serde_json::Value =
+        serde_json::from_slice(&fs::read(diagnostic.join("permission-mode.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        permission_mode,
+        serde_json::json!({"schemaVersion": 1, "requested": "auto", "reported": "auto"})
+    );
     assert_eq!(
         metadata["nativeSession"],
         serde_json::json!({"relativeDirectory": "session", "formatVersion": 1})
@@ -6714,7 +6721,7 @@ fn claude_code_result_correction_fixture() {
             "cwd": std::env::current_dir().unwrap(),
             "session_id": session,
             "model": model,
-            "permissionMode": "bypassPermissions",
+            "permissionMode": "auto",
             "claude_code_version": "2.1.300",
         })
     )

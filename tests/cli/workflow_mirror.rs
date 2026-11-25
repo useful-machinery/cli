@@ -661,6 +661,42 @@ fn the_mirror_writes_with_the_first_linear_credential_the_environment_offers() {
     assert_eq!(stub.authorizations(), ["test"; 6]);
 }
 
+/// The variable through which a runner tells a `useful` command it started that its
+/// assignment was admitted in `cloud`.
+const CREDENTIAL_MODE_VARIABLE: &str = "USEFUL_RUNNER_CREDENTIAL_MODE";
+
+// a `useful` command a runner started for an assignment
+// admitted in `cloud` takes the mirror's credential from `USEFUL_LINEAR_ACCESS_TOKEN_FILE` and
+// `USEFUL_LINEAR_ACCESS_TOKEN` alone: with only `LINEAR_API_KEY` set nothing is sent and each
+// owed write fails `mirror_credentials_unavailable`; with the access token as well each request
+// carries it as `Bearer`.
+#[test]
+fn a_cloud_runner_command_writes_the_mirror_with_the_offered_linear_token_alone() {
+    let published = engineering(true);
+    let stub = LinearStub::start();
+
+    let run = create(&published, "AUTO-7", |command| {
+        stub.point(command).env(CREDENTIAL_MODE_VARIABLE, "cloud")
+    });
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    let writes = mirror_writes(&run);
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    for (_, write) in &writes {
+        assert_eq!(write["outcome"], "failed", "{write}");
+        assert_eq!(write["code"], "mirror_credentials_unavailable", "{write}");
+    }
+    assert_eq!(stub.bodies(), Vec::<Value>::new());
+
+    stub.clear();
+    let run = create(&published, "AUTO-8", |command| {
+        stub.point(command)
+            .env(CREDENTIAL_MODE_VARIABLE, "cloud")
+            .env(TOKEN_VARIABLE, "variable-token")
+    });
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(stub.authorizations(), ["Bearer variable-token"; 6]);
+}
+
 /// The `design` stage's program in `a_failed_state_commit_writes_no_outcome_to_the_mirror`,
 /// run in the execution root: while `useful-runs` there names the definition's runs directory, it
 /// moves the `state.json` of the run that has not exited aside, so the root's next commit, the

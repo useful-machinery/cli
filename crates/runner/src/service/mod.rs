@@ -347,6 +347,9 @@ struct PreparedReload {
 struct ReloadDependencies {
     target: ServingTarget,
     boot_id: String,
+    /// Whether the service has its agent-login setup, so a candidate's hello advertises the
+    /// credential mode as the connection loop's does.
+    credential_mode: bool,
     frame_source: Arc<dyn FrameSource>,
     sleeper: Arc<dyn Sleeper>,
     recorder: Arc<Recorder>,
@@ -397,11 +400,13 @@ impl AssignmentGate for HeldRunGate {
     }
 }
 
-/// The serving process's repeating agent-login setup: a setup at once, then
-/// one every `AGENT_LOGIN_SETUP_INTERVAL` on the service's sleeper, each
-/// checking a login it installed and publishing the readiness it recorded
-/// in the live status. A setup that finds a held run working is skipped,
-/// not queued. Dropping the schedule stops it.
+/// The serving process's repeating agent-login setup: a setup once Cloud has
+/// first welcomed the runner, when the credential mode it goes by is first
+/// written, then one every
+/// `AGENT_LOGIN_SETUP_INTERVAL` on the service's sleeper, each checking a
+/// login it installed and publishing the readiness it
+/// recorded in the live status. A setup that finds a held run working is
+/// skipped, not queued. Dropping the schedule stops it.
 struct AgentLoginSchedule {
     task: tokio::task::JoinHandle<()>,
 }
@@ -414,6 +419,7 @@ impl AgentLoginSchedule {
     ) -> Self {
         Self {
             task: tokio::spawn(async move {
+                status.credential_mode().wait_until_learned().await;
                 loop {
                     let _ =
                         control::set_up_agent_logins(&setup, &status, SetupCaller::Schedule).await;
@@ -1192,9 +1198,11 @@ async fn connection_loop_with_work_root(
                 workspaces: u64::try_from(found).unwrap_or(u64::MAX),
             });
     }
+    let credential_mode = agent_login_setup.is_some();
     let reload_dependencies = ReloadDependencies {
         target,
         boot_id: boot_id.clone(),
+        credential_mode,
         frame_source: Arc::clone(&frame_source),
         sleeper: Arc::clone(&sleeper),
         recorder: Arc::clone(&recorder),
@@ -1204,7 +1212,9 @@ async fn connection_loop_with_work_root(
     let agent_login_setup = agent_login_setup.map(|dependencies| {
         let clock = Arc::clone(&sleeper);
         Arc::new(AgentLoginSetup::new(
-            dependencies,
+            // A periodic or `sync` setup goes by the mode the connection
+            // writes.
+            dependencies.with_credential_mode(Arc::clone(live_status.credential_mode())),
             Arc::new(HeldRunGate::new(Arc::clone(&assignment_manager))),
             move || clock.utc_now(),
         ))
@@ -1244,9 +1254,10 @@ async fn connection_loop_with_work_root(
         })
         .transpose()
         .map_err(ServiceError::Control)?;
-    // Setup never delays connecting: its first pass starts once the control
-    // socket is bound, on a task of its own, and the connection loop below
-    // never waits for it.
+    // Setup never delays connecting: its schedule starts once the control
+    // socket is bound, on a task of its own, and makes its first pass once
+    // the connection has read Cloud's first welcome; the connection loop
+    // below never waits for it.
     let _agent_login_schedule = agent_login_setup.as_ref().map(|setup| {
         AgentLoginSchedule::start(
             Arc::clone(setup),
@@ -1273,6 +1284,7 @@ async fn connection_loop_with_work_root(
         opening_message_id.clone(),
         opening_sequence,
         recorder.service_version(),
+        credential_mode,
     )
     .map_err(ServiceError::Connection)?;
     let mut attempt = 1_u64;
@@ -1353,7 +1365,8 @@ async fn connection_loop_with_work_root(
                 &assignment_manager,
                 attempt,
             )
-            .with_live_status(&live_status);
+            .with_live_status(&live_status)
+            .with_credential_mode(live_status.credential_mode());
             let opening_frame = OpeningHello {
                 boot_id: &boot_id,
                 encoded: &opening,
@@ -1725,6 +1738,7 @@ async fn connection_loop_with_work_root(
                 opening_message_id.clone(),
                 opening_sequence,
                 recorder.service_version(),
+                credential_mode,
             )
             .map_err(ServiceError::Connection)?;
         }
@@ -2157,7 +2171,8 @@ impl ReloadDependencies {
             &active_effect_event,
             &self.assignment_manager,
             attempt,
-        );
+        )
+        .with_credential_mode(self.live_status.credential_mode());
         let transport = connection::connect_candidate_transport(dependencies)
             .await
             .map_err(|error| candidate_control_error(&connection_event, error))?;
@@ -2173,6 +2188,7 @@ impl ReloadDependencies {
             opening_message_id.clone(),
             opening_sequence,
             self.recorder.service_version(),
+            self.credential_mode,
         )
         .map_err(|error| candidate_control_error(&connection_event, error))?;
         let candidate = connection::authenticate_candidate(
@@ -2920,6 +2936,7 @@ mod tests {
         let reload = ReloadDependencies {
             target: target.clone(),
             boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5abe".to_owned(),
+            credential_mode: true,
             frame_source,
             sleeper: fixture_sleeper(),
             recorder,
@@ -6536,13 +6553,13 @@ mod tests {
         use super::super::source::test_support::unavailable_source_broker;
         use super::super::test_support::{
             ConfigFixture, ControlledShutdownTrigger, FAKE_AGENT_LOGIN_SENTINEL,
-            FakeAgentLoginCloud, SleepRelease, accept_fixture_socket, assignment_offer,
-            assignment_prepare, begin_assignment_preparation, controlled_shutdown,
-            controlled_sleeper, deterministic_frame_source, effect_acknowledgement,
-            effect_observation_acknowledgement, fake_agent_login_material, fake_agent_login_setup,
-            fake_codex_answer, fake_codex_authorized, fixture_lease_clock, fixture_listener,
-            observation_acknowledgement, scripted_connector, sleep_request, welcome, with_bound,
-            with_watchdog,
+            FakeAgentLoginCloud, ScriptedConnection, SleepRelease, accept_fixture_socket,
+            assignment_offer, assignment_prepare, begin_assignment_preparation,
+            controlled_shutdown, controlled_sleeper, deterministic_frame_source,
+            effect_acknowledgement, effect_observation_acknowledgement, fake_agent_login_material,
+            fake_agent_login_setup, fake_codex_answer, fake_codex_authorized, fixture_lease_clock,
+            fixture_listener, observation_acknowledgement, scripted_connector, sleep_request,
+            welcome, welcome_with_credential_mode, with_bound, with_watchdog,
         };
         use super::super::workspace::WorkRootLease;
         use super::super::{
@@ -6556,7 +6573,7 @@ mod tests {
         };
         use crate::agent_login::cloud::{CloudFailure, LoginStatus};
         use crate::agent_login::readiness::{LoginReadiness, ReadinessDocument, readiness_path};
-        use crate::control_protocol::{AgentLoginProvider, AgentLoginState};
+        use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialMode};
         use crate::credential::test_credential;
         use crate::telemetry::{TestCapture, test_recorder};
 
@@ -6739,6 +6756,89 @@ mod tests {
             }
         }
 
+        /// Takes the runner's next connection, reads its hello and welcomes
+        /// it, naming `mode` as its credential mode or naming none, and
+        /// acknowledging the hello.
+        async fn welcomed(
+            attempts: &mut tokio::sync::mpsc::UnboundedReceiver<ScriptedConnection>,
+            mode: Option<CredentialMode>,
+        ) -> ScriptedConnection {
+            let mut connection = with_watchdog(attempts.recv())
+                .await
+                .expect("the runner did not connect")
+                .expect("connection attempt");
+            let hello = next_text(&mut connection.outbound, "hello").await;
+            connection.inbound.send(welcome_with_credential_mode(mode));
+            connection.inbound.send(observation_acknowledgement(
+                hello["messageId"].as_str().unwrap(),
+                hello["sequence"].as_u64().unwrap(),
+            ));
+            connection
+        }
+
+        #[tokio::test]
+        async fn the_schedule_makes_its_first_setup_once_cloud_first_welcomes_the_runner() {
+            let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
+            let (connector, mut attempts) = scripted_connector(Default::default());
+            let mut service = SetupService::spawn(
+                "ws://127.0.0.1:1/v1/runner/connect",
+                connector,
+                Arc::clone(&cloud),
+            );
+            let mut connection = with_watchdog(attempts.recv())
+                .await
+                .expect("the runner did not connect")
+                .expect("connection attempt");
+            let hello = next_text(&mut connection.outbound, "hello").await;
+
+            // Connected but not yet welcomed, the runner has made no setup
+            // and waits for no next one.
+            assert_eq!(cloud.status_requests(), 0);
+            let mut waiting = Vec::new();
+            while let Ok((duration, release)) = service.sleeps.try_recv() {
+                assert_ne!(duration, AGENT_LOGIN_SETUP_INTERVAL);
+                waiting.push(release);
+            }
+
+            connection.inbound.send(welcome());
+            connection.inbound.send(observation_acknowledgement(
+                hello["messageId"].as_str().unwrap(),
+                hello["sequence"].as_u64().unwrap(),
+            ));
+            service.pass_ended().await;
+            assert!(cloud.status_requests() >= 1);
+            assert_eq!(service.codex().state, AgentLoginState::Ready);
+            assert_eq!(
+                service.installed_material(),
+                Some(fake_agent_login_material(1))
+            );
+            drop(waiting);
+            service.stop().await;
+        }
+
+        #[tokio::test]
+        async fn a_runner_welcomed_in_host_asks_cloud_nothing_at_any_setup() {
+            let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
+            let (connector, mut attempts) = scripted_connector(Default::default());
+            let mut service = SetupService::spawn(
+                "ws://127.0.0.1:1/v1/runner/connect",
+                connector,
+                Arc::clone(&cloud),
+            );
+            let _connection = welcomed(&mut attempts, Some(CredentialMode::Host)).await;
+
+            // The first setup and those of two intervals after it.
+            service.pass_ended().await;
+            service.next_pass().await;
+            service.next_pass().await;
+
+            assert_eq!(cloud.status_requests(), 0);
+            assert_eq!(cloud.deliveries(), 0);
+            assert_eq!(service.installed_material(), None);
+            assert_eq!(service.codex().state, AgentLoginState::ForeignLogin);
+            service.stop().await;
+        }
+
         #[tokio::test]
         async fn starting_installs_an_authorized_login_without_holding_up_the_connection() {
             let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
@@ -6757,6 +6857,11 @@ mod tests {
                 .expect("connection attempt");
             let hello = next_text(&mut connection.outbound, "hello").await;
             assert_eq!(hello["type"], "hello");
+            connection.inbound.send(welcome());
+            connection.inbound.send(observation_acknowledgement(
+                hello["messageId"].as_str().unwrap(),
+                hello["sequence"].as_u64().unwrap(),
+            ));
             assert_eq!(cloud.status_requests(), 0);
             drop(status_held);
             service.pass_ended().await;
@@ -6801,23 +6906,15 @@ mod tests {
                 connector,
                 Arc::clone(&cloud),
             );
+            // The runner still connects and serves.
+            let mut connection = welcomed(&mut attempts, None).await;
             service.pass_ended().await;
             // Nothing was authorized, so an unanswered Cloud changes
             // nothing.
             assert_eq!(service.recorded_codex(), None);
             assert!(service.setup_records().is_empty());
 
-            // The runner still connects and serves: it takes an assignment.
-            let mut connection = with_watchdog(attempts.recv())
-                .await
-                .expect("the runner did not connect")
-                .expect("connection attempt");
-            let hello = next_text(&mut connection.outbound, "hello").await;
-            connection.inbound.send(welcome());
-            connection.inbound.send(observation_acknowledgement(
-                hello["messageId"].as_str().unwrap(),
-                hello["sequence"].as_u64().unwrap(),
-            ));
+            // It takes an assignment.
             connection.inbound.send(assignment_offer());
             let offered = next_text(&mut connection.outbound, "effect_acknowledged").await;
             let preparing = next_text(&mut connection.outbound, "assignment_preparing").await;
@@ -6852,12 +6949,13 @@ mod tests {
         #[tokio::test]
         async fn an_ended_login_is_removed_and_an_unrecorded_one_is_the_runners_own() {
             let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
-            let (connector, _attempts) = scripted_connector(Default::default());
+            let (connector, mut attempts) = scripted_connector(Default::default());
             let mut service = SetupService::spawn(
                 "ws://127.0.0.1:1/v1/runner/connect",
                 connector,
                 Arc::clone(&cloud),
             );
+            let _connection = welcomed(&mut attempts, None).await;
             service.pass_ended().await;
             assert_eq!(service.generation(), Some(1));
 
@@ -6987,10 +7085,8 @@ mod tests {
         /// it cannot end at all until the request is released.
         const HELD_SETUP_BOUND: Duration = Duration::from_secs(1);
 
-        /// A service started with a held join key whose rejoin succeeds, at an
-        /// endpoint that refuses every upgrade, once its first agent-login pass
-        /// waits on the status request `held` holds and its rejoin object has
-        /// been dropped, so the rejoin has been answered.
+        /// A runner welcomed before its hello is acknowledged. Its first setup is still
+        /// in flight when the next connection is refused and its held key rejoins.
         struct HeldRejoin {
             service: SetupService,
             cloud: Arc<FakeAgentLoginCloud>,
@@ -7004,21 +7100,29 @@ mod tests {
                 let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
                 let (held, arrival) = cloud.hold_next_status_arrival();
                 let (join_key, calls) = held_join_key(&[RejoinAnswer::Rejoined]);
-                let service = SetupService::spawn_in_mode(
+                let mut service = SetupService::spawn_in_mode(
                     &endpoint,
                     WebSocketConnector,
                     Arc::clone(&cloud),
                     join_key,
                 );
+                let mut socket =
+                    super::super::test_support::accept_opened_fixture_socket(&listener).await;
+                socket.send(welcome()).await.unwrap();
                 with_watchdog(tokio::task::spawn_blocking(move || arrival.recv()))
                     .await
                     .expect("the setup did not ask Cloud")
                     .unwrap()
                     .expect("the setup asked Cloud");
-                // Refused only now: the upgrade waits in the listener's
-                // backlog until the pass's request has arrived, so the setup
-                // ends with its request in flight, not before it asks.
+                // The welcome starts setup. Withhold the hello acknowledgement so the
+                // runner still holds its join key when its next connection is refused.
+                socket.close(None).await.unwrap();
+                drop(socket);
                 let server = refuse_every_upgrade(listener);
+                with_watchdog(sleep_request(&mut service.sleeps, Duration::from_secs(1)))
+                    .await
+                    .expect("the runner did not back off after the incomplete handshake")
+                    .release();
                 calls.wait_until_dropped().await;
                 Self {
                     service,

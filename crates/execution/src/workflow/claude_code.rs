@@ -113,7 +113,7 @@ const QUALIFICATION_VERSION: &str =
     crate::claude_code::CLAUDE_CODE_STREAM_JSON_V1_QUALIFICATION_VERSION;
 
 const MAXIMUM_FRAME_BYTES: u64 = 16 * 1024 * 1024;
-const PERMISSION_MODE: &str = "bypassPermissions";
+const PERMISSION_MODE: &str = "auto";
 
 /// Set for every invocation over the runner's environment. Claude Code exits by itself five
 /// seconds after its work is done (`CLAUDE_CODE_EXIT_AFTER_STOP_DELAY`), which is how a step
@@ -182,8 +182,8 @@ pub(crate) fn normal_mode_arguments(
     .into()
 }
 
-/// The normal arguments and then `--mcp-config` naming the result tool's configuration. The
-/// flag takes every value that follows it, so it must be last.
+/// Pre-approve the invocation's result tool. Both options consume values up to the
+/// next flag, so keep the MCP configuration file last.
 pub(crate) fn result_mode_arguments(
     model: &str,
     effort: &str,
@@ -192,7 +192,14 @@ pub(crate) fn result_mode_arguments(
     mcp_configuration_file: &Path,
 ) -> Vec<OsString> {
     let mut arguments = normal_mode_arguments(model, effort, session_id, system_prompt_file);
+    let result_tool = format!(
+        "mcp__{}__{}",
+        result_tool::SERVER_NAME,
+        result_tool::TOOL_NAME
+    );
     arguments.extend([
+        OsString::from("--allowedTools"),
+        OsString::from(result_tool),
         OsString::from("--mcp-config"),
         mcp_configuration_file.as_os_str().to_owned(),
     ]);

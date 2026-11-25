@@ -26,7 +26,7 @@ use super::result_channel::{
 };
 use super::result_tool::{ResultChannelAnswer, ResultChannelFailure, ResultChannelRequest};
 use super::{
-    FIXED_INVOCATION_ENVIRONMENT, initial_user_text_frame, normal_mode_arguments,
+    FIXED_INVOCATION_ENVIRONMENT, PERMISSION_MODE, initial_user_text_frame, normal_mode_arguments,
     result_mode_arguments, user_content_frame,
 };
 use crate::claude_code::compatibility_profile_for_version;
@@ -913,6 +913,13 @@ where
             if let Start::Pending(mut held) =
                 std::mem::replace(&mut self.start, Start::Acknowledged)
             {
+                let _ = self
+                    .invocation
+                    .diagnostic_session()
+                    .retain_claude_code_permission_mode(
+                        PERMISSION_MODE,
+                        initialization.permission_mode.as_deref(),
+                    );
                 held.append(&mut observations);
                 observations = held;
             }

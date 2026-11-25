@@ -203,7 +203,7 @@ separate entity family.
 - **Verb lexicon:** the final token of every leaf below a command group is one
   of this closed set: `accept`, `add`, `answer`, `approve`, `archive`,
   `authorize`, `cancel`, `connect` (joins a service to its owner by the
-  provider's sign-in or by a token), `create`, `deauthorize`, `decline`,
+  provider's sign-in or by a token), `create`, `credentials`, `deauthorize`, `decline`,
   `delete`, `disable`, `disconnect` (ends what `connect` joined), `doctor`,
   `download`, `drain`, `enable`, `end`, `event`,
   `hand-back`, `interrupt`, `issue`, `leave`, `link`, `list`, `login`,

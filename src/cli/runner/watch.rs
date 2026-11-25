@@ -444,6 +444,9 @@ fn control_refusal(error: ControlError) -> Vec<String> {
             "the runner's release does not offer this",
             Some("restart `useful runner serve` on this release"),
         ),
+        ControlError::NotYetConnected => {
+            ("the runner is waiting for its first Cloud connection", None)
+        }
         ControlError::UnsupportedVersion => ("the runner does not read this request", None),
         ControlError::RunnerBusy => (
             "a run the runner holds is working",
@@ -1326,6 +1329,7 @@ mod tests {
         .unwrap();
         let synced = setup_outcome(Ok(Response::AgentLoginsSynced(SyncedAgentLogins {
             readiness,
+            credential_mode: None,
             unanswered_checks: vec![UnansweredCheck {
                 provider: AgentLoginProvider::ClaudeCode,
                 cause: AgentLoginCheckCause::TimedOut,

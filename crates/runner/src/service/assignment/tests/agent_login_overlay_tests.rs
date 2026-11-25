@@ -5,6 +5,7 @@ use useful_execution::{
     CLAUDE_CODE_LOGIN_VARIABLE as TOKEN_VARIABLE, CODEX_LOGIN_VARIABLE as CODEX_HOME,
 };
 
+use crate::agent_login::blocked::AdmittedMode;
 use crate::agent_login::cloud::{
     CloudFailure, CredentialSourcesFailure, CredentialSourcesRequest, DeliveryRefusal,
     GrantProvider, GrantProvidersFailure, GrantTokenFailure, GrantTokenRefusal, ListedProvider,
@@ -15,7 +16,9 @@ use crate::agent_login::readiness::{
     GrantReadiness, LoginReadiness, ReadinessDocument, UseOutcome, readiness_path,
 };
 use crate::agent_login::setup::{AgentLoginSetup, SetupOutcome};
-use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialSource};
+use crate::control_protocol::{
+    AgentLoginProvider, AgentLoginState, CredentialMode, CredentialSource,
+};
 use crate::service::HeldRunGate;
 use crate::service::control::{AdmissionAgentLogins, LiveStatus};
 use crate::service::test_support::{
@@ -59,6 +62,17 @@ steps:
     environmentPassthrough: []
     command:
       argv: [sh, -c, 'test -z "${CODEX_HOME+x}"']
+"#;
+
+/// A workflow that passes `CODEX_HOME` and GitHub's two names, so that its
+/// admitted environment shows what the admission offered each.
+const PASSING_CODEX_AND_GITHUB_WORKFLOW: &str = r#"schemaVersion: 1
+environmentPassthrough: [CODEX_HOME, GH_TOKEN, GH_TOKEN_FILE]
+steps:
+  noop:
+    kind: cmd
+    command:
+      argv: [sh, -c, 'true']
 "#;
 
 /// A manager for `workflow` whose process environment has no Claude Code or
@@ -450,9 +464,21 @@ impl SettingUp {
         (self.cloud.status_requests(), self.cloud.deliveries())
     }
 
+    /// The value of `name` in the environment of the assignment the manager
+    /// accepted.
+    fn accepted(&self, name: &str) -> Option<OsString> {
+        accepted_variable(&self.manager.lock().unwrap(), name)
+    }
+
     /// A setup that holds `codex` generation 2, which Cloud still authorizes.
     async fn holding_generation_two() -> Self {
-        let fixture = Self::new(FakeAgentLoginCloud::new(fake_codex_authorized(2)));
+        Self::holding_generation_two_running(PASSING_CODEX_WORKFLOW).await
+    }
+
+    /// `holding_generation_two`, for a manager whose assignments run
+    /// `workflow`.
+    async fn holding_generation_two_running(workflow: &str) -> Self {
+        let fixture = Self::running(workflow, FakeAgentLoginCloud::new(fake_codex_authorized(2)));
         assert!(matches!(
             fixture.periodic_pass().await,
             SetupOutcome::Recorded(_)
@@ -607,6 +633,582 @@ async fn nothing_is_asked_for_installed_or_removed_between_an_offer_and_the_rele
     assert_eq!(fixture.codex().state, AgentLoginState::Ready);
 }
 
+/// `offer(suffix)`, naming the credential mode `mode`.
+fn offer_in(suffix: &str, mode: Option<CredentialMode>) -> AssignmentOffer {
+    AssignmentOffer {
+        credential_mode: mode,
+        ..offer(suffix)
+    }
+}
+
+/// What a fake Cloud was asked on each of the six routes of agent logins
+/// and grant tokens.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RouteRequests {
+    status: u64,
+    deliveries: u64,
+    provider_lists: usize,
+    token_service_lists: usize,
+    credential_provider_lists: usize,
+    tokens: usize,
+}
+
+fn route_requests(cloud: &FakeAgentLoginCloud) -> RouteRequests {
+    RouteRequests {
+        status: cloud.status_requests(),
+        deliveries: cloud.deliveries(),
+        provider_lists: cloud.grant_providers_requests().len(),
+        token_service_lists: cloud.token_services_requests().len(),
+        credential_provider_lists: cloud.credential_providers_requests().len(),
+        tokens: cloud.grant_requests().len(),
+    }
+}
+
+/// The runner's three providers as Cloud lists them.
+fn runner_three() -> Vec<ListedProvider> {
+    GRANT_NAMES
+        .iter()
+        .map(|(provider, token, token_file)| ListedProvider {
+            provider: provider.grant_provider().unwrap().to_owned(),
+            token: (*token).to_owned(),
+            token_file: (*token_file).to_owned(),
+        })
+        .collect()
+}
+
+/// Has `cloud` list the runner's three providers and two token services,
+/// and all five as its provider table, issue each a token and take each
+/// credential-source report, so that an admission that asks for any of them
+/// gets it.
+fn answer_every_route(cloud: &FakeAgentLoginCloud) {
+    cloud.answer_grant_providers(Ok(runner_three()));
+    cloud.answer_token_services(Ok(mergify_and_buildkite()));
+    cloud.answer_credential_providers(Ok(runner_three()
+        .into_iter()
+        .chain(mergify_and_buildkite())
+        .collect()));
+    for (provider, _, _) in GRANT_NAMES {
+        cloud.answer_grant_token(provider, FakeGrantToken::Issue(1));
+    }
+    cloud.answer_grant_token(mergify(), FakeGrantToken::IssueIntegrationToken(1));
+    cloud.answer_credential_sources(Ok(()));
+}
+
+#[tokio::test]
+async fn an_offer_that_names_host_is_offered_nothing_the_runner_holds_from_cloud() {
+    let fixture =
+        SettingUp::holding_generation_two_running(PASSING_CODEX_AND_GITHUB_WORKFLOW).await;
+    answer_every_route(&fixture.cloud);
+    let before = route_requests(&fixture.cloud);
+    let first = offer_in("bg", Some(CredentialMode::Host));
+
+    assert_eq!(fixture.admit(&first).await, None);
+
+    for name in ["GH_TOKEN", "GH_TOKEN_FILE"] {
+        assert_eq!(fixture.accepted(name), None, "{name}");
+    }
+    assert!(fixture.codex_home().symlink_metadata().is_err());
+    // One status request more, the removal's report, and nothing else.
+    assert_eq!(
+        route_requests(&fixture.cloud),
+        RouteRequests {
+            status: before.status + 1,
+            ..before
+        }
+    );
+    let codex = fixture.codex();
+    assert_eq!(
+        (codex.state, codex.installation()),
+        (AgentLoginState::ForeignLogin, None)
+    );
+    let github = fixture.grant(AgentLoginProvider::Github);
+    assert_eq!(
+        (github.state, github.run_id.as_deref(), github.source),
+        (
+            AgentLoginState::NotDelivered,
+            Some(first.run_id.as_str()),
+            None
+        )
+    );
+    assert_eq!(
+        fixture.cloud.credential_source_reports(),
+        [CredentialSourcesRequest {
+            boot_id: SETTING_UP_BOOT.to_owned(),
+            assignment_id: first.assignment_id.clone(),
+            sources: Vec::new(),
+            token_services: Vec::new(),
+        }]
+    );
+
+    // The next offer names none: it is admitted as on the base, asking Cloud
+    // and installing and offering what Cloud authorizes.
+    fixture.release(&first).await;
+    let asked = route_requests(&fixture.cloud);
+    let offered = fixture
+        .admit(&offer_in("bh", None))
+        .await
+        .expect("CODEX_HOME offered");
+    assert_eq!(auth_json_in(&offered), Some(fake_agent_login_material(2)));
+    // It asks for the status, and reports the install it made.
+    let now = route_requests(&fixture.cloud);
+    assert!(now.status > asked.status);
+    assert_eq!(now.deliveries, asked.deliveries + 1);
+    assert_eq!(fixture.codex().state, AgentLoginState::Ready);
+}
+
+#[tokio::test]
+async fn an_offer_that_names_host_keeps_the_services_own_logins_and_asks_cloud_nothing() {
+    let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(2));
+    answer_every_route(&cloud);
+    let fixture = SettingUp::running_serving(
+        PASSING_CODEX_AND_GITHUB_WORKFLOW,
+        cloud,
+        &[
+            ("GH_TOKEN", "service-gh-token"),
+            (CODEX_HOME, "/service/codex-home"),
+        ],
+    );
+    let offered = offer_in("bg", Some(CredentialMode::Host));
+
+    assert_eq!(
+        fixture.admit(&offered).await,
+        Some(OsString::from("/service/codex-home"))
+    );
+
+    assert_eq!(
+        fixture.accepted("GH_TOKEN"),
+        Some(OsString::from("service-gh-token"))
+    );
+    assert_eq!(fixture.accepted("GH_TOKEN_FILE"), None);
+    assert_eq!(route_requests(&fixture.cloud), RouteRequests::default());
+    assert_eq!(
+        fixture
+            .cloud
+            .credential_source_reports()
+            .iter()
+            .map(|report| (report.sources.clone(), report.token_services.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            vec![
+                reported(
+                    AgentLoginProvider::Codex,
+                    CredentialSource::Host,
+                    None,
+                    None
+                ),
+                reported(
+                    AgentLoginProvider::Github,
+                    CredentialSource::Host,
+                    None,
+                    None
+                ),
+            ],
+            Vec::new()
+        )]
+    );
+}
+
+/// The service environment of the `cloud` offer tests: its own GitHub token
+/// and Codex home.
+const SERVICE_GITHUB_AND_CODEX: [(&str, &str); 2] = [
+    ("GH_TOKEN", "service-gh-token"),
+    (CODEX_HOME, "/service/codex-home"),
+];
+
+#[tokio::test]
+async fn an_offer_that_names_cloud_is_offered_what_the_runner_holds_in_place_of_the_services_own() {
+    // Cloud authorizes a Codex login no readiness record names: the
+    // admission asks Cloud all the same, and installs it.
+    let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
+    cloud.answer_grant_providers(Ok(vec![ListedProvider {
+        provider: "github".to_owned(),
+        token: "GH_TOKEN".to_owned(),
+        token_file: "GH_TOKEN_FILE".to_owned(),
+    }]));
+    cloud.answer_grant_token(AgentLoginProvider::Github, FakeGrantToken::Issue(1));
+    cloud.answer_credential_providers(Ok(runner_three()));
+    cloud.answer_credential_sources(Ok(()));
+    let fixture = SettingUp::running_serving(
+        PASSING_CODEX_AND_GITHUB_WORKFLOW,
+        cloud,
+        &SERVICE_GITHUB_AND_CODEX,
+    );
+    let offered = offer_in("bg", Some(CredentialMode::Cloud));
+
+    assert_eq!(
+        fixture.admit(&offered).await,
+        Some(fixture.codex_home().into_os_string())
+    );
+    assert_eq!(fixture.installed(), Some(fake_agent_login_material(1)));
+
+    assert_eq!(
+        fixture.accepted("GH_TOKEN"),
+        Some(OsString::from(fake_grant_token(
+            AgentLoginProvider::Github,
+            1
+        )))
+    );
+    let (file, _) = LoginDirectory::beside(&fixture.temporary.path().join("runner-state.json"))
+        .grant_token(&offered.assignment_id, AgentLoginProvider::Github)
+        .unwrap();
+    assert_eq!(
+        fixture.accepted("GH_TOKEN_FILE"),
+        Some(file.into_os_string())
+    );
+    // Cloud was asked for GitHub's token although the service carries its
+    // name.
+    assert!(
+        fixture
+            .cloud
+            .grant_requests()
+            .iter()
+            .any(|request| request.provider.agent_login_provider()
+                == Some(AgentLoginProvider::Github))
+    );
+    assert_eq!(
+        fixture
+            .cloud
+            .credential_source_reports()
+            .iter()
+            .map(|report| (report.sources.clone(), report.token_services.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            vec![
+                reported(
+                    AgentLoginProvider::Codex,
+                    CredentialSource::Grant,
+                    None,
+                    Some(FAKE_AGENT_LOGIN_ID)
+                ),
+                reported(
+                    AgentLoginProvider::Github,
+                    CredentialSource::Grant,
+                    Some(FAKE_GRANT_ID),
+                    None
+                ),
+            ],
+            Vec::new()
+        )]
+    );
+    let github = fixture.grant(AgentLoginProvider::Github);
+    assert_eq!(
+        (github.state, github.source),
+        (AgentLoginState::Ready, Some(CredentialSource::Grant))
+    );
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "the admission's setup must not take the manager's lock"
+)]
+async fn an_offer_that_names_cloud_leaves_a_blocked_name_unset_where_the_runner_holds_nothing() {
+    let cloud = FakeAgentLoginCloud::new(Ok(Vec::new()));
+    cloud.answer_grant_providers(Ok(Vec::new()));
+    cloud.answer_credential_providers(Ok(Vec::new()));
+    cloud.answer_credential_sources(Ok(()));
+    let names = ["GH_TOKEN", "GH_TOKEN_FILE", CODEX_HOME];
+    let fixture = SettingUp::running_serving(
+        &workflow_checking(&names.join(", "), &unset(&names)),
+        cloud,
+        &SERVICE_GITHUB_AND_CODEX,
+    );
+    let offered = offer_in("bg", Some(CredentialMode::Cloud));
+    let mut manager = fixture.manager.lock().unwrap();
+
+    offer_then_prepare(&mut manager, &offered).await;
+
+    for name in names {
+        assert_eq!(accepted_variable(&manager, name), None, "{name}");
+    }
+    assert_eq!(
+        fixture.cloud.credential_source_reports(),
+        [CredentialSourcesRequest {
+            boot_id: SETTING_UP_BOOT.to_owned(),
+            assignment_id: offered.assignment_id.clone(),
+            sources: Vec::new(),
+            token_services: Vec::new(),
+        }]
+    );
+    assert_succeeded(&execute_to_terminal(&mut manager, &offered).await);
+}
+
+#[tokio::test]
+async fn an_offer_that_names_cloud_is_offered_a_declared_token_services_token_in_place_of_the_services()
+ {
+    let token = fake_grant_token(mergify(), 1);
+    let cloud = cloud_issuing_mergify();
+    cloud.answer_credential_providers(Ok(mergify_and_buildkite()));
+    cloud.answer_credential_sources(Ok(()));
+    let fixture = SettingUp::running_serving(
+        &workflow_declaring(
+            "mergify",
+            &format!(
+                r#"test "$MERGIFY_TOKEN" = {token} && test "$(cat "$MERGIFY_TOKEN_FILE")" = {token}"#
+            ),
+        ),
+        cloud,
+        &[
+            ("MERGIFY_TOKEN", "service-mergify-token"),
+            ("MERGIFY_TOKEN_FILE", "/service/mergify-token"),
+        ],
+    );
+
+    assert_succeeded(
+        &fixture
+            .run(&offer_in("bg", Some(CredentialMode::Cloud)))
+            .await,
+    );
+
+    assert!(
+        fixture
+            .cloud
+            .grant_requests()
+            .iter()
+            .any(|request| request.provider == mergify())
+    );
+    assert_eq!(
+        fixture
+            .cloud
+            .credential_source_reports()
+            .iter()
+            .map(|report| report.token_services.clone())
+            .collect::<Vec<_>>(),
+        [vec![ReportedTokenService {
+            provider: "mergify".to_owned(),
+            source: TokenServiceSource::Token {
+                integration_token_id: FAKE_INTEGRATION_TOKEN_ID.to_owned(),
+            },
+        }]]
+    );
+}
+
+#[tokio::test]
+async fn an_offer_that_names_cloud_installs_the_login_a_foreign_login_record_stood_back_from() {
+    let cloud = FakeAgentLoginCloud::new(fake_codex_authorized(1));
+    answer_every_route(&cloud);
+    let fixture = SettingUp::running_serving(
+        PASSING_CODEX_WORKFLOW,
+        cloud,
+        &[(CODEX_HOME, "/service/codex-home")],
+    );
+    // A pass governed by no mode stands back for the service's Codex home.
+    assert!(matches!(
+        fixture.periodic_pass().await,
+        SetupOutcome::Recorded(_)
+    ));
+    assert_eq!(fixture.codex().state, AgentLoginState::ForeignLogin);
+    assert_eq!(fixture.installed(), None);
+    let before = fixture.requests();
+
+    assert_eq!(
+        fixture
+            .admit(&offer_in("bg", Some(CredentialMode::Cloud)))
+            .await,
+        Some(fixture.codex_home().into_os_string())
+    );
+
+    // The admission made its pass, which asked Cloud and installed the
+    // login Cloud authorizes.
+    let after = fixture.requests();
+    assert!(after.0 > before.0);
+    assert_eq!(after.1, before.1 + 1);
+    assert_eq!(fixture.installed(), Some(fake_agent_login_material(1)));
+    let codex = fixture.codex();
+    assert_eq!(
+        (codex.state, codex.source),
+        (AgentLoginState::Ready, Some(CredentialSource::Grant))
+    );
+}
+
+/// What shows that a file was read, changed or removed: its access and
+/// modification times, its length and its mode.
+fn untouched_metadata(path: &Path) -> (std::time::SystemTime, std::time::SystemTime, u64, u32) {
+    let metadata = fs::metadata(path).unwrap();
+    (
+        metadata.accessed().unwrap(),
+        metadata.modified().unwrap(),
+        metadata.len(),
+        std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()),
+    )
+}
+
+#[tokio::test]
+async fn an_offer_that_names_cloud_is_admitted_whatever_logins_the_services_home_holds() {
+    let cloud = FakeAgentLoginCloud::new(Ok(Vec::new()));
+    cloud.answer_grant_providers(Ok(Vec::new()));
+    cloud.answer_credential_providers(Ok(runner_three()));
+    cloud.answer_credential_sources(Ok(()));
+    let fixture = SettingUp::running_serving(PASSING_CODEX_AND_GITHUB_WORKFLOW, cloud, &[]);
+    let home = fixture.temporary.path().join("service-home");
+    // A Codex and a Claude Code login of the service's own, each last read
+    // long ago, so that a read would move its access time.
+    let long_ago = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    let logins = [
+        (home.join(".codex"), "auth.json", &b"{\"tokens\":{}}"[..]),
+        (
+            home.join(".claude"),
+            ".credentials.json",
+            &b"{\"claudeAiOauth\":{}}"[..],
+        ),
+    ]
+    .map(|(directory, file, bytes)| {
+        create_private_directory(&directory);
+        let path = directory.join(file);
+        write_private(&path, bytes);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_accessed(long_ago))
+            .unwrap();
+        let before = untouched_metadata(&path);
+        (path, bytes, before)
+    });
+
+    // Accepted, not declined, with no agent login of the runner's to offer.
+    assert_eq!(
+        fixture
+            .admit(&offer_in("bg", Some(CredentialMode::Cloud)))
+            .await,
+        None
+    );
+
+    assert_eq!(fixture.accepted("HOME"), Some(home.into_os_string()));
+    for (path, bytes, before) in logins {
+        assert_eq!(untouched_metadata(&path), before, "{}", path.display());
+        assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
+    }
+}
+
+/// The decline of a `cloud` offer that has no list of the provider table's
+/// names it can trust, for the closed `cause`.
+fn untrusted_provider_table(cause: &'static str) -> AssignmentDecline {
+    AssignmentDecline::RunnerUnable(RunnerUnableReason::InputServiceUnavailable)
+        .diagnosed("credential_providers", cause)
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "the admission's setup must not take the manager's lock"
+)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the hold removes its directory on a blocking task of its own, which signals nothing; the delay only spaces polls"
+)]
+async fn an_offer_that_names_cloud_is_declined_where_cloud_gives_no_list_of_the_provider_table() {
+    for (answer, cause) in [
+        (GrantProvidersFailure::NoRoute, "no_route"),
+        (
+            GrantProvidersFailure::AssignmentNotCurrent,
+            "assignment_not_current",
+        ),
+        (
+            GrantProvidersFailure::Cloud(CloudFailure::Transport),
+            "transport",
+        ),
+        (
+            GrantProvidersFailure::Cloud(CloudFailure::InvalidResponse),
+            "invalid_response",
+        ),
+    ] {
+        // Cloud answers every other route, issuing GitHub a token, and the
+        // run's one step leaves a mark were it ever started.
+        let cloud = FakeAgentLoginCloud::new(Ok(Vec::new()));
+        answer_every_route(&cloud);
+        cloud.answer_credential_providers(Err(answer));
+        let marks = tempfile::tempdir().unwrap();
+        let mark = marks.path().join("step-ran");
+        let fixture = SettingUp::running(
+            &workflow_checking("OTHER_NAME", &format!("touch {}", mark.display())),
+            cloud,
+        );
+        let offered = offer_in("bg", Some(CredentialMode::Cloud));
+        let directory = LoginDirectory::beside(&fixture.temporary.path().join("runner-state.json"))
+            .assignment(&offered.assignment_id)
+            .unwrap();
+        let mut manager = fixture.manager.lock().unwrap();
+
+        assert_preparation_declined(&mut manager, offered, untrusted_provider_table(cause)).await;
+
+        assert_eq!(
+            fixture.cloud.credential_providers_requests().len(),
+            1,
+            "{cause}"
+        );
+        assert!(
+            fixture.cloud.credential_source_reports().is_empty(),
+            "{cause}"
+        );
+        assert!(!mark.exists(), "{cause}");
+        // The released hold removes the assignment's token directory.
+        with_watchdog(async {
+            while directory.symlink_metadata().is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the assignment's token directory was not removed");
+    }
+}
+
+#[tokio::test]
+async fn an_offer_that_names_cloud_to_a_runner_without_agent_login_setup_is_declined() {
+    let (_temporary, mut manager) = manager_without_agent_logins(PASSING_WORKFLOW);
+
+    assert_preparation_declined(
+        &mut manager,
+        offer_in("bg", Some(CredentialMode::Cloud)),
+        untrusted_provider_table("setup_unavailable"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_offer_that_names_no_mode_or_host_asks_for_no_provider_table_and_is_admitted() {
+    for (suffix, mode) in [("bg", None), ("bh", Some(CredentialMode::Host))] {
+        // A Cloud without the route, which would decline a `cloud` offer.
+        let cloud = FakeAgentLoginCloud::new(Ok(Vec::new()));
+        cloud.answer_credential_sources(Ok(()));
+        let fixture = SettingUp::running(PASSING_CODEX_AND_GITHUB_WORKFLOW, cloud);
+
+        assert_succeeded(&fixture.run(&offer_in(suffix, mode)).await);
+
+        assert_eq!(
+            fixture.cloud.credential_providers_requests(),
+            [],
+            "{mode:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "the admission's setup must not take the manager's lock"
+)]
+async fn a_redelivered_offer_that_names_another_mode_is_the_same_assignment() {
+    let fixture = SettingUp::holding_generation_two().await;
+    let mut manager = fixture.manager.lock().unwrap();
+    let mut admitted = offer("bg");
+    align_offer_with_source_fixture(&manager, &mut admitted);
+    manager.handle_offer(admitted.clone()).unwrap();
+    prepare_current(&mut manager, &admitted).await;
+    let offered = accepted_variable(&manager, CODEX_HOME).expect("CODEX_HOME offered");
+    let asked = route_requests(&fixture.cloud);
+
+    let redelivered = AssignmentOffer {
+        credential_mode: Some(CredentialMode::Host),
+        ..admitted
+    };
+    assert!(matches!(manager.handle_offer(redelivered), Ok(())));
+
+    assert_eq!(route_requests(&fixture.cloud), asked);
+    assert_eq!(fixture.installed(), Some(fake_agent_login_material(2)));
+    assert_eq!(accepted_variable(&manager, CODEX_HOME), Some(offered));
+}
+
 /// A readiness document as an earlier release left it for a runner that
 /// holds no login: each provider in `state` and recorded as selected.
 fn record_selected(state_file: &Path, entries: &[(AgentLoginProvider, AgentLoginState)]) {
@@ -662,7 +1264,8 @@ fn a_provider_recorded_as_selected_has_nothing_removed_or_replaced() {
         ]);
 
         for service in [without_codex_home, own_codex_home] {
-            let offered = crate::agent_login::offer(&service, Some(&directory));
+            let offered =
+                crate::agent_login::offer(&service, Some(&directory), AdmittedMode::Unnamed);
             assert_eq!(offered.environment, service, "{state:?}");
             assert!(offered.offered.is_empty(), "{state:?}");
         }
@@ -779,6 +1382,7 @@ async fn codex_last_use_after_a_codex_step(service_codex_home: bool) -> Option<U
 
     let Some(SetupOutcome::Recorded(document)) = setup
         .set_up_admission(
+            None,
             "rbt_01k0z6r1w8f4jy2m7q9v3x5abe",
             "run_01k0z6r1w8f4jy2m7q9v3x5abz",
             "asn_01k0z6r1w8f4jy2m7q9v3x5abz",
@@ -1163,6 +1767,7 @@ fn asked_for(cloud: &FakeAgentLoginCloud) -> Vec<AgentLoginProvider> {
         .collect()
 }
 
+// SC-GRANT-12
 #[tokio::test]
 async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its_absence() {
     let issuing_every_grant = || {

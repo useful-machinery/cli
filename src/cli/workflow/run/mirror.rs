@@ -15,8 +15,8 @@ use zeroize::Zeroizing;
 
 use useful_execution::{
     DefinitionError, LocalRunDirectoryError, Mirror, MirrorFailure, MirrorRun, MirrorTarget,
-    ResolvedInput, ResolvedInputs, ValidatedWorkflow, WorkflowHome, WorkflowRunRecord,
-    read_revision_bindings,
+    ResolvedInput, ResolvedInputs, USEFUL_RUNNER_CREDENTIAL_MODE, ValidatedWorkflow, WorkflowHome,
+    WorkflowRunRecord, read_revision_bindings,
 };
 
 use super::create::blocking_operation;
@@ -131,10 +131,23 @@ pub(super) fn read_run_record(run_directory: &Path) -> Option<WorkflowRunRecord>
         .and_then(|record| serde_json::from_value(record).ok())
 }
 
-/// The message a command refuses with when `outcome_credentials` fails.
-pub(super) const CREDENTIALS_REFUSAL: &str = "No Linear credential is set, so the run's mirror \
-    cannot update its issue in Linear; the run is unchanged. Set USEFUL_LINEAR_ACCESS_TOKEN_FILE, \
-    USEFUL_LINEAR_ACCESS_TOKEN or LINEAR_API_KEY and run the command again.";
+/// The message a command refuses with when `outcome_credentials` fails, naming the three
+/// variables a Linear credential is read from with the remedy this command
+/// can take: a command a runner started in credential mode `cloud` reads only the token the
+/// runner offers, so its remedy is the run actor's connection and no variable.
+pub(super) fn credentials_refusal() -> &'static str {
+    if offered_names_only() {
+        "No Linear credential is set, so the run's mirror cannot update its issue in Linear; \
+         the run is unchanged. The runner started this command in credential mode cloud, so it \
+         reads the token the runner offers in USEFUL_LINEAR_ACCESS_TOKEN_FILE and \
+         USEFUL_LINEAR_ACCESS_TOKEN and never LINEAR_API_KEY. Connect Linear for the run's \
+         actor and run the command again."
+    } else {
+        "No Linear credential is set, so the run's mirror cannot update its issue in Linear; \
+         the run is unchanged. Set USEFUL_LINEAR_ACCESS_TOKEN_FILE, USEFUL_LINEAR_ACCESS_TOKEN \
+         or LINEAR_API_KEY and run the command again."
+    }
+}
 
 /// The check a command makes before it ends a run itself with `outcome` and then performs
 /// `onOutcome`: `mirror_credentials_unavailable` when the run's mirror maps `outcome` and the
@@ -184,6 +197,14 @@ pub(super) fn offered_token(file_variable: &str, variable: &str) -> Option<Zeroi
         std::env::var_os(file_variable).as_deref().map(Path::new),
         std::env::var(variable).ok(),
     )
+}
+
+/// Whether the runner that started this command told it that its assignment was admitted in
+/// credential mode `cloud`, through `USEFUL_RUNNER_CREDENTIAL_MODE`: the
+/// command's own provider calls then read the names the runner offered, through
+/// `offered_token`, and no other source.
+pub(super) fn offered_names_only() -> bool {
+    std::env::var_os(USEFUL_RUNNER_CREDENTIAL_MODE).is_some_and(|mode| mode == "cloud")
 }
 
 /// `offered_token` over the file `file` names and the variable's `value`.

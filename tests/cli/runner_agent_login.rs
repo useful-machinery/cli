@@ -46,6 +46,41 @@ pub(super) const SYNC: [&str; 2] = ["runner", "sync"];
 const BUSY_RESPONSE: &[u8] =
     b"{\"schemaVersion\":1,\"outcome\":\"error\",\"error\":\"runner_busy\"}\n";
 
+/// The answer of a runner that goes by `host`: its `codex`
+/// entry is `foreign_login` with no agent login.
+const SYNCED_IN_HOST: &[u8] = include_bytes!(
+    "../fixtures/runner-control/v1/valid/agent-logins-synced-credential-mode-response.json"
+);
+/// The `codex` entry of [`SYNCED_IN_HOST`].
+const FOREIGN_CODEX: &str =
+    r#"{"provider":"codex","state":"foreign_login","checkedAt":"2026-11-12T01:00:00Z"}"#;
+/// The answer of a runner Cloud has not welcomed since it started.
+const NOT_YET_CONNECTED: &[u8] =
+    include_bytes!("../fixtures/runner-control/v1/valid/not-yet-connected-response.json");
+/// The answer of a runner that goes by no credential mode.
+const SYNCED_IN_NO_MODE: &[u8] =
+    include_bytes!("../fixtures/runner-control/v1/valid/agent-logins-synced-response.json");
+
+/// The value of each `credential mode:` line `stdout` prints: its first word.
+pub(super) fn printed_credential_modes(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("credential mode:"))
+        .map(|value| value.split_whitespace().next().unwrap_or_default())
+        .collect()
+}
+
+/// The step `stdout` prints on the provider's line after its next action.
+pub(super) fn printed_step<'a>(stdout: &'a str, provider: &str, next_action: &str) -> &'a str {
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with(&format!("{provider} login:")))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    line.split_once(&format!("next action {next_action}: "))
+        .unwrap_or_else(|| panic!("{line}"))
+        .1
+}
+
 /// Runs `command --config PATH` and `extra` against a fake control socket
 /// that answers `response` to one request, and returns the command's output
 /// with the request the socket received.
@@ -551,6 +586,90 @@ fn sync_exits_4_when_no_runner_is_live_or_a_run_it_holds_is_working() {
     assert!(String::from_utf8_lossy(&busy.stderr).contains("runner_busy"));
 }
 
+// before Cloud has first welcomed the runner it makes no
+// setup for the command, which exits 4 and prints nothing on standard output.
+#[test]
+fn sync_exits_4_before_cloud_has_first_welcomed_the_runner() {
+    for extra in [&[][..], &["--json"][..]] {
+        let (output, request) = sync_against(SYNC, NOT_YET_CONNECTED.to_vec(), extra);
+        assert_eq!(request, SYNC_REQUEST);
+        assert_eq!(output.status.code(), Some(4), "{extra:?}");
+        assert!(output.stdout.is_empty(), "{extra:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not_yet_connected"),
+            "{extra:?}"
+        );
+    }
+}
+
+// on a runner that goes by `host` the sync prints the mode
+// after the readiness and exits 0, and beside `foreign_login` it names the command an
+// owner changes the mode with rather than the step the line names with no mode; the
+// projection in `--json` does not change.
+#[test]
+fn sync_on_a_runner_that_goes_by_host_prints_the_mode_and_exits_0() {
+    let (output, request) = sync_against(SYNC, SYNCED_IN_HOST.to_vec(), &[]);
+    assert_eq!(request, SYNC_REQUEST);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(printed_credential_modes(&stdout), ["host"], "{stdout}");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    let readiness_end = lines
+        .iter()
+        .rposition(|line| line.contains(" login:"))
+        .unwrap();
+    let mode_line = lines
+        .iter()
+        .position(|line| line.starts_with("credential mode:"))
+        .unwrap();
+    assert!(mode_line > readiness_end, "{stdout}");
+    assert_provider_lines(
+        &stdout,
+        &[
+            ("codex", "foreign_login", "not_delivered"),
+            ("github", "not_delivered", "not_delivered"),
+            ("gitlab", "not_delivered", "not_delivered"),
+            ("linear", "not_delivered", "not_delivered"),
+        ],
+    );
+    let step = printed_step(&stdout, "codex", "resolve_service_login");
+    assert!(step.contains("`useful runner credentials`"), "{stdout}");
+
+    let (no_mode, _) = sync_against(SYNC, synced_response(FOREIGN_CODEX), &[]);
+    assert_eq!(no_mode.status.code(), Some(0), "{no_mode:?}");
+    let no_mode = String::from_utf8(no_mode.stdout).unwrap();
+    let step_with_no_mode = printed_step(&no_mode, "codex", "resolve_service_login");
+    assert_ne!(step, step_with_no_mode, "{stdout}");
+    assert!(
+        !step_with_no_mode.contains("`useful runner credentials`"),
+        "{no_mode}"
+    );
+
+    let (output, _) = sync_against(SYNC, SYNCED_IN_HOST.to_vec(), &["--json"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["credentialMode"], "host", "{document}");
+    let codex = &document["agentLogins"]["providers"][0];
+    assert_eq!(codex["provider"], "codex", "{document}");
+    assert_eq!(codex["state"], "foreign_login", "{document}");
+    assert_eq!(codex["nextAction"], "resolve_service_login", "{document}");
+}
+
+// a runner that goes by no credential mode answers no mode, and the
+// command prints no `credential mode:` line and no `credentialMode` member.
+#[test]
+fn sync_on_a_runner_that_goes_by_no_mode_prints_no_mode() {
+    let (output, _) = sync_against(SYNC, SYNCED_IN_NO_MODE.to_vec(), &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(printed_credential_modes(&stdout).is_empty(), "{stdout}");
+
+    let (output, _) = sync_against(SYNC, SYNCED_IN_NO_MODE.to_vec(), &["--json"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(document.get("credentialMode").is_none(), "{document}");
+}
+
 #[test]
 fn sync_against_an_older_runner_says_it_must_be_restarted_on_this_release() {
     let (output, _) = sync_against(
@@ -630,9 +749,14 @@ fn cloud_without_agent_logins(_request: &[u8]) -> Vec<u8> {
     http_response("404 Not Found", None, b"")
 }
 
-/// Serves the runner's connection with a welcome and its agent-login
-/// requests from `agent_logins`, for as long as the test runs.
-fn serve_gateway_with_agent_logins(listener: TcpListener, agent_logins: fn(&[u8]) -> Vec<u8>) {
+/// Serves the runner's connection with a welcome that names
+/// `credential_mode`, none where it is `None`, and its agent-login requests
+/// from `agent_logins`, for as long as the test runs.
+fn serve_gateway_with_agent_logins(
+    listener: TcpListener,
+    agent_logins: fn(&[u8]) -> Vec<u8>,
+    credential_mode: Option<&'static str>,
+) {
     thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -648,7 +772,7 @@ fn serve_gateway_with_agent_logins(listener: TcpListener, agent_logins: fn(&[u8]
                             return;
                         };
                         let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
-                        let _ = socket.send(cloud_welcome()).await;
+                        let _ = socket.send(welcome_naming(credential_mode)).await;
                         let _ = socket
                             .send(cloud_observation_ack(
                                 hello["messageId"].as_str().unwrap(),
@@ -660,6 +784,17 @@ fn serve_gateway_with_agent_logins(listener: TcpListener, agent_logins: fn(&[u8]
                 }
             });
     });
+}
+
+/// Cloud's `welcome`, naming `credential_mode` where it is one.
+fn welcome_naming(credential_mode: Option<&str>) -> Message {
+    let welcome = cloud_welcome();
+    let Some(mode) = credential_mode else {
+        return welcome;
+    };
+    let mut frame: serde_json::Value = serde_json::from_str(welcome.to_text().unwrap()).unwrap();
+    frame["payload"]["credentialMode"] = mode.into();
+    Message::Text(frame.to_string().into())
 }
 
 /// A live `useful runner serve` against a Cloud whose agent-login routes answer
@@ -676,6 +811,11 @@ struct ServedRunner {
 
 impl ServedRunner {
     fn against(agent_logins: fn(&[u8]) -> Vec<u8>) -> Self {
+        Self::welcomed(agent_logins, None)
+    }
+
+    /// `against`, with Cloud's welcome naming `credential_mode`.
+    fn welcomed(agent_logins: fn(&[u8]) -> Vec<u8>, credential_mode: Option<&'static str>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
@@ -684,7 +824,7 @@ impl ServedRunner {
         // No coding agent's program is on the service's `PATH`, so a check
         // of a login gives no answer and never reaches a provider.
         let empty_path = tempfile::tempdir().unwrap();
-        serve_gateway_with_agent_logins(listener, agent_logins);
+        serve_gateway_with_agent_logins(listener, agent_logins, credential_mode);
         let mut serve = Command::new(crate::executable())
             .args(["runner", "serve", "--config", &fixture.config])
             .env("OTEL_SDK_DISABLED", "true")
@@ -857,6 +997,79 @@ fn installed_agent_logins_reach_their_files_and_no_output() {
             "{name} carries the Claude Code token"
         );
     }
+}
+
+/// Each request to a route that asks Cloud for a credential or about one:
+/// agent-login status and delivery, the provider and token-service lists
+/// and a grant token.
+static CREDENTIAL_REQUESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`cloud_with_agent_logins`], counting each request to a credential route
+/// in [`CREDENTIAL_REQUESTS`].
+fn cloud_counting_credential_requests(request: &[u8]) -> Vec<u8> {
+    let request_line = request
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    let request_line = String::from_utf8_lossy(request_line);
+    if [
+        "/v1/runner/agent-logins/status",
+        "/v1/runner/agent-logins/delivery",
+        "/v1/runner/grants/providers",
+        "/v1/runner/credentials/providers",
+        "/v1/runner/integrations/providers",
+        "/v1/runner/grants/token",
+    ]
+    .iter()
+    .any(|route| request_line.contains(&format!(" {route} ")))
+    {
+        CREDENTIAL_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    cloud_with_agent_logins(request)
+}
+
+// SC-GRANT-16: a runner Cloud welcomes in `host` asks Cloud
+// for no login although Cloud would authorize and deliver one; its sync says so and
+// exits 0, its status prints the mode, and no login reaches its directory.
+#[test]
+fn a_runner_that_uses_only_its_host_asks_cloud_for_no_login() {
+    let ServedRunner {
+        fixture,
+        sync,
+        status,
+        serve_stderr,
+        ..
+    } = ServedRunner::welcomed(cloud_counting_credential_requests, Some("host"));
+
+    assert_eq!(
+        sync.status.code(),
+        Some(0),
+        "{}\n{serve_stderr}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+    let synced: serde_json::Value = serde_json::from_slice(&sync.stdout).unwrap();
+    assert_eq!(synced["credentialMode"], "host", "{synced}");
+    assert_eq!(synced["agentLogins"]["providers"][0]["provider"], "codex");
+    assert_eq!(
+        synced["agentLogins"]["providers"][0]["state"], "foreign_login",
+        "{synced}"
+    );
+    assert!(status.status.success(), "{status:?}");
+    assert_eq!(
+        printed_credential_modes(&String::from_utf8_lossy(&status.stdout)),
+        ["host"]
+    );
+    assert!(
+        !fixture
+            .state_directory()
+            .join(".runner-agent-login/codex/auth.json")
+            .exists()
+    );
+    assert_eq!(
+        CREDENTIAL_REQUESTS.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{serve_stderr}"
+    );
 }
 
 /// The GitHub token Cloud issues for the assignment, which no output may

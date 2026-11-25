@@ -53,6 +53,9 @@ pub struct RunnerDiagnostic {
     pub validation_path: Option<String>,
     #[serde(rename = "validationStep", skip_serializing_if = "Option::is_none")]
     pub validation_step: Option<String>,
+    /// The ids of the providers a grant_required rejection names, each once, in the order the runner sent them.
+    #[serde(rename = "providers", skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<String>>,
 }
 
 impl RunnerDiagnostic {
@@ -76,6 +79,7 @@ impl RunnerDiagnostic {
             validation_location: None,
             validation_path: None,
             validation_step: None,
+            providers: None,
         }
     }
 }

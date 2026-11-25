@@ -11,28 +11,35 @@
 //! `credential_source`, which the readiness document, the offer and what the
 //! runner reports all take.
 
+pub(crate) mod blocked;
 pub(crate) mod check;
 pub(crate) mod claude_code;
 pub(crate) mod cloud;
 pub(crate) mod codex;
 pub(crate) mod directory;
 pub(crate) mod grant_token;
+pub(crate) mod mode;
 pub(crate) mod readiness;
+pub(crate) mod required;
 pub(crate) mod setup;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use useful_execution::{CLAUDE_CODE_LOGIN_VARIABLE, CODEX_LOGIN_VARIABLE, EnvironmentSnapshot};
+use useful_execution::{
+    CLAUDE_CODE_LOGIN_VARIABLE, CODEX_LOGIN_VARIABLE, EnvironmentSnapshot,
+    USEFUL_RUNNER_CREDENTIAL_MODE,
+};
 
 use crate::control_protocol::{
-    AgentLoginCheckCause, AgentLoginProvider, AgentLoginState, CredentialSource,
+    AgentLoginCheckCause, AgentLoginProvider, AgentLoginState, CredentialMode, CredentialSource,
 };
 use crate::telemetry;
+use blocked::AdmittedMode;
 use directory::LoginDirectory;
 
 /// A token the runner keeps in a file of its own, a Claude Code login or a
@@ -118,6 +125,18 @@ impl ServiceEnvironment {
             })
     }
 
+    /// The service environment each rule that asks what the host provides
+    /// is asked of for an assignment admitted under `mode`: this one, but in
+    /// `cloud` one that carries no name and has no home, so that the host
+    /// provides nothing, no login of the service's own counts and no source
+    /// is `host`.
+    pub(crate) fn under(&self, mode: Option<CredentialMode>) -> &Self {
+        match mode {
+            Some(CredentialMode::Cloud) => &PROVIDES_NOTHING,
+            None | Some(CredentialMode::Host) => self,
+        }
+    }
+
     /// `relative` under the service's `HOME`; none while `HOME` is unset or
     /// not absolute.
     fn under_home(&self, relative: &str) -> Option<PathBuf> {
@@ -128,6 +147,16 @@ impl ServiceEnvironment {
             .map(|home| home.join(relative))
     }
 }
+
+/// The service environment that provides nothing: no name, no home
+/// (`ServiceEnvironment::under`).
+static PROVIDES_NOTHING: ServiceEnvironment = ServiceEnvironment {
+    home: None,
+    claude_config_dir: None,
+    claude_code_oauth_token: false,
+    codex_home: false,
+    names: BTreeSet::new(),
+};
 
 /// Whether a file of the service's own login is present at `path`. It is
 /// only looked at, never opened or followed, and one the runner cannot tell
@@ -245,37 +274,35 @@ impl FailureCause {
     }
 }
 
-/// Where `provider`'s credential comes from for an assignment the runner
-/// admits now: `host` for an OAuth provider the service environment
-/// `service` provides and for a coding agent the service has a login of its
-/// own of, whatever Cloud answered; for an OAuth provider whose token
-/// `grant_tokens` holds and can read back, `org_connection` where a
-/// connection authorization issued it and `grant` otherwise; `grant` for a
-/// coding agent whose login the runner keeps in `directory` and the offer
-/// therefore adds; none otherwise. It reads what the offer reads, through
-/// the same functions, so the source recorded, reported and offered never
-/// disagree.
+/// The source the admission can actually offer. Cloud mode ignores the host, and host
+/// mode never inspects the runner's installed logins or assignment token files.
 pub(crate) fn credential_source(
     provider: AgentLoginProvider,
+    mode: Option<CredentialMode>,
     service: &ServiceEnvironment,
     directory: Option<&LoginDirectory>,
     grant_tokens: Option<&grant_token::AssignmentGrantTokens>,
 ) -> Option<CredentialSource> {
-    let (host, offered) = match provider {
-        AgentLoginProvider::Codex => (
-            codex::foreign_login(service),
-            directory
-                .filter(|directory| codex::offered_home(service, directory).is_some())
-                .map(|_| CredentialSource::Grant),
-        ),
-        AgentLoginProvider::ClaudeCode => (
-            claude_code::foreign_login(service),
-            directory
-                .filter(|directory| claude_code::offered_token(service, directory).is_some())
-                .map(|_| CredentialSource::Grant),
-        ),
-        AgentLoginProvider::Github | AgentLoginProvider::Gitlab | AgentLoginProvider::Linear => (
-            service.provides(provider),
+    let service = service.under(mode);
+    let host = match provider {
+        AgentLoginProvider::Codex => codex::foreign_login(service),
+        AgentLoginProvider::ClaudeCode => claude_code::foreign_login(service),
+        _ => service.provides(provider),
+    };
+    if host {
+        return Some(CredentialSource::Host);
+    }
+    if mode == Some(CredentialMode::Host) {
+        return None;
+    }
+    match provider {
+        AgentLoginProvider::Codex => directory
+            .filter(|directory| codex::offered_home(service, directory).is_some())
+            .map(|_| CredentialSource::Grant),
+        AgentLoginProvider::ClaudeCode => directory
+            .filter(|directory| claude_code::offered_token(service, directory).is_some())
+            .map(|_| CredentialSource::Grant),
+        AgentLoginProvider::Github | AgentLoginProvider::Gitlab | AgentLoginProvider::Linear => {
             grant_tokens
                 .filter(|tokens| tokens.holds(provider))
                 .and_then(|tokens| tokens.issuer(provider))
@@ -284,13 +311,8 @@ pub(crate) fn credential_source(
                     cloud::Issuer::Grant(_) | cloud::Issuer::IntegrationToken(_) => {
                         CredentialSource::Grant
                     }
-                }),
-        ),
-    };
-    if host {
-        Some(CredentialSource::Host)
-    } else {
-        offered
+                })
+        }
     }
 }
 
@@ -306,7 +328,8 @@ pub(crate) struct ProviderSource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Offer {
     /// The process environment, with each agent login the runner offers
-    /// added as the variable its coding agent reads.
+    /// added as the variable its coding agent reads; for an assignment
+    /// admitted in `cloud`, without its blocked names first.
     pub(crate) environment: EnvironmentSnapshot,
     /// Each variable added to `environment` whose login the readiness
     /// document records as installed, with that install: the uses an
@@ -330,20 +353,31 @@ pub(crate) struct Offer {
 }
 
 /// What each `useful` command of a tree run is offered, built when the
-/// command starts: the process environment, with each agent login the runner
-/// keeps in `directory` then added as `with_agent_logins` adds it, and with
-/// the grant token variables of the assignment's admission as that admission
-/// offered them (`grant_token::offer`). A token variable keeps the
-/// admission's value while the file its file variable names is kept current,
-/// so a build reads no grant token file and no readiness document; only the
-/// agent logins are looked at again. The admission's own environment, its
-/// credential sources and its observer stay as the admission settled them.
+/// command starts: the process environment, with each agent
+/// login the runner keeps in `directory` then added as `with_agent_logins`
+/// adds it, and with the grant token variables of the assignment's admission
+/// as that admission offered them (`grant_token::offer`). A token variable
+/// keeps the admission's value while the file its file variable names is
+/// kept current, so a build reads no grant token file and no
+/// readiness document; only the agent logins are looked at again. The
+/// admission's own environment, its credential sources and its observer
+/// stay as the admission settled them. An assignment
+/// admitted in `host` is offered the process environment unchanged at
+/// every command, whatever the directory holds then. One admitted in `cloud` has its blocked names removed
+/// from the process environment at every build, before anything is added,
+/// and is offered the agent logins the directory holds then whatever the
+/// service has. Every build
+/// sets `USEFUL_RUNNER_CREDENTIAL_MODE` to `cloud` for an assignment
+/// admitted in `cloud` and removes an inherited value otherwise.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CommandEnvironment {
     process: EnvironmentSnapshot,
     directory: Option<LoginDirectory>,
     /// Each grant token variable the admission's offer added, with its value.
     grant_tokens: Vec<(OsString, OsString)>,
+    /// The credential mode the assignment was admitted under, with the
+    /// names it blocks in `cloud`.
+    mode: AdmittedMode,
 }
 
 impl CommandEnvironment {
@@ -354,6 +388,7 @@ impl CommandEnvironment {
             process,
             directory: None,
             grant_tokens: Vec::new(),
+            mode: AdmittedMode::Unnamed,
         }
     }
 
@@ -361,22 +396,54 @@ impl CommandEnvironment {
     /// login files the runner keeps, small private files, so it runs on a
     /// blocking worker.
     pub(crate) fn build(&self) -> EnvironmentSnapshot {
+        let mut variables = self.offered_variables();
+        // Only the runner's word on the mode reaches the command, which then
+        // makes its own provider calls with the offered names alone.
+        let mode = OsStr::new(USEFUL_RUNNER_CREDENTIAL_MODE);
+        match self.mode {
+            AdmittedMode::Cloud(_) => {
+                variables.insert(mode.to_owned(), OsString::from("cloud"));
+            }
+            AdmittedMode::Unnamed | AdmittedMode::Host => {
+                variables.remove(mode);
+            }
+        }
+        EnvironmentSnapshot::new(variables)
+    }
+
+    /// What `build` offers before it settles the credential mode variable.
+    fn offered_variables(&self) -> BTreeMap<OsString, OsString> {
+        let base = match &self.mode {
+            AdmittedMode::Host => return self.process.variables().clone(),
+            AdmittedMode::Unnamed => self.process.clone(),
+            AdmittedMode::Cloud(blocked) => blocked.remove_from(&self.process),
+        };
         let service = ServiceEnvironment::of(&self.process);
+        let service = service.under(self.mode.credential_mode());
         let logins = self
             .directory
             .as_ref()
-            .map(|directory| agent_logins(&service, directory))
+            .map(|directory| agent_logins(service, directory))
             .unwrap_or_default();
-        let mut variables = self.process.variables().clone();
+        let mut variables = base.variables().clone();
         variables.extend(logins.into_iter().map(|login| login.added));
-        // The admission added a token only under names its environment did
-        // not carry, so none of them replaces a value here either.
         for (name, value) in &self.grant_tokens {
-            variables
-                .entry(name.clone())
-                .or_insert_with(|| value.clone());
+            match self.mode {
+                // Its names were removed, so the token takes their place.
+                AdmittedMode::Cloud(_) => {
+                    variables.insert(name.clone(), value.clone());
+                }
+                // The admission added a token only under names its
+                // environment did not carry, so none of them replaces a
+                // value here either.
+                AdmittedMode::Unnamed | AdmittedMode::Host => {
+                    variables
+                        .entry(name.clone())
+                        .or_insert_with(|| value.clone());
+                }
+            }
         }
-        EnvironmentSnapshot::new(variables)
+        variables
     }
 }
 
@@ -391,46 +458,78 @@ pub(crate) struct OfferedLogin {
     pub(crate) generation: u64,
 }
 
-/// What the admission is offered with the agent logins the runner keeps in
-/// `directory` (`with_agent_logins`), and each provider's source as
-/// `credential_source` settles it from the same environment and directory
-/// with no grant token held; an admission is offered its grant tokens
-/// through `offer_with_grant_tokens`.
-pub(crate) fn offer(process: &EnvironmentSnapshot, directory: Option<&LoginDirectory>) -> Offer {
+/// What the admission of an assignment admitted under `mode` is offered
+/// with the agent logins the runner keeps in `directory`
+/// (`with_agent_logins`), and each provider's source as `credential_source`
+/// settles it under `mode` from the same environment and directory with no
+/// grant token held; an admission is offered its grant tokens through
+/// `offer_with_grant_tokens`, which builds on this. In `host` it is offered
+/// the process environment unchanged, and nothing the runner keeps. In `cloud` it starts from the process environment
+/// without the names `mode` blocks, and adds each agent login the runner
+/// keeps as the rules asked of a service that provides nothing offer it,
+/// whatever login the service has.
+pub(crate) fn offer(
+    process: &EnvironmentSnapshot,
+    directory: Option<&LoginDirectory>,
+    mode: AdmittedMode,
+) -> Offer {
     let service = ServiceEnvironment::of(process);
-    let (environment, offered) = with_agent_logins(process, &service, directory);
+    let (environment, offered) = match &mode {
+        AdmittedMode::Host => (process.clone(), Vec::new()),
+        AdmittedMode::Unnamed => with_agent_logins(process, &service, directory),
+        AdmittedMode::Cloud(blocked) => with_agent_logins(
+            &blocked.remove_from(process),
+            service.under(mode.credential_mode()),
+            directory,
+        ),
+    };
     Offer {
         environment,
         offered,
-        sources: sources(&service, directory, None),
+        sources: sources(&service, mode.credential_mode(), directory, None),
         token_services: Vec::new(),
         commands: CommandEnvironment {
             process: process.clone(),
             directory: directory.cloned(),
             grant_tokens: Vec::new(),
+            mode,
         },
     }
 }
 
 /// What an assignment's admission is offered: `offer`'s, with the grant
 /// tokens it holds, `grant_tokens`, and their files offered as well
-/// (`grant_token::offer`), and each provider's source settled with them,
-/// each token service Cloud listed for the assignment included. The
+/// (`grant_token::offer`), and each provider's source settled
+/// with them, each token service Cloud
+/// listed for the assignment included. With no mode the
 /// admission holds no token of a provider the host provides, whose names
-/// stay as the process environment has them, and nothing is withheld. No
+/// stay as the process environment has them, and nothing is withheld. In
+/// `cloud` the set of blocked names is settled here, once, from the tokens
+/// the admission holds, the token services it checked and the names of
+/// Cloud's provider table it was answered (`AdmittedMode::of`), the offer starts from the process environment
+/// without them, and each token is offered under its two names whatever
+/// the service carried. No
 /// `OfferedLogin` records a grant token, whose uses are not noted. Its
 /// `commands` keep the token variables it added, as values, so the
 /// environment the admission reports its sources from and the one its tree
 /// run's first command is given come from this one call.
+/// It goes by the assignment's credential mode, `mode`, read once by the
+/// admission: in `host` it is `offer`'s, since the
+/// admission asked for no token and Cloud listed no token service.
 pub(crate) fn offer_with_grant_tokens(
     process: &EnvironmentSnapshot,
     directory: Option<&LoginDirectory>,
     grant_tokens: Option<&grant_token::AssignmentGrantTokens>,
+    mode: Option<CredentialMode>,
 ) -> Offer {
-    let offered = offer(process, directory);
+    let offered = offer(process, directory, AdmittedMode::of(mode, grant_tokens));
+    match mode {
+        Some(CredentialMode::Host) => return offered,
+        None | Some(CredentialMode::Cloud) => {}
+    }
     let environment = grant_token::offer(&offered.environment, grant_tokens);
     // `grant_token::offer` only adds names, and only ones its input did not
-    // carry.
+    // carry: in `cloud` its input carries no name of a token held.
     let added = environment
         .variables()
         .iter()
@@ -439,7 +538,12 @@ pub(crate) fn offer_with_grant_tokens(
         .collect();
     Offer {
         environment,
-        sources: sources(&ServiceEnvironment::of(process), directory, grant_tokens),
+        sources: sources(
+            &ServiceEnvironment::of(process),
+            mode,
+            directory,
+            grant_tokens,
+        ),
         token_services: grant_token::token_service_sources(&offered.environment, grant_tokens),
         commands: CommandEnvironment {
             grant_tokens: added,
@@ -452,15 +556,17 @@ pub(crate) fn offer_with_grant_tokens(
 /// `process`, the environment of the service `service` describes, with each
 /// agent login the runner keeps in `directory` added as the variable its
 /// coding agent reads (`CODEX_HOME`, `CLAUDE_CODE_OAUTH_TOKEN`) where the
-/// service has no login of that agent's own, and each added variable whose
-/// login the readiness document records as installed. Where the runner
-/// keeps none either, nothing is added and nothing withheld: the variable
-/// is as the process environment has it. A variable the process environment
-/// carries, a grant token name included, is never replaced or removed, and
-/// the process environment itself is never changed. A missing or unreadable
-/// readiness document records no install of what is added. Which steps
-/// receive a variable is the workflow's `environmentPassthrough` and its
-/// declared integrations.
+/// service has no login of that agent's own, and each added
+/// variable whose login the readiness document records as installed. Where
+/// the runner keeps none either, nothing is added and nothing withheld: the
+/// variable is as the process environment has it. A variable the process
+/// environment carries, a grant token name included, is never replaced or removed, and the process
+/// environment itself is never changed. For an assignment admitted in
+/// `cloud`, `process` is the process environment without the blocked names
+/// and `service` one that provides nothing. A missing or unreadable readiness
+/// document records no install of what is added. Which steps receive a
+/// variable is the workflow's `environmentPassthrough` and its declared
+/// integrations.
 fn with_agent_logins(
     process: &EnvironmentSnapshot,
     service: &ServiceEnvironment,
@@ -534,17 +640,19 @@ fn agent_logins(service: &ServiceEnvironment, directory: &LoginDirectory) -> Vec
         .collect()
 }
 
-/// Each provider's source, in `AgentLoginProvider::ALL`'s order, leaving out
-/// those with none (`credential_source`).
+/// Each provider's source under the assignment's credential mode `mode`, in
+/// `AgentLoginProvider::ALL`'s order, leaving out those with none
+/// (`credential_source`).
 fn sources(
     service: &ServiceEnvironment,
+    mode: Option<CredentialMode>,
     directory: Option<&LoginDirectory>,
     grant_tokens: Option<&grant_token::AssignmentGrantTokens>,
 ) -> Vec<ProviderSource> {
     AgentLoginProvider::ALL
         .into_iter()
         .filter_map(|provider| {
-            credential_source(provider, service, directory, grant_tokens)
+            credential_source(provider, mode, service, directory, grant_tokens)
                 .map(|source| ProviderSource { provider, source })
         })
         .collect()

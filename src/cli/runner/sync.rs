@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use crate::exit_code::{ExitCode, OutcomeClass};
 use useful_runner::{
-    AgentLoginProvider, AgentLoginReadiness, ControlError, CredentialSource, Operation,
-    ProviderReadiness, RequestFailure, Response,
+    AgentLoginProvider, AgentLoginReadiness, ControlError, CredentialMode, CredentialSource,
+    Operation, ProviderReadiness, RequestFailure, Response,
 };
 use useful_support::{CredentialStatus, NextAction};
 
@@ -38,6 +38,9 @@ struct SyncOutput<'a, Check: Serialize> {
     /// control socket names them; absent when there is none.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     unanswered_checks: &'a [Check],
+    /// The credential mode the runner's setup went by; absent while it goes by none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_mode: Option<CredentialMode>,
 }
 
 /// The readiness the control socket returned, each provider with its
@@ -108,12 +111,13 @@ impl Command {
                     outcome: "synced",
                     agent_logins: ReadinessView::of(readiness),
                     unanswered_checks: &synced.unanswered_checks,
+                    credential_mode: synced.credential_mode,
                 },
             )
             .context("write agent-login readiness")?;
             writeln!(stdout).context("write agent-login readiness")?;
         } else {
-            write_readiness(&mut stdout, readiness)
+            write_readiness(&mut stdout, readiness, synced.credential_mode)
                 .and_then(|()| {
                     write_unanswered_checks(
                         &mut stdout,
@@ -123,6 +127,7 @@ impl Command {
                             .map(|check| (check.provider, check.cause)),
                     )
                 })
+                .and_then(|()| write_credential_mode(&mut stdout, synced.credential_mode))
                 .context("write agent-login readiness")?;
         }
         Ok(
@@ -144,6 +149,12 @@ fn control_failure(error: ControlError) -> CommandFailure {
         ControlError::RunnerBusy => CommandFailure::with_exit_code(
             anyhow!(
                 "Runner Serve did not finish agent-login setup because a run it holds is working (runner_busy); retry once every run it holds is waiting or has ended"
+            ),
+            ExitCode::Unavailable,
+        ),
+        ControlError::NotYetConnected => CommandFailure::with_exit_code(
+            anyhow!(
+                "agent-login setup not started: Runner Serve has not connected to Cloud since it started\n\ncode: not_yet_connected\n\nRetry once `useful runner show` reports the connection as connected:\n  useful runner sync"
             ),
             ExitCode::Unavailable,
         ),
@@ -170,6 +181,7 @@ fn control_failure(error: ControlError) -> CommandFailure {
 pub(super) fn write_readiness(
     output: &mut impl Write,
     readiness: &AgentLoginReadiness,
+    mode: Option<CredentialMode>,
 ) -> io::Result<()> {
     for entry in &readiness.providers {
         let label = format!("{} login:", super::show::enum_json(entry.provider)?);
@@ -182,6 +194,10 @@ pub(super) fn write_readiness(
         let status = entry.credential_status();
         let step = if entry.provider.is_brokered() {
             grant_step(status, entry.provider)
+        } else if mode == Some(CredentialMode::Host)
+            && matches!(status.next_action, NextAction::ResolveServiceLogin)
+        {
+            Some(HOST_MODE_STEP.to_owned())
         } else {
             let login = Login {
                 provider: &super::show::enum_json(entry.provider)?,
@@ -210,6 +226,27 @@ pub(super) fn write_readiness(
         )?;
     }
     Ok(())
+}
+
+/// The step beside a coding agent's `foreign_login` on a runner that goes by
+/// `host`: the runner stands back for the service's own logins by its mode,
+/// which only an owner changes.
+const HOST_MODE_STEP: &str = "the runner's credential mode is host, so it uses the service's own logins; an owner changes the mode with `useful runner credentials`";
+
+/// Writes, when the setup went by a credential mode, one line naming it;
+/// for `host` it also says that Cloud was asked for nothing.
+fn write_credential_mode(output: &mut impl Write, mode: Option<CredentialMode>) -> io::Result<()> {
+    match mode {
+        None => Ok(()),
+        Some(CredentialMode::Host) => writeln!(
+            output,
+            "{:<19}host · Cloud was asked for no agent login, list or token",
+            "credential mode:"
+        ),
+        Some(mode @ CredentialMode::Cloud) => {
+            writeln!(output, "{:<19}{}", "credential mode:", mode.as_str())
+        }
+    }
 }
 
 /// The words a readiness line prints for a recorded source: `org_connection`

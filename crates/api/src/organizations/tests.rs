@@ -946,11 +946,11 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
     server.finish_one();
 
     for (limit, cursor, query) in [
-        (None, None, "?vocabulary=7"),
+        (None, None, "?vocabulary=8"),
         (
             Some(100),
             Some("opaque cursor"),
-            "?limit=100&cursor=opaque+cursor&vocabulary=7",
+            "?limit=100&cursor=opaque+cursor&vocabulary=8",
         ),
     ] {
         let page = serde_json::to_vec(&serde_json::json!({"items": []})).unwrap();

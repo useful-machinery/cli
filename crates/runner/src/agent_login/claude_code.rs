@@ -99,6 +99,9 @@ pub(crate) fn read_token(path: &Path) -> Option<ClaudeCodeToken> {
 
 /// `CLAUDE_CODE_OAUTH_TOKEN` with the token the runner keeps in `directory`,
 /// when it keeps one and the service has no Claude Code login of its own.
+/// For an assignment admitted in `cloud` it is asked of a service
+/// environment that provides nothing (`ServiceEnvironment::under`), so the
+/// service's own login does not count.
 pub(crate) fn offered_token(
     service: &ServiceEnvironment,
     directory: &LoginDirectory,

@@ -588,48 +588,84 @@ impl AssignmentManager {
                 }
             };
             let _preparation_fence = preparation_fence;
-            // The admission sets agent logins up for itself first, a continuation's
-            // included, so it is offered a replaced generation and nothing of a revoked
-            // login; nothing has been offered yet, and nothing is installed or removed once
-            // it has. Beside other runs it asks Cloud only while each waits, and installs or
-            // removes only while none also has a command in flight, holding their activities
-            // and never the manager's lock; otherwise it is offered what is on disk. Then it
-            // asks Cloud for its assignment's grant tokens, whatever the gate answered, now
-            // that Cloud counts the assignment as preparing, as for its source credential,
-            // and keeps them until the assignment ends, keeping each file current while it
-            // runs. Whatever the setup meets, a panic included, the admission goes on with
-            // what is on disk. The worker is the hold's only owner until it publishes the
-            // admission's outcome, which carries it.
+            // The assignment's credential mode is its offer's, read once here before anything
+            // is asked of Cloud; its setup, its offer, its sources and each command
+            // environment built for it go by this one value, and nothing here reads the
+            // runner's cell.
+            let credential_mode = worker_offer.credential_mode;
+            // The admission sets agent logins up for itself first, a
+            // continuation's included, so it is offered a replaced generation
+            // and nothing of a revoked login; nothing has been offered yet,
+            // and nothing is installed or removed once it has. Beside other
+            // runs it asks Cloud only while each waits, and installs or
+            // removes only while none also has a command in flight, holding
+            // their activities and never the manager's lock; otherwise it is
+            // offered what is on disk. Then it
+            // asks Cloud for its assignment's grant tokens, whatever the
+            // gate answered, now that Cloud counts the assignment as
+            // preparing, as for its source credential, and keeps them
+            // until the assignment ends,
+            // keeping each file current while it runs.
+            // Whatever the setup meets, a panic included, the admission goes
+            // on with what is on disk.
             let grant_tokens = agent_login_setup.as_ref().and_then(|setup| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     setup.set_up(
                         &runs_beside,
+                        credential_mode,
                         &worker_offer.run_id,
                         &worker_offer.assignment_id,
                     )
                 }))
                 .ok()
                 .flatten()
-                .map(|mut tokens| {
-                    if let Some(refreshing) = &grant_token_refresh {
-                        refreshing.start(&mut tokens);
-                    }
-                    tokens
-                })
+            });
+            // An assignment admitted in `cloud` whose setup holds no list of the provider
+            // table's names it can trust cannot know what to block: it offers nothing, starts
+            // no step and no refresh, and is declined with the list's cause, `setup_unavailable`
+            // where there is no setup to ask with, the setup is gone or its call panicked. The
+            // hold is dropped first, which removes its token files.
+            if credential_mode == Some(CredentialMode::Cloud)
+                && let Some(cause) =
+                    crate::agent_login::blocked::provider_table_untrusted(grant_tokens.as_ref())
+            {
+                drop(grant_tokens);
+                let decline =
+                    AssignmentDecline::RunnerUnable(RunnerUnableReason::InputServiceUnavailable)
+                        .diagnosed("credential_providers", cause);
+                let _ = sender.send(ManagerEvent::Prepared {
+                    offer: Box::new(worker_offer),
+                    prepare_effect_id,
+                    deadline,
+                    admission: Box::new(Err(Box::new((root, decline)))),
+                });
+                wake.wake();
+                return;
+            }
+            let grant_tokens = grant_tokens.map(|mut tokens| {
+                if let Some(refreshing) = &grant_token_refresh {
+                    refreshing.start(&mut tokens);
+                }
+                tokens
             });
             // The steps draw from the process environment with the agent
-            // logins the runner keeps now, looked at for this admission, and a
-            // tree run's `useful` commands with those it keeps as each starts,
-            // where the service has none of its own; where the runner keeps
-            // none either, nothing is added or withheld. The admission's grant
-            // tokens and their files are offered too; it holds none of a
-            // provider whose names the service carries, which keeps the
-            // service's values, and a provider neither provides has its names
-            // unset.
+            // logins the runner keeps now, looked at for this admission, and a tree run's `useful` commands
+            // with those it keeps as each starts, where the
+            // service has none of its own; where the runner keeps
+            // none either, nothing is added or withheld. The admission's grant tokens and their files
+            // are offered too; it holds none of a provider whose names the
+            // service carries, which keeps the service's values, and a
+            // provider neither provides has its names unset. An assignment
+            // admitted in `host` is offered the process environment unchanged, at this
+            // admission and at each later command. One admitted in `cloud`
+            // has its blocked names, settled here from the tokens it holds, removed from the
+            // process environment before anything is offered, at this admission and at each
+            // later command, so they carry only what Cloud issued.
             let offered = crate::agent_login::offer_with_grant_tokens(
                 &runtime.environment,
                 agent_login_directory.as_ref(),
                 grant_tokens.as_ref(),
+                credential_mode,
             );
             // The admission reports where each provider's credential comes
             // from to Cloud once, before any step starts, from what the
@@ -643,6 +679,13 @@ impl AssignmentManager {
                     setup.report_sources(&worker_offer.assignment_id, sources);
                 }));
             }
+            // A tree run admitted in `cloud` is checked, once its tree is published, against
+            // what this offer and the hold settled: the names it blocks, the provider table's
+            // rows, what it holds and what Cloud answered each request. None for any other mode.
+            let credential_check = crate::agent_login::required::CredentialCheck::of_admission(
+                &offered,
+                grant_tokens.as_ref(),
+            );
             runtime.environment = offered.environment;
             // Each command of a tree run builds its own environment from the same process
             // environment and directory when it starts, keeping the token variables this
@@ -665,6 +708,7 @@ impl AssignmentManager {
                         environment: &environment,
                         offer: &worker_offer,
                         tree,
+                        credential_check: credential_check.as_ref(),
                         deadline,
                         cancellation: &worker_cancellation,
                         sleeper: Arc::clone(&sleeper),
@@ -1302,6 +1346,9 @@ struct TreeAdmission<'a> {
     environment: &'a EnvironmentSnapshot,
     offer: &'a AssignmentOffer,
     tree: &'a useful_runner_protocol::WorkflowTreeV1RunnerProjection,
+    /// The check of a tree run admitted in `cloud`, which its preparation makes once the tree
+    /// is published; a continuation, which publishes nothing, makes none.
+    credential_check: Option<&'a crate::agent_login::required::CredentialCheck>,
     deadline: PreparationDeadline,
     cancellation: &'a CaptureCancellation,
     sleeper: Arc<dyn Sleeper>,
@@ -1361,6 +1408,7 @@ impl TreeAdmission<'_> {
                 private: &root.private,
                 workspace: &workspace,
                 environment: &self.runtime.command_environment,
+                credential_check: self.credential_check,
                 deadline: self.deadline,
                 cancellation: self.cancellation,
                 sleeper: Arc::clone(&self.sleeper),

@@ -1,23 +1,29 @@
-//! One agent-login setup pass of the serving runner: ask Cloud which agent logins the runner is
-//! authorized for, install what is new, remove what has ended, and record each provider's
-//! readiness. Between admissions a pass asks Cloud for a delivery only while no run the runner
-//! holds is working, and installs or removes a login only while, in addition, no command of a
-//! held run is in flight, and a pass that changes a provider's readiness, or cannot record it,
-//! writes one `runner.agent_login_setup` record. Each admission makes a pass of its own before
-//! the assignment is offered anything, then asks Cloud for its assignment's grant tokens of the
-//! providers the service's environment does not provide, whose files each refresh while it runs
-//! replaces or removes under the same lock as a pass; the admission then reports the sources it
-//! settled to Cloud, a report Cloud does not take writing one `runner.credential_sources`
-//! record. How the provider answered each use of an offered login is noted in memory while the
-//! assignment runs and folded into the readiness by the next pass. Every pass removes the grant
-//! token files no assignment the runner holds owns, which an ended assignment, an interrupted
-//! runner or an earlier release left, and a pass made while the runner holds no assignment
-//! marks ended each OAuth entry left without an end; the end of an assignment marks its
-//! admission's entries ended, unless a later admission has recorded its own, and a refresh
-//! records an entry only while its admission is the last that recorded them. A setup the
-//! control socket asks for, or one the schedule makes that installs a login, then checks logins
-//! with their providers outside the pass and the assignment gate, and a second pass records
-//! what they found.
+//! One agent-login setup pass of the serving runner: ask Cloud which agent logins the runner is authorized
+//! for, install what is new, remove what has ended, and record each
+//! provider's readiness. Between admissions a pass asks Cloud for a delivery
+//! only while no run the runner holds is working, and installs or removes a
+//! login only while, in addition, no command of a held run is in flight, and a pass that
+//! changes a provider's readiness, or cannot record it, writes one
+//! `runner.agent_login_setup` record. Each admission makes
+//! a pass of its own before the assignment is offered anything, then asks Cloud for its assignment's grant tokens of the
+//! providers the service's environment does not provide, whose files each refresh while it runs replaces or removes
+//! under the same lock as a pass; the admission then reports
+//! the sources it settled to Cloud, a report Cloud does not take writing one
+//! `runner.credential_sources` record. How
+//! the provider answered each use of an offered login is noted in memory while the
+//! assignment runs and folded into the readiness by the next pass. Every pass removes the grant token files no assignment
+//! the runner holds owns, which an ended assignment, an interrupted runner or
+//! an earlier release left, and a pass made while the runner
+//! holds no assignment marks ended each OAuth entry left without an end; the
+//! end of an assignment marks its admission's entries ended, unless a later
+//! admission has recorded its own, and a refresh records an entry only while
+//! its admission is the last that recorded them. A setup the
+//! control socket asks for, or one the schedule makes that installs a login,
+//! then checks logins with their providers outside the pass and the
+//! assignment gate, and a second pass records what they found. A periodic or `sync` pass goes by the credential mode the
+//! runner goes by when it begins; in `host` it asks Cloud nothing but the
+//! report of a removal, removes the agent logins in the runner's directory
+//! and records each coding agent `foreign_login`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -38,6 +44,7 @@ use super::cloud::{
 use super::codex;
 use super::directory::{self, LoginDirectory};
 use super::grant_token::{self, AssignmentGrantTokens, TokenFiles};
+use super::mode::CredentialModeCell;
 use super::readiness::{
     self, Installation, LastUse, LoginReadiness, ReadinessDocument, ReadinessError, RecordedLogin,
     UseOutcome,
@@ -46,7 +53,9 @@ use super::{
     FailureCause, FailureStage, InstallRefusal, OfferedLogin, OperatingSystem, ServiceEnvironment,
     StepFailure, credential_source,
 };
-use crate::control_protocol::{AgentLoginProvider, AgentLoginState, UnansweredCheck};
+use crate::control_protocol::{
+    AgentLoginProvider, AgentLoginState, CredentialMode, UnansweredCheck,
+};
 use crate::enrollment::remove_leftover_temporary_files;
 use crate::runner_http;
 use crate::runner_http::ServingTarget;
@@ -223,12 +232,14 @@ pub(crate) enum SetupCaller {
     Schedule,
 }
 
-/// What a setup did: its outcome, and each login whose check gave no
-/// answer.
+/// What a setup did: its outcome, each login whose check gave no answer,
+/// and the credential mode its pass read where it began, none where the
+/// setup made no pass.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SetupAnswer {
     pub(crate) outcome: SetupOutcome,
     pub(crate) unanswered: Vec<UnansweredCheck>,
+    pub(crate) mode: Option<CredentialMode>,
 }
 
 /// What a pass did.
@@ -256,6 +267,9 @@ pub(crate) struct SetupDependencies {
     directory: LoginDirectory,
     os: OperatingSystem,
     recorder: Arc<Recorder>,
+    /// The credential mode the runner goes by, which a periodic or `sync`
+    /// setup reads once where it begins.
+    credential_mode: Arc<CredentialModeCell>,
 }
 
 impl SetupDependencies {
@@ -296,7 +310,15 @@ impl SetupDependencies {
             directory: LoginDirectory::beside(runner_state_path),
             os: OperatingSystem::current(),
             recorder,
+            credential_mode: Arc::default(),
         }
+    }
+
+    /// The same setup, going by the mode `cell` holds rather than by a cell
+    /// of its own that learns nothing, which reads as none.
+    pub(crate) fn with_credential_mode(mut self, cell: Arc<CredentialModeCell>) -> Self {
+        self.credential_mode = cell;
+        self
     }
 }
 
@@ -314,15 +336,25 @@ pub(crate) struct AgentLoginSetup {
     gate: EndableGate,
     clock: Clock,
     /// Held through every pass, admission, refresh and marking of an
-    /// assignment's end, so none interleaves with another's writes. It
-    /// holds the assignment whose admission last recorded the OAuth
-    /// entries, the only one whose end marks them and whose refresh records
-    /// them.
-    pass: Mutex<Option<String>>,
+    /// assignment's end, so none interleaves with another's writes.
+    pass: Mutex<PassHold>,
     /// The uses noted since a pass last folded them in.
     uses: Arc<NotedUses>,
     /// The grant token files of each assignment the runner holds.
     grant_files: Arc<TokenFiles>,
+}
+
+/// What the setup's `pass` lock holds.
+#[derive(Debug, Default)]
+struct PassHold {
+    /// The assignment whose admission last recorded the OAuth entries, the
+    /// only one whose end marks them and whose refresh records them.
+    recording: Option<String>,
+    /// Whether a `host` pass removed an install the record named and Cloud
+    /// has answered no status request since, so the next `host` pass reports
+    /// the removal again. Kept in memory alone: a restart
+    /// forgets it.
+    removal_unreported: bool,
 }
 
 /// What the setup an admission makes for itself did: the agent-login pass,
@@ -353,7 +385,7 @@ impl AgentLoginSetup {
                 threads: Arc::new(SetupThreads::new()),
             },
             clock: Arc::new(clock),
-            pass: Mutex::new(None),
+            pass: Mutex::new(PassHold::default()),
             uses: Arc::default(),
             grant_files,
         }
@@ -422,6 +454,7 @@ impl AgentLoginSetup {
             return SetupAnswer {
                 outcome: SetupOutcome::Busy(None),
                 unanswered: Vec::new(),
+                mode: None,
             };
         };
         let setup = Arc::clone(self);
@@ -436,6 +469,7 @@ impl AgentLoginSetup {
         let failed = || SetupAnswer {
             outcome: SetupOutcome::Failed,
             unanswered: Vec::new(),
+            mode: None,
         };
         if let Err(error) = started {
             self.record_failure(PassStage::Spawn, error.kind());
@@ -449,17 +483,23 @@ impl AgentLoginSetup {
     /// the caller's rule names, each started only while the runner holds no
     /// assignment and run outside the gate, so no admission waits for one;
     /// then, when a check found an answer, a second pass that records it as
-    /// the login's last use and reports it. A check writes nothing itself.
+    /// the login's last use and reports it.
+    /// A check writes nothing itself. Each pass goes by the credential mode
+    /// the runner goes by when it takes the `pass` lock, read once there
+    /// and never at a request; each check goes
+    /// by the mode the first pass went by.
     fn set_up_blocking(&self, caller: SetupCaller) -> SetupAnswer {
-        let (outcome, earlier, record) = {
-            let _pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
+        let (outcome, earlier, record, mode) = {
+            let mut pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
+            let mode = self.dependencies.credential_mode.mode();
             // What the document held before the pass, against which the
             // schedule's rule finds what the pass installed.
             let earlier = ReadinessDocument::load(&self.dependencies.readiness_path)
                 .ok()
                 .flatten();
-            let (outcome, record) = self.pass_recording(&self.gate);
-            (outcome, earlier, record)
+            let (outcome, record) =
+                self.pass_recording(&mut pass.removal_unreported, &self.gate, mode);
+            (outcome, earlier, record, mode)
         };
         let (first, mut record) = match (&outcome, record) {
             (SetupOutcome::Recorded(first), Some(record)) => (first, record),
@@ -468,10 +508,11 @@ impl AgentLoginSetup {
                 return SetupAnswer {
                     outcome,
                     unanswered: Vec::new(),
+                    mode,
                 };
             }
         };
-        let (noted, unanswered) = self.check_logins(caller, earlier.as_ref(), first);
+        let (noted, unanswered) = self.check_logins(caller, earlier.as_ref(), first, mode);
         // A check that gave no answer is named in the pass's record whether
         // or not the provider's readiness changed, unless the provider's
         // setup already failed a step, which the record names first.
@@ -499,21 +540,25 @@ impl AgentLoginSetup {
         SetupAnswer {
             outcome,
             unanswered,
+            mode,
         }
     }
 
-    /// Checks each login that `caller`'s rule names in `document`, the readiness the
-    /// setup's pass recorded over `earlier`: every `ready` install for a sync, and a
-    /// `ready` install `earlier` did not hold for the schedule. Before each check it asks
-    /// the gate's read level, without holding it, whether no held run is working, and makes
-    /// no further check once one is. An answer is noted as the login's last use, as an
-    /// admission's observer notes one. Answers whether it noted one, and each login whose
-    /// check gave no answer.
+    /// Checks each login that `caller`'s rule names in `document`, the
+    /// readiness the setup's pass recorded over `earlier`: every `ready`
+    /// install for a sync, and a `ready` install `earlier` did not hold for
+    /// the schedule. Before each check it asks the gate's read level, without
+    /// holding it, whether no held run is working, and makes no further
+    /// check once one is. An answer is noted as the login's last use, as an
+    /// admission's observer notes one. Answers whether it
+    /// noted one, and each login whose check gave no answer. Each check goes
+    /// by `mode`, the credential mode the setup's pass went by.
     fn check_logins(
         &self,
         caller: SetupCaller,
         earlier: Option<&ReadinessDocument>,
         document: &ReadinessDocument,
+        mode: Option<CredentialMode>,
     ) -> (bool, Vec<UnansweredCheck>) {
         let mut noted = false;
         let mut unanswered = Vec::new();
@@ -537,7 +582,11 @@ impl AgentLoginSetup {
             if !self.gate.none_working() {
                 break;
             }
-            match self.dependencies.check.check(login.provider, installation) {
+            match self
+                .dependencies
+                .check
+                .check(login.provider, installation, mode)
+            {
                 LoginCheckOutcome::Answered(outcome) => {
                     self.uses.note(NotedUse {
                         provider: login.provider,
@@ -560,47 +609,67 @@ impl AgentLoginSetup {
     }
 
     fn run_pass_blocking(&self) -> SetupOutcome {
-        let _pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
-        self.pass_under(&self.gate)
+        let mut pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
+        let mode = self.dependencies.credential_mode.mode();
+        self.pass_under(&mut pass.removal_unreported, &self.gate, mode)
+            .0
     }
 
     /// `set_up_admission_beside` while the runner holds no other run.
     #[cfg(test)]
     pub(crate) fn set_up_admission(
         self: &Arc<Self>,
+        mode: Option<CredentialMode>,
         boot_id: &str,
         run_id: &str,
         assignment_id: &str,
     ) -> AdmissionSetup {
-        self.set_up_admission_beside(&NothingBeside, boot_id, run_id, assignment_id)
+        self.set_up_admission_beside(&NothingBeside, mode, boot_id, run_id, assignment_id)
     }
 
-    /// Sets agent logins up for an assignment the runner is admitting, on the
-    /// admission's own blocking task and before the assignment is offered
-    /// them: waits for a pass already running, then makes one under `beside`,
-    /// the gate over the other runs the runner held when the preparation
-    /// began, since the assignment has been offered nothing: it asks Cloud
-    /// only while each of them waits, and installs or removes only while none
-    /// of them also has a command in flight, at once when there is none. It
-    /// makes none, and asks Cloud nothing, unless the readiness document
-    /// names an installable provider's login as installed or as authorized
-    /// without being ready. A document it cannot read names none. Its
-    /// `agent_logins` is `None` when it made no pass, and `Busy` when
-    /// `beside` stopped the pass, which keeps what it recorded before that.
-    /// Then, whatever the pass did, it asks Cloud for the grant tokens of the
-    /// assignment `assignment_id` of the run `run_id` and the boot `boot_id`,
-    /// under the same hold of the pass lock; what it holds of them refreshes
-    /// through this setup, and marks the entries ended when it is dropped.
+    /// Sets agent logins up for an assignment the runner is admitting, on
+    /// the admission's own blocking task and before the assignment is offered
+    /// them: waits for a pass already running, then makes
+    /// one under `beside`, the gate over the other runs the runner held when
+    /// the preparation began, since the assignment has been offered nothing:
+    /// it asks Cloud only while each of them waits, and installs or removes
+    /// only while none of them also has a command in flight, at once when
+    /// there is none. With no mode it makes none, and asks
+    /// Cloud nothing, unless the readiness document names an installable
+    /// provider's login as installed or as authorized without being ready. A
+    /// document it cannot read names none. Its `agent_logins` is `None` when
+    /// it made no pass, and `Busy` when `beside` stopped the pass, which
+    /// keeps what it recorded before that. Then, whatever the pass did, it asks Cloud
+    /// for the grant tokens of the assignment `assignment_id` of the run
+    /// `run_id` and the boot `boot_id`, under the same hold
+    /// of the pass lock; what it holds of them refreshes through this setup, and marks the entries ended when it is dropped. Both go by `mode`, the credential mode the
+    /// assignment's offer named, which the admission read once and the cell
+    /// does not change: in `host` the pass is always made,
+    /// and asks Cloud nothing but the report of a removal, and no grant token
+    /// is asked for; in `cloud` the pass is always made, and
+    /// asks Cloud for the runner's agent logins. The hold
+    /// keeps what the pass left of each coding agent, and whether Cloud
+    /// answered its status request, beside what each token request answered,
+    /// from which a `cloud` tree run is checked.
     pub(crate) fn set_up_admission_beside(
         self: &Arc<Self>,
         beside: &dyn AssignmentGate,
+        mode: Option<CredentialMode>,
         boot_id: &str,
         run_id: &str,
         assignment_id: &str,
     ) -> AdmissionSetup {
         let mut pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
-        let agent_logins = self.admission_pass(beside);
-        let (grants, tokens) = self.admit_grant_tokens(&mut pass, boot_id, run_id, assignment_id);
+        let made = self.admission_pass(&mut pass.removal_unreported, beside, mode);
+        let (grants, mut tokens) =
+            self.admit_grant_tokens(&mut pass.recording, mode, boot_id, run_id, assignment_id);
+        // The hold keeps what the pass left of each coding agent beside what
+        // each token request answered, both in hand here.
+        tokens.note_agent_logins(
+            made.as_ref()
+                .map(|(outcome, answered)| (outcome, *answered)),
+        );
+        let agent_logins = made.map(|(outcome, _)| outcome);
         AdmissionSetup {
             agent_logins,
             grants,
@@ -608,16 +677,20 @@ impl AgentLoginSetup {
         }
     }
 
-    /// Asks Cloud for the assignment's grant tokens of each provider the service's
-    /// environment does not provide and records each provider's entry for the run in
-    /// the readiness document, with each coding agent's source as it stands at this
-    /// admission; the caller holds the pass lock, whose `recording` it sets to the
-    /// assignment, so the end of an earlier one no longer marks the entries. A
-    /// document that cannot be read is neither replaced nor written, its failure
-    /// recorded as a pass's is, and the tokens are kept all the same.
+    /// Asks Cloud for the assignment's grant tokens of each provider the
+    /// service's environment does not provide, none in
+    /// `host` and each listed whatever the service carries
+    /// in `cloud`, and records each
+    /// provider's entry for the run in the readiness document, with each coding agent's source as it stands at this
+    /// admission under `mode`; the caller holds the pass lock, whose `recording` it
+    /// sets to the assignment, so the end of an earlier one no longer marks
+    /// the entries. A document that cannot be read is
+    /// neither replaced nor written, its failure recorded as a pass's is,
+    /// and the tokens are kept all the same.
     fn admit_grant_tokens(
         self: &Arc<Self>,
         recording: &mut Option<String>,
+        mode: Option<CredentialMode>,
         boot_id: &str,
         run_id: &str,
         assignment_id: &str,
@@ -627,14 +700,15 @@ impl AgentLoginSetup {
         let (previous, mut document) = self.grant_document(now);
         let tokens = self.asking(boot_id, run_id, assignment_id, now).admit(
             Arc::downgrade(self),
+            mode,
             &self.dependencies.environment,
             previous.as_ref().ok().and_then(Option::as_ref),
             &mut document,
         );
         // An admission that made no pass still offers and reports each
-        // coding agent's source as it now stands, so the document records
-        // the same.
-        self.record_sources(&mut document);
+        // coding agent's source as it now stands under the assignment's
+        // mode, so the document records the same.
+        self.record_sources(&mut document, mode);
         let recorded = previous.is_ok() && self.write(&document);
         (recorded.then_some(document), tokens)
     }
@@ -666,7 +740,7 @@ impl AgentLoginSetup {
         let asking = self.asking(boot_id, run_id, assignment_id, now);
         // The entries are another admission's: the refresh keeps its file
         // and records none.
-        if pass.as_deref() != Some(assignment_id) {
+        if pass.recording.as_deref() != Some(assignment_id) {
             let (next, recorded, _) = asking.refresh(step, None);
             return (next, recorded, None);
         }
@@ -693,7 +767,7 @@ impl AgentLoginSetup {
     /// recorded as a pass's is.
     pub(crate) fn mark_grants_ended(&self, assignment_id: &str) -> Option<ReadinessDocument> {
         let pass = self.pass.lock().unwrap_or_else(PoisonError::into_inner);
-        if pass.as_deref() != Some(assignment_id) {
+        if pass.recording.as_deref() != Some(assignment_id) {
             return None;
         }
         let now = (self.clock)();
@@ -779,32 +853,65 @@ impl AgentLoginSetup {
     }
 
     /// The admission's agent-login pass under `beside`, under the pass lock
-    /// its caller holds.
-    fn admission_pass(&self, beside: &dyn AssignmentGate) -> Option<SetupOutcome> {
-        let named = ReadinessDocument::load(&self.dependencies.readiness_path)
-            .ok()
-            .flatten()
-            .is_some_and(|document| {
-                AgentLoginProvider::INSTALLABLE
-                    .into_iter()
-                    .filter_map(|provider| document.login(provider))
-                    .any(authorized_or_installed)
-            });
-        named.then(|| self.pass_under(beside))
+    /// its caller holds, whose `removal_unreported` it is given, going by
+    /// the assignment's credential mode `mode`. In `host` it is the `host`
+    /// pass whatever the record names, local unless it removed a recorded
+    /// install or a report is owed; in `cloud` it is made
+    /// whatever the record names, so that what the assignment is offered is
+    /// Cloud's answer rather than the runner's memory; with
+    /// none it is made only where the record names a login as installed or
+    /// as authorized without being ready.
+    fn admission_pass(
+        &self,
+        removal_unreported: &mut bool,
+        beside: &dyn AssignmentGate,
+        mode: Option<CredentialMode>,
+    ) -> Option<(SetupOutcome, bool)> {
+        let named = match mode {
+            Some(CredentialMode::Host | CredentialMode::Cloud) => true,
+            None => ReadinessDocument::load(&self.dependencies.readiness_path)
+                .ok()
+                .flatten()
+                .is_some_and(|document| {
+                    AgentLoginProvider::INSTALLABLE
+                        .into_iter()
+                        .filter_map(|provider| document.login(provider))
+                        .any(authorized_or_installed)
+                }),
+        };
+        named.then(|| self.pass_under(removal_unreported, beside, mode))
     }
 
-    /// One pass, each install and removal under `gate`, writing its record;
-    /// the caller holds the `pass` lock.
-    fn pass_under(&self, gate: &dyn AssignmentGate) -> SetupOutcome {
-        let (outcome, record) = self.pass_recording(gate);
+    /// One pass going by `mode`, each install and removal under `gate`,
+    /// writing its record; the caller holds the `pass` lock, whose
+    /// `removal_unreported` it is given. Beside what the pass did it answers
+    /// whether Cloud answered its status request.
+    fn pass_under(
+        &self,
+        removal_unreported: &mut bool,
+        gate: &dyn AssignmentGate,
+        mode: Option<CredentialMode>,
+    ) -> (SetupOutcome, bool) {
+        let (outcome, record) = self.pass_recording(removal_unreported, gate, mode);
         self.record_changes(record.as_ref());
-        outcome
+        let answered = record.as_ref().is_some_and(|record| record.status_answered);
+        (outcome, answered)
     }
 
     /// `pass_under`, answering what its record names rather than writing it:
     /// none for a pass that failed, or that the gate stopped before it
-    /// changed anything.
-    fn pass_recording(&self, gate: &dyn AssignmentGate) -> (SetupOutcome, Option<PassRecord>) {
+    /// changed anything. In `host` it is the `host` pass, which asks Cloud
+    /// nothing but the report of a removal;
+    /// `cloud` and none make the same pass, except that in `cloud` the
+    /// service's own login does not count and no provider ends
+    /// `foreign_login`. Any status request Cloud answers
+    /// leaves no removal unreported.
+    fn pass_recording(
+        &self,
+        removal_unreported: &mut bool,
+        gate: &dyn AssignmentGate,
+        mode: Option<CredentialMode>,
+    ) -> (SetupOutcome, Option<PassRecord>) {
         if !gate.none_working() {
             return (SetupOutcome::Busy(None), None);
         }
@@ -858,7 +965,6 @@ impl AgentLoginSetup {
             carried.unknown
         });
         let cloud = self.dependencies.cloud.as_ref();
-        let answer = cloud.status(&self.status_request(previous));
         // The providers settled so far, in order, then what was last
         // recorded for the rest, each with its source as the directory
         // stands when the document is written.
@@ -879,9 +985,19 @@ impl AgentLoginSetup {
                     .collect(),
                 unknown: carried.clone(),
             };
-            self.record_sources(&mut document);
+            self.record_sources(&mut document, mode);
             document
         };
+        match mode {
+            Some(CredentialMode::Host) => {
+                return self.host_pass(removal_unreported, gate, previous, &document, now);
+            }
+            None | Some(CredentialMode::Cloud) => {}
+        }
+        let answer = cloud.status(&self.status_request(previous));
+        if answer.is_ok() {
+            *removal_unreported = false;
+        }
         let mut settled = Vec::with_capacity(AgentLoginProvider::INSTALLABLE.len());
         let mut failures = Vec::new();
         let mut interrupted = false;
@@ -913,7 +1029,7 @@ impl AgentLoginSetup {
                 )),
                 Ok(_) => {
                     match installed.filter(|installation| self.superseded(installation, named)) {
-                        None => self.settle(gate, cloud, provider, installed, named, now),
+                        None => self.settle(gate, provider, installed, named, now, mode),
                         // Cloud names another agent login, or this build
                         // keeps the provider's login elsewhere: the install
                         // the record names ends, and is recorded as ended,
@@ -946,7 +1062,7 @@ impl AgentLoginSetup {
                                 recorded_change = true;
                                 installed = None;
                                 ended = Some(entry);
-                                self.settle(gate, cloud, provider, None, named, now)
+                                self.settle(gate, provider, None, named, now, mode)
                             }
                             failed => failed,
                         },
@@ -1024,7 +1140,7 @@ impl AgentLoginSetup {
                     ) {
                         Some(false) => {}
                         ended => {
-                            self.record_sources(&mut document);
+                            self.record_sources(&mut document, mode);
                             if !self.write(&document) {
                                 return (SetupOutcome::Failed, None);
                             }
@@ -1046,6 +1162,115 @@ impl AgentLoginSetup {
             previous: previous.cloned(),
             document: document.clone(),
             failures,
+            status_answered: answer.is_ok(),
+        };
+        let outcome = if interrupted {
+            SetupOutcome::Busy(Some(document))
+        } else {
+            SetupOutcome::Recorded(document)
+        };
+        (outcome, Some(record))
+    }
+
+    /// The pass while the runner goes by `host`, over the readiness
+    /// `previous` recorded, writing each document through `document`, at
+    /// `now`: it asks Cloud for no status and
+    /// no delivery, ends each installable provider's login through `end`
+    /// under `gate`, removing what is at its location in the runner's
+    /// directory whether or not the record names it, and records the
+    /// provider `foreign_login` with no agent login, or `install_failed`
+    /// with the install it could not remove; a removal is recorded before
+    /// the pass goes on. Where the document no longer names
+    /// an install `previous` named, the removal is owed to Cloud: a pass the
+    /// gate did not stop then reports it in one status request built from
+    /// the document it wrote, whose answer it acts on in no way. A report
+    /// Cloud does not answer stays owed in `removal_unreported`, and the
+    /// next `host` pass makes it again, whether or not it removed anything.
+    fn host_pass(
+        &self,
+        removal_unreported: &mut bool,
+        gate: &dyn AssignmentGate,
+        previous: Option<&ReadinessDocument>,
+        document: &dyn Fn(&[LoginReadiness]) -> ReadinessDocument,
+        now: OffsetDateTime,
+    ) -> (SetupOutcome, Option<PassRecord>) {
+        let installed =
+            |provider| previous.and_then(|previous| previous.login(provider)?.installation());
+        let mut settled = Vec::with_capacity(AgentLoginProvider::INSTALLABLE.len());
+        let mut failures = Vec::new();
+        let mut interrupted = false;
+        let mut recorded_change = false;
+        for provider in AgentLoginProvider::INSTALLABLE {
+            let installed = installed(provider);
+            // The gate refused a removal the provider needed: the rest
+            // waits for the next pass.
+            let Some(Settled {
+                state,
+                login,
+                failure,
+            }) = self.end(
+                gate,
+                provider,
+                installed,
+                AgentLoginState::ForeignLogin,
+                None,
+            )
+            else {
+                interrupted = true;
+                break;
+            };
+            let entry = LoginReadiness {
+                provider,
+                state,
+                checked_at: Some(now),
+                login,
+                last_use: None,
+                source: None,
+            };
+            let changed = entry.installation() != installed;
+            settled.push(entry);
+            failures.extend(failure.map(|failure| (provider, failure)));
+            if changed {
+                if !self.write(&document(&settled)) {
+                    return (SetupOutcome::Failed, None);
+                }
+                recorded_change = true;
+            }
+        }
+        if interrupted && !recorded_change {
+            return (SetupOutcome::Busy(None), None);
+        }
+        let document = document(&settled);
+        if !self.write(&document) {
+            return (SetupOutcome::Failed, None);
+        }
+        // What was noted was noted for an install no longer recorded.
+        self.uses.forget(&self.uses.noted());
+        let removed = AgentLoginProvider::INSTALLABLE.into_iter().any(|provider| {
+            installed(provider).is_some_and(|installation| {
+                document
+                    .login(provider)
+                    .and_then(LoginReadiness::installation)
+                    != Some(installation)
+            })
+        });
+        *removal_unreported |= removed;
+        if !interrupted && *removal_unreported {
+            match self
+                .dependencies
+                .cloud
+                .status(&self.status_request(Some(&document)))
+            {
+                Ok(_answer) => *removal_unreported = false,
+                Err(failure) => failures.extend(status_failures(failure.cause())),
+            }
+        }
+        let record = PassRecord {
+            previous: previous.cloned(),
+            document: document.clone(),
+            failures,
+            // The `host` pass asks Cloud for no status.
+            status_answered: false,
         };
         let outcome = if interrupted {
             SetupOutcome::Busy(Some(document))
@@ -1157,14 +1382,17 @@ impl AgentLoginSetup {
     }
 
     /// Records on each coding agent's entry in `document` its source, as
-    /// `credential_source` settles it from the service's environment and
-    /// what the runner's directory holds now, whatever Cloud answered:
-    /// each pass and each admission writes it.
-    fn record_sources(&self, document: &mut ReadinessDocument) {
+    /// `credential_source` settles it under `mode`, the credential mode of
+    /// the pass or admission it serves, from the service's environment and
+    /// what the runner's directory holds now, whatever Cloud answered: each pass and each admission writes it.
+    /// In `cloud`, `credential_source` asks of a service environment that
+    /// provides nothing, so no source is `host`.
+    fn record_sources(&self, document: &mut ReadinessDocument, mode: Option<CredentialMode>) {
         let dependencies = &self.dependencies;
         for login in &mut document.logins {
             login.source = credential_source(
                 login.provider,
+                mode,
                 &dependencies.environment,
                 Some(&dependencies.directory),
                 None,
@@ -1221,16 +1449,17 @@ impl AgentLoginSetup {
     }
 
     /// One provider's readiness from Cloud's answer about it, each install
-    /// and removal under `gate`; `None` when the gate refused a request,
-    /// install or removal it needed.
+    /// and removal under `gate`, going by `mode`, the pass's credential
+    /// mode; `None` when the gate refused a request, install or removal it
+    /// needed.
     fn settle(
         &self,
         gate: &dyn AssignmentGate,
-        cloud: &dyn AgentLoginCloud,
         provider: AgentLoginProvider,
         installed: Option<&Installation>,
         answer: Option<&ProviderLogin>,
         now: OffsetDateTime,
+        mode: Option<CredentialMode>,
     ) -> Option<Settled> {
         let Some(answer) = answer else {
             // Cloud no longer names the provider: nothing is authorized.
@@ -1289,9 +1518,11 @@ impl AgentLoginSetup {
         };
         // While the service has a login of its own the runner keeps and
         // asks for none: a kept token would outrank the service's Claude
-        // Code login, and the service's own Codex login is never
-        // replaced.
-        if self.foreign_login(provider) {
+        // Code login, and the service's own Codex login is
+        // never replaced. In `cloud` the
+        // service's own login does not count, and the runner keeps, asks
+        // for and installs what Cloud names.
+        if self.foreign_login(provider, mode) {
             return self.end(
                 gate,
                 provider,
@@ -1321,7 +1552,7 @@ impl AgentLoginSetup {
             agent_login_id: answer.agent_login_id.clone(),
             generation,
         };
-        match cloud.delivery(&request) {
+        match self.dependencies.cloud.delivery(&request) {
             Ok(delivery) => self.install(gate, installed, &delivery, now, kept()),
             Err(DeliveryFailure::Refused(DeliveryRefusal::Revoked)) => self.end(
                 gate,
@@ -1464,9 +1695,10 @@ impl AgentLoginSetup {
     }
 
     /// Whether the service has a login of the provider's own, which the
-    /// runner never outranks or replaces.
-    fn foreign_login(&self, provider: AgentLoginProvider) -> bool {
-        let environment = &self.dependencies.environment;
+    /// runner never outranks or replaces, under `mode`: in `cloud` it is
+    /// asked of a service environment that provides nothing, so none counts.
+    fn foreign_login(&self, provider: AgentLoginProvider, mode: Option<CredentialMode>) -> bool {
+        let environment = self.dependencies.environment.under(mode);
         match provider {
             AgentLoginProvider::Codex => codex::foreign_login(environment),
             AgentLoginProvider::ClaudeCode => claude_code::foreign_login(environment),
@@ -1513,6 +1745,7 @@ impl AgentLoginSetup {
             previous,
             document,
             failures,
+            ..
         }) = record
         else {
             return;
@@ -1727,6 +1960,10 @@ struct PassRecord {
     previous: Option<ReadinessDocument>,
     document: ReadinessDocument,
     failures: Vec<(AgentLoginProvider, StepFailure)>,
+    /// Whether Cloud answered the pass's status request, so that what it
+    /// recorded of each coding agent is Cloud's answer and not what the
+    /// runner last knew.
+    status_answered: bool,
 }
 
 /// A provider's state after a pass, the agent login its entry records, and

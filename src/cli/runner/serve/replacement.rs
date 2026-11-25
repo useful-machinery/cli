@@ -164,6 +164,7 @@ impl PromotionFailure {
             Self::Control(ControlError::InvalidRequest) => "invalid_request",
             Self::Control(ControlError::UnsupportedVersion) => "unsupported_version",
             Self::Control(ControlError::RunnerBusy) => "runner_busy",
+            Self::Control(ControlError::NotYetConnected) => "not_yet_connected",
             Self::Control(ControlError::NoPendingCredential) => "no_pending_credential",
             Self::Control(ControlError::PendingRegistrationMismatch) => {
                 "pending_registration_mismatch"
@@ -187,7 +188,8 @@ impl PromotionFailure {
             Self::Control(
                 ControlError::InvalidRequest
                 | ControlError::UnsupportedVersion
-                | ControlError::RunnerBusy,
+                | ControlError::RunnerBusy
+                | ControlError::NotYetConnected,
             )
             | Self::Control(ControlError::PendingProtocolFailed)
             | Self::InvalidControlResponse => OutcomeClass::Protocol,
@@ -207,6 +209,7 @@ impl PromotionFailure {
             | Self::Control(ControlError::UnsupportedVersion)
             | Self::Control(ControlError::InvalidRequest)
             | Self::Control(ControlError::RunnerBusy)
+            | Self::Control(ControlError::NotYetConnected)
             | Self::InvalidControlResponse => {
                 "Verify that the CLI and Runner Serve versions agree, then start useful runner serve --replace-credential again with the same single-runner key."
             }

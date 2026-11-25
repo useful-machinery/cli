@@ -49,11 +49,11 @@ pub use workflow::admission::{
     CODEX_LOGIN_VARIABLE, CancellationPolicy, CancellationReason, CancellationSource,
     EnvironmentSnapshot, ExecutionContext, HarnessLoginObserver, HarnessLoginOutcome,
     OrdinaryCancellationRequestResult, ResolvedAttachment, ResolvedFile, ResolvedInput,
-    ResolvedInputs, ResolvedJsonInput, SourceRevisionProvenance, WorkflowCapacityBudget,
-    admit_local_continuation_workflow, admit_local_workflow, admit_runner_workflow,
-    completed_inputs_match, default_execution_policy_limits, grant_token_environment_names,
-    is_declared_only_environment_name, local_continuation_input_failures,
-    untested_harness_advisories,
+    ResolvedInputs, ResolvedJsonInput, SourceRevisionProvenance, USEFUL_RUNNER_CREDENTIAL_MODE,
+    WorkflowCapacityBudget, admit_local_continuation_workflow, admit_local_workflow,
+    admit_runner_workflow, completed_inputs_match, default_execution_policy_limits,
+    grant_token_environment_names, is_declared_only_environment_name,
+    local_continuation_input_failures, untested_harness_advisories,
 };
 pub use workflow::agent::WorkflowRunId;
 pub use workflow::agent::dispatch::{ProductionAgentDispatcher, production_agent_dispatcher};

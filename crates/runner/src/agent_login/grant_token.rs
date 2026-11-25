@@ -1,15 +1,15 @@
-//! The grant tokens of each assignment the serving runner holds: at each
-//! admission the runner asks Cloud for the assignment's providers and, at the
-//! same time, its token services, then for the token of the run's grant of
-//! each provider listed, and of each token service, that the host does not
-//! provide, keeps each token it is issued in a private file of its own in the
-//! assignment's own directory of its agent-login directory, records the
-//! outcome of each of GitHub, GitLab.com and Linear for the run in the
-//! readiness document, and writes a `runner.grant_token` record for each
-//! changed state and each failure. A token file is only ever the token of the
-//! assignment whose directory holds it: every setup, an admission's included,
-//! removes what no assignment the runner holds owns, an admission clears its
-//! own assignment's directory before it uses any answer, and the hold an
+//! The grant tokens of each assignment the serving runner holds: at each admission the runner asks Cloud for the
+//! assignment's providers and, at the same time, its token services, then for the token of the run's grant of each
+//! provider listed, and of each token service, that the host does not provide, which for an assignment admitted in `cloud` is each listed, for which it also asks for the names of Cloud's provider
+//! table, keeps each token it is issued in a private file of its own
+//! in the assignment's own directory of its agent-login directory, records
+//! the outcome of each of GitHub, GitLab.com and Linear for the run in the
+//! readiness document, and writes a `runner.grant_token`
+//! record for each changed state and each failure. A
+//! token file is only ever the token of the assignment whose directory holds
+//! it: every setup, an admission's included, removes what no
+//! assignment the runner holds owns, an admission clears its own
+//! assignment's directory before it uses any answer, and the hold an
 //! admission returns removes that directory when the assignment ends. The
 //! admission offers each token it holds, and its file, to the steps of its
 //! workflow that pass their names or, for the runner's own three, declare the
@@ -46,9 +46,10 @@ use super::cloud::{
 };
 use super::directory::{self, LoginDirectory};
 use super::readiness::{GrantReadiness, IssuedGrant, ReadinessDocument, brokered_providers};
-use super::setup::AgentLoginSetup;
+use super::required::Answers;
+use super::setup::{AgentLoginSetup, SetupOutcome};
 use super::{FailureCause, ServiceEnvironment, credential_source};
-use crate::control_protocol::{AgentLoginProvider, AgentLoginState};
+use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialMode};
 use crate::service::Sleeper;
 use crate::telemetry::{self, Outcome, Recorder, attribute};
 
@@ -85,12 +86,18 @@ const MAXIMUM_RETRY: Duration = Duration::from_secs(5 * 60);
 /// of that failed request carries.
 const ASSIGNMENT_NOT_CURRENT_STATUS: u16 = 409;
 
-/// What an admission's two lists answered: the OAuth providers' and the
-/// token services'.
+/// What an admission's lists answered: the OAuth providers', the token
+/// services' and, for an assignment admitted in `cloud` alone, the provider
+/// table's names.
 type Lists = (
     Result<Vec<ListedProvider>, GrantProvidersFailure>,
     Result<Vec<ListedProvider>, GrantProvidersFailure>,
+    Option<CredentialProviders>,
 );
+
+/// What Cloud answered for the names of every row of its provider table: the rows, whose names the runner has not yet checked, or
+/// the failure of a list Cloud did not answer usefully.
+pub(crate) type CredentialProviders = Result<Vec<ListedProvider>, GrantProvidersFailure>;
 
 /// Which of an assignment's requests a record is of.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,11 +357,22 @@ impl TokenFiles {
         assignment_id: Option<&str>,
         error: &io::Error,
     ) {
+        self.record_failure(provider, assignment_id, Failure::io(Stage::Remove, error));
+    }
+
+    /// Records `failure`, of a removal, with the provider and the
+    /// assignment where they are known.
+    fn record_failure(
+        &self,
+        provider: Option<&str>,
+        assignment_id: Option<&str>,
+        failure: Failure,
+    ) {
         let mut attributes: Vec<KeyValue> = provider
             .map(|provider| KeyValue::new(attribute::GRANT_TOKEN_PROVIDER, provider.to_owned()))
             .into_iter()
             .collect();
-        attributes.extend(failure_attributes(Failure::io(Stage::Remove, error)));
+        attributes.extend(failure_attributes(failure));
         attributes.extend(assignment_id.map(|assignment_id| {
             KeyValue::new(attribute::ASSIGNMENT_ID, assignment_id.to_owned())
         }));
@@ -403,6 +421,14 @@ pub(crate) struct AssignmentGrantTokens {
     /// those whose source the admission reports. None where Cloud did not
     /// answer the list.
     services: Vec<Offering>,
+    /// What Cloud answered for the provider table's names, which only an
+    /// admission in `cloud` asks; `None` for any other.
+    credential_providers: Option<CredentialProviders>,
+    /// What each of the admission's requests answered: the two lists, each
+    /// token request and, once the setup notes it, the pass's entry for
+    /// each coding agent, from which the check of a `cloud` assignment
+    /// tells a missing grant from an unsettled one.
+    answers: Answers,
     /// The task keeping the files current, once started.
     refresh: Option<GrantTokenRefresh>,
     /// Where each readiness document a refresh or the end records is
@@ -446,6 +472,44 @@ impl AssignmentGrantTokens {
     /// kept one.
     pub(crate) fn issuer(&self, provider: AgentLoginProvider) -> Option<&Issuer> {
         self.held(provider).map(|held| &held.issuer)
+    }
+
+    /// Both names of each token the admission kept and of each token
+    /// service it checked, which an assignment admitted in `cloud` blocks.
+    pub(crate) fn offered_names(&self) -> impl Iterator<Item = &str> {
+        self.held
+            .iter()
+            .map(|held| &held.offering)
+            .chain(&self.services)
+            .flat_map(|offering| [offering.variable.as_str(), offering.file_variable.as_str()])
+    }
+
+    /// What Cloud answered the admission for the provider table's names: the rows it can trust, each id a provider id at most
+    /// once, or the failure of a list it cannot; `None` where the admission
+    /// did not ask, which only one in `cloud` does.
+    pub(crate) fn credential_providers(&self) -> Option<&CredentialProviders> {
+        self.credential_providers.as_ref()
+    }
+
+    /// The provider id of each token the admission kept of a provider other
+    /// than the runner's three, a token service's included.
+    pub(crate) fn kept_configured(&self) -> impl Iterator<Item = &str> {
+        self.held
+            .iter()
+            .filter(|held| held.offering.provider.agent_login_provider().is_none())
+            .map(|held| held.offering.provider.cloud_id())
+    }
+
+    /// What each of the admission's requests answered.
+    pub(crate) const fn answers(&self) -> &Answers {
+        &self.answers
+    }
+
+    /// Keeps what the admission's agent-login pass left of each coding
+    /// agent beside the token requests' answers: the pass, where one was
+    /// made, and whether Cloud answered its status request.
+    pub(crate) fn note_agent_logins(&mut self, pass: Option<(&SetupOutcome, bool)>) {
+        self.answers.note_agent_logins(pass);
     }
 
     /// Publishes with `publish` each readiness document a refresh of this
@@ -729,6 +793,7 @@ impl std::fmt::Debug for AssignmentGrantTokens {
             .field("assignment_id", &self.assignment_id)
             .field("held", &self.held)
             .field("services", &self.services)
+            .field("credential_providers", &self.credential_providers)
             .field("refreshing", &self.refresh.is_some())
             .finish_non_exhaustive()
     }
@@ -764,15 +829,17 @@ impl Drop for AssignmentGrantTokens {
     }
 }
 
-/// `environment` with the grant tokens of `tokens` offered in it: for each
-/// token the admission kept and can read back, the token as its file holds
-/// it under the first of the two names the hold carries for it and the
-/// file's path under the second, the runner's own for its three and the
-/// checked names of Cloud's list for any other provider. The admission asks
-/// for no token of a provider the host provides, and a token either of whose
-/// names `environment` carries is skipped here too, so a token never
-/// replaces a value the service carries, whichever reading of the service's
-/// environment the admission asked from. Every other name stays as
+/// `environment` with the grant tokens of `tokens` offered in it: for each token the admission kept and can read back, the
+/// token as its file holds it under the first of the two names the hold
+/// carries for it and the file's path under the second, the runner's own
+/// for its three and the checked names of Cloud's list for any other
+/// provider. The admission asks for no token of a provider
+/// the host provides, and a token either of whose names `environment`
+/// carries is skipped here too, so a token never replaces a value the
+/// service carries, whichever reading of the service's environment the
+/// admission asked from. For an assignment admitted in
+/// `cloud`, `environment` no longer carries a name of any token the
+/// admission holds, which the offer removed first, so each is offered. Every other name stays as
 /// `environment` has it: nothing is removed or withheld, and a provider the
 /// host does not provide and the admission holds no token of has its names
 /// unset as the service has them.
@@ -816,12 +883,14 @@ fn carried(environment: &EnvironmentSnapshot, offering: &Offering) -> bool {
 }
 
 /// The source of each token service Cloud listed for the assignment of
-/// `tokens` whose names the runner checked, in the list's order, settled from
-/// what `offer` reads of `environment` and `tokens`: `host` where
-/// `environment` carries either of its names, else `token`, with the `itk_`
-/// ID it was issued from, where the admission kept its token and the file
-/// reads back, else none, and no entry. None where Cloud did not answer the
-/// list, or there is no hold.
+/// `tokens` whose names the runner checked, in the list's order, settled
+/// from what `offer` reads of `environment` and `tokens`: `host` where `environment` carries either of its names,
+/// else `token`, with the `itk_` ID it was issued from, where the
+/// admission kept its token and the file reads back, else none, and no
+/// entry. None where Cloud did not answer the list, or there is no hold.
+/// For an assignment admitted in `cloud`, `environment` carries neither
+/// name of a checked token service, which the offer removed, so no source is
+/// `host`.
 pub(crate) fn token_service_sources(
     environment: &EnvironmentSnapshot,
     tokens: Option<&AssignmentGrantTokens>,
@@ -978,41 +1047,58 @@ struct Settled {
 impl Asking<'_> {
     /// Registers the assignment as held, with the hold it answers, removes
     /// what no held assignment owns and clears the assignment's own
-    /// directory; then asks Cloud once for the assignment's providers and, at
-    /// the same time, once for its token services, then for the token of the
-    /// grant of each provider the first list names, and of each token service
-    /// the second names, that the host, whose environment is `service`, does
-    /// not provide, the token requests at once so that a Cloud that does not
-    /// answer them costs one bounded request; the two lists are independent.
-    /// A token service is asked for, kept, offered and recorded as a
-    /// configured provider is; a Cloud without its list lists none and
-    /// records nothing, and a list Cloud did not answer usefully lists none
-    /// and is recorded once, with no provider. A Cloud without the OAuth list
-    /// is asked for each of the runner's three as before it, one of the three
-    /// a list does not name is `not_authorized`, and a list Cloud did not
-    /// answer usefully asks for none and leaves each of the three
-    /// `cloud_unavailable`. A listed provider other than the three is asked
-    /// for only when the names its entry gives may carry its token
-    /// (`usable_names`), and an entry whose names may not is recorded as a
-    /// failure of stage `list`. A failure to clear its own directory asks for
-    /// no token and leaves each provider it would have asked for
-    /// `install_failed` with stage `remove`; a leftover it cannot remove is
-    /// recorded and withholds nothing. Keeps each issued token in its file;
-    /// records the entry of each of the three in `document`, as `previous`
-    /// recorded it before, a provider the host provides as `not_delivered`
-    /// for the run, each with its source as `credential_source` settles it
-    /// from what the hold keeps, and writes one record per changed state or
-    /// failure, a provider that has no entry counting as `not_delivered`. It
-    /// never fails: an answer it cannot use is the provider's state. Its hold
-    /// refreshes through `setup` once started.
+    /// directory; then asks Cloud once for the assignment's
+    /// providers and, at the same time, once for its token
+    /// services, then for the token of the grant of
+    /// each provider the first list names, and of each token service the
+    /// second names, that the host, whose environment is `service`, does not
+    /// provide, the token requests at once so
+    /// that a Cloud that does not answer them costs one bounded request; the
+    /// two lists are independent. A token service is asked for, kept,
+    /// offered and recorded as a configured provider is; a Cloud without its
+    /// list lists none and records nothing, and a list Cloud did not answer
+    /// usefully lists none and is recorded once, with no provider. A Cloud without the OAuth list is asked for each
+    /// of the runner's three as before it, one of the three a list does not
+    /// name is `not_authorized`, and a list Cloud did not answer usefully
+    /// asks for none and leaves each of the three `cloud_unavailable`. A listed provider other than the three is asked for
+    /// only when the names its entry gives may carry its token
+    /// (`usable_names`), and an entry whose names may not is
+    /// recorded as a failure of stage `list`. A failure to
+    /// clear its own directory asks for no token and leaves each provider it
+    /// would have asked for `install_failed` with stage `remove`; a leftover
+    /// it cannot remove is recorded and withholds nothing. Keeps each
+    /// issued token in its file; records the entry of each of the three in
+    /// `document`, as `previous` recorded it before, a provider the host
+    /// provides as `not_delivered` for the run, each with its source as
+    /// `credential_source` settles it from what the hold keeps, and writes one record per changed state or failure,
+    /// a provider that has no entry counting as `not_delivered`. It never
+    /// fails: an answer it cannot use is the provider's state. Its hold
+    /// refreshes through `setup` once started. It goes by the assignment's
+    /// credential mode, `mode`: in `host` it registers the
+    /// hold and clears the directory as above, asks for neither list and no
+    /// token, and records each of the three `not_delivered`, with its source
+    /// as `credential_source` settles it in `host`; a directory it cannot
+    /// clear is recorded as a leftover it cannot remove is, and withholds
+    /// nothing. In `cloud` it makes the requests it makes
+    /// with no mode, but asks of a service environment that provides nothing
+    /// (`ServiceEnvironment::under`): it asks for a token of each provider
+    /// and token service the lists name whatever `service` carries, and
+    /// records no provider `not_delivered` because the host provides it. In `cloud` alone it also asks, once,
+    /// at the same time as the two lists and whether or not it could clear
+    /// the directory, for the names of every row of Cloud's provider table, and keeps what Cloud answered on the hold
+    /// (`AssignmentGrantTokens::credential_providers`), from which the
+    /// admission blocks the rows' names or, with no rows it can trust,
+    /// declines the assignment. Outside `host` the hold
+    /// keeps whether Cloud answered both lists and the state each request
+    /// settled in (`AssignmentGrantTokens::answers`).
     pub(crate) fn admit(
         &self,
         setup: Weak<AgentLoginSetup>,
+        mode: Option<CredentialMode>,
         service: &ServiceEnvironment,
         previous: Option<&ReadinessDocument>,
         document: &mut ReadinessDocument,
     ) -> AssignmentGrantTokens {
-        let recorded = |provider| previous.and_then(|document| document.grant(provider));
         // The hold is made before the assignment is registered, so whatever
         // stops the admission, a panic included, releases it.
         let mut tokens = AssignmentGrantTokens {
@@ -1023,11 +1109,34 @@ impl Asking<'_> {
             assignment_id: self.assignment_id.to_owned(),
             held: Vec::new(),
             services: Vec::new(),
+            credential_providers: None,
+            answers: Answers::default(),
             refresh: None,
             publish: None,
         };
         let uncleared = self.files.admit(self.assignment_id);
-        let (providers, services) = self.lists();
+        match mode {
+            Some(CredentialMode::Host) => {
+                if let Some(failure) = uncleared {
+                    self.files
+                        .record_failure(None, Some(self.assignment_id), failure);
+                }
+                let settled: Vec<Settled> = brokered_providers()
+                    .filter_map(Offering::runner)
+                    .map(|offering| self.settled(&offering.provider, AgentLoginState::NotDelivered))
+                    .collect();
+                self.record_admitted(&settled, mode, service, &tokens, previous, document);
+                return tokens;
+            }
+            None | Some(CredentialMode::Cloud) => {}
+        }
+        // In `cloud` the host provides nothing: each provider and token
+        // service the lists name is asked for whatever the service carries.
+        let service = service.under(mode);
+        let (providers, services, credential_providers) =
+            self.lists(mode == Some(CredentialMode::Cloud));
+        tokens.credential_providers = credential_providers;
+        let lists_answered = providers.is_ok() && services.is_ok();
         // The names of each configured entry so far, used or not, of the
         // OAuth list and then of the token-service list.
         let mut earlier: Vec<&str> = Vec::new();
@@ -1111,17 +1220,44 @@ impl Asking<'_> {
                 settled.push(outcome);
             }
         }
+        tokens.answers = Answers::of_requests(
+            settled
+                .iter()
+                .map(|outcome| (outcome.provider.cloud_id(), outcome.state)),
+            lists_answered,
+        );
         tokens.held = settled
             .iter_mut()
             .filter_map(|outcome| outcome.kept.take())
             .collect();
         tokens.services = checked_services;
-        for outcome in &settled {
+        self.record_admitted(&settled, mode, service, &tokens, previous, document);
+        if let Err(failure) = services {
+            self.record_list_failure(failure);
+        }
+        tokens
+    }
+
+    /// Records each of `settled` for the admission: the entry of one of the
+    /// runner's three in `document`, with its source as `credential_source`
+    /// settles it under `mode` from what `tokens` keeps, and the record of a
+    /// changed state or a failure against what `previous` recorded.
+    fn record_admitted(
+        &self,
+        settled: &[Settled],
+        mode: Option<CredentialMode>,
+        service: &ServiceEnvironment,
+        tokens: &AssignmentGrantTokens,
+        previous: Option<&ReadinessDocument>,
+        document: &mut ReadinessDocument,
+    ) {
+        for outcome in settled {
             match outcome.provider.agent_login_provider() {
                 Some(provider) => {
                     let mut entry = self.entry(provider, outcome);
-                    entry.source = credential_source(provider, service, None, Some(&tokens));
-                    self.record(Phase::Admission, &Recorded::of(recorded(provider)), outcome);
+                    entry.source = credential_source(provider, mode, service, None, Some(tokens));
+                    let recorded = previous.and_then(|document| document.grant(provider));
+                    self.record(Phase::Admission, &Recorded::of(recorded), outcome);
                     document.record_grant(entry);
                 }
                 // A provider other than the three has no entry in the
@@ -1131,10 +1267,6 @@ impl Asking<'_> {
                 None => self.record(Phase::Admission, &Recorded::of(None), outcome),
             }
         }
-        if let Err(failure) = services {
-            self.record_list_failure(failure);
-        }
-        tokens
     }
 
     /// Asks Cloud again for the token `step` names, for the assignment whose files
@@ -1263,28 +1395,45 @@ impl Asking<'_> {
     }
 
     /// Cloud's answers for the assignment's providers and its token
-    /// services, each asked once with the same request, the second on a
-    /// thread of its own so that a Cloud that answers neither costs one
-    /// bounded request, or after the first when no thread can be started.
-    fn lists(&self) -> Lists {
+    /// services and, where `named` asks for them, which only an admission
+    /// in `cloud` does, the provider table's names, each
+    /// asked once with the same request, all but the first on a thread of
+    /// its own so that a Cloud that answers none costs one bounded request,
+    /// or after the first when no thread can be started.
+    fn lists(&self, named: bool) -> Lists {
         let request = GrantProvidersRequest {
             boot_id: self.boot_id.to_owned(),
             assignment_id: self.assignment_id.to_owned(),
         };
         let request = &request;
         std::thread::scope(|scope| {
-            let services = std::thread::Builder::new()
-                .name("useful-token-services".to_owned())
-                .spawn_scoped(scope, move || self.cloud.token_services(request));
-            let providers = self.cloud.grant_providers(request);
-            let services = match services {
-                // A request whose thread panicked got no answer.
-                Ok(thread) => thread
-                    .join()
-                    .unwrap_or(Err(GrantProvidersFailure::Cloud(CloudFailure::Transport))),
-                Err(_) => self.cloud.token_services(request),
+            type Ask = fn(
+                &dyn AgentLoginCloud,
+                &GrantProvidersRequest,
+            ) -> Result<Vec<ListedProvider>, GrantProvidersFailure>;
+            let beside = |name: &str, ask: Ask| {
+                let cloud = self.cloud;
+                let spawned = std::thread::Builder::new()
+                    .name(name.to_owned())
+                    .spawn_scoped(scope, move || ask(cloud, request));
+                move || match spawned {
+                    // A request whose thread panicked got no answer.
+                    Ok(thread) => thread
+                        .join()
+                        .unwrap_or(Err(GrantProvidersFailure::Cloud(CloudFailure::Transport))),
+                    Err(_) => ask(cloud, request),
+                }
             };
-            (providers, services)
+            let services = beside("useful-token-services", |cloud, request| {
+                cloud.token_services(request)
+            });
+            let names = named.then(|| {
+                beside("useful-credential-providers", |cloud, request| {
+                    cloud.credential_providers(request)
+                })
+            });
+            let providers = self.cloud.grant_providers(request);
+            (providers, services(), names.map(|names| names()))
         })
     }
 

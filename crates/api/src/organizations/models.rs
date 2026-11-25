@@ -1289,6 +1289,7 @@ impl From<models::OrganizationAuditChange> for OrganizationAuditChange {
             Field::NoEffectReason => "no_effect_reason",
             Field::Provider => "provider",
             Field::RunnerId => "runner_id",
+            Field::CredentialMode => "credential_mode",
             Field::ConnectionId => "connection_id",
             Field::TriggerName => "trigger_name",
             Field::GithubUserId => "github_user_id",

@@ -458,6 +458,7 @@ async fn replay_conversation(conversation: Conversation) -> Result<(), Connectio
         opening_message_id.clone(),
         opening.sequence,
         "conversation-replay",
+        opening.credential_mode,
     )
     .expect("encode replay opening hello");
     let sleeper = LogicalSleeper::new();
@@ -578,6 +579,8 @@ async fn replay_conversation(conversation: Conversation) -> Result<(), Connectio
 struct OpeningMetadata {
     runner_id: String,
     sequence: u64,
+    /// Whether the recorded hello advertises `credentialMode: 1`.
+    credential_mode: bool,
 }
 
 fn opening_metadata(conversation: &Conversation) -> OpeningMetadata {
@@ -594,6 +597,7 @@ fn opening_metadata(conversation: &Conversation) -> OpeningMetadata {
             .expect("runner hello runner ID")
             .to_owned(),
         sequence,
+        credential_mode: payload["payload"]["credentialMode"] == 1,
     }
 }
 

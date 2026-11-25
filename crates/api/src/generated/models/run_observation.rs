@@ -15,7 +15,7 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// RunObservation : Authorized database snapshot. Placement belongs to the current attempt; assignment is the current Cloud assignment, not proof of Runner Serve delivery. Runner connectivity matches runner, boot and presence generation. Last transition is coordinator-accepted evidence (possibly from an earlier attempt), not a heartbeat or a blocked-workload verdict. Null means no such record; source read errors fail the request instead of masquerading as absence.
+/// RunObservation : Authorized database snapshot. Placement belongs to the current attempt; assignment is the current Cloud assignment, not proof of Runner Serve delivery. Runner connectivity follows the runner's current presence on the assignment's boot; the presence generation is the one the assignment was offered under. Last transition is coordinator-accepted evidence (possibly from an earlier attempt), not a heartbeat or a blocked-workload verdict. Null means no such record; source read errors fail the request instead of masquerading as absence.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunObservation {
     #[serde(rename = "observedAt")]
@@ -51,7 +51,7 @@ pub struct RunObservation {
 }
 
 impl RunObservation {
-    /// Authorized database snapshot. Placement belongs to the current attempt; assignment is the current Cloud assignment, not proof of Runner Serve delivery. Runner connectivity matches runner, boot and presence generation. Last transition is coordinator-accepted evidence (possibly from an earlier attempt), not a heartbeat or a blocked-workload verdict. Null means no such record; source read errors fail the request instead of masquerading as absence.
+    /// Authorized database snapshot. Placement belongs to the current attempt; assignment is the current Cloud assignment, not proof of Runner Serve delivery. Runner connectivity follows the runner's current presence on the assignment's boot; the presence generation is the one the assignment was offered under. Last transition is coordinator-accepted evidence (possibly from an earlier attempt), not a heartbeat or a blocked-workload verdict. Null means no such record; source read errors fail the request instead of masquerading as absence.
     pub fn new(
         observed_at: String,
         placement: Option<models::RunPlacement>,

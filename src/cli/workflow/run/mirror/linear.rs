@@ -2,12 +2,13 @@
 //! credential the environment holds when the target is made, through
 //! `useful_api::provider_post_json`. The credential is the first of the token in the file
 //! `USEFUL_LINEAR_ACCESS_TOKEN_FILE` names and `USEFUL_LINEAR_ACCESS_TOKEN`, a runner's grant token
-//! sent as `Bearer`, and the operator's `LINEAR_API_KEY`, sent bare in `Authorization` as Linear's
-//! personal keys are; a target is made for each hook, so each reads the credential anew.
-//! `USEFUL_LINEAR_API_URL` overrides the base URL for development and tests, and admits `http`.
-//! Every request is one attempt: a comment is not idempotent, and a failed write is recorded for a
-//! person to see. `useful workflow run event` reads an issue by its Linear id through the same
-//! target.
+//! sent as `Bearer`, and the operator's `LINEAR_API_KEY`, sent bare in `Authorization` as
+//! Linear's personal keys are, which a command a runner started in credential mode `cloud`
+//! never reads; a target is made for each hook, so each reads the credential
+//! anew. `USEFUL_LINEAR_API_URL` overrides the base URL for development and tests, and admits
+//! `http`. Every request is one attempt: a comment is not idempotent, and a failed write is
+//! recorded for a person to see. `useful workflow run event` reads an issue by its Linear id
+//! through the same target.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -152,10 +153,18 @@ impl LinearTarget {
             .as_deref()
             .map(String::as_str)
             .ok_or_else(|| {
-                MirrorFailure::credentials_unavailable(format!(
-                    "No Linear credential is set in {TOKEN_FILE_VARIABLE}, {TOKEN_VARIABLE} or \
-                     {KEY_VARIABLE}, so Linear cannot be written."
-                ))
+                MirrorFailure::credentials_unavailable(if super::offered_names_only() {
+                    format!(
+                        "No Linear credential is set in {TOKEN_FILE_VARIABLE} or \
+                         {TOKEN_VARIABLE}, the only names a command the runner started in \
+                         credential mode cloud reads, so Linear cannot be written."
+                    )
+                } else {
+                    format!(
+                        "No Linear credential is set in {TOKEN_FILE_VARIABLE}, {TOKEN_VARIABLE} \
+                         or {KEY_VARIABLE}, so Linear cannot be written."
+                    )
+                })
             })
     }
 
@@ -325,12 +334,13 @@ impl LinearTarget {
     }
 }
 
-/// The `Authorization` value of the Linear credential the environment holds now: `Bearer` and the
-/// grant token `offered_token` reads from `USEFUL_LINEAR_ACCESS_TOKEN_FILE` and
-/// `USEFUL_LINEAR_ACCESS_TOKEN`, else `LINEAR_API_KEY` bare.
+/// The `Authorization` value of the Linear credential the environment holds now: `Bearer` and the grant token `offered_token` reads from
+/// `USEFUL_LINEAR_ACCESS_TOKEN_FILE` and `USEFUL_LINEAR_ACCESS_TOKEN`, else `LINEAR_API_KEY` bare,
+/// except in a command a runner started in credential mode `cloud`, which has none then.
 fn environment_authorization() -> Option<String> {
     match super::offered_token(TOKEN_FILE_VARIABLE, TOKEN_VARIABLE) {
         Some(token) => Some(format!("Bearer {}", token.as_str())),
+        None if super::offered_names_only() => None,
         None => std::env::var(KEY_VARIABLE).ok(),
     }
 }

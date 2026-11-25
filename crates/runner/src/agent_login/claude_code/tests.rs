@@ -6,13 +6,14 @@ use std::sync::Arc;
 use useful_execution::EnvironmentSnapshot;
 
 use super::*;
+use crate::agent_login::blocked::AdmittedMode;
 use crate::agent_login::cloud::{
     AgentLoginCloud, CloudFailure, LoginMaterial, LoginStatus, ProviderLogin,
 };
 use crate::agent_login::readiness::{ReadinessDocument, readiness_path};
 use crate::agent_login::setup::{AgentLoginSetup, SetupDependencies, SetupOutcome};
 use crate::agent_login::{FailureCause, FailureStage, StepFailure, offer};
-use crate::control_protocol::{AgentLoginProvider, AgentLoginState};
+use crate::control_protocol::{AgentLoginProvider, AgentLoginState, CredentialMode};
 use crate::service::{
     CountedGate, FAKE_AGENT_LOGIN_ID, FAKE_AGENT_LOGIN_SENTINEL, FakeAgentLoginCloud,
     FakeLoginCheck, fake_agent_login_material,
@@ -327,18 +328,24 @@ fn the_token_is_offered_only_where_the_process_environment_has_no_claude_code_lo
         ("PATH", OsStr::new("/usr/bin:/bin")),
     ]);
     let offered = |process: &EnvironmentSnapshot| {
-        offer(process, Some(&directory))
+        offer(process, Some(&directory), AdmittedMode::Unnamed)
             .environment
             .variable(OsStr::new(CLAUDE_CODE_LOGIN_VARIABLE))
             .map(OsStr::to_os_string)
     };
 
     assert_eq!(offered(&process), None);
-    assert_eq!(offer(&process, Some(&directory)).environment, process);
+    assert_eq!(
+        offer(&process, Some(&directory), AdmittedMode::Unnamed).environment,
+        process
+    );
     install_claude_code(&directory, None, &delivery(1), now()).unwrap();
-    assert_eq!(offer(&process, None).environment, process);
+    assert_eq!(
+        offer(&process, None, AdmittedMode::Unnamed).environment,
+        process
+    );
     assert_eq!(offered(&process), Some(OsString::from(token(1))));
-    let overlaid = offer(&process, Some(&directory)).environment;
+    let overlaid = offer(&process, Some(&directory), AdmittedMode::Unnamed).environment;
     assert_eq!(
         overlaid.variable(OsStr::new("PATH")),
         Some(OsStr::new("/usr/bin:/bin"))
@@ -353,7 +360,10 @@ fn the_token_is_offered_only_where_the_process_environment_has_no_claude_code_lo
         ("HOME", home.path().as_os_str()),
         (CLAUDE_CODE_LOGIN_VARIABLE, OsStr::new("service-token")),
     ]);
-    assert_eq!(offer(&carrying, Some(&directory)).environment, carrying);
+    assert_eq!(
+        offer(&carrying, Some(&directory), AdmittedMode::Unnamed).environment,
+        carrying
+    );
 
     fs::create_dir(home.path().join(".claude")).unwrap();
     fs::write(home.path().join(".claude/.credentials.json"), "{}").unwrap();
@@ -364,6 +374,63 @@ fn the_token_is_offered_only_where_the_process_environment_has_no_claude_code_lo
     assert_eq!(offered(&process), None);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(offered(&process), Some(OsString::from(token(1))));
+}
+
+#[test]
+fn in_cloud_the_runners_token_is_offered_whatever_claude_code_login_the_service_has() {
+    let state = state_directory();
+    let directory = LoginDirectory::beside(&state.path().join("runner-state.json"));
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir(home.path().join(".claude")).unwrap();
+    fs::write(home.path().join(".claude/.credentials.json"), "{}").unwrap();
+    let process = EnvironmentSnapshot::new([
+        ("HOME", home.path().as_os_str()),
+        (CLAUDE_CODE_LOGIN_VARIABLE, OsStr::new("service-token")),
+        ("ANTHROPIC_API_KEY", OsStr::new("service-key")),
+        ("CLAUDE_CONFIG_DIR", home.path().join(".claude").as_os_str()),
+    ]);
+    let cloud = || AdmittedMode::of(Some(CredentialMode::Cloud), None);
+    let variable = |environment: &EnvironmentSnapshot, name: &str| {
+        environment
+            .variable(OsStr::new(name))
+            .map(OsStr::to_os_string)
+    };
+
+    // The runner holds none: the service's login is removed, and so are its
+    // key and its configuration directory.
+    let offered = offer(&process, Some(&directory), cloud()).environment;
+    assert_eq!(
+        offered.variables().keys().collect::<Vec<_>>(),
+        [OsStr::new("HOME")]
+    );
+
+    install_claude_code(&directory, None, &delivery(1), now()).unwrap();
+    let offered = offer(&process, Some(&directory), cloud());
+    assert_eq!(
+        variable(&offered.environment, CLAUDE_CODE_LOGIN_VARIABLE),
+        Some(OsString::from(token(1)))
+    );
+    for name in ["ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"] {
+        assert_eq!(variable(&offered.environment, name), None, "{name}");
+    }
+    assert_eq!(
+        variable(&offered.environment, "HOME"),
+        Some(home.path().as_os_str().to_os_string())
+    );
+    assert_eq!(
+        offered.sources,
+        [crate::agent_login::ProviderSource {
+            provider: AgentLoginProvider::ClaudeCode,
+            source: crate::control_protocol::CredentialSource::Grant,
+        }]
+    );
+    // Each command is offered the same, and is told the runner's mode.
+    let mut command = offered.commands.build().variables().clone();
+    assert_eq!(
+        command.remove(OsStr::new(useful_execution::USEFUL_RUNNER_CREDENTIAL_MODE)),
+        Some(OsString::from("cloud"))
+    );
+    assert_eq!(&command, offered.environment.variables());
 }
 
 #[test]

@@ -57,6 +57,8 @@ pub enum Reason {
     RunRejectionReasonWorkflowContractInvalid,
     #[serde(rename = "workflow_admission_invalid")]
     RunRejectionReasonWorkflowAdmissionInvalid,
+    #[serde(rename = "grant_required")]
+    RunRejectionReasonGrantRequired,
     #[serde(rename = "invalid_input_projection")]
     RunRejectionReasonInvalidInputProjection,
     #[serde(rename = "input_manifest_mismatch")]

@@ -2647,7 +2647,7 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!((commands.len(), expected.len() - commands.len()), (150, 34));
+        assert_eq!((commands.len(), expected.len() - commands.len()), (151, 34));
         let root = Cli::command();
         let visible = commands
             .iter()
@@ -2661,7 +2661,7 @@ mod tests {
                 })
             })
             .count();
-        assert_eq!(visible, 149);
+        assert_eq!(visible, 150);
     }
 
     #[test]

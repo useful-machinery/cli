@@ -1,16 +1,17 @@
 //! The reader of Claude Code's stream-json output. It takes stdout bytes in chunks of any
 //! size and yields the activity it recognizes and the facts a step is decided by
-//! (`outcome`); it has no failing path. It compares no session, model, working directory or
-//! permission mode and keeps no account of turns or tasks: its only state is the line being
-//! read, the facts, and small bounded tables it uses to label and deduplicate what it
-//! shows, where a wrong guess shows a line twice or not at all.
+//! (`outcome`); it has no failing path. It compares no session, model or working directory,
+//! reads the permission mode only to show it, and keeps no account of turns or tasks: its
+//! only state is the line being read, the facts, the mode last shown, and small bounded
+//! tables it uses to label and deduplicate what it shows, where a wrong guess shows a line
+//! twice or not at all.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::ClaudeCodeStreamJsonV1ProtocolLimits;
+use super::{ClaudeCodeStreamJsonV1ProtocolLimits, PERMISSION_MODE};
 use crate::workflow::agent::{
     AgentDiagnosticLevel, AgentHarnessFailureDetail, AgentLifecycleMilestone, AgentObservation,
     AgentToolCallPhase, AgentValueKind, CanonicalHarnessFailure, HarnessFailureDiagnostic,
@@ -24,6 +25,8 @@ const MAXIMUM_SUBAGENT_TOKEN_WIDTH: usize = 64;
 const MAXIMUM_UNRECOGNIZED_KINDS: usize = 64;
 const MAXIMUM_UNRECOGNIZED_KIND_TOKEN_BYTES: usize = 64;
 const MAXIMUM_COMPACTION_ERROR_WIDTH: usize = 200;
+const MAXIMUM_PERMISSION_SLUG_BYTES: usize = 64;
+const MAXIMUM_NOTICE_WIDTH: usize = 1024;
 /// Messages whose content stream events showed, newest kept, so that their `assistant`
 /// envelopes are not shown again.
 const MAXIMUM_STREAMED_MESSAGE_IDS: usize = 128;
@@ -49,6 +52,8 @@ const CLASSIFYING_TERMINAL_REASONS: [&str; 10] = [
 pub(super) struct Initialization {
     /// The `claude_code_version` it names, if it names one.
     pub(super) claude_code_version: Option<Arc<str>>,
+    /// The short permission mode it reports, when present.
+    pub(super) permission_mode: Option<Arc<str>>,
 }
 
 /// The last `result` read that reports a failure or the successful end of a turn; a `result`
@@ -82,6 +87,7 @@ pub(super) struct StreamReader {
     skipped_line_bytes: Option<u64>,
     observations: Vec<AgentObservation>,
     initialization: Option<Initialization>,
+    last_permission_mode: Option<Arc<str>>,
     deciding_result: Option<DecidingResult>,
     /// The class and status of the newest main-thread api-error message since the last
     /// `result`.
@@ -142,6 +148,7 @@ impl StreamReader {
             skipped_line_bytes: None,
             observations: Vec::new(),
             initialization: None,
+            last_permission_mode: None,
             deciding_result: None,
             api_error: None,
             latest_reset: None,
@@ -246,14 +253,48 @@ impl StreamReader {
     fn read_system(&mut self, object: &Map<String, Value>, value: &Value) {
         match string(object, "subtype") {
             Some("init") => {
-                if self.initialization.is_none() {
+                let mode = permission_slug(object, "permissionMode");
+                let first_init = self.initialization.is_none();
+                if first_init {
                     self.initialization = Some(Initialization {
                         claude_code_version: string(object, "claude_code_version").map(Arc::from),
+                        permission_mode: mode.map(Arc::from),
                     });
                     self.lifecycle(AgentLifecycleMilestone::SessionEstablished);
                     self.lifecycle(AgentLifecycleMilestone::HarnessStarted);
                 }
                 self.lifecycle(AgentLifecycleMilestone::TurnStarted);
+                self.observe_permission_mode(mode, first_init);
+            }
+            Some("permission_denied") => {
+                let Some(tool) = nonempty_string(object, "tool_name") else {
+                    return self.observe_unrecognized(value);
+                };
+                let mut message = format!(
+                    "Claude Code denied {}",
+                    ellipsize(tool, MAXIMUM_NOTICE_WIDTH)
+                );
+                for field in ["decision_reason_type", "decision_reason_code"] {
+                    if let Some(reason) = permission_slug(object, field) {
+                        message.push_str(" · ");
+                        message.push_str(reason);
+                    }
+                }
+                self.observations.push(warning(message));
+            }
+            Some("informational") => {
+                let (Some(level), Some(content)) = (
+                    nonempty_string(object, "level"),
+                    nonempty_string(object, "content"),
+                ) else {
+                    return self.observe_unrecognized(value);
+                };
+                let message = ellipsize(content, MAXIMUM_NOTICE_WIDTH);
+                if level == "warning" {
+                    self.observations.push(warning(message));
+                } else {
+                    self.information(message);
+                }
             }
             Some("status") => self.read_status(object, value),
             Some("api_retry") => {
@@ -277,10 +318,32 @@ impl StreamReader {
         }
     }
 
+    fn observe_permission_mode(&mut self, mode: Option<&str>, first_init: bool) {
+        let first_missing_mode = first_init && mode.is_none();
+        if mode == self.last_permission_mode.as_deref() && !first_missing_mode {
+            return;
+        }
+        self.last_permission_mode = mode.map(Arc::from);
+        match mode {
+            Some(PERMISSION_MODE) => {
+                self.information(format!("Claude Code permission mode: {PERMISSION_MODE}"))
+            }
+            Some(actual) => self.observations.push(warning(format!(
+                "Claude Code permission mode: {actual} (requested {PERMISSION_MODE})"
+            ))),
+            None => self.observations.push(warning(format!(
+                "Claude Code did not report its permission mode (requested {PERMISSION_MODE})"
+            ))),
+        }
+    }
+
     /// A status is text or `null`, which clears it. Only beside `null` does Claude Code
     /// report how a compaction ended: `compact_result` `success`, whose `compact_boundary`
     /// follows, or `failed`, optionally with a text `compact_error`.
     fn read_status(&mut self, object: &Map<String, Value>, value: &Value) {
+        if let Some(mode) = permission_slug(object, "permissionMode") {
+            self.observe_permission_mode(Some(mode), false);
+        }
         let compact_result = object.get("compact_result").map(Value::as_str);
         let compact_error = object.get("compact_error").map(Value::as_str);
         match (object.get("status"), compact_result, compact_error) {
@@ -853,6 +916,15 @@ impl StreamReader {
     }
 }
 
+fn permission_slug<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    nonempty_string(object, key).filter(|value| {
+        value.len() <= MAXIMUM_PERMISSION_SLUG_BYTES
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    })
+}
+
 fn warning(message: String) -> AgentObservation {
     AgentObservation::Diagnostic {
         level: AgentDiagnosticLevel::Warning,
@@ -990,7 +1062,7 @@ mod tests {
     fn init() -> Value {
         json!({"type": "system", "subtype": "init", "session_id": SESSION_ID,
             "cwd": "/synthetic/project", "model": "scherzo-loopback",
-            "permissionMode": "bypassPermissions", "claude_code_version": QUALIFICATION_VERSION})
+            "permissionMode": "auto", "claude_code_version": QUALIFICATION_VERSION})
     }
 
     fn system_event(subtype: &str, fields: Value) -> Value {
@@ -1128,6 +1200,85 @@ mod tests {
     }
 
     #[test]
+    fn permission_activity_reports_the_initial_mode_and_each_change() {
+        let auto = system_event("init", json!({"permissionMode": "auto"}));
+        let manual = system_event("init", json!({"permissionMode": "default"}));
+        let status = system_event("status", json!({"status": null, "permissionMode": "auto"}));
+        let (observations, _) = read(
+            &framed(&[auto.clone(), auto, manual.clone(), manual, status]),
+            AgentValueKind::Response,
+        );
+        let info = information(&observations);
+        assert_eq!(info.len(), 2);
+        assert!(info.iter().all(|line| line.contains("auto")));
+        let warnings = warnings(&observations);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("default") && warnings[0].contains("auto"));
+        assert!(unrecognized_events(&observations).is_empty());
+    }
+
+    #[test]
+    fn permission_activity_warns_when_the_initial_mode_is_missing_or_malformed() {
+        for fields in [json!({}), json!({"permissionMode": "private path"})] {
+            let init = system_event("init", fields);
+            let (observations, _) = read(&framed(&[init.clone(), init]), AgentValueKind::Response);
+            let warnings = warnings(&observations);
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains("mode") && !warnings[0].contains("private path"));
+        }
+    }
+
+    #[test]
+    fn permission_activity_shows_every_denial_and_only_its_short_reason_fields() {
+        let denial = |id, reason| {
+            system_event(
+                "permission_denied",
+                json!({
+                    "tool_name": "Bash", "tool_use_id": id, "decision_reason_type": reason,
+                    "decision_reason_code": "policy_block", "message": "private path"
+                }),
+            )
+        };
+        let (observations, _) = read(
+            &framed(&[denial("a", "classifier"), denial("b", "asyncAgent")]),
+            AgentValueKind::Response,
+        );
+        let lines = warnings(&observations);
+        assert_eq!(lines.len(), 2);
+        for (line, reason) in lines.iter().zip(["classifier", "asyncAgent"]) {
+            assert!(
+                line.contains("Bash") && line.contains(reason) && line.contains("policy_block")
+            );
+            assert!(!line.contains("private path"));
+        }
+        assert!(unrecognized_events(&observations).is_empty());
+    }
+
+    #[test]
+    fn permission_activity_preserves_notice_level_and_bounds_the_content() {
+        let notice = |level, content: &str| {
+            system_event(
+                "informational",
+                json!({
+                    "level": level, "content": content, "tag": "auto_mode_no_server_check"
+                }),
+            )
+        };
+        let long = format!("warn{}private tail", "a".repeat(8192));
+        let (observations, _) = read(
+            &framed(&[notice("warning", &long), notice("notice", "news")]),
+            AgentValueKind::Response,
+        );
+        let warnings = warnings(&observations);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("warn") && !warnings[0].contains("private tail"));
+        let info = information(&observations);
+        assert_eq!(info.len(), 1);
+        assert!(info[0].contains("news"));
+        assert!(unrecognized_events(&observations).is_empty());
+    }
+
+    #[test]
     fn nothing_claude_code_writes_fails_the_reader() {
         let limit = ClaudeCodeStreamJsonV1ProtocolLimits::profile()
             .maximum_frame_bytes()
@@ -1246,6 +1397,7 @@ mod tests {
             reader.initialization(),
             Some(&Initialization {
                 claude_code_version: Some(Arc::from(QUALIFICATION_VERSION)),
+                permission_mode: Some(Arc::from("auto")),
             })
         );
         assert_eq!(
@@ -1540,8 +1692,10 @@ mod tests {
             ]),
             AgentValueKind::Response,
         );
+        let info = information(&observations);
+        assert!(info[0].contains("auto"));
         assert_eq!(
-            information(&observations),
+            &info[1..],
             [
                 "subagent Explore started · Review the diff",
                 "subagent Explore completed · Review the diff",

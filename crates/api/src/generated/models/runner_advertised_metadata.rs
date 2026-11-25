@@ -22,6 +22,9 @@ pub struct RunnerAdvertisedMetadata {
     pub runner_version: String,
     #[serde(rename = "protocolVersion")]
     pub protocol_version: i32,
+    /// True when the runner's last hello said its release applies the credential mode Cloud names; omitted otherwise.
+    #[serde(rename = "credentialMode", skip_serializing_if = "Option::is_none")]
+    pub credential_mode: Option<bool>,
 }
 
 impl RunnerAdvertisedMetadata {
@@ -30,6 +33,7 @@ impl RunnerAdvertisedMetadata {
         RunnerAdvertisedMetadata {
             runner_version,
             protocol_version,
+            credential_mode: None,
         }
     }
 }

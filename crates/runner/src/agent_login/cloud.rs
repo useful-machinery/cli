@@ -2,10 +2,12 @@
 //! directory: its agent-login status and one delivery, which name neither a
 //! boot nor an assignment, since an agent login is a standing install bound
 //! to the runner alone, and the OAuth providers an assignment can be issued
-//! a grant token of and the token of one of them, which name both; and its
-//! report of where an assignment's credentials come from, which names both
-//! too. Each is a POST on the HTTP base of the runner's endpoint,
-//! authenticated by the enrolled runner credential.
+//! a grant token of, the names of every row of Cloud's
+//! provider table and the token of one of them, which name
+//! both; and its report of where an assignment's credentials
+//! come from, which names both too. Each is a POST on the
+//! HTTP base of the runner's endpoint, authenticated by the enrolled runner
+//! credential.
 
 use std::time::Duration;
 
@@ -26,11 +28,15 @@ const DELIVERY_PATH: &str = "/v1/runner/agent-logins/delivery";
 const GRANT_TOKEN_PATH: &str = "/v1/runner/grants/token";
 const GRANT_PROVIDERS_PATH: &str = "/v1/runner/grants/providers";
 const TOKEN_SERVICES_PATH: &str = "/v1/runner/integrations/providers";
+const CREDENTIAL_PROVIDERS_PATH: &str = "/v1/runner/credentials/providers";
 const CREDENTIAL_SOURCES_PATH: &str = "/v1/runner/credential-sources";
 /// Cloud accepts no larger material for any provider.
 const MAXIMUM_MATERIAL_BYTES: usize = 32 * 1024;
 /// Cloud lists no more providers for an assignment.
 const MAXIMUM_LISTED_PROVIDERS: usize = 32;
+/// Cloud's provider table has no more rows, the Gateway's
+/// `MaximumCredentialProviders`.
+const MAXIMUM_CREDENTIAL_PROVIDERS: usize = 256;
 /// The longest provider id, `^[a-z][a-z0-9.-]{0,62}$`.
 const MAXIMUM_PROVIDER_ID_BYTES: usize = 63;
 
@@ -64,6 +70,17 @@ pub(crate) trait AgentLoginCloud: Send + Sync {
     /// where no id is one of the runner's three. A Cloud without the route
     /// answers `NoRoute`.
     fn token_services(
+        &self,
+        request: &GrantProvidersRequest,
+    ) -> Result<Vec<ListedProvider>, GrantProvidersFailure>;
+
+    /// Every row of Cloud's provider table, OAuth providers and token
+    /// services alike, each with the two names its token is offered under,
+    /// which the runner blocks for an assignment admitted in `cloud`: the request and answers of
+    /// `grant_providers` under another path, with at most 256 entries, the
+    /// runner's three among them. A Cloud without the route answers
+    /// `NoRoute`.
+    fn credential_providers(
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure>;
@@ -640,6 +657,7 @@ impl HttpAgentLoginCloud {
         &self,
         path: &str,
         request: &GrantProvidersRequest,
+        maximum: usize,
         accepted: impl Fn(&str) -> bool,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
         let body = GrantProvidersRequestBody {
@@ -664,7 +682,7 @@ impl HttpAgentLoginCloud {
         }
         let answer: GrantProvidersAnswer =
             serde_json::from_slice(&response.body).map_err(|_| CloudFailure::InvalidResponse)?;
-        if answer.schema_version != 1 || answer.providers.len() > MAXIMUM_LISTED_PROVIDERS {
+        if answer.schema_version != 1 || answer.providers.len() > maximum {
             return Err(CloudFailure::InvalidResponse.into());
         }
         let mut listed: Vec<ListedProvider> = Vec::with_capacity(answer.providers.len());
@@ -881,14 +899,36 @@ impl AgentLoginCloud for HttpAgentLoginCloud {
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
-        self.list(GRANT_PROVIDERS_PATH, request, |_| true)
+        self.list(
+            GRANT_PROVIDERS_PATH,
+            request,
+            MAXIMUM_LISTED_PROVIDERS,
+            |_| true,
+        )
     }
 
     fn token_services(
         &self,
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
-        self.list(TOKEN_SERVICES_PATH, request, |id| !runner_provider_id(id))
+        self.list(
+            TOKEN_SERVICES_PATH,
+            request,
+            MAXIMUM_LISTED_PROVIDERS,
+            |id| !runner_provider_id(id),
+        )
+    }
+
+    fn credential_providers(
+        &self,
+        request: &GrantProvidersRequest,
+    ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
+        self.list(
+            CREDENTIAL_PROVIDERS_PATH,
+            request,
+            MAXIMUM_CREDENTIAL_PROVIDERS,
+            |_| true,
+        )
     }
 
     fn credential_sources(

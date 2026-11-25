@@ -191,11 +191,15 @@ the typed harness path before any workflow output can commit.
 
 ## Claude Code execution authority
 
-ClaudeCodeStreamJsonV1 launches normal Claude Code with the fixed unattended
-`bypassPermissions` mode and runner-owned user, project, and local setting sources. That
-mode suppresses interactive permission prompts; it does not reduce native tool authority,
-confine filesystem paths, filter network access, isolate processes, restrict resources,
-or protect ambient secrets. Useful Machinery's update, nonessential-traffic, marketplace, memory,
+ClaudeCodeStreamJsonV1 requests `--permission-mode auto` and loads runner-owned user,
+project, and local settings. When an action needs approval, Claude Code's classifier
+reviews it before it runs and may deny it. If Auto is unavailable, Claude Code starts in
+Manual and denies any call that would ask a person. For a structured-result step, Useful
+Machinery pre-approves only its result tool. It never selects `bypassPermissions`.
+Auto is Claude Code's own judgment of each call, not a boundary: neither mode reduces
+native tool authority, confines filesystem paths, filters network access, isolates
+processes, restricts resources, or protects ambient secrets.
+Useful Machinery's update, nonessential-traffic, marketplace, memory,
 Git-instruction, and fresh retained-session controls are deterministic profile behavior,
 not a sandbox. The profile removes `CLAUDE_CODE_PROJECT_DIR_NAME` so an inherited native
 path override cannot redirect the validated release away from Useful Machinery's fresh retained-session

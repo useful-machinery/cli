@@ -1009,6 +1009,133 @@ fn a_token_service_list_is_no_route_assignment_not_current_or_invalid_as_cloud_a
     }
 }
 
+fn answer_credential_providers(
+    status: &str,
+    headers: &str,
+    body: &str,
+) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
+    let (endpoint, _request, server) = test_server::respond_once(status, headers, body);
+    let result = client(&endpoint).credential_providers(&grant_providers_request());
+    server.join().unwrap();
+    result
+}
+
+#[test]
+fn a_credential_provider_list_request_posts_the_pinned_body_and_reads_every_row() {
+    let pinned = grant_providers_fixture("credential-providers.json");
+    let (endpoint, request, server) =
+        test_server::respond_once("200 OK", &test_server::broker_headers("", &pinned), &pinned);
+
+    let rows = client(&endpoint)
+        .credential_providers(&grant_providers_request())
+        .unwrap();
+
+    let request = request.recv().unwrap();
+    server.join().unwrap();
+    assert!(
+        request
+            .head
+            .starts_with("POST /v1/runner/credentials/providers HTTP/1.1\r\n")
+    );
+    assert_eq!(
+        header(&request, "authorization"),
+        Some(format!("Bearer {}", test_credential().bearer_value()).as_str())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&request.body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&grant_providers_fixture("request.json"))
+            .unwrap()
+    );
+    // Every row, the runner's three included.
+    assert_eq!(
+        rows,
+        [
+            listed("github", "GH_TOKEN", "GH_TOKEN_FILE"),
+            listed("gitlab.com", "GITLAB_TOKEN", "GITLAB_TOKEN_FILE"),
+            listed(
+                "linear",
+                "USEFUL_LINEAR_ACCESS_TOKEN",
+                "USEFUL_LINEAR_ACCESS_TOKEN_FILE"
+            ),
+            listed("mergify", "MERGIFY_TOKEN", "MERGIFY_TOKEN_FILE"),
+            listed(
+                "buildkite",
+                "BUILDKITE_API_TOKEN",
+                "BUILDKITE_API_TOKEN_FILE"
+            ),
+            listed(
+                "cloudflare",
+                "CLOUDFLARE_API_TOKEN",
+                "CLOUDFLARE_API_TOKEN_FILE"
+            ),
+        ]
+    );
+
+    // The table holds at most 256 rows.
+    let entries = |count: usize| {
+        providers_answer(
+            &(0..count)
+                .map(|index| provider_entry(&format!("example{index}")))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let full = entries(256);
+    assert_eq!(
+        answer_credential_providers("200 OK", &test_server::broker_headers("", &full), &full)
+            .unwrap()
+            .len(),
+        256
+    );
+    let over = entries(257);
+    assert_eq!(
+        answer_credential_providers("200 OK", &test_server::broker_headers("", &over), &over),
+        Err(GrantProvidersFailure::Cloud(CloudFailure::InvalidResponse))
+    );
+}
+
+#[test]
+fn a_credential_provider_list_is_no_route_assignment_not_current_or_invalid_as_cloud_answers_it() {
+    assert_eq!(
+        answer_credential_providers("404 Not Found", "", ""),
+        Err(GrantProvidersFailure::NoRoute)
+    );
+    let refusal = grant_providers_fixture("refusal.json");
+    assert_eq!(
+        answer_credential_providers(
+            "409 Conflict",
+            &test_server::broker_headers("", &refusal),
+            &refusal
+        ),
+        Err(GrantProvidersFailure::AssignmentNotCurrent)
+    );
+    assert_eq!(
+        answer_credential_providers("503 Service Unavailable", "", ""),
+        Err(GrantProvidersFailure::Cloud(CloudFailure::Status(503)))
+    );
+
+    let valid = grant_providers_fixture("credential-providers.json");
+    let bodies = [
+        valid.replace(r#""schemaVersion": 1"#, r#""schemaVersion": 2"#),
+        // An unknown member.
+        valid.replace(
+            r#""provider": "mergify","#,
+            r#""provider": "mergify", "kind": "token_service","#,
+        ),
+        // A repeated id.
+        valid.replace(r#""provider": "buildkite""#, r#""provider": "mergify""#),
+        // An id that is not a provider id.
+        valid.replace(r#""provider": "buildkite""#, r#""provider": "Buildkite""#),
+    ];
+    for body in &bodies {
+        assert_ne!(*body, valid);
+        assert_eq!(
+            answer_credential_providers("200 OK", &test_server::broker_headers("", body), body),
+            Err(GrantProvidersFailure::Cloud(CloudFailure::InvalidResponse)),
+            "{body}"
+        );
+    }
+}
+
 #[test]
 fn a_token_request_for_a_token_service_reads_only_an_integration_tokens_answer() {
     let mergify = GrantTokenRequest {

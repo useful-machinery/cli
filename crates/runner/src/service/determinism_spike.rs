@@ -942,6 +942,7 @@ fn established_fixture(transcript: &DeterminismTranscript) -> EstablishedFixture
         OPENING_MESSAGE_ID.to_owned(),
         1,
         "0.2.0",
+        true,
     )
     .expect("encode deterministic opening hello");
     let (sleeper, sleep_requests) = controlled_sleeper_with_transcript(transcript.clone());

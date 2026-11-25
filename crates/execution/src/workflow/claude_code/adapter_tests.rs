@@ -93,7 +93,7 @@ printf '%s\n' "$PWD" > "$CLAUDE_FIXTURE_CWD"
 } > "$CLAUDE_FIXTURE_ENVIRONMENT"
 printf 'fixture diagnostic\n' >&2
 output=$(
-printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"bypassPermissions","claude_code_version":"2.1.321"}\n' "$PWD" "$session" "$model"
+printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"auto","claude_code_version":"2.1.321"}\n' "$PWD" "$session" "$model"
 printf '{"type":"system","subtype":"status","status":"requesting","session_id":"%s"}\n' "$session"
 printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-driver","type":"message","role":"assistant","content":[],"model":"%s","usage":{"input_tokens":1,"output_tokens":0}}},"session_id":"%s","parent_tool_use_id":null}\n' "$model" "$session"
 printf '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"session_id":"%s","parent_tool_use_id":null}\n' "$session"
@@ -553,7 +553,7 @@ for argument in "$@"; do
 done
 IFS= read -r _initial
 session='{session}'
-printf '{{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"bypassPermissions","claude_code_version":"2.1.321"}}\n' "$PWD" "$session" "$model"
+printf '{{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","model":"%s","permissionMode":"auto","claude_code_version":"2.1.321"}}\n' "$PWD" "$session" "$model"
 {output}exit {exit_status}
 "#
     )
@@ -907,7 +907,7 @@ fn write_fixture_initialization(
         "cwd": std::env::current_dir().unwrap(),
         "session_id": session,
         "model": MODEL,
-        "permissionMode": "bypassPermissions",
+        "permissionMode": "auto",
         "claude_code_version": QUALIFICATION_VERSION,
     });
     if let Some(padding) = padding {
@@ -1125,7 +1125,7 @@ fn scripted_process_fixture() {
                             "cwd": std::env::current_dir().unwrap(),
                             "session_id": std::env::var("CLAUDE_FIXTURE_SESSION").unwrap(),
                             "model": MODEL,
-                            "permissionMode": "bypassPermissions",
+                            "permissionMode": "auto",
                             "claude_code_version": value,
                         })],
                     ),
@@ -2157,6 +2157,31 @@ async fn cancellation_after_an_accepted_result_forces_containment_quiescent() {
 }
 
 #[tokio::test]
+async fn startup_diagnostics_keep_the_reported_permission_mode_when_auto_is_unavailable() {
+    let fixture = ProcessFixture::scripted(
+        AgentValueMode::None,
+        &[
+            frame(json!({"type": "system", "subtype": "init",
+                "claude_code_version": QUALIFICATION_VERSION, "permissionMode": "default"})),
+            successful_result("done"),
+        ],
+    );
+    let (fixture, outcome) = run_fixture(fixture).await;
+    assert_eq!(
+        outcome,
+        AgentOutcome::Completed(CompletedAgentInvocation::NoValue)
+    );
+    let mode: Value = serde_json::from_slice(
+        &std::fs::read(fixture.diagnostic_directory.join("permission-mode.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        mode,
+        json!({"schemaVersion": 1, "requested": "auto", "reported": "default"})
+    );
+}
+
+#[tokio::test]
 async fn normal_driver_preserves_runner_configuration_and_returns_only_final_response() {
     let fixture = ProcessFixture::new(
         AgentValueMode::Response {
@@ -2203,7 +2228,7 @@ async fn normal_driver_preserves_runner_configuration_and_returns_only_final_res
             "--session-id",
             fixture.session_id.as_ref(),
             "--permission-mode",
-            "bypassPermissions",
+            "auto",
             "--setting-sources",
             "user,project,local",
             "--model",

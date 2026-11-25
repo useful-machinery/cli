@@ -17,6 +17,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 
+use crate::agent_login::mode::CredentialModeCell;
 use crate::service::artifact_delivery::ArtifactCloudResponse;
 use crate::service::assignment::{
     ArtifactRequestKind, AssignmentCancel, AssignmentManager, AssignmentManagerFailure,
@@ -380,6 +381,7 @@ impl<'a> ProtocolLog<'a> {
                 ping_interval_seconds,
                 pong_timeout_seconds,
                 lease_policy: _,
+                credential_mode: _,
             } => {
                 self.session_id = Some(session_id.clone());
                 (
@@ -1361,6 +1363,7 @@ where
                 ping_interval_seconds,
                 pong_timeout_seconds,
                 lease_policy,
+                credential_mode,
                 ..
             } => {
                 let policy = dependencies
@@ -1379,6 +1382,9 @@ where
                 };
                 if let Some(cause) = cause {
                     return Err(ConnectionError::terminal(progress, cause));
+                }
+                if let Some(cell) = dependencies.credential_mode {
+                    cell.learn(credential_mode.map(Into::into));
                 }
                 return Ok(CandidateHandshake {
                     progress,
@@ -1453,6 +1459,7 @@ impl BufferedEffect {
                 attempt_number,
                 execution_spec,
                 continuation,
+                credential_mode,
                 ..
             } => {
                 let offer = AssignmentOffer {
@@ -1464,6 +1471,7 @@ impl BufferedEffect {
                     attempt_number,
                     execution_spec: *execution_spec,
                     continuation,
+                    credential_mode: credential_mode.map(Into::into),
                 };
                 (
                     effect_id,
@@ -1938,6 +1946,8 @@ pub(super) struct ConnectionDependencies<'a> {
     assignment_manager: &'a Mutex<AssignmentManager>,
     connection_attempt: u64,
     live_status: Option<&'a LiveStatus>,
+    /// The cell every welcome and offer frame writes its credential mode to.
+    credential_mode: Option<&'a CredentialModeCell>,
 }
 
 impl<'a> ConnectionDependencies<'a> {
@@ -1965,11 +1975,19 @@ impl<'a> ConnectionDependencies<'a> {
             assignment_manager,
             connection_attempt,
             live_status: None,
+            credential_mode: None,
         }
     }
 
     pub(super) fn with_live_status(mut self, live_status: &'a LiveStatus) -> Self {
         self.live_status = Some(live_status);
+        self
+    }
+
+    /// Has each welcome and offer frame the connection reads write the credential
+    /// mode it names, or none, to `credential_mode`.
+    pub(super) fn with_credential_mode(mut self, credential_mode: &'a CredentialModeCell) -> Self {
+        self.credential_mode = Some(credential_mode);
         self
     }
 }
@@ -2065,6 +2083,7 @@ where
         assignment_manager,
         connection_attempt,
         live_status,
+        credential_mode: credential_mode_cell,
     } = dependencies;
     let _observation_transport = ObservationTransport { assignment_manager };
     let mut protocol = ProtocolLog::new(
@@ -2372,6 +2391,7 @@ where
                 ping_interval_seconds,
                 pong_timeout_seconds,
                 lease_policy,
+                credential_mode,
                 ..
             } if inbound_silence_timeout.is_none() => {
                 let policy_result = assignment_manager
@@ -2396,6 +2416,9 @@ where
                         cause,
                     )
                     .await);
+                }
+                if let Some(cell) = credential_mode_cell {
+                    cell.learn(credential_mode.map(Into::into));
                 }
                 outbound_send_timeout = Some(Duration::from_secs(ping_interval_seconds));
                 inbound_silence_timeout = Some(Duration::from_secs(pong_timeout_seconds));
@@ -2545,6 +2568,15 @@ where
             | effect @ CloudFrame::RunControl { .. }
                 if progress.handshake_completed =>
             {
+                if let (
+                    CloudFrame::AssignmentOffer {
+                        credential_mode, ..
+                    },
+                    Some(cell),
+                ) = (&effect, credential_mode_cell)
+                {
+                    cell.learn(credential_mode.map(Into::into));
+                }
                 let mut received = BufferedEffect::received(
                     recorder,
                     config,
@@ -2936,6 +2968,7 @@ pub(crate) fn opening_hello(
     message_id: String,
     sequence: u64,
     runner_version: &str,
+    credential_mode: bool,
 ) -> Result<Vec<u8>, ConnectionError> {
     let sent_at = frame_source.utc_timestamp().map_err(|_| {
         ConnectionError::terminal(
@@ -2963,6 +2996,9 @@ pub(crate) fn opening_hello(
         tree_no_source: true,
         // It takes another run while every run it holds waits.
         holds_waiting_runs: true,
+        // It applies the credential mode Cloud names where the service has its agent-login
+        // setup, which every enrolled service has.
+        credential_mode,
     })
     .map_err(|_| {
         ConnectionError::terminal(
@@ -3004,6 +3040,8 @@ mod tests {
         close_locally, close_outcome, handle_artifact_cloud_response, opening_hello, run,
         run_established,
     };
+    use crate::agent_login::mode::CredentialModeCell;
+    use crate::control_protocol::CredentialMode;
     use crate::credential::test_credential;
     use crate::service::artifact_delivery::{
         ArtifactCloudResponse, ArtifactDeliverySpec, ArtifactUploadBody,
@@ -3024,11 +3062,12 @@ mod tests {
     };
     use crate::service::test_support::{
         ConfigFixture, DeterminismTranscript, ScriptedInbound, ScriptedReader, SleepRelease,
-        accept_fixture_socket, accept_opened_fixture_socket, assignment_offer, controlled_sleeper,
-        deterministic_frame_source, effect_acknowledgement, expect_close_frame,
-        expect_opening_hello, fixture_lease_clock, fixture_listener, fixture_sleeper,
-        observation_acknowledgement, offer_assignment_after_handshake, scripted_duplex,
-        sleep_request, tree_fixture::offer_frame, welcome, with_watchdog,
+        accept_fixture_socket, accept_opened_fixture_socket, assignment_offer,
+        assignment_offer_with_credential_mode, controlled_sleeper, deterministic_frame_source,
+        effect_acknowledgement, expect_close_frame, expect_opening_hello, fixture_lease_clock,
+        fixture_listener, fixture_sleeper, observation_acknowledgement,
+        offer_assignment_after_handshake, scripted_duplex, sleep_request,
+        tree_fixture::offer_frame, welcome, welcome_with_credential_mode, with_watchdog,
     };
     use crate::service::workspace::{AssignmentRoot, AssignmentRootCreationError};
     use crate::service::{Sequence, Sleeper};
@@ -3559,6 +3598,139 @@ mod tests {
         )
     }
 
+    /// Sends the credential mode of each offer the manager prepares a root for,
+    /// and prepares none.
+    struct ModeRecordingAssignmentRootPreparer {
+        offered: mpsc::UnboundedSender<Option<CredentialMode>>,
+    }
+
+    impl AssignmentRootPreparer for ModeRecordingAssignmentRootPreparer {
+        fn prepare(
+            &self,
+            offer: &AssignmentOffer,
+            _recorder: Option<Arc<Recorder>>,
+        ) -> Result<AssignmentRoot, AssignmentRootCreationError> {
+            let _ = self.offered.send(offer.credential_mode);
+            Err(AssignmentRootCreationError::Unavailable)
+        }
+    }
+
+    /// The next frame the runner sends whose type is `frame_type`, past the others.
+    async fn next_sent(
+        outbound: &mut mpsc::UnboundedReceiver<Message>,
+        frame_type: &str,
+    ) -> serde_json::Value {
+        loop {
+            let message = with_watchdog(outbound.recv())
+                .await
+                .expect("the runner sent nothing in time")
+                .expect("the runner's writer closed");
+            if let Message::Text(text) = message {
+                let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if frame["type"] == frame_type {
+                    return frame;
+                }
+            }
+        }
+    }
+
+    /// Waits for the Pong of a Ping sent after the frames before it, which the
+    /// runner has then read.
+    async fn read_through(
+        inbound: &ScriptedInbound,
+        outbound: &mut mpsc::UnboundedReceiver<Message>,
+        marker: &'static [u8],
+    ) {
+        inbound.send(Message::Ping(marker.to_vec().into()));
+        loop {
+            let message = with_watchdog(outbound.recv())
+                .await
+                .expect("the runner sent no Pong in time")
+                .expect("the runner's writer closed");
+            if matches!(&message, Message::Pong(payload) if payload.as_ref() == marker) {
+                return;
+            }
+        }
+    }
+
+    // each welcome and each offer frame writes the mode it names, or none,
+    // and the offer the manager is handed carries its own frame's mode.
+    #[tokio::test]
+    async fn welcomes_and_offers_write_the_credential_mode_the_runner_goes_by() {
+        let cell = CredentialModeCell::default();
+        let (offered, mut offers) = mpsc::unbounded_channel();
+        let context = EstablishedTestContext::with_root_preparer(Arc::new(
+            ModeRecordingAssignmentRootPreparer { offered },
+        ));
+        let mut next_sequence = 2;
+        let (inbound, reader, writer, mut outbound) =
+            scripted_duplex(DeterminismTranscript::default());
+        let established = run_established(
+            context.dependencies().with_credential_mode(&cell),
+            context.opening(),
+            &mut next_sequence,
+            reader,
+            writer,
+        );
+        let peer = async {
+            let _opening = with_watchdog(outbound.recv()).await.expect("opening hello");
+            inbound.send(welcome_with_credential_mode(Some(CredentialMode::Host)));
+            inbound.send(observation_acknowledgement(OPENING_MESSAGE_ID, 1));
+            read_through(&inbound, &mut outbound, b"welcome").await;
+            assert_eq!(cell.mode(), Some(CredentialMode::Host));
+
+            inbound.send(assignment_offer_with_credential_mode(Some(
+                CredentialMode::Cloud,
+            )));
+            let receipt = next_sent(&mut outbound, "effect_acknowledged").await;
+            assert_eq!(cell.mode(), Some(CredentialMode::Cloud));
+            assert_eq!(
+                with_watchdog(offers.recv())
+                    .await
+                    .expect("no offer prepared"),
+                Some(Some(CredentialMode::Cloud))
+            );
+            inbound.send(observation_acknowledgement(
+                receipt["messageId"].as_str().unwrap(),
+                receipt["sequence"].as_u64().unwrap(),
+            ));
+            let rejection = next_sent(&mut outbound, "assignment_rejected").await;
+            inbound.send(observation_acknowledgement(
+                rejection["messageId"].as_str().unwrap(),
+                rejection["sequence"].as_u64().unwrap(),
+            ));
+            inbound.send(Message::Close(None));
+        };
+        let (result, ()) = with_watchdog(async { tokio::join!(established, peer) })
+            .await
+            .expect("the first connection timed out");
+        result.expect("the first connection failed");
+
+        let context = EstablishedTestContext::new();
+        let mut next_sequence = 2;
+        let (inbound, reader, writer, mut outbound) =
+            scripted_duplex(DeterminismTranscript::default());
+        let established = run_established(
+            context.dependencies().with_credential_mode(&cell),
+            context.opening(),
+            &mut next_sequence,
+            reader,
+            writer,
+        );
+        let peer = async {
+            let _opening = with_watchdog(outbound.recv()).await.expect("opening hello");
+            inbound.send(welcome());
+            inbound.send(observation_acknowledgement(OPENING_MESSAGE_ID, 1));
+            read_through(&inbound, &mut outbound, b"second-welcome").await;
+            assert_eq!(cell.mode(), None);
+            inbound.send(Message::Close(None));
+        };
+        let (result, ()) = with_watchdog(async { tokio::join!(established, peer) })
+            .await
+            .expect("the second connection timed out");
+        result.expect("the second connection failed");
+    }
+
     #[tokio::test]
     async fn slow_failing_workspace_does_not_block_acknowledgements_or_ping() {
         let (workspace_started, mut workspace_start) = mpsc::unbounded_channel();
@@ -3725,6 +3897,7 @@ mod tests {
             attempt_number,
             execution_spec: *execution_spec,
             continuation: None,
+            credential_mode: None,
         }
     }
 
@@ -5030,6 +5203,7 @@ mod tests {
             assert_eq!(hello["payload"]["treeIntegrationBindings"], 1);
             assert_eq!(hello["payload"]["treeNoSource"], 1);
             assert_eq!(hello["payload"]["holdsWaitingRuns"], 1);
+            assert_eq!(hello["payload"]["credentialMode"], 1);
             socket.send(welcome()).await.expect("send welcome");
             socket
                 .send(observation_acknowledgement(OPENING_MESSAGE_ID, 1))
@@ -6324,6 +6498,7 @@ mod tests {
             OPENING_MESSAGE_ID.to_owned(),
             1,
             crate::telemetry::TEST_SERVICE_VERSION,
+            true,
         )
         .expect("encode opening hello")
     }

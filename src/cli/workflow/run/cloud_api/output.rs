@@ -619,8 +619,10 @@ pub(crate) fn write_held_with(
 
 /// The block saying why Cloud rejected a run, nothing when it did not: its reason, under it
 /// each validation fact its runner diagnostic holds, in the order code, location, path and
-/// step. It prints no other diagnostic member and escapes every value: a fact is untrusted
-/// runner text.
+/// step, then each provider it names in its order with the
+/// commands that connect it and authorize a runner for it. It prints no other diagnostic member and escapes every value: a
+/// fact is untrusted runner text. `RUNNER` stays a placeholder, since the run's read names
+/// no runner for a rejected run.
 pub(crate) fn write_rejection(out: &mut impl Write, run: &Run) -> io::Result<()> {
     let Some(rejection) = run.rejection.as_deref() else {
         return Ok(());
@@ -639,6 +641,15 @@ pub(crate) fn write_rejection(out: &mut impl Write, run: &Run) -> io::Result<()>
             if let Some(fact) = fact {
                 writeln!(out, "  {label}: {}", visible_text(fact))?;
             }
+        }
+        for provider in diagnostic.providers.iter().flatten() {
+            let provider = visible_text(provider);
+            writeln!(out, "  missing provider: {provider}")?;
+            writeln!(out, "    useful account integration connect {provider}")?;
+            writeln!(
+                out,
+                "    useful account integration authorize {provider} --runner RUNNER --yes"
+            )?;
         }
     }
     Ok(())

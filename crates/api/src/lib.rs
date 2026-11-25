@@ -193,9 +193,9 @@ pub use run_inputs::{
 pub use run_records::{RecordDownloadCapability, RunRecordFacts, RunRecordRead};
 pub use runners::{
     RunnerActivation, RunnerActivationIssuance, RunnerActivationState, RunnerApi, RunnerCredential,
-    RunnerCredentialEffectiveState, RunnerCredentialStoredState, RunnerCurrentAssignment,
-    RunnerDeletionBlocker, RunnerFailure, RunnerHeldAssignment, RunnerPool, RunnerPoolList,
-    RunnerRegistration, RunnerRegistrationList, RunnerRegistrationMode,
+    RunnerCredentialEffectiveState, RunnerCredentialMode, RunnerCredentialStoredState,
+    RunnerCurrentAssignment, RunnerDeletionBlocker, RunnerFailure, RunnerHeldAssignment,
+    RunnerPool, RunnerPoolList, RunnerRegistration, RunnerRegistrationList, RunnerRegistrationMode,
 };
 pub use runs::{
     ContinuationAdmissionViolation, CreateRunInput, RetryConflict, Run, RunApi,

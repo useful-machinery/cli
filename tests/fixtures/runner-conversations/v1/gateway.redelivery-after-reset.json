@@ -12,6 +12,7 @@
         "direction": "runner_to_cloud",
         "messageId": "«mid-1»",
         "payload": {
+          "credentialMode": 1,
           "holdsWaitingRuns": 1,
           "runnerVersion": "«ver»",
           "treeContinuation": 1,

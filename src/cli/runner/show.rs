@@ -154,6 +154,9 @@ fn write_status(output: &mut impl Write, status: &StatusSnapshot) -> io::Result<
     if let Some(credential_id) = &status.pending_credential_id {
         writeln!(output, "pending:        {credential_id}")?;
     }
+    if let Some(mode) = status.credential_mode {
+        writeln!(output, "credential mode: {}", mode.as_str())?;
+    }
     writeln!(
         output,
         "assignments:    {}",
@@ -171,7 +174,7 @@ fn write_status(output: &mut impl Write, status: &StatusSnapshot) -> io::Result<
         writeln!(output, "last failure:   {}", enum_json(failure)?)?;
     }
     if let Some(readiness) = &status.agent_logins {
-        super::sync::write_readiness(output, readiness)?;
+        super::sync::write_readiness(output, readiness, status.credential_mode)?;
     }
     Ok(())
 }
@@ -283,6 +286,7 @@ mod tests {
             connection_state: ConnectionState::Connected,
             last_connected_at: Some("2026-08-06T19:00:00Z".to_owned()),
             current_credential_id: Some("rrc_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned()),
+            credential_mode: None,
             pending_credential_id: None,
             assignment_counts: AssignmentCounts {
                 running: 1,
@@ -320,6 +324,7 @@ mod tests {
             connection_state: ConnectionState::Connecting,
             last_connected_at: None,
             current_credential_id: None,
+            credential_mode: None,
             pending_credential_id: None,
             assignment_counts: AssignmentCounts::default(),
             last_connection_failure: None,

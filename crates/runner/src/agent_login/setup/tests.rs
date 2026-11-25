@@ -9,14 +9,16 @@ use futures_util::FutureExt as _;
 
 use super::*;
 use crate::agent_login::ProviderSource;
+use crate::agent_login::blocked::AdmittedMode;
 use crate::agent_login::check::LoginCheckOutcome;
 use crate::agent_login::cloud::{
     CloudFailure, CredentialSourcesFailure, GrantProvidersFailure, GrantProvidersRequest,
     GrantTokenFailure, GrantTokenRequest, IssuedToken, ListedProvider, LoginStatus, ProviderLogin,
     ReportedSource,
 };
+use crate::agent_login::mode::CredentialModeCell;
 use crate::agent_login::readiness::readiness_path;
-use crate::control_protocol::{AgentLoginCheckCause, CredentialSource};
+use crate::control_protocol::{AgentLoginCheckCause, CredentialMode, CredentialSource};
 use crate::service::{
     CountedGate, FAKE_AGENT_LOGIN_ID, FAKE_AGENT_LOGIN_SENTINEL, FakeAgentLoginCloud,
     FakeLoginCheck, fake_agent_login_material, fake_codex_authorized, with_watchdog,
@@ -44,6 +46,9 @@ struct Fixture {
     capture: TestCapture,
     /// Seconds the setup's clock reads after `now()`.
     clock: Arc<AtomicI64>,
+    /// The credential mode the setup goes by, which has learned nothing
+    /// until a test teaches it.
+    mode: Arc<CredentialModeCell>,
 }
 
 impl Fixture {
@@ -72,6 +77,7 @@ impl Fixture {
             std::iter::once((OsString::from("HOME"), home))
                 .chain(codex_home.then(|| (OsString::from("CODEX_HOME"), service_codex))),
         );
+        let mode = Arc::new(CredentialModeCell::default());
         let setup = Arc::new(AgentLoginSetup::new(
             SetupDependencies::new(
                 Arc::clone(&cloud) as Arc<dyn AgentLoginCloud>,
@@ -79,7 +85,8 @@ impl Fixture {
                 environment,
                 &state.join("runner-state.json"),
                 Arc::clone(&recorder),
-            ),
+            )
+            .with_credential_mode(Arc::clone(&mode)),
             Arc::clone(&gate) as Arc<dyn AssignmentGate>,
             move || now() + time::Duration::seconds(elapsed.load(Ordering::SeqCst)),
         ));
@@ -92,6 +99,7 @@ impl Fixture {
             recorder,
             capture,
             clock,
+            mode,
         }
     }
 
@@ -305,6 +313,254 @@ async fn a_codex_login_the_runner_holds_is_removed_once_the_service_sets_codex_h
 }
 
 impl Fixture {
+    /// Teaches the setup that the runner goes by `host`.
+    fn learn_host(&self) {
+        self.mode.learn(Some(CredentialMode::Host));
+    }
+
+    /// Teaches the setup that the runner goes by `cloud`.
+    fn learn_cloud(&self) {
+        self.mode.learn(Some(CredentialMode::Cloud));
+    }
+
+    /// Each installable provider's state, agent login and source as the
+    /// pass's document and the recorded one hold them, which must agree.
+    fn host_entries(
+        &self,
+        document: &ReadinessDocument,
+    ) -> Vec<(
+        AgentLoginState,
+        Option<RecordedLogin>,
+        Option<CredentialSource>,
+    )> {
+        let recorded = self.recorded().expect("the pass recorded readiness");
+        AgentLoginProvider::INSTALLABLE
+            .into_iter()
+            .map(|provider| {
+                let entry = document.login(provider).expect("provider readiness");
+                assert_eq!(recorded.login(provider), Some(entry), "{provider:?}");
+                assert_eq!(entry.last_use, None, "{provider:?}");
+                (entry.state, entry.login.clone(), entry.source)
+            })
+            .collect()
+    }
+}
+
+/// What a `host` pass records for each installable provider whose login it
+/// removed, or that had none: `foreign_login`, no agent login, and `source`.
+fn standing_back(
+    source: Option<CredentialSource>,
+) -> Vec<(
+    AgentLoginState,
+    Option<RecordedLogin>,
+    Option<CredentialSource>,
+)> {
+    AgentLoginProvider::INSTALLABLE
+        .map(|_| (AgentLoginState::ForeignLogin, None, source))
+        .to_vec()
+}
+
+#[tokio::test]
+async fn a_runner_that_learns_host_removes_the_codex_login_it_installed_and_reports_it_once() {
+    let fixture = Fixture::new(fake_codex_authorized(1));
+    fixture.pass().await;
+    assert!(fixture.auth_path().is_file());
+    let (statuses, deliveries) = (fixture.cloud.status_requests(), fixture.cloud.deliveries());
+
+    // The runner learns `host`, and Cloud would now authorize a newer
+    // generation.
+    fixture.learn_host();
+    fixture.cloud.answer(fake_codex_authorized(2));
+    let document = fixture.pass().await;
+
+    assert!(!fixture.directory().codex_home().exists());
+    assert_eq!(fixture.host_entries(&document), standing_back(None));
+    let codex = document.login(AgentLoginProvider::Codex).unwrap();
+    assert_eq!(codex.checked_at, Some(now()));
+    // One status request, the report of the removal, from whose answer the
+    // runner installs nothing; no delivery is asked for.
+    let reports = fixture.cloud.reports();
+    assert_eq!(fixture.cloud.status_requests(), statuses + 1);
+    let report = codex_report(reports.last().unwrap());
+    assert_eq!(report.installed, None);
+    assert_eq!(report.state, Some(AgentLoginState::ForeignLogin));
+    assert_eq!(fixture.cloud.deliveries(), deliveries);
+    assert!(!fixture.auth_path().exists());
+
+    // The removal is reported: the next `host` pass asks Cloud nothing.
+    let again = fixture.pass().await;
+    assert_eq!(fixture.host_entries(&again), standing_back(None));
+    assert_eq!(fixture.cloud.status_requests(), statuses + 1);
+    assert_eq!(fixture.cloud.deliveries(), deliveries);
+    assert_eq!(fixture.service_entries(), 0);
+}
+
+#[tokio::test]
+async fn a_host_pass_over_a_record_that_names_no_install_asks_cloud_nothing() {
+    for state in [None, Some(AgentLoginState::NotAuthorized)] {
+        let fixture = Fixture::new(fake_codex_authorized(1));
+        if let Some(state) = state {
+            fixture.record(
+                AgentLoginProvider::INSTALLABLE
+                    .map(|provider| earlier(provider, state, false))
+                    .to_vec(),
+            );
+        }
+        fixture.learn_host();
+
+        let document = fixture.pass().await;
+
+        assert_eq!(
+            fixture.host_entries(&document),
+            standing_back(None),
+            "{state:?}"
+        );
+        assert_eq!(fixture.cloud.status_requests(), 0, "{state:?}");
+        assert_eq!(fixture.cloud.deliveries(), 0, "{state:?}");
+        assert!(!fixture.auth_path().exists(), "{state:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_host_pass_records_host_as_the_source_only_where_the_service_has_a_login() {
+    for (codex_home, source) in [(true, Some(CredentialSource::Host)), (false, None)] {
+        let fixture = Fixture::serving(fake_codex_authorized(1), codex_home);
+        fixture.learn_host();
+
+        let document = fixture.pass().await;
+
+        let entries = fixture.host_entries(&document);
+        assert_eq!(
+            entries[0],
+            (AgentLoginState::ForeignLogin, None, source),
+            "{codex_home}"
+        );
+        assert_eq!(
+            entries[1],
+            (AgentLoginState::ForeignLogin, None, None),
+            "{codex_home}"
+        );
+        assert_eq!(fixture.cloud.status_requests(), 0, "{codex_home}");
+    }
+}
+
+#[tokio::test]
+async fn a_host_pass_removes_a_login_no_record_names_and_asks_cloud_nothing() {
+    // The runner kept both logins and stopped before it recorded them.
+    let fixture = Fixture::new(fake_codex_authorized(1));
+    fs::create_dir_all(fixture.directory().codex_home()).unwrap();
+    write_private(&fixture.auth_path(), b"{\"kept\":true}");
+    write_private(&fixture.token_path(), b"sk-ant-oat01-kept-and-unrecorded");
+    fixture.learn_host();
+
+    let document = fixture.pass().await;
+
+    assert!(!fixture.directory().codex_home().exists());
+    assert!(!fixture.token_path().exists());
+    assert_eq!(fixture.host_entries(&document), standing_back(None));
+    assert_eq!(fixture.cloud.status_requests(), 0);
+    assert_eq!(fixture.cloud.deliveries(), 0);
+}
+
+#[tokio::test]
+async fn a_removal_report_cloud_does_not_answer_is_made_again_by_the_next_host_pass() {
+    let fixture = Fixture::new(fake_codex_authorized(1));
+    fixture.pass().await;
+    let statuses = fixture.cloud.status_requests();
+    fixture.learn_host();
+    fixture.cloud.answer(Err(CloudFailure::Transport));
+
+    // The report is not answered, and the pass still records the removal,
+    // naming the report's failure in its record.
+    let document = fixture.pass().await;
+    assert!(!fixture.auth_path().exists());
+    assert_eq!(fixture.host_entries(&document), standing_back(None));
+    assert_eq!(fixture.cloud.status_requests(), statuses + 1);
+    let records = fixture.setup_records();
+    let last = records.last().unwrap();
+    assert_eq!(last["um.agent_login.codex.state"], "foreign_login");
+    assert_eq!(last["um.agent_login.codex.failure_stage"], "status");
+    assert_eq!(last["um.agent_login.codex.failure_cause"], "transport");
+
+    // The next `host` pass, which removes nothing, reports it again.
+    fixture.pass().await;
+    assert_eq!(fixture.cloud.status_requests(), statuses + 2);
+    fixture.cloud.answer(Ok(Vec::new()));
+    fixture.pass().await;
+    assert_eq!(fixture.cloud.status_requests(), statuses + 3);
+    let reports = fixture.cloud.reports();
+    for report in &reports[reports.len() - 3..] {
+        assert_eq!(codex_report(report).installed, None);
+        assert_eq!(
+            codex_report(report).state,
+            Some(AgentLoginState::ForeignLogin)
+        );
+    }
+
+    // Cloud answered it: the pass after makes no request.
+    fixture.pass().await;
+    assert_eq!(fixture.cloud.status_requests(), statuses + 3);
+    assert_eq!(fixture.cloud.deliveries(), 1);
+}
+
+#[tokio::test]
+async fn a_host_pass_the_gate_stops_keeps_the_login_until_a_pass_may_remove_it() {
+    let fixture = Fixture::new(fake_codex_authorized(1));
+    let installed = fixture.pass().await;
+    let statuses = fixture.cloud.status_requests();
+    fixture.learn_host();
+
+    // No held run is working, but one has a command in flight when the pass
+    // would remove the login.
+    fixture.gate.idle_calls.store(1, Ordering::SeqCst);
+    assert_eq!(fixture.setup.run_pass().await, SetupOutcome::Busy(None));
+    assert!(fixture.auth_path().is_file());
+    assert_eq!(fixture.recorded(), Some(installed));
+    assert_eq!(fixture.cloud.status_requests(), statuses);
+
+    fixture.gate.idle_calls.store(usize::MAX, Ordering::SeqCst);
+    let document = fixture.pass().await;
+    assert!(!fixture.auth_path().exists());
+    assert_eq!(fixture.host_entries(&document), standing_back(None));
+    assert_eq!(fixture.cloud.status_requests(), statuses + 1);
+    let reports = fixture.cloud.reports();
+    assert_eq!(codex_report(reports.last().unwrap()).installed, None);
+}
+
+#[tokio::test]
+async fn a_runner_that_leaves_host_asks_cloud_again_and_its_next_admission_at_once() {
+    let fixture = Fixture::new(fake_codex_authorized(1));
+    fixture.learn_host();
+    let document = fixture.pass().await;
+    assert_eq!(fixture.host_entries(&document), standing_back(None));
+    assert_eq!(fixture.cloud.status_requests(), 0);
+
+    // The runner learns it goes by none. Its record says `foreign_login`, so
+    // an admission asks Cloud at once rather than waiting for the next pass,
+    // and installs what Cloud authorizes.
+    fixture.mode.learn(None);
+    let admitted = fixture.setup.set_up_admission(None, BOOT, RUN, ASSIGNMENT);
+    let Some(SetupOutcome::Recorded(document)) = admitted.agent_logins else {
+        panic!("the admission made no pass: {:?}", admitted.agent_logins);
+    };
+    assert!(fixture.cloud.status_requests() >= 1);
+    assert_eq!(
+        state_of(&document, AgentLoginProvider::Codex),
+        AgentLoginState::Ready
+    );
+    assert!(fixture.auth_path().is_file());
+
+    // A periodic setup is the base's pass again: it asks Cloud.
+    let statuses = fixture.cloud.status_requests();
+    let document = fixture.pass().await;
+    assert_eq!(fixture.cloud.status_requests(), statuses + 1);
+    assert_eq!(
+        state_of(&document, AgentLoginProvider::Codex),
+        AgentLoginState::Ready
+    );
+}
+
+impl Fixture {
     /// The `CODEX_HOME` an admission is offered from a process environment
     /// that carries only the service's `HOME`.
     fn offered_codex_home(&self) -> Option<OsString> {
@@ -312,7 +568,7 @@ impl Fixture {
             OsString::from("HOME"),
             OsString::from(self.root.path().join("home")),
         )]);
-        crate::agent_login::offer(&process, Some(&self.directory()))
+        crate::agent_login::offer(&process, Some(&self.directory()), AdmittedMode::Unnamed)
             .environment
             .variable(std::ffi::OsStr::new(useful_execution::CODEX_LOGIN_VARIABLE))
             .map(std::ffi::OsStr::to_os_string)
@@ -381,6 +637,125 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn a_pass_governed_by_cloud_installs_what_cloud_authorizes_beside_the_services_own_logins() {
+    // The service sets `CODEX_HOME` and is signed in to Claude Code.
+    let fixture = Fixture::serving(
+        Ok(vec![
+            authorized(AgentLoginProvider::Codex, 1),
+            authorized(AgentLoginProvider::ClaudeCode, 1),
+        ]),
+        true,
+    );
+    fixture.sign_in_to_claude_code();
+    fixture.learn_cloud();
+
+    let document = fixture.pass().await;
+
+    assert_eq!(
+        fixture.sources(&document),
+        [
+            (AgentLoginState::Ready, Some(CredentialSource::Grant)),
+            (AgentLoginState::Ready, Some(CredentialSource::Grant)),
+        ]
+    );
+    assert_eq!(
+        fs::read(fixture.auth_path()).unwrap(),
+        fake_agent_login_material(1)
+    );
+    assert!(claude_code::read_token(&fixture.token_path()).is_some());
+    assert_eq!(fixture.cloud.deliveries(), 2);
+    // The pass told Cloud what it installed.
+    assert_reported(
+        fixture.cloud.reports().last().unwrap(),
+        Some(AgentLoginState::Ready),
+        Some(1),
+    );
+    // The service's own logins are untouched.
+    assert_eq!(
+        fs::read(fixture.root.path().join("home/.claude/.credentials.json")).unwrap(),
+        b"{\"operator\":true}"
+    );
+    assert_eq!(
+        fs::read_dir(fixture.root.path().join("service-codex"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_foreign_login_record_is_installed_under_cloud_and_removed_again_under_no_mode() {
+    for host in [false, true] {
+        // The service sets `CODEX_HOME`: with no mode, or in `host`, the
+        // runner stands back.
+        let fixture = Fixture::serving(fake_codex_authorized(1), true);
+        if host {
+            fixture.learn_host();
+        }
+        let document = fixture.pass().await;
+        assert_eq!(
+            state_of(&document, AgentLoginProvider::Codex),
+            AgentLoginState::ForeignLogin,
+            "{host}"
+        );
+        assert!(!fixture.auth_path().exists(), "{host}");
+
+        // The first pass governed by `cloud` installs what Cloud authorizes.
+        fixture.learn_cloud();
+        let document = fixture.pass().await;
+        let codex = document.login(AgentLoginProvider::Codex).unwrap();
+        assert_eq!(
+            (codex.state, codex.source),
+            (AgentLoginState::Ready, Some(CredentialSource::Grant)),
+            "{host}"
+        );
+        assert_eq!(
+            fs::read(fixture.auth_path()).unwrap(),
+            fake_agent_login_material(1),
+            "{host}"
+        );
+
+        // Back to no mode: the service's own login counts again, and the
+        // runner's is removed and the removal reported.
+        fixture.mode.learn(None);
+        let document = fixture.pass().await;
+        let codex = document.login(AgentLoginProvider::Codex).unwrap();
+        assert_eq!(
+            (codex.state, codex.installation(), codex.source),
+            (
+                AgentLoginState::ForeignLogin,
+                None,
+                Some(CredentialSource::Host)
+            ),
+            "{host}"
+        );
+        assert!(!fixture.directory().codex_home().exists(), "{host}");
+        let reports = fixture.cloud.reports();
+        let report = codex_report(reports.last().unwrap());
+        assert_eq!(report.installed, None, "{host}");
+        assert_eq!(report.state, Some(AgentLoginState::ForeignLogin), "{host}");
+        assert_eq!(fixture.service_entries(), 0, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn a_sync_checks_each_ready_login_under_the_mode_that_governs_it() {
+    for mode in [None, Some(CredentialMode::Cloud)] {
+        let fixture = Fixture::new(Ok(vec![authorized(AgentLoginProvider::ClaudeCode, 1)]));
+        fixture.mode.learn(mode);
+
+        fixture.sync().await;
+
+        assert_eq!(
+            fixture.check.checked(),
+            [(AgentLoginProvider::ClaudeCode, 1)],
+            "{mode:?}"
+        );
+        assert_eq!(fixture.check.checked_modes(), [mode], "{mode:?}");
+    }
+}
+
+#[tokio::test]
 async fn a_pass_records_the_hosts_claude_code_login_as_its_source_whatever_cloud_answers() {
     for (answer, state) in [
         (
@@ -426,7 +801,8 @@ async fn a_pass_that_installs_a_login_the_service_lacks_records_the_grant_as_its
         OsString::from("HOME"),
         OsString::from(fixture.root.path().join("home")),
     )]);
-    let offered = crate::agent_login::offer(&process, Some(&fixture.directory()));
+    let offered =
+        crate::agent_login::offer(&process, Some(&fixture.directory()), AdmittedMode::Unnamed);
     assert_eq!(
         offered.sources,
         [ProviderSource {
@@ -466,7 +842,7 @@ async fn an_admission_that_makes_no_pass_records_each_coding_agents_source_as_it
     // The service signs in to Claude Code after that pass: the admission's
     // offer and its report settle `host`, and so must the document.
     fixture.sign_in_to_claude_code();
-    let admitted = fixture.setup.set_up_admission(BOOT, RUN, ASSIGNMENT);
+    let admitted = fixture.setup.set_up_admission(None, BOOT, RUN, ASSIGNMENT);
 
     assert!(admitted.agent_logins.is_none());
     let recorded = fixture
@@ -478,6 +854,102 @@ async fn an_admission_that_makes_no_pass_records_each_coding_agents_source_as_it
         Some(CredentialSource::Host)
     );
     assert_eq!(source(AgentLoginProvider::Codex), None);
+}
+
+#[tokio::test]
+async fn a_cloud_admission_asks_cloud_whatever_the_record_names_and_installs_what_it_authorizes() {
+    for state in [None, Some(AgentLoginState::NotAuthorized)] {
+        for mode in [Some(CredentialMode::Cloud), None] {
+            // The record names no login, and Cloud now authorizes Codex.
+            let fixture = Fixture::new(fake_codex_authorized(1));
+            if let Some(state) = state {
+                fixture.record(
+                    AgentLoginProvider::INSTALLABLE
+                        .map(|provider| earlier(provider, state, false))
+                        .to_vec(),
+                );
+            }
+            fixture.mode.learn(mode);
+
+            let admitted = fixture.setup.set_up_admission(mode, BOOT, RUN, ASSIGNMENT);
+
+            let process = useful_execution::EnvironmentSnapshot::new([(
+                OsString::from("HOME"),
+                OsString::from(fixture.root.path().join("home")),
+            )]);
+            let offered = crate::agent_login::offer_with_grant_tokens(
+                &process,
+                Some(&fixture.directory()),
+                Some(&admitted.tokens),
+                mode,
+            )
+            .environment
+            .variable(std::ffi::OsStr::new(useful_execution::CODEX_LOGIN_VARIABLE))
+            .map(std::ffi::OsStr::to_os_string);
+            if mode.is_some() {
+                let Some(SetupOutcome::Recorded(document)) = &admitted.agent_logins else {
+                    panic!("the admission made no pass: {state:?}");
+                };
+                // It asked Cloud once, holding nothing, was delivered the
+                // login, and then reported the install.
+                let reports = fixture.cloud.reports();
+                assert_eq!(fixture.cloud.status_requests(), 2, "{state:?}");
+                assert_eq!(codex_report(&reports[0]).installed, None, "{state:?}");
+                assert_eq!(
+                    codex_report(&reports[1]).state,
+                    Some(AgentLoginState::Ready),
+                    "{state:?}"
+                );
+                assert_eq!(fixture.cloud.deliveries(), 1, "{state:?}");
+                assert_eq!(
+                    state_of(document, AgentLoginProvider::Codex),
+                    AgentLoginState::Ready,
+                    "{state:?}"
+                );
+                assert_eq!(
+                    offered,
+                    Some(fixture.directory().codex_home().into_os_string()),
+                    "{state:?}"
+                );
+            } else {
+                assert!(admitted.agent_logins.is_none(), "{state:?}");
+                assert_eq!(fixture.cloud.status_requests(), 0, "{state:?}");
+                assert_eq!(fixture.cloud.deliveries(), 0, "{state:?}");
+                assert_eq!(offered, None, "{state:?}");
+            }
+        }
+    }
+}
+
+// the hold of a `cloud` admission keeps a coding agent as Cloud
+// answered its pass for it, and never as the record last knew it: a status request Cloud did
+// not answer leaves a login the record names `not_authorized` unanswered, and one Cloud
+// answers without it leaves it refused.
+#[tokio::test]
+async fn a_cloud_admission_keeps_each_coding_agent_as_cloud_answered_its_pass() {
+    use crate::agent_login::required::Answer;
+
+    for (answer, kept) in [
+        (Err(CloudFailure::Transport), Answer::Unanswered),
+        (Ok(Vec::new()), Answer::Refused),
+    ] {
+        let fixture = Fixture::new(answer);
+        fixture.record(
+            AgentLoginProvider::INSTALLABLE
+                .map(|provider| earlier(provider, AgentLoginState::NotAuthorized, false))
+                .to_vec(),
+        );
+        fixture.mode.learn(Some(CredentialMode::Cloud));
+
+        let admitted =
+            fixture
+                .setup
+                .set_up_admission(Some(CredentialMode::Cloud), BOOT, RUN, ASSIGNMENT);
+
+        for provider in ["claude_code", "codex"] {
+            assert_eq!(admitted.tokens.answers().of(provider), kept, "{provider}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -841,6 +1313,7 @@ async fn an_ended_setup_stops_its_pass_and_is_waited_for_until_its_thread_lets_i
         SetupAnswer {
             outcome: SetupOutcome::Busy(None),
             unanswered: Vec::new(),
+            mode: None,
         }
     );
     assert!(!spawned);
@@ -1076,6 +1549,13 @@ impl AgentLoginCloud for ObservingCloud {
         request: &GrantProvidersRequest,
     ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
         self.inner.token_services(request)
+    }
+
+    fn credential_providers(
+        &self,
+        request: &GrantProvidersRequest,
+    ) -> Result<Vec<ListedProvider>, GrantProvidersFailure> {
+        self.inner.credential_providers(request)
     }
 
     fn credential_sources(
@@ -1870,7 +2350,7 @@ async fn an_admissions_pass_installs_and_ends_without_consulting_the_assignment_
 
     let Some(SetupOutcome::Recorded(document)) = fixture
         .setup
-        .set_up_admission(BOOT, RUN, ASSIGNMENT)
+        .set_up_admission(None, BOOT, RUN, ASSIGNMENT)
         .agent_logins
     else {
         panic!("the admission's pass did not record readiness");
@@ -1903,7 +2383,11 @@ async fn an_admissions_pass_waits_for_a_pass_in_flight_and_then_makes_its_own() 
         .expect("the periodic pass asked Cloud");
     let admission = tokio::task::spawn_blocking({
         let setup = Arc::clone(&fixture.setup);
-        move || setup.set_up_admission(BOOT, RUN, ASSIGNMENT).agent_logins
+        move || {
+            setup
+                .set_up_admission(None, BOOT, RUN, ASSIGNMENT)
+                .agent_logins
+        }
     });
     drop(held);
 
@@ -2350,7 +2834,7 @@ async fn an_admissions_pass_checks_nothing_even_when_it_installs() {
 
     let Some(SetupOutcome::Recorded(document)) = fixture
         .setup
-        .set_up_admission(BOOT, RUN, ASSIGNMENT)
+        .set_up_admission(None, BOOT, RUN, ASSIGNMENT)
         .agent_logins
     else {
         panic!("the admission's pass did not record readiness");

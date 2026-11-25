@@ -845,12 +845,20 @@ const KEPT_CLAUDE_CODE_TOKEN: &str = "sk-ant-oat01-kept-claude-code-token";
 /// holding `KEPT_CLAUDE_CODE_TOKEN` as its Claude Code login; answers the state directory,
 /// which the caller keeps, and the token file.
 fn keep_claude_code_token(fixture: &mut Fixture) -> (tempfile::TempDir, PathBuf) {
-    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
-
     let state = tempfile::tempdir().unwrap();
     let directory = crate::agent_login::directory::LoginDirectory::beside(
         &state.path().join("runner-state.json"),
     );
+    let token = write_claude_code_token(&directory);
+    keep_agent_logins_in(&mut fixture.manager, directory);
+    (state, token)
+}
+
+/// Writes `KEPT_CLAUDE_CODE_TOKEN` as the Claude Code login `directory`, which does not exist
+/// yet, holds, with no readiness record naming it; answers the token file.
+fn write_claude_code_token(directory: &crate::agent_login::directory::LoginDirectory) -> PathBuf {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+
     fs::DirBuilder::new()
         .mode(0o700)
         .create(directory.path())
@@ -864,8 +872,7 @@ fn keep_claude_code_token(fixture: &mut Fixture) -> (tempfile::TempDir, PathBuf)
         .unwrap()
         .write_all(KEPT_CLAUDE_CODE_TOKEN.as_bytes())
         .unwrap();
-    keep_agent_logins_in(&mut fixture.manager, directory);
-    (state, token)
+    token
 }
 
 #[tokio::test]
@@ -938,8 +945,49 @@ async fn a_run_that_waited_through_a_removed_login_resumes_with_none() {
     );
 }
 
-// The runtime that creates the run is offered the admission's issued GitHub token and its file,
-// and the service's own GitLab token, for which Cloud is asked for none.
+// a run admitted in `host` is offered no agent login at any of
+// its commands, a Codex login that appears in the runner's directory while it waits included,
+// as one does once the runner learns another mode and a setup installs it.
+#[tokio::test]
+async fn a_run_admitted_in_host_resumes_with_no_login_that_appeared_while_it_waited() {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+
+    let mut fixture = control_wait_fixture("answer", &[]);
+    fixture.offer.credential_mode = Some(crate::control_protocol::CredentialMode::Host);
+    let state = tempfile::tempdir().unwrap();
+    let directory = crate::agent_login::directory::LoginDirectory::beside(
+        &state.path().join("runner-state.json"),
+    );
+    keep_agent_logins_in(&mut fixture.manager, directory.clone());
+
+    answer_after(&mut fixture, || {
+        for private in [directory.path().to_owned(), directory.codex_home()] {
+            fs::DirBuilder::new().mode(0o700).create(private).unwrap();
+        }
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(crate::agent_login::codex::auth_path(&directory))
+            .unwrap()
+            .write_all(b"{\"tokens\":{}}")
+            .unwrap();
+    })
+    .await;
+
+    for log in ["create.env", "resume.env"] {
+        assert!(
+            logged_lines(&fixture.log, log)
+                .iter()
+                .all(|line| !line.starts_with("CODEX_HOME=")),
+            "{log}"
+        );
+    }
+}
+
+// the runtime that creates the run is
+// offered the admission's issued GitHub token and its file, and the service's own GitLab token,
+// for which Cloud is asked for none.
 #[tokio::test]
 async fn issued_grant_token_reaches_the_runtime_that_creates_the_run() {
     use crate::control_protocol::AgentLoginProvider;
@@ -974,9 +1022,463 @@ async fn issued_grant_token_reaches_the_runtime_that_creates_the_run() {
     );
 }
 
-// A command started after the run waited is offered the agent logins as the runner holds
-// them then, but the grant token variable keeps the admission's value while its file
-// variable names the same, current file.
+/// Every name an assignment admitted in `cloud` blocks whatever it holds, each
+/// with a value of the service's own.
+const SERVICE_BLOCKED_VALUES: [(&str, &str); 15] = [
+    ("GH_TOKEN", "service-value-of-gh-token"),
+    ("GH_TOKEN_FILE", "/service/value-of-gh-token-file"),
+    ("GITLAB_TOKEN", "service-value-of-gitlab-token"),
+    ("GITLAB_TOKEN_FILE", "/service/value-of-gitlab-token-file"),
+    (
+        "USEFUL_LINEAR_ACCESS_TOKEN",
+        "service-value-of-linear-token",
+    ),
+    (
+        "USEFUL_LINEAR_ACCESS_TOKEN_FILE",
+        "/service/value-of-linear-token-file",
+    ),
+    (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "service-value-of-claude-code-token",
+    ),
+    ("CODEX_HOME", "/service/value-of-codex-home"),
+    ("GITHUB_TOKEN", "service-value-of-github-token"),
+    ("LINEAR_API_KEY", "service-value-of-linear-api-key"),
+    (
+        "GITHUB_PUBLISH_TOKEN_FILE",
+        "/service/value-of-github-publish-token-file",
+    ),
+    ("UM_LINEAR_ACCESS_TOKEN", "service-value-of-um-linear-token"),
+    (
+        "UM_LINEAR_ACCESS_TOKEN_FILE",
+        "/service/value-of-um-linear-token-file",
+    ),
+    ("ANTHROPIC_API_KEY", "service-value-of-anthropic-api-key"),
+    ("CLAUDE_CONFIG_DIR", "/service/value-of-claude-config-dir"),
+];
+
+/// Whether any of `lines` holds the service's value of a blocked name.
+fn holds_a_service_blocked_value(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        SERVICE_BLOCKED_VALUES
+            .iter()
+            .any(|(_, value)| line.contains(value))
+    })
+}
+
+/// The service's values of the names Cloud's provider table lists for `mergify`, whose token
+/// Cloud does not issue the run.
+const SERVICE_MERGIFY_VALUES: [(&str, &str); 2] = [
+    ("MERGIFY_TOKEN", "service-value-of-mergify-token"),
+    ("MERGIFY_TOKEN_FILE", "/service/value-of-mergify-token-file"),
+];
+
+// the runtime that creates a run admitted in `cloud`
+// is offered, under the blocked names, only the GitHub token Cloud issued and its file; the
+// service's value of every blocked name is removed, both names of a row of Cloud's provider
+// table among them although Cloud issued it no token, and every other name, `HOME` included, is
+// as the service has it, a listed `HOME` and `USEFUL_HOME`, which no step receives by declaring
+// them, included. A run admitted with no mode keeps every service value.
+#[tokio::test]
+async fn a_cloud_run_is_offered_only_what_cloud_issued_under_the_blocked_names() {
+    use crate::agent_login::cloud::ListedProvider;
+    use crate::control_protocol::{AgentLoginProvider, CredentialMode};
+    use crate::service::test_support::fake_grant_token;
+
+    let service: Vec<(&str, &str)> = SERVICE_BLOCKED_VALUES
+        .into_iter()
+        .chain(SERVICE_MERGIFY_VALUES)
+        .chain([
+            ("OTHER_NAME", "service-other-value"),
+            ("HOME", "/service/home"),
+        ])
+        .collect();
+    let row = |provider: &str, token: &str, token_file: &str| ListedProvider {
+        provider: provider.to_owned(),
+        token: token.to_owned(),
+        token_file: token_file.to_owned(),
+    };
+    for mode in [Some(CredentialMode::Cloud), None] {
+        let mut fixture = fixture_with(TREE_DIGEST, "exited", "\"planned\"", &service);
+        fixture.offer.credential_mode = mode;
+        let issued = issue_github_token(&mut fixture, &service);
+        issued.cloud.answer_credential_providers(Ok(vec![
+            row("github", "GH_TOKEN", "GH_TOKEN_FILE"),
+            row("mergify", "MERGIFY_TOKEN", "MERGIFY_TOKEN_FILE"),
+            row("homes", "HOME", "USEFUL_HOME"),
+        ]));
+
+        execute(&mut fixture).await;
+
+        let environment = logged_lines(&fixture.log, "create.env");
+        for name in ["OTHER_NAME", "HOME"] {
+            let (_, value) = service.iter().find(|(own, _)| *own == name).unwrap();
+            assert!(
+                environment.contains(&format!("{name}={value}")),
+                "{mode:?}: create.env lacks {name}"
+            );
+        }
+        let private_home = format!("/{}/private/home", fixture.offer.assignment_id);
+        assert!(
+            environment
+                .iter()
+                .any(|line| line.starts_with("USEFUL_HOME=") && line.ends_with(&private_home)),
+            "{mode:?}: create.env lacks the run-scoped USEFUL_HOME"
+        );
+        if mode.is_none() {
+            assert!(issued.cloud.credential_providers_requests().is_empty());
+            for (name, value) in SERVICE_BLOCKED_VALUES
+                .into_iter()
+                .chain(SERVICE_MERGIFY_VALUES)
+            {
+                assert!(
+                    environment.contains(&format!("{name}={value}")),
+                    "create.env lacks {name}"
+                );
+            }
+            continue;
+        }
+        assert!(
+            issued
+                .cloud
+                .grant_requests()
+                .iter()
+                .all(|request| request.provider.cloud_id() != "mergify")
+        );
+        for (name, _) in SERVICE_MERGIFY_VALUES {
+            assert!(
+                environment
+                    .iter()
+                    .all(|line| !line.starts_with(&format!("{name}="))),
+                "create.env holds {name}"
+            );
+        }
+        let token = fake_grant_token(AgentLoginProvider::Github, 3);
+        assert!(environment.contains(&format!("GH_TOKEN={token}")));
+        assert!(environment.contains(&format!("GH_TOKEN_FILE={}", issued.file.display())));
+        for (name, _) in SERVICE_BLOCKED_VALUES {
+            if name == "GH_TOKEN" || name == "GH_TOKEN_FILE" {
+                continue;
+            }
+            assert!(
+                environment
+                    .iter()
+                    .all(|line| !line.starts_with(&format!("{name}="))),
+                "create.env holds {name}"
+            );
+        }
+        assert!(
+            !holds_a_service_blocked_value(&environment),
+            "{environment:#?}"
+        );
+    }
+}
+
+/// A root that forwards `GH_TOKEN` to its two commands.
+const FORWARDING_TREE_FILES: &[TreeFile] = &[TreeFile {
+    path: "workflow.yaml",
+    bytes: b"schemaVersion: 1\nname: build\nenvironmentPassthrough: [GH_TOKEN]\nsteps:\n  build:\n    kind: cmd\n    command:\n      argv: [/bin/sh, -c, 'exit 0']\n  review:\n    kind: cmd\n    dependsOn: [build]\n    command:\n      argv: [/bin/sh, -c, 'exit 0']\n",
+    executable: false,
+}];
+
+/// `FORWARDING_TREE_FILES` whose root also binds a `linear.team`, which calls for `linear`.
+const LINEAR_BOUND_TREE_FILES: &[TreeFile] = &[TreeFile {
+    path: "workflow.yaml",
+    bytes: b"schemaVersion: 1\nname: build\nenvironmentPassthrough: [GH_TOKEN]\nbindings:\n  team: {kind: linear.team}\nsteps:\n  build:\n    kind: cmd\n    command:\n      argv: [/bin/sh, -c, 'exit 0']\n  review:\n    kind: cmd\n    dependsOn: [build]\n    command:\n      argv: [/bin/sh, -c, 'exit 0']\n",
+    executable: false,
+}];
+
+/// The service's own value of `GH_TOKEN` in the credential check's fixtures.
+const SERVICE_GH_TOKEN: &str = "service-value-of-gh-token";
+
+/// One row of a list Cloud answers, `provider` with its two names.
+fn listed_row(
+    provider: &str,
+    token: &str,
+    token_file: &str,
+) -> crate::agent_login::cloud::ListedProvider {
+    crate::agent_login::cloud::ListedProvider {
+        provider: provider.to_owned(),
+        token: token.to_owned(),
+        token_file: token_file.to_owned(),
+    }
+}
+
+/// A fixture of `files` offered with `mode`, on a service that sets `GH_TOKEN`, over a Cloud
+/// that issues the assignment a GitHub token and answers the provider table with its GitHub
+/// row.
+fn credential_check_fixture(
+    files: &'static [TreeFile],
+    mode: Option<crate::control_protocol::CredentialMode>,
+) -> (
+    Fixture,
+    crate::service::test_support::tree_fixture::IssuedGithubToken,
+) {
+    let service = [("GH_TOKEN", SERVICE_GH_TOKEN)];
+    let mut fixture = fixture_sourced(
+        TREE_DIGEST,
+        "exited",
+        "\"planned\"",
+        &service,
+        None,
+        tuned(super::command::SHORT_COMMAND_BOUND),
+        fixture_source_broker,
+        files,
+    );
+    fixture.offer.credential_mode = mode;
+    let issued = issue_github_token(&mut fixture, &service);
+    issued.cloud.answer_credential_providers(Ok(vec![listed_row(
+        "github",
+        "GH_TOKEN",
+        "GH_TOKEN_FILE",
+    )]));
+    (fixture, issued)
+}
+
+// SC-GRANT-17: a `cloud` run whose tree forwards `GH_TOKEN`, which calls for
+// `github`, is started once Cloud issues the GitHub token, and `create` reads the issued token
+// and not the service's.
+#[tokio::test]
+async fn a_cloud_run_whose_tree_calls_for_a_provider_it_holds_starts_with_what_cloud_issued() {
+    use crate::control_protocol::{AgentLoginProvider, CredentialMode};
+    use crate::service::test_support::fake_grant_token;
+
+    let (mut fixture, issued) =
+        credential_check_fixture(FORWARDING_TREE_FILES, Some(CredentialMode::Cloud));
+
+    let authorization = "cna_01k0z6r1w8f4jy2m7q9v3x5abc";
+    issued.cloud.answer_grant_token(
+        AgentLoginProvider::Github,
+        crate::service::test_support::FakeGrantToken::IssueFrom(authorization, 3),
+    );
+    execute(&mut fixture).await;
+
+    let environment = logged_lines(&fixture.log, "create.env");
+    let token = fake_grant_token(AgentLoginProvider::Github, 3);
+    assert!(environment.contains(&format!("GH_TOKEN={token}")));
+    assert!(!environment.contains(&format!("GH_TOKEN={SERVICE_GH_TOKEN}")));
+
+    let reports = issued.cloud.credential_source_reports();
+    let source = reports[0]
+        .sources
+        .iter()
+        .find(|entry| entry.provider == AgentLoginProvider::Github)
+        .unwrap();
+    assert_eq!(
+        source.source,
+        crate::control_protocol::CredentialSource::OrgConnection
+    );
+    assert_eq!(
+        source.connection_authorization_id.as_deref(),
+        Some(authorization)
+    );
+    assert_eq!(source.grant_id, None);
+}
+
+#[tokio::test]
+async fn cloud_mode_rejects_a_revoked_github_credential_even_when_the_host_has_a_token() {
+    use crate::agent_login::cloud::{GrantTokenFailure, GrantTokenRefusal};
+    use crate::control_protocol::{AgentLoginProvider, CredentialMode};
+    use crate::service::test_support::FakeGrantToken;
+
+    let (mut fixture, issued) =
+        credential_check_fixture(FORWARDING_TREE_FILES, Some(CredentialMode::Cloud));
+    issued.cloud.answer_grant_token(
+        AgentLoginProvider::Github,
+        FakeGrantToken::Fail(GrantTokenFailure::Refused(GrantTokenRefusal::Revoked)),
+    );
+    let decline = prepare_offered(&mut fixture.manager, &fixture.offer).await;
+    assert_eq!(
+        decline,
+        Some(
+            AssignmentDecline::ExecutionSpecInvalid(ExecutionSpecInvalidReason::GrantRequired)
+                .diagnosed("credential_check", "grant_missing")
+                .with_providers(useful_runner_protocol::DeclineProviders::new(["github"]))
+        )
+    );
+    assert!(!fixture.log.join("create.args").exists());
+    assert!(
+        issued
+            .cloud
+            .credential_source_reports()
+            .iter()
+            .flat_map(|report| &report.sources)
+            .all(|entry| entry.provider != AgentLoginProvider::Github)
+    );
+}
+
+// SC-GRANT-17: a `cloud` run whose tree also binds a `linear.team`, where
+// Cloud's provider list does not name `linear`, is rejected `grant_required` naming `linear`
+// alone, once the tree is published and before `create` starts.
+#[tokio::test]
+async fn a_cloud_run_whose_tree_calls_for_a_provider_cloud_gave_nothing_for_is_rejected() {
+    use crate::control_protocol::CredentialMode;
+
+    let (mut fixture, issued) =
+        credential_check_fixture(LINEAR_BOUND_TREE_FILES, Some(CredentialMode::Cloud));
+    issued.cloud.answer_grant_providers(Ok(vec![listed_row(
+        "github",
+        "GH_TOKEN",
+        "GH_TOKEN_FILE",
+    )]));
+
+    let decline = prepare_offered(&mut fixture.manager, &fixture.offer).await;
+
+    assert_eq!(
+        decline
+            .as_ref()
+            .and_then(AssignmentDecline::providers)
+            .map(|providers| providers.ids().collect::<Vec<_>>()),
+        Some(vec!["linear"])
+    );
+    assert_eq!(
+        decline,
+        Some(
+            AssignmentDecline::ExecutionSpecInvalid(ExecutionSpecInvalidReason::GrantRequired)
+                .diagnosed("credential_check", "grant_missing")
+                .with_providers(useful_runner_protocol::DeclineProviders::new(["linear"]))
+        )
+    );
+    assert!(fixture.log.join("publish.args").exists());
+    assert!(!fixture.log.join("create.args").exists());
+}
+
+// the same run, where Cloud lists `linear` and does not answer its token
+// request, lacks it without its being missing: it is declined as unable, with the stage
+// `credential_check`, to be offered again.
+#[tokio::test]
+async fn a_cloud_run_whose_token_request_cloud_did_not_answer_is_declined_as_unable() {
+    use crate::agent_login::cloud::{CloudFailure, GrantTokenFailure};
+    use crate::control_protocol::{AgentLoginProvider, CredentialMode};
+    use crate::service::test_support::FakeGrantToken;
+
+    let (mut fixture, issued) =
+        credential_check_fixture(LINEAR_BOUND_TREE_FILES, Some(CredentialMode::Cloud));
+    issued.cloud.answer_grant_providers(Ok(vec![
+        listed_row("github", "GH_TOKEN", "GH_TOKEN_FILE"),
+        listed_row(
+            "linear",
+            "USEFUL_LINEAR_ACCESS_TOKEN",
+            "USEFUL_LINEAR_ACCESS_TOKEN_FILE",
+        ),
+    ]));
+    issued.cloud.answer_grant_token(
+        AgentLoginProvider::Linear,
+        FakeGrantToken::Fail(GrantTokenFailure::Cloud(CloudFailure::Transport)),
+    );
+
+    let decline = prepare_offered(&mut fixture.manager, &fixture.offer).await;
+
+    assert_eq!(
+        decline,
+        Some(
+            AssignmentDecline::RunnerUnable(RunnerUnableReason::InputServiceUnavailable)
+                .diagnosed("credential_check", "cloud_unanswered")
+        )
+    );
+    assert!(!fixture.log.join("create.args").exists());
+}
+
+// the tree that calls for `linear`, offered in `host` or with no mode, is never
+// checked: its run starts whatever Cloud's list names.
+#[tokio::test]
+async fn a_run_admitted_in_host_or_with_no_mode_is_not_checked() {
+    use crate::control_protocol::CredentialMode;
+
+    for mode in [Some(CredentialMode::Host), None] {
+        let (mut fixture, issued) = credential_check_fixture(LINEAR_BOUND_TREE_FILES, mode);
+        issued.cloud.answer_grant_providers(Ok(vec![listed_row(
+            "github",
+            "GH_TOKEN",
+            "GH_TOKEN_FILE",
+        )]));
+
+        execute(&mut fixture).await;
+
+        assert!(fixture.log.join("create.args").exists(), "{mode:?}");
+    }
+}
+
+// a run admitted in `cloud` on a service that has
+// a Claude Code login of its own is started with the login Cloud authorizes the runner, which
+// the admission's pass installs, and the `resume` that continues it from a wait, whose
+// environment is built again from the process environment, is offered no service value of a
+// blocked name either.
+#[tokio::test]
+async fn a_cloud_run_is_offered_the_runners_login_at_each_command_and_never_the_services() {
+    use crate::control_protocol::CredentialMode;
+    use crate::service::test_support::{fake_agent_login_material, fake_claude_code_authorized};
+
+    let service = [
+        (
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "service-value-of-claude-code-token",
+        ),
+        ("HOME", "/service/home"),
+    ];
+    let mut fixture = control_wait_fixture("answer", &service);
+    fixture.offer.credential_mode = Some(CredentialMode::Cloud);
+    let issued = issue_github_token(&mut fixture, &service);
+    issued.cloud.answer_credential_providers(Ok(Vec::new()));
+    issued.cloud.answer(fake_claude_code_authorized(1));
+    let delivered = String::from_utf8(fake_agent_login_material(1)).unwrap();
+
+    answer_after(&mut fixture, || {}).await;
+
+    assert_eq!(issued.cloud.deliveries(), 1);
+    for log in ["create.env", "resume.env"] {
+        let environment = logged_lines(&fixture.log, log);
+        assert!(
+            environment.contains(&format!("CLAUDE_CODE_OAUTH_TOKEN={delivered}")),
+            "{log}"
+        );
+        assert!(!holds_a_service_blocked_value(&environment), "{log}");
+    }
+}
+
+// each command of a run admitted in `cloud`, the `resume` after a wait among
+// them, is told the runner's credential mode in place of the service's own value of its
+// variable; one admitted with no mode or in `host` is told nothing, and the service's value
+// does not reach it either.
+#[tokio::test]
+async fn only_a_cloud_run_is_told_its_credential_mode_at_each_command() {
+    use crate::control_protocol::CredentialMode;
+    use useful_execution::USEFUL_RUNNER_CREDENTIAL_MODE;
+
+    let service = [(
+        USEFUL_RUNNER_CREDENTIAL_MODE,
+        "service-value-of-credential-mode",
+    )];
+    for mode in [
+        Some(CredentialMode::Cloud),
+        None,
+        Some(CredentialMode::Host),
+    ] {
+        let mut fixture = control_wait_fixture("answer", &service);
+        fixture.offer.credential_mode = mode;
+        let issued = issue_github_token(&mut fixture, &service);
+        issued.cloud.answer_credential_providers(Ok(Vec::new()));
+
+        answer_after(&mut fixture, || {}).await;
+
+        let told: &[String] = if mode == Some(CredentialMode::Cloud) {
+            &[format!("{USEFUL_RUNNER_CREDENTIAL_MODE}=cloud")]
+        } else {
+            &[]
+        };
+        for log in ["create.env", "resume.env"] {
+            let lines: Vec<String> = logged_lines(&fixture.log, log)
+                .into_iter()
+                .filter(|line| line.starts_with(&format!("{USEFUL_RUNNER_CREDENTIAL_MODE}=")))
+                .collect();
+            assert_eq!(lines, told, "{mode:?}: {log}");
+        }
+    }
+}
+
+// a command started after the run waited is offered the agent
+// logins as the runner holds them then, but the grant token variable keeps the admission's
+// value while its file variable names the same, current file.
 #[tokio::test]
 async fn a_resumed_run_keeps_the_admissions_grant_token_variable() {
     use crate::control_protocol::AgentLoginProvider;
@@ -2889,14 +3391,14 @@ async fn a_successors_offer_keeps_the_terminal_report_of_a_run_that_waited() {
 }
 
 /// What `replaced_beside_a_wait` arranges: the fixture, its waiting run's activity, Cloud, the
-/// path of the installed Codex login, and the setup and state directory kept for the test.
+/// path of the installed Codex login, the setup kept for the test, and the state directory.
 struct ReplacedBesideAWait {
     fixture: Fixture,
     activity: Arc<super::RunActivity>,
     cloud: Arc<crate::service::test_support::FakeAgentLoginCloud>,
     installed: PathBuf,
     _setup: Arc<crate::agent_login::setup::AgentLoginSetup>,
-    _state: tempfile::TempDir,
+    state: tempfile::TempDir,
 }
 
 /// The two-run fixture whose first run waits on a wait only a control resolves, with no
@@ -2904,6 +3406,18 @@ struct ReplacedBesideAWait {
 /// agent-login directory and Cloud now authorizes generation 2; each admission sets agent
 /// logins up for itself.
 async fn replaced_beside_a_wait() -> ReplacedBesideAWait {
+    replaced_beside_a_wait_arranged(|_, _, _| ()).await
+}
+
+/// `replaced_beside_a_wait`, with `arrange` given the fixture, Cloud and the live status once
+/// the login is installed and before the first run is admitted.
+async fn replaced_beside_a_wait_arranged(
+    arrange: impl FnOnce(
+        &mut Fixture,
+        &crate::service::test_support::FakeAgentLoginCloud,
+        &Arc<crate::service::control::LiveStatus>,
+    ),
+) -> ReplacedBesideAWait {
     use crate::agent_login::directory::LoginDirectory;
     use crate::agent_login::setup::{AgentLoginSetup, SetupOutcome};
     use crate::service::control::{AdmissionAgentLogins, LiveStatus};
@@ -2935,7 +3449,8 @@ async fn replaced_beside_a_wait() -> ReplacedBesideAWait {
     ));
     fixture
         .manager
-        .set_up_agent_logins_with(AdmissionAgentLogins::new(&setup, status));
+        .set_up_agent_logins_with(AdmissionAgentLogins::new(&setup, Arc::clone(&status)));
+    arrange(&mut fixture, &cloud, &status);
     start(&mut fixture).await;
     wait_for_waiting(&mut fixture).await;
     // The run can be reported waiting while `create`, which wrote its wait, is still in
@@ -2966,7 +3481,7 @@ async fn replaced_beside_a_wait() -> ReplacedBesideAWait {
         cloud,
         installed,
         _setup: setup,
-        _state: state,
+        state,
     }
 }
 
@@ -2996,6 +3511,106 @@ async fn an_admission_beside_a_waiting_run_installs_only_while_none_of_its_comma
         fs::read(&beside.installed).unwrap(),
         fake_agent_login_material(2)
     );
+}
+
+// a run admitted with no mode keeps its GitHub
+// token file, and its refresh still asks Cloud, after an assignment is admitted beside it in
+// `host`; that admission's setup removes the installed Codex login only while the waiting run
+// has no command in flight, and the waiting run's next command is offered none.
+#[tokio::test]
+async fn an_admission_in_host_beside_a_waiting_run_removes_the_login_only_between_its_commands() {
+    use crate::control_protocol::{AgentLoginProvider, CredentialMode};
+    use crate::service::test_support::{
+        FakeGrantToken, controlled_sleeper, fake_agent_login_material, fake_grant_token,
+    };
+
+    let in_host = |offer: &AssignmentOffer| AssignmentOffer {
+        credential_mode: Some(CredentialMode::Host),
+        ..other_offer(offer, '6')
+    };
+
+    // A command of the waiting run is in flight: nothing is removed or reported.
+    let mut beside = replaced_beside_a_wait().await;
+    let command = beside.activity.start_command();
+    let second = in_host(&beside.fixture.offer);
+    let reported = beside.cloud.status_requests();
+    assert_eq!(start_other(&mut beside.fixture, &second, '6').await, None);
+    assert_eq!(
+        fs::read(&beside.installed).unwrap(),
+        fake_agent_login_material(1)
+    );
+    assert_eq!(beside.cloud.status_requests(), reported);
+    drop(command);
+
+    // None is: the login is removed and reported once, and the waiting run's tokens and
+    // refresh are its own.
+    let mut first_log = PathBuf::new();
+    let mut refreshes = None;
+    let mut beside = replaced_beside_a_wait_arranged(|fixture, cloud, status| {
+        cloud.answer_grant_token(AgentLoginProvider::Github, FakeGrantToken::Issue(3));
+        let (sleeper, sleeps) = controlled_sleeper();
+        fixture
+            .manager
+            .refresh_grant_tokens_with(sleeper, Arc::clone(status));
+        refreshes = Some(sleeps);
+        first_log = per_run_log(fixture, &fixture.offer);
+        fs::write(first_log.join("proceed"), b"").unwrap();
+    })
+    .await;
+    let mut refreshes = refreshes.unwrap();
+    let first = beside.fixture.offer.clone();
+    let token_file = crate::agent_login::directory::LoginDirectory::beside(
+        &beside.state.path().join("runner-state.json"),
+    )
+    .grant_token(&first.assignment_id, AgentLoginProvider::Github)
+    .unwrap()
+    .0;
+    let issued = fake_grant_token(AgentLoginProvider::Github, 3);
+    assert_eq!(fs::read_to_string(&token_file).unwrap(), issued);
+    let (_, refresh) = crate::service::test_support::with_watchdog(refreshes.recv())
+        .await
+        .expect("the waiting run's refresh sleeps")
+        .unwrap();
+    let (reported, delivered, asked) = (
+        beside.cloud.status_requests(),
+        beside.cloud.deliveries(),
+        beside.cloud.grant_requests().len(),
+    );
+
+    let second = in_host(&first);
+    assert_eq!(start_other(&mut beside.fixture, &second, '6').await, None);
+
+    assert!(beside.installed.symlink_metadata().is_err());
+    assert_eq!(
+        (beside.cloud.status_requests(), beside.cloud.deliveries()),
+        (reported + 1, delivered)
+    );
+    assert_eq!(fs::read_to_string(&token_file).unwrap(), issued);
+    refresh.release();
+    crate::service::test_support::with_watchdog(refreshes.recv())
+        .await
+        .expect("the waiting run's refresh sleeps again")
+        .unwrap();
+    assert_eq!(beside.cloud.grant_requests().len(), asked + 1);
+
+    send_control(
+        &mut beside.fixture,
+        CONTROL_ID,
+        json!({
+            "kind": "answer",
+            "wait": {"kind": "answer", "since": WAIT_SINCE},
+            "answers": [{"question": "scope", "text": "Only the API."}],
+        }),
+    );
+    finished_assignment_reports(&mut beside.fixture.manager, &first.assignment_id).await;
+    assert!(
+        logged_lines(&first_log, "create.env")
+            .iter()
+            .any(|line| line.starts_with("CODEX_HOME="))
+    );
+    let resumed = logged_lines(&first_log, "resume.env");
+    assert!(resumed.iter().all(|line| !line.starts_with("CODEX_HOME=")));
+    assert!(resumed.contains(&format!("GH_TOKEN_FILE={}", token_file.display())));
 }
 
 /// Two runs of one manager, each waiting on an `approval` wait only a control resolves, each

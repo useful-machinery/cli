@@ -23,6 +23,8 @@ pub struct RunnerAdministration {
     pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(rename = "credentialMode", skip_serializing_if = "Option::is_none")]
+    pub credential_mode: Option<models::RunnerCredentialMode>,
 }
 
 impl RunnerAdministration {
@@ -31,6 +33,7 @@ impl RunnerAdministration {
             mode,
             created_at,
             updated_at,
+            credential_mode: None,
         }
     }
 }

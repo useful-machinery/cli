@@ -260,11 +260,12 @@ fn write_runner_list_human_to(
     for runner in &page.items {
         writeln!(
             output,
-            "  Runner: {}  Name: {}  Pool: {}  Mode: {}  Enrollment: {}  Connectivity: {}  Activity: {}",
+            "  Runner: {}  Name: {}  Pool: {}  Mode: {}  Credential mode: {}  Enrollment: {}  Connectivity: {}  Activity: {}",
             runner.id,
             runner.name,
             runner.runner_pool.name,
             enum_text(&runner.administration.mode)?,
+            credential_mode_text(runner)?,
             enum_text(&runner.enrollment.state)?,
             enum_text(&runner.connectivity.state)?,
             enum_text(&runner.activity.state)?,
@@ -402,6 +403,14 @@ fn write_runner_human_to(
     )?;
     writeln!(
         output,
+        "    Credential mode: {}",
+        credential_mode_text(runner)?
+    )?;
+    if let Some(note) = credential_mode_note(runner) {
+        writeln!(output, "      {note}")?;
+    }
+    writeln!(
+        output,
         "    Created:    {}",
         runner.administration.created_at
     )?;
@@ -527,6 +536,29 @@ fn write_assigned_run_to(
     writeln!(output, "{indent}Project:     {project_id}")?;
     writeln!(output, "{indent}Assigned at: {assigned_at}")?;
     Ok(())
+}
+
+// A registration with no credential mode set, or from a Cloud that reports none, is host first.
+fn credential_mode_text(runner: &RunnerRegistration) -> anyhow::Result<String> {
+    match &runner.administration.credential_mode {
+        Some(mode) => enum_text(mode),
+        None => Ok("host first".to_owned()),
+    }
+}
+
+// Cloud reports advertised metadata only once the runner has said hello, so its absence means
+// the runner has not connected rather than that its release ignores the mode.
+fn credential_mode_note(runner: &RunnerRegistration) -> Option<&'static str> {
+    runner.administration.credential_mode.as_ref()?;
+    match &runner.advertised_metadata {
+        Some(metadata) if metadata.credential_mode == Some(true) => None,
+        Some(_) => {
+            Some("The runner's release does not apply this mode; the runner stays host first.")
+        }
+        None => {
+            Some("The runner has not connected yet; whether it applies this mode is not known.")
+        }
+    }
 }
 
 pub(super) fn enum_text(value: &impl Serialize) -> anyhow::Result<String> {

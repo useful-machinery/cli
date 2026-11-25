@@ -5,6 +5,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nix::sys::stat::Mode;
@@ -258,6 +259,14 @@ impl SyntheticClaudeCodeRoot {
         &self.project
     }
 
+    pub(super) fn disable_auto_mode(&self) {
+        fs::write(
+            self.config.join("settings.json"),
+            br#"{"permissions":{"disableAutoMode":"disable"}}"#,
+        )
+        .unwrap();
+    }
+
     pub(super) fn system_prompt(&self) -> &Path {
         &self.system_prompt
     }
@@ -489,6 +498,10 @@ done
             (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
             (OsString::from("SHELL"), self.shell.as_os_str().to_owned()),
             (OsString::from("CI"), OsString::from("1")),
+            (
+                OsString::from("CLAUDE_CODE_AUTO_MODE_SERVER"),
+                OsString::from("0"),
+            ),
             (OsString::from("NO_COLOR"), OsString::from("1")),
             (
                 OsString::from("ANTHROPIC_API_KEY"),
@@ -510,6 +523,7 @@ done
             .env("PATH", "/usr/bin:/bin")
             .env("SHELL", &self.shell)
             .env("CI", "1")
+            .env("CLAUDE_CODE_AUTO_MODE_SERVER", "0")
             .env("NO_COLOR", "1")
             .env("ANTHROPIC_API_KEY", PLACEHOLDER_API_KEY)
             .env("ANTHROPIC_BASE_URL", provider.base_url());
@@ -640,7 +654,7 @@ pub(super) fn submission(value: Value) -> Value {
 pub(super) enum LoopbackBlock {
     Text(String),
     Thinking(Vec<String>),
-    /// A tool call, its id `tool_scherzo_loopback_<index>`.
+    /// A tool call with a fresh id in the released message.
     ToolUse {
         name: String,
         input: Value,
@@ -677,7 +691,36 @@ enum LoopbackProviderResponse {
     OverloadAfterThinking,
 }
 
+#[derive(Default)]
+struct ToolReviews {
+    block: AtomicBool,
+    count: AtomicUsize,
+}
+
+impl ToolReviews {
+    fn answer(&self, model: &Value) -> Vec<u8> {
+        let text = if self.block.load(Ordering::SeqCst) {
+            "<severity>95</severity><category>Data Exfiltration</category>"
+        } else {
+            "<severity>5</severity>"
+        };
+        self.count.fetch_add(1, Ordering::SeqCst);
+        serde_json::to_vec(&json!({
+            "id": "msg_synthetic_tool_review",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }))
+        .unwrap()
+    }
+}
+
 pub(super) struct LoopbackProvider {
+    reviews: Arc<ToolReviews>,
     address: std::net::SocketAddr,
     requests: mpsc::UnboundedReceiver<ControlledProviderRequest>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -692,6 +735,8 @@ impl LoopbackProvider {
         let address = listener.local_addr().unwrap();
         let (request_sender, requests) = mpsc::unbounded_channel();
         let (shutdown_sender, mut shutdown) = oneshot::channel();
+        let reviews = Arc::<ToolReviews>::default();
+        let provider_reviews = Arc::clone(&reviews);
         let task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
             loop {
@@ -703,8 +748,9 @@ impl LoopbackProvider {
                             break;
                         };
                         let request_sender = request_sender.clone();
+                        let reviews = Arc::clone(&provider_reviews);
                         connections.spawn(async move {
-                            serve_connection(stream, request_sender).await;
+                            serve_connection(stream, request_sender, &reviews).await;
                         });
                     }
                 }
@@ -712,11 +758,20 @@ impl LoopbackProvider {
             connections.shutdown().await;
         });
         Self {
+            reviews,
             address,
             requests,
             shutdown: Some(shutdown_sender),
             task,
         }
+    }
+
+    pub(super) fn block_reviews(&self) {
+        self.reviews.block.store(true, Ordering::SeqCst);
+    }
+
+    pub(super) fn review_count(&self) -> usize {
+        self.reviews.count.load(Ordering::SeqCst)
     }
 
     fn base_url(&self) -> String {
@@ -740,10 +795,23 @@ impl LoopbackProvider {
 async fn serve_connection(
     mut stream: TcpStream,
     requests: mpsc::UnboundedSender<ControlledProviderRequest>,
+    reviews: &ToolReviews,
 ) {
     let Some(request) = read_request(&mut stream).await else {
         return;
     };
+    // Auto's tool reviews are non-streaming Messages requests in the pinned release.
+    // The case controls the streamed agent turns independently.
+    if request.path.split('?').next() == Some("/v1/messages")
+        && request.used_placeholder_key
+        && request.body["stream"] != true
+        && request.body["model"] == "claude-sonnet-5"
+        && request.body.get("tools").is_none()
+    {
+        let payload = reviews.answer(&request.body["model"]);
+        write_response(&mut stream, "200 OK", "application/json", &payload).await;
+        return;
+    }
     // This controller exchange releases one Anthropic-compatible HTTP response; Pi's
     // similarly shaped channel releases native extension events with different authority.
     let (respond, response) = oneshot::channel();
@@ -791,6 +859,10 @@ async fn serve_connection(
         ),
         response => ("200 OK", "text/event-stream", response_payload(response)),
     };
+    write_response(&mut stream, status, content_type, &payload).await;
+}
+
+async fn write_response(stream: &mut TcpStream, status: &str, content_type: &str, payload: &[u8]) {
     let header = format!(
         "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncache-control: no-cache\r\nconnection: close\r\ncontent-length: {}\r\n\r\n",
         payload.len()
@@ -798,7 +870,7 @@ async fn serve_connection(
     if stream.write_all(header.as_bytes()).await.is_err() {
         return;
     }
-    let _ = stream.write_all(&payload).await;
+    let _ = stream.write_all(payload).await;
     let _ = stream.shutdown().await;
 }
 
@@ -916,9 +988,14 @@ fn overload_after_thinking_payload() -> Vec<u8> {
 }
 
 fn block_response_events(blocks: &[LoopbackBlock]) -> Vec<(&'static str, Value)> {
-    let mut events = vec![message_start_event("msg_scherzo_loopback")];
+    // Claude Code correlates each tool result with a call across the entire conversation.
+    static NEXT_MESSAGE: AtomicUsize = AtomicUsize::new(1);
+    let message = NEXT_MESSAGE.fetch_add(1, Ordering::Relaxed);
+    let mut events = vec![message_start_event(&format!(
+        "msg_scherzo_loopback_{message}"
+    ))];
     for (index, block) in blocks.iter().enumerate() {
-        events.extend(content_block_events(index, block));
+        events.extend(content_block_events(message, index, block));
     }
     let stop_reason = if blocks
         .iter()
@@ -932,7 +1009,11 @@ fn block_response_events(blocks: &[LoopbackBlock]) -> Vec<(&'static str, Value)>
     events
 }
 
-fn content_block_events(index: usize, block: &LoopbackBlock) -> Vec<(&'static str, Value)> {
+fn content_block_events(
+    message: usize,
+    index: usize,
+    block: &LoopbackBlock,
+) -> Vec<(&'static str, Value)> {
     let (start, deltas) = match block {
         LoopbackBlock::Text(text) => (
             json!({"type": "text", "text": ""}),
@@ -952,7 +1033,7 @@ fn content_block_events(index: usize, block: &LoopbackBlock) -> Vec<(&'static st
         LoopbackBlock::ToolUse { name, input } => (
             json!({
                 "type": "tool_use",
-                "id": format!("tool_scherzo_loopback_{index}"),
+                "id": format!("tool_scherzo_loopback_{message}_{index}"),
                 "name": name,
                 "input": {},
             }),

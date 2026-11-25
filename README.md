@@ -1638,8 +1638,8 @@ organization also has a personal pool, named by the service, that shows its memb
 `useful runner pool show`; it serves that member's own runners and cannot serve a project.
 Owners administer every pool. A member administers the runners in their own personal pool:
 registering, renaming, changing the mode of and deleting them, and issuing their
-single-runner keys and join keys. Creating, renaming and deleting pools and moving runners between
-pools stay with owners. Commands taking a pool or runner accept its ID or exact name, and
+single-runner keys and join keys. Only owners create, rename or delete pools, move runners between pools,
+or set a runner's credential mode. Commands taking a pool or runner accept its ID or exact name, and
 every one acts in the organization in effect, like the `org` commands: `--org`, then
 `USEFUL_ORG`, then the project of this checkout, then your only organization.
 
@@ -1677,6 +1677,18 @@ prints how many runs the pool's runners hold, working and in a wait, all from on
 `--json` carries the counts, waiting runs and held runs as `status`. Against a Cloud release
 that does not report pool status, it shows the pool alone, and against one that does not
 report held runs, it omits them.
+
+A runner's credential mode is where the credentials of the runs it serves come from. An
+owner sets it with `useful runner credentials RUNNER MODE [--org ORG]`. The mode can
+switch between `cloud` and `host` once set. `useful runner list` and `useful runner show` print it, with `host first`
+where none is set, and `show` says when the runner's release does not apply the mode. While
+the mode is `cloud`, Runner Serve removes the host's values of the provider credential names
+from each run and offers under them only the tokens and the agent login Cloud issued, and
+while it is `host` it asks Cloud for none; [Runner serve](#runner-serve) lists the names and
+says what each mode does. In `cloud` it checks no home: a program that reads a login from
+the service's home (`gh`, Claude Code, Codex) still acts as the host.
+`useful runner credential`, one letter shorter, is a different command: it manages the
+credentials the runner itself authenticates to Cloud with.
 
 Hosts enroll with one of two keys, each written once as one line of JSON. A single-runner
 key enrolls one host as one registered runner, within an hour of issue. A pool's join key
@@ -1814,6 +1826,14 @@ first:
 assignments:    2 total (preparing: 1, waiting: 1)
 run:            run_01k0z6r1w8f4jy2m7q9v3x5abp · working
 run:            run_01k0z6r1w8f4jy2m7q9v3x5abq · waiting
+```
+
+A `credential mode:` line before the `assignments:` line names the credential mode the
+runner goes by, `cloud` or `host`, as Cloud last named it; while it goes by none, before
+Cloud first welcomes it included, there is no such line:
+
+```text
+credential mode: host
 ```
 
 After its `log:` line `runner show` prints a `disk:` line with the free space and the size
@@ -2150,10 +2170,11 @@ old Cloud credential active until local status shows the replacement current and
 one-hour grace, or revoke it at once without `--after` if compromise is suspected. Never
 print a single-runner key or runner state while transferring or verifying it.
 
-Runner Serve installs the agent logins members have authorized for the runner when it
-starts, every five minutes while no run it holds is working, and for each assignment it admits
-before offering it any, so an assignment admitted after a reconnect gets the new generation
-and one admitted after a revocation gets nothing of it. A run it holds is working unless it is
+Runner Serve installs the agent logins members have authorized for the runner once it has
+first connected to Cloud after it starts, every five minutes while no run it holds is
+working, and for each assignment it admits before offering it any, so an assignment
+admitted after a reconnect gets the new generation and one admitted after a revocation gets
+nothing of it. A run it holds is working unless it is
 waiting: a run that is working keeps what it was offered, and one that waited through a
 reconnect or a revocation continues on the logins the runner holds then. It removes a login
 once Cloud no longer authorizes it, a Codex
@@ -2169,7 +2190,7 @@ or has a Claude Code login of its own, that provider is reported `foreign_login`
 installed for it, and steps run on the service's login. Where neither the service nor the
 runner has a login, the variable is simply unset and the step starts. Runner Serve also checks a login with its
 provider by running that coding agent's own program once with the login, outside any run,
-with a fixed prompt that asks for a one-word answer: a login it installs when it starts or
+with a fixed prompt that asks for a one-word answer: a login it installs at that first setup or
 on that five-minute schedule, and every `ready` login when you ask it to set up now. A check
 spends one model turn of the login owner's account at the provider, starts only while no run
 the runner holds is working, and is never made for an assignment's own setup. `useful runner
@@ -2216,8 +2237,58 @@ authorized for the runner is not `ready`, but not for one in `foreign_login`, wh
 on the service's own login, or its login was refused at its last use, and 4 when
 Runner Serve is not reachable or did not finish the setup because a run it holds is working
 (`runner_busy`); a check with no answer
-does not change the exit status. A Runner Serve process started from an older `useful` refuses
+does not change the exit status. Runner Serve sets nothing up for the command and asks Cloud
+nothing before it has first connected to Cloud since it started: the command then exits 4
+with `not_yet_connected`; run it again once `useful runner show` reports
+`connection:     connected`. A Runner Serve process started from an older `useful` refuses
 the request; restart it on this release.
+
+While a runner's credential mode is `host`, which an owner sets with
+`useful runner credentials` (see
+[Runner pools, registrations, and join keys](#runner-pools-registrations-and-join-keys)),
+Runner Serve asks Cloud for no agent login, no list of an assignment's providers and no
+grant token. At its first setup in `host`
+it removes the agent logins it installed, a Codex login with the runner's whole Codex home,
+and tells Cloud of the removal once. Its runs' steps draw on the service environment as it
+is and run on the service's own logins, and it records each coding agent `foreign_login`.
+`useful runner sync` says so: after the readiness it prints a
+`credential mode:` line naming `host`, `--json` carries `credentialMode`, a `foreign_login`
+line names the credential mode and `useful runner credentials` as what stands in the way
+instead of the service's login, and the command exits 0 unless a removal failed.
+
+While a runner's credential mode is `cloud`, Runner Serve keeps the host's values of the
+provider credential names from each run. For every run it removes the service environment's
+values of `GH_TOKEN`, `GITLAB_TOKEN` and `USEFUL_LINEAR_ACCESS_TOKEN` and their `_FILE`
+forms, `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_HOME`, `GITHUB_TOKEN`, `LINEAR_API_KEY`,
+`GITHUB_PUBLISH_TOKEN_FILE`, `UM_LINEAR_ACCESS_TOKEN`, `UM_LINEAR_ACCESS_TOKEN_FILE`,
+`ANTHROPIC_API_KEY` and `CLAUDE_CONFIG_DIR`, and both names of every provider and token
+service it holds a token of for the run and of every row of Cloud's provider table that a
+step receives only by declaring it, from what the run's steps and the `useful` commands it
+starts for the run receive. It asks Cloud for a token of every provider and token service
+listed for the run, whatever the service environment carries, and for the provider table's
+names, and offers only those tokens and the agent login it holds from Cloud, installing and
+offering that login even where the service has one of its own; where it holds none, the name
+is unset. A run it cannot get the provider table's names for is declined and offered again.
+`useful runner show` shows no source `host` in this mode. Runner Serve checks no home:
+every step still inherits the service's `HOME`, so a program that reads a login from it
+(`gh`, Claude Code, Codex) still acts as the host, and Runner Serve neither refuses to start
+nor declines a run because of one.
+
+In `cloud` mode Runner Serve also rejects a run whose workflow calls for a grant it holds
+nothing for, before any step starts. It checks the first attempt of a run of a workflow tree
+whose root does not declare `requires.integrations`: once the tree is published it derives
+the providers the tree calls for as `useful runner doctor --workflow` does, over the root
+workflow and the files its `workflow` steps name, from an agent profile, an integration
+binding, a `mirror` block, a required tool and a forwarded variable that it removes as above,
+and the repository's remote calls for nothing. A provider it holds no token or agent login
+for from Cloud, where Cloud's answer for the run leaves it none, rejects the run with the
+reason `grant_required` naming every such provider: the run is `rejected`, no step starts and
+nothing is retried. `useful workflow run show` prints, under the reason, each provider the rejection
+names with the commands that connect it and authorize a runner for it,
+`useful account integration connect ID` and `useful account integration authorize ID --runner RUNNER --yes`. Where
+Cloud did not answer, the run is declined and offered again instead. A workflow whose root
+declares `requires.integrations`, a continuation of a run an earlier attempt started, and any
+run on a runner in `host` mode or with no mode are not checked.
 
 Runner startup selects `pi`, `claude`, and `codex` independently from its inherited
 operator-controlled `PATH`. Useful Machinery installs none of them. Each successful installation
@@ -2239,9 +2310,10 @@ selection.
 Runner agent steps use the same production dispatcher, cancellation precedence, process
 containment, descendant-quiescence boundary, result authority, and atomic publication
 path as local execution; no runner protocol or credential boundary changes by harness.
-Claude execution still requires native initialization to report the startup version and
-uses fixed unattended `bypassPermissions`. Codex execution uses the closed ephemeral
-App Server profile and fixed no-approval policy. Neither is a sandbox. The runner owner
+Claude execution requires native initialization to report the startup version. Each step
+requests `--permission-mode auto`, and a structured-result step pre-approves only its
+result tool. Codex execution uses the closed ephemeral App Server profile and fixed
+no-approval policy. Neither is a sandbox. The runner owner
 remains responsible for trusted native configuration and filesystem, process, network,
 resource, credential, and secret isolation. Follow the harness rollout runbook, including
 the required native qualification boundary, service restart, selected-harness no-fallback
@@ -2506,7 +2578,7 @@ The Claude Code check follows the same first-candidate and immutable-path rules 
 and, as untested, any stable release newer than `2.1.321`. Useful Machinery does not
 install or upgrade that executable. Its isolated `--version` and `--help` probes require the closed stream
 input/output, partial-message, subagent-forwarding, explicit-session-identity,
-permission-mode, setting-source, model, effort, append-system-prompt-file, and
+permission-mode, allowed-tools, setting-source, model, effort, append-system-prompt-file, and
 MCP-configuration capabilities used by `ClaudeCodeStreamJsonV1`. The report contains only status, profile,
 observed version, supported range, exact repository qualification version,
 qualification (`supported_range` or `untested`), closed capabilities, and the selected
@@ -2855,7 +2927,9 @@ invocation receives a fresh profile directory under
 `attempts/<attempt>/diagnostics/` with immutable attempt, step, invocation, profile, and
 exact-version metadata. PiJsonV1 and ClaudeCodeStreamJsonV1 additionally retain fresh
 native session storage there; those sessions are never resumed, and Claude's temporary
-ambient history links are removed when the invocation quiesces. CodexAppServerV1 starts
+ambient history links are removed when the invocation quiesces. A Claude Code invocation
+also keeps `permission-mode.json` there with the requested and reported permission modes.
+CodexAppServerV1 starts
 one fresh ephemeral thread and uses one transient owner-private SQLite directory beneath
 invocation staging. App Server events remain authoritative, the SQLite directory is
 removed after settlement, and no Codex-native thread or file is retained. A PiJsonV1 or

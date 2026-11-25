@@ -1991,6 +1991,12 @@ fn runner_mode_commands_send_closed_targets_with_idempotency() {
     }
 }
 
+fn credential_mode_response(mode: &str) -> Vec<u8> {
+    let mut runner = registration_body();
+    runner["administration"]["credentialMode"] = serde_json::json!(mode);
+    registration_change_response(&runner)
+}
+
 const GPU_POOL_ID: &str = "rpl_01k0z6r1w8f4jy2m7q9v3x5abe";
 
 /// The registration of `registration_body` as Cloud returns it once moved to the `gpu` pool,
@@ -2017,6 +2023,153 @@ fn registration_change_response(runner: &serde_json::Value) -> Vec<u8> {
         &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
         &serde_json::to_vec(runner).unwrap(),
     )
+}
+
+// SC-RUNNERPOOL-8
+#[test]
+fn runner_credentials_sets_a_closed_credential_mode_with_idempotency() {
+    for (runner, lookup, mode) in [
+        (RUNNER_ID, registration_body(), "cloud"),
+        ("builder-one", registration_list_body(), "host"),
+    ] {
+        let (server, _directory, credential_path) = prepared_runner(vec![
+            json_http_response("200 OK", lookup.clone()),
+            credential_mode_response(mode),
+        ]);
+        let environment = deployment_environment(&server.api_url, &credential_path);
+
+        let output = run_with_env(
+            &[
+                "runner",
+                "credentials",
+                "--org",
+                ORGANIZATION,
+                runner,
+                mode,
+                "--json",
+                "--allow-insecure-http",
+            ],
+            &environment,
+        );
+
+        assert!(output.status.success(), "{runner}: {output:?}");
+        assert!(output.stderr.is_empty());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["schemaVersion"], 1);
+        assert_eq!(result["outcome"], "credential_mode_set");
+        assert_eq!(result["runner"]["administration"]["credentialMode"], mode);
+        let requests = server.finish();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].starts_with(&format!(
+            "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/credential-mode HTTP/1.1\r\n"
+        )));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(request_body(&requests[1])).unwrap(),
+            serde_json::json!({"credentialMode": mode})
+        );
+        assert_eq!(
+            header_value(&requests[1], "content-type"),
+            "application/json"
+        );
+        assert_eq!(header_value(&requests[1], "idempotency-key").len(), 64);
+
+        let (server, _directory, credential_path) = prepared_runner(vec![
+            json_http_response("200 OK", lookup),
+            credential_mode_response(mode),
+        ]);
+        let output = run_with_env(
+            &[
+                "runner",
+                "credentials",
+                "--org",
+                ORGANIZATION,
+                runner,
+                mode,
+                "--allow-insecure-http",
+            ],
+            &deployment_environment(&server.api_url, &credential_path),
+        );
+        assert!(output.status.success(), "{runner}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(credential_mode_line(&stdout, "credentials").0, mode);
+        assert_eq!(server.finish().len(), 2);
+    }
+}
+
+#[test]
+fn runner_credentials_refused_by_cloud_exits_with_forbidden() {
+    let refused = problem_http_response(
+        "403 Forbidden",
+        serde_json::json!({
+            "type": "https://api.usefulmachinery.com/problems/forbidden",
+            "title": "Forbidden",
+            "status": 403
+        }),
+    );
+    let (server, _directory, credential_path) = prepared_runner(vec![
+        json_http_response("200 OK", registration_body()),
+        refused,
+    ]);
+
+    let output = run_with_env(
+        &[
+            "runner",
+            "credentials",
+            "--org",
+            ORGANIZATION,
+            RUNNER_ID,
+            "cloud",
+            "--json",
+            "--allow-insecure-http",
+        ],
+        &deployment_environment(&server.api_url, &credential_path),
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["outcome"], "forbidden");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].starts_with(&format!(
+        "PUT /api/v1/organizations/{ORGANIZATION}/runner-registrations/{RUNNER_ID}/credential-mode HTTP/1.1\r\n"
+    )));
+}
+
+#[test]
+fn runner_credentials_refuses_an_open_or_missing_mode_before_network_access() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api_url = format!("http://{}/api", listener.local_addr().unwrap());
+    let missing_credentials = tempfile::tempdir().unwrap().path().join("missing.json");
+    let environment = deployment_environment(&api_url, missing_credentials.to_str().unwrap());
+
+    for mode in [Some("both"), Some("none"), Some("Cloud"), None] {
+        let mut args = vec!["runner", "credentials", "--org", ORGANIZATION, RUNNER_ID];
+        args.extend(mode);
+        args.push("--allow-insecure-http");
+        let output = run_with_env(&args, &environment);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn runner_credentials_without_a_credential_exits_with_sign_in_required() {
+    let output = run(&[
+        "runner",
+        "credentials",
+        "--org",
+        ORGANIZATION,
+        RUNNER_ID,
+        "cloud",
+    ]);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty());
 }
 
 /// The responses `runner update builder-one --pool gpu --name builder-two` reads, ending with
@@ -2832,6 +2985,121 @@ fn runner_commands_report_reserved_run_and_idle_capacity() {
             }
         }
         assert_eq!(server.finish().len(), 4);
+    }
+}
+
+// The value after a `Credential mode:` label and the line printed after it.
+fn credential_mode_line<'a>(text: &'a str, command: &str) -> (&'a str, Option<&'a str>) {
+    let lines = text.lines().collect::<Vec<_>>();
+    let index = lines
+        .iter()
+        .position(|line| line.contains("Credential mode:"))
+        .unwrap_or_else(|| panic!("{command} should print the credential mode: {text}"));
+    let (_, value) = lines[index].split_once("Credential mode:").unwrap();
+    (value.trim(), lines.get(index + 1).copied())
+}
+
+#[test]
+fn runner_show_and_list_print_the_credential_mode() {
+    let unset = registration_body();
+    let mut applied = registration_body();
+    applied["administration"]["credentialMode"] = serde_json::json!("cloud");
+    applied["advertisedMetadata"]["credentialMode"] = serde_json::json!(true);
+    let mut unapplied = registration_body();
+    unapplied["administration"]["credentialMode"] = serde_json::json!("cloud");
+    let mut unconnected = registration_body();
+    unconnected["administration"]["credentialMode"] = serde_json::json!("host");
+    unconnected
+        .as_object_mut()
+        .unwrap()
+        .remove("advertisedMetadata");
+
+    let mut unapplied_note = None;
+    for (case, runner, mode) in [
+        ("unset", &unset, "host first"),
+        ("applied", &applied, "cloud"),
+        ("unapplied", &unapplied, "cloud"),
+        ("unconnected", &unconnected, "host"),
+    ] {
+        let mut responses = vec![
+            json_http_response("200 OK", runner.clone()),
+            json_http_response("200 OK", serde_json::json!({"items": [runner.clone()]})),
+        ];
+        if case == "applied" {
+            responses.push(json_http_response("200 OK", runner.clone()));
+        }
+        let request_count = responses.len();
+        let (server, _directory, credential_path) = prepared_runner(responses);
+        let environment = deployment_environment(&server.api_url, &credential_path);
+        let run = |args: &[&str]| {
+            let output = run_with_env(args, &environment);
+            assert!(output.status.success(), "{case} {args:?}: {output:?}");
+            assert!(output.stderr.is_empty(), "{case} {args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+
+        let show = run(&[
+            "runner",
+            "show",
+            "--org",
+            ORGANIZATION,
+            RUNNER_ID,
+            "--allow-insecure-http",
+        ]);
+        let (value, next) = credential_mode_line(&show, "show");
+        assert_eq!(value, mode, "{case}: {show}");
+        let next = next.unwrap_or_default();
+        let created = next.trim_start().starts_with("Created:");
+        match case {
+            // No mode is set, so there is nothing for the runner to apply and no note.
+            "unset" => assert!(created, "{case}: {show}"),
+            "applied" => {
+                assert!(!show.contains("host first"), "{case}: {show}");
+                assert!(created, "{case}: {show}");
+            }
+            "unapplied" => {
+                assert!(next.contains("host first"), "{case}: {show}");
+                unapplied_note = Some(next.to_owned());
+            }
+            "unconnected" => {
+                assert!(!created, "{case}: {show}");
+                assert_ne!(Some(next), unapplied_note.as_deref(), "{case}: {show}");
+                assert!(!next.contains("host first"), "{case}: {show}");
+            }
+            _ => {}
+        }
+
+        let list = run(&[
+            "runner",
+            "list",
+            "--org",
+            ORGANIZATION,
+            "--allow-insecure-http",
+        ]);
+        let line = format!("Mode: draining  Credential mode: {mode}  Enrollment:");
+        assert!(list.contains(&line), "{case}: {list}");
+
+        if case == "applied" {
+            let document: serde_json::Value = serde_json::from_str(&run(&[
+                "runner",
+                "show",
+                "--org",
+                ORGANIZATION,
+                RUNNER_ID,
+                "--json",
+                "--allow-insecure-http",
+            ]))
+            .unwrap();
+            assert_eq!(
+                document["runner"]["administration"]["credentialMode"],
+                "cloud"
+            );
+            assert_eq!(
+                document["runner"]["advertisedMetadata"]["credentialMode"],
+                true
+            );
+        }
+        assert_eq!(server.finish().len(), request_count);
     }
 }
 

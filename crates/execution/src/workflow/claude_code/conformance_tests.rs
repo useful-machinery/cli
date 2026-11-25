@@ -35,10 +35,11 @@ use super::test_support::{
 use super::*;
 use crate::workflow::admission::{CancellationReason, CancellationSource};
 use crate::workflow::agent::{
-    AgentAdapter, AgentFailureCause, AgentHarnessFailureDetail, AgentInvocation,
-    AgentInvocationStaging, AgentLifecycleMilestone, AgentObservation, AgentOutcome,
-    AgentProcessContext, AgentPrompt, AgentValueKind, AgentValueMode, CanonicalHarnessFailure,
-    CompletedAgentInvocation, StagedAgentAttachment, agent_start_channel, failed_agent_outcome,
+    AgentAdapter, AgentDiagnosticLevel, AgentFailureCause, AgentHarnessFailureDetail,
+    AgentInvocation, AgentInvocationStaging, AgentLifecycleMilestone, AgentObservation,
+    AgentOutcome, AgentProcessContext, AgentPrompt, AgentValueKind, AgentValueMode,
+    CanonicalHarnessFailure, CompletedAgentInvocation, StagedAgentAttachment, agent_start_channel,
+    failed_agent_outcome,
 };
 use crate::workflow::agent_diagnostics::AgentDiagnosticSession;
 use crate::workflow::diagnostic::StepDiagnosticLog;
@@ -556,6 +557,7 @@ async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one
     let (executable, _exclusive) = exclusive_conformance_executable().await;
     host_scaled_watchdog("pinned Claude Code result correction", WATCHDOG, async {
         let mut provider = LoopbackProvider::start().await;
+        provider.block_reviews();
         let root = SyntheticClaudeCodeRoot::new();
         let observations = RecordingObservationSink::default();
         let running = RunningProductionClaudeCode::launch(
@@ -591,6 +593,11 @@ async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one
         running.task.await.unwrap();
 
         assert_eq!(result_value(outcome), json!(7));
+        assert_eq!(
+            provider.review_count(),
+            0,
+            "the result tool needed a review"
+        );
         let rejections = value_rejections(&observations);
         assert_eq!(rejections.len(), 1, "{rejections:?}");
         // Claude Code trims the answer's trailing newline.
@@ -1306,6 +1313,127 @@ async fn pinned_real_claude_code_07_the_quiet_bound_interrupts_a_held_claude_cod
         provider.shutdown().await;
     })
     .await;
+}
+
+// SC-AGENT-12
+#[tokio::test]
+#[ignore = "requires pinned harness"]
+async fn pinned_real_claude_code_08_a_denied_call_stands_and_the_result_is_still_submitted() {
+    let (executable, _exclusive) = exclusive_conformance_executable().await;
+    host_scaled_watchdog("pinned Claude Code Auto denial", WATCHDOG, async {
+        let root = SyntheticClaudeCodeRoot::new();
+        let command = BackgroundSubagent::new(&root).blocking_command();
+        let observations = submit_after_denied_bash(executable, &root, command, 2).await;
+        assert_diagnostic_contains(&observations, AgentDiagnosticLevel::Information, &["auto"]);
+        assert_diagnostic_contains(
+            &observations,
+            AgentDiagnosticLevel::Warning,
+            &["Bash", "classifier"],
+        );
+    })
+    .await;
+}
+
+// SC-AGENT-13
+#[tokio::test]
+#[ignore = "requires pinned harness"]
+async fn pinned_real_claude_code_08b_auto_turned_off_starts_in_manual_and_says_so() {
+    let (executable, _exclusive) = exclusive_conformance_executable().await;
+    host_scaled_watchdog("pinned Claude Code Manual denial", WATCHDOG, async {
+        let root = SyntheticClaudeCodeRoot::new();
+        root.disable_auto_mode();
+        let command = json!({"command": "echo probe > probe.txt"});
+        let observations = submit_after_denied_bash(executable, &root, command, 0).await;
+        assert!(!root.project().join("probe.txt").exists());
+        assert_diagnostic_contains(&observations, AgentDiagnosticLevel::Warning, &["default"]);
+        let mode: Value = serde_json::from_slice(
+            &fs::read(root.private().join("diagnostics/permission-mode.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mode["requested"], "auto");
+        assert_eq!(mode["reported"], "default");
+    })
+    .await;
+}
+
+async fn submit_after_denied_bash(
+    executable: PathBuf,
+    root: &SyntheticClaudeCodeRoot,
+    bash_input: Value,
+    expected_reviews: usize,
+) -> RecordingObservationSink {
+    let mut provider = LoopbackProvider::start().await;
+    provider.block_reviews();
+    let observations = RecordingObservationSink::default();
+    let mut running = RunningProductionClaudeCode::launch(
+        executable,
+        root,
+        &provider,
+        result_mode(positive_integer_schema()),
+        observations.clone(),
+    )
+    .await_started()
+    .await;
+    next_request_or_outcome(&mut provider, &mut running.terminal)
+        .await
+        .release_tool_use("Bash", bash_input);
+    let denied = next_request_or_outcome(&mut provider, &mut running.terminal).await;
+    let (error, answer) = denied.tool_answer();
+    assert!(error, "the Bash call succeeded: {answer}");
+    assert_eq!(provider.review_count(), expected_reviews);
+    denied.release_submission(json!(7));
+    let accepted = next_request_or_outcome(&mut provider, &mut running.terminal).await;
+    let (error, answer) = accepted.tool_answer();
+    assert!(!error, "the result submission failed: {answer}");
+    assert_eq!(
+        provider.review_count(),
+        expected_reviews,
+        "the result tool needed a review"
+    );
+    accepted.release_text("submitted");
+    assert_eq!(result_value(running.finish().await), json!(7));
+    provider.shutdown().await;
+    observations
+}
+
+#[tokio::test]
+#[ignore = "requires pinned harness"]
+async fn pinned_real_claude_code_08c_a_text_step_reports_auto() {
+    let (executable, _exclusive) = exclusive_conformance_executable().await;
+    host_scaled_watchdog("pinned Claude Code Auto response", WATCHDOG, async {
+        let root = SyntheticClaudeCodeRoot::new();
+        let mut provider = LoopbackProvider::start().await;
+        let observations = RecordingObservationSink::default();
+        let mut running =
+            launch_recorded_response_lifecycle(executable, &root, &provider, &observations).await;
+        next_request_or_outcome(&mut provider, &mut running.terminal)
+            .await
+            .release_text(RESPONSE);
+        let outcome = running.finish().await;
+        let AgentOutcome::Completed(CompletedAgentInvocation::Response(text)) = outcome else {
+            panic!("expected the final text, got {outcome:?}");
+        };
+        assert_eq!(text.as_str(), RESPONSE);
+        assert_diagnostic_contains(&observations, AgentDiagnosticLevel::Information, &["auto"]);
+        provider.shutdown().await;
+    })
+    .await;
+}
+
+fn assert_diagnostic_contains(
+    observations: &RecordingObservationSink,
+    level: AgentDiagnosticLevel,
+    fragments: &[&str],
+) {
+    let snapshot = observations.snapshot();
+    assert!(
+        snapshot.iter().any(|envelope| matches!(
+            envelope.observation(),
+            AgentObservation::Diagnostic {level: observed, message}
+                if *observed == level && fragments.iter().all(|fragment| message.contains(fragment))
+        )),
+        "no {level:?} diagnostic contained {fragments:?}"
+    );
 }
 
 fn result_value(outcome: AgentOutcome) -> Value {

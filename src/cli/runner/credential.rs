@@ -8,7 +8,7 @@ use crate::exit_code::ExitCode;
 use useful_human_auth::Deployment;
 use useful_support::generate_idempotency_key;
 
-pub(super) const ABOUT: &str = "Manage runner credential lifecycle";
+pub(super) const ABOUT: &str = "Manage the credentials a runner authenticates to Cloud with";
 const COMMAND_PATH: &[&str] = &["runner", "credential"];
 const RUNNER_HELP: &str = "Runner ID or exact name";
 

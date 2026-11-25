@@ -806,6 +806,67 @@ fn runner_status_counts_waiting_runs_and_lists_each_held_run() {
     assert!(output.stderr.is_empty());
 }
 
+// the mode the runner goes by is one line of its own, and a
+// runner that goes by none prints no such line.
+#[test]
+fn runner_status_prints_the_credential_mode_the_runner_goes_by() {
+    let credential_mode_lines = |stdout: &str| {
+        stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("credential mode:"))
+            .map(str::trim)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let output = run_status_with_response(include_bytes!(
+        "../fixtures/runner-control/v1/valid/status-credential-mode-response.json"
+    ));
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(credential_mode_lines(&stdout), ["host"], "{stdout}");
+
+    let output = run_status_with_response(include_bytes!(
+        "../fixtures/runner-control/v1/valid/status-idle-response.json"
+    ));
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(credential_mode_lines(&stdout).is_empty(), "{stdout}");
+}
+
+// beside a coding agent's `foreign_login` on a runner that goes
+// by `host`, the step names the mode's command; with no mode the line is as it was.
+#[test]
+fn runner_status_names_the_credential_mode_beside_foreign_login_in_host() {
+    let in_host = run_status_with_response(
+        b"{\"schemaVersion\":1,\"outcome\":\"ok\",\"status\":{\"processState\":\"running\",\"bootId\":\"rbt_01k0z6r1w8f4jy2m7q9v3x5abc\",\"uptimeMilliseconds\":10000,\"connectionState\":\"connected\",\"assignmentCounts\":{\"preparing\":0,\"accepted\":0,\"running\":0,\"finishing\":0,\"reporting\":0},\"credentialMode\":\"host\",\"agentLogins\":{\"updatedAt\":\"2026-11-12T01:00:00Z\",\"providers\":[{\"provider\":\"codex\",\"state\":\"foreign_login\",\"checkedAt\":\"2026-11-12T01:00:00Z\"}]}}}\n",
+    );
+    let no_mode = run_status_with_response(
+        b"{\"schemaVersion\":1,\"outcome\":\"ok\",\"status\":{\"processState\":\"running\",\"bootId\":\"rbt_01k0z6r1w8f4jy2m7q9v3x5abc\",\"uptimeMilliseconds\":10000,\"connectionState\":\"connected\",\"assignmentCounts\":{\"preparing\":0,\"accepted\":0,\"running\":0,\"finishing\":0,\"reporting\":0},\"agentLogins\":{\"updatedAt\":\"2026-11-12T01:00:00Z\",\"providers\":[{\"provider\":\"codex\",\"state\":\"foreign_login\",\"checkedAt\":\"2026-11-12T01:00:00Z\"}]}}}\n",
+    );
+
+    assert!(in_host.status.success(), "{in_host:?}");
+    assert!(no_mode.status.success(), "{no_mode:?}");
+    let in_host = String::from_utf8(in_host.stdout).unwrap();
+    let no_mode = String::from_utf8(no_mode.stdout).unwrap();
+    for stdout in [&in_host, &no_mode] {
+        super::runner_agent_login::assert_provider_lines(
+            stdout,
+            &[("codex", "foreign_login", "not_delivered")],
+        );
+    }
+    let step =
+        |stdout| super::runner_agent_login::printed_step(stdout, "codex", "resolve_service_login");
+    assert!(
+        step(&in_host).contains("`useful runner credentials`"),
+        "{in_host}"
+    );
+    assert!(
+        !step(&no_mode).contains("`useful runner credentials`"),
+        "{no_mode}"
+    );
+    assert_ne!(step(&in_host), step(&no_mode), "{in_host}");
+}
+
 #[test]
 fn runner_status_prints_each_provider_readiness_once_the_runner_has_set_up() {
     let output = run_status_with_response(

@@ -83,7 +83,10 @@ pub(crate) fn install_codex(
 }
 
 /// `CODEX_HOME` naming the runner's Codex home, when the runner keeps a
-/// Codex login there and the service has no Codex login of its own.
+/// Codex login there and the service has no Codex login of its own. For an
+/// assignment admitted in `cloud` it is asked of a service environment that
+/// provides nothing (`ServiceEnvironment::under`), so the service's own
+/// login does not count.
 pub(crate) fn offered_home(
     service: &ServiceEnvironment,
     directory: &LoginDirectory,

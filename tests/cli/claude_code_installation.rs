@@ -12,8 +12,8 @@ use super::{
 const CLAUDE_CODE_CHECK_ID: &str = "execution.harness.claude-code-stream-json-v1";
 const PI_CHECK_ID: &str = "execution.harness.pi-json-v1";
 const CLOSED_PROBES: &[u8] = b"--version\n--help\n";
-pub(super) const COMPLETE_HELP: &str = "Usage: claude [options] [command] [prompt]\nOptions:\n  -p, --print Print response\n  --input-format <format> Input format: stream-json\n  --output-format <format> Output format: stream-json\n  --verbose Verbose mode\n  --include-partial-messages Include chunks\n  --forward-subagent-text Forward text\n  --session-id <uuid> Use session\n  --permission-mode <mode> Permission mode\n  --setting-sources <sources> Setting sources\n  --model <model> Model\n  --effort <level> Effort\n  --bare Context via --append-system-prompt[-file]\n  --mcp-config <configs...> Load MCP servers from JSON files or strings\n";
-const REQUIRED_CAPABILITIES: &str = "print_mode,stream_json_input,stream_json_output,verbose,partial_messages,forward_subagent_text,session_id,permission_mode,setting_sources,model,effort,append_system_prompt_file,mcp_config";
+pub(super) const COMPLETE_HELP: &str = "Usage: claude [options] [command] [prompt]\nOptions:\n  -p, --print Print response\n  --input-format <format> Input format: stream-json\n  --output-format <format> Output format: stream-json\n  --verbose Verbose mode\n  --include-partial-messages Include chunks\n  --forward-subagent-text Forward text\n  --session-id <uuid> Use session\n  --permission-mode <mode> Permission mode\n  --setting-sources <sources> Setting sources\n  --model <model> Model\n  --effort <level> Effort\n  --bare Context via --append-system-prompt[-file]\n  --allowedTools, --allowed-tools <tools...> Allow tools\n  --mcp-config <configs...> Load MCP servers from JSON files or strings\n";
+const REQUIRED_CAPABILITIES: &str = "print_mode,stream_json_input,stream_json_output,verbose,partial_messages,forward_subagent_text,session_id,permission_mode,setting_sources,model,effort,append_system_prompt_file,mcp_config,allowed_tools";
 
 pub(super) struct ClaudeCodeFixture {
     _directory: tempfile::TempDir,

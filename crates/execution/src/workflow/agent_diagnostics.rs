@@ -415,6 +415,24 @@ impl AgentDiagnosticSession {
         verify_directory_binding(&self.directory, self.directory_handle.as_ref())
     }
 
+    pub(crate) fn retain_claude_code_permission_mode(
+        &self,
+        requested: &str,
+        reported: Option<&str>,
+    ) -> Result<(), AgentDiagnosticSessionError> {
+        self.verify_path_binding()?;
+        let mut mode = serde_json::json!({"schemaVersion": 1, "requested": requested});
+        if let Some(reported) = reported {
+            mode["reported"] = serde_json::Value::from(reported);
+        }
+        write_immutable_file(
+            self.directory_handle.as_ref(),
+            "permission-mode.json",
+            format!("{mode:#}\n").as_bytes(),
+        )?;
+        sync_directory(self.directory_handle.as_ref())
+    }
+
     pub(crate) fn retain_protocol_rejection_from(&self, outcome: &AgentOutcome) {
         if let AgentOutcome::Failed(failure) = outcome
             && let Some(rejection) = failure.protocol_rejection()

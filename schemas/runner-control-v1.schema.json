@@ -161,6 +161,10 @@
           "type": "array",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/heldRun" }
+        },
+        "credentialMode": {
+          "description": "The credential mode the runner goes by, as Cloud last named it in a welcome or an assignment offer; absent while it goes by none, and where a serving process that predates it answers.",
+          "enum": ["cloud", "host"]
         }
       }
     },
@@ -358,6 +362,10 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/unansweredCheck" }
+        },
+        "credentialMode": {
+          "description": "The credential mode the setup went by, as Cloud last named it in a welcome or an assignment offer when the setup began; absent while the runner goes by none, and where a serving process that predates it answers.",
+          "enum": ["cloud", "host"]
         }
       }
     },
@@ -1071,6 +1079,7 @@
             "invalid_request",
             "unsupported_version",
             "runner_busy",
+            "not_yet_connected",
             "no_pending_credential",
             "pending_registration_mismatch",
             "pending_authentication_failed",
