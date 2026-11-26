@@ -9,7 +9,7 @@ use super::document::{
     InputDeclaration, Integration, IntegrationAs, IntegrationBinding, IntegrationProvider,
     JsonDefault, MessageSource, NodeBody, OutcomeDeclaration, Output, OutputReference,
     RecoveryHandler, SourceReference, StartRule, Trigger, TriggerControlAction, ValueReference,
-    WaitKind, WaitRule, WorkflowNode,
+    WaitKind, WaitRule, WaitRunner, WorkflowNode,
 };
 use super::pi::{PiConfig, Thinking};
 use super::validated::ValidatedHarness;
@@ -1014,6 +1014,7 @@ fn workflow_steps_decode_the_child_file_inputs_and_edges() {
                     "failed".to_owned(),
                     EdgeTarget::Wait {
                         kind: WaitKind::Repair,
+                        runner: WaitRunner::Keep,
                         then: Box::new(EdgeTarget::Exit("failed".to_owned())),
                         on_hand_back: None,
                         rule: None,
@@ -1054,6 +1055,7 @@ fn workflow_steps_decode_hand_backs_and_control_references() {
         workflow_node("review").edges["approve"],
         EdgeTarget::Wait {
             kind: WaitKind::Approval,
+            runner: WaitRunner::Keep,
             then: Box::new(EdgeTarget::Step("merge".to_owned())),
             on_hand_back: Some("fix".to_owned()),
             rule: None,
@@ -1063,6 +1065,7 @@ fn workflow_steps_decode_hand_backs_and_control_references() {
         workflow_node("design").edges["blocked"],
         EdgeTarget::Wait {
             kind: WaitKind::Answer,
+            runner: WaitRunner::Keep,
             then: Box::new(EdgeTarget::Step("design".to_owned())),
             on_hand_back: None,
             rule: None,
@@ -1078,6 +1081,25 @@ fn workflow_steps_decode_hand_backs_and_control_references() {
             field: "notes".to_owned(),
         }
     );
+}
+
+#[test]
+fn workflow_steps_decode_wait_runner_choices() {
+    let source = fs::read(fixture_root().join("valid/workflow-step-wait-runner.yaml")).unwrap();
+    let workflow = decode(&source).unwrap();
+    for (step, outcome, expected) in [
+        ("review", "approve", WaitRunner::Release),
+        ("design", "failed", WaitRunner::Keep),
+        ("design", "blocked", WaitRunner::Keep),
+    ] {
+        let NodeBody::Workflow(node) = &workflow.steps[step].body else {
+            panic!("{step} decodes as a workflow step");
+        };
+        let EdgeTarget::Wait { runner, .. } = node.edges[outcome] else {
+            panic!("expected a wait edge at {step}.{outcome}");
+        };
+        assert_eq!(runner, expected, "{step}.{outcome}");
+    }
 }
 
 #[test]
@@ -1143,6 +1165,7 @@ fn workflow_steps_decode_backward_limited_and_external_edges() {
             limit: 2,
             else_: Box::new(EdgeTarget::Wait {
                 kind: WaitKind::Repair,
+                runner: WaitRunner::Keep,
                 then: Box::new(EdgeTarget::Step("review".to_owned())),
                 on_hand_back: None,
                 rule: None,
@@ -1153,6 +1176,7 @@ fn workflow_steps_decode_backward_limited_and_external_edges() {
         edge("merge", "admitted"),
         EdgeTarget::Wait {
             kind: WaitKind::External,
+            runner: WaitRunner::Keep,
             then: Box::new(EdgeTarget::Step("merge".to_owned())),
             on_hand_back: None,
             rule: Some(WaitRule {

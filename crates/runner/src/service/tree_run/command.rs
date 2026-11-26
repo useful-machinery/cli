@@ -44,8 +44,9 @@ use useful_execution::{
     LocalRunDirectoryError, RUNNER_DISK_GATE_ENVIRONMENT, WITHDRAWN_OUTCOME, wait_identity,
 };
 use useful_runner_protocol::{
-    RunControlAction, RunControlAnswer, RunControlOutcome, TriggerDelivery, TriggerDeliveryAction,
-    TriggerDeliveryApplication, TriggerDeliveryOutcome, TriggerIssueObservation,
+    RunControlAction, RunControlAnswer, RunControlOutcome, RunWaitEvent, RunWaitEventOutcome,
+    TriggerDelivery, TriggerDeliveryAction, TriggerDeliveryApplication, TriggerDeliveryOutcome,
+    TriggerIssueObservation,
 };
 use useful_support::is_diagnostic_slug;
 
@@ -70,6 +71,7 @@ const RUN_DIRECTORY_POLL: Duration = Duration::from_millis(50);
 /// The code an application reports when `useful workflow run event` could not be run or
 /// answered with no document it could report.
 const EVENT_COMMAND_FAILED: &str = "event_command_failed";
+const DELIVER_COMMAND_FAILED: &str = "deliver_command_failed";
 /// The reason the start's own stop is recorded with when the runner puts it back.
 const START_STOP_REASON: &str = "The start trigger's stopBefore";
 /// The reason a Cloud `stop` that gives none is recorded with; the local command needs one.
@@ -1010,6 +1012,72 @@ async fn event_command(
     Ok(Answered::of(&end, document))
 }
 
+/// Records one Cloud event without resuming the run. Cancellation leaves it unreported.
+pub(super) async fn deliver_event(
+    useful: &UsefulCommand,
+    run_directory: &Path,
+    event: &RunWaitEvent,
+    cancellation: &CancellationSource,
+) -> Option<RunWaitEventOutcome> {
+    let directory = useful.home.join("deliveries").join(&event.delivery);
+    let event_path = directory.join("run-event.json");
+    let path = event_path.clone();
+    let bytes = serde_json::to_vec(event);
+    let staged = tokio::task::spawn_blocking(move || {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)?;
+        write_synced(&path, &bytes?)
+    })
+    .await
+    .map_err(io::Error::other)
+    .and_then(|result| result);
+    let answer = match staged {
+        Ok(()) => {
+            short_document(
+                useful,
+                vec![
+                    "workflow".into(),
+                    "run".into(),
+                    "deliver".into(),
+                    run_directory.into(),
+                    "--event".into(),
+                    event_path.into(),
+                    "--json".into(),
+                ],
+                cancellation,
+            )
+            .await
+        }
+        Err(error) => Answered::launch(error.kind()),
+    };
+    let Answered::Ended { document, .. } = answer else {
+        return None;
+    };
+    if let Ok(reply) = &document {
+        match (
+            reply["outcome"].as_str(),
+            reply["diagnostics"][0]["code"].as_str(),
+        ) {
+            (Some("recorded" | "unchanged"), _) => return Some(RunWaitEventOutcome::Applied),
+            (Some("refused"), Some("wait_not_current")) => {
+                return Some(RunWaitEventOutcome::Skipped);
+            }
+            (Some("refused"), Some(code)) if is_diagnostic_slug(code) => {
+                return Some(RunWaitEventOutcome::Refused {
+                    code: code.to_owned(),
+                });
+            }
+            _ => {}
+        }
+    }
+    log_failure(&useful.log, DELIVER_COMMAND_FAILED, unanswered(&document)).await;
+    Some(RunWaitEventOutcome::Refused {
+        code: DELIVER_COMMAND_FAILED.to_owned(),
+    })
+}
+
 /// The outcome and observation `document`, the event command's last JSON document, reports;
 /// `None` when it reports neither an action nor a refusal. An `applied` one reports the
 /// action its `actionOutcome` says was taken: `canceled` a cancel, and `withdrawn`, or
@@ -1106,7 +1174,7 @@ async fn start_control(
     arguments: Vec<OsString>,
     cancellation: &CancellationSource,
 ) -> bool {
-    let document = match control(useful, arguments, cancellation).await {
+    let document = match short_document(useful, arguments, cancellation).await {
         Answered::Ended { success: true, .. } => return true,
         Answered::Abandoned => return false,
         Answered::Ended { document, .. } => document,
@@ -1138,7 +1206,7 @@ pub(in crate::service) async fn apply_control(
         .into_iter()
         .enumerate()
     {
-        let document = match control(useful, arguments, cancellation).await {
+        let document = match short_document(useful, arguments, cancellation).await {
             Answered::Abandoned => return None,
             Answered::Ended { document, .. } => document,
         };
@@ -1547,10 +1615,10 @@ fn command_failed() -> RunControlOutcome {
     }
 }
 
-/// Runs one short control command, its stdout read back, at most `CONTROL_OUTPUT_LIMIT`, and
+/// Runs one short command, its stdout read back, at most `CONTROL_OUTPUT_LIMIT`, and
 /// appended to the log: `Answered::launch` with the I/O error's kind when it could not be
 /// launched or its output could not be read back.
-async fn control(
+async fn short_document(
     useful: &UsefulCommand,
     arguments: Vec<OsString>,
     cancellation: &CancellationSource,

@@ -26,7 +26,7 @@ use super::validated::{
     ValidatedStep, ValidatedStepRecovery, ValidatedWorkflow, ValidatedWorkflowStep, WorkflowNode,
     WorkflowNodeRole, WorkflowValueType,
 };
-use super::wait::{Operand, parse_where};
+use super::wait::{CLOUD_SOURCE, Operand, parse_where};
 
 const MAXIMUM_WORKFLOW_NODES: usize = 256;
 const MAXIMUM_CONDITION_DEPTH: usize = 16;
@@ -1002,6 +1002,7 @@ fn validate_edge_target(
         }
         EdgeTarget::Wait {
             kind,
+            runner,
             then,
             on_hand_back,
             rule,
@@ -1024,6 +1025,7 @@ fn validate_edge_target(
             };
             Ok(ValidatedEdgeTarget::Wait {
                 kind: *kind,
+                runner: *runner,
                 then: Box::new(validate_edge_target(then, step_name, position, document)?),
                 on_hand_back: on_hand_back
                     .as_deref()
@@ -1060,6 +1062,21 @@ fn validate_wait_rule(
     }
     let conjuncts =
         parse_where(&rule.where_).map_err(|_| ValidationFailureKind::WaitRuleInvalid)?;
+    if rule.source == CLOUD_SOURCE
+        && !conjuncts.iter().any(|(left, right)| match (left, right) {
+            (Operand::Event(path), value) | (value, Operand::Event(path))
+                if path.as_slice() == ["runId"] =>
+            {
+                matches!(
+                    value,
+                    Operand::Literal(_) | Operand::Inputs(_) | Operand::Outputs { .. }
+                )
+            }
+            _ => false,
+        })
+    {
+        return Err(ValidationFailureKind::WaitRuleInvalid);
+    }
     let admitted = |operand: &Operand| match operand {
         Operand::Inputs(name) => matches!(
             document.inputs.get(name),

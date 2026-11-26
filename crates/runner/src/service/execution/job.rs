@@ -1048,6 +1048,7 @@ impl ExecutionJob {
                 self.run_event.result("interrupted");
                 self.run_event.interruption_cause(reason);
             }
+            ExecutionReport::Released { .. } => self.run_event.result("released"),
             ExecutionReport::Aborted { reason, .. } => {
                 self.run_event.result("aborted");
                 self.run_event.set(KeyValue::new(
@@ -1059,6 +1060,7 @@ impl ExecutionJob {
             | ExecutionReport::Transition { .. }
             | ExecutionReport::TreeProgress { .. }
             | ExecutionReport::TriggerDeliveryApplied { .. }
+            | ExecutionReport::RunWaitEventApplied { .. }
             | ExecutionReport::RunControlApplied { .. } => {}
         }
     }

@@ -89,7 +89,7 @@ use super::step_workspace::{StepWorkspaces, WORKSPACES_DIRECTORY};
 use super::tree::{ValidatedTree, validate_workflow_tree};
 use super::tree_copy::{self, FileOperationError, TreeCopyError, file_locator, write_tree_copy};
 use super::value::CapturedValue;
-use super::wait::{ControlEvent, RuleError, WaitRecord, fan_out_element};
+use super::wait::{ControlEvent, ExternalEvent, RuleError, RunEvent, WaitRecord, fan_out_element};
 use super::workspace_snapshot::{
     WorkspaceSnapshotSettlementV1, WorkspaceSnapshotV1, capture_settlement_snapshot,
     capture_start_snapshot, compare_continuation_snapshots,
@@ -122,6 +122,7 @@ pub const SUPERSEDED_OUTCOME: &str = "superseded";
 const RUN_ID_PREFIX: &str = "run_";
 /// The controls appended to the run, written by `wait::append_control`.
 pub(super) const CONTROLS_DIRECTORY: &str = "controls";
+pub(super) const EVENTS_DIRECTORY: &str = "events";
 /// The mirror writes of the run, written by `mirror::append_write`.
 pub(super) const MIRROR_DIRECTORY: &str = "mirror";
 const INITIAL_ATTEMPT_NUMBER: u64 = 1;
@@ -253,6 +254,7 @@ pub enum LocalRunDirectoryError {
     StateDiagnosticsLimitInvalid,
     WaitRecordInvalid,
     ControlEventInvalid,
+    RunEventInvalid,
     MirrorWriteInvalid,
     /// No run under the `useful` home has the id: `run_not_found`.
     RunNotFound,
@@ -2611,7 +2613,11 @@ impl PendingLocalContinuation {
         let definition = workflow.definition.clone();
         let partition = partition.clone();
         tokio::task::spawn_blocking(move || {
-            super::continuation::handover_violations(&definition, &partition, copy_root.as_deref())
+            super::continuation::handover_violations(
+                &definition,
+                &[partition],
+                copy_root.as_deref(),
+            )
         })
         .await
     }
@@ -4164,6 +4170,7 @@ fn create_with_observer(
             Ok(StagedRunContent {
                 state,
                 controls: false,
+                events: false,
                 wait: false,
                 kept: attempt_directory,
             })
@@ -4205,10 +4212,11 @@ struct RunStaging<'a> {
 }
 
 /// What one kind of run stages beyond the shared layout: its `state.json`, whether it holds
-/// `controls/` and a root `wait.json`, and what its creator keeps of the staging.
+/// `controls/`, `events/` and a root `wait.json`, and what its creator keeps of the staging.
 struct StagedRunContent<Kept> {
     state: LocalRunStateV1,
     controls: bool,
+    events: bool,
     wait: bool,
     kept: Kept,
 }
@@ -4310,14 +4318,7 @@ fn publish_run_directory<Kept>(
     sync_directory(&private)?;
     sync_directory(&run_staging)?;
     sync_directory(&staging.root)?;
-    verify_initial_staging(
-        &run_staging,
-        &run,
-        &content.state,
-        record,
-        content.controls,
-        content.wait,
-    )?;
+    verify_initial_staging(&run_staging, &run, &content, record)?;
     let retained_root =
         dup(&run_staging).map_err(|_| LocalRunDirectoryError::PublicationUnavailable)?;
 
@@ -4350,7 +4351,7 @@ fn publish_run_directory<Kept>(
 
 /// Stages a successor's import of the waiting run `predecessor` holds: its `attempts/` copied
 /// entire, its root `workflow/` copied under the first attempt that ran under it, its
-/// `controls/` copied when it has them, its root `wait.json` copied when `wait` carries it,
+/// `controls/` and `events/` copied when present, its root `wait.json` copied when `wait` carries it,
 /// and the state of its attempts re-located and marked imported from `predecessor_id` under a
 /// fresh state identity.
 fn stage_successor_import(
@@ -4371,25 +4372,14 @@ fn stage_successor_import(
         copy_entry(&predecessor.root, WORKFLOW_DIRECTORY, &attempt)?;
         sync_directory(&attempt)?;
     }
-    let controls = match statat(
-        &predecessor.root,
-        CONTROLS_DIRECTORY,
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Ok(_) => true,
-        Err(Errno::NOENT) => false,
-        Err(source) => {
-            return Err(file_error(
-                &predecessor.root,
-                CONTROLS_DIRECTORY,
-                "stat",
-                source,
-            ));
-        }
+    let copy_if_present = |name| {
+        read_if_present(&predecessor.root, name, |root| {
+            copy_entry(root, name, staging.root)
+        })
+        .map(|copied| copied.is_some())
     };
-    if controls {
-        copy_entry(&predecessor.root, CONTROLS_DIRECTORY, staging.root)?;
-    }
+    let controls = copy_if_present(CONTROLS_DIRECTORY)?;
+    let events = copy_if_present(EVENTS_DIRECTORY)?;
     if wait {
         copy_entry(&predecessor.root, WAIT_RECORD_FILE, staging.root)?;
     }
@@ -4403,6 +4393,7 @@ fn stage_successor_import(
             diagnostics: predecessor.state.diagnostics.clone(),
         },
         controls,
+        events,
         wait,
         kept: (),
     })
@@ -6763,27 +6754,28 @@ fn create_state_temporary(parent: &OwnedFd) -> Result<(String, File), LocalRunDi
     Err(LocalRunDirectoryError::StateWriteUnavailable)
 }
 
-fn verify_initial_staging(
+fn verify_initial_staging<Kept>(
     root: &OwnedFd,
     expected_run: &LocalRunV1,
-    expected_state: &LocalRunStateV1,
+    content: &StagedRunContent<Kept>,
     expected_record: Option<&WorkflowRunRecord>,
-    expected_controls: bool,
-    expected_wait: bool,
 ) -> Result<(), LocalRunDirectoryError> {
     let mut expected_entries = run_root_entries();
     if expected_record.is_some() {
         expected_entries.insert(RUN_RECORD_FILE.as_bytes().to_vec());
     }
-    if expected_controls {
+    if content.controls {
         expected_entries.insert(CONTROLS_DIRECTORY.as_bytes().to_vec());
     }
-    if expected_wait {
+    if content.events {
+        expected_entries.insert(EVENTS_DIRECTORY.as_bytes().to_vec());
+    }
+    if content.wait {
         expected_entries.insert(WAIT_RECORD_FILE.as_bytes().to_vec());
     }
     if directory_entries(root)? != expected_entries
         || read_run(root)? != *expected_run
-        || read_state(root)? != *expected_state
+        || read_state(root)? != content.state
         || expected_record
             .map(|record| read_run_record(root).map(|retained| retained != *record))
             .transpose()?
@@ -6967,10 +6959,10 @@ pub(super) fn read_attempt_wait_record(
 pub enum WaitInspection {
     /// A live process holds the run lock.
     Locked(LocalRetryRejection),
-    /// The run waits and no control or observed event resolves the wait.
+    /// The run waits and no control, delivery or observed event resolves the wait.
     Held { wait: WaitRecord },
-    /// `by` is the first control, in ordinal order, or the first event the condition source
-    /// observed that the wait's rule matches.
+    /// `by` is the first matching control or Cloud delivery in ordinal order, or the first
+    /// matching event observed by a live condition source.
     Satisfied { wait: WaitRecord, by: ResolvedBy },
     /// The wait's rule is outside the matcher's grammar (`wait_rule_invalid`).
     RuleInvalid { wait: WaitRecord, error: RuleError },
@@ -6996,8 +6988,8 @@ pub enum WaitInspection {
     },
 }
 
-/// What resolved a wait: a control under `controls/` for a rule on source `useful`, or an
-/// event a condition source observed for a rule on any other source.
+/// What resolved a wait: a control under `controls/` for a rule on source `um`, a delivery under
+/// `events/` on `cloud`, or an event observed by a condition source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedBy {
     Control(ControlEvent),
@@ -7079,10 +7071,27 @@ fn control_resolution(
     Ok(super::wait::evaluate(&rule, run_id, wait, &controls).map(|control| control.cloned()))
 }
 
+/// The first matching delivery addressed to this wait, in recorded order.
+fn recorded_event_resolution(
+    deliveries: &[RunEvent],
+    run_id: &str,
+    wait: &WaitRecord,
+) -> Result<Option<ExternalEvent>, RuleError> {
+    let identity = wait.id();
+    let events: Vec<_> = deliveries
+        .iter()
+        .filter(|event| event.wait == identity)
+        .cloned()
+        .map(RunEvent::into_external_event)
+        .collect();
+    super::wait::evaluate(&wait.rule, run_id, wait, &events).map(|event| event.cloned())
+}
+
 /// Probes the run at `requested` without taking its lock: a lock a live process holds is
 /// `Locked`; otherwise the run record, the root wait record and the events decide: the
 /// controls for a rule on source `um`; for a `host` wait the controls a `repair` wait is
-/// read by and, only when none resolves it, the host condition `conditions` evaluates; and
+/// read by and, only when none resolves it, the host condition `conditions` evaluates;
+/// for a `cloud` rule the deliveries recorded for this wait under `events/`; and
 /// for a rule on any other source the events `conditions` observes now, never the controls.
 /// Nothing is written.
 pub fn inspect_wait(
@@ -7159,6 +7168,10 @@ pub fn inspect_wait(
     } else if wait.rule.source == super::wait::SOURCE {
         control_resolution(&normalized, &record.id, &wait)?
             .map(|control| control.map(ResolvedBy::Control))
+    } else if wait.rule.source == super::wait::CLOUD_SOURCE {
+        let deliveries = super::wait::read_run_events(&normalized)?;
+        recorded_event_resolution(&deliveries, &record.id, &wait)
+            .map(|event| event.map(ResolvedBy::External))
     } else {
         let events = match conditions.observe(&wait) {
             Ok(events) => events,
@@ -7175,6 +7188,46 @@ pub fn inspect_wait(
         Err(error) => WaitInspection::RuleInvalid { wait, error },
     };
     Ok(probe(inspection))
+}
+
+/// Result of recording a delivery against a run's current wait.
+pub enum RunEventDelivery {
+    Recorded { ordinal: u64, path: PathBuf },
+    Unchanged,
+    RunLocked,
+    WaitNotCurrent,
+    EventNotAccepted,
+}
+
+/// Rechecks the wait under the run lock and holds that lock through the append, so a
+/// concurrent resume or upgrade cannot consume the wait between these operations.
+pub fn deliver_run_event(
+    requested: &Path,
+    event: &super::wait::RunEvent,
+) -> Result<RunEventDelivery, LocalRunDirectoryError> {
+    let (normalized, root) = open_run_root(requested)?;
+    let lock = open_retry_lock(&root)?;
+    match fcntl_lock(&lock, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {}
+        Err(Errno::AGAIN | Errno::ACCESS) => return Ok(RunEventDelivery::RunLocked),
+        Err(source) => return Err(file_error(&root, LOCK_FILE, "lock", source)),
+    }
+    verify_retry_lock_identity(&root, &lock)?;
+    let record = read_run_record(&root)?;
+    if record.state != RunState::Waiting || record.successor.is_some() {
+        return Ok(RunEventDelivery::WaitNotCurrent);
+    }
+    let Some(wait) = read_optional_wait_record(&root)?.filter(|wait| wait.id() == event.wait)
+    else {
+        return Ok(RunEventDelivery::WaitNotCurrent);
+    };
+    if wait.rule.source != super::wait::CLOUD_SOURCE || !wait.rule.event.contains(&event.event) {
+        return Ok(RunEventDelivery::EventNotAccepted);
+    }
+    Ok(match super::wait::append_run_event(&normalized, event)? {
+        Some((ordinal, path)) => RunEventDelivery::Recorded { ordinal, path },
+        None => RunEventDelivery::Unchanged,
+    })
 }
 
 /// Whether `controls` hold a `control.withdraw` naming no wait that no attempt of `attempts` has
@@ -7417,7 +7470,7 @@ fn read_withdrawal_pending(
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AttemptControls {
     /// `wait` and `resume_item` from the attempt immediately before, when it entered a wait
-    /// a control resolved, so only the attempt that continues the wait reads its control's
+    /// a control or recorded event resolved, so only the attempt that continues the wait reads its
     /// fields; `answers` from every resolved `answer` wait, the latest per `then` step.
     pub controls: super::step_runtime::ControlContext,
     /// The step a `control.retry` continues at and its `payload.agentProfiles`, the
@@ -7535,7 +7588,7 @@ impl AttemptControls {
         {
             self.replacement = Some((target.clone(), profiles.clone()));
         }
-        // Only the attempt that continues the wait reads its control's fields and resumes its
+        // Only the attempt that continues the wait reads its resolution's fields and resumes its
         // fan-out at the recorded element; one reaching the step after a later attempt ended
         // without a wait (a backward or limited edge, an abandoned attempt) has no
         // `wait.<field>` and starts at the first element.
@@ -7556,17 +7609,19 @@ impl AttemptControls {
 enum WaitResolution {
     /// The control that resolved it.
     Control(ControlEvent),
+    /// The Cloud event delivered for this external wait.
+    Event(ExternalEvent),
     /// The host condition: a `host` wait copy that no control resolved, followed by an
     /// attempt whose continuation reason is `host`. It carries no payload.
     Condition,
 }
 
 impl WaitResolution {
-    /// The string fields the resolution gives the step it continues at: a control's
-    /// payload's, and none for the condition.
+    /// The text fields of the control or event payload. A host condition carries none.
     fn fields(&self) -> impl Iterator<Item = (String, String)> + '_ {
         let payload = match self {
             Self::Control(control) => control.payload.as_ref(),
+            Self::Event(event) => Some(&event.payload),
             Self::Condition => None,
         };
         payload
@@ -7605,13 +7660,14 @@ fn retried_in_place(wait: &WaitRecord, resolution: &WaitResolution, step: &str) 
                 )
         }
         WaitResolution::Condition => true,
+        WaitResolution::Event(_) => false,
     };
     retried && wait.step.first().and_then(Value::as_str) == Some(step)
 }
 
 /// The `wait.<field>` values the attempt continuing the last of `waits`, the earlier attempts'
 /// resolved wait copies in attempt order, starts with at the step that wait continues at: the
-/// string fields of the control that resolved it. When it was retried in place
+/// string fields of the control or recorded event that resolved it. When it was retried in place
 /// (`retried_in_place`: a `control.retry` of a `repair` or `host` wait entered at the step it
 /// continues at, or the host condition, whose layer is empty), the fields are laid over the
 /// ones the attempt that entered the wait had there, found the same way from the copy of the
@@ -7647,7 +7703,7 @@ fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, Stri
 
 /// Each wait copy of the attempts before `attempt_number` of the run at `root`, in attempt
 /// order, with what resolved it: the control, read by `controls_rule` (a `host` wait's by the
-/// repair rule; a wait no control resolves has none), and otherwise, for a
+/// repair rule), the first matching event delivered to a Cloud wait's identity, or, for a
 /// `host` wait copy, the host condition when the attempt right after it records continuation
 /// reason `host` in `state.json` or, not recorded yet, is attempt `attempt_number` with
 /// `reason` `host`. An imported attempt's copy is resolved by a control naming any run of the
@@ -7663,6 +7719,7 @@ fn resolved_attempt_waits(
         return Ok(Vec::new());
     };
     let controls = super::wait::read_controls(normalized)?;
+    let deliveries = super::wait::read_run_events(normalized)?;
     let state = read_optional_state(root)?;
     let recorded = |number: u64| {
         state.as_ref().and_then(|state| {
@@ -7715,6 +7772,12 @@ fn resolved_attempt_waits(
         });
         let resolution = match control {
             Some(control) => Some(WaitResolution::Control(control)),
+            None if wait.rule.source == super::wait::CLOUD_SOURCE => {
+                recorded_event_resolution(&deliveries, &record.id, &wait)
+                    .ok()
+                    .flatten()
+                    .map(WaitResolution::Event)
+            }
             None if wait.kind == super::wait::WaitKind::Host
                 && reason_of(number.saturating_add(1))
                     == Some(super::publication::ContinuationReasonV1::Host) =>
@@ -9324,6 +9387,7 @@ fn resumed_entered_wait(record: &WaitRecord) -> Result<EnteredWait, LocalRunDire
             .and_then(Value::as_str)
             .map(str::to_owned),
         kind: record.kind,
+        runner: super::document::WaitRunner::Keep,
         then: record.then.clone(),
         on_hand_back: record.on_hand_back.clone(),
         rule: None,
@@ -9894,7 +9958,7 @@ fn verify_retained_output(
 
 /// The run root holds exactly the entries of `run_root_entries`, with or without the run
 /// record `run.json`, the directory `children/`, the directory `workspaces/`, the wait record
-/// `wait.json` as a regular file, the directory `controls/` and the directory `mirror/`.
+/// `wait.json` as a regular file and `controls/`, `events/` and `mirror/` as directories.
 fn verify_existing_run_layout(root: &OwnedFd) -> Result<(), LocalRunDirectoryError> {
     let mut entries = directory_entries(root)?;
     for name in [
@@ -9918,6 +9982,7 @@ fn verify_existing_run_layout(root: &OwnedFd) -> Result<(), LocalRunDirectoryErr
         (CHILDREN_DIRECTORY, FileType::Directory),
         (WORKSPACES_DIRECTORY, FileType::Directory),
         (CONTROLS_DIRECTORY, FileType::Directory),
+        (EVENTS_DIRECTORY, FileType::Directory),
         (MIRROR_DIRECTORY, FileType::Directory),
         (WAIT_RECORD_FILE, FileType::RegularFile),
     ]

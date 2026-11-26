@@ -43,6 +43,7 @@ fn entered(kind: WaitKind, step: &str, then: &str, on_hand_back: Option<&str>) -
         step: step.to_owned(),
         outcome: (kind != WaitKind::Stop).then(|| "blocked".to_owned()),
         kind,
+        runner: crate::workflow::document::WaitRunner::Keep,
         then: then.to_owned(),
         on_hand_back: on_hand_back.map(str::to_owned),
         rule: None,
@@ -78,6 +79,26 @@ fn record(kind: WaitKind, step: &str, then: &str, on_hand_back: Option<&str>) ->
         &BTreeMap::new(),
     )
     .unwrap()
+}
+
+#[test]
+fn release_matches_the_steps_that_require_the_execution_root() {
+    let previous = r#"{"kind":"repair","since":"2026-11-07T21:41:58Z","step":["build"],"then":"build","rule":{"source":"um","event":["control.retry","control.withdraw"],"where":"event.run == run.id and event.wait == wait.id"},"payload":{}}"#;
+    let record: WaitRecord = serde_json::from_str(previous).unwrap();
+    assert!(record.is_valid());
+    assert_eq!(serde_json::to_string(&record).unwrap(), previous);
+    for release in [
+        json!({"permitted": true, "executionRootSteps": [{"id": "build"}]}),
+        json!({"permitted": false}),
+    ] {
+        let mut value: Value = serde_json::from_str(previous).unwrap();
+        value["release"] = release;
+        assert!(
+            !serde_json::from_value::<WaitRecord>(value)
+                .unwrap()
+                .is_valid()
+        );
+    }
 }
 
 #[test]
@@ -862,6 +883,36 @@ fn assert_control_invalid(root: &Path, name: &str) {
                 && matches!(*source, LocalRunDirectoryError::ControlEventInvalid) => {}
         other => panic!("{name} was not refused as a control event: {other:?}"),
     }
+}
+
+#[test]
+fn delivered_events_are_private_idempotent_and_read_in_order() {
+    let root = run_root();
+    let event: RunEvent = serde_json::from_value(json!({
+        "source": "cloud", "event": "run.ended", "at": SINCE,
+        "wait": format!("external@{SINCE}"), "delivery": "run-ended:41",
+        "payload": { "runId": RUN, "definitionId": "def_01jcf9a4r7t2m8k3v6x1z5n0pq",
+                     "attempt": 2, "outcome": "ok" }
+    }))
+    .unwrap();
+    let (ordinal, path) = append_run_event(root.path(), &event).unwrap().unwrap();
+    assert_eq!(ordinal, 1);
+    let events = root.path().canonicalize().unwrap().join("events");
+    assert_eq!(path, events.join("0001-run_ended.json"));
+    assert_eq!(mode(&events), 0o700);
+    assert_eq!(mode(&path) & 0o077, 0);
+    assert_valid(
+        &validator("workflow-run-event-v1.schema.json"),
+        &serde_json::from_slice(&fs::read(path).unwrap()).unwrap(),
+    );
+    assert_eq!(append_run_event(root.path(), &event).unwrap(), None);
+    assert_eq!(read_run_events(root.path()).unwrap(), [event]);
+    let invalid = events.join("0002-run_ended.json");
+    fs::write(&invalid, b"{}").unwrap();
+    assert!(
+        matches!(read_run_events(root.path()), Err(LocalRunDirectoryError::StateFile {path, source, ..})
+        if path == invalid && *source == LocalRunDirectoryError::RunEventInvalid)
+    );
 }
 
 #[test]

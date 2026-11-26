@@ -62,6 +62,8 @@ pub enum RunnerFrame {
         tree_no_source: bool,
         /// Advertises `treeHandover: 1` when this runner can take a handed-over tree run.
         tree_handover: bool,
+        /// This runner accepts matched Cloud run exits for waiting assignments.
+        cloud_waits: bool,
         /// Advertises `holdsWaitingRuns: 1`: this runner takes another run while every run it
         /// holds waits, so Cloud may offer it one.
         holds_waiting_runs: bool,
@@ -171,6 +173,12 @@ pub enum RunnerFrame {
         attempt_id: String,
         application: TriggerDeliveryApplication,
     },
+    RunWaitEventApplied {
+        envelope: RunnerEnvelope,
+        assignment_id: String,
+        attempt_id: String,
+        application: RunWaitEventApplication,
+    },
     /// The runner's application of one authorized Cloud control to the run its assignment
     /// holds.
     RunControlApplied {
@@ -199,6 +207,12 @@ pub enum RunnerFrame {
         lease_loss: Option<String>,
         terminal_outcome: Value,
         artifact_delivery: Value,
+    },
+    ExecutionReleased {
+        envelope: RunnerEnvelope,
+        assignment_id: String,
+        attempt_id: String,
+        final_execution_event_sequence: u64,
     },
     ExecutionAborted {
         envelope: RunnerEnvelope,
@@ -360,7 +374,7 @@ impl TreeExport {
 pub struct TreeRootProgress {
     pub attempt: u64,
     pub position: Vec<Value>,
-    pub wait: Option<TreeProgressWait>,
+    pub wait: Option<Box<TreeProgressWait>>,
     pub reported_at: String,
     pub steps: Vec<TreeStepObservation>,
 }
@@ -371,7 +385,8 @@ pub struct TreeRootProgress {
 /// `Some` of an empty list is written as `[]`. The schema admits `questions` only on kind
 /// `answer`, which the encoder does not check. `failed_child` is `None` when the wait
 /// reports none, and the encoder then writes no `failedChild` member; the schema admits
-/// it on a wait of any kind.
+/// it on a wait of any kind. The optional Cloud wait rule and execution-root
+/// release decision are also admitted on any wait.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeProgressWait {
     pub kind: String,
@@ -379,6 +394,78 @@ pub struct TreeProgressWait {
     pub step: Vec<Value>,
     pub questions: Option<TreeProgressWaitQuestions>,
     pub failed_child: Option<TreeProgressFailedChild>,
+    pub accepts: Option<TreeProgressWaitAccepts>,
+    pub release: Option<TreeProgressWaitRelease>,
+}
+
+/// The Cloud run exit a wait accepts.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeProgressWaitAccepts {
+    source: &'static str,
+    event: &'static str,
+    run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
+}
+
+impl TreeProgressWaitAccepts {
+    pub fn new(run_id: String, outcome: Option<String>) -> Option<Self> {
+        (valid_run_id(&run_id) && outcome.as_deref().is_none_or(is_diagnostic_slug)).then_some(
+            Self {
+                source: "cloud",
+                event: "run.ended",
+                run_id,
+                outcome,
+            },
+        )
+    }
+}
+
+/// A step whose retained execution root prevents releasing a wait.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct TreeProgressExecutionRootStep {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeProgressWaitRelease {
+    permitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_root_steps: Option<Vec<TreeProgressExecutionRootStep>>,
+}
+
+impl TreeProgressWaitRelease {
+    pub fn permitted(&self) -> bool {
+        self.permitted
+    }
+
+    pub fn new(
+        permitted: bool,
+        execution_root_steps: Option<Vec<TreeProgressExecutionRootStep>>,
+    ) -> Option<Self> {
+        match (permitted, &execution_root_steps) {
+            (true, None) => {}
+            (false, Some(steps))
+                if (1..=64).contains(&steps.len())
+                    && steps.iter().all(|step| {
+                        step.id
+                            .parse::<generated::TreeProgressWaitReleaseExecutionRootStepsItemId>()
+                            .is_ok()
+                            && step.child.as_deref().is_none_or(|child| {
+                                !child.contains('\0') && (1..=255).contains(&child.chars().count())
+                            })
+                    }) => {}
+            _ => return None,
+        }
+        Some(Self {
+            permitted,
+            execution_root_steps,
+        })
+    }
 }
 
 /// The role of the failing node of a wait's failed child in that child's
@@ -680,6 +767,39 @@ pub struct TriggerDeliveryApplication {
 
 /// Bounds one answer's text in UTF-8 bytes; the schema can bound only its characters.
 pub const MAXIMUM_RUN_CONTROL_ANSWER_BYTES: usize = 65_536;
+
+/// The complete recorded event the runner passes to the workflow engine.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct RunWaitEvent {
+    pub source: String,
+    pub event: String,
+    pub delivery: String,
+    pub wait: String,
+    pub at: String,
+    pub payload: RunEndedPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEndedPayload {
+    pub definition_id: String,
+    pub run_id: String,
+    pub attempt: u64,
+    pub outcome: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RunWaitEventOutcome {
+    Applied,
+    Skipped,
+    Refused { code: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunWaitEventApplication {
+    pub delivery: String,
+    pub outcome: RunWaitEventOutcome,
+}
 
 /// An authorized Cloud control for the run an assignment holds, carried by a `run_control`
 /// effect.
@@ -1550,6 +1670,14 @@ pub enum CloudFrame {
         attempt_id: String,
         delivery: TriggerDelivery,
     },
+    RunWaitEvent {
+        envelope: CloudEnvelope,
+        effect_id: String,
+        assignment_id: String,
+        run_id: String,
+        attempt_id: String,
+        event: RunWaitEvent,
+    },
     /// A Gateway-originated effect carrying one authorized control for the run the
     /// assignment holds.
     RunControl {
@@ -1638,7 +1766,7 @@ pub fn decode_cloud_frame(bytes: &[u8]) -> Result<CloudFrame, DecodeError> {
 }
 
 pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> {
-    let value = match frame {
+    let mut value = match frame {
         RunnerFrame::Hello {
             envelope,
             runner_version,
@@ -1648,6 +1776,7 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             tree_integration_bindings,
             tree_no_source,
             tree_handover,
+            cloud_waits,
             holds_waiting_runs,
             credential_mode,
             registration_mode,
@@ -1670,6 +1799,9 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }
             if *tree_handover {
                 payload["treeHandover"] = json!(1);
+            }
+            if *cloud_waits {
+                payload["cloudWaits"] = json!(1);
             }
             if *holds_waiting_runs {
                 payload["holdsWaitingRuns"] = json!(1);
@@ -1904,6 +2036,8 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
                     if let Some(questions) = &wait.questions {
                         value["questions"] = tree_progress_wait_questions_value(questions);
                     }
+                    if let Some(accepts) = &wait.accepts { value["accepts"] = json!(accepts); }
+                    if let Some(release) = &wait.release { value["release"] = json!(release); }
                     if let Some(child) = &wait.failed_child {
                         value["failedChild"] = tree_progress_wait_failed_child_value(child);
                     }
@@ -1947,6 +2081,26 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
                 }
             }
             runner_frame_value(envelope, "trigger_delivery_applied", payload)
+        }
+        RunnerFrame::RunWaitEventApplied {
+            envelope,
+            assignment_id,
+            attempt_id,
+            application,
+        } => {
+            let mut payload = json!({ "assignmentId": assignment_id, "attemptId": attempt_id, "delivery": application.delivery });
+            match &application.outcome {
+                RunWaitEventOutcome::Applied => payload["outcome"] = json!("applied"),
+                RunWaitEventOutcome::Skipped => {
+                    payload["outcome"] = json!("skipped");
+                    payload["code"] = json!("wait_not_current");
+                }
+                RunWaitEventOutcome::Refused { code } => {
+                    payload["outcome"] = json!("refused");
+                    payload["code"] = json!(code);
+                }
+            }
+            runner_frame_value(envelope, "run_wait_event_applied", payload)
         }
         RunnerFrame::RunControlApplied {
             envelope,
@@ -2042,6 +2196,20 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
                 lease_loss.as_deref(),
             ),
         ),
+        RunnerFrame::ExecutionReleased {
+            envelope,
+            assignment_id,
+            attempt_id,
+            final_execution_event_sequence,
+        } => runner_frame_value(
+            envelope,
+            "execution_released",
+            json!({
+                "assignmentId": assignment_id,
+                "attemptId": attempt_id,
+                "finalExecutionEventSequence": final_execution_event_sequence,
+            }),
+        ),
         RunnerFrame::ExecutionAborted {
             envelope,
             assignment_id,
@@ -2127,7 +2295,16 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }),
         ),
     };
-    let encoded = serde_json::to_vec(&value).map_err(|_| EncodeError::Serialization)?;
+    let mut encoded = serde_json::to_vec(&value).map_err(|_| EncodeError::Serialization)?;
+    // A large release explanation may fit by itself but exceed the frame budget
+    // beside 64 step observations and an answer wait's questions.
+    if encoded.len() > MAXIMUM_ORDINARY_FRAME_BYTES
+        && matches!(frame, RunnerFrame::TreeProgress { .. })
+        && let Some(wait) = value["payload"]["wait"].as_object_mut()
+        && wait.remove("release").is_some()
+    {
+        encoded = serde_json::to_vec(&value).map_err(|_| EncodeError::Serialization)?;
+    }
 
     match decode_frame(&encoded) {
         Ok(ValidatedFrame::Runner) => Ok(encoded),
@@ -2311,10 +2488,16 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
         generated::RunnerProtocolVersion1::RunnerTriggerDeliveryApplied(frame) => {
             validated_runner_frame!(frame)
         }
+        generated::RunnerProtocolVersion1::RunnerRunWaitEventApplied(frame) => {
+            validated_runner_frame!(frame)
+        }
         generated::RunnerProtocolVersion1::RunnerRunControlApplied(frame) => {
             validated_runner_frame!(frame)
         }
         generated::RunnerProtocolVersion1::RunnerExecutionInterrupted(frame) => {
+            validated_runner_frame!(frame)
+        }
+        generated::RunnerProtocolVersion1::RunnerExecutionReleased(frame) => {
             validated_runner_frame!(frame)
         }
         generated::RunnerProtocolVersion1::RunnerExecutionAborted(frame) => {
@@ -2676,6 +2859,33 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 )?,
             }))
         }
+        generated::RunnerProtocolVersion1::CloudRunWaitEvent(frame) => {
+            let envelope = validated_cloud_envelope!(frame)?;
+            let payload = frame.payload;
+            let event = payload.event;
+            OffsetDateTime::parse(&event.at, &Rfc3339)
+                .map_err(|_| DecodeError::InvalidFrame("event.at"))?;
+            Ok(cloud(CloudFrame::RunWaitEvent {
+                envelope,
+                effect_id: payload.effect_id.to_string(),
+                assignment_id: payload.assignment_id.to_string(),
+                run_id: payload.run_id.to_string(),
+                attempt_id: payload.attempt_id.to_string(),
+                event: RunWaitEvent {
+                    source: "cloud".to_owned(),
+                    event: "run.ended".to_owned(),
+                    delivery: event.delivery.to_string(),
+                    wait: event.wait.to_string(),
+                    at: event.at,
+                    payload: RunEndedPayload {
+                        definition_id: event.payload.definition_id.to_string(),
+                        run_id: event.payload.run_id.to_string(),
+                        attempt: event.payload.attempt.get(),
+                        outcome: event.payload.outcome.to_string(),
+                    },
+                },
+            }))
+        }
         generated::RunnerProtocolVersion1::CloudRunControl(frame) => {
             let envelope = validated_cloud_envelope!(frame)?;
             let payload = frame.payload;
@@ -2801,6 +3011,7 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "continuation_ready" => variant(value, Frame::RunnerContinuationReady),
         "tree_progress" => variant(value, Frame::RunnerTreeProgress),
         "trigger_delivery_applied" => variant(value, Frame::RunnerTriggerDeliveryApplied),
+        "run_wait_event_applied" => variant(value, Frame::RunnerRunWaitEventApplied),
         "run_control_applied" => variant(value, Frame::RunnerRunControlApplied),
         "assignment_accepted" => variant(value, Frame::RunnerAssignmentAccepted),
         "assignment_rejected" => variant(value, Frame::RunnerAssignmentRejected),
@@ -2815,6 +3026,7 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "execution_transition" => variant(value, Frame::RunnerExecutionTransition),
         "execution_finished" => variant(value, Frame::RunnerExecutionFinished),
         "execution_interrupted" => variant(value, Frame::RunnerExecutionInterrupted),
+        "execution_released" => variant(value, Frame::RunnerExecutionReleased),
         "execution_aborted" => variant(value, Frame::RunnerExecutionAborted),
         "artifact_carrier_register" => variant(value, Frame::RunnerArtifactCarrierRegister),
         "artifact_carrier_confirm" => variant(value, Frame::RunnerArtifactCarrierConfirm),
@@ -2835,6 +3047,7 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "assignment_lease_renewed" => variant(value, Frame::CloudAssignmentLeaseRenewed),
         "assignment_release" => variant(value, Frame::CloudAssignmentRelease),
         "trigger_delivery" => variant(value, Frame::CloudTriggerDelivery),
+        "run_wait_event" => variant(value, Frame::CloudRunWaitEvent),
         "run_control" => variant(value, Frame::CloudRunControl),
         _ => Err(DecodeError::InvalidFrame("type")),
     }
@@ -3381,6 +3594,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "outcome",
             "observation",
         ],
+        "run_wait_event_applied" => &["assignmentId", "attemptId", "delivery", "outcome"],
         "run_control_applied" => &["assignmentId", "attemptId", "controlId", "outcome"],
         "execution_finished" => &[
             "assignmentId",
@@ -3397,6 +3611,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "terminalOutcome",
             "artifactDelivery",
         ],
+        "execution_released" => &["assignmentId", "attemptId", "finalExecutionEventSequence"],
         "execution_aborted" => &[
             "assignmentId",
             "attemptId",
@@ -3473,6 +3688,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "event",
             "claim",
         ],
+        "run_wait_event" => &["effectId", "assignmentId", "runId", "attemptId", "event"],
         "run_control" => &[
             "effectId",
             "assignmentId",
@@ -3491,6 +3707,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeIntegrationBindings",
             "treeNoSource",
             "treeHandover",
+            "cloudWaits",
             "holdsWaitingRuns",
             "credentialMode",
             "registrationMode",
@@ -3509,6 +3726,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
         "assignment_offer" => &["continuation", "handover", "credentialMode"],
         "workspace_retention_report" => &["settlementSnapshot"],
         "trigger_delivery_applied" => &["action", "code"],
+        "run_wait_event_applied" => &["code"],
         "run_control_applied" => &["code", "actionOutcome"],
         _ => &[],
     };
@@ -3923,6 +4141,34 @@ mod tests {
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-wait-event.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/hello-cloud-waits.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/run-wait-event-applied.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/run-wait-event-refused.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/run-wait-event-skipped.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-cloud-any-outcome.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/tree-progress-waiting-cloud.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-registration-mode.json"
         )),
         include_bytes!(concat!(
@@ -4214,6 +4460,38 @@ mod tests {
         )),
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-run-wait-event-extra-member.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/run-wait-event-applied-invalid-code.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/run-wait-event-skipped-invalid-code.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-cloud-invalid-event.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-cloud-invalid-runid.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-cloud-invalid-source.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-release-denied-without-steps.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/tree-progress-release-permitted-with-steps.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-registration-mode-unknown.json"
         )),
         include_bytes!(concat!(
@@ -4307,6 +4585,28 @@ mod tests {
                 .and_then(|frame| decode_frame(fixture).ok().map(|_| frame));
             assert!(result.is_none(), "invalid fixture {index} was accepted");
         }
+    }
+
+    #[test]
+    fn execution_released_round_trips_without_a_terminal_outcome() {
+        let frame = RunnerFrame::ExecutionReleased {
+            envelope: maximal_envelope(),
+            assignment_id: "asn_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+            final_execution_event_sequence: 0,
+        };
+        let encoded = encode_runner_frame(&frame).unwrap();
+        assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
+        let value: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(value["type"], "execution_released");
+        assert_eq!(
+            value["payload"],
+            json!({
+                "assignmentId": "asn_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "finalExecutionEventSequence": 0,
+            })
+        );
     }
 
     #[test]
@@ -4422,6 +4722,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             tree_handover: false,
+            cloud_waits: false,
             holds_waiting_runs: false,
             credential_mode: false,
             registration_mode: false,
@@ -4442,6 +4743,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             tree_handover: false,
+            cloud_waits: false,
             holds_waiting_runs: false,
             credential_mode: false,
             registration_mode: false,
@@ -4461,6 +4763,7 @@ mod tests {
             tree_integration_bindings: false,
             tree_no_source: false,
             tree_handover: false,
+            cloud_waits: false,
             holds_waiting_runs: false,
             credential_mode: false,
             registration_mode: false,
@@ -4483,6 +4786,7 @@ mod tests {
             tree_integration_bindings: true,
             tree_no_source: true,
             tree_handover: true,
+            cloud_waits: false,
             holds_waiting_runs: false,
             credential_mode: false,
             registration_mode: false,
@@ -4504,6 +4808,7 @@ mod tests {
             tree_integration_bindings: true,
             tree_no_source: true,
             tree_handover: true,
+            cloud_waits: false,
             holds_waiting_runs: true,
             credential_mode: false,
             registration_mode: false,
@@ -4523,6 +4828,7 @@ mod tests {
             tree_integration_bindings: true,
             tree_no_source: true,
             tree_handover: true,
+            cloud_waits: false,
             holds_waiting_runs: true,
             credential_mode: true,
             registration_mode: false,
@@ -4808,13 +5114,15 @@ mod tests {
             TreeRootProgress {
                 attempt: 2,
                 position: vec![json!(step)],
-                wait: Some(TreeProgressWait {
+                wait: Some(Box::new(TreeProgressWait {
                     kind: kind.to_owned(),
                     since: "2026-07-23T00:00:05Z".to_owned(),
                     step: vec![json!(step)],
                     questions,
+                    accepts: None,
+                    release: None,
                     failed_child,
-                }),
+                })),
                 reported_at: "2026-07-23T00:00:06Z".to_owned(),
                 steps: Vec::new(),
             },
@@ -4943,7 +5251,7 @@ mod tests {
             MAXIMUM_TREE_PROGRESS_WAIT_QUESTIONS_BYTES
         );
 
-        // The largest report Cloud admits: questions at the bound beside 64
+        // A report with questions at the bound beside 64
         // worst-case step observations and the longest position and wait step.
         let step = |ordinal: usize| format!("s{ordinal:063}");
         let path = (0..64)
@@ -4957,13 +5265,27 @@ mod tests {
             progress: TreeRootProgress {
                 attempt: 2_147_483_647,
                 position: path.clone(),
-                wait: Some(TreeProgressWait {
+                wait: Some(Box::new(TreeProgressWait {
                     kind: "answer".to_owned(),
                     since: "9999-12-31T23:59:59.999999999Z".to_owned(),
                     step: path,
                     questions: TreeProgressWaitQuestions::new(questions_of_encoded_size(
                         MAXIMUM_TREE_PROGRESS_WAIT_QUESTIONS_BYTES,
                     )),
+                    accepts: TreeProgressWaitAccepts::new(
+                        "run_01k0z6r1w8f4jy2m7q9v3x5abt".to_owned(),
+                        None,
+                    ),
+                    release: TreeProgressWaitRelease::new(
+                        false,
+                        Some(vec![
+                            TreeProgressExecutionRootStep {
+                                id: "build".to_owned(),
+                                child: Some("\u{1}".repeat(255))
+                            };
+                            64
+                        ]),
+                    ),
                     failed_child: Some(failed_child(
                         &"o".repeat(64),
                         &"n".repeat(64),
@@ -4972,7 +5294,7 @@ mod tests {
                         Some(&"p".repeat(64)),
                         Some(&"c".repeat(64)),
                     )),
-                }),
+                })),
                 reported_at: "9999-12-31T23:59:59.999999999Z".to_owned(),
                 steps: (0..64)
                     .map(|ordinal| TreeStepObservation {
@@ -4992,6 +5314,10 @@ mod tests {
         };
         let encoded = encode_runner_frame(&maximal).expect("the maximal report encodes");
         assert!(encoded.len() <= MAXIMUM_ORDINARY_FRAME_BYTES);
+        let document: Value = serde_json::from_slice(&encoded).unwrap();
+        let wait = &document["payload"]["wait"];
+        assert!(wait.get("accepts").is_some());
+        assert!(wait.get("release").is_none());
     }
 
     /// The failed child of the given values, which the test expects admitted.
@@ -5388,6 +5714,92 @@ mod tests {
             serde_json::from_slice::<Value>(&encoded).unwrap(),
             fixture("trigger-delivery-refused.json")
         );
+    }
+
+    #[test]
+    fn cloud_wait_descriptions_encode_as_reported() {
+        let run_id = "run_01k0z6r1w8f4jy2m7q9v3x5abt";
+        let step = TreeProgressExecutionRootStep {
+            id: "build".to_owned(),
+            child: Some("unit".to_owned()),
+        };
+        for (name, outcome, permitted, steps) in [
+            (
+                "tree-progress-waiting-cloud.json",
+                Some("succeeded".to_owned()),
+                false,
+                Some(vec![step.clone()]),
+            ),
+            (
+                "tree-progress-waiting-cloud-any-outcome.json",
+                None,
+                true,
+                None,
+            ),
+        ] {
+            let mut report = fixture_waiting_report("external", None);
+            let RunnerFrame::TreeProgress { progress, .. } = &mut report else {
+                panic!("expected tree progress")
+            };
+            let wait = progress.wait.as_mut().unwrap();
+            wait.accepts = TreeProgressWaitAccepts::new(run_id.to_owned(), outcome);
+            wait.release = TreeProgressWaitRelease::new(permitted, steps);
+            let encoded = encode_runner_frame(&report).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&encoded).unwrap(),
+                valid_runner_fixture(name)
+            );
+        }
+        assert!(
+            TreeProgressWaitAccepts::new(run_id.to_owned(), Some("bad slug".to_owned())).is_none()
+        );
+        assert!(TreeProgressWaitRelease::new(false, None).is_none());
+        assert!(TreeProgressWaitRelease::new(true, Some(vec![step])).is_none());
+    }
+
+    #[test]
+    fn run_wait_event_decodes_and_its_applications_encode_as_the_fixtures() {
+        let document = valid_runner_fixture("cloud-run-wait-event.json");
+        let CloudFrame::RunWaitEvent { event, .. } =
+            decode_cloud_frame(&serde_json::to_vec(&document).unwrap()).unwrap()
+        else {
+            panic!("expected a run wait event")
+        };
+        assert_eq!(event.payload.attempt, 1);
+        assert_eq!(event.payload.outcome, "succeeded");
+        assert_eq!(json!(event), document["payload"]["event"]);
+
+        for (name, outcome) in [
+            ("applied", RunWaitEventOutcome::Applied),
+            ("skipped", RunWaitEventOutcome::Skipped),
+            (
+                "refused",
+                RunWaitEventOutcome::Refused {
+                    code: "deliver_command_failed".to_owned(),
+                },
+            ),
+        ] {
+            let expected = valid_runner_fixture(&format!("run-wait-event-{name}.json"));
+            let frame = RunnerFrame::RunWaitEventApplied {
+                envelope: RunnerEnvelope {
+                    message_id: "rmsg_01k0z6r1w8f4jy2m7q9v3x5acr".to_owned(),
+                    runner_id: "rnr_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                    boot_id: "rbt_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                    sequence: 9,
+                    sent_at: "2026-07-23T00:00:13Z".to_owned(),
+                },
+                assignment_id: "asn_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
+                application: RunWaitEventApplication {
+                    delivery: event.delivery.clone(),
+                    outcome,
+                },
+            };
+            assert_eq!(
+                encode_runner_frame(&frame).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -6466,6 +6878,7 @@ mod tests {
                 tree_integration_bindings: false,
                 tree_no_source: false,
                 tree_handover: false,
+                cloud_waits: false,
                 holds_waiting_runs: false,
                 credential_mode: false,
                 registration_mode,

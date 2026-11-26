@@ -2667,7 +2667,7 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!((commands.len(), expected.len() - commands.len()), (152, 34));
+        assert_eq!((commands.len(), expected.len() - commands.len()), (153, 34));
         let root = Cli::command();
         let visible = commands
             .iter()
@@ -3989,10 +3989,9 @@ mod tests {
         }
     }
 
-    // `workflow run event`, which the runner passes a delivered event, is the tree's one
-    // hidden path.
+    // The workflow delivery commands are internal and stay hidden from CLI help.
     #[test]
-    fn workflow_run_event_is_the_one_hidden_path() {
+    fn only_workflow_run_delivery_commands_are_hidden() {
         fn hidden(command: &clap::Command, prefix: &str, paths: &mut Vec<String>) {
             for child in command.get_subcommands() {
                 let path = format!("{prefix} {}", child.get_name());
@@ -4004,7 +4003,8 @@ mod tests {
         }
         let mut paths = Vec::new();
         hidden(&Cli::command(), "", &mut paths);
-        assert_eq!(paths, ["workflow run event"]);
+        paths.sort();
+        assert_eq!(paths, ["workflow run deliver", "workflow run event"]);
     }
 
     #[test]

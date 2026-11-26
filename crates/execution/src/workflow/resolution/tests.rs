@@ -1662,9 +1662,17 @@ fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
     // the nested workflow may hold.
     let repair = nested_variant(
         "      failed: exit.failed\n",
-        "      failed:\n        then: draft\n        limit: 2\n        else:\n          wait: repair\n          then: draft\n",
+        "      failed:\n        then: draft\n        limit: 2\n        else:\n          wait: repair\n          runner: keep\n          then: draft\n",
     );
     ChildBundle::nesting(&repair)
+        .resolve("workflow.yaml")
+        .unwrap();
+
+    let release = nested_variant(
+        "failed: exit.failed",
+        "failed: {wait: repair, then: draft, runner: release}",
+    );
+    ChildBundle::nesting(&release)
         .resolve("workflow.yaml")
         .unwrap();
 }

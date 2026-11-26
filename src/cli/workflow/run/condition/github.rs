@@ -389,6 +389,7 @@ mod tests {
             step: vec![json!("merge")],
             then: "merge".to_owned(),
             on_hand_back: None,
+            release: None,
             rule: WaitRule {
                 source: SOURCE.to_owned(),
                 event: vec![QUEUE_SETTLED.to_owned()],

@@ -583,6 +583,7 @@ pub(crate) enum EdgeTarget {
     },
     Wait {
         kind: WaitKind,
+        runner: WaitRunner,
         then: Box<EdgeTarget>,
         on_hand_back: Option<String>,
         rule: Option<WaitRule>,
@@ -622,6 +623,15 @@ pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
         OneOrMany::One(event) => vec![event],
         OneOrMany::Many(events) => events,
     })
+}
+
+/// Whether a wait edge retains its Cloud runner or permits it to be released.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WaitRunner {
+    #[default]
+    Keep,
+    Release,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

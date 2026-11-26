@@ -6,6 +6,7 @@ use super::codex::CodexConfig;
 use super::condition::ResolvedPredicate;
 use super::document::{
     DeclaredWorkspace, FailurePolicy, FinalizationTrigger, Output, RootBlocks, WaitKind, WaitRule,
+    WaitRunner,
 };
 use super::evidence::Prerequisite;
 use super::pi::PiConfig;
@@ -246,6 +247,7 @@ pub(crate) enum ValidatedEdgeTarget {
     },
     Wait {
         kind: WaitKind,
+        runner: WaitRunner,
         then: Box<ValidatedEdgeTarget>,
         /// The step a hand-back continues at; present exactly for `approval`.
         on_hand_back: Option<String>,

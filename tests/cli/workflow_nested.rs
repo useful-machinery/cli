@@ -2,18 +2,21 @@
 //! own runs that child's stages and loops its edges inside the step.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::workflow_continue::{
-    attempt_count, completed, host_waiting_run, ordinals_of, read_json,
+    attempt_count, chained, completed, host_waiting_run, ordinals_of, read_json,
 };
+use super::workflow_definition::Home;
 use super::workflow_run::{
     INHERITED_SOURCE_COMMIT, TreeBundle, given_source_revision, isolated_command, progress_records,
-    run_record, source_revision_options,
+    run_record, source_revision_options, workflow_run_schema,
 };
 use super::workflow_run_control::{
-    attempt_result, failed_stage_line, plain_status, summary_row, summary_wait_line,
+    attempt_result, control_command, failed_stage_line, plain_status, summary_row,
+    summary_wait_line,
 };
+use super::workflow_status::signed_out;
 
 /// The root of the nested tree: `outer` fans out over the `parts` input into the nested
 /// workflow `part.yaml`, and `finish` follows it. The root admits both test variables.
@@ -1069,6 +1072,183 @@ fn a_plain_steps_nested_run_waits_at_its_two_element_path_and_continues_in_place
         fs::read_to_string(execution.join("stages.log")).unwrap(),
         "ask b\nask b\nwork b\nfinish -\n"
     );
+}
+
+fn nested_repair_tree(workspace: Option<&str>, runner: Option<&str>) -> TreeBundle {
+    let bundle = TreeBundle::new(
+        "schemaVersion: 1
+environmentPassthrough: [PHASE, COUNTER]
+outcomes: [landed, failed]
+steps:
+  outer:
+    kind: workflow
+    workflow: part.yaml
+    on: {checked: exit.landed, failed: exit.failed}
+",
+    );
+    let runner = runner.map_or_else(String::new, |runner| format!("runner: {runner}, "));
+    bundle.write_source(
+        "part.yaml",
+        &format!(
+            "schemaVersion: 1
+environmentPassthrough: [PHASE, COUNTER]
+outcomes: [checked, failed]
+steps:
+  prepare:
+    kind: workflow
+    workflow: prepare.yaml
+    on: {{succeeded: work, failed: exit.failed}}
+  work:
+    kind: workflow
+    workflow: work.yaml
+    on: {{succeeded: exit.checked, failed: {{wait: repair, {runner}then: work}}}}
+"
+        ),
+    );
+    let workspace = workspace.map_or_else(String::new, |workspace| {
+        format!("    workspace: {workspace}\n")
+    });
+    bundle.write_source(
+        "prepare.yaml",
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE, COUNTER]
+steps:
+  prepare:
+    kind: cmd
+    workspace: none
+    command: {argv: [sh, -ec, 'echo prepare >> "$COUNTER"']}
+"#,
+    );
+    bundle.write_source(
+        "work.yaml",
+        &format!(
+            r#"schemaVersion: 1
+environmentPassthrough: [PHASE, COUNTER]
+steps:
+  build:
+    kind: cmd
+{workspace}    command: {{argv: [sh, -ec, 'test "$PHASE" = continuation']}}
+"#
+        ),
+    );
+    bundle
+}
+
+fn nested_repair_wait(
+    bundle: &TreeBundle,
+    home: &Home,
+    counter: &Path,
+    release: Option<serde_json::Value>,
+) -> PathBuf {
+    let mut create = isolated_command(&["workflow".into(), "run".into(), "create".into()]);
+    create
+        .arg("--path")
+        .arg(bundle.source_root())
+        .arg("--execution-root")
+        .arg(bundle.execution_root())
+        .arg("--json")
+        .env("USEFUL_HOME", home.path())
+        .env("PHASE", "initial")
+        .env("COUNTER", counter);
+    let terminal = completed(&signed_out(create));
+    let wait = &terminal["wait"];
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    assert_eq!(wait["kind"], "repair", "{wait}");
+    assert_eq!(wait["step"], serde_json::json!(["outer", "work"]), "{wait}");
+    assert_eq!(wait.get("release"), release.as_ref());
+    let run = PathBuf::from(terminal["runDirectory"].as_str().unwrap());
+    assert_eq!(
+        read_json(&run.join("wait.json")).get("release"),
+        release.as_ref()
+    );
+    run
+}
+
+fn retry_nested_repair(
+    home: &Home,
+    run: &Path,
+    counter: &Path,
+    args: &[&str],
+) -> std::process::Output {
+    let mut retry = control_command(Some(home), "retry", run.file_name().unwrap(), args);
+    retry.env("PHASE", "continuation").env("COUNTER", counter);
+    signed_out(retry)
+}
+
+#[test]
+fn a_carried_release_wait_restarts_the_nested_run_only_on_handover() {
+    let bundle = nested_repair_tree(Some("new"), Some("release"));
+    let home = Home::new();
+    let base = bundle.execution_root().parent().unwrap();
+    let new_root = base.join("handover");
+    fs::create_dir(&new_root).unwrap();
+    let permitted = serde_json::json!({"permitted": true});
+
+    let counter = base.join("handover-calls");
+    let run = nested_repair_wait(&bundle, &home, &counter, Some(permitted.clone()));
+    chained(&retry_nested_repair(
+        &home,
+        &run,
+        &counter,
+        &["--execution-root", new_root.to_str().unwrap(), "--handover"],
+    ));
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(
+        ordinals_of(&run.join("children/outer")),
+        ["000001", "000002"]
+    );
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "prepare\nprepare\n");
+
+    let counter = base.join("in-place-calls");
+    let run = nested_repair_wait(&bundle, &home, &counter, Some(permitted));
+    chained(&retry_nested_repair(&home, &run, &counter, &[]));
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(ordinals_of(&run.join("children/outer")), ["000001"]);
+    assert_eq!(attempt_count(&run.join("children/outer/000001")), 2);
+    assert_eq!(fs::read_to_string(counter).unwrap(), "prepare\n");
+}
+
+#[test]
+fn a_carried_release_wait_names_the_nested_step_that_needs_the_execution_root() {
+    let bundle = nested_repair_tree(None, Some("release"));
+    let home = Home::new();
+    let base = bundle.execution_root().parent().unwrap();
+    let counter = base.join("calls");
+    let new_root = base.join("handover");
+    fs::create_dir(&new_root).unwrap();
+    let run = nested_repair_wait(
+        &bundle,
+        &home,
+        &counter,
+        Some(serde_json::json!({
+            "permitted": false,
+            "executionRootSteps": [{"id": "outer", "child": "work.build"}]
+        })),
+    );
+    let output = retry_nested_repair(
+        &home,
+        &run,
+        &counter,
+        &["--execution-root", new_root.to_str().unwrap(), "--handover"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&result), "{result}");
+    assert_eq!(result["outcome"], "rejected", "{result}");
+    assert_eq!(result["phase"], "continuation", "{result}");
+    assert!(result["diagnostics"].as_array().unwrap().iter().any(|diagnostic|
+        diagnostic["code"] == "handover_execution_root_required"
+            && diagnostic["location"] == serde_json::json!({"kind": "execution_root_step", "id": "outer", "child": "work.build"})
+    ), "{result}");
+    assert_eq!(ordinals_of(&run.join("children/outer")), ["000001"]);
+    assert_eq!(fs::read_to_string(counter).unwrap(), "prepare\n");
+}
+
+#[test]
+fn a_carried_wait_without_runner_release_has_no_release_judgment() {
+    let bundle = nested_repair_tree(Some("new"), None);
+    let counter = bundle.execution_root().join("calls");
+    nested_repair_wait(&bundle, &Home::new(), &counter, None);
 }
 
 // SC-WFROUTE-1: the answered carried wait continues the same nested run in a new attempt from

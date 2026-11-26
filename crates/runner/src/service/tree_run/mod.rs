@@ -31,7 +31,8 @@ use useful_execution::{
 };
 use useful_runner_protocol::{
     AssignmentDecline, ExecutionSpecInvalidReason, ExecutionSpecV1RunnerProjection, RunControl,
-    RunnerUnableReason, TriggerDelivery, ValidationFacts, WorkflowTreeV1RunnerProjection,
+    RunWaitEvent, RunnerUnableReason, TriggerDelivery, ValidationFacts,
+    WorkflowTreeV1RunnerProjection,
 };
 
 use super::Sleeper;
@@ -87,6 +88,7 @@ pub(super) struct TreeRunDependencies {
     command_bound: Duration,
     deliveries: Inbox<TriggerDelivery>,
     controls: Inbox<RunControl>,
+    wait_events: Inbox<RunWaitEvent>,
     /// The fence each `useful` command of a run enters, which the clones
     /// share.
     fence: Arc<CommandFence>,
@@ -107,6 +109,7 @@ impl TreeRunDependencies {
             command_bound: command::SHORT_COMMAND_BOUND,
             deliveries: Inbox::default(),
             controls: Inbox::default(),
+            wait_events: Inbox::default(),
             fence: CommandFence::new(),
             disk_gate: None,
         }
@@ -148,11 +151,17 @@ impl TreeRunDependencies {
         self.controls.push(assignment_id, control);
     }
 
+    /// Queues a Cloud event for the wait of the assignment's tree run.
+    pub(super) fn deliver_wait_event(&self, assignment_id: &str, event: RunWaitEvent) {
+        self.wait_events.push(assignment_id, event);
+    }
+
     /// Drops the deliveries and controls still queued for `assignment_id`, which has ended,
     /// so the runner keeps nothing of an ended assignment's for the life of its boot.
     pub(super) fn forget(&self, assignment_id: &str) {
         self.deliveries.forget(assignment_id);
         self.controls.forget(assignment_id);
+        self.wait_events.forget(assignment_id);
     }
 
     /// The executable the workspace's workflow-Git helper runs in its internal helper
@@ -199,6 +208,12 @@ trait Inbound {
 impl Inbound for TriggerDelivery {
     fn id(&self) -> &str {
         &self.delivery_id
+    }
+}
+
+impl Inbound for RunWaitEvent {
+    fn id(&self) -> &str {
+        &self.delivery
     }
 }
 
@@ -270,6 +285,14 @@ impl<T: Inbound> AssignmentInbox<T> {
             queued.push_back(item);
         }
         self.arrived.notify_one();
+    }
+
+    /// Takes the oldest item, leaving the rest queued if this item resumes the run.
+    fn pop(&self) -> Option<T> {
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
     }
 
     /// Removes and returns the items queued.
@@ -405,6 +428,7 @@ pub(super) struct TreeRun {
     /// The Cloud controls for the run's assignment; a wait whose rule source is `um` is
     /// evaluated again only once one is applied.
     controls: Arc<AssignmentInbox<RunControl>>,
+    wait_events: Arc<AssignmentInbox<RunWaitEvent>>,
     /// The deliveries the offer carried, applied before the run's first step: after
     /// `create`, or before an adopted run's first command.
     pending: Vec<TriggerDelivery>,
@@ -448,6 +472,7 @@ impl TreeRun {
             intervals: dependencies.intervals,
             deliveries: dependencies.deliveries.of(offer.assignment_id),
             controls: dependencies.controls.of(offer.assignment_id),
+            wait_events: dependencies.wait_events.of(offer.assignment_id),
             pending: offer.pending.to_vec(),
         }
     }

@@ -1988,7 +1988,8 @@ pub(in crate::service) mod tree_fixture {
     /// `$TREE_TEST_OUTCOME`, answering with `$TREE_TEST_RESULT` as the document's `result`, the
     /// engine's `{"outcome":"succeeded"}` when it is unset: for state `waiting`
     /// beside a `wait.json` of kind `$TREE_TEST_WAIT_KIND` whose rule names
-    /// `$TREE_TEST_WAIT_SOURCE`, its `step` and the record's `position` the JSON
+    /// `$TREE_TEST_WAIT_SOURCE` unless `$TREE_TEST_WAIT_RULE` supplies the rule, with release
+    /// from `$TREE_TEST_WAIT_RELEASE` when set, its `step` and the record's `position` the JSON
     /// `$TREE_TEST_POSITION` (`["merge"]` when unset), its `then` `$TREE_TEST_THEN` (`merge`
     /// when unset) and its `payload` the JSON `$TREE_TEST_WAIT_PAYLOAD` (`{}` when unset), the
     /// record first reading `running` at that position while
@@ -2012,6 +2013,7 @@ pub(in crate::service) mod tree_fixture {
     /// directory: `create` before the first record is written, `exited` after `create` writes
     /// an `exited` record, `resume<n>` by the n-th `resume` (after `continue` writes attempt 2)
     /// and `landed` before the run lands.
+    /// `run deliver` logs its event file and records the event.
     /// `run event` copies its event and claim files to the log and answers by
     /// `$TREE_TEST_EVENT`: `cancel` applies `cancel`, ending the run `canceled`, after copying
     /// the stage `event` into the run directory, and signalling
@@ -2151,7 +2153,9 @@ case "$1 $2 $3" in
       n=0
       while [ -e "$log/running" ] && [ "$n" -lt 400 ]; do sleep 0.05; n=$((n + 1)); done
     fi
-    printf '{"kind":"%s","since":"2026-07-23T00:00:05Z","step":%s,"then":"%s","rule":{"source":"%s","event":"pull_request.merged"},"payload":%s}\n' "$TREE_TEST_WAIT_KIND" "$position" "${TREE_TEST_THEN:-merge}" "$TREE_TEST_WAIT_SOURCE" "$wait_payload" > "$run/wait.json"
+    wait_rule="$TREE_TEST_WAIT_RULE"
+    [ -n "$wait_rule" ] || wait_rule=$(printf '{"source":"%s","event":"pull_request.merged"}' "$TREE_TEST_WAIT_SOURCE")
+    printf '{"kind":"%s","since":"2026-07-23T00:00:05Z","step":%s,"then":"%s","rule":%s,"payload":%s%s}\n' "$TREE_TEST_WAIT_KIND" "$position" "${TREE_TEST_THEN:-merge}" "$wait_rule" "$wait_payload" "${TREE_TEST_WAIT_RELEASE:+,\"release\":$TREE_TEST_WAIT_RELEASE}" > "$run/wait.json"
     printf '{"state":"waiting","outcome":null,"attempts":1,"position":%s}\n' "$position" > "$run/run.json"
     ;;
   exited)
@@ -2165,6 +2169,11 @@ case "$1 $2 $3" in
   result="$TREE_TEST_RESULT"
   [ -n "$result" ] || result='{"outcome":"succeeded"}'
   printf '{"runDirectory":"%s","result":%s}\n' "$run" "$result"
+  ;;
+"workflow run deliver")
+  [ "$5" = --event ] && [ "$7" = --json ] && cp "$6" "$log/run-event.json" || exit 1
+  echo deliver >> "$log/order"
+  printf '{"outcome":"recorded"}\n'
   ;;
 "workflow run event")
   run="$4"

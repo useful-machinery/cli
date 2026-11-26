@@ -204,7 +204,7 @@ separate entity family.
   of this closed set: `accept`, `add`, `answer`, `approve`, `archive`,
   `authorize`, `cancel`, `connect` (joins a service to its owner by the
   provider's sign-in or by a token), `create`, `credentials`, `deauthorize`, `decline`,
-  `delete`, `disable`, `disconnect` (ends what `connect` joined), `doctor`,
+  `delete`, `deliver`, `disable`, `disconnect` (ends what `connect` joined), `doctor`,
   `download`, `drain`, `enable`, `end`, `event`,
   `hand-back`, `handover`, `interrupt`, `issue`, `leave`, `link`, `list`, `login`,
   `logout`, `pause`, `propose`, `prune` (removes what a runner keeps on its host,

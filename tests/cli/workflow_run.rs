@@ -8916,40 +8916,50 @@ fn admission_admits_an_answer_wait_target() {
 #[test]
 fn admission_admits_an_external_wait_only_on_a_supported_condition() {
     let bundle = child_tree(CHILD_TREE_DECIDE);
-    let external = |event: &str| {
+    let external = |source: &str, event: &str, field: &str| {
         CHILD_TREE_ROOT.replace(
             "      blocked: exit.failed\n",
             &format!(
-                "      blocked:\n        wait: external\n        then: build\n        rule:\n          source: github\n          event: {event}\n          where: event.ticket == inputs.ticket\n"
+                "      blocked:\n        wait: external\n        then: build\n        rule:\n          source: {source}\n          event: {event}\n          where: event.{field} == inputs.ticket\n"
             ),
         )
     };
     fs::write(bundle.execution_root().join("verdict-input"), "blocked").unwrap();
-    bundle.write_source("workflow.yaml", &external("pull_request.queue_settled"));
-    let destination = bundle.result("queue-settled");
-    let output = run(&child_tree_args(&bundle, &destination));
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
-    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
-    assert_eq!(terminal["wait"]["kind"], "external", "{terminal}");
-    assert_eq!(
-        terminal["wait"]["rule"]["where"],
-        "event.ticket == \"AUTO-1\""
-    );
+    for (source, event, field) in [
+        ("github", "pull_request.queue_settled", "ticket"),
+        ("cloud", "run.ended", "runId"),
+    ] {
+        bundle.write_source("workflow.yaml", &external(source, event, field));
+        let destination = bundle.result(event);
+        let output = run(&child_tree_args(&bundle, &destination));
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
+        assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+        assert_eq!(terminal["wait"]["kind"], "external", "{terminal}");
+        assert_eq!(
+            terminal["wait"]["rule"]["where"],
+            format!(r#"event.{field} == "AUTO-1""#)
+        );
+    }
 
-    bundle.write_source("workflow.yaml", &external("issue.closed"));
-    let destination = bundle.result("issue-closed");
-    let output = run(&child_tree_args(&bundle, &destination));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
-    assert_eq!(terminal["phase"], "admission", "{terminal}");
-    assert_eq!(
-        terminal["diagnostics"][0]["code"],
-        "wait_condition_unsupported"
-    );
-    assert!(!destination.exists());
+    for (source, event, field) in [
+        ("github", "issue.closed", "ticket"),
+        ("cloud", "run.started", "runId"),
+    ] {
+        bundle.write_source("workflow.yaml", &external(source, event, field));
+        let destination = bundle.result(event);
+        let output = run(&child_tree_args(&bundle, &destination));
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let terminal: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(workflow_run_schema().is_valid(&terminal), "{terminal}");
+        assert_eq!(terminal["phase"], "admission", "{terminal}");
+        assert_eq!(
+            terminal["diagnostics"][0]["code"],
+            "wait_condition_unsupported"
+        );
+        assert!(!destination.exists());
+    }
 }
 
 // Admission refuses a wait target that continues at an exit, and a workflow step run without a

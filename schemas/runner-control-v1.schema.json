@@ -954,6 +954,7 @@
             "failed",
             "cancelled",
             "interrupted",
+            "released",
             "artifact_delivery_failed",
             "outcome_unknown",
             "process_stop_failed",

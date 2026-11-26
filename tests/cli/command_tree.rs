@@ -6,7 +6,7 @@ mod migration;
 
 #[test]
 fn installed_command_tree_has_the_declared_paths_visibility_and_options() {
-    const HIDDEN: &str = "workflow run event";
+    const HIDDEN: [&str; 2] = ["workflow run deliver", "workflow run event"];
     let mut pending = vec![String::new()];
     let mut visible = BTreeSet::new();
     while let Some(path) = pending.pop() {
@@ -43,15 +43,15 @@ fn installed_command_tree_has_the_declared_paths_visibility_and_options() {
     }
     let expected = include_str!("../fixtures/command-tree.txt")
         .lines()
-        .filter(|path| *path != HIDDEN)
+        .filter(|path| !HIDDEN.contains(path))
         .map(str::to_owned)
         .collect();
     assert_eq!(visible, expected);
-    assert!(
-        run(&["workflow", "run", "event", "--help"])
-            .status
-            .success()
-    );
+    for path in HIDDEN {
+        let mut args: Vec<_> = path.split_whitespace().collect();
+        args.push("--help");
+        assert!(run(&args).status.success(), "{path}");
+    }
 }
 
 #[test]

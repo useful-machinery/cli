@@ -2367,7 +2367,7 @@ steps:
         path: verdict-design.txt
 ";
 
-/// `decide NAME` records the step inputs it received as `seen-<input>` and reports the
+/// `decide NAME` records its nonempty step inputs as `seen-<input>` and reports the
 /// execution root's `verdict-NAME`, first taking it from the head of `verdicts-NAME` when
 /// that queue holds one, and the pull request `verdict-NAME-pullRequest` names, if any;
 /// while the execution root holds `hold-NAME` it first writes `held-NAME` and sleeps until
@@ -2383,8 +2383,8 @@ if [ -s \"verdicts-$1\" ]; then
   tail -n +2 \"verdicts-$1\" > \"verdicts-$1.tmp\"
   mv -f \"verdicts-$1.tmp\" \"verdicts-$1\"
 fi
-for input in answers notes findings; do
-  if [ -e \"${USEFUL_STEP_INPUTS:-}/values/$input\" ]; then
+for input in answers notes findings awaited; do
+  if [ -s \"${USEFUL_STEP_INPUTS:-}/values/$input\" ]; then
     cat \"$USEFUL_STEP_INPUTS/values/$input\" > \"seen-$input.tmp\"
     mv -f \"seen-$input.tmp\" \"seen-$input\"
   fi
@@ -3445,7 +3445,7 @@ fn loop_tree_with(root: &str, review: &str, merge: &str) -> TreeBundle {
             Some(("answers", "json")),
         ),
         ("fix", "built, failed", Some(("findings", "text"))),
-        ("merge", merge, None),
+        ("merge", merge, Some(("awaited", "text"))),
     ] {
         bundle.write_source(
             &format!("{name}.yaml"),
@@ -4328,6 +4328,128 @@ fn an_external_wait_holds_while_queued_and_continues_once_merged() {
     assert_eq!(record["state"], "exited", "{record}");
     assert_eq!(record["outcome"], "landed");
     assert_eq!(record["attempts"], 2);
+}
+
+pub(super) const AWAITED: &str = "run_01m8a1zdqqy8bpr5pre4jkr2s8";
+
+pub(super) fn cloud_wait_tree() -> TreeBundle {
+    let root = LOOP_TREE_ROOT
+        .replace(
+            "    workflow: merge.yaml",
+            "    workflow: merge.yaml\n    inputs:\n      awaited:\n        ref: wait.runId",
+        )
+        .replace("source: github", "source: cloud")
+        .replace("event: pull_request.queue_settled", "event: run.ended")
+        .replace(
+            "event.pullRequest == outputs.design.pullRequest",
+            r#"'event.runId == outputs.design.pullRequest and event.outcome == "ok"'"#,
+        );
+    let bundle = loop_tree_with(
+        &root,
+        "proceed, hand_back, failed",
+        "admitted, landed, failed",
+    );
+    fs::write(
+        bundle.execution_root().join("verdict-design-pullRequest"),
+        AWAITED,
+    )
+    .unwrap();
+    decide(&bundle, "design", "planned");
+    decide(&bundle, "review", "proceed");
+    decide(&bundle, "merge", "admitted");
+    bundle
+}
+
+pub(super) fn cloud_event(
+    delivery: &str,
+    wait: &str,
+    id: &str,
+    outcome: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "delivery": delivery, "source": "cloud", "event": "run.ended",
+        "wait": wait, "at": "2026-11-07T22:00:00Z",
+        "payload": {"definitionId": "def_01jcf9a4r7t2m8k3v6x1z5n0pq", "runId": id, "attempt": 1, "outcome": outcome}
+    })
+}
+
+#[test]
+fn a_cloud_wait_continues_only_from_a_matching_delivery_to_the_current_wait() {
+    let bundle = cloud_wait_tree();
+    let run = bundle.result("cloud-wait");
+    let stub = QueueStub::start(QueueAnswer::Failing);
+    let created = chained(&stub.command(&bundle.args(&run)).output().unwrap());
+    assert_eq!(created[0]["outcome"], "waiting");
+    let run = fs::canonicalize(run).unwrap();
+    let wait = read_json(&run.join("wait.json"));
+    let current = format!("external@{}", wait["since"].as_str().unwrap());
+    let seen = bundle.execution_root().join("seen-awaited");
+    assert!(!seen.exists());
+    let state = fs::read(run.join("state.json")).unwrap();
+    let held = || {
+        let result = completed(&stub.command(&continue_args(&run, &[])).output().unwrap());
+        assert_eq!(result["outcome"], "waiting", "{result}");
+        assert_eq!(attempt_count(&run), 1);
+        assert_eq!(fs::read(run.join("state.json")).unwrap(), state);
+        assert!(stub.requests().is_empty());
+    };
+    held();
+    let deliver = |delivery: &str, wait: &str, id: &str, outcome: &str, code: i32| {
+        let path = bundle.result("event.json");
+        fs::write(&path, cloud_event(delivery, wait, id, outcome).to_string()).unwrap();
+        let result = isolated_command(&[
+            "workflow".into(),
+            "run".into(),
+            "deliver".into(),
+            run.to_str().unwrap().into(),
+            "--event".into(),
+            path.to_str().unwrap().into(),
+            "--json".into(),
+        ])
+        .output()
+        .unwrap();
+        assert_eq!(result.status.code(), Some(code), "{result:?}");
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()
+    };
+    let first = deliver("other", &current, "run_01jcf9a4r7t2m8k3v6x1z5n0pq", "ok", 0);
+    assert_eq!(first["outcome"], "recorded");
+    assert_eq!(first["path"], "events/0001-run_ended.json");
+    assert_eq!(first["ordinal"], 1);
+    held();
+    assert_eq!(
+        deliver("failed", &current, AWAITED, "failed", 0)["outcome"],
+        "recorded"
+    );
+    held();
+    assert_eq!(
+        deliver("failed", &current, AWAITED, "failed", 0)["outcome"],
+        "unchanged"
+    );
+    let count = || fs::read_dir(run.join("events")).unwrap().count();
+    assert_eq!(count(), 2);
+    assert_eq!(
+        deliver("stale", "external@2026-01-01T00:00:00Z", AWAITED, "ok", 1)["diagnostics"][0]["code"],
+        "wait_not_current"
+    );
+    assert_eq!(count(), 2);
+    assert_eq!(
+        deliver("completed", &current, AWAITED, "ok", 0)["outcome"],
+        "recorded"
+    );
+    decide(&bundle, "merge", "landed");
+    let result = resume(&run);
+    let documents = chained(&result);
+    assert_eq!(documents[0]["attemptNumber"], 2);
+    assert_eq!(documents[0]["outcome"], "succeeded");
+    let continuation = &partition_event(&result)["continuation"];
+    assert_eq!(continuation["reason"], "resume");
+    assert_eq!(continuation["fromSteps"], serde_json::json!(["merge"]));
+    assert_eq!(fs::read_to_string(seen).unwrap(), AWAITED);
+    assert_eq!(
+        deliver("later", &current, AWAITED, "ok", 1)["diagnostics"][0]["code"],
+        "wait_not_current"
+    );
+    assert_eq!(count(), 3);
 }
 
 /// The loop tree run through `merge` admitted to the queue for `QUEUED_PULL_REQUEST`, with

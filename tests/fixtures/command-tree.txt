@@ -155,6 +155,7 @@ workflow run artifact list
 workflow run artifact validate
 workflow run cancel
 workflow run create
+workflow run deliver
 workflow run event
 workflow run hand-back
 workflow run handover

@@ -22,8 +22,9 @@ use crate::service::artifact_delivery::ArtifactCloudResponse;
 use crate::service::assignment::{
     ArtifactRequestKind, AssignmentCancel, AssignmentManager, AssignmentManagerFailure,
     AssignmentOffer, AssignmentPrepare, AssignmentRelease, AssignmentRenewal, AssignmentRunControl,
-    AssignmentStart, AssignmentStartAuthorization, AssignmentTriggerDelivery,
-    PendingAssignmentObservation, RetainedObservationFrame, WelcomePolicyFailure,
+    AssignmentRunWaitEvent, AssignmentStart, AssignmentStartAuthorization,
+    AssignmentTriggerDelivery, PendingAssignmentObservation, RetainedObservationFrame,
+    WelcomePolicyFailure,
 };
 use crate::service::config::Config;
 use crate::service::control::{LiveStatus, RegistrationModeCell};
@@ -263,6 +264,16 @@ impl<'a> ProtocolLog<'a> {
                 None,
                 Some(assignment_id),
             ),
+            RunnerFrame::RunWaitEventApplied {
+                envelope,
+                assignment_id,
+                ..
+            } => (
+                envelope,
+                "run_wait_event_applied",
+                None,
+                Some(assignment_id),
+            ),
             RunnerFrame::RunControlApplied {
                 envelope,
                 assignment_id,
@@ -288,6 +299,11 @@ impl<'a> ProtocolLog<'a> {
                 assignment_id,
                 ..
             } => (envelope, "execution_interrupted", None, Some(assignment_id)),
+            RunnerFrame::ExecutionReleased {
+                envelope,
+                assignment_id,
+                ..
+            } => (envelope, "execution_released", None, Some(assignment_id)),
             RunnerFrame::ExecutionAborted {
                 envelope,
                 assignment_id,
@@ -551,6 +567,21 @@ impl<'a> ProtocolLog<'a> {
             } => (
                 envelope,
                 "trigger_delivery",
+                vec![
+                    KeyValue::new(telemetry::attribute::EFFECT_ID, effect_id.clone()),
+                    KeyValue::new(telemetry::attribute::ASSIGNMENT_ID, assignment_id.clone()),
+                    KeyValue::new(telemetry::attribute::RUN_ID, run_id.clone()),
+                ],
+            ),
+            CloudFrame::RunWaitEvent {
+                envelope,
+                effect_id,
+                assignment_id,
+                run_id,
+                ..
+            } => (
+                envelope,
+                "run_wait_event",
                 vec![
                     KeyValue::new(telemetry::attribute::EFFECT_ID, effect_id.clone()),
                     KeyValue::new(telemetry::attribute::ASSIGNMENT_ID, assignment_id.clone()),
@@ -1656,6 +1687,26 @@ impl BufferedEffect {
                     delivery,
                 })),
             ),
+            CloudFrame::RunWaitEvent {
+                effect_id,
+                assignment_id,
+                run_id,
+                attempt_id,
+                event,
+                ..
+            } => (
+                effect_id.clone(),
+                assignment_id.clone(),
+                run_id.clone(),
+                None,
+                AssignmentManagerEffect::RunWaitEvent(Box::new(AssignmentRunWaitEvent {
+                    effect_id,
+                    assignment_id,
+                    run_id,
+                    attempt_id,
+                    event,
+                })),
+            ),
             CloudFrame::RunControl {
                 effect_id,
                 assignment_id,
@@ -1769,6 +1820,7 @@ enum AssignmentManagerEffect {
     Release(AssignmentRelease),
     TriggerDelivery(Box<AssignmentTriggerDelivery>),
     RunControl(Box<AssignmentRunControl>),
+    RunWaitEvent(Box<AssignmentRunWaitEvent>),
 }
 
 fn apply_assignment_manager_effect(
@@ -1815,6 +1867,9 @@ fn apply_assignment_manager_effect(
             }
             AssignmentManagerEffect::TriggerDelivery(delivery) => {
                 manager.handle_trigger_delivery(*delivery).map(|()| None)
+            }
+            AssignmentManagerEffect::RunWaitEvent(event) => {
+                manager.handle_run_wait_event(*event).map(|()| None)
             }
             AssignmentManagerEffect::RunControl(control) => {
                 manager.handle_run_control(*control).map(|()| None)
@@ -2608,6 +2663,7 @@ where
             | effect @ CloudFrame::AssignmentLeaseRenewed { .. }
             | effect @ CloudFrame::AssignmentRelease { .. }
             | effect @ CloudFrame::TriggerDelivery { .. }
+            | effect @ CloudFrame::RunWaitEvent { .. }
             | effect @ CloudFrame::RunControl { .. }
                 if progress.handshake_completed =>
             {
@@ -3039,6 +3095,7 @@ pub(crate) fn opening_hello(
         tree_no_source: true,
         // It restores Cloud's kept record into a fresh assignment for a handover.
         tree_handover: true,
+        cloud_waits: true,
         // It takes another run while every run it holds waits.
         holds_waiting_runs: true,
         // It applies the credential mode Cloud names where the service has its agent-login
@@ -5306,6 +5363,7 @@ mod tests {
             assert_eq!(hello["payload"]["treeNoSource"], 1);
             assert_eq!(hello["payload"]["treeHandover"], 1);
             assert_eq!(hello["payload"]["holdsWaitingRuns"], 1);
+            assert_eq!(hello["payload"]["cloudWaits"], 1);
             assert_eq!(hello["payload"]["credentialMode"], 1);
             socket.send(welcome()).await.expect("send welcome");
             socket

@@ -6493,6 +6493,7 @@ async fn an_interruption_before_a_continuations_child_starts_keeps_its_wait() {
             step: "design".to_owned(),
             outcome: Some("failed".to_owned()),
             kind: crate::workflow::document::WaitKind::Repair,
+            runner: crate::workflow::document::WaitRunner::Keep,
             then: "design".to_owned(),
             on_hand_back: None,
             rule: None,

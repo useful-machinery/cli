@@ -29,9 +29,9 @@ use super::document::{BindingKey, Trigger, TriggerControlAction};
 pub use super::document::{WaitKind, WaitRule};
 use super::evidence::FailedChild;
 use super::local_run::{
-    CONTROLS_DIRECTORY, LocalRunDirectoryError, PRIVATE_DIRECTORY, create_or_open_directory,
-    directory_entries, encode_json, file_error, open_directory_at, open_run_root,
-    read_regular_file, sync_directory, write_new_immutable_file,
+    CONTROLS_DIRECTORY, EVENTS_DIRECTORY, LocalRunDirectoryError, PRIVATE_DIRECTORY,
+    create_or_open_directory, directory_entries, encode_json, file_error, open_directory_at,
+    open_run_root, read_regular_file, sync_directory, write_new_immutable_file,
 };
 use super::runtime::{EnteredWait, StepState, step_outputs};
 use super::schema_common::{is_identifier, is_prefixed_ulid, parse_canonical_utc_timestamp};
@@ -41,6 +41,12 @@ use super::value::CapturedValue;
 
 /// The source every control event names, and every derived rule but a host wait's.
 pub(crate) const SOURCE: &str = "um";
+/// The source of Cloud events delivered to a run.
+pub const CLOUD_SOURCE: &str = "cloud";
+/// The Cloud event reporting that the identified run has ended.
+pub const RUN_ENDED: &str = "run.ended";
+/// The external conditions the engine resolves from events recorded in the waiting run.
+pub const RECORDED_CONDITIONS: &[(&str, &str)] = &[(CLOUD_SOURCE, RUN_ENDED)];
 /// The source a `host` wait's derived rule names: the host condition, not a
 /// control.
 pub(crate) const HOST_SOURCE: &str = "host";
@@ -123,6 +129,41 @@ pub struct WaitRecord {
     pub on_hand_back: Option<String>,
     pub rule: WaitRule,
     pub payload: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<WaitRelease>,
+}
+
+/// The handover judgment for a wait whose edge requested release.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WaitRelease {
+    pub permitted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_root_steps: Option<Vec<ExecutionRootStep>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionRootStep {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<String>,
+}
+
+impl WaitRelease {
+    fn is_valid(&self) -> bool {
+        match &self.execution_root_steps {
+            None => self.permitted,
+            Some(steps) => {
+                !self.permitted
+                    && !steps.is_empty()
+                    && steps.iter().all(|step| {
+                        is_identifier(&step.id)
+                            && step.child.as_ref().is_none_or(|child| !child.is_empty())
+                    })
+            }
+        }
+    }
 }
 
 /// One question an `answer` wait's payload lists: the `id` an answer names and the
@@ -204,6 +245,65 @@ pub struct ControlEvent {
     pub wait: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Map<String, Value>>,
+}
+
+/// A Cloud event delivered to a particular external wait.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunEvent {
+    pub source: String,
+    pub event: String,
+    pub delivery: String,
+    pub wait: String,
+    pub at: String,
+    pub payload: RunEndedPayload,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunEndedPayload {
+    pub definition_id: String,
+    pub run_id: String,
+    pub attempt: u64,
+    pub outcome: String,
+}
+
+impl RunEvent {
+    pub fn is_valid(&self) -> bool {
+        let delivery = self.delivery.as_bytes();
+        let outcome = self.payload.outcome.as_bytes();
+        self.source == CLOUD_SOURCE
+            && self.event == RUN_ENDED
+            && delivery.len() <= 128
+            && delivery.first().is_some_and(u8::is_ascii_alphanumeric)
+            && delivery
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(b))
+            && is_wait_identity(&self.wait)
+            && OffsetDateTime::parse(&self.at, &Rfc3339).is_ok()
+            && is_prefixed_ulid(&self.payload.definition_id, "def_")
+            && is_prefixed_ulid(&self.payload.run_id, RUN_ID_PREFIX)
+            && self.payload.attempt > 0
+            && outcome.first().is_some_and(u8::is_ascii_lowercase)
+            && outcome
+                .iter()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
+    }
+
+    /// The external event against which the wait evaluates its rule.
+    pub fn into_external_event(self) -> ExternalEvent {
+        ExternalEvent {
+            source: self.source,
+            event: self.event,
+            at: self.at,
+            payload: Map::from_iter([
+                ("definitionId".into(), self.payload.definition_id.into()),
+                ("runId".into(), self.payload.run_id.into()),
+                ("attempt".into(), self.payload.attempt.into()),
+                ("outcome".into(), self.payload.outcome.into()),
+            ]),
+        }
+    }
 }
 
 /// An event a condition source observed for an `external` wait: its provider `source`, its
@@ -295,7 +395,8 @@ impl std::error::Error for ConditionError {}
 /// and the CLI implements it. `supports` answers whether a `source` and `event` pair is
 /// evaluated, which admission asks of an `external` wait before a run starts; `observe`
 /// reads the condition an `external` wait's rule names now and answers the events it saw,
-/// which `evaluate` matches against the rule as it matches controls. `observe_host`
+/// which `evaluate` matches against the rule as it matches controls; a `cloud` wait is
+/// read from the deliveries recorded in the run and never reaches `observe`. `observe_host`
 /// evaluates the host condition for the run at `run_directory` waiting on the `host` wait
 /// `wait`; an unreadable run is the run's own error, never an unavailable condition.
 pub trait ConditionSource {
@@ -309,8 +410,9 @@ pub trait ConditionSource {
 }
 
 /// The condition source that evaluates nothing: it supports no pair and observes no event,
-/// so an `external` or `host` wait holds and no host check runs. The control commands, which
-/// never resolve a wait, use it.
+/// so a `host` wait and an `external` wait on an observed condition hold and no host check
+/// runs; a `cloud` wait is still read from its recorded deliveries. The control commands,
+/// which never resolve a wait, use it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoConditions;
 
@@ -440,6 +542,7 @@ impl WaitRecord {
             on_hand_back: wait.on_hand_back.clone(),
             rule,
             payload,
+            release: None,
         })
         .filter(Self::is_valid)
         .ok_or(LocalRunDirectoryError::WaitRecordInvalid)
@@ -477,6 +580,7 @@ impl WaitRecord {
             on_hand_back: None,
             rule,
             payload,
+            release: None,
         })
         .filter(Self::is_valid)
         .ok_or(LocalRunDirectoryError::WaitRecordInvalid)
@@ -529,6 +633,7 @@ impl WaitRecord {
             && self.step.iter().all(super::run_record::is_position_element)
             && is_identifier(&self.then)
             && self.on_hand_back.as_deref().is_none_or(is_identifier)
+            && self.release.as_ref().is_none_or(WaitRelease::is_valid)
             && !self.rule.source.is_empty()
             && !self.rule.event.is_empty()
             && self.rule.event.iter().all(|event| is_event_name(event))
@@ -552,6 +657,13 @@ fn is_event_name(event: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     }) && segments >= 2
+}
+
+fn is_wait_identity(wait: &str) -> bool {
+    wait.split_once('@').is_some_and(|(kind, since)| {
+        serde_json::from_value::<WaitKind>(Value::String(kind.to_owned())).is_ok()
+            && OffsetDateTime::parse(since, &Rfc3339).is_ok()
+    })
 }
 
 impl ControlEvent {
@@ -588,12 +700,7 @@ impl ControlEvent {
             && is_prefixed_ulid(&self.run, RUN_ID_PREFIX)
             && !self.by.is_empty()
             && OffsetDateTime::parse(&self.at, &Rfc3339).is_ok()
-            && self.wait.as_deref().is_none_or(|wait| {
-                wait.split_once('@').is_some_and(|(kind, since)| {
-                    serde_json::from_value::<WaitKind>(Value::String(kind.to_owned())).is_ok()
-                        && OffsetDateTime::parse(since, &Rfc3339).is_ok()
-                })
-            })
+            && self.wait.as_deref().is_none_or(is_wait_identity)
     }
 
     /// The event name after `control.`, the suffix of the control's file name.
@@ -1037,7 +1144,7 @@ fn parse_numbered_file_name(name: &[u8]) -> Option<(u64, &str)> {
 }
 
 /// A directory of a run root that holds one record per file `<NNNN>-<entry>.json`, appended
-/// whole and never rewritten: `controls/` and `mirror/`. `decode` answers the record a file
+/// whole and never rewritten: `controls/`, `events/` and `mirror/`. `decode` answers the record a file
 /// holds when it is one for its entry name, and `invalid` is the failure a file that is not
 /// one reads as.
 pub(crate) struct NumberedRecords<T> {
@@ -1133,15 +1240,30 @@ impl<T> NumberedRecords<T> {
         entry: &str,
         record: &impl Serialize,
     ) -> Result<PathBuf, LocalRunDirectoryError> {
+        self.append_unless(run_directory, entry, record, |_| false)?
+            .map(|(_, path)| path)
+            .ok_or(LocalRunDirectoryError::StateConflict)
+    }
+
+    /// Checks existing records under the append lock, returning the new ordinal and path
+    /// only when no existing record matches.
+    fn append_unless(
+        &self,
+        run_directory: &Path,
+        entry: &str,
+        record: &impl Serialize,
+        matches: impl Fn(&T) -> bool,
+    ) -> Result<Option<(u64, PathBuf)>, LocalRunDirectoryError> {
         let (normalized, root) = open_run_root(run_directory)?;
         let private = open_directory_at(&root, PRIVATE_DIRECTORY)?;
         let records = create_or_open_directory(&root, self.directory)?;
         flock(&records, FlockOperation::LockExclusive)
             .map_err(|source| file_error(&root, self.directory, "lock", source))?;
-        let ordinal = self
-            .read_open(&records)?
-            .last()
-            .map_or(1, |(ordinal, _)| ordinal + 1);
+        let existing = self.read_open(&records)?;
+        if existing.iter().any(|(_, record)| matches(record)) {
+            return Ok(None);
+        }
+        let ordinal = existing.last().map_or(1, |(ordinal, _)| ordinal + 1);
         if ordinal > NUMBERED_ORDINAL_LIMIT {
             return Err(LocalRunDirectoryError::StateConflict);
         }
@@ -1174,7 +1296,7 @@ impl<T> NumberedRecords<T> {
         written?;
         sync_directory(&records)?;
         sync_directory(&root)?;
-        Ok(normalized.join(self.directory).join(name))
+        Ok(Some((ordinal, normalized.join(self.directory).join(name))))
     }
 }
 
@@ -1225,6 +1347,42 @@ pub fn append_control(
         .filter(|_| event.is_valid())
         .ok_or(LocalRunDirectoryError::ControlEventInvalid)?;
     CONTROLS.append(run_directory, suffix, event)
+}
+
+const EVENTS: NumberedRecords<RunEvent> = NumberedRecords::new(
+    EVENTS_DIRECTORY,
+    "event.json.tmp",
+    || LocalRunDirectoryError::RunEventInvalid,
+    |entry, bytes| {
+        serde_json::from_slice::<RunEvent>(bytes)
+            .ok()
+            .filter(|record| record.is_valid() && record.event.replace('.', "_") == entry)
+    },
+);
+
+/// The run's deliveries in ordinal order. An unreadable record fails the read at its path.
+pub fn read_run_events(run_directory: &Path) -> Result<Vec<RunEvent>, LocalRunDirectoryError> {
+    Ok(EVENTS
+        .read(run_directory)?
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect())
+}
+
+/// Appends a delivery once, returning the ordinal and path if it was new.
+pub fn append_run_event(
+    run_directory: &Path,
+    event: &RunEvent,
+) -> Result<Option<(u64, PathBuf)>, LocalRunDirectoryError> {
+    if !event.is_valid() {
+        return Err(LocalRunDirectoryError::RunEventInvalid);
+    }
+    EVENTS.append_unless(
+        run_directory,
+        &event.event.replace('.', "_"),
+        event,
+        |existing| existing.delivery == event.delivery,
+    )
 }
 
 /// A step position as `show` and `list` print it: its identifiers joined by `.` and each

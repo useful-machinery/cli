@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::admission::{ResolvedInput, ResolvedInputs};
 use super::document::{DeclaredWorkspace, FailurePolicy, Output};
+use super::local_run::LocalRunDirectoryError;
 use super::resolution::{ResolvedWorkflow, resolve_workflow_file};
+use super::runtime::StepState;
 use super::validated::{
     ResolvedOutputSource, ResolvedValueSource, Scheduling, StepWorkspace, ValidatedEdgeTarget,
     ValidatedMessageSource, ValidatedStep, ValidatedWorkflow, WorkflowNode, WorkflowNodeRole,
     WorkflowValueType,
 };
-use super::wait::{Operand, parse_where};
+use super::wait::{ExecutionRootStep, Operand, WaitRecord, WaitRelease, parse_where};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Partition {
@@ -259,15 +261,68 @@ pub enum AdmissionViolation {
     },
 }
 
+/// Judge both ways out of the wait against the same tree and the just-ended attempt.
+/// Traverse their selected steps together so a shared child is read and reported once.
+pub async fn wait_release<Output>(
+    workflow: &ResolvedWorkflow,
+    wait: &WaitRecord,
+    steps: &BTreeMap<String, StepState<Output>>,
+    copy_root: PathBuf,
+) -> Result<WaitRelease, LocalRunDirectoryError> {
+    let unfinished = steps
+        .iter()
+        .filter(|(_, state)| {
+            !matches!(
+                state,
+                StepState::Succeeded { .. } | StepState::Inherited { .. }
+            )
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let empty = BTreeSet::new();
+    let partitions = std::iter::once(&wait.then)
+        .chain(&wait.on_hand_back)
+        .map(|target| {
+            partition(
+                &workflow.definition,
+                std::slice::from_ref(target),
+                &unfinished,
+                &empty,
+                &empty,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| LocalRunDirectoryError::WaitRecordInvalid)?;
+
+    let definition = workflow.definition.clone();
+    let violations = tokio::task::spawn_blocking(move || {
+        handover_violations(&definition, &partitions, Some(&copy_root))
+    })
+    .await
+    .map_err(|_| LocalRunDirectoryError::StateWriteUnavailable)?;
+    let steps = violations
+        .into_iter()
+        .map(|violation| match violation {
+            AdmissionViolation::HandoverExecutionRootRequired { id, child } => {
+                Ok(ExecutionRootStep { id, child })
+            }
+            _ => Err(LocalRunDirectoryError::WaitRecordInvalid),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(WaitRelease {
+        permitted: steps.is_empty(),
+        execution_root_steps: (!steps.is_empty()).then_some(steps),
+    })
+}
+
 pub(crate) fn handover_violations(
     workflow: &ValidatedWorkflow,
-    partition: &Partition,
+    partitions: &[Partition],
     copy_root: Option<&Path>,
 ) -> Vec<AdmissionViolation> {
-    let mut pending = partition
-        .reexecuted
+    let mut pending = partitions
         .iter()
-        .chain(&partition.revalidated)
+        .flat_map(|partition| partition.reexecuted.iter().chain(&partition.revalidated))
         .map(String::as_str)
         .collect::<Vec<_>>();
     let mut visited = BTreeSet::new();
@@ -815,7 +870,7 @@ steps:
                 &BTreeSet::new(),
             )
             .unwrap();
-            handover_violations(&workflow, &selected, None)
+            handover_violations(&workflow, &[selected], None)
         };
         let rebuilt = r#"schemaVersion: 1
 steps:
@@ -879,11 +934,73 @@ steps:
         .unwrap();
         assert_eq!(selected.inherited, ["design"]);
         assert_eq!(
-            handover_violations(&workflow, &selected, Some(root)),
+            handover_violations(&workflow, &[selected], Some(root)),
             [AdmissionViolation::HandoverExecutionRootRequired {
                 id: "design".to_owned(),
                 child: Some("prepare".to_owned()),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_release_wait_is_judged_from_its_hand_back_step_as_well_as_then() {
+        let copy = tempfile::tempdir().unwrap();
+        let root = copy.path();
+        std::fs::write(
+            root.join("root.yaml"),
+            r#"schemaVersion: 1
+steps:
+  fix: {kind: workflow, workflow: fix.yaml, on: {succeeded: review, failed: exit.failed}}
+  review: {kind: workflow, workflow: rebuilt.yaml, on: {succeeded: {wait: approval, runner: release, then: merge, onHandBack: fix}, failed: exit.failed}}
+  merge: {kind: workflow, workflow: rebuilt.yaml, on: {succeeded: exit.succeeded, failed: exit.failed}}
+"#,
+        )
+        .unwrap();
+        let child = r#"schemaVersion: 1
+steps:
+  prepare: {kind: cmd, command: {argv: ["true"]}}
+"#;
+        std::fs::write(root.join("fix.yaml"), child).unwrap();
+        std::fs::write(
+            root.join("rebuilt.yaml"),
+            child.replace("kind: cmd", "kind: cmd, workspace: new"),
+        )
+        .unwrap();
+        let workflow = resolve_workflow_file(root, &root.join("root.yaml")).unwrap();
+        // `fix` and `review` succeeded before the wait, so only a hand-back runs `fix` again.
+        let steps = BTreeMap::from([("merge".to_owned(), StepState::<()>::Pending)]);
+        let mut wait = WaitRecord {
+            kind: super::super::document::WaitKind::Approval,
+            since: "2026-11-08T08:00:00Z".to_owned(),
+            step: vec![serde_json::Value::String("review".to_owned())],
+            then: "merge".to_owned(),
+            on_hand_back: None,
+            rule: super::super::wait::derive_rule(super::super::document::WaitKind::Approval, true)
+                .unwrap(),
+            payload: serde_json::Map::new(),
+            release: None,
+        };
+        assert_eq!(
+            wait_release(&workflow, &wait, &steps, root.to_owned())
+                .await
+                .unwrap(),
+            WaitRelease {
+                permitted: true,
+                execution_root_steps: None,
+            }
+        );
+        wait.on_hand_back = Some("fix".to_owned());
+        assert_eq!(
+            wait_release(&workflow, &wait, &steps, root.to_owned())
+                .await
+                .unwrap(),
+            WaitRelease {
+                permitted: false,
+                execution_root_steps: Some(vec![ExecutionRootStep {
+                    id: "fix".to_owned(),
+                    child: Some("prepare".to_owned()),
+                }]),
+            }
         );
     }
 

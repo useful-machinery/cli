@@ -84,6 +84,7 @@ pub use workflow::claude_code::result_tool::{
 };
 pub use workflow::continuation::{
     AdmissionViolation as ContinuationAdmissionViolation, PriorState as ContinuationPriorState,
+    wait_release,
 };
 pub use workflow::coordinator::{
     ClassifiedCommitError, CommitFailure, CommitFailureClass, CoordinationError, CoordinatorClock,
@@ -133,20 +134,20 @@ pub use workflow::local_run::{
     LocalRetryOpen, LocalRetryRejection, LocalRunStatusSnapshot, LocalStatusError,
     LocalStatusResult, MAXIMUM_DURABLE_RECORD_BYTES, OpenedPortableRecord,
     PendingLocalContinuation, PortableRecordCapture, PortableRecordError, PortableRecordFiles,
-    PublicationFailurePhaseV1, ResolvedBy, RetryIneligibilityReason, RunListing, RunView,
-    RunViewChildRun, RunViewError, RunViewObservedOutput, RunViewOutput, RunViewPathElement,
-    RunViewRecord, RunViewRequest, RunViewRetainedOutput, RunViewStage, RunViewStep,
-    RunViewStepOutput, RunViewStream, RunViewWait, RunViewWork, SUPERSEDED_OUTCOME, SuccessorCarry,
-    TreeCopyMismatch, WITHDRAWN_OUTCOME, WaitChild, WaitInspection, WaitProbe,
+    PublicationFailurePhaseV1, ResolvedBy, RetryIneligibilityReason, RunEventDelivery, RunListing,
+    RunView, RunViewChildRun, RunViewError, RunViewObservedOutput, RunViewOutput,
+    RunViewPathElement, RunViewRecord, RunViewRequest, RunViewRetainedOutput, RunViewStage,
+    RunViewStep, RunViewStepOutput, RunViewStream, RunViewWait, RunViewWork, SUPERSEDED_OUTCOME,
+    SuccessorCarry, TreeCopyMismatch, WITHDRAWN_OUTCOME, WaitChild, WaitInspection, WaitProbe,
     acquire_local_continuation, acquire_local_continuation_bridged, acquire_local_retry,
     assemble_portable_record, attempt_controls, await_begin_gate, await_child_start_gate,
     await_release_gate, await_run_lock_gate, await_settled_gate, bind_cloud_continuation_context,
-    child_run_directories, child_runs, create_portable_record, inspect_wait, is_run_id,
-    latest_attempt_failed, latest_child_run, list_runs, live_run_view, live_running_steps,
-    load_cloud_continuation_seed, locate_run, lock_holder, open_portable_record,
-    portable_record_files, positioned_element, read_durable_record, read_local_run_status,
-    read_run_file_bounded, read_run_file_tail, read_run_view, restore_portable_record,
-    retain_cloud_continuation_evidence, wait_child,
+    child_run_directories, child_runs, create_portable_record, deliver_run_event, inspect_wait,
+    is_run_id, latest_attempt_failed, latest_child_run, list_runs, live_run_view,
+    live_running_steps, load_cloud_continuation_seed, locate_run, lock_holder,
+    open_portable_record, portable_record_files, positioned_element, read_durable_record,
+    read_local_run_status, read_run_file_bounded, read_run_file_tail, read_run_view,
+    restore_portable_record, retain_cloud_continuation_evidence, wait_child,
 };
 pub use workflow::login_check::{
     HarnessLoginCheck, HarnessLoginCheckCause, HarnessLoginCheckStage, check_claude_code_login,
@@ -244,12 +245,14 @@ pub use workflow::validated::{
 };
 pub use workflow::value::CapturedValue;
 pub use workflow::wait::{
-    CONTROL_ANSWER, CONTROL_APPROVE, CONTROL_CANCEL, CONTROL_HAND_BACK, CONTROL_INTERRUPT,
-    CONTROL_LIFT, CONTROL_RELEASE, CONTROL_RETRY, CONTROL_STOP, CONTROL_WITHDRAW, ConditionError,
-    ConditionSource, ControlEvent, ControlTrigger, Event, ExternalEvent, NoConditions, RuleError,
-    WaitKind, WaitQuestion, WaitQuestions, WaitRecord, WaitRule, append_control, evaluate,
-    event_literal, position_path, read_controls, read_numbered_controls, stop_in_force,
-    wait_failed_child, wait_identity, wait_payload, wait_questions,
+    CLOUD_SOURCE, CONTROL_ANSWER, CONTROL_APPROVE, CONTROL_CANCEL, CONTROL_HAND_BACK,
+    CONTROL_INTERRUPT, CONTROL_LIFT, CONTROL_RELEASE, CONTROL_RETRY, CONTROL_STOP,
+    CONTROL_WITHDRAW, ConditionError, ConditionSource, ControlEvent, ControlTrigger, Event,
+    ExecutionRootStep, ExternalEvent, NoConditions, RECORDED_CONDITIONS, RUN_ENDED, RuleError,
+    RunEndedPayload, RunEvent, WaitKind, WaitQuestion, WaitQuestions, WaitRecord, WaitRelease,
+    WaitRule, append_control, append_run_event, evaluate, event_literal, position_path,
+    read_controls, read_numbered_controls, read_run_events, stop_in_force, wait_failed_child,
+    wait_identity, wait_payload, wait_questions,
 };
 pub use workflow::workspace_snapshot::{
     CloudContinuationSnapshot, capture_cloud_continuation_snapshot,

@@ -24,6 +24,10 @@ pub(in crate::service) enum ExecutionReport {
     TriggerDeliveryApplied {
         application: useful_runner_protocol::TriggerDeliveryApplication,
     },
+    /// A tree run's application of an event for its current wait.
+    RunWaitEventApplied {
+        application: useful_runner_protocol::RunWaitEventApplication,
+    },
     /// A tree run's application of one authorized Cloud control.
     RunControlApplied {
         application: useful_runner_protocol::RunControlApplication,
@@ -50,6 +54,9 @@ pub(in crate::service) enum ExecutionReport {
         terminal_outcome: Value,
         artifact_delivery: Value,
     },
+    Released {
+        final_execution_event_sequence: u64,
+    },
     Aborted {
         last_execution_event_sequence: u64,
         reason: String,
@@ -64,6 +71,7 @@ impl ExecutionReport {
                 | Self::Finished { .. }
                 | Self::TreeFinished { .. }
                 | Self::Interrupted { .. }
+                | Self::Released { .. }
                 | Self::Aborted { .. }
         )
     }
@@ -137,6 +145,12 @@ impl ExecutionReport {
                 attempt_id,
                 application: application.clone(),
             },
+            Self::RunWaitEventApplied { application } => RunnerFrame::RunWaitEventApplied {
+                envelope,
+                assignment_id,
+                attempt_id,
+                application: application.clone(),
+            },
             Self::RunControlApplied { application } => RunnerFrame::RunControlApplied {
                 envelope,
                 assignment_id,
@@ -189,6 +203,14 @@ impl ExecutionReport {
                 lease_loss: lease_loss.map(|reason| reason.as_str().to_owned()),
                 terminal_outcome: terminal_outcome.clone(),
                 artifact_delivery: artifact_delivery.clone(),
+            },
+            Self::Released {
+                final_execution_event_sequence,
+            } => RunnerFrame::ExecutionReleased {
+                envelope,
+                assignment_id,
+                attempt_id,
+                final_execution_event_sequence: *final_execution_event_sequence,
             },
             Self::Aborted {
                 last_execution_event_sequence,
@@ -516,6 +538,16 @@ pub(in crate::service) struct AssignmentTriggerDelivery {
     pub(in crate::service) delivery: useful_runner_protocol::TriggerDelivery,
 }
 
+/// A Cloud event for the wait of one assigned run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::service) struct AssignmentRunWaitEvent {
+    pub(in crate::service) effect_id: String,
+    pub(in crate::service) assignment_id: String,
+    pub(in crate::service) run_id: String,
+    pub(in crate::service) attempt_id: String,
+    pub(in crate::service) event: useful_runner_protocol::RunWaitEvent,
+}
+
 /// A `run_control` effect: one authorized Cloud control for the run an assignment
 /// holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -556,6 +588,18 @@ impl AssignmentManager {
         if self.holds_for_tree_run(&control.assignment_id, &control.run_id, &control.attempt_id)? {
             self.tree_run
                 .control(&control.assignment_id, control.control);
+        }
+        Ok(())
+    }
+
+    /// Queues an event only for the assignment holding its run and attempt.
+    pub(in crate::service) fn handle_run_wait_event(
+        &mut self,
+        effect: AssignmentRunWaitEvent,
+    ) -> Result<(), AssignmentManagerFailure> {
+        if self.holds_for_tree_run(&effect.assignment_id, &effect.run_id, &effect.attempt_id)? {
+            self.tree_run
+                .deliver_wait_event(&effect.assignment_id, effect.event);
         }
         Ok(())
     }

@@ -1066,7 +1066,7 @@ impl ExecutionJob {
             }
         };
         self.run_event.leave(match &result {
-            TransportResult::Succeeded => PhaseEnd::Succeeded,
+            TransportResult::Released | TransportResult::Succeeded => PhaseEnd::Succeeded,
             TransportResult::Failed { .. } => PhaseEnd::Failed,
             TransportResult::Interrupted {
                 reason: CancellationReason::ExecutionLeaseExpired,
@@ -1104,8 +1104,13 @@ impl ExecutionJob {
             "phase": "preparation",
             "code": "delivery_internal_failure",
         });
-        let outcome = result.outcome();
         let (report, disposition) = match result {
+            TransportResult::Released => (
+                ExecutionReport::Released {
+                    final_execution_event_sequence: last_sequence,
+                },
+                WorkspaceDisposition::Retain(RetentionReason::Released),
+            ),
             TransportResult::Interrupted { reason } => {
                 let interruption = if reason == CancellationReason::RunnerShutdown {
                     InfrastructureInterruption::RunnerShutdown
@@ -1115,7 +1120,7 @@ impl ExecutionJob {
                 let Some(report) = self.interruption_report(
                     last_sequence,
                     interruption,
-                    outcome,
+                    result.outcome(),
                     artifact_delivery,
                 ) else {
                     return self.abort_retained(
@@ -1134,6 +1139,7 @@ impl ExecutionJob {
                 // A failure the runner classified itself, such as a refused first resume of
                 // an adopted run, carries its safe facts; it is an ordinary finish, so the
                 // workspace stays retained and no boot fault is recorded.
+                let outcome = result.outcome();
                 let (diagnostic, disposition) = match result {
                     TransportResult::Succeeded => (None, WorkspaceDisposition::Remove),
                     TransportResult::Cancelled { .. } => (
@@ -1144,7 +1150,7 @@ impl ExecutionJob {
                         diagnostic,
                         WorkspaceDisposition::Retain(RetentionReason::Failed),
                     ),
-                    TransportResult::Interrupted { .. } => {
+                    TransportResult::Released | TransportResult::Interrupted { .. } => {
                         (None, WorkspaceDisposition::Retain(RetentionReason::Failed))
                     }
                 };

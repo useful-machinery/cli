@@ -12,7 +12,7 @@ use super::document::{
     OutcomeDeclaration, Output, OutputReference, OwnerDeclaration, OwnerSource, PresentationSource,
     RecoveryHandler, RootBlocks, RootRequires, SourceReference, StartRule, StepDefinition,
     StepRecovery, StopBefore, Trigger, TriggerControlAction, TriggerRule, ValueReference, WaitKind,
-    WaitRule, WorkflowDocument, WorkflowNode,
+    WaitRule, WaitRunner, WorkflowDocument, WorkflowNode,
 };
 use super::mirror::{MirrorBlock, MirrorState};
 use super::validated::ValidatedHarness;
@@ -547,6 +547,8 @@ enum ElseTargetDto {
 #[serde(deny_unknown_fields)]
 struct WaitTargetDto {
     wait: WaitKind,
+    #[serde(default)]
+    runner: WaitRunner,
     then: String,
     #[serde(default, rename = "onHandBack")]
     on_hand_back: Option<String>,
@@ -586,6 +588,7 @@ impl WaitTargetDto {
     fn into_target(self) -> EdgeTarget {
         EdgeTarget::Wait {
             kind: self.wait,
+            runner: self.runner,
             then: Box::new(parse_edge_target(self.then)),
             on_hand_back: self.on_hand_back,
             rule: self.rule,

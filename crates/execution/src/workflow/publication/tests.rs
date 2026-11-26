@@ -2765,6 +2765,7 @@ fn repair_wait(
             step: "build".to_owned(),
             outcome: Some("failed".to_owned()),
             kind: crate::workflow::document::WaitKind::Repair,
+            runner: crate::workflow::document::WaitRunner::Keep,
             then: "build".to_owned(),
             on_hand_back: None,
             rule: None,

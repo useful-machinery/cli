@@ -64,7 +64,7 @@ use useful_execution::{
     Scheduling, WaitKind, WaitRecord, acquire_local_continuation, acquire_local_retry,
     admit_local_continuation_workflow, adopted_child_outcome, append_control, attempt_controls,
     await_child_start_gate, await_release_gate, await_settled_gate, position_path, read_controls,
-    read_numbered_controls, stop_in_force, wait_payload,
+    read_numbered_controls, stop_in_force, wait_payload, wait_release,
 };
 use useful_execution::{
     DefinitionError, SubjectClaim, SubjectError, WITHDRAWN_OUTCOME, WorkflowHome, check_subject,
@@ -1971,12 +1971,12 @@ async fn execute_attempt_phases(
             } else {
                 entered_wait_record(
                     wait,
-                    admitted.inputs(),
-                    &execution.steps,
-                    &execution.failed_children,
-                    attempt.run()?.run_directory(),
+                    &admitted,
+                    &execution,
+                    attempt.run()?,
                     dispatcher.as_ref().map(|(dispatcher, _)| dispatcher),
-                )?
+                )
+                .await?
             };
             let owned_run = attempt
                 .run
@@ -2685,24 +2685,48 @@ impl ChildRecovery {
     }
 }
 
-/// The record of the wait an attempt ended on: the payload from the waiting step's outputs
-/// and child directory or, for a stop, from the stop control in force before the step, for
-/// an interrupted `repair` wait with the `control.interrupt` the signal observer acted on,
-/// and for an `external` wait its rule's run-value operands resolved from the run's `inputs`
-/// and step outputs.
-fn entered_wait_record(
+/// The wait the attempt ended on, with the handover judgment for a release wait.
+async fn entered_wait_record(
     wait: &EnteredWait,
-    inputs: &useful_execution::ResolvedInputs,
-    steps: &BTreeMap<String, useful_execution::StepState<CapturedValue>>,
-    failed_children: &BTreeMap<String, useful_execution::FailedChild>,
-    run_directory: &Path,
+    admitted: &AdmittedWorkflow,
+    execution: &WorkflowExecutionResult<ExecutionInstant>,
+    run: &LocalAttemptOwner,
     dispatcher: Option<&LocalChildRunDispatcher>,
 ) -> anyhow::Result<WaitRecord> {
-    // The wait a step's nested run entered is the root's, built from the nested record
-    // when the step's child returned it.
-    if let Some(carried) = dispatcher.and_then(|dispatcher| dispatcher.carried_wait(wait.step())) {
-        return Ok(carried);
+    let (mut record, releases_runner) =
+        match dispatcher.and_then(|dispatcher| dispatcher.carried_wait(wait.step())) {
+            Some(carried) => carried,
+            None => (
+                local_wait_record(wait, admitted, execution, run, dispatcher)?,
+                wait.releases_runner(),
+            ),
+        };
+    if releases_runner {
+        record.release = Some(
+            wait_release(
+                admitted.workflow(),
+                &record,
+                &execution.steps,
+                run.tree_copy_directory(),
+            )
+            .await
+            .context("judge handover from the local workflow wait")?,
+        );
     }
+    Ok(record)
+}
+
+/// The record of a wait the attempt entered itself. The payload comes from the waiting
+/// step's outputs and child directory or the control that stopped or interrupted it.
+/// An external wait closes its rule over the run's inputs and outputs.
+fn local_wait_record(
+    wait: &EnteredWait,
+    admitted: &AdmittedWorkflow,
+    execution: &WorkflowExecutionResult<ExecutionInstant>,
+    run: &LocalAttemptOwner,
+    dispatcher: Option<&LocalChildRunDispatcher>,
+) -> anyhow::Result<WaitRecord> {
+    let run_directory = run.run_directory();
     // An interrupted wait's payload names the `control.interrupt` whose interruption
     // the signal observer requested. A nested run's stop is in the root's controls.
     let control = if wait.kind() == WaitKind::Stop {
@@ -2732,9 +2756,9 @@ fn entered_wait_record(
     // The waiting step's failed child, when it recorded one.
     let payload = wait_payload(
         wait,
-        steps,
+        &execution.steps,
         child.as_deref(),
-        failed_children.get(wait.step()),
+        execution.failed_children.get(wait.step()),
         control.as_ref(),
     );
     WaitRecord::entered(
@@ -2742,10 +2766,9 @@ fn entered_wait_record(
         item,
         payload,
         useful_support::utc_now(),
-        inputs,
-        steps,
+        admitted.inputs(),
+        &execution.steps,
     )
-    .map_err(anyhow::Error::new)
     .context("record the local workflow wait")
 }
 
@@ -2826,9 +2849,8 @@ struct LocalChildRunParent {
     /// The latest child run directory each step started and the fan-out element it ran
     /// for, for a wait's payload and step.
     started: std::sync::Mutex<BTreeMap<String, (PathBuf, Option<u64>)>>,
-    /// The root's record of the wait each step's nested run entered in this attempt, which
-    /// the root writes as its own when the step's walk ends on it.
-    carried: std::sync::Mutex<BTreeMap<String, WaitRecord>>,
+    /// The carried record each step's nested run left and whether it requested release.
+    carried: std::sync::Mutex<BTreeMap<String, (WaitRecord, bool)>>,
     /// The journals the command's signal observer reads, which each child's run directory
     /// joins while its attempt runs.
     journals: ControlJournals,
@@ -2894,8 +2916,8 @@ impl LocalChildRunDispatcher {
             .and_then(|started| started.get(step).cloned())
     }
 
-    /// The root's record of the wait `step`'s nested run entered in this attempt.
-    fn carried_wait(&self, step: &str) -> Option<WaitRecord> {
+    /// The root's record of the wait `step`'s nested run entered and its release choice.
+    fn carried_wait(&self, step: &str) -> Option<(WaitRecord, bool)> {
         self.parent
             .carried
             .lock()
@@ -2929,11 +2951,11 @@ impl LocalChildRunParent {
     }
 
     /// Keeps the root's record of the wait `step`'s nested run entered.
-    fn record_carried(&self, step: &str, wait: WaitRecord) -> bool {
+    fn record_carried(&self, step: &str, wait: WaitRecord, releases_runner: bool) -> bool {
         self.carried
             .lock()
             .map(|mut carried| {
-                carried.insert(step.to_owned(), wait);
+                carried.insert(step.to_owned(), (wait, releases_runner));
             })
             .is_ok()
     }
@@ -3240,8 +3262,11 @@ fn carried_outcome(
 ) -> ChildRunOutcome {
     match outcome {
         ChildRunOutcome::Waiting { wait, interruption } => {
-            let carried = carried_wait_record(&wait, directory, root, step)
-                .is_some_and(|carried| parent.record_carried(step, carried));
+            // The root judges its own handover, which starts the nested workflow afresh.
+            let carried =
+                carried_wait_record(&wait, directory, root, step).is_some_and(|carried| {
+                    parent.record_carried(step, carried, wait.release.is_some())
+                });
             if carried {
                 ChildRunOutcome::Waiting { wait, interruption }
             } else {

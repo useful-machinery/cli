@@ -146,6 +146,7 @@ fn host_wait() -> WaitRecord {
         step: vec![json!("build")],
         then: "build".to_owned(),
         on_hand_back: None,
+        release: None,
         rule: derive_rule(WaitKind::Host, false).unwrap(),
         payload: Map::new(),
     }

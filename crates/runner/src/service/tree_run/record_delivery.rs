@@ -632,6 +632,10 @@ async fn prune(directory: PathBuf, files: Vec<RecordFile>) {
 #[derive(Clone)]
 pub(super) enum Signal {
     Progress(Option<PathBuf>),
+    /// Capture after the engine has stopped at this wait. Only the commit of this
+    /// capture (or an identical record already stored) acknowledges its release.
+    ForRelease(PathBuf, Arc<tokio::sync::Notify>),
+    Released,
     Final(Option<PathBuf>),
     Unstored,
 }
@@ -693,6 +697,7 @@ async fn deliver_records(run: &TreeRun, delivery: &Delivery, mut signal: watch::
     let mut backoff = Backoff::new();
     let mut stored_entries = None;
     let mut snapshot: Option<Snapshot> = None;
+    let mut release_receipt = None;
     let mut read = false;
     let mut final_read = false;
     loop {
@@ -704,7 +709,13 @@ async fn deliver_records(run: &TreeRun, delivery: &Delivery, mut signal: watch::
         }
         if read {
             let message = signal.borrow_and_update().clone();
+            release_receipt = None;
             let directory = match message {
+                Signal::Released => return,
+                Signal::ForRelease(path, receipt) => {
+                    release_receipt = Some(receipt);
+                    Some(path)
+                }
                 Signal::Unstored => {
                     delivery.update(|s| s.end = Some("unstored"));
                     return;
@@ -743,9 +754,16 @@ async fn deliver_records(run: &TreeRun, delivery: &Delivery, mut signal: watch::
             };
             cache = returned;
             match result {
-                Ok(captured) if stored_entries.as_ref() == Some(&captured.entries) => {
+                // A later commit whose acknowledgement was lost could have
+                // replaced our last confirmed manifest.
+                Ok(captured)
+                    if snapshot.is_none() && stored_entries.as_ref() == Some(&captured.entries) =>
+                {
                     snapshot = None;
                     delivery.update(|s| s.end = Some("stored"));
+                    if let Some(receipt) = release_receipt.take() {
+                        receipt.notify_one();
+                    }
                     continue;
                 }
                 Ok(captured) => {
@@ -784,6 +802,9 @@ async fn deliver_records(run: &TreeRun, delivery: &Delivery, mut signal: watch::
                     s.end = Some("stored");
                     s.sequence = current.sequence;
                 });
+                if let Some(receipt) = release_receipt.take() {
+                    receipt.notify_one();
+                }
                 stored_entries = Some(current.entries);
                 prune(delivery.files.clone(), current.files).await;
             }

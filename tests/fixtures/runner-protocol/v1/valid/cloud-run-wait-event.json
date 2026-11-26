@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "direction": "cloud_to_runner",
+  "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5acr",
+  "sentAt": "2026-07-23T00:00:12Z",
+  "type": "run_wait_event",
+  "payloadVersion": 1,
+  "payload": {
+    "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5acr",
+    "assignmentId": "asn_01k0z6r1w8f4jy2m7q9v3x5abn",
+    "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abp",
+    "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+    "event": {
+      "source": "cloud",
+      "event": "run.ended",
+      "delivery": "rwe_01k0z6r1w8f4jy2m7q9v3x5acr",
+      "wait": "external@2026-07-23T00:00:05Z",
+      "at": "2026-07-23T00:00:06Z",
+      "payload": {
+        "definitionId": "def_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abt",
+        "attempt": 1,
+        "outcome": "succeeded"
+      }
+    }
+  }
+}

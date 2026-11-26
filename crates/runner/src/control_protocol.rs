@@ -2035,6 +2035,7 @@ pub struct KeptRunsBounds {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeptReason {
+    Released,
     Failed,
     Cancelled,
     Interrupted,

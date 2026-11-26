@@ -899,6 +899,7 @@ const fn kept_reason(reason: RetentionReason) -> KeptReason {
         RetentionReason::Failed => KeptReason::Failed,
         RetentionReason::Cancelled => KeptReason::Cancelled,
         RetentionReason::Interrupted => KeptReason::Interrupted,
+        RetentionReason::Released => KeptReason::Released,
         RetentionReason::ArtifactDeliveryFailed => KeptReason::ArtifactDeliveryFailed,
         RetentionReason::OutcomeUnknown => KeptReason::OutcomeUnknown,
         RetentionReason::ProcessStopFailed => KeptReason::ProcessStopFailed,

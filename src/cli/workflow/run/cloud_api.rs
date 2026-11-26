@@ -628,6 +628,7 @@ const fn terminal_run_state(state: RunState) -> Option<TerminalRunState> {
         | RunState::Preparing
         | RunState::Assigned
         | RunState::Running
+        | RunState::Waiting
         | RunState::Cancelling => None,
         RunState::Succeeded => Some(TerminalRunState::Succeeded),
         RunState::Failed => Some(TerminalRunState::Failed),
@@ -2070,6 +2071,7 @@ mod tests {
             RunState::Preparing,
             RunState::Assigned,
             RunState::Running,
+            RunState::Waiting,
             RunState::Cancelling,
         ];
         let terminal = [

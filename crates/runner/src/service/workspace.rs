@@ -183,6 +183,7 @@ pub(super) enum RetentionReason {
     Failed,
     Cancelled,
     Interrupted,
+    Released,
     ArtifactDeliveryFailed,
     OutcomeUnknown,
     ProcessStopFailed,
@@ -191,10 +192,11 @@ pub(super) enum RetentionReason {
 }
 
 impl RetentionReason {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Failed,
         Self::Cancelled,
         Self::Interrupted,
+        Self::Released,
         Self::ArtifactDeliveryFailed,
         Self::OutcomeUnknown,
         Self::ProcessStopFailed,
@@ -207,6 +209,7 @@ impl RetentionReason {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Interrupted => "interrupted",
+            Self::Released => "released",
             Self::ArtifactDeliveryFailed => "artifact_delivery_failed",
             Self::OutcomeUnknown => "outcome_unknown",
             Self::ProcessStopFailed => "process_stop_failed",

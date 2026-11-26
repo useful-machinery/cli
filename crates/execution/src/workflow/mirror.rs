@@ -945,6 +945,7 @@ mod tests {
             step: vec![Value::String("review".to_owned())],
             then: "merge".to_owned(),
             on_hand_back: None,
+            release: None,
             rule: derive_rule(WaitKind::Approval, false).expect("approval derives a rule"),
             payload: Map::new(),
         }

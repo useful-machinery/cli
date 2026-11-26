@@ -5,8 +5,8 @@ use std::process::{Command, Output};
 use serde_json::Value;
 
 use super::workflow_continue::{
-    attempt_count, chained, completed, decide, decide_each, loop_tree, ordinals_of,
-    partition_event, read_json, wait_tree,
+    AWAITED, attempt_count, chained, cloud_event, cloud_wait_tree, completed, decide, decide_each,
+    loop_tree, ordinals_of, partition_event, read_json, wait_tree,
 };
 use super::workflow_run::{TreeBundle, isolated_command, run_record, workflow_run_schema};
 use super::workflow_run_control::{
@@ -595,9 +595,8 @@ enum BuildWorkspace {
     ExecutionRoot,
 }
 
-fn repair_tree(workspace: BuildWorkspace) -> TreeBundle {
-    let bundle = TreeBundle::new(
-        r#"schemaVersion: 1
+fn repair_tree(workspace: BuildWorkspace, release: bool) -> TreeBundle {
+    let root = r#"schemaVersion: 1
 environmentPassthrough: [PHASE, COUNTER]
 outcomes: [landed, failed]
 steps:
@@ -613,8 +612,12 @@ steps:
     on: {built: exit.landed, failed: {wait: repair, then: build}}
 exports:
   package: {ref: outputs.build.package}
-"#,
-    );
+"#;
+    let bundle = if release {
+        TreeBundle::new(&root.replace("wait: repair", "wait: repair, runner: release"))
+    } else {
+        TreeBundle::new(root)
+    };
     bundle.write_source(
         "design.yaml",
         r#"schemaVersion: 1
@@ -710,16 +713,20 @@ exports:
                 "workspace: read\n    dependsOn: [amend]",
             ),
         BuildWorkspace::ExecutionRoot => build
-            .lines()
-            .filter(|line| !line.starts_with("    workspace:"))
-            .collect::<Vec<_>>()
-            .join("\n"),
+            .replace("dependsOn: [prepare]", "dependsOn: [checkout]")
+            .replace(
+                "  prepare:\n    kind: cmd",
+                "  prepare:\n    kind: cmd\n    command: {argv: [touch, prepared]}\n  checkout:\n    kind: cmd\n    dependsOn: [prepare]",
+            ),
     };
     bundle.write_source("build.yaml", &build);
     bundle
 }
 
-fn restored_stage_retry(bundle: &TreeBundle) -> (Command, PathBuf, PathBuf, PathBuf) {
+fn restored_stage_retry(
+    bundle: &TreeBundle,
+    release: Option<Value>,
+) -> (Command, PathBuf, PathBuf, PathBuf) {
     let root = bundle.execution_root().parent().unwrap();
     let home = root.join("home-a");
     let counter = root.join("calls");
@@ -728,6 +735,12 @@ fn restored_stage_retry(bundle: &TreeBundle) -> (Command, PathBuf, PathBuf, Path
     let waiting = completed(&signed_out(initial));
     assert_eq!(waiting["wait"]["kind"], "repair");
     assert_eq!(waiting["wait"]["payload"]["child"], "children/build/000001");
+    let run = Path::new(waiting["runDirectory"].as_str().unwrap());
+    assert_eq!(waiting["wait"].get("release"), release.as_ref());
+    assert_eq!(
+        read_json(&run.join("wait.json")).get("release"),
+        release.as_ref()
+    );
     let id = id(&waiting);
     let (other, new) = move_run(bundle, &home, id);
     let mut retry = run_command(
@@ -739,7 +752,7 @@ fn restored_stage_retry(bundle: &TreeBundle) -> (Command, PathBuf, PathBuf, Path
 }
 
 fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
-    let (retry, restored, new, counter) = restored_stage_retry(bundle);
+    let (retry, restored, new, counter) = restored_stage_retry(bundle, None);
     chained(&signed_out(retry));
     assert_eq!(run_record(&restored)["outcome"], "landed");
     (restored, new, fs::read_to_string(counter).unwrap())
@@ -748,8 +761,13 @@ fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
 // SC-HANDOVER-1, SC-HANDOVER-7
 #[test]
 fn handover_judges_a_waiting_stage_by_its_child_workspaces() {
-    let bundle = repair_tree(BuildWorkspace::ExecutionRoot);
-    let (mut retry, run, _, _) = restored_stage_retry(&bundle);
+    let bundle = repair_tree(BuildWorkspace::ExecutionRoot, true);
+    let (mut retry, run, _, _) = restored_stage_retry(
+        &bundle,
+        Some(
+            serde_json::json!({"permitted": false, "executionRootSteps": [{"id": "build", "child": "prepare"}]}),
+        ),
+    );
     retry.arg("--handover");
     let result = handover_refusal(signed_out(retry));
     assert!(result["diagnostics"].as_array().unwrap().iter().any(|diagnostic|
@@ -760,8 +778,9 @@ fn handover_judges_a_waiting_stage_by_its_child_workspaces() {
     assert_eq!(ordinals_of(&build), ["000001"]);
     assert_eq!(attempt_count(&build.join("000001")), 1);
 
-    let bundle = repair_tree(BuildWorkspace::Checkout);
-    let (mut retry, run, _, _) = restored_stage_retry(&bundle);
+    let bundle = repair_tree(BuildWorkspace::Checkout, true);
+    let (mut retry, run, _, _) =
+        restored_stage_retry(&bundle, Some(serde_json::json!({"permitted": true})));
     retry.arg("--handover");
     chained(&signed_out(retry));
     assert_eq!(run_record(&run)["outcome"], "landed");
@@ -773,7 +792,7 @@ fn handover_judges_a_waiting_stage_by_its_child_workspaces() {
 // SC-CONTINUE-18
 #[test]
 fn a_restored_stage_rebuilds_its_workspace_in_the_same_child() {
-    let bundle = repair_tree(BuildWorkspace::Checkout);
+    let bundle = repair_tree(BuildWorkspace::Checkout, false);
     let (run, new, calls) = retry_restored_stage(&bundle);
     let build = run.join("children/build");
     assert_eq!(ordinals_of(&build), ["000001"], "{calls}");
@@ -813,7 +832,7 @@ fn a_restored_stage_rebuilds_its_workspace_in_the_same_child() {
 // SC-CONTINUE-22
 #[test]
 fn a_restored_stage_rechecks_a_replayed_write() {
-    let bundle = repair_tree(BuildWorkspace::AmendedCheckout);
+    let bundle = repair_tree(BuildWorkspace::AmendedCheckout, false);
     let (run, _, calls) = retry_restored_stage(&bundle);
     let build = run.join("children/build");
     assert_eq!(ordinals_of(&build), ["000001"]);
@@ -827,7 +846,7 @@ fn a_restored_stage_rechecks_a_replayed_write() {
 // SC-CONTINUE-23
 #[test]
 fn a_restored_stage_using_the_execution_root_starts_a_new_child() {
-    let bundle = repair_tree(BuildWorkspace::ExecutionRoot);
+    let bundle = repair_tree(BuildWorkspace::ExecutionRoot, false);
     let (run, _, _) = retry_restored_stage(&bundle);
     let build = run.join("children/build");
     assert_eq!(ordinals_of(&build), ["000001", "000002"]);
@@ -1029,6 +1048,48 @@ fn answer_resolves_the_restored_design_wait() {
     assert_eq!(
         read_json(&new.join("seen-answers")),
         serde_json::json!({"1": "keep it"})
+    );
+}
+
+#[test]
+fn a_delivered_cloud_event_resolves_the_restored_wait() {
+    let bundle = cloud_wait_tree();
+    let root = bundle.execution_root().parent().unwrap();
+    let home = root.join("home-a");
+    let terminal = path_run(&bundle, &home);
+    assert_eq!(terminal["wait"]["kind"], "external");
+    let id = id(&terminal);
+    let wait = format!("external@{}", terminal["wait"]["since"].as_str().unwrap());
+    let event = cloud_event("completed", &wait, AWAITED, "ok");
+    let path = root.join("event.json");
+    fs::write(&path, event.to_string()).unwrap();
+    let delivered = success(run(
+        &home,
+        &["deliver", id, "--event", path.to_str().unwrap()],
+    ));
+    assert_eq!(delivered["outcome"], "recorded");
+
+    let (other, new) = move_run(&bundle, &home, id);
+    let run_dir = other.join("runs").join(id);
+    assert_eq!(fs::read_dir(run_dir.join("events")).unwrap().count(), 1);
+    assert_eq!(
+        read_json(&run_dir.join(delivered["path"].as_str().unwrap())),
+        event
+    );
+    fs::write(new.join("verdict-merge"), "landed").unwrap();
+    let resumed = completed(&run(
+        &other,
+        &["resume", id, "--execution-root", new.to_str().unwrap()],
+    ));
+    assert_eq!(resumed["attemptNumber"], 2);
+    assert_eq!(resumed["outcome"], "succeeded");
+    assert_eq!(
+        resumed["result"]["continuation"]["fromSteps"],
+        serde_json::json!(["merge"])
+    );
+    assert_eq!(
+        fs::read_to_string(new.join("seen-awaited")).unwrap(),
+        AWAITED
     );
 }
 

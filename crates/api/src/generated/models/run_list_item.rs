@@ -28,6 +28,7 @@ pub struct RunListItem {
     pub project_id: String,
     #[serde(rename = "workflowPath")]
     pub workflow_path: String,
+    /// A waiting run is nonterminal. Its runner released it at a workflow wait and no runner holds it.
     #[serde(rename = "state")]
     pub state: State,
     #[serde(rename = "createdAt")]
@@ -129,6 +130,7 @@ impl RunListItem {
         }
     }
 }
+/// A waiting run is nonterminal. Its runner released it at a workflow wait and no runner holds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum State {
     #[serde(rename = "queued")]
@@ -141,6 +143,8 @@ pub enum State {
     Assigned,
     #[serde(rename = "running")]
     Running,
+    #[serde(rename = "waiting")]
+    Waiting,
     #[serde(rename = "cancelling")]
     Cancelling,
     #[serde(rename = "succeeded")]

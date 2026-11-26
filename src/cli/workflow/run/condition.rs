@@ -10,7 +10,7 @@ use std::path::Path;
 
 use useful_execution::{
     ConditionError, ConditionSource, EnvironmentSnapshot, ExternalEvent, HOST_CHECK_BOUND,
-    LocalRunDirectoryError, WaitRecord, observe_host_condition,
+    LocalRunDirectoryError, RECORDED_CONDITIONS, WaitRecord, observe_host_condition,
 };
 
 type Observe = fn(&WaitRecord) -> Result<Vec<ExternalEvent>, ConditionError>;
@@ -38,6 +38,7 @@ impl Conditions {
         self.conditions
             .iter()
             .map(|(source, event, _)| (*source, *event))
+            .chain(RECORDED_CONDITIONS.iter().copied())
     }
 
     fn condition(&self, source: &str, event: &str) -> Option<Observe> {

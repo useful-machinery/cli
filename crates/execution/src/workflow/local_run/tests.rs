@@ -2331,6 +2331,13 @@ fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions
     );
     let (predecessor_path, predecessor_record, _predecessor_writable) =
         waiting_predecessor(&fixture, "predecessor");
+    let events = predecessor_path.join("events");
+    fs::create_dir(&events).unwrap();
+    fs::write(events.join("0001-run_ended.json"), serde_json::to_vec(&json!({
+        "source": "cloud", "event": "run.ended", "at": "2026-11-07T22:00:00Z",
+        "wait": "external@2026-11-07T21:41:58Z", "delivery": "release:23",
+        "payload": {"runId": predecessor_record.id, "definitionId": "def_01jcf9a4r7t2m8k3v6x1z5n0pq", "attempt": 1, "outcome": "ok"}
+    })).unwrap()).unwrap();
     let predecessor_root = open_directory_path(&predecessor_path).unwrap();
     let predecessor_run = read_run(&predecessor_root).unwrap();
     let predecessor_state = read_state(&predecessor_root).unwrap();
@@ -2364,6 +2371,7 @@ fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions
             ".private",
             "attempts",
             "controls",
+            "events",
             "local-run.json",
             "run.json",
             "run.lock",
@@ -2439,6 +2447,10 @@ fn a_successor_imports_the_predecessors_attempts_and_relocates_their_definitions
     assert_eq!(
         file_contents(&successor_path.join(CONTROLS_DIRECTORY)),
         file_contents(&predecessor_path.join(CONTROLS_DIRECTORY))
+    );
+    assert_eq!(
+        file_contents(&successor_path.join("events")),
+        file_contents(&events)
     );
     verify_existing_run_layout(&root).unwrap();
 
@@ -2641,6 +2653,66 @@ fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_r
         drop(owner);
         assert_eq!(continued(&run_path, None), expected, "{reason:?}");
     }
+}
+
+#[test]
+fn attempt_controls_carry_the_first_matching_cloud_events_text_fields() {
+    let fixture = tree_fixture();
+    let wait: WaitRecord = serde_json::from_value(json!({
+        "kind": "external",
+        "since": "2026-11-06T16:30:02Z",
+        "step": ["first"],
+        "then": "second",
+        "rule": {
+            "source": "cloud",
+            "event": ["run.ended"],
+            "where": format!(r#"event.runId == "{UNKNOWN_RUN_ID}" and event.outcome == "ok""#)
+        },
+        "payload": {}
+    }))
+    .unwrap();
+    let (run, _, _writable) = predecessor_waiting_on(&fixture, "cloud-wait", &wait);
+    let wait_id = wait.id();
+    let fields = || {
+        attempt_controls(
+            &run,
+            2,
+            Some(crate::workflow::publication::ContinuationReasonV1::Resume),
+        )
+        .unwrap()
+        .controls
+        .wait
+    };
+    let append = |delivery, identity: &str, definition, outcome| {
+        let event = serde_json::from_value(json!({
+            "delivery": delivery, "source": "cloud", "event": "run.ended",
+            "wait": identity, "at": "2026-11-07T22:00:00Z",
+            "payload": {"definitionId": definition, "runId": UNKNOWN_RUN_ID, "attempt": 1, "outcome": outcome}
+        })).unwrap();
+        crate::workflow::wait::append_run_event(&run, &event).unwrap();
+    };
+    append(
+        "stale",
+        "external@2026-11-05T00:00:00Z",
+        HOME_DEFINITION,
+        "ok",
+    );
+    assert_eq!(fields(), None);
+    append("failed", &wait_id, HOME_DEFINITION, "failed");
+    assert_eq!(fields(), None);
+    append("matched", &wait_id, HOME_DEFINITION, "ok");
+    append("later", &wait_id, OTHER_HOME_DEFINITION, "ok");
+    assert_eq!(
+        fields(),
+        Some((
+            "second".to_owned(),
+            BTreeMap::from([
+                ("definitionId".to_owned(), HOME_DEFINITION.to_owned()),
+                ("runId".to_owned(), UNKNOWN_RUN_ID.to_owned()),
+                ("outcome".to_owned(), "ok".to_owned()),
+            ])
+        ))
+    );
 }
 
 // A wait carried by `upgrade` is resolved by a control naming the successor that carried it,

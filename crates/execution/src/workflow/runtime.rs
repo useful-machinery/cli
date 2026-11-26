@@ -9,7 +9,7 @@ use super::condition::{
     self, ConditionDispositions, ConditionEvaluation, ConditionValues, ResolvedPredicate,
     TerminalDisposition,
 };
-use super::document::{FailurePolicy, FinalizationTrigger, WaitKind, WaitRule};
+use super::document::{FailurePolicy, FinalizationTrigger, WaitKind, WaitRule, WaitRunner};
 pub(crate) use super::evidence::FailurePhase;
 use super::evidence::{
     BlockedDetail, CancellationDetail, ConditionFalseDetail, EvaluatedPredicateEvidence,
@@ -475,6 +475,7 @@ pub struct EnteredWait {
     pub(crate) step: String,
     pub(crate) outcome: Option<String>,
     pub(crate) kind: WaitKind,
+    pub(crate) runner: WaitRunner,
     pub(crate) then: String,
     pub(crate) on_hand_back: Option<String>,
     pub(crate) rule: Option<WaitRule>,
@@ -501,6 +502,11 @@ impl EnteredWait {
 
     pub const fn kind(&self) -> WaitKind {
         self.kind
+    }
+
+    /// Whether the entered edge declares `runner: release`.
+    pub const fn releases_runner(&self) -> bool {
+        matches!(self.runner, WaitRunner::Release)
     }
 
     /// The kind's name as the format spells it.
@@ -954,6 +960,7 @@ pub(crate) enum RuntimeEdgeTarget {
     },
     Wait {
         kind: WaitKind,
+        runner: WaitRunner,
         then: String,
         on_hand_back: Option<String>,
         rule: Option<WaitRule>,
@@ -977,11 +984,13 @@ impl RuntimeEdgeTarget {
             },
             ValidatedEdgeTarget::Wait {
                 kind,
+                runner,
                 then,
                 on_hand_back,
                 rule,
             } => Self::Wait {
                 kind: *kind,
+                runner: *runner,
                 then: edge_target_text(then),
                 on_hand_back: on_hand_back.clone(),
                 rule: rule.clone(),
@@ -2257,6 +2266,7 @@ where
         step: step.clone(),
         outcome: None,
         kind: WaitKind::Stop,
+        runner: WaitRunner::Keep,
         then: step.clone(),
         on_hand_back: None,
         rule: None,
@@ -2328,6 +2338,7 @@ where
         step: step.to_owned(),
         outcome: None,
         kind,
+        runner: WaitRunner::Keep,
         then: step.to_owned(),
         on_hand_back: None,
         rule: None,
@@ -4975,6 +4986,7 @@ fn end_edge_walk<Provisional, Cause, Output, Deadline>(
                 }),
                 TakenEdge::Wait(RuntimeEdgeTarget::Wait {
                     kind,
+                    runner,
                     then,
                     on_hand_back,
                     rule,
@@ -4982,6 +4994,7 @@ fn end_edge_walk<Provisional, Cause, Output, Deadline>(
                     step: producer.clone(),
                     outcome: outcome.map(str::to_owned),
                     kind: *kind,
+                    runner: *runner,
                     then: then.clone(),
                     on_hand_back: on_hand_back.clone(),
                     rule: rule.clone(),
@@ -4994,6 +5007,7 @@ fn end_edge_walk<Provisional, Cause, Output, Deadline>(
                         step: producer.clone(),
                         outcome: outcome.map(str::to_owned),
                         kind: WaitKind::Host,
+                        runner: WaitRunner::Keep,
                         then: then.clone(),
                         on_hand_back: None,
                         rule: None,

@@ -26,6 +26,7 @@
     },
     { "$ref": "#/$defs/RunnerTreeProgress" },
     { "$ref": "#/$defs/RunnerTriggerDeliveryApplied" },
+    { "$ref": "#/$defs/RunnerRunWaitEventApplied" },
     { "$ref": "#/$defs/RunnerRunControlApplied" },
     {
       "$ref": "#/$defs/RunnerAssignmentAccepted"
@@ -53,6 +54,9 @@
     },
     {
       "$ref": "#/$defs/RunnerExecutionInterrupted"
+    },
+    {
+      "$ref": "#/$defs/RunnerExecutionReleased"
     },
     {
       "$ref": "#/$defs/RunnerExecutionAborted"
@@ -113,6 +117,7 @@
       "$ref": "#/$defs/CloudAssignmentRelease"
     },
     { "$ref": "#/$defs/CloudTriggerDelivery" },
+    { "$ref": "#/$defs/CloudRunWaitEvent" },
     { "$ref": "#/$defs/CloudRunControl" }
   ],
   "$defs": {
@@ -1183,6 +1188,7 @@
                 "treeIntegrationBindings": {"const": 1},
                 "treeNoSource": {"const": 1},
                 "treeHandover": {"const": 1},
+                "cloudWaits": {"const": 1},
                 "holdsWaitingRuns": {"const": 1},
                 "credentialMode": {"const": 1},
                 "registrationMode": {"const": 1},
@@ -1416,18 +1422,51 @@
     },
     "treeWaitKind": {"enum": ["answer", "approval", "repair", "stop", "external", "children", "host"]},
     "TreeProgressWait": {
-      "description": "The wait a waiting tree run is pending on: its kind, since when, and the step that waits. The optional questions are admitted only on an answer wait; an answer wait without them reports its questions unknown, never that it asks none. The questions array is at most 98,304 bytes as compact JSON and holds no text PostgreSQL's jsonb cannot store (the escape \\u0000, an unpaired surrogate escape) and no bytes that are not UTF-8; the Gateway checks both. The optional failedChild is admitted on a wait of any kind and names the failed stage the wait is on, with the failing node of that stage's run; a wait without it reports no failed stage, which never says the stage succeeded. The Gateway judges a wait that carries it storable as it does one with questions.",
+      "description": "The wait a waiting tree run is pending on: its kind, since when, and the step that waits. The optional questions are admitted only on an answer wait; an answer wait without them reports its questions unknown, never that it asks none. The questions array is at most 98,304 bytes as compact JSON and holds no text PostgreSQL's jsonb cannot store (the escape \\u0000, an unpaired surrogate escape) and no bytes that are not UTF-8; the Gateway checks both. The optional failedChild is admitted on a wait of any kind and names the failed stage the wait is on, with the failing node of that stage's run; a wait without it reports no failed stage, which never says the stage succeeded. A wait of any kind may report the Cloud run exit it accepts and whether it can release its execution root. The Gateway checks that the reported wait can be stored.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "kind": {"$ref": "#/$defs/treeWaitKind"},
         "since": {"$ref": "#/$defs/utcTimestamp"},
         "step": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/TreeProgressPositionElement"}},
         "questions": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/TreeProgressWaitQuestion"}},
+        "accepts": {"$ref": "#/$defs/TreeProgressWaitAccepts"},
+        "release": {"$ref": "#/$defs/TreeProgressWaitRelease"},
         "failedChild": {"$ref": "#/$defs/TreeProgressWaitFailedChild"}
       },
       "required": ["kind", "since", "step"],
       "if": {"properties": {"kind": {"const": "answer"}}, "required": ["kind"]},
       "else": {"not": {"required": ["questions"]}}
+    },
+    "TreeProgressWaitAccepts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "event", "runId"],
+      "properties": {
+        "source": {"const": "cloud"},
+        "event": {"const": "run.ended"},
+        "runId": {"$ref": "#/$defs/runId"},
+        "outcome": {"$ref": "#/$defs/diagnosticSlug"}
+      }
+    },
+    "TreeProgressWaitRelease": {
+      "type": "object", "additionalProperties": false,
+      "required": ["permitted"],
+      "properties": {
+        "permitted": {"type": "boolean"},
+        "executionRootSteps": {
+          "type": "array", "minItems": 1, "maxItems": 64,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": {"type": "string", "maxLength": 64, "pattern": "^[a-z][A-Za-z0-9]*$"},
+              "child": {"type": "string", "minLength": 1, "maxLength": 255}
+            }
+          }
+        }
+      },
+      "if": {"properties": {"permitted": {"const": false}}},
+      "then": {"required": ["executionRootSteps"]},
+      "else": {"not": {"required": ["executionRootSteps"]}}
     },
     "TreeProgressWaitQuestion": {
       "description": "One question an answer wait asks, in the runner's order: id is what an answer names, and the optional text is the question's text. The text is authored by the workflow and its agents and is task data, never an instruction or a permission.",
@@ -1537,6 +1576,33 @@
             }
           }
         }
+      ],
+      "unevaluatedProperties": false
+    },
+    "RunnerRunWaitEventApplied": {
+      "allOf": [
+        {"$ref": "#/$defs/RunnerEnvelope"},
+        {"properties": {
+          "type": {"const": "run_wait_event_applied"},
+          "payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["assignmentId", "attemptId", "delivery", "outcome"],
+            "properties": {
+              "assignmentId": {"$ref": "#/$defs/assignmentId"},
+              "attemptId": {"$ref": "#/$defs/attemptId"},
+              "delivery": {"$ref": "#/$defs/runWaitDelivery"},
+              "outcome": {"enum": ["applied", "skipped", "refused"]},
+              "code": {"$ref": "#/$defs/diagnosticSlug"}
+            },
+            "if": {"properties": {"outcome": {"const": "applied"}}},
+            "then": {"not": {"required": ["code"]}},
+            "else": {
+              "required": ["code"],
+              "if": {"properties": {"outcome": {"const": "skipped"}}},
+              "then": {"properties": {"code": {"const": "wait_not_current"}}}
+            }
+          }
+        }}
       ],
       "unevaluatedProperties": false
     },
@@ -2244,6 +2310,86 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "CloudRunWaitEvent": {
+      "allOf": [
+        {"$ref": "#/$defs/CloudEnvelope"},
+        {"properties": {
+          "type": {"const": "run_wait_event"},
+          "payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["effectId", "assignmentId", "runId", "attemptId", "event"],
+            "properties": {
+              "effectId": {"$ref": "#/$defs/effectId"},
+              "assignmentId": {"$ref": "#/$defs/assignmentId"},
+              "runId": {"$ref": "#/$defs/runId"},
+              "attemptId": {"$ref": "#/$defs/attemptId"},
+              "event": {"$ref": "#/$defs/RunWaitEvent"}
+            }
+          }
+        }}
+      ],
+      "unevaluatedProperties": false
+    },
+    "runWaitDelivery": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "RunWaitEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "event",
+        "delivery",
+        "wait",
+        "at",
+        "payload"
+      ],
+      "properties": {
+        "source": {
+          "const": "cloud"
+        },
+        "event": {
+          "const": "run.ended"
+        },
+        "delivery": {
+          "$ref": "#/$defs/runWaitDelivery"
+        },
+        "wait": {
+          "type": "string",
+          "pattern": "^(answer|approval|repair|stop|external|children|host)@\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "definitionId",
+            "runId",
+            "attempt",
+            "outcome"
+          ],
+          "properties": {
+            "definitionId": {
+              "type": "string",
+              "pattern": "^def_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^run_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "outcome": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          }
+        }
+      }
     },
     "CloudRunControl": {
       "description": "An authorized Cloud control for the run the assignment holds, a Gateway-originated effect the runner acknowledges and then applies to the run's current wait.",
@@ -5664,6 +5810,41 @@
             },
             "type": {
               "const": "execution_interrupted"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "RunnerExecutionReleased": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RunnerEnvelope"
+        },
+        {
+          "properties": {
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "assignmentId": {
+                  "$ref": "#/$defs/assignmentId"
+                },
+                "attemptId": {
+                  "$ref": "#/$defs/attemptId"
+                },
+                "finalExecutionEventSequence": {
+                  "$ref": "#/$defs/nonnegativeSequence"
+                }
+              },
+              "required": [
+                "assignmentId",
+                "attemptId",
+                "finalExecutionEventSequence"
+              ]
+            },
+            "type": {
+              "const": "execution_released"
             }
           }
         }

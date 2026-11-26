@@ -455,9 +455,9 @@ steps:
   (`child_input_undeclared`), kinds must match (`child_input_type_mismatch`), and a child
   `file` or `attachments` input cannot be mapped (`child_input_unsupported`). These
   failures are at location `step_input`.
-- A `workflow` step's `inputs` may also reference `wait.<field>`, a `text` value: the
-  named field of the control that resolved the wait whose `then` or `onHandBack` is this
-  step. `controls.answers` is a `json` value: the answers recorded for this step's
+- A `workflow` step's `inputs` may also reference `wait.<field>`, a `text` value from
+  the payload of the control or recorded Cloud event that resolved the wait whose `then`
+  or `onHandBack` is this step. `controls.answers` is a `json` value: the answers recorded for this step's
   questions. Either may be absent when the step starts, so the child input it maps onto
   must be optional or defaulted (`control_reference_requires_optional` at `step_input`),
   and kinds must match as above. `cmd` and `agent` steps accept neither form.
@@ -472,8 +472,10 @@ steps:
 - `on` maps each of the child's outcomes (its `outcomes`, or `succeeded` and `failed`) to
   one target: a step ID, `exit.<outcome>` naming one of this workflow's outcomes
   (`succeeded` or `failed` when it declares none), a limited edge, a host wait, or a wait
-  `{wait: answer|approval|repair|external, then: <target>}`. An `approval`
-  wait also names `onHandBack: <step>`, the step a hand-back continues at
+  `{wait: answer|approval|repair|external, then: <target>}`. These waits default to
+  `runner: keep`. Use `runner: release` to allow Cloud to release the runner.
+  Host waits forbid `runner`.
+  An `approval` wait also names `onHandBack: <step>`, the step a hand-back continues at
   (`wait_hand_back_required` without it); any other wait may not
   (`wait_hand_back_unsupported`). Validation reports `edge_outcome_undeclared`,
   `edge_outcome_missing`, `edge_target_unknown`, `edge_exit_undeclared`,
@@ -507,6 +509,9 @@ steps:
   `outputs.<step>.<output>` (a `text` export of an earlier step), for example
   `event.pullRequest == outputs.design.pullRequest`. Anything else in the rule is
   `wait_rule_invalid`; an operand naming another value is `wait_rule_reference_invalid`.
+  For `cloud` / `run.ended`, `where` must equate `event.runId` with a quoted literal,
+  a text input or a text output (`wait_rule_invalid` otherwise). Only a matching run-ended
+  event delivered to the waiting run resolves it.
 
 `forEach` runs the child once per element of a `json` list, in order. It is a reference
 or `{items: <reference>, empty: <outcome>}`, `empty` the outcome for an empty list:

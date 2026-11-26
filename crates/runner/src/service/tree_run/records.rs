@@ -17,13 +17,15 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use useful_execution::{
-    CancellationReason, FailingNodeState, LocalRunDirectoryError, MirrorAction, MirrorHook,
-    MirrorSkipReason, MirrorWrite, MirrorWriteOutcome, WaitQuestions, WorkflowNodeRole,
-    read_durable_record, wait_failed_child, wait_identity, wait_questions,
+    CLOUD_SOURCE, CancellationReason, FailingNodeState, LocalRunDirectoryError, MirrorAction,
+    MirrorHook, MirrorSkipReason, MirrorWrite, MirrorWriteOutcome, RUN_ENDED, WaitQuestions,
+    WaitRelease, WaitRule, WorkflowNodeRole, event_literal, read_durable_record, wait_failed_child,
+    wait_identity, wait_questions,
 };
 use useful_runner_protocol::{
-    TreeExit, TreeExport, TreeProgressFailedChild, TreeProgressFailedChildRole,
-    TreeProgressFailedChildState, TreeProgressWaitQuestion, TreeProgressWaitQuestions,
+    TreeExit, TreeExport, TreeProgressExecutionRootStep, TreeProgressFailedChild,
+    TreeProgressFailedChildRole, TreeProgressFailedChildState, TreeProgressWaitAccepts,
+    TreeProgressWaitQuestion, TreeProgressWaitQuestions, TreeProgressWaitRelease,
     TreeStepObservation,
 };
 use useful_support::is_diagnostic_slug;
@@ -187,6 +189,8 @@ pub(in crate::service) struct TreeWait {
     pub(in crate::service) since: String,
     pub(in crate::service) step: Vec<Value>,
     pub(in crate::service) source: String,
+    pub(in crate::service) accepts: Option<TreeProgressWaitAccepts>,
+    pub(in crate::service) release: Option<TreeProgressWaitRelease>,
     /// `None` when the wait reports no questions: another kind, a payload that is not an
     /// object, or questions outside the bounds Cloud admits.
     pub(in crate::service) questions: Option<TreeProgressWaitQuestions>,
@@ -202,10 +206,9 @@ impl TreeWait {
         wait_identity(&self.kind, &self.since)
     }
 
-    /// Whether only a recorded control resolves it: a local kind's derived rule names
-    /// the source `um`; any other source is an external condition.
-    pub(in crate::service) fn awaits_control(&self) -> bool {
-        self.source == "um"
+    /// Whether the run awaits a recorded control or a delivered Cloud event.
+    pub(in crate::service) fn awaits_delivery_or_control(&self) -> bool {
+        matches!(self.source.as_str(), "um" | CLOUD_SOURCE)
     }
 }
 
@@ -226,9 +229,37 @@ pub(in crate::service) fn read_wait(run_directory: &Path) -> Option<TreeWait> {
         since: wait["since"].as_str()?.to_owned(),
         step: wait["step"].as_array()?.clone(),
         source: wait["rule"]["source"].as_str()?.to_owned(),
+        accepts: accepts_cloud_event(&wait["rule"]),
+        release: reported_release(&wait["release"]),
         questions,
         failed_child,
     })
+}
+
+/// The literal subscription Cloud can route from a resolved wait rule.
+fn accepts_cloud_event(rule: &Value) -> Option<TreeProgressWaitAccepts> {
+    let rule: WaitRule = serde_json::from_value(rule.clone()).ok()?;
+    if rule.source != CLOUD_SOURCE || !rule.event.iter().any(|event| event == RUN_ENDED) {
+        return None;
+    }
+    let run_id = event_literal(&rule.where_, &["runId"]).ok()??;
+    let outcome = event_literal(&rule.where_, &["outcome"]).ok()?;
+    TreeProgressWaitAccepts::new(run_id, outcome)
+}
+
+/// The engine's handover judgment, reported whole when it fits the frame.
+fn reported_release(value: &Value) -> Option<TreeProgressWaitRelease> {
+    let release: WaitRelease = serde_json::from_value(value.clone()).ok()?;
+    let steps = release.execution_root_steps.map(|steps| {
+        steps
+            .into_iter()
+            .map(|step| TreeProgressExecutionRootStep {
+                id: step.id,
+                child: step.child,
+            })
+            .collect()
+    });
+    TreeProgressWaitRelease::new(release.permitted, steps)
 }
 
 /// The questions an `answer` wait's `payload` asks, read as `useful workflow run answer` reads
@@ -297,6 +328,7 @@ pub(in crate::service) enum TreeConclusion {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::service) enum TransportResult {
+    Released,
     Succeeded,
     Failed {
         primary_issue: Value,
@@ -316,6 +348,7 @@ impl TransportResult {
     /// The closed `WorkflowTerminalOutcome` the finish or interruption carries.
     pub(in crate::service) fn outcome(&self) -> Value {
         match self {
+            Self::Released => Value::Null,
             Self::Succeeded => json!({ "outcome": "succeeded", "forceAbort": null }),
             Self::Failed { primary_issue, .. } => json!({
                 "outcome": "failed",
@@ -591,6 +624,7 @@ fn confirms_departure(write: &MirrorWrite) -> bool {
 /// the runtime refused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::service) enum ClassifiedEnd {
+    Released,
     /// The runtime refused `command`, the run's first, with its first diagnostic's `code`,
     /// so `step` did not start: the first named step of a `retry --from`, or the root
     /// workflow's first step for a `create`.
@@ -602,7 +636,9 @@ pub(in crate::service) enum ClassifiedEnd {
     },
     /// `cancellation` reached the first `retry --from` before it started an engine
     /// attempt: the record still reads `exited` as the earlier attempt left it.
-    Unstarted { cancellation: CancellationReason },
+    Unstarted {
+        cancellation: CancellationReason,
+    },
 }
 
 /// The run's first command the runtime refused.
@@ -637,6 +673,7 @@ impl RefusedCommand {
 /// of the record, which is the earlier attempt's, is reported.
 pub(in crate::service) fn conclude_classified(end: &ClassifiedEnd) -> TreeConclusion {
     let (result, exit) = match end {
+        ClassifiedEnd::Released => (TransportResult::Released, unchanged_exit()),
         ClassifiedEnd::Refused {
             command,
             step,
@@ -678,6 +715,7 @@ pub(in crate::service) fn conclude_classified(end: &ClassifiedEnd) -> TreeConclu
 fn gate_transitions(result: &TransportResult) -> Vec<Value> {
     let open = json!({ "state": "executing", "gate": "open" });
     let states = match result {
+        TransportResult::Released => return Vec::new(),
         TransportResult::Succeeded => {
             vec![open, json!({ "state": "succeeded", "forceAbort": null })]
         }

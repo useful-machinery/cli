@@ -4,6 +4,7 @@ use super::super::claude_code::{ClaudeCodeConfig, ClaudeCodeEffort};
 use super::super::condition::{ResolvedOperand, ResolvedPredicate};
 use super::super::document::{
     FailurePolicy, FinalizationTrigger, NodeBody, Output, ValueReference, WaitKind, WaitRule,
+    WaitRunner,
 };
 use super::super::pi::{PiConfig, Thinking};
 use super::super::validated::{
@@ -2268,6 +2269,7 @@ fn workflow_step_edges_route_every_child_outcome_to_one_target() {
         design.edges["blocked"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Repair,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Step("build".to_owned())),
             on_hand_back: None,
             rule: None,
@@ -2277,6 +2279,37 @@ fn workflow_step_edges_route_every_child_outcome_to_one_target() {
         design.edges["planned"],
         ValidatedEdgeTarget::Step("build".to_owned())
     );
+}
+
+#[test]
+fn validated_waits_carry_runner_choices_on_direct_and_limited_edges() {
+    let source = edge_workflow(
+        "planned: build",
+        "planned: {then: design, limit: 2, else: {wait: repair, then: build, runner: release}}",
+    )
+    .replace(
+        "blocked: exit.failed",
+        "blocked: {wait: answer, then: design, runner: keep}",
+    );
+    let workflow = validate_with_children(&source, &child_summaries()).unwrap();
+    let design = workflow_step(&workflow, "design");
+    assert!(matches!(
+        design.edges["blocked"],
+        ValidatedEdgeTarget::Wait {
+            runner: WaitRunner::Keep,
+            ..
+        }
+    ));
+    let ValidatedEdgeTarget::Limited { else_, .. } = &design.edges["planned"] else {
+        panic!("expected a limited edge");
+    };
+    assert!(matches!(
+        else_.as_ref(),
+        ValidatedEdgeTarget::Wait {
+            runner: WaitRunner::Release,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -2320,6 +2353,7 @@ fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
         workflow_step(&workflow, "build").edges["built"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Approval,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Exit("landed".to_owned())),
             on_hand_back: Some("design".to_owned()),
             rule: None,
@@ -2345,6 +2379,7 @@ fn an_approval_wait_names_a_hand_back_step_and_no_other_wait_does() {
         workflow_step(&workflow, "build").edges["built"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Approval,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Exit("landed".to_owned())),
             on_hand_back: Some("fix".to_owned()),
             rule: None,
@@ -2363,6 +2398,7 @@ fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
         workflow_step(&workflow, "build").edges["failed"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Repair,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Step("build".to_owned())),
             on_hand_back: None,
             rule: None,
@@ -2384,6 +2420,7 @@ fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
         workflow_step(&workflow, "build").edges["built"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Approval,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Exit("landed".to_owned())),
             on_hand_back: Some("build".to_owned()),
             rule: None,
@@ -2399,6 +2436,7 @@ fn a_wait_may_continue_at_the_waiting_step_or_an_earlier_one() {
         workflow_step(&workflow, "build").edges["built"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::Answer,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Step("design".to_owned())),
             on_hand_back: None,
             rule: None,
@@ -2474,6 +2512,7 @@ fn a_limited_edge_continues_at_a_step_until_its_limit_and_then_takes_else() {
             limit: 2,
             else_: Box::new(ValidatedEdgeTarget::Wait {
                 kind: WaitKind::Repair,
+                runner: WaitRunner::Keep,
                 then: Box::new(ValidatedEdgeTarget::Step("build".to_owned())),
                 on_hand_back: None,
                 rule: None,
@@ -2532,6 +2571,7 @@ fn a_host_wait_waits_at_its_own_step_under_a_limit_with_an_else() {
             limit: 3,
             else_: Box::new(ValidatedEdgeTarget::Wait {
                 kind: WaitKind::Repair,
+                runner: WaitRunner::Keep,
                 then: Box::new(ValidatedEdgeTarget::Step("build".to_owned())),
                 on_hand_back: None,
                 rule: None,
@@ -2759,6 +2799,7 @@ fn an_external_wait_carries_a_rule_over_earlier_text_values() {
         workflow_step(&workflow, "merge").edges["admitted"],
         ValidatedEdgeTarget::Wait {
             kind: WaitKind::External,
+            runner: WaitRunner::Keep,
             then: Box::new(ValidatedEdgeTarget::Step("merge".to_owned())),
             on_hand_back: None,
             rule: Some(WaitRule {
@@ -2775,6 +2816,28 @@ fn an_external_wait_carries_a_rule_over_earlier_text_values() {
         &external_wait_summaries(),
     )
     .unwrap();
+}
+
+#[test]
+fn a_cloud_wait_requires_the_id_of_the_run_it_awaits() {
+    let cloud = external_wait("source: github", "source: cloud")
+        .replace("pull_request.queue_settled", "run.ended")
+        .replace("event.pullRequest", "event.runId")
+        .replace(r#"event.state == "merged""#, r#"event.outcome == "ok""#);
+    let summaries = external_wait_summaries();
+    validate_with_children(&cloud, &summaries).unwrap();
+    validate_with_children(EXTERNAL_WAIT_WORKFLOW, &summaries).unwrap();
+    for invalid in [
+        cloud.replace("event.runId", "event.ticket"),
+        cloud.replace("outputs.design.pullRequest", "event.otherRun"),
+    ] {
+        assert_edge_failure(
+            &invalid,
+            &summaries,
+            ValidationFailureKind::WaitRuleInvalid,
+            step_edge("merge", "admitted"),
+        );
+    }
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! The tree run's resume loop: one assignment, lease and claim carry the run through every engine
 //! attempt. After `useful workflow run create` and each later `useful` process exits, the loop
-//! reads `run.json`: `exited` ends the loop; `waiting` reads `wait.json` and, for a wait only a
-//! control resolves (rule source `um`), runs `useful workflow run resume` once a Cloud control is
-//! applied, and for an external condition runs it on entry and then at an interval, longer while
+//! reads `run.json`: `exited` ends the loop; `waiting` reads `wait.json` and, for a rule
+//! with source `um` or `cloud`, runs `useful workflow run resume` once a control or event
+//! is applied. For other conditions it runs on entry and then at an interval, longer while
 //! the condition is unavailable; `running` with no process left (an abandoned attempt or an
 //! unchained `continued` edge) runs `resume` once. A cancellation of a waiting run is
 //! `useful workflow run cancel`; the runner's shutdown or lease loss ends the loop with the record
@@ -69,8 +69,9 @@ use time::format_description::well_known::Rfc3339;
 use useful_execution::{CancellationReason, CancellationSource, ConditionError, wait_identity};
 use useful_runner_protocol::{
     RunControl, RunControlAction, RunControlApplication, RunControlOutcome, RunControlSkip,
-    RunControlWait, TreeProgressWait, TreeRootProgress, TreeStepObservation, TreeStepState,
-    TriggerDelivery, TriggerDeliveryApplication,
+    RunControlWait, RunWaitEvent, RunWaitEventApplication, RunWaitEventOutcome, TreeProgressWait,
+    TreeRootProgress, TreeStepObservation, TreeStepState, TriggerDelivery,
+    TriggerDeliveryApplication,
 };
 
 use super::command::{self, CommandExit, UsefulCommand};
@@ -286,10 +287,12 @@ enum Pause {
     Now,
     For(Duration),
     Control,
+    Release(Arc<tokio::sync::Notify>),
 }
 
 /// How a pause ended.
 enum Woken {
+    Released,
     /// The pause elapsed, or a control was applied for `resume` to act on.
     Due,
     /// A delivery's application ended the run or moved it off the wait, or a withdrawal was
@@ -400,6 +403,8 @@ impl Progress<'_> {
                     step: wait.step.clone(),
                     questions: wait.questions.clone(),
                     failed_child: wait.failed_child.clone(),
+                    accepts: wait.accepts.clone(),
+                    release: wait.release.clone(),
                 }),
             )),
         };
@@ -442,7 +447,7 @@ impl Progress<'_> {
                 progress: TreeRootProgress {
                     attempt,
                     position,
-                    wait,
+                    wait: wait.map(Box::new),
                     reported_at: reported_at.clone(),
                     steps,
                 },
@@ -501,6 +506,27 @@ struct Driver<'a> {
     withdrawal_recorded: bool,
 }
 
+/// The identity of the wait the run currently holds.
+async fn current_wait(directory: &Path) -> Option<String> {
+    observe_record(directory.to_owned())
+        .await
+        .filter(|(record, _)| record.state == RecordState::Waiting)
+        .and_then(|(_, held)| held)
+        .map(|held| held.identity())
+}
+
+/// Read the durable control log as the engine does. An unreadable record or an
+/// unhonored withdrawal keeps the assignment.
+async fn withdrawal_clear(directory: PathBuf) -> bool {
+    tokio::task::spawn_blocking(move || {
+        useful_execution::inspect_wait(&directory, &useful_execution::NoConditions)
+            .and_then(|probe| probe.withdrawal_pending())
+            .is_ok_and(|pending| !pending)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Whether a command's document is the runtime's refusal, and its first diagnostic's
 /// code.
 fn refusal(document: Option<&Value>) -> Option<Option<String>> {
@@ -555,7 +581,12 @@ pub(super) async fn drive(run: &TreeRun, sink: ReportSink<'_>) -> Result<TreeEnd
                         .as_ref()
                         .is_some_and(|record| record.state == RecordState::Exited)
             });
-            let signal = if matches!(run.start, TreeStart::Handover { .. })
+            let signal = if end
+                .as_ref()
+                .is_ok_and(|end| matches!(end.classified, Some(ClassifiedEnd::Released)))
+            {
+                Signal::Released
+            } else if matches!(run.start, TreeStart::Handover { .. })
                 && !settled
                 && (driver.directory.is_none() || driver.progress.restored_attempt.is_some())
             {
@@ -586,6 +617,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
     // The attempt count of an adopted exited record its first command resumes from named
     // steps: a record still exited on that count is the earlier attempt's, not this one's.
     let mut adopted_exit: Option<u64> = None;
+    let mut adopted_wait = None;
     let mut exit = match &run.start {
         TreeStart::Create {
             arguments, first, ..
@@ -669,6 +701,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                 Some(directory) => {
                     // The writes the run already holds are earlier attempts', counted before
                     // a delivery or command of this attempt can add one.
+                    adopted_wait = current_wait(&directory).await;
                     driver.earlier_writes = count_mirror_writes(directory.clone()).await;
                     driver.apply_adopted_pending(&directory).await?
                 }
@@ -839,18 +872,41 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                 resumed_running = None;
                 let identity = wait.identity();
                 let entered = entered_wait.as_deref() != Some(identity.as_str());
+                // Cloud continues a released run for a delivery or a control alone, so a
+                // wait whose condition this runner polls stays held.
+                let may_release = adopted_wait.as_ref() != Some(&identity)
+                    && wait.awaits_delivery_or_control()
+                    && wait
+                        .release
+                        .as_ref()
+                        .is_some_and(|release| release.permitted());
                 entered_wait = Some(identity);
-                match (wait.awaits_control(), entered) {
-                    (true, true) => Pause::Control,
-                    (false, true) => Pause::Now,
-                    (awaits_control, false) => match answer(exit.document.as_ref()) {
-                        Answer::Refused => {
-                            return Err(DriveFailure::Cause("tree_run_resume_refused"));
-                        }
-                        _ if awaits_control => Pause::Control,
-                        Answer::Held => Pause::For(run.intervals.held),
-                        Answer::Unavailable => Pause::For(run.intervals.unavailable),
-                    },
+                if may_release
+                    && let Some(delivery) = &driver.progress.delivery
+                    && withdrawal_clear(directory.clone()).await
+                {
+                    let receipt = Arc::new(tokio::sync::Notify::new());
+                    delivery
+                        .signal
+                        .send_replace(super::record_delivery::Signal::ForRelease(
+                            directory.clone(),
+                            receipt.clone(),
+                        ));
+                    Pause::Release(receipt)
+                } else {
+                    match (wait.awaits_delivery_or_control(), entered) {
+                        (true, true) => Pause::Control,
+                        (false, true) => Pause::Now,
+                        (awaits_delivery_or_control, false) => match answer(exit.document.as_ref())
+                        {
+                            Answer::Refused => {
+                                return Err(DriveFailure::Cause("tree_run_resume_refused"));
+                            }
+                            _ if awaits_delivery_or_control => Pause::Control,
+                            Answer::Held => Pause::For(run.intervals.held),
+                            Answer::Unavailable => Pause::For(run.intervals.unavailable),
+                        },
+                    }
                 }
             }
         };
@@ -858,6 +914,12 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
             .pause(pause, &directory, entered_wait.as_deref())
             .await?
         {
+            Woken::Released => {
+                return Ok(TreeEnd {
+                    classified: Some(ClassifiedEnd::Released),
+                    ..TreeEnd::after(Some(record), exit)
+                });
+            }
             Woken::Due => {}
             Woken::Changed => continue,
             Woken::Ran(ran) => {
@@ -1020,7 +1082,7 @@ impl Driver<'_> {
     /// `wait`, the identity of the wait it holds, `Due`, `Ran` or, for a `withdraw`, `Changed`
     /// once a control is applied (`apply_control`), and `Cancelled` when the assignment's
     /// cancellation comes first.
-    /// `Control` waits for a control alone. `Now` waits for nothing; the command it precedes
+    /// `Control` waits for an incoming control or event. `Now` waits for nothing; the command it precedes
     /// applies any delivery, and any control that names no wait.
     async fn pause(
         &mut self,
@@ -1035,11 +1097,13 @@ impl Driver<'_> {
                 .cancellation_reason()
                 .map_or(Woken::Due, Woken::Cancelled));
         }
+        let releasing = matches!(pause, Pause::Release(_));
         let elapsed = async move {
             match pause {
                 Pause::Now => {}
                 Pause::For(duration) => run.sleeper.sleep(duration).await,
                 Pause::Control => std::future::pending().await,
+                Pause::Release(receipt) => receipt.notified().await,
             }
         };
         tokio::pin!(elapsed);
@@ -1064,7 +1128,8 @@ impl Driver<'_> {
                             record.state == RecordState::Waiting
                                 && held.map(|held| held.identity()).as_deref() == wait
                         });
-                if !held {
+                // Even a delivery that left the wait current may have changed its record.
+                if !held || releasing {
                     return Ok(Woken::Changed);
                 }
                 continue;
@@ -1074,14 +1139,32 @@ impl Driver<'_> {
                 if let Some(woken) = self.apply_control(control, directory).await? {
                     return Ok(woken);
                 }
+                if releasing {
+                    return Ok(Woken::Changed);
+                }
+                continue;
+            }
+            if let Some(event) = run.wait_events.pop() {
+                // Delivery names are chosen independently of control and trigger ids.
+                if self
+                    .applied
+                    .insert(format!("wait-event/{}", event.delivery))
+                    && self.apply_wait_event(event, directory).await?
+                {
+                    return Ok(Woken::Due);
+                }
+                if releasing {
+                    return Ok(Woken::Changed);
+                }
                 continue;
             }
             tokio::select! {
                 biased;
                 reason = cancellation.wait_for_cancellation() => return Ok(Woken::Cancelled(reason)),
-                () = &mut elapsed => return Ok(Woken::Due),
                 () = run.deliveries.arrived() => {}
                 () = run.controls.arrived() => {}
+                () = run.wait_events.arrived() => {}
+                () = &mut elapsed => return Ok(if releasing { Woken::Released } else { Woken::Due }),
             }
         }
     }
@@ -1202,6 +1285,38 @@ impl Driver<'_> {
         unwaited
     }
 
+    /// Applies the Cloud event only while the run holds the named wait. An applied
+    /// event wakes the run for the engine to evaluate the recorded event.
+    async fn apply_wait_event(
+        &self,
+        event: RunWaitEvent,
+        directory: &Path,
+    ) -> Result<bool, DriveFailure> {
+        let outcome = if current_wait(directory).await.as_ref() == Some(&event.wait) {
+            let Some(outcome) = command::deliver_event(
+                &self.run.useful,
+                directory,
+                &event,
+                self.run.cancellation.source(),
+            )
+            .await
+            else {
+                return Ok(false);
+            };
+            outcome
+        } else {
+            RunWaitEventOutcome::Skipped
+        };
+        let applied = outcome == RunWaitEventOutcome::Applied;
+        self.report(vec![ExecutionReport::RunWaitEventApplied {
+            application: RunWaitEventApplication {
+                delivery: event.delivery,
+                outcome,
+            },
+        }])?;
+        Ok(applied)
+    }
+
     /// Applies `control` to the run at `directory`, which no process holds, and reports its
     /// application. A control naming a wait the run does not currently wait on is skipped
     /// `wait_not_current` and runs nothing. A `retry` runs as the loop's next command, `Ran`
@@ -1216,19 +1331,14 @@ impl Driver<'_> {
         directory: &Path,
     ) -> Result<Option<Woken>, DriveFailure> {
         let wait = named_wait(&control.action).map(|wait| wait_identity(&wait.kind, &wait.since));
-        if let Some(wait) = &wait {
-            let current = observe_record(directory.to_owned())
-                .await
-                .filter(|(record, _)| record.state == RecordState::Waiting)
-                .and_then(|(_, held)| held)
-                .map(|held| held.identity());
-            if current.as_deref() != Some(wait.as_str()) {
-                self.report_control(
-                    control.control_id,
-                    RunControlOutcome::Skipped(RunControlSkip::WaitNotCurrent),
-                )?;
-                return Ok(None);
-            }
+        if let Some(wait) = &wait
+            && current_wait(directory).await.as_ref() != Some(wait)
+        {
+            self.report_control(
+                control.control_id,
+                RunControlOutcome::Skipped(RunControlSkip::WaitNotCurrent),
+            )?;
+            return Ok(None);
         }
         if let (RunControlAction::Retry { .. }, Some(wait)) = (&control.action, wait) {
             let exit = self

@@ -36,7 +36,9 @@ pub(super) type JsonOutput = super::super::super::JsonArgs<super::super::super::
 
 /// A run a control command acts on: its record and its wait as `inspect_wait` found them
 /// without taking the run lock. A control command observes no condition (`NoConditions`), so
-/// an `external` wait reads as held whatever its provider would answer.
+/// an `external` wait on a condition the CLI observes reads as held whatever its provider
+/// would answer; a `cloud` wait reads as resolved once a delivery recorded in the run
+/// matches its rule.
 pub(super) struct ControlTarget {
     pub(super) run_directory: PathBuf,
     pub(super) record: WorkflowRunRecord,

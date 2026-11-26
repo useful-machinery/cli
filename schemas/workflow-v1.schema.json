@@ -863,6 +863,10 @@
       "additionalProperties": false,
       "properties": {
         "wait": { "enum": ["answer", "approval", "repair", "external"] },
+        "runner": {
+          "enum": ["keep", "release"],
+          "description": "Whether the wait keeps its Cloud runner or permits release. Defaults to keep."
+        },
         "then": { "$ref": "#/$defs/EdgeTargetString" },
         "onHandBack": { "$ref": "#/$defs/Identifier" },
         "rule": { "$ref": "#/$defs/WaitRule" }

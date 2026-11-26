@@ -31,8 +31,8 @@ use crate::service::assignment::test_support::{
 };
 use crate::service::assignment::{
     AssignmentCancel, AssignmentManager, AssignmentObservation, AssignmentOffer, AssignmentRelease,
-    AssignmentRunControl, AssignmentTriggerDelivery, ExecutionReport, LeaseLossReason,
-    MAXIMUM_SERVICE_OBSERVATIONS, OBSERVATION_RESERVE_BASE,
+    AssignmentRunControl, AssignmentRunWaitEvent, AssignmentTriggerDelivery, ExecutionReport,
+    LeaseLossReason, MAXIMUM_SERVICE_OBSERVATIONS, OBSERVATION_RESERVE_BASE,
 };
 use crate::service::source::test_support::{fixture_credential, fixture_source_broker};
 use crate::service::source::{
@@ -3699,6 +3699,661 @@ async fn each_held_run_applies_its_own_controls_and_deliveries() {
     assert_eq!(chosen_outcome(&second_reports).as_deref(), Some("landed"));
 }
 
+fn cloud_wait_fixture() -> Fixture {
+    control_wait_fixture(
+        "external",
+        &[
+            (
+                "TREE_TEST_WAIT_RULE",
+                r#"{"source":"cloud","event":["run.ended"],"where":"event.runId == \"run_01k0z6r1w8f4jy2m7q9v3x5abt\" and event.outcome == \"ok\""}"#,
+            ),
+            (
+                "TREE_TEST_WAIT_RELEASE",
+                r#"{"permitted":false,"executionRootSteps":[{"id":"merge"}]}"#,
+            ),
+        ],
+    )
+}
+
+/// A Cloud event routed to the given assignment just as the connection decoded it.
+fn wait_event(offer: &AssignmentOffer, wait: &str) -> AssignmentRunWaitEvent {
+    let mut frame: Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/runner-protocol/v1/valid/cloud-run-wait-event.json"
+    )))
+    .unwrap();
+    let payload = &mut frame["payload"];
+    payload["assignmentId"] = json!(offer.assignment_id);
+    payload["runId"] = json!(offer.run_id);
+    payload["attemptId"] = json!(offer.attempt_id);
+    payload["event"]["wait"] = json!(wait);
+    payload["event"]["payload"]["outcome"] = json!("ok");
+    let CloudFrame::RunWaitEvent {
+        effect_id,
+        assignment_id,
+        run_id,
+        attempt_id,
+        event,
+        ..
+    } = decode_cloud_frame(&serde_json::to_vec(&frame).unwrap()).unwrap()
+    else {
+        panic!("expected a wait event")
+    };
+    AssignmentRunWaitEvent {
+        effect_id,
+        assignment_id,
+        run_id,
+        attempt_id,
+        event,
+    }
+}
+
+const RELEASE_WAIT_TREE: &[TreeFile] = &[
+    TreeFile {
+        path: "workflow.yaml",
+        bytes: br#"schemaVersion: 1
+name: releaseWait
+environmentPassthrough: [SHARED]
+outcomes: [landed, failed]
+steps:
+  prepare:
+    kind: workflow
+    workflow: child.yaml
+    on:
+      succeeded:
+        wait: external
+        runner: release
+        then: finish
+        rule: {source: cloud, event: run.ended, where: 'event.runId == "run_01k0z6r1w8f4jy2m7q9v3x5abt" and event.outcome == "ok"'}
+      failed: exit.failed
+  finish:
+    kind: workflow
+    workflow: child.yaml
+    on: {succeeded: exit.landed, failed: exit.failed}
+"#,
+        executable: false,
+    },
+    TreeFile {
+        path: "child.yaml",
+        bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+steps:
+  work:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -c, 'echo work >> "$SHARED/work"; while test -f "$SHARED/hold"; do sleep 0.05; done']}
+"#,
+        executable: false,
+    },
+];
+
+async fn released_workspace(fixture: &mut Fixture) -> (PathBuf, Value) {
+    let workspace = start_record_tree(fixture).await;
+    let reports = finished_reports(&mut fixture.manager).await;
+    let terminal = encoded_frame(reports.last().unwrap(), &fixture.offer);
+    assert_eq!(terminal["type"], "execution_released", "{reports:#?}");
+    assert_eq!(terminal["payload"]["finalExecutionEventSequence"], 0);
+    assert_eq!(terminal_count(&reports), 1);
+    let wait = reported_waits(&reports, &fixture.offer).pop().unwrap().0;
+    assert_eq!(wait["release"], json!({"permitted":true}));
+    assert_eq!(
+        retention_reports(&settled_observations(&mut fixture.manager).await),
+        [(
+            fixture.offer.assignment_id.clone(),
+            fixture.offer.attempt_id.clone(),
+            workspace.display().to_string()
+        )]
+    );
+    let authority = fs::read_to_string(
+        workspace
+            .parent()
+            .unwrap()
+            .join(".useful-runner-serve-attempt-v1"),
+    )
+    .unwrap();
+    assert!(authority.lines().any(|line| line == "disposition=released"));
+    acknowledge_retention(&mut fixture.manager);
+    (workspace, wait)
+}
+
+#[tokio::test]
+async fn release_wait_stores_the_waiting_record_and_takes_another_offer() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    released_workspace(&mut fixture).await;
+    assert_eq!(
+        gateway.state.lock().unwrap().kept_run_state().as_deref(),
+        Some("waiting")
+    );
+    let second = other_offer(&fixture.offer, '6');
+    assert_eq!(start_other(&mut fixture, &second, '6').await, None);
+    let reports = finished_assignment_reports(&mut fixture.manager, &second.assignment_id).await;
+    assert_eq!(
+        encoded_frame(reports.last().unwrap(), &second)["type"],
+        "execution_released"
+    );
+}
+
+#[tokio::test]
+async fn release_wait_requiring_the_execution_root_holds_after_storage() {
+    const NEEDS_ROOT: &[TreeFile] = &[
+        TreeFile {
+            path: "workflow.yaml",
+            bytes: RELEASE_WAIT_TREE[0].bytes,
+            executable: false,
+        },
+        TreeFile {
+            path: "child.yaml",
+            bytes: br#"schemaVersion: 1
+steps:
+  work: {kind: cmd, command: {argv: [sh, -c, "true"]}}
+"#,
+            executable: false,
+        },
+    ];
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, NEEDS_ROOT, shared.path());
+    start_record_tree(&mut fixture).await;
+    wait_for_waiting(&mut fixture).await;
+    wait_for_record_condition(|| {
+        gateway.state.lock().unwrap().kept_run_state().as_deref() == Some("waiting")
+    })
+    .await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &fixture.offer.assignment_id);
+    let wait = reported_waits(&reports, &fixture.offer).pop().unwrap().0;
+    assert_eq!(
+        wait["release"],
+        json!({"permitted":false, "executionRootSteps":[{"id":"finish","child":"work"}]})
+    );
+    let event = wait_event(
+        &fixture.offer,
+        &format!("external@{}", wait["since"].as_str().unwrap()),
+    );
+    fixture.manager.handle_run_wait_event(event).unwrap();
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(
+        chosen_outcome(&reports).as_deref(),
+        Some("landed"),
+        "{reports:#?}"
+    );
+}
+
+// Cloud wakes a released run for a match, a control or a trigger departure. A condition the
+// runner polls has none of them, so its release wait keeps the runner.
+#[tokio::test]
+async fn release_wait_on_a_condition_the_runner_polls_keeps_the_runner() {
+    const POLLED: &[TreeFile] = &[
+        TreeFile {
+            path: "workflow.yaml",
+            bytes: br#"schemaVersion: 1
+name: releaseWait
+environmentPassthrough: [SHARED]
+outcomes: [landed, failed]
+steps:
+  prepare:
+    kind: workflow
+    workflow: child.yaml
+    on:
+      succeeded:
+        wait: external
+        runner: release
+        then: finish
+        rule: {source: github, event: pull_request.queue_settled, where: 'event.state == "merged"'}
+      failed: exit.failed
+  finish:
+    kind: workflow
+    workflow: child.yaml
+    on: {succeeded: exit.landed, failed: exit.failed}
+"#,
+            executable: false,
+        },
+        TreeFile {
+            path: "child.yaml",
+            bytes: RELEASE_WAIT_TREE[1].bytes,
+            executable: false,
+        },
+    ];
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, POLLED, shared.path());
+    start_record_tree(&mut fixture).await;
+    wait_for_waiting(&mut fixture).await;
+    wait_for_record_condition(|| {
+        gateway.state.lock().unwrap().kept_run_state().as_deref() == Some("waiting")
+    })
+    .await;
+    // Ten held-wait intervals pass after the storage a release waits for.
+    crate::service::Sleeper::sleep(&crate::service::TokioSleeper, Duration::from_millis(200)).await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &fixture.offer.assignment_id);
+    assert_eq!(terminal_count(&reports), 0, "{reports:#?}");
+    assert_eq!(
+        reported_waits(&reports, &fixture.offer).pop().unwrap().0["release"],
+        json!({"permitted":true})
+    );
+    cancel_assignment(&mut fixture);
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("canceled"));
+}
+
+#[tokio::test]
+async fn release_wait_retries_storage_before_releasing() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let hold = shared.path().join("hold");
+    fs::write(&hold, b"").unwrap();
+    let mut fixture = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    start_record_tree(&mut fixture).await;
+    wait_for_record_condition(|| {
+        gateway.state.lock().unwrap().kept_run_state().as_deref() == Some("running")
+    })
+    .await;
+    gateway
+        .state
+        .lock()
+        .unwrap()
+        .set_fault(RecordFault::Close(usize::MAX));
+    fs::remove_file(hold).unwrap();
+    wait_for_waiting(&mut fixture).await;
+    wait_for_record_condition(|| gateway.state.lock().unwrap().closed_requests > 0).await;
+    assert_eq!(
+        terminal_count(&queued_assignment_reports(
+            &mut fixture.manager,
+            &fixture.offer.assignment_id
+        )),
+        0
+    );
+    gateway.state.lock().unwrap().set_fault(RecordFault::None);
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(
+        encoded_frame(reports.last().unwrap(), &fixture.offer)["type"],
+        "execution_released"
+    );
+    assert_eq!(
+        gateway.state.lock().unwrap().kept_run_state().as_deref(),
+        Some("waiting")
+    );
+}
+
+#[tokio::test]
+async fn release_wait_applies_a_match_while_its_store_is_unacknowledged() {
+    let (acknowledge, pause_commit) = std::sync::mpsc::channel();
+    let gateway = RecordGateway::new(RecordFault::HoldRunState("waiting", pause_commit));
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    start_record_tree(&mut fixture).await;
+    wait_for_record_condition(|| {
+        gateway.state.lock().unwrap().kept_run_state().as_deref() == Some("waiting")
+    })
+    .await;
+    wait_for_waiting(&mut fixture).await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &fixture.offer.assignment_id);
+    let wait = reported_waits(&reports, &fixture.offer).pop().unwrap().0;
+    let event = wait_event(
+        &fixture.offer,
+        &format!("external@{}", wait["since"].as_str().unwrap()),
+    );
+    fixture.manager.handle_run_wait_event(event).unwrap();
+    wait_for_reports(&mut fixture.manager, |reports| {
+        reports
+            .iter()
+            .any(|report| matches!(report, ExecutionReport::RunWaitEventApplied { .. }))
+    })
+    .await;
+    acknowledge.send(()).unwrap();
+    let reports = finished_reports(&mut fixture.manager).await;
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
+// SC-CLOUDWAIT-2
+#[tokio::test]
+async fn release_wait_handover_holds_for_a_matched_event() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut prior = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    released_workspace(&mut prior).await;
+    let mut replacement = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    replacement.offer = handover_of(&prior.offer, &[], "hn2");
+    drop(prior);
+    let workspace = start_record_tree(&mut replacement).await;
+    let document = workspace.parent().unwrap().join("private/tree-run.json");
+    wait_for_record_condition(|| {
+        fs::read(&document)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|reply| {
+                reply["command"] == "useful workflow run resume" && reply["outcome"] == "waiting"
+            })
+    })
+    .await;
+    wait_for_waiting(&mut replacement).await;
+    let reports =
+        queued_assignment_reports(&mut replacement.manager, &replacement.offer.assignment_id);
+    let wait = reported_waits(&reports, &replacement.offer)
+        .pop()
+        .unwrap()
+        .0;
+    let event = wait_event(
+        &replacement.offer,
+        &format!("external@{}", wait["since"].as_str().unwrap()),
+    );
+    replacement.manager.handle_run_wait_event(event).unwrap();
+    let reports = finished_reports(&mut replacement.manager).await;
+    assert_eq!(
+        chosen_outcome(&reports).as_deref(),
+        Some("landed"),
+        "{reports:#?}"
+    );
+}
+
+// SC-CLOUDWAIT-3
+#[tokio::test]
+async fn release_wait_retaining_boot_resumes_at_then_on_a_matched_event() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, RELEASE_WAIT_TREE, shared.path());
+    let (workspace, _) = released_workspace(&mut fixture).await;
+    let work = shared.path().join("work");
+    assert_eq!(fs::read_to_string(&work).unwrap(), "work\n");
+
+    let next = continuation_of(&fixture.offer, BOOT, &workspace, &[], "cn1");
+    assert_eq!(start_other(&mut fixture, &next, '6').await, None);
+    wait_for_assignment_reports(&mut fixture.manager, &next.assignment_id, |reports| {
+        reported_state(reports, "waiting")
+    })
+    .await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &next.assignment_id);
+    let wait = reported_waits(&reports, &next).pop().unwrap().0;
+    let event = wait_event(
+        &next,
+        &format!("external@{}", wait["since"].as_str().unwrap()),
+    );
+    fixture.manager.handle_run_wait_event(event).unwrap();
+    let reports = finished_assignment_reports(&mut fixture.manager, &next.assignment_id).await;
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+    // Both stages call the same child. Only finish ran after adoption.
+    assert_eq!(fs::read_to_string(work).unwrap(), "work\nwork\n");
+}
+
+#[tokio::test]
+async fn release_wait_retaining_continuation_holds_for_a_control() {
+    const APPROVAL: &[TreeFile] = &[
+        TreeFile {
+            path: "workflow.yaml",
+            bytes: br#"schemaVersion: 1
+name: review
+environmentPassthrough: [SHARED]
+outcomes: [landed, failed]
+steps:
+  review: {kind: workflow, workflow: child.yaml, on: {succeeded: {wait: approval, runner: release, then: finish, onHandBack: review}, failed: exit.failed}}
+  finish: {kind: workflow, workflow: child.yaml, on: {succeeded: exit.landed, failed: exit.failed}}
+"#,
+            executable: false,
+        },
+        TreeFile {
+            path: "child.yaml",
+            bytes: RELEASE_WAIT_TREE[1].bytes,
+            executable: false,
+        },
+    ];
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, APPROVAL, shared.path());
+    let (workspace, _) = released_workspace(&mut fixture).await;
+    let next = continuation_of(&fixture.offer, BOOT, &workspace, &[], "cn1");
+    assert_eq!(start_other(&mut fixture, &next, '6').await, None);
+    wait_for_assignment_reports(&mut fixture.manager, &next.assignment_id, |reports| {
+        reported_state(reports, "waiting")
+    })
+    .await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &next.assignment_id);
+    let wait = reported_waits(&reports, &next).pop().unwrap().0;
+    let control = run_control_for(
+        &next,
+        CONTROL_ID,
+        json!({"kind":"approve","wait":{"kind":"approval","since":wait["since"]}}),
+    );
+    fixture.manager.handle_run_control(control).unwrap();
+    let reports = finished_assignment_reports(&mut fixture.manager, &next.assignment_id).await;
+    assert_eq!(
+        chosen_outcome(&reports).as_deref(),
+        Some("landed"),
+        "{reports:#?}"
+    );
+}
+
+const fn nested_release_wait_tree(work_stage: &'static [u8]) -> [TreeFile; 4] {
+    [
+        TreeFile {
+            path: "workflow.yaml",
+            bytes: br#"schemaVersion: 1
+name: nestedReleaseWait
+environmentPassthrough: [SHARED]
+outcomes: [landed, failed]
+steps:
+  outer:
+    kind: workflow
+    workflow: part.yaml
+    on: {checked: exit.landed, failed: exit.failed}
+"#,
+            executable: false,
+        },
+        TreeFile {
+            path: "part.yaml",
+            bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+outcomes: [checked, failed]
+steps:
+  prepare:
+    kind: workflow
+    workflow: prepare.yaml
+    on: {succeeded: work, failed: exit.failed}
+  work:
+    kind: workflow
+    workflow: work.yaml
+    on: {succeeded: exit.checked, failed: {wait: repair, runner: release, then: work}}
+"#,
+            executable: false,
+        },
+        TreeFile {
+            path: "prepare.yaml",
+            bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+steps:
+  prepare:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -ec, 'echo prepare >> "$SHARED/calls"']}
+"#,
+            executable: false,
+        },
+        TreeFile {
+            path: "work.yaml",
+            bytes: work_stage,
+            executable: false,
+        },
+    ]
+}
+
+const NESTED_RELEASE_WAIT_TREE: &[TreeFile] = &nested_release_wait_tree(
+    br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+steps:
+  build:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -ec, 'echo work >> "$SHARED/calls"; test -f "$SHARED/fixed"']}
+"#,
+);
+
+fn assert_nested_repair_wait(wait: &Value) {
+    assert_eq!(wait["kind"], "repair", "{wait}");
+    assert_eq!(wait["step"], json!(["outer", "work"]), "{wait}");
+}
+
+async fn retry_nested_release_wait(
+    manager: &mut AssignmentManager,
+    offer: &AssignmentOffer,
+    shared: &Path,
+    release: Value,
+) {
+    wait_for_assignment_reports(manager, &offer.assignment_id, |reports| {
+        reported_state(reports, "waiting")
+    })
+    .await;
+    let reports = queued_assignment_reports(manager, &offer.assignment_id);
+    assert_eq!(terminal_count(&reports), 0, "{reports:#?}");
+    let wait = reported_waits(&reports, offer).pop().unwrap().0;
+    assert_nested_repair_wait(&wait);
+    assert_eq!(wait["release"], release);
+    assert_eq!(logged_lines(shared, "calls"), ["prepare", "work"]);
+
+    fs::write(shared.join("fixed"), b"").unwrap();
+    let control = run_control_for(
+        offer,
+        CONTROL_ID,
+        json!({"kind": "retry", "wait": {"kind": "repair", "since": wait["since"]}}),
+    );
+    manager.handle_run_control(control).unwrap();
+    let reports = finished_assignment_reports(manager, &offer.assignment_id).await;
+    assert_eq!(
+        control_applications(&reports),
+        [applied(CONTROL_ID, "succeeded")]
+    );
+    assert_eq!(terminal_count(&reports), 1, "{reports:#?}");
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
+// SC-CLOUDWAIT-7
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_continues_in_place_on_the_retaining_boot() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, NESTED_RELEASE_WAIT_TREE, shared.path());
+    let (workspace, wait) = released_workspace(&mut fixture).await;
+    assert_nested_repair_wait(&wait);
+
+    let next = continuation_of(&fixture.offer, BOOT, &workspace, &[], "cn1");
+    assert_eq!(start_other(&mut fixture, &next, '6').await, None);
+    retry_nested_release_wait(
+        &mut fixture.manager,
+        &next,
+        shared.path(),
+        json!({"permitted": true}),
+    )
+    .await;
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        ["prepare", "work", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-7
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_restarts_the_nested_workflow_on_handover() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut prior = handover_fixture(&gateway, NESTED_RELEASE_WAIT_TREE, shared.path());
+    let (_, wait) = released_workspace(&mut prior).await;
+    assert_nested_repair_wait(&wait);
+    assert_eq!(
+        gateway.state.lock().unwrap().kept_run_state().as_deref(),
+        Some("waiting")
+    );
+
+    let mut replacement = handover_fixture(&gateway, NESTED_RELEASE_WAIT_TREE, shared.path());
+    replacement.offer = handover_of(&prior.offer, &[], "hn2");
+    drop(prior);
+    start_record_tree(&mut replacement).await;
+    retry_nested_release_wait(
+        &mut replacement.manager,
+        &replacement.offer,
+        shared.path(),
+        json!({"permitted": true}),
+    )
+    .await;
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        ["prepare", "work", "prepare", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-7
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_holds_if_a_stage_needs_the_execution_root() {
+    const NEEDS_ROOT: &[TreeFile] = &nested_release_wait_tree(
+        br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+steps:
+  build:
+    kind: cmd
+    command: {argv: [sh, -ec, 'echo work >> "$SHARED/calls"; test -f "$SHARED/fixed"']}
+"#,
+    );
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, NEEDS_ROOT, shared.path());
+    start_record_tree(&mut fixture).await;
+    wait_for_record_condition(|| {
+        gateway.state.lock().unwrap().kept_run_state().as_deref() == Some("waiting")
+    })
+    .await;
+    retry_nested_release_wait(
+        &mut fixture.manager,
+        &fixture.offer,
+        shared.path(),
+        json!({"permitted": false, "executionRootSteps": [{"id": "outer", "child": "work.build"}]}),
+    )
+    .await;
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        ["prepare", "work", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-1
+#[tokio::test]
+async fn cloud_event_for_the_current_wait_is_applied_once_and_the_run_resumes() {
+    let mut fixture = cloud_wait_fixture();
+    start(&mut fixture).await;
+    wait_for_waiting(&mut fixture).await;
+    let reports = queued_assignment_reports(&mut fixture.manager, &fixture.offer.assignment_id);
+    let waits = reported_waits(&reports, &fixture.offer);
+    let wait = &waits.first().expect("waiting progress").0;
+    assert_eq!(
+        wait["accepts"],
+        json!({"source":"cloud","event":"run.ended","runId":"run_01k0z6r1w8f4jy2m7q9v3x5abt","outcome":"ok"})
+    );
+    assert_eq!(
+        wait["release"],
+        json!({"permitted":false,"executionRootSteps":[{"id":"merge"}]})
+    );
+    crate::service::Sleeper::sleep(&crate::service::TokioSleeper, Duration::from_millis(200)).await;
+    assert_eq!(resumes(&fixture.log), 0);
+
+    let effect = wait_event(&fixture.offer, &format!("external@{WAIT_SINCE}"));
+    let event = serde_json::to_value(&effect.event).unwrap();
+    fixture
+        .manager
+        .handle_run_wait_event(effect.clone())
+        .unwrap();
+    fixture.manager.handle_run_wait_event(effect).unwrap();
+    let reports =
+        finished_assignment_reports(&mut fixture.manager, &fixture.offer.assignment_id).await;
+    assert_eq!(logged_json(&fixture.log, "run-event.json"), event);
+    assert_eq!(order(&fixture.log), ["deliver", "resume"]);
+    let applications = reports
+        .iter()
+        .map(|report| encoded_frame(report, &fixture.offer))
+        .filter(|frame| frame["type"] == "run_wait_event_applied")
+        .collect::<Vec<_>>();
+    assert_eq!(applications.len(), 1);
+    assert_eq!(applications[0]["payload"]["delivery"], event["delivery"]);
+    assert_eq!(applications[0]["payload"]["outcome"], "applied");
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
 #[tokio::test]
 async fn control_for_the_current_wait_is_applied_once_and_the_run_resumes() {
     let mut fixture = control_wait_fixture("answer", &[]);
@@ -3748,6 +4403,27 @@ async fn control_for_the_current_wait_is_applied_once_and_the_run_resumes() {
     assert_eq!(resumes(&fixture.log), 1);
     assert_eq!(terminal_count(&reports), 1);
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+}
+
+#[tokio::test]
+async fn cloud_event_naming_another_wait_is_skipped_and_runs_nothing() {
+    let mut fixture = cloud_wait_fixture();
+    start(&mut fixture).await;
+    wait_for_waiting(&mut fixture).await;
+    let effect = wait_event(&fixture.offer, "external@2026-07-23T00:00:04Z");
+    fixture.manager.handle_run_wait_event(effect).unwrap();
+    wait_for_reports(&mut fixture.manager, |reports| {
+        reports.iter().any(|report| {
+            let frame = encoded_frame(report, &fixture.offer);
+            frame["type"] == "run_wait_event_applied"
+                && frame["payload"]["outcome"] == "skipped"
+                && frame["payload"]["code"] == "wait_not_current"
+        })
+    })
+    .await;
+    assert!(order(&fixture.log).is_empty());
+    cancel_assignment(&mut fixture);
+    finished_reports(&mut fixture.manager).await;
 }
 
 #[tokio::test]

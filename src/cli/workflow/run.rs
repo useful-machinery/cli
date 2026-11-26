@@ -7,6 +7,7 @@ pub(super) mod cloud_api;
 mod condition;
 mod control;
 mod create;
+mod deliver;
 mod end;
 mod event;
 mod handover;
@@ -56,6 +57,8 @@ enum RunCommand {
     Cancel(end::Cancel),
     #[command(about = create::ABOUT, after_help = create::AFTER_HELP)]
     Create(Box<create::Command>),
+    #[command(about = deliver::ABOUT, hide = true)]
+    Deliver(deliver::Command),
     // The runner's own, hidden: it applies a delivered provider event.
     #[command(about = event::ABOUT, hide = true)]
     Event(event::Command),
@@ -102,6 +105,7 @@ impl Command {
             Some(RunCommand::Artifact(command)) => command.execute(),
             Some(RunCommand::Cancel(command)) => command.execute(),
             Some(RunCommand::Create(command)) => command.execute(),
+            Some(RunCommand::Deliver(command)) => command.execute(),
             Some(RunCommand::Event(command)) => command.execute(),
             Some(RunCommand::HandBack(command)) => command.execute(),
             Some(RunCommand::Handover(command)) => command.execute(),

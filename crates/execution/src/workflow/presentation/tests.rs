@@ -2321,6 +2321,7 @@ async fn a_waiting_stage_whose_child_failed_is_summarized_as_failed() {
             step: "design".to_owned(),
             outcome: Some("failed".to_owned()),
             kind: crate::workflow::document::WaitKind::Repair,
+            runner: crate::workflow::document::WaitRunner::Keep,
             then: "design".to_owned(),
             on_hand_back: None,
             rule: None,

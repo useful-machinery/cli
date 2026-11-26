@@ -2219,6 +2219,29 @@ fn run_show_names_the_workflow_state_and_the_wait() {
     );
 }
 
+#[test]
+fn run_show_names_the_released_state_and_wait() {
+    let report = run_show_plain(released_wait());
+    assert!(
+        report.lines().any(|line| line == "state: waiting"),
+        "{report}"
+    );
+    assert!(
+        wait_lines(&report)
+            .iter()
+            .any(|line| line.contains("external at merge")),
+        "{report}"
+    );
+}
+
+fn released_wait() -> serde_json::Value {
+    let mut body = waiting_for_repair(run_body_with_state("waiting"), serde_json::json!(["merge"]));
+    body["workflowProgress"]["wait"]["kind"] = serde_json::json!("external");
+    body["workflowProgress"]["wait"]["release"] =
+        serde_json::json!({"permitted": true, "executionRootSteps": null});
+    body
+}
+
 // `useful workflow run show` names a wait for the host, as it names any other kind, rather than
 // refusing the run read.
 #[test]
@@ -2243,7 +2266,7 @@ fn list_runs_names_a_listed_runs_wait() {
     let item = |id: &str, wait: serde_json::Value| {
         serde_json::json!({
             "id": id, "displayName": "Release checks", "projectId": PROJECT_ID,
-            "workflowPath": WORKFLOW_PATH, "state": "running",
+            "workflowPath": WORKFLOW_PATH, "state": if wait.is_null() { "running" } else { "waiting" },
             "createdAt": "2025-01-03T00:00:00Z", "updatedAt": "2025-01-03T01:00:00Z",
             "integrationContext": {}, "placement": null,
             "workflowState": if wait.is_null() { "running" } else { "waiting" },
@@ -2254,7 +2277,7 @@ fn list_runs_names_a_listed_runs_wait() {
     let body = serde_json::json!({
         "items": [
             item(RUN_ID, serde_json::json!({
-                "kind": "repair", "since": REPAIR_SINCE, "step": ["design", "read"],
+                "kind": "external", "since": REPAIR_SINCE, "step": ["design", "read"],
             })),
             item(other, serde_json::Value::Null),
         ],
@@ -2267,8 +2290,14 @@ fn list_runs_names_a_listed_runs_wait() {
         &serde_json::to_vec(&body).unwrap(),
     );
     let empty_held = super::workflow_run_list::empty_held_page_response;
-    let (server, _directory, credential_path) =
-        prepared_run(vec![reply.clone(), empty_held(), reply, empty_held()]);
+    let (server, _directory, credential_path) = prepared_run(vec![
+        reply.clone(),
+        empty_held(),
+        reply.clone(),
+        empty_held(),
+        reply,
+        empty_held(),
+    ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let arguments = [
         "workflow",
@@ -2285,7 +2314,7 @@ fn list_runs_names_a_listed_runs_wait() {
     let waits = wait_lines(&report);
     assert_eq!(waits.len(), 1, "{report}");
     assert!(
-        waits[0].contains("repair")
+        waits[0].contains("external")
             && waits[0].contains("design.read")
             && waits[0].contains(REPAIR_SINCE),
         "{report}"
@@ -2295,11 +2324,25 @@ fn list_runs_names_a_listed_runs_wait() {
     let second = lines.iter().position(|line| line.contains(other));
     assert!(first < wait && wait < second && first.is_some(), "{report}");
 
+    let filtered = run_with_env(
+        &[arguments.as_slice(), &["--waiting"]].concat(),
+        &environment,
+    );
+    assert_eq!(filtered.status.code(), Some(0), "{filtered:?}");
+    let filtered = String::from_utf8(filtered.stdout).unwrap();
+    assert!(
+        filtered
+            .lines()
+            .any(|line| line.contains(RUN_ID) && line.contains("  waiting  ")),
+        "{filtered}"
+    );
+    assert!(!filtered.contains(other), "{filtered}");
+
     let structured = run_with_env(&[arguments.as_slice(), &["--json"]].concat(), &environment);
     assert_eq!(structured.status.code(), Some(0), "{structured:?}");
     let parsed: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(parsed["runs"], listed_cloud_rows(&body), "{parsed}");
-    assert_eq!(server.finish().len(), 4);
+    assert_eq!(server.finish().len(), 6);
 }
 
 // `useful workflow run list` reads a listed run whose `workflowWait` and closed `workflowProgress`
@@ -2370,6 +2413,7 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
     });
     let (server, _directory, credential_path) = prepared_run(vec![
         run_response(waiting),
+        run_response(released_wait()),
         run_response(finished.clone()),
         empty_slack_messages(),
     ]);
@@ -2395,7 +2439,7 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
         .lines()
         .filter(|line| line.starts_with("Run observation:"))
         .collect::<Vec<_>>();
-    assert_eq!(observations.len(), 2, "{stderr}");
+    assert_eq!(observations.len(), 3, "{stderr}");
     assert!(
         observations[0].contains("running")
             && observations[0].contains("repair")
@@ -2403,7 +2447,12 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
             && observations[0].contains(REPAIR_SINCE),
         "{stderr}"
     );
-    assert!(!observations[1].contains("repair"), "{stderr}");
+    assert!(
+        observations[1].starts_with("Run observation: waiting")
+            && observations[1].contains("external at merge"),
+        "{stderr}"
+    );
+    assert!(!observations[2].contains("repair"), "{stderr}");
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["outcome"], "shown");
     assert_eq!(result["run"]["state"], "succeeded");
@@ -2412,7 +2461,7 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
         result["run"]["workflowProgress"],
         finished["workflowProgress"]
     );
-    assert_eq!(server.finish().len(), 3);
+    assert_eq!(server.finish().len(), 4);
 }
 
 #[test]

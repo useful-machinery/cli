@@ -266,9 +266,14 @@ pub(super) fn wait_run_with_reads(
                 }
             }
             record(current.clone());
+            let released = current
+                .run
+                .as_ref()
+                .is_some_and(|run| run.state == RunState::Waiting);
             let waiting = match current.run.as_deref().map(super::output::read_wait) {
+                Some(Ok(Some(Some(wait)))) if released => format!(" · {wait}"),
                 Some(Ok(Some(Some(wait)))) => format!(" · waiting {wait}"),
-                Some(Ok(Some(None))) => " · waiting".to_owned(),
+                Some(Ok(Some(None))) if !released => " · waiting".to_owned(),
                 _ => String::new(),
             };
             let _ = writeln!(
@@ -283,6 +288,7 @@ pub(super) fn wait_run_with_reads(
                         RunState::Preparing => "preparing",
                         RunState::Assigned => "assigned",
                         RunState::Running => "running",
+                        RunState::Waiting => "waiting",
                         RunState::Cancelling => "cancelling",
                         RunState::Succeeded => "succeeded",
                         RunState::Failed => "failed",

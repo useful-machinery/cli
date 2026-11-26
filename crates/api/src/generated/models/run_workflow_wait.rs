@@ -41,6 +41,22 @@ pub struct RunWorkflowWait {
         skip_serializing_if = "Option::is_none"
     )]
     pub failed_child: Option<Option<Box<models::RunWorkflowWaitFailedChild>>>,
+    /// The event this wait accepts, or null when the runner reported none. Cloud sends the member on every wait. A deployment that predates it omits it.
+    #[serde(
+        rename = "accepts",
+        default,
+        with = "crate::nullable::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub accepts: Option<Option<Box<models::RunWorkflowWaitAccepts>>>,
+    /// The runner's judgment for a wait that requests release, or null when the runner reported none. Cloud sends the member on every wait. A deployment that predates it omits it.
+    #[serde(
+        rename = "release",
+        default,
+        with = "crate::nullable::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub release: Option<Option<Box<models::RunWorkflowWaitRelease>>>,
 }
 
 impl RunWorkflowWait {
@@ -56,6 +72,8 @@ impl RunWorkflowWait {
             step,
             questions: None,
             failed_child: None,
+            accepts: None,
+            release: None,
         }
     }
 }
