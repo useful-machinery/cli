@@ -2,6 +2,7 @@ use std::time::Duration;
 
 const INITIAL_CAP: Duration = Duration::from_secs(1);
 const MAXIMUM_CAP: Duration = Duration::from_secs(30);
+const STABLE_SESSION_THRESHOLD: Duration = MAXIMUM_CAP;
 
 // Backoff implements bounded exponential backoff with full jitter: every delay
 // is drawn uniformly at random from zero through the current cap, and the cap
@@ -42,6 +43,12 @@ impl Backoff {
     pub(crate) fn reset(&mut self) {
         self.cap = INITIAL_CAP;
     }
+
+    pub(super) fn session_ended(&mut self, lasted: Duration) {
+        if lasted >= STABLE_SESSION_THRESHOLD {
+            self.reset();
+        }
+    }
 }
 
 // random_unit returns a uniformly distributed value in [0, 1) from operating
@@ -78,8 +85,13 @@ mod tests {
             );
         }
         assert_eq!(backoff.cap, duration("maximumCapMilliseconds"));
-        backoff.reset();
-        assert_eq!(backoff.cap, duration("initialCapMilliseconds"));
+        let stable_session = duration("stableSessionMilliseconds");
+        backoff.session_ended(stable_session - Duration::from_millis(1));
+        assert_eq!(
+            backoff.next_delay(),
+            duration("afterShortSessionDelayMilliseconds")
+        );
+        backoff.session_ended(stable_session);
         assert_eq!(
             backoff.next_delay(),
             duration("afterResetDelayMilliseconds")

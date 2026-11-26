@@ -87,6 +87,8 @@
     "maximumCapMilliseconds": 30000,
     "unit": 0.5,
     "delaysMilliseconds": [500, 1000, 2000, 4000, 8000, 15000, 15000],
+    "stableSessionMilliseconds": 30000,
+    "afterShortSessionDelayMilliseconds": 15000,
     "afterResetDelayMilliseconds": 500
   }
 }

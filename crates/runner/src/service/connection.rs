@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use opentelemetry::KeyValue;
@@ -721,6 +721,7 @@ fn protocol_text_attributes(
 pub(crate) struct ConnectionProgress {
     pub(crate) opening_acknowledged: bool,
     pub(crate) handshake_completed: bool,
+    pub(super) handshake_completed_at: Option<Instant>,
     pub(crate) cloud_text_frames_received: u64,
     pub(crate) runner_text_frames_sent: u64,
     pub(crate) effects_received: u64,
@@ -732,11 +733,17 @@ impl ConnectionProgress {
         Self {
             opening_acknowledged: false,
             handshake_completed: false,
+            handshake_completed_at: None,
             cloud_text_frames_received: 0,
             runner_text_frames_sent: 0,
             effects_received: 0,
             effect_acknowledgements_confirmed: 0,
         }
+    }
+
+    fn complete_handshake(&mut self, now: Instant) {
+        self.handshake_completed = true;
+        self.handshake_completed_at = Some(now);
     }
 
     fn incremented(self, value: u64) -> Result<u64, ConnectionError> {
@@ -2135,7 +2142,7 @@ where
     let (mut progress, mut inbound_silence_timeout, mut outbound_send_timeout) =
         if let Some((mut progress, inbound_timeout, outbound_timeout)) = resumed_transport {
             if progress.opening_acknowledged {
-                progress.handshake_completed = true;
+                progress.complete_handshake(sleeper.now());
                 record_progress(connection_event, progress);
                 if let Some(status) = live_status {
                     status.connected(frame_source.utc_timestamp().ok());
@@ -2669,7 +2676,7 @@ where
             && progress.opening_acknowledged
             && !progress.handshake_completed
         {
-            progress.handshake_completed = true;
+            progress.complete_handshake(sleeper.now());
             record_progress(connection_event, progress);
             if let Some(status) = live_status {
                 status.connected(frame_source.utc_timestamp().ok());
@@ -4074,8 +4081,9 @@ mod tests {
             &mut context.assignment_manager.lock().unwrap(),
             offered.clone(),
         );
+        let sleeper = fixture_sleeper();
         let mut progress = ConnectionProgress::unacknowledged();
-        progress.handshake_completed = true;
+        progress.complete_handshake(sleeper.now());
         let mut effect = super::BufferedEffect::received(
             context.recorder.as_ref(),
             &context.config,
@@ -4093,7 +4101,6 @@ mod tests {
         let mut writer = GatedEffectWriter {
             gate: Arc::clone(&gate),
         };
-        let sleeper = fixture_sleeper();
         let sequence = Sequence::new(2);
         let mut protocol = super::ProtocolLog::new(
             context.recorder.as_ref(),

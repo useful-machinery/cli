@@ -1849,8 +1849,10 @@ async fn connection_loop_with_work_root(
             }
             Err(error) => (error.progress, error.connection_cause(), error.kind()),
         };
+        if let Some(completed_at) = progress.handshake_completed_at {
+            backoff.session_ended(sleeper.now().saturating_duration_since(completed_at));
+        }
         if progress.handshake_completed {
-            backoff.reset();
             join_key.handshake_completed();
         }
         let delay = backoff.next_delay();
@@ -2678,7 +2680,7 @@ mod tests {
         fixture_sleeper, guarded_processes, holding_step_workflow, observation_acknowledgement,
         offer_assignment_after_handshake, process_exists, require_internal_worker_executable,
         run_fixture_git, scripted_connector, sleep_request, terminal_observation_acknowledgement,
-        welcome, welcome_with_registration_mode, with_watchdog,
+        welcome, welcome_with_pong_timeout, welcome_with_registration_mode, with_watchdog,
     };
     use super::workspace::{
         CleanupCancellation, CleanupSleeper, OwnedTree, TreeRemover, WorkRootHook, WorkRootLease,
@@ -6638,6 +6640,83 @@ mod tests {
             .await
             .expect("gateway fixture did not observe forced exit")
             .expect("gateway fixture failed");
+    }
+
+    #[tokio::test]
+    async fn reconnect_backoff_resets_only_after_a_stable_session() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = ConfigFixture::new(&endpoint, test_credential(), true).unwrap();
+        let (sleeper, mut sleep_requests) = controlled_sleeper();
+        let (recorder, _capture) = test_recorder("rbt_00000000000000000000000001");
+        let dependencies = super::fixture_loop_dependencies(
+            fixture.cloned_config(),
+            deterministic_frame_source(),
+            sleeper,
+            recorder,
+            Some(unavailable_source_broker()),
+        )
+        .unwrap();
+        let (mut shutdown, shutdown_trigger) = controlled_shutdown();
+        let service = tokio::spawn(async move {
+            super::run_connection_loop_with_filesystem(
+                dependencies,
+                &super::WebSocketConnector,
+                super::Backoff::with_fixed_unit(0.125),
+                shutdown.as_mut(),
+                super::workspace::WorkspaceFilesystem::testing(),
+                JoinKeyMode::None,
+            )
+            .await
+        });
+
+        for (timeout_seconds, expected_delay_ms) in [(2, 125), (2, 250), (30, 125)] {
+            let mut socket = with_watchdog(accept_fixture_socket(&listener))
+                .await
+                .expect("runner did not reconnect");
+            let Some(Ok(Message::Text(hello))) = with_watchdog(socket.next()).await.unwrap() else {
+                panic!("fixture did not receive opening hello");
+            };
+            let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
+            let timeout = Duration::from_secs(timeout_seconds);
+            socket
+                .send(welcome_with_pong_timeout(timeout_seconds))
+                .await
+                .unwrap();
+            // Leave the welcome's timer unreleased. The opening acknowledgement replaces it.
+            drop(
+                with_watchdog(sleep_request(&mut sleep_requests, timeout))
+                    .await
+                    .unwrap(),
+            );
+            socket
+                .send(observation_acknowledgement(
+                    hello["messageId"].as_str().unwrap(),
+                    hello["sequence"].as_u64().unwrap(),
+                ))
+                .await
+                .unwrap();
+            let session_timer = with_watchdog(sleep_request(&mut sleep_requests, timeout))
+                .await
+                .expect("runner did not complete the handshake");
+            if timeout_seconds == 30 {
+                session_timer.release();
+                let close = with_watchdog(expect_close_frame(&mut socket))
+                    .await
+                    .unwrap();
+                assert_eq!(close.code, CloseCode::Away);
+            } else {
+                socket.send(Message::Close(None)).await.unwrap();
+            }
+
+            let (delay, release) = backoff_request(&mut sleep_requests).await;
+            assert_eq!(delay, Duration::from_millis(expected_delay_ms));
+            if timeout_seconds < 30 {
+                release.release();
+            }
+        }
+
+        shutdown_trigger.notify_one();
+        with_watchdog(service).await.unwrap().unwrap().unwrap();
     }
 
     #[tokio::test]

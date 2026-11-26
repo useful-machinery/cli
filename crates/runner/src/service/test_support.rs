@@ -850,6 +850,12 @@ pub(crate) fn welcome_with_registration_mode(
     Message::Text(frame.to_string().into())
 }
 
+pub(crate) fn welcome_with_pong_timeout(seconds: u64) -> Message {
+    let mut frame = welcome_frame();
+    frame["payload"]["pongTimeoutSeconds"] = json!(seconds);
+    Message::Text(frame.to_string().into())
+}
+
 fn welcome_frame() -> Value {
     json!({
         "protocolVersion": 1,

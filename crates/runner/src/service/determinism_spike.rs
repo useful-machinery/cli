@@ -22,7 +22,7 @@ use super::test_support::{
     assignment_offer, assignment_prepare, controlled_shutdown, controlled_sleeper_with_transcript,
     deterministic_frame_source, effect_observation_acknowledgement, fixture_lease_clock,
     fixture_sleeper, observation_acknowledgement, scripted_connector, scripted_duplex,
-    sleep_request, welcome, with_watchdog,
+    sleep_request, welcome, welcome_with_pong_timeout, with_watchdog,
 };
 use super::workspace::{
     CleanupCancellation, CleanupSleeper, OwnedTree, TreeRemover, WorkRootHook, WorkRootLease,
@@ -177,7 +177,7 @@ async fn offer_rejected_assignment(
 ) -> ScriptedConnection {
     let mut connection = next_connection(attempts).await;
     let hello = next_hello(&mut connection).await;
-    complete_handshake(&connection, sleep_requests, &hello).await;
+    complete_handshake(&connection, sleep_requests, &hello, 2).await;
     connection.inbound.send(scripted_assignment_offer());
     let effect_acknowledgement = next_outbound(&mut connection.outbound).await;
     assert_eq!(
@@ -564,7 +564,7 @@ async fn run_reconnect_scenario() -> Vec<String> {
             second_hello, first_hello,
             "unacknowledged hello was not replayed"
         );
-        complete_handshake(&second, &mut sleep_requests, &second_hello).await;
+        complete_handshake(&second, &mut sleep_requests, &second_hello, 2).await;
         second.inbound.send(scripted_assignment_offer());
         let effect_acknowledgement = next_outbound(&mut second.outbound).await;
         assert_effect_acknowledgement(
@@ -577,13 +577,14 @@ async fn run_reconnect_scenario() -> Vec<String> {
         let preparing = decode_text(&preparing, "assignment preparation acknowledgement");
         assert_eq!(preparing["type"], "assignment_preparing");
         assert_eq!(preparing["sequence"], 3);
-        let pending_effect_timer = sleep_request(&mut sleep_requests, Duration::from_secs(2)).await;
+        // Consume the pending liveness timer before closing the connection. The
+        // two-second sleep requested after the close is the reconnect delay.
+        drop(sleep_request(&mut sleep_requests, Duration::from_secs(2)).await);
         second.inbound.send(gateway_close(
             CloseCode::Normal,
             "disconnect before effect acknowledgement confirmation",
         ));
-        drop(pending_effect_timer);
-        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(1)).await;
+        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(2)).await;
 
         let mut third = next_connection(&mut attempts).await;
         let third_hello = next_hello(&mut third).await;
@@ -597,10 +598,10 @@ async fn run_reconnect_scenario() -> Vec<String> {
         let third_welcome_timer = sleep_request(&mut sleep_requests, Duration::from_secs(5)).await;
         third.inbound.send(gateway_close(
             CloseCode::Normal,
-            "first failure after reset",
+            "first failure after a short session",
         ));
         drop(third_welcome_timer);
-        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(2)).await;
+        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(4)).await;
 
         let mut fourth = next_connection(&mut attempts).await;
         let fourth_hello = next_hello(&mut fourth).await;
@@ -611,10 +612,10 @@ async fn run_reconnect_scenario() -> Vec<String> {
         let fourth_welcome_timer = sleep_request(&mut sleep_requests, Duration::from_secs(5)).await;
         fourth.inbound.send(gateway_close(
             CloseCode::Normal,
-            "second failure after reset",
+            "second failure after a short session",
         ));
         drop(fourth_welcome_timer);
-        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(4)).await;
+        release_backoff(&mut sleep_requests, &transcript, Duration::from_secs(8)).await;
 
         let mut fifth = next_connection(&mut attempts).await;
         let fifth_hello = next_hello(&mut fifth).await;
@@ -622,11 +623,28 @@ async fn run_reconnect_scenario() -> Vec<String> {
             fifth_hello, third_hello,
             "unacknowledged hello was not replayed"
         );
-        complete_handshake(&fifth, &mut sleep_requests, &fifth_hello).await;
-        fifth.inbound.send(gateway_close(
-            CloseCode::Normal,
-            "completed handshake resets backoff",
-        ));
+        let stable_session_timer =
+            complete_handshake(&fifth, &mut sleep_requests, &fifth_hello, 30).await;
+        let replayed_preparing = next_outbound(&mut fifth.outbound).await;
+        assert_eq!(
+            decode_text(
+                &replayed_preparing,
+                "preparation replay during stable session"
+            ),
+            preparing
+        );
+        stable_session_timer.release();
+        let local_close = next_outbound(&mut fifth.outbound).await;
+        assert!(
+            matches!(
+                local_close,
+                Message::Close(Some(CloseFrame {
+                    code: CloseCode::Away,
+                    ..
+                }))
+            ),
+            "expected a liveness close, got {local_close:?}",
+        );
         let final_backoff =
             request_backoff(&mut sleep_requests, &transcript, Duration::from_secs(1)).await;
         transcript.record("cancellation.released".to_owned());
@@ -641,7 +659,7 @@ async fn run_reconnect_scenario() -> Vec<String> {
             "rbt_00000000000000000000000001",
             5,
         );
-        complete_handshake(&sixth, &mut sleep_requests, &sixth_hello).await;
+        complete_handshake(&sixth, &mut sleep_requests, &sixth_hello, 2).await;
         let replayed_preparing = next_outbound(&mut sixth.outbound).await;
         assert_eq!(
             decode_text(&replayed_preparing, "preparation replay after reconnect")["type"],
@@ -674,15 +692,16 @@ async fn run_reconnect_scenario() -> Vec<String> {
     let mut events = transcript.snapshot();
     assert_eq!(
         requested_backoff_durations(&events),
-        vec![1_000, 1_000, 2_000, 4_000, 1_000]
+        vec![1_000, 2_000, 4_000, 8_000, 1_000]
     );
     assert_eq!(
         released_backoff_durations(&events),
-        vec![1_000, 1_000, 2_000, 4_000]
+        vec![1_000, 2_000, 4_000, 8_000]
     );
     // The blocking preparation worker may arm this independently of connection writes.
     // Preserve the timer assertion without treating its scheduler-dependent position as protocol.
-    let preparation_deadline = "sleep.requested:895000ms";
+    // The clock advanced 45 seconds, leaving 858 seconds until the fixture's deadline.
+    let preparation_deadline = "sleep.requested:858000ms";
     assert_eq!(
         events
             .iter()
@@ -842,18 +861,21 @@ async fn complete_handshake(
     connection: &ScriptedConnection,
     sleep_requests: &mut mpsc::UnboundedReceiver<(Duration, SleepRelease)>,
     hello: &Value,
-) {
+    pong_timeout_seconds: u64,
+) -> SleepRelease {
+    let silence_timeout = Duration::from_secs(pong_timeout_seconds);
     let welcome_timer = sleep_request(sleep_requests, Duration::from_secs(5)).await;
-    connection.inbound.send(welcome());
-    let first_silence_timer = sleep_request(sleep_requests, Duration::from_secs(2)).await;
+    connection
+        .inbound
+        .send(welcome_with_pong_timeout(pong_timeout_seconds));
+    let first_silence_timer = sleep_request(sleep_requests, silence_timeout).await;
     connection.inbound.send(observation_acknowledgement(
         hello["messageId"].as_str().expect("opening message ID"),
         hello["sequence"].as_u64().expect("opening sequence"),
     ));
-    let second_silence_timer = sleep_request(sleep_requests, Duration::from_secs(2)).await;
     drop(welcome_timer);
     drop(first_silence_timer);
-    drop(second_silence_timer);
+    sleep_request(sleep_requests, silence_timeout).await
 }
 
 struct EstablishedRuntime {
