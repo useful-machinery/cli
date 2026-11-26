@@ -2707,6 +2707,8 @@ mod tests {
     };
     use useful_runner_protocol::RegistrationMode;
 
+    const FIXTURE_KEEPALIVE_PAYLOAD: [u8; 3] = [4, 5, 6];
+
     #[test]
     fn recovery_required_failures_are_closed_to_work_root_ownership() {
         for error in [
@@ -3376,7 +3378,9 @@ mod tests {
             // barrier is the matching pong, not the next frame on the wire.
             loop {
                 match with_watchdog(current.next()).await.unwrap() {
-                    Some(Ok(Message::Pong(payload))) if payload.as_ref() == [4, 5, 6] => {
+                    Some(Ok(Message::Pong(payload)))
+                        if payload.as_ref() == FIXTURE_KEEPALIVE_PAYLOAD =>
+                    {
                         // A keepalive sent during source admission can still be in flight.
                     }
                     Some(Ok(Message::Pong(payload))) => {
@@ -5137,14 +5141,18 @@ mod tests {
             let next = tokio::select! {
                 frame = socket.next() => frame,
                 _ = sleeper.sleep(Duration::from_millis(500)) => {
-                    socket.send(Message::Ping(vec![4, 5, 6].into())).await
+                    socket.send(Message::Ping(FIXTURE_KEEPALIVE_PAYLOAD.to_vec().into())).await
                         .expect("send fixture keepalive");
                     continue;
                 }
             };
             let frame = match next {
                 Some(Ok(Message::Text(frame))) => frame,
-                Some(Ok(Message::Pong(payload))) if payload.as_ref() == [4, 5, 6] => continue,
+                Some(Ok(Message::Pong(payload)))
+                    if payload.as_ref() == FIXTURE_KEEPALIVE_PAYLOAD =>
+                {
+                    continue;
+                }
                 Some(Ok(Message::Ping(payload))) => {
                     socket
                         .send(Message::Pong(payload))
@@ -6055,10 +6063,37 @@ mod tests {
             .send(Message::Ping(ping.clone().into()))
             .await
             .unwrap();
-        let Some(Ok(Message::Pong(pong))) = socket.next().await else {
-            panic!("expected a pong on the open connection");
-        };
-        assert_eq!(pong.as_ref(), ping);
+        loop {
+            let Some(Ok(Message::Pong(pong))) = socket.next().await else {
+                panic!("expected a pong on the open connection");
+            };
+            if pong.as_ref() == FIXTURE_KEEPALIVE_PAYLOAD {
+                continue;
+            }
+            assert_eq!(pong.as_ref(), ping);
+            return;
+        }
+    }
+
+    #[tokio::test]
+    async fn ping_serving_runner_passes_a_keepalive_pong_still_in_flight() {
+        let (listener, endpoint) = fixture_listener().await;
+        let peer = tokio::spawn(async move {
+            let (mut peer, _) = tokio_tungstenite::connect_async(endpoint).await.unwrap();
+            peer.send(Message::Pong(FIXTURE_KEEPALIVE_PAYLOAD.to_vec().into()))
+                .await
+                .unwrap();
+            while peer.next().await.is_some() {}
+        });
+
+        with_watchdog(async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ping_serving_runner(&mut socket, 7).await;
+        })
+        .await
+        .unwrap();
+        with_watchdog(peer).await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -6977,7 +7012,7 @@ mod tests {
                 _ = sleeper.sleep(Duration::from_millis(10)) => {
                     polls += 1;
                     if polls.is_multiple_of(50) {
-                        socket.send(Message::Ping(vec![4, 5, 6].into())).await
+                        socket.send(Message::Ping(FIXTURE_KEEPALIVE_PAYLOAD.to_vec().into())).await
                             .expect("send fixture keepalive");
                     }
                     continue;
