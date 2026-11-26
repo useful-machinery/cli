@@ -4780,6 +4780,157 @@ mod cloud {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
+    fn cloud_command(
+        steps: &[&str],
+        verb: &str,
+        run: &str,
+        options: &[&str],
+    ) -> (Output, Vec<String>) {
+        let home = tempfile::tempdir().unwrap();
+        let mut args = vec![
+            "workflow",
+            "run",
+            verb,
+            run,
+            "--org",
+            "acme",
+            "--allow-insecure-http",
+        ];
+        args.extend_from_slice(options);
+        execute_with_env(
+            steps,
+            &args,
+            &[("USEFUL_HOME", home.path().to_str().unwrap())],
+        )
+    }
+
+    // SC-HANDOVER-6
+    #[test]
+    fn handover_reports_the_record_and_observes_the_replacement_attempt() {
+        for wait in [false, true] {
+            let mut options = vec!["--from", "build", "--json"];
+            let mut replies = vec!["submitted"];
+            if wait {
+                options.push("--wait");
+                replies.push("submitted-succeeded");
+            }
+            let (output, requests) = cloud_command(&replies, "handover", RUN_ID, &options);
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert_eq!(requests.len(), replies.len());
+            assert!(requests[0].starts_with(&format!(
+                "POST /api/v1/organizations/acme/runs/{RUN_ID}/continuation-requests "
+            )));
+            assert_eq!(
+                body(&requests[0]),
+                serde_json::json!({
+                    "definition": "inherited", "fromSteps": ["build"], "runner": "replacement"
+                })
+            );
+            let result = document(&output);
+            assert_eq!(result["operation"], "continue");
+            assert_eq!(
+                result["outcome"],
+                if wait { "observed" } else { "accepted" }
+            );
+            assert_eq!(result["request"]["attemptNumber"], 2);
+            assert_eq!(result["request"]["runner"], "replacement");
+            assert_eq!(
+                result["request"]["record"],
+                serde_json::json!({
+                    "attemptNumber": 1, "sequence": 4, "storedAt": "2026-08-10T11:59:00Z"
+                })
+            );
+            assert_eq!(result["run"]["continuation"]["runner"], "replacement");
+            if wait {
+                let receipt = result["request"]["requestId"].as_str().unwrap();
+                assert!(requests[1].starts_with(&format!(
+                    "GET /api/v1/organizations/acme/runs/{RUN_ID}/continuation-requests/{receipt} "
+                )));
+                assert_eq!(result["run"]["state"], "succeeded");
+            }
+        }
+
+        let (human, requests) =
+            cloud_command(&["submitted"], "handover", RUN_ID, &["--from", "build"]);
+        assert_eq!(human.status.code(), Some(0), "{human:?}");
+        assert_eq!(requests.len(), 1);
+        let text = String::from_utf8(human.stdout).unwrap();
+        for detail in [
+            "number 2",
+            "attempt 1",
+            "sequence 4",
+            "2026-08-10T11:59:00Z",
+        ] {
+            assert!(text.contains(detail), "{text}");
+        }
+    }
+
+    #[test]
+    fn handover_reports_admission_refusals_and_their_remedies() {
+        for (reply, code, remedy) in [
+            (
+                "violation:continuation_attempt_unavailable",
+                "continuation_attempt_unavailable",
+                "execution lease",
+            ),
+            (
+                "conflict:run-record-unavailable",
+                "run_record_unavailable",
+                "retry RUN --all",
+            ),
+        ] {
+            let (output, requests) = cloud_command(&[reply], "handover", RUN_ID, &["--json"]);
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert_eq!(requests.len(), 1);
+            let result = document(&output);
+            assert_eq!(result["code"], "continuation_admission_invalid");
+            assert_eq!(result["diagnostic"][0]["code"], code);
+            let (human, _) = cloud_command(&[reply], "handover", RUN_ID, &[]);
+            assert_eq!(human.status.code(), Some(1), "{human:?}");
+            assert!(String::from_utf8(human.stderr).unwrap().contains(remedy));
+        }
+    }
+
+    #[test]
+    fn handover_usage_errors_name_the_applicable_command_or_option() {
+        let bundle = super::RunBundle::new(
+            "schemaVersion: 1\nsteps:\n  build: {kind: cmd, command: {argv: ['true']}}\n",
+        );
+        let directory = bundle.result("local");
+        let initial = super::isolated_command(&bundle.args(&directory))
+            .output()
+            .unwrap();
+        assert_eq!(initial.status.code(), Some(0), "{initial:?}");
+        for (verb, run, options, remedy) in [
+            (
+                "handover",
+                directory.to_str().unwrap(),
+                &[][..],
+                "retry RUN --execution-root ROOT --handover",
+            ),
+            (
+                "retry",
+                RUN_ID,
+                &["--from", "build", "--handover", "--execution-root", "root"],
+                "useful workflow run handover",
+            ),
+            (
+                "resume",
+                RUN_ID,
+                &["--handover", "--execution-root", "root"],
+                "useful workflow run handover",
+            ),
+            ("handover", RUN_ID, &["--timeout", "5m"], "--wait"),
+            ("handover", RUN_ID, &["--from", "Build"], "--from"),
+        ] {
+            let (output, requests) = cloud_command(&[], verb, run, options);
+            assert_eq!(output.status.code(), Some(2), "{output:?}");
+            assert!(requests.is_empty());
+            let message = String::from_utf8(output.stderr).unwrap();
+            assert!(message.contains(remedy), "{message}");
+        }
+    }
+
     #[test]
     fn named_steps_post_one_inherited_continuation_and_report_its_receipt() {
         let (output, requests) = resume(&["submitted"], &["build", "review"], true);

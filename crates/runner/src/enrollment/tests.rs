@@ -3069,3 +3069,149 @@ fn a_private_document_read_while_it_is_replaced_always_answers_a_whole_version()
         }
     });
 }
+
+#[test]
+fn ephemeral_session_joins_with_separate_state_and_cleans_only_its_credentials() {
+    let server = ScriptedHttpServer::respond(enrollment_response());
+    let fixture = EnrollmentFixture::new(&server, ACTIVATION_ID, future_time());
+    fixture.write_current_state();
+    let host = fixture.state_path.parent().expect("host directory");
+    let login = host.join(crate::agent_login::directory::DIRECTORY);
+    fs::create_dir(&login).expect("create host login directory");
+    let host_files = [
+        fixture.state_path.clone(),
+        fixture.journal_path(),
+        fixture.registration_path(),
+        login.join("claude-code.token"),
+    ];
+    for file in &host_files[1..] {
+        fs::write(file, b"persistent host data").expect("write host data");
+    }
+    let read_host = || {
+        host_files
+            .each_ref()
+            .map(|file| fs::read(file).expect("read persistent file"))
+    };
+    let original = read_host();
+
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.config_path).expect("read config"))
+            .expect("decode config");
+    config["keptRuns"] = serde_json::json!({"maximumAgeDays": null});
+    config["buildCaches"] = serde_json::json!([{
+        "path": fixture.root.path().join("cache"), "maximumBytes": 1000
+    }]);
+    config["minimumFreeDiskBytes"] = serde_json::json!(123);
+    fs::write(&fixture.config_path, config.to_string()).expect("write host settings");
+
+    let directory = host.join("ephemeral");
+    let state = directory.join("runner-state.json");
+    let session = EphemeralSession::begin(&fixture.config_path).expect("begin session");
+    assert_eq!(session.config_path(), directory.join("runner.json"));
+    config["runnerStatePath"] = serde_json::json!(state);
+    let derived = fs::read(session.config_path()).expect("read derived config");
+    assert_json_matches_schema("ephemeral runner config", OPERATOR_CONFIG_SCHEMA, &derived);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&derived).unwrap(),
+        config
+    );
+
+    let outcome = join_unless_enrolled(
+        session.config_path(),
+        join_key(&server, JOIN_KEY_ID, &future_time()),
+        |_| {},
+    )
+    .expect("join a fresh runner");
+    assert!(matches!(outcome, JoinOutcome::Joined(_)));
+    assert!(state.is_file());
+    assert!(matches!(
+        EphemeralSession::begin(&fixture.config_path),
+        Err(EnrollmentError::StateLock)
+    ));
+    assert!(state.is_file(), "contender must leave joined state alone");
+    server.finish_one();
+
+    let journal = directory.join(JOURNAL_FILE);
+    let login = directory.join(crate::agent_login::directory::DIRECTORY);
+    let logs = directory.join(LOG_DIRECTORY);
+    fs::create_dir(&logs).expect("create runner logs");
+    let log = logs.join("service.log");
+    fs::write(&log, b"retained").unwrap();
+    let write_leftovers = || {
+        fs::write(&journal, b"unfinished").unwrap();
+        fs::create_dir(&login).unwrap();
+        fs::write(login.join("claude-code.token"), b"session credential").unwrap();
+    };
+    let assert_clean = || {
+        for path in [&state, &journal, &login] {
+            assert!(!path.exists(), "session left {}", path.display());
+        }
+        assert_eq!(fs::read(&log).unwrap(), b"retained");
+        assert_eq!(read_host(), original);
+    };
+    write_leftovers();
+    drop(session);
+    assert_clean();
+
+    // A killed process releases the lock but leaves its files.
+    fs::write(&state, b"previous runner").unwrap();
+    write_leftovers();
+    let next = EphemeralSession::begin(&fixture.config_path).expect("begin after a crash");
+    assert_clean();
+    fs::write(&state, b"new runner").unwrap();
+    write_leftovers();
+    next.end().expect("end session");
+    assert_clean();
+}
+
+#[test]
+fn ephemeral_session_refuses_paths_shared_with_the_host() {
+    let root = tempfile::tempdir().expect("create host");
+    let host = root.path();
+    fs::set_permissions(host, Permissions::from_mode(0o700)).unwrap();
+    let config = host.join("config.json");
+    let ephemeral = host.join("ephemeral");
+    let write_config = |path: &Path, state: &Path| {
+        fs::write(
+            path,
+            serde_json::json!({
+                "schemaVersion": 1, "deploymentMode": "development", "runnerStatePath": state,
+                "controlSocketPath": host.join("control.sock"), "workRoot": host.join("work")
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+
+    write_config(&config, &ephemeral);
+    assert!(matches!(
+        EphemeralSession::begin(&config),
+        Err(EnrollmentError::UnsafePath(_))
+    ));
+    assert!(
+        !ephemeral.exists(),
+        "reserved space for the host state file"
+    );
+
+    let state = host.join("state.json");
+    write_config(&config, &state);
+    std::os::unix::fs::symlink(host, &ephemeral).unwrap();
+    assert!(matches!(
+        EphemeralSession::begin(&config),
+        Err(EnrollmentError::UnsafePath(_))
+    ));
+    assert!(!host.join("runner.json").exists());
+
+    fs::remove_file(&ephemeral).unwrap();
+    ensure_private_directory(&ephemeral).unwrap();
+    let alias = host.join("alias");
+    std::os::unix::fs::symlink(&ephemeral, &alias).unwrap();
+    let config = alias.join("runner.json");
+    write_config(&config, &state);
+    let original = fs::read(&config).unwrap();
+    assert!(matches!(
+        EphemeralSession::begin(&config),
+        Err(EnrollmentError::UnsafePath(_))
+    ));
+    assert_eq!(fs::read(config).unwrap(), original);
+}

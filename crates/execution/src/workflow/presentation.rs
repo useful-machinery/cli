@@ -934,6 +934,16 @@ where
                     "continuation_references_unsatisfied",
                     serde_json::json!({"kind":"reference","reference":reference}),
                 ),
+                super::continuation::AdmissionViolation::HandoverExecutionRootRequired {
+                    id,
+                    child,
+                } => {
+                    let mut location = serde_json::json!({"kind": "execution_root_step", "id": id});
+                    if let Some(path) = child {
+                        location["child"] = serde_json::json!(path);
+                    }
+                    ("handover_execution_root_required", location)
+                }
             };
             diagnostics.push(serde_json::json!({"code": code, "location": location}));
         }

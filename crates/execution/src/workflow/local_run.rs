@@ -2601,6 +2601,21 @@ impl PendingLocalContinuation {
             .collect()
     }
 
+    /// Judge the handover against the selected steps and the workflows they can start.
+    pub async fn handover_violations(
+        &self,
+        workflow: &ResolvedWorkflow,
+        partition: &super::continuation::Partition,
+    ) -> Result<Vec<super::continuation::AdmissionViolation>, tokio::task::JoinError> {
+        let copy_root = self.tree_copy().map(|(root, _)| root);
+        let definition = workflow.definition.clone();
+        let partition = partition.clone();
+        tokio::task::spawn_blocking(move || {
+            super::continuation::handover_violations(&definition, &partition, copy_root.as_deref())
+        })
+        .await
+    }
+
     pub fn partition(
         &self,
         workflow: &ResolvedWorkflow,

@@ -16,6 +16,7 @@ mod history;
 mod idle_stop;
 mod kept_runs;
 mod lease_clock;
+mod retirement;
 mod run_inputs;
 mod source;
 #[cfg(test)]
@@ -41,6 +42,7 @@ pub(crate) use config::BuildCache;
 pub(crate) use config::KeptRunBounds;
 pub(crate) use config::LOG_DIRECTORY;
 pub use config::{Config, ConfigError};
+pub use retirement::{Retirement, RetirementCause};
 #[cfg(test)]
 pub(crate) use test_support::{
     CountedGate, FAKE_AGENT_LOGIN_ID, FAKE_AGENT_LOGIN_SENTINEL, FAKE_GRANT_ID,
@@ -853,11 +855,52 @@ pub(crate) fn run(
     service_version: &str,
     join_key: JoinKeyMode,
 ) -> Result<ServiceEnd, ServiceError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    service_runtime()?.block_on(async {
+        let mut shutdown = ProcessShutdown::new()?;
+        let target = serving_target(&config)?;
+        run_until_cancelled(config, service_version, join_key, target, &mut shutdown).await
+    })
+}
+
+fn service_runtime() -> Result<tokio::runtime::Runtime, ServiceError> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|_| ServiceError::BuildRuntime)?;
-    runtime.block_on(run_until_cancelled(config, service_version, join_key))
+        .map_err(|_| ServiceError::BuildRuntime)
+}
+
+pub(crate) fn run_ephemeral(
+    config: Config,
+    service_version: &str,
+) -> Result<(Result<ServiceEnd, ServiceError>, Retirement), ServiceError> {
+    service_runtime()?.block_on(async {
+        let mut shutdown = ProcessShutdown::new()?;
+        let target = serving_target(&config)?;
+        let service = run_until_cancelled(
+            config,
+            service_version,
+            JoinKeyMode::Spent,
+            target.clone(),
+            &mut shutdown,
+        )
+        .await;
+        let retirement = match service {
+            Ok(ServiceEnd::CredentialRefused) => {
+                Retirement::Kept(RetirementCause::CredentialNotAccepted)
+            }
+            Err(ServiceError::ShutdownForced) => Retirement::Kept(RetirementCause::Abandoned),
+            _ => {
+                retirement::retire(
+                    target.current(),
+                    &TokioSleeper,
+                    &mut shutdown,
+                    Backoff::new(),
+                )
+                .await
+            }
+        };
+        Ok((service, retirement))
+    })
 }
 
 fn serving_target(config: &Config) -> Result<ServingTarget, ServiceError> {
@@ -870,6 +913,8 @@ async fn run_until_cancelled(
     config: Config,
     service_version: &str,
     join_key: JoinKeyMode,
+    target: ServingTarget,
+    shutdown: &mut dyn Shutdown,
 ) -> Result<ServiceEnd, ServiceError> {
     let frame_source: Arc<dyn FrameSource> = Arc::new(SystemFrameSource);
     let sleeper: Arc<dyn Sleeper> = Arc::new(TokioSleeper);
@@ -882,8 +927,6 @@ async fn run_until_cancelled(
         config.log_directory().map(Path::to_path_buf),
     );
     let lease_clock = LeaseClock::system().map_err(ServiceError::LeaseClock)?;
-    let mut shutdown = ProcessShutdown::new()?;
-    let target = serving_target(&config)?;
     let agent_login_setup = config.state_access().map(|state| {
         // A login is checked with the programs `serve` validated when it
         // started.
@@ -920,7 +963,7 @@ async fn run_until_cancelled(
         },
         &WebSocketConnector,
         Backoff::new(),
-        &mut shutdown,
+        shutdown,
         join_key,
     ))
     .await

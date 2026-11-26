@@ -16,6 +16,7 @@ use url::Url;
 use useful_execution::{CancellationReason, CaptureCancellation, PortableRecordCapture};
 
 use super::TreeRun;
+use super::record_restore::{DownloadBatch, DownloadLink};
 use crate::runner_http::ServingTarget;
 use crate::service::backoff::Backoff;
 use crate::service::run_inputs::validate_capability_url;
@@ -24,7 +25,7 @@ use crate::service::run_inputs::validate_capability_url;
 pub(in crate::service) struct Scope {
     assignment: String,
     attempt: String,
-    stopped: CaptureCancellation,
+    pub(super) stopped: CaptureCancellation,
 }
 
 impl Scope {
@@ -40,8 +41,8 @@ impl Scope {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(in crate::service) struct RecordFile {
-    sha256: String,
-    size_bytes: u64,
+    pub(super) sha256: String,
+    pub(super) size_bytes: u64,
 }
 impl RecordFile {
     fn new(sha256: String, size_bytes: u64) -> Self {
@@ -80,6 +81,14 @@ const SERVICE: Failure = Failure::Retry("service_unavailable");
 const UPLOAD: Failure = Failure::Retry("upload_failed");
 
 pub(in crate::service) trait RecordBroker: Send + Sync {
+    fn download_links(&self, scope: &Scope, keys: &[&str]) -> Result<DownloadBatch, Failure>;
+    fn get(
+        &self,
+        scope: &Scope,
+        link: &DownloadLink,
+        output: &mut dyn std::io::Write,
+    ) -> Result<(), Failure>;
+
     fn links(
         &self,
         scope: &Scope,
@@ -254,6 +263,52 @@ enum StoreAnswer {
 }
 
 impl RecordBroker for HttpRecordBroker {
+    fn download_links(&self, scope: &Scope, keys: &[&str]) -> Result<DownloadBatch, Failure> {
+        let value = self.post(
+            "/v1/runner/run-records/download-capabilities",
+            scope,
+            json!({"files":keys}),
+            30,
+            2 * 1024 * 1024,
+        )?;
+        DownloadBatch::decode(value, keys)
+    }
+
+    fn get(
+        &self,
+        scope: &Scope,
+        link: &DownloadLink,
+        output: &mut dyn std::io::Write,
+    ) -> Result<(), Failure> {
+        operation(scope, 300, SERVICE, async |client| {
+            let mut response = client
+                .get(link.url.clone())
+                .send()
+                .await
+                .map_err(|_| SERVICE)?;
+            if response.status() != StatusCode::OK {
+                return Err(SERVICE);
+            }
+            let mut written = 0u64;
+            let mut hash = ring::digest::Context::new(&SHA256);
+            while let Some(chunk) = response.chunk().await.map_err(|_| SERVICE)? {
+                written = written
+                    .checked_add(chunk.len() as u64)
+                    .filter(|n| *n <= link.size_bytes)
+                    .ok_or(Failure::Stop("record_altered"))?;
+                hash.update(&chunk);
+                output
+                    .write_all(&chunk)
+                    .map_err(|_| Failure::Stop("files_unavailable"))?;
+            }
+            let observed = useful_support::lowercase_hex(hash.finish().as_ref());
+            if written != link.size_bytes || observed != link.sha256 {
+                return Err(Failure::Stop("record_altered"));
+            }
+            Ok(())
+        })
+    }
+
     fn links(
         &self,
         scope: &Scope,
@@ -389,7 +444,7 @@ pub(in crate::service) struct Summary {
 
 #[derive(Clone)]
 pub(super) struct Delivery {
-    broker: Arc<dyn RecordBroker>,
+    pub(super) broker: Arc<dyn RecordBroker>,
     scope: Scope,
     files: PathBuf,
     bound: Duration,
@@ -409,6 +464,10 @@ impl Delivery {
             bound,
             summary: Arc::default(),
         }
+    }
+
+    pub(super) fn download_scope(&self) -> Scope {
+        Scope::new(&self.scope.assignment, &self.scope.attempt)
     }
 
     pub(super) fn summary(&self) -> Summary {
@@ -574,10 +633,11 @@ async fn prune(directory: PathBuf, files: Vec<RecordFile>) {
 pub(super) enum Signal {
     Progress(Option<PathBuf>),
     Final(Option<PathBuf>),
+    Unstored,
 }
 
 /// Dropping the drive also drops its authority to finish an HTTP call on a blocking worker.
-struct CancelRequests<'a>(&'a CaptureCancellation);
+pub(super) struct CancelRequests<'a>(pub(super) &'a CaptureCancellation);
 
 impl Drop for CancelRequests<'_> {
     fn drop(&mut self) {
@@ -645,12 +705,19 @@ async fn deliver_records(run: &TreeRun, delivery: &Delivery, mut signal: watch::
         if read {
             let message = signal.borrow_and_update().clone();
             let directory = match message {
+                Signal::Unstored => {
+                    delivery.update(|s| s.end = Some("unstored"));
+                    return;
+                }
                 Signal::Progress(directory) => directory,
                 Signal::Final(directory) => {
                     final_read = true;
                     match directory {
                         Some(path) => Some(path),
-                        None => super::resume_loop::locate(&run.runs).await,
+                        None => match &run.runs {
+                            Some(runs) => super::resume_loop::locate(runs).await,
+                            None => None,
+                        },
                     }
                 }
             };
@@ -784,6 +851,9 @@ mod tests {
         for name in [
             "upload-issued",
             "upload-refused",
+            "download-issued",
+            "download-manifest",
+            "download-refused",
             "commit-stored",
             "commit-superseded",
             "commit-incomplete",
@@ -812,6 +882,26 @@ mod tests {
                     );
                     "issued"
                 })
+            } else if name.starts_with("download") {
+                let keys: Vec<&str> = request["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|key| key.as_str().unwrap())
+                    .collect();
+                broker.download_links(&scope, &keys).map(|batch| {
+                    assert_eq!(
+                        serde_json::to_value(&batch.record).unwrap(),
+                        answer["record"]
+                    );
+                    for (link, expected) in
+                        batch.links.iter().zip(answer["files"].as_array().unwrap())
+                    {
+                        assert_eq!(link.url.as_str(), expected["url"].as_str().unwrap());
+                        assert_eq!(link.size_bytes, expected["sizeBytes"].as_u64().unwrap());
+                    }
+                    "issued"
+                })
             } else {
                 let file = serde_json::from_value(request["manifest"].clone()).unwrap();
                 broker
@@ -834,6 +924,8 @@ mod tests {
             let req = &state.requests[0];
             let route = if name.starts_with("upload") {
                 "/v1/runner/run-records/upload-capabilities"
+            } else if name.starts_with("download") {
+                "/v1/runner/run-records/download-capabilities"
             } else {
                 "/v1/runner/run-records/commit"
             };

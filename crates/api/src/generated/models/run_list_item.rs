@@ -21,6 +21,9 @@ pub struct RunListItem {
     pub id: String,
     #[serde(rename = "displayName", deserialize_with = "Option::deserialize")]
     pub display_name: Option<String>,
+    /// The human-readable label of the member or app the run acts as.
+    #[serde(rename = "actorDisplayName", skip_serializing_if = "Option::is_none")]
+    pub actor_display_name: Option<String>,
     #[serde(rename = "projectId")]
     pub project_id: String,
     #[serde(rename = "workflowPath")]
@@ -108,6 +111,7 @@ impl RunListItem {
         RunListItem {
             id,
             display_name,
+            actor_display_name: None,
             project_id,
             workflow_path,
             state,

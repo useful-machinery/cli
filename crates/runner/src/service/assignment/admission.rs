@@ -293,6 +293,10 @@ impl AssignmentManager {
             return self.retain_decision(offer, response);
         }
 
+        if offer.handover.is_some() && offer.execution_spec.workflow_tree.is_none() {
+            let response = rejected(&offer, invalid_source_projection());
+            return self.retain_decision(offer, response);
+        }
         if let Err(decline) = self.validate_admission_prerequisites(&offer) {
             let response = rejected(&offer, decline);
             return self.retain_decision(offer, response);
@@ -1351,7 +1355,8 @@ struct TreeAdmission<'a> {
     offer: &'a AssignmentOffer,
     tree: &'a useful_runner_protocol::WorkflowTreeV1RunnerProjection,
     /// The check of a tree run admitted in `cloud`, which its preparation makes once the tree
-    /// is published; a continuation, which publishes nothing, makes none.
+    /// is published; a continuation, which publishes nothing, makes none, and neither does a
+    /// handover, which publishes once it has started.
     credential_check: Option<&'a crate::agent_login::required::CredentialCheck>,
     deadline: PreparationDeadline,
     cancellation: &'a CaptureCancellation,
@@ -1390,17 +1395,22 @@ impl TreeAdmission<'_> {
         };
         root.execution.clone_from(&workspace);
         self.runtime.run_event.enter(RunPhase::Preparation);
-        self.runtime.progress(offer, 2, "input_download")?;
-        let inputs = super::super::run_inputs::materialize(
-            self.input_broker,
-            &offer.assignment_id,
-            &spec.execution_spec_id,
-            spec.run_inputs.as_ref(),
-            self.deadline,
-            self.cancellation,
-            &root.private,
-        )
-        .map_err(run_input_decline)?;
+        let start = if let Some(handover) = &offer.handover {
+            super::super::tree_run::PreparationStart::Handover(&handover.reexecuted_steps)
+        } else {
+            self.runtime.progress(offer, 2, "input_download")?;
+            let inputs = super::super::run_inputs::materialize(
+                self.input_broker,
+                &offer.assignment_id,
+                &spec.execution_spec_id,
+                spec.run_inputs.as_ref(),
+                self.deadline,
+                self.cancellation,
+                &root.private,
+            )
+            .map_err(run_input_decline)?;
+            super::super::tree_run::PreparationStart::Create(inputs)
+        };
         self.runtime.progress(offer, 3, "workflow_admission")?;
         let prepared = super::super::tree_run::prepare(
             self.tree_run,
@@ -1417,7 +1427,7 @@ impl TreeAdmission<'_> {
                 cancellation: self.cancellation,
                 sleeper: Arc::clone(&self.sleeper),
             },
-            &inputs,
+            start,
         )?;
         let Some(origin) = relay_origin else {
             return Ok(prepared);

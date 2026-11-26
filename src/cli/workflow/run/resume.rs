@@ -122,6 +122,13 @@ pub(super) struct Command {
         help = "Existing execution root, for a run under the useful home; defaults to the previous attempt's root"
     )]
     execution_root: Option<PathBuf>,
+
+    #[arg(
+        long,
+        requires = "execution_root",
+        help = "Continue only if the selected work can run without the previous execution root"
+    )]
+    handover: bool,
     #[command(flatten)]
     org: OrgArgs,
     #[command(flatten)]
@@ -135,7 +142,7 @@ pub(super) struct Command {
 impl Command {
     /// Finds the run and continues it: a run under the home as `continue_run` continues it
     /// without `--from`, and a Cloud run through the continuation request naming no step,
-    /// for which `--workflow` and `--execution-root` are usage errors, exit 2.
+    /// for which `--workflow`, `--execution-root` and `--handover` are usage errors, exit 2.
     pub(super) fn execute(self) -> super::super::super::CommandResult {
         let found = match super::control::find(
             COMMAND,
@@ -151,6 +158,9 @@ impl Command {
         let run_directory = match found {
             Found::Home(run_directory) => run_directory,
             Found::Cloud(run) => {
+                if self.handover {
+                    return Err(super::handover::local_option_on_cloud());
+                }
                 if let Some(option) = [
                     self.workflow.as_ref().map(|_| "--workflow"),
                     self.execution_root.as_ref().map(|_| "--execution-root"),
@@ -183,6 +193,7 @@ impl Command {
                         wait: false,
                         timeout: None,
                     },
+                    None,
                 );
             }
         };
@@ -199,6 +210,7 @@ impl Command {
                     from_steps: Vec::new(),
                     workflow: self.workflow,
                     execution_root: self.execution_root,
+                    handover: self.handover,
                     leaf: ExecutionLeaf::Resume,
                     edge: None,
                     bridge: None,
@@ -223,6 +235,7 @@ pub(super) struct Continuation {
     pub(super) from_steps: Vec<String>,
     pub(super) workflow: Option<PathBuf>,
     pub(super) execution_root: Option<PathBuf>,
+    pub(super) handover: bool,
     pub(super) leaf: ExecutionLeaf,
     pub(super) edge: Option<ContinuationEdgeV1>,
     pub(super) bridge: Option<ControlsLock>,
@@ -245,6 +258,7 @@ pub(super) async fn continue_run(
         from_steps,
         workflow: replacement_workflow,
         execution_root,
+        handover,
         leaf,
         edge,
         bridge,
@@ -553,6 +567,7 @@ pub(super) async fn continue_run(
         workflow: &workflow,
         from: &from,
         execution_root: execution_root.unwrap_or_else(|| pending.prior_execution_root().to_owned()),
+        handover,
         tree,
     };
     let (admitted, untested_advisories) =
@@ -1057,6 +1072,7 @@ pub(super) struct ContinuationCandidate<'a> {
     pub(super) from: &'a [String],
     pub(super) inputs: ResolvedInputs,
     pub(super) execution_root: PathBuf,
+    pub(super) handover: bool,
     pub(super) tree: Option<ValidatedTree>,
 }
 
@@ -1094,9 +1110,19 @@ pub(super) async fn admit_continuation_in(
         from,
         inputs,
         execution_root,
+        handover,
         tree,
     } = candidate;
-    let selection = pending.partition(workflow, from);
+    let mut selection = pending.partition(workflow, from);
+    if handover && let Ok(partition) = &selection {
+        let violations = pending
+            .handover_violations(workflow, partition)
+            .await
+            .map_err(|_| Unadmitted::Failed("check execution root requirements for handover"))?;
+        if !violations.is_empty() {
+            selection = Err(violations);
+        }
+    }
     let input_admission_failures =
         useful_execution::local_continuation_input_failures(workflow, &inputs);
     // Graph selection is independent of predecessor dispositions. Continue collecting

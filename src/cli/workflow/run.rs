@@ -9,6 +9,7 @@ mod control;
 mod create;
 mod end;
 mod event;
+mod handover;
 mod input;
 mod interrupt;
 mod linear;
@@ -60,6 +61,8 @@ enum RunCommand {
     Event(event::Command),
     #[command(about = approve::HAND_BACK_ABOUT, after_help = control::RESOLVING_AFTER_HELP)]
     HandBack(approve::HandBack),
+    #[command(about = handover::ABOUT, after_help = handover::AFTER_HELP)]
+    Handover(handover::Command),
     #[command(about = input::ABOUT)]
     Input(input::Command),
     #[command(about = interrupt::ABOUT, after_help = interrupt::AFTER_HELP)]
@@ -101,6 +104,7 @@ impl Command {
             Some(RunCommand::Create(command)) => command.execute(),
             Some(RunCommand::Event(command)) => command.execute(),
             Some(RunCommand::HandBack(command)) => command.execute(),
+            Some(RunCommand::Handover(command)) => command.execute(),
             Some(RunCommand::Input(command)) => command.execute(),
             Some(RunCommand::Interrupt(command)) => command.execute(),
             Some(RunCommand::Linear(command)) => command.execute(),

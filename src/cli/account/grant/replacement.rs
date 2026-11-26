@@ -50,12 +50,13 @@ pub(super) fn holds(grant: &MemberGrant, provider: &str, organization_id: Option
 }
 
 /// Whether `grant`, one the member holds, needs reconnecting: its state is
-/// `reconnect_required`, or its status on a runner it is authorized for is.
+/// `reconnect_required`, or its status on a runner it reaches, by that runner's own
+/// authorization or through the personal pool, is.
 pub(super) fn needs_reconnecting(grant: &MemberGrant) -> bool {
     grant.state == MemberGrantState::GrantStateReconnectRequired
-        || grant.authorizations.iter().any(|authorization| {
+        || projection::grant_runners(grant).values().any(|runner| {
             matches!(
-                projection::grant_authorization_status(grant, Some(authorization)).availability,
+                runner.status(grant).availability,
                 Availability::ReconnectRequired
             )
         })

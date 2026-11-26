@@ -3,7 +3,8 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use useful_api::{
-    Run, RunContinuationDefinition, RunContinuationEnvelope, RunContinuationRequest, RunFailure,
+    Run, RunContinuationDefinition, RunContinuationEnvelope, RunContinuationRequest,
+    RunContinuationRequestRunner, RunFailure,
 };
 use useful_human_auth::Deployment;
 
@@ -28,6 +29,7 @@ pub(in crate::cli) fn parse_step(value: &str) -> Result<String, String> {
 
 #[derive(Clone)]
 struct Recovery {
+    handover: bool,
     key: String,
     envelope: Option<RunContinuationEnvelope>,
     diagnostic: Option<Vec<useful_api::ContinuationAdmissionViolation>>,
@@ -57,6 +59,7 @@ pub(in crate::cli) struct Submission {
     run: RunReference,
     from_steps: Vec<String>,
     expected_version: Option<i64>,
+    runner: Option<RunContinuationRequestRunner>,
     wait: RunWaitArgs,
     options: RunOptions,
 }
@@ -69,6 +72,7 @@ impl Submission {
         (organization, run_id): (String, String),
         from_steps: Vec<String>,
         expected_version: Option<i64>,
+        runner: Option<RunContinuationRequestRunner>,
         wait: RunWaitArgs,
         options: RunOptions,
     ) -> Self {
@@ -79,6 +83,7 @@ impl Submission {
             },
             from_steps,
             expected_version,
+            runner,
             wait,
             options,
         }
@@ -104,6 +109,7 @@ impl Submission {
         crate::cli::execute_mutation_with_signals_and_deferred_timeout(
             "Cloud run continuation",
             Recovery {
+                handover: self.runner == Some(RunContinuationRequestRunner::Replacement),
                 key,
                 envelope: None,
                 diagnostic: None,
@@ -162,6 +168,7 @@ impl Submission {
             RunContinuationDefinition::String("inherited".to_owned()),
         );
         request.expected_run_version = self.expected_version;
+        request.runner = self.runner;
         let result = pinned_submission(
             deployment,
             &self.run,
@@ -422,6 +429,17 @@ fn pinned_submission(
     )
 }
 
+fn format_run_headline(handover: bool, outcome: &str, code: Option<&str>) -> String {
+    let operation = if handover { "Handover" } else { "Continuation" };
+    if outcome == "accepted" {
+        format!("✓ {operation} accepted (execution not yet confirmed).")
+    } else if code.is_some() {
+        format!("{operation} accepted; observation incomplete.")
+    } else {
+        format!("✓ {operation} observed.")
+    }
+}
+
 fn render(
     (deployment, org, run_id, json): (&Deployment, &str, &str, bool),
     recovery: &Recovery,
@@ -451,13 +469,7 @@ fn render(
     } else if let Some(envelope) = envelope {
         super::write_run_human(
             deployment.fingerprint().api_url(),
-            if outcome == "accepted" {
-                "✓ Continuation accepted (execution not yet confirmed)."
-            } else if code.is_some() {
-                "Continuation accepted; observation incomplete."
-            } else {
-                "✓ Continuation observed."
-            },
+            &format_run_headline(recovery.handover, outcome, code),
             &envelope.run,
         )?;
         let mut stdout = io::stdout().lock();
@@ -476,6 +488,13 @@ fn render(
                 .collect::<Vec<_>>()
                 .join(", ")
         )?;
+        if let Some(record) = &envelope.request.record {
+            writeln!(
+                stdout,
+                "record: attempt {}, sequence {}, stored {}",
+                record.attempt_number, record.sequence, record.stored_at
+            )?;
+        }
         if let Some(code) = code {
             writeln!(
                 io::stderr().lock(),
@@ -490,24 +509,26 @@ fn render(
             code.unwrap_or(outcome),
             recovery.key
         )?;
-        if let Some(violations) = &recovery.diagnostic {
-            for violation in violations {
-                let code = serde_json::to_value(violation.code)?
-                    .as_str()
-                    .unwrap_or("invalid")
-                    .to_owned();
-                writeln!(stderr, "  {code}")?;
+        let mut guidance = if code == Some("path_run_retired") {
+            super::PATH_RUN_RETIRED_GUIDANCE
+        } else {
+            "Inspect the run before requesting another continuation with a new key."
+        };
+        for violation in recovery.diagnostic.as_deref().unwrap_or_default() {
+            writeln!(stderr, "  {}", violation.code)?;
+            if recovery.handover {
+                match violation.code {
+                    "continuation_attempt_unavailable" => {
+                        guidance = "The run has not ended failed, cancelled or interrupted. A runner holding its execution lease keeps it. Request a handover once the run reads one of those states."
+                    }
+                    "run_record_unavailable" => {
+                        guidance = "Cloud keeps no record to continue from. Rerun every step with useful workflow run retry RUN --all."
+                    }
+                    _ => {}
+                }
             }
         }
-        writeln!(
-            stderr,
-            "\n{}",
-            if code == Some("path_run_retired") {
-                super::PATH_RUN_RETIRED_GUIDANCE
-            } else {
-                "Inspect the run before requesting another continuation with a new key."
-            }
-        )?;
+        writeln!(stderr, "\n{guidance}")?;
     }
     Ok(exit)
 }
@@ -569,7 +590,14 @@ pub(super) fn write_run_continuation(out: &mut impl Write, run: &Run) -> anyhow:
             useful_execution::visible_text(&replacement.replaced.workflow_path)
         )?;
     }
-    let workspace = &continuation.workspace;
+    if continuation.runner == useful_api::RunContinuationRunner::Replacement {
+        writeln!(out, "  runs on: replacement runner")?;
+        return Ok(());
+    }
+    let workspace = continuation
+        .workspace
+        .as_deref()
+        .context("retaining continuation is missing its workspace")?;
     writeln!(
         out,
         "  preparation: {}",
@@ -604,6 +632,21 @@ pub(super) fn write_run_continuation(out: &mut impl Write, run: &Run) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_handover_names_the_replacement_runner_without_workspace_details() {
+        let envelope: RunContinuationEnvelope = serde_json::from_str(include_str!(
+            "../../../../../crates/api/tests/fixtures/run-continuation-handover.json"
+        ))
+        .unwrap();
+        let mut output = Vec::new();
+        write_run_continuation(&mut output, &envelope.run).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("replacement runner"));
+        for label in ["preparation:", "execution root:", "modified:"] {
+            assert!(!text.contains(label), "printed {label}: {text}");
+        }
+    }
 
     #[test]
     fn human_continuation_prints_no_workspace_recovery() {

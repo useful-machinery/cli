@@ -87,6 +87,7 @@
     "artifactDelivery": null,
     "portableResult": "absent",
     "continuation": {
+      "runner": "retaining",
       "request": {
         "fromSteps": [
           "rerun"

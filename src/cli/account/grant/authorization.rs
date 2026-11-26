@@ -4,6 +4,7 @@
 //! `useful account integration list` prints it for a grant of either kind. The authorization of a
 //! token `useful account integration authorize` makes is printed here too.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use anyhow::Context;
@@ -12,12 +13,12 @@ use serde::Serialize;
 use crate::exit_code::ExitCode;
 
 use useful_api::{
-    AgentLoginReportState, GrantEndedAuthorization, IntegrationTokenAuthorization,
+    AgentLoginReportState, GrantEndedAuthorization, IntegrationTokenAuthorization, MemberGrant,
     MemberGrantAuthorization,
 };
 use useful_execution::visible_text;
 
-use super::projection::MemberStatus;
+use super::projection::{Access, GrantRunner, MemberStatus, grant_subject};
 
 /// A runner's authorization of a grant or agent login, in force or ended: the model's named
 /// fields only, enums as their wire strings. Nothing a response adds beyond the model reaches
@@ -34,22 +35,47 @@ pub(in crate::cli) struct AuthorizationView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     organization_id: Option<&'a str>,
     created_at: &'a str,
+    #[serde(flatten)]
+    exchange: ExchangeView<'a>,
+    #[serde(flatten)]
+    status: Option<AccessStatus>,
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExchangeView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     delivery: Option<DeliveryView<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     report: Option<ReportView<'a>>,
-    // The runner's last use of a native grant where `useful account integration list` prints no
-    // exchange.
     #[serde(flatten)]
     last_use: Option<LastUseView<'a>>,
-    // An authorization in force's availability and next action; an ended one, and the
-    // one `authorize` just made, carry none.
-    #[serde(flatten)]
-    status: Option<MemberStatus>,
-    // Whether the text form prints what was delivered and reported: an OAuth grant's
-    // authorization has no exchange, and `useful account integration list` leaves it to `show`.
     #[serde(skip)]
-    exchange: bool,
+    detailed: bool,
+}
+
+#[derive(Serialize)]
+struct AccessStatus {
+    access: Access,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    conflict: bool,
+    #[serde(flatten)]
+    status: MemberStatus,
+}
+
+impl AccessStatus {
+    fn new(grant: &MemberGrant, runner: &GrantRunner<'_>) -> Self {
+        Self {
+            access: runner.access,
+            conflict: runner.conflict,
+            status: MemberStatus::new(runner.status(grant), grant_subject(grant)),
+        }
+    }
+
+    fn write_human(&self, output: &mut impl Write, indent: &str) -> io::Result<()> {
+        self.status.write_human(output, indent)?;
+        writeln!(output, "{indent}access: {}", self.access.as_str())
+    }
 }
 
 /// The runner's last authorization of the agent login, ended, with whether that runner has
@@ -109,36 +135,35 @@ struct LastUseView<'a> {
     last_use_at: Option<&'a str>,
 }
 
-/// The fields an authorization in force and an ended one share, read alike from either
-/// generated model.
-macro_rules! authorization_view {
-    ($authorization:expr) => {{
-        let authorization = $authorization;
-        AuthorizationView {
-            id: &authorization.id,
-            runner_id: &authorization.runner_id,
-            runner_name: None,
-            organization_id: None,
-            created_at: &authorization.created_at,
-            delivery: authorization
+// Native holds, including ended ones, carry the same exchange in each target's API model.
+macro_rules! exchange_view {
+    ($hold:expr, $detailed:expr) => {{
+        let hold = $hold;
+        let detailed = $detailed;
+        let report = hold.report.as_deref();
+        let last_use = report.and_then(|report| {
+            report.last_use.map(|last_use| LastUseView {
+                last_use: last_use.as_str(),
+                last_use_at: report.last_use_at.as_deref(),
+            })
+        });
+        ExchangeView {
+            detailed,
+            delivery: hold
                 .delivery
                 .as_deref()
+                .filter(|_| detailed)
                 .map(|delivery| DeliveryView {
                     generation: delivery.generation,
                     delivered_at: &delivery.delivered_at,
                 }),
-            report: authorization.report.as_deref().map(|report| ReportView {
+            report: report.filter(|_| detailed).map(|report| ReportView {
                 state: report_state(report.state),
                 generation: report.generation,
-                last_use: report.last_use.map(|last_use| LastUseView {
-                    last_use: last_use.as_str(),
-                    last_use_at: report.last_use_at.as_deref(),
-                }),
+                last_use,
                 reported_at: &report.reported_at,
             }),
-            last_use: None,
-            status: None,
-            exchange: true,
+            last_use: last_use.filter(|_| !detailed),
         }
     }};
 }
@@ -150,7 +175,15 @@ pub(in crate::cli) fn ended_authorization_views(
     ended
         .iter()
         .map(|ended| EndedAuthorizationView {
-            authorization: authorization_view!(ended),
+            authorization: AuthorizationView {
+                id: &ended.id,
+                runner_id: &ended.runner_id,
+                runner_name: None,
+                organization_id: None,
+                created_at: &ended.created_at,
+                exchange: exchange_view!(ended, true),
+                status: None,
+            },
             ended_at: &ended.ended_at,
             removal: RemovalView {
                 state: ended.removal.state.as_str(),
@@ -169,7 +202,7 @@ impl EndedAuthorizationView<'_> {
     pub(in crate::cli) fn write_human(&self, output: &mut impl Write) -> io::Result<()> {
         self.authorization.write_heading(output)?;
         writeln!(output, "    ended: {}", self.ended_at)?;
-        self.authorization.write_exchange(output)?;
+        self.authorization.exchange.write_human(output, "    ")?;
         self.write_outcome(output, "    ")
     }
 
@@ -217,40 +250,6 @@ impl RemovalView<'_> {
 }
 
 impl<'a> AuthorizationView<'a> {
-    /// An authorization in force of a grant, with the runner's organization and the
-    /// authorization's availability and next action; `exchange` keeps what was delivered to the
-    /// runner and what it reported, and without it the runner's last use alone is kept.
-    pub(in crate::cli) fn of_grant(
-        authorization: &'a MemberGrantAuthorization,
-        status: MemberStatus,
-        exchange: bool,
-    ) -> Self {
-        let view = authorization_view!(authorization);
-        Self {
-            organization_id: Some(&authorization.organization_id),
-            last_use: view
-                .report
-                .as_ref()
-                .and_then(|report| report.last_use)
-                .filter(|_| !exchange),
-            delivery: view.delivery.filter(|_| exchange),
-            report: view.report.filter(|_| exchange),
-            status: Some(status),
-            exchange,
-            ..view
-        }
-    }
-
-    /// The authorization of a grant `useful account integration authorize` just made, with the runner's
-    /// organization: nothing has been delivered or reported under it yet.
-    pub(in crate::cli) fn made(authorization: &'a MemberGrantAuthorization) -> Self {
-        Self {
-            organization_id: Some(&authorization.organization_id),
-            exchange: false,
-            ..authorization_view!(authorization)
-        }
-    }
-
     /// The authorization of a token `useful account integration authorize` just made: the
     /// runner by ID and name, its organization and when. A token's runner reports nothing
     /// back, so there is no delivery or report.
@@ -261,22 +260,14 @@ impl<'a> AuthorizationView<'a> {
             runner_name: Some(&authorization.runner_name),
             organization_id: Some(&authorization.organization_id),
             created_at: &authorization.created_at,
-            delivery: None,
-            report: None,
-            last_use: None,
+            exchange: ExchangeView::default(),
             status: None,
-            exchange: false,
         }
     }
 
     pub(in crate::cli) fn write_human(&self, output: &mut impl Write) -> io::Result<()> {
         self.write_heading(output)?;
-        if self.exchange {
-            self.write_exchange(output)?;
-        }
-        if let Some(last_use) = &self.last_use {
-            last_use.write_human(output)?;
-        }
+        self.exchange.write_human(output, "    ")?;
         match &self.status {
             Some(status) => status.write_human(output, "    "),
             None => Ok(()),
@@ -300,16 +291,23 @@ impl<'a> AuthorizationView<'a> {
         }
         writeln!(output, "    authorized: {}", self.created_at)
     }
+}
 
+impl ExchangeView<'_> {
     /// What was last delivered to the runner and what it last reported.
-    fn write_exchange(&self, output: &mut impl Write) -> io::Result<()> {
+    fn write_human(&self, output: &mut impl Write, indent: &str) -> io::Result<()> {
+        if !self.detailed {
+            return self
+                .last_use
+                .map_or(Ok(()), |last_use| last_use.write_human(output, indent));
+        }
         match &self.delivery {
             Some(delivery) => writeln!(
                 output,
-                "    delivered: generation {} at {}",
+                "{indent}delivered: generation {} at {}",
                 delivery.generation, delivery.delivered_at
             )?,
-            None => writeln!(output, "    delivered: never")?,
+            None => writeln!(output, "{indent}delivered: never")?,
         }
         match &self.report {
             Some(ReportView {
@@ -319,30 +317,34 @@ impl<'a> AuthorizationView<'a> {
                 ..
             }) => writeln!(
                 output,
-                "    reported: {state}, generation {generation} at {reported_at}"
+                "{indent}reported: {state}, generation {generation} at {reported_at}"
             )?,
             Some(ReportView {
                 state,
                 generation: None,
                 reported_at,
                 ..
-            }) => writeln!(output, "    reported: {state} at {reported_at}")?,
-            None => writeln!(output, "    reported: never")?,
+            }) => writeln!(output, "{indent}reported: {state} at {reported_at}")?,
+            None => writeln!(output, "{indent}reported: never")?,
         }
         match self.report.as_ref().and_then(|report| report.last_use) {
-            Some(last_use) => last_use.write_human(output),
+            Some(last_use) => last_use.write_human(output, indent),
             None => Ok(()),
         }
     }
 }
 
 impl LastUseView<'_> {
-    fn write_human(&self, output: &mut impl Write) -> io::Result<()> {
+    fn write_human(&self, output: &mut impl Write, indent: &str) -> io::Result<()> {
         match self.last_use_at {
             Some(last_use_at) => {
-                writeln!(output, "    last use: {} at {last_use_at}", self.last_use)
+                writeln!(
+                    output,
+                    "{indent}last use: {} at {last_use_at}",
+                    self.last_use
+                )
             }
-            None => writeln!(output, "    last use: {}", self.last_use),
+            None => writeln!(output, "{indent}last use: {}", self.last_use),
         }
     }
 }
@@ -445,20 +447,132 @@ impl Holder<'_> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(untagged)]
+pub(super) enum AuthorizationTargetView<'a> {
+    Runner(AuthorizationView<'a>),
+    Pool(PoolAuthorizationView<'a>),
+}
+
+// The authorize command returns the target it just made, without a grant-status projection.
+pub(super) use AuthorizationTargetView as MadeView;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PoolAuthorizationView<'a> {
+    id: &'a str,
+    runner_pool_id: &'a str,
+    organization_id: &'a str,
+    created_at: &'a str,
+    runners: Vec<PoolRunner<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PoolRunner<'a> {
+    runner_id: &'a str,
+    #[serde(flatten)]
+    status: Option<AccessStatus>,
+    #[serde(flatten)]
+    exchange: Option<ExchangeView<'a>>,
+}
+
+impl<'a> AuthorizationTargetView<'a> {
+    pub(super) fn grant(authorization: &'a MemberGrantAuthorization) -> anyhow::Result<Self> {
+        Self::new(authorization, None, false).context("authorization response omitted its target")
+    }
+
+    pub(super) fn new(
+        authorization: &'a MemberGrantAuthorization,
+        coverage: Option<(&MemberGrant, &BTreeMap<&str, GrantRunner<'_>>)>,
+        detailed: bool,
+    ) -> Option<Self> {
+        let status = |id: &str| {
+            let (grant, runners) = coverage?;
+            Some(AccessStatus::new(grant, runners.get(id)?))
+        };
+        if let Some(pool) = &authorization.runner_pool_id {
+            return Some(Self::Pool(PoolAuthorizationView {
+                id: &authorization.id,
+                runner_pool_id: pool,
+                organization_id: &authorization.organization_id,
+                created_at: &authorization.created_at,
+                runners: authorization
+                    .runners
+                    .as_deref()?
+                    .iter()
+                    .map(|runner| PoolRunner {
+                        runner_id: &runner.runner_id,
+                        status: status(&runner.runner_id),
+                        exchange: coverage.map(|_| exchange_view!(runner, detailed)),
+                    })
+                    .collect(),
+            }));
+        }
+        let runner_id = authorization.runner_id.as_deref()?;
+        // The creation response also carries the exchange on an idempotent replay.
+        let mut exchange = exchange_view!(authorization, detailed || coverage.is_none());
+        exchange.detailed = detailed;
+        Some(Self::Runner(AuthorizationView {
+            id: &authorization.id,
+            runner_id,
+            runner_name: None,
+            organization_id: Some(&authorization.organization_id),
+            created_at: &authorization.created_at,
+            exchange,
+            status: status(runner_id),
+        }))
+    }
+
+    pub(super) fn write_human(&self, output: &mut impl Write) -> io::Result<()> {
+        match self {
+            Self::Runner(runner) => runner.write_human(output),
+            Self::Pool(pool) => {
+                writeln!(output, "  authorization: {}", pool.id)?;
+                writeln!(output, "    pool: {} (personal)", pool.runner_pool_id)?;
+                writeln!(output, "    organization: {}", pool.organization_id)?;
+                writeln!(output, "    authorized: {}", pool.created_at)?;
+                if pool.runners.is_empty() {
+                    return writeln!(output, "    runners: none");
+                }
+                writeln!(output, "    runners: {}", pool.runners.len())?;
+                for runner in &pool.runners {
+                    if let Some(status) = &runner.status {
+                        writeln!(output, "      runner: {}", runner.runner_id)?;
+                        status.write_human(output, "        ")?;
+                    }
+                    if let Some(exchange) = &runner.exchange {
+                        exchange.write_human(output, "        ")?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn id(&self) -> &str {
+        match self {
+            Self::Runner(runner) => runner.id,
+            Self::Pool(pool) => pool.id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuthorizeResult<'a> {
     schema_version: u8,
     deployment: &'a str,
     outcome: &'static str,
     #[serde(flatten)]
     holder: Holder<'a>,
-    authorization: AuthorizationView<'a>,
+    authorization: MadeView<'a>,
 }
 
 /// Reports the authorization `authorize` made.
-pub(in crate::cli) fn write_authorized(
+pub(super) fn write_authorized(
     deployment: &str,
     holder: Holder<'_>,
-    authorization: AuthorizationView<'_>,
+    authorization: MadeView<'_>,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
     if json {
@@ -472,7 +586,10 @@ pub(in crate::cli) fn write_authorized(
         return Ok(ExitCode::Success);
     }
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "✓ Runner authorized.")?;
+    match authorization {
+        MadeView::Runner(_) => writeln!(stdout, "✓ Runner authorized.")?,
+        MadeView::Pool(_) => writeln!(stdout, "✓ Personal pool authorized.")?,
+    }
     holder.write_human(&mut stdout)?;
     authorization.write_human(&mut stdout)?;
     writeln!(stdout, "deployment: {deployment}")?;
@@ -489,28 +606,75 @@ struct DeauthorizeResult<'a> {
     #[serde(flatten)]
     holder: Holder<'a>,
     authorization_id: &'a str,
+    #[serde(flatten)]
+    target: EndedTarget<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(super) enum EndedTarget<'a> {
+    #[serde(rename_all = "camelCase")]
+    Runner {
+        runner_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        removal: Option<RemovalView<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stop: Option<StopView<'a>>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Pool {
+        runner_pool_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        runners: Option<Vec<RemovedRunner<'a>>>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RemovedRunner<'a> {
     runner_id: &'a str,
-    // Absent when the read after the change failed or did not list the ended authorization,
-    // and for an OAuth grant, whose runner kept no copy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    removal: Option<RemovalView<'a>>,
-    // Absent as well when no stop was requested there.
+    removal: RemovalView<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<StopView<'a>>,
+}
+
+impl<'a> EndedTarget<'a> {
+    pub(super) fn runner(id: &'a str, ended: Option<EndedAuthorizationView<'a>>) -> Self {
+        let (removal, stop) = ended.map_or((None, None), |ended| (Some(ended.removal), ended.stop));
+        Self::Runner {
+            runner_id: id,
+            removal,
+            stop,
+        }
+    }
+
+    pub(super) fn pool(id: &'a str, runners: Option<Vec<EndedAuthorizationView<'a>>>) -> Self {
+        Self::Pool {
+            runner_pool_id: id,
+            runners: runners.map(|ended| {
+                ended
+                    .into_iter()
+                    .map(|ended| RemovedRunner {
+                        runner_id: ended.authorization.runner_id,
+                        removal: ended.removal,
+                        stop: ended.stop,
+                    })
+                    .collect()
+            }),
+        }
+    }
 }
 
 /// Reports an ended authorization with its removal state and stop, as the read after the
 /// change gives them in `ended`: `None` when that read failed, which leaves the change done,
 /// or when there was none to make.
-pub(in crate::cli) fn write_deauthorized(
+pub(super) fn write_deauthorized(
     deployment: &str,
     holder: Holder<'_>,
     authorization_id: &str,
-    runner_id: &str,
-    ended: Option<EndedAuthorizationView<'_>>,
+    target: EndedTarget<'_>,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
-    let (removal, stop) = ended.map_or((None, None), |ended| (Some(ended.removal), ended.stop));
     if json {
         write_json(&DeauthorizeResult {
             schema_version: 1,
@@ -518,29 +682,62 @@ pub(in crate::cli) fn write_deauthorized(
             outcome: "deauthorized",
             holder,
             authorization_id,
-            runner_id,
-            removal,
-            stop,
+            target,
         })?;
         return Ok(ExitCode::Success);
     }
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "✓ Runner authorization ended.")?;
+    let who = match &target {
+        EndedTarget::Runner { .. } => "Runner",
+        EndedTarget::Pool { .. } => "Personal pool",
+    };
+    writeln!(stdout, "✓ {who} authorization ended.")?;
     holder.write_human(&mut stdout)?;
     writeln!(stdout, "authorization: {authorization_id}")?;
-    writeln!(stdout, "runner: {runner_id}")?;
-    if let Some(removal) = &removal {
-        removal.write_human(&mut stdout, "")?;
-    }
-    if let Some(stop) = &stop {
-        stop.write_human(&mut stdout, "")?;
-    }
-    writeln!(stdout, "deployment: {deployment}")?;
-    if removal.is_some() {
-        write_removal_note(&mut stdout)?;
-    }
-    if stop.is_some() {
-        write_stop_note(&mut stdout)?;
+    match target {
+        EndedTarget::Runner {
+            runner_id,
+            removal,
+            stop,
+        } => {
+            writeln!(stdout, "runner: {runner_id}")?;
+            if let Some(removal) = &removal {
+                removal.write_human(&mut stdout, "")?;
+            }
+            if let Some(stop) = &stop {
+                stop.write_human(&mut stdout, "")?;
+            }
+            writeln!(stdout, "deployment: {deployment}")?;
+            if removal.is_some() {
+                write_removal_note(&mut stdout)?;
+            }
+            if stop.is_some() {
+                write_stop_note(&mut stdout)?;
+            }
+        }
+        EndedTarget::Pool {
+            runner_pool_id,
+            runners,
+        } => {
+            writeln!(stdout, "pool: {runner_pool_id} (personal)")?;
+            writeln!(stdout, "deployment: {deployment}")?;
+            if let Some(runners) = runners {
+                writeln!(stdout, "runners: {}", runners.len())?;
+                for runner in &runners {
+                    writeln!(stdout, "  runner: {}", runner.runner_id)?;
+                    runner.removal.write_human(&mut stdout, "    ")?;
+                    if let Some(stop) = &runner.stop {
+                        stop.write_human(&mut stdout, "    ")?;
+                    }
+                }
+                if !runners.is_empty() {
+                    write_removal_note(&mut stdout)?;
+                }
+                if runners.iter().any(|r| r.stop.is_some()) {
+                    write_stop_note(&mut stdout)?;
+                }
+            }
+        }
     }
     stdout.flush()?;
     Ok(ExitCode::Success)

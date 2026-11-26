@@ -628,6 +628,7 @@ async fn precheck(
             from: std::slice::from_ref(from),
             inputs: inputs.clone(),
             execution_root: execution_root.clone(),
+            handover: false,
             tree: Some(tree.clone()),
         };
         match admit_continuation(pending, candidate, cancellation, (config, leaf)).await {
@@ -748,6 +749,7 @@ fn create_and_supersede(
                 from_steps: vec![from],
                 workflow: None,
                 execution_root: Some(execution_root),
+                handover: false,
                 leaf: ExecutionLeaf::Restart,
                 edge: None,
                 bridge: None,

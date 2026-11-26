@@ -19,9 +19,11 @@ use useful_support::generate_idempotency_key;
 use super::service::{Backoff, BuildCache, KeptRunBounds, LOG_DIRECTORY};
 use super::validation::{valid_secret_syntax, valid_typed_id};
 
+mod ephemeral;
 mod home;
 mod registration;
 
+pub use ephemeral::EphemeralSession;
 pub use home::{PublicationStage, RunnerHome, RunnerHomeError};
 pub use registration::{
     RecordedOptions, RegisteredRunner, RegistrationAuthority, RegistrationConflict,
@@ -2914,6 +2916,10 @@ pub enum EnrollmentError {
     RunnerMismatch,
     InvalidState,
     StateWrite,
+    EphemeralSessionIo {
+        operation: &'static str,
+        source: io::Error,
+    },
     NetworkAmbiguous(AmbiguousCause),
     Unauthorized,
     Conflict,
@@ -2997,6 +3003,9 @@ impl fmt::Display for EnrollmentError {
             Self::RunnerMismatch => "the single-runner key is for another runner than this host's",
             Self::InvalidState => "protected runner state is invalid",
             Self::StateWrite => "protected runner state could not be committed durably",
+            Self::EphemeralSessionIo { operation, source } => {
+                return write!(formatter, "{operation}: {source}");
+            }
             Self::NetworkAmbiguous(cause) => {
                 write!(
                     formatter,
@@ -3104,7 +3113,14 @@ impl fmt::Display for EnrollmentError {
     }
 }
 
-impl Error for EnrollmentError {}
+impl Error for EnrollmentError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::EphemeralSessionIo { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 // A staged join was written before its request was sent, so the host cannot
 // know whether Cloud registered a runner from it. It names the key by id: the

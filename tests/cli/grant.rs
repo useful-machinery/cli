@@ -317,6 +317,7 @@ fn list_prints_every_grant_with_its_account_runners_and_status_and_names_the_res
                         "runnerId": RUNNER_ID,
                         "organizationId": ORGANIZATION_ID,
                         "createdAt": "2026-11-01T08:05:00Z",
+                        "access": "direct",
                         "availability": "available",
                         "nextAction": "none"
                     }]
@@ -435,6 +436,80 @@ fn an_account_the_member_cannot_name_is_printed_by_its_id() {
     );
 }
 
+// SC-GRANTAUTH-1, SC-GRANTAUTH-4
+#[test]
+fn list_shows_empty_pool_and_each_runners_direct_or_pool_access() {
+    let mut empty = oauth_grant_unauthorized(OAUTH_GRANT_ID);
+    let mut pool = pool_authorization("pga_01k0z6r1w8f4jy2m7q9v3x5abf", ORGANIZATION_ID);
+    empty["authorizations"] = serde_json::json!([pool]);
+    let mut covered = oauth_grant(LINEAR_GRANT_ID, "linear", "active");
+    let mut direct = covered["authorizations"][0].clone();
+    direct["id"] = "pga_01k0z6r1w8f4jy2m7q9v3x5abd".into();
+    direct["runnerId"] = GLOBEX_RUNNER_ID.into();
+    pool["runners"] = serde_json::json!([{"runnerId": RUNNER_ID}, {"runnerId": ENDED_RUNNER_ID}]);
+    covered["authorizations"]
+        .as_array_mut()
+        .unwrap()
+        .extend([direct, pool]);
+    let grants = page(&[empty, covered], None);
+    let responses = [grants, predating_served(), identities(ada())];
+    let (server, _directory, credential) = prepared([responses.clone(), responses].concat());
+    let document = json_output(&run_grant(&server, &credential, &["list", "--json"]));
+    let empty = &document["grants"][0];
+    assert_eq!(empty["authorizations"][0]["runnerPoolId"], POOL_ID);
+    assert_eq!(empty["authorizations"][0]["runners"], serde_json::json!([]));
+    assert!(empty.get("nextAction").is_none());
+    let authorizations = &document["grants"][1]["authorizations"];
+    assert_eq!(authorizations[0]["access"], "both");
+    assert_eq!(authorizations[1]["access"], "direct");
+    let runners = &authorizations[2]["runners"];
+    assert_eq!(runners[0]["runnerId"], RUNNER_ID);
+    assert_eq!(runners[0]["access"], "both");
+    assert_eq!(runners[1]["runnerId"], ENDED_RUNNER_ID);
+    assert_eq!(runners[1]["access"], "pool");
+    assert_eq!(runners[1]["availability"], "available");
+    let human = stdout(&run_grant(&server, &credential, &["list"]));
+    assert!(human.contains(&format!("pool: {POOL_ID} (personal)")));
+    assert!(human.contains("runners: none"));
+    server.finish();
+}
+
+// SC-GRANTAUTH-2, SC-GRANTAUTH-3
+#[test]
+fn show_reports_pool_runners_delivery_conflict_and_ended_removal() {
+    let mut grant = native_grant_in_use();
+    grant["provider"] = "claude_code".into();
+    let moved = &mut grant["endedAuthorizations"][0];
+    moved.as_object_mut().unwrap().remove("stop");
+    moved["removal"] =
+        serde_json::json!({"state": "confirmed", "confirmedAt": "2026-11-03T09:01:00Z"});
+    let exchange = grant["authorizations"][0].clone();
+    let mut pool = pool_authorization("aga_01k0z6r1w8f4jy2m7q9v3x5abf", ORGANIZATION_ID);
+    pool["runners"] = serde_json::json!([
+        {"runnerId": RUNNER_ID, "conflict": false, "delivery": exchange["delivery"], "report": exchange["report"]},
+        {"runnerId": GLOBEX_RUNNER_ID, "conflict": true}
+    ]);
+    grant["authorizations"] = serde_json::json!([pool]);
+    let (server, _directory, credential) = prepared(vec![one(&grant), organization()]);
+    let document = json_output(&run_grant(
+        &server,
+        &credential,
+        &["show", NATIVE_GRANT_ID, "--json"],
+    ));
+    let shown = &document["grant"];
+    let runners = &shown["authorizations"][0]["runners"];
+    assert_eq!(runners[0]["delivery"], exchange["delivery"]);
+    assert_eq!(runners[0]["report"], exchange["report"]);
+    assert!(runners[0].get("conflict").is_none());
+    assert_eq!(runners[1]["conflict"], true);
+    assert_eq!(runners[1]["availability"], "not_delivered");
+    assert_eq!(runners[1]["nextAction"], "resolve_runner_conflict");
+    let ended = &shown["endedAuthorizations"][0];
+    assert_eq!(ended["runnerId"], ENDED_RUNNER_ID);
+    assert_eq!(ended["removal"], grant["endedAuthorizations"][0]["removal"]);
+    server.finish();
+}
+
 #[test]
 fn list_names_the_command_that_authorizes_a_runner_for_an_oauth_grant_with_none() {
     let responses = vec![
@@ -503,6 +578,7 @@ fn show_prints_a_native_grants_exchange_and_ended_authorizations() {
         String::from_utf8_lossy(&json.stderr)
     );
     let mut authorization = grant["authorizations"][0].clone();
+    authorization["access"] = "direct".into();
     authorization["availability"] = "available".into();
     authorization["nextAction"] = "none".into();
     assert_eq!(
@@ -670,6 +746,7 @@ fn list_and_show_print_a_native_authorizations_last_use_and_when() {
             "runnerId": RUNNER_ID,
             "organizationId": ORGANIZATION_ID,
             "createdAt": authorization["createdAt"],
+            "access": "direct",
             "lastUse": "accepted",
             "availability": "available",
             "nextAction": "none"
@@ -1382,6 +1459,192 @@ pub(super) fn assert_stated_by_the_refusal(statement: &[String], refusal: &str) 
     }
 }
 
+use super::runner_administration::{MEMBER_ID, POOL_ID, current_principal_response};
+
+fn personal_pools(org: &str) -> Vec<u8> {
+    json_http_response(
+        "200 OK",
+        serde_json::json!({"items": [{
+            "id": POOL_ID, "name": "personal", "organizationId": org,
+            "member": {"id": MEMBER_ID, "displayName": "Ada"},
+            "createdAt": "2026-11-01T08:00:00Z", "updatedAt": "2026-11-01T08:00:00Z"
+        }]}),
+    )
+}
+
+pub(super) fn pool_authorization(id: &str, org: &str) -> serde_json::Value {
+    serde_json::json!({"id": id, "runnerPoolId": POOL_ID, "organizationId": org,
+        "createdAt": "2026-11-06T09:00:00Z", "runners": []})
+}
+
+// SC-GRANTAUTH-1, SC-GRANTAUTH-2
+#[test]
+fn authorize_personal_pool_binds_the_grants_organization_and_replays_the_same_key() {
+    let mut native = native_grant(NATIVE_GRANT_ID, "active");
+    native["provider"] = "claude_code".into();
+    for (grant, id, org, requested_org, read, post) in [
+        (
+            native,
+            "aga_01k0z6r1w8f4jy2m7q9v3x5abf",
+            ORGANIZATION_ID,
+            OTHER_ORGANIZATION_ID,
+            READ_NATIVE,
+            AUTHORIZE_NATIVE,
+        ),
+        (
+            oauth_grant_unauthorized(OAUTH_GRANT_ID),
+            "pga_01k0z6r1w8f4jy2m7q9v3x5abf",
+            OTHER_ORGANIZATION_ID,
+            OTHER_ORGANIZATION_ID,
+            READ_OAUTH,
+            AUTHORIZE_OAUTH,
+        ),
+    ] {
+        let auth = pool_authorization(id, org);
+        let (server, _directory, credential) = prepared(vec![
+            one(&grant),
+            current_principal_response(),
+            personal_pools(org),
+            Vec::new(),
+            http_response_with_headers(
+                "201 Created",
+                Some("application/json"),
+                &[("Idempotency-Key", ECHO_IDEMPOTENCY_KEY)],
+                &serde_json::to_vec(&auth).unwrap(),
+            ),
+        ]);
+        let grant_id = grant["id"].as_str().unwrap();
+        let args = [
+            "authorize",
+            grant_id,
+            "--personal-pool",
+            "--org",
+            requested_org,
+            "--json",
+        ];
+        let refusal = refusal_without_yes(&server, &credential, &args);
+        let mut args = args.to_vec();
+        args.push("--yes");
+        let output = run_grant(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let lines = statement(&output, grant_id);
+        assert!(lines.iter().any(|line| line.contains("pool")));
+        assert_stated_by_the_refusal(&lines, &refusal);
+        assert!(stderr(&output).lines().next().unwrap().contains(POOL_ID));
+        assert_eq!(json_output(&output)["authorization"], auth);
+        let requests = server.finish();
+        let pools = format!("GET /api/v1/organizations/{org}/runner-pools?limit=200 HTTP/1.1");
+        assert_eq!(
+            request_lines(&requests),
+            [read, "GET /api/v1/me HTTP/1.1", &pools, post, post]
+        );
+        for request in &requests[3..] {
+            assert_eq!(
+                request_body(request),
+                serde_json::json!({"runnerPoolId": POOL_ID})
+            );
+        }
+        let key = header_value(&requests[3], "idempotency-key");
+        assert!(!key.is_empty());
+        assert_eq!(key, header_value(&requests[4], "idempotency-key"));
+    }
+}
+
+#[test]
+fn personal_pool_options_refuse_conflicting_targets_before_any_request() {
+    let (server, _directory, credential) = prepared(vec![]);
+    for args in [
+        vec!["authorize", "--all", "--personal-pool"],
+        vec![
+            "authorize",
+            NATIVE_GRANT_ID,
+            "--personal-pool",
+            "--runner",
+            RUNNER_ID,
+        ],
+        vec![
+            "deauthorize",
+            NATIVE_GRANT_ID,
+            "--personal-pool",
+            "--runner",
+            RUNNER_ID,
+        ],
+        vec!["authorize", NATIVE_GRANT_ID, "--org", ORGANIZATION_ID],
+        vec!["deauthorize", NATIVE_GRANT_ID, "--org", ORGANIZATION_ID],
+    ] {
+        let mut args = args;
+        args.push("--yes");
+        assert_eq!(
+            run_grant(&server, &credential, &args).status.code(),
+            Some(2),
+            "{args:?}"
+        );
+    }
+    assert!(server.finish().is_empty());
+}
+
+#[test]
+fn personal_pool_refusals_name_the_outcome_and_its_remedy() {
+    for (code, slug, outcome, remedy) in [
+        (
+            404,
+            "grant-runner-pool-not-found",
+            "runner_pool_not_found",
+            "useful runner pool list --org",
+        ),
+        (
+            409,
+            "grant-runner-pool-unavailable",
+            "runner_pool_unavailable",
+            "authorize codex --runner",
+        ),
+        (
+            409,
+            "grant-runner-conflict",
+            "runner_holds_login",
+            "deauthorize INTEGRATION --personal-pool",
+        ),
+        (
+            409,
+            "grant-already-authorized",
+            "already_authorized",
+            "show INTEGRATION",
+        ),
+    ] {
+        let status = if code == 404 {
+            "404 Not Found"
+        } else {
+            "409 Conflict"
+        };
+        let answers = || {
+            vec![
+                one(&native_grant(NATIVE_GRANT_ID, "active")),
+                current_principal_response(),
+                personal_pools(ORGANIZATION_ID),
+                problem(status, code, slug),
+            ]
+        };
+        let (server, _directory, credential) = prepared([answers(), answers()].concat());
+        let args = [
+            "authorize",
+            NATIVE_GRANT_ID,
+            "--personal-pool",
+            "--yes",
+            "--json",
+        ];
+        let output = run_grant(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(json_output(&output)["outcome"], outcome);
+        let human = run_grant(&server, &credential, &args[..4]);
+        assert_eq!(human.status.code(), Some(1));
+        assert!(stderr(&human).contains(remedy), "{human:?}");
+        assert_eq!(
+            request_lines(&server.finish()).last(),
+            Some(&AUTHORIZE_NATIVE)
+        );
+    }
+}
+
 #[test]
 fn authorize_states_who_can_use_the_grant_then_authorizes_the_runner_with_one_key() {
     let native = native_grant(NATIVE_GRANT_ID, "active");
@@ -2051,6 +2314,88 @@ fn native_grant_deauthorized() -> serde_json::Value {
     grant
 }
 
+// SC-GRANTAUTH-4
+#[test]
+fn deauthorize_personal_pool_selects_only_the_oauth_organization_in_effect() {
+    let mut grant = oauth_grant(OAUTH_GRANT_ID, "github", "active");
+    let id = "pga_01k0z6r1w8f4jy2m7q9v3x5abf";
+    grant["authorizations"]
+        .as_array_mut()
+        .unwrap()
+        .push(pool_authorization(id, OTHER_ORGANIZATION_ID));
+    let (server, _dir, credential) = prepared(vec![one(&grant), one(&grant), deleted()]);
+    let run = |org: &str| {
+        run_grant(
+            &server,
+            &credential,
+            &[
+                "deauthorize",
+                OAUTH_GRANT_ID,
+                "--personal-pool",
+                "--org",
+                org,
+                "--yes",
+                "--json",
+            ],
+        )
+    };
+    let missing = run(ORGANIZATION_ID);
+    assert_eq!(missing.status.code(), Some(1));
+    assert_eq!(json_output(&missing)["outcome"], "authorization_not_found");
+    let ended = run(OTHER_ORGANIZATION_ID);
+    assert_eq!(ended.status.code(), Some(0));
+    assert_eq!(json_output(&ended)["runnerPoolId"], POOL_ID);
+    assert!(json_output(&ended).get("runners").is_none());
+    let delete = format!("DELETE /api/v1/me/grants/{OAUTH_GRANT_ID}/authorizations/{id} HTTP/1.1");
+    assert_eq!(
+        request_lines(&server.finish()),
+        [READ_OAUTH, READ_OAUTH, &delete]
+    );
+}
+
+// SC-GRANTAUTH-4
+#[test]
+fn deauthorize_personal_pool_reports_only_new_removals_of_pool_runners() {
+    let id = "aga_01k0z6r1w8f4jy2m7q9v3x5abf";
+    let mut before = native_grant_in_use();
+    before["provider"] = "claude_code".into();
+    let mut pool = pool_authorization(id, ORGANIZATION_ID);
+    pool["runners"] = serde_json::json!([{"runnerId": RUNNER_ID, "conflict": false}, {"runnerId": ENDED_RUNNER_ID, "conflict": false}, {"runnerId": NEW_RUNNER_ID, "conflict": false}]);
+    before["authorizations"].as_array_mut().unwrap().push(pool);
+    let mut after = before.clone();
+    after["authorizations"].as_array_mut().unwrap().pop();
+    let mut newly_ended = native_grant_deauthorized()["endedAuthorizations"][0].clone();
+    newly_ended["runnerId"] = NEW_RUNNER_ID.into();
+    newly_ended["id"] = "aga_01k0z6r1w8f4jy2m7q9v3x5abe".into();
+    after["endedAuthorizations"]
+        .as_array_mut()
+        .unwrap()
+        .push(newly_ended.clone());
+    let (server, _dir, credential) = prepared(vec![one(&before), deleted(), one(&after)]);
+    let args = ["deauthorize", NATIVE_GRANT_ID, "--personal-pool"];
+    let refusal = refusal_without_yes(&server, &credential, &args);
+    let mut args = args.to_vec();
+    args.extend(["--yes", "--json"]);
+    let output = run_grant(&server, &credential, &args);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_stated_by_the_refusal(&statement(&output, NATIVE_GRANT_ID), &refusal);
+    let result = json_output(&output);
+    assert_eq!(result["authorizationId"], id);
+    assert_eq!(result["runnerPoolId"], POOL_ID);
+    assert!(result.get("runnerId").is_none());
+    assert_eq!(
+        result["runners"],
+        serde_json::json!([{
+            "runnerId": NEW_RUNNER_ID, "removal": newly_ended["removal"], "stop": newly_ended["stop"]
+        }])
+    );
+    let delete = format!("DELETE /api/v1/me/grants/{NATIVE_GRANT_ID}/authorizations/{id} HTTP/1.1");
+    assert_eq!(
+        request_lines(&server.finish()),
+        [READ_NATIVE, &delete, READ_NATIVE]
+    );
+}
+
 const DEAUTHORIZE_NATIVE: &str = "DELETE /api/v1/me/grants/agl_01k0z6r1w8f4jy2m7q9v3x5abc/authorizations/aga_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1";
 
 #[test]
@@ -2373,7 +2718,8 @@ fn each_refusal_these_leaves_meet_exits_1_with_its_remedy() {
                 problem("409 Conflict", 409, "grant-runner-conflict"),
             ],
             "runner_holds_login",
-            Some("useful account integration deauthorize"),
+            // The other login may reach the runner through its personal pool alone.
+            Some("useful account integration deauthorize INTEGRATION --personal-pool"),
         ),
         // The runner holds no authorization in force, so nothing is deleted.
         (
@@ -7508,6 +7854,51 @@ fn create_workflow_passes_over_each_grant_that_needs_reconnecting_naming_its_rec
     );
 }
 
+// A login that reaches its runner through the personal pool alone is judged by what that runner
+// reported, as one the runner is authorized for itself is.
+#[test]
+fn create_workflow_passes_over_a_login_refused_on_a_runner_its_pool_reaches() {
+    let tree = Tree::linear_and_claude_code(true);
+    let git = Git::new();
+    let opener = Opener::new(0);
+    let claude = FakeProgram::claude(SetupToken::Prints);
+    let mut grant = claude_grant_refused(NATIVE_GRANT_ID);
+    let direct = grant["authorizations"][0].clone();
+    let mut pool = pool_authorization("aga_01k0z6r1w8f4jy2m7q9v3x5abf", ORGANIZATION_ID);
+    pool["runners"] = serde_json::json!([{
+        "runnerId": RUNNER_ID,
+        "conflict": false,
+        "delivery": direct["delivery"],
+        "report": direct["report"]
+    }]);
+    grant["authorizations"] = serde_json::json!([pool]);
+    let grants = page(
+        &[oauth_grant(OAUTH_GRANT_ID, "linear", "active"), grant],
+        None,
+    );
+    let (server, _directory, credential) = prepared(vec![grants, serving_every()]);
+    let output = run_in(
+        &server,
+        &credential,
+        &opener,
+        &[&claude],
+        git.in_tree(&tree),
+        &["--workflow", "root.yaml", "--json"],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let events = events(&output);
+    let plan = &events[0];
+    assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
+    assert_eq!(providers_of(plan, "held"), ["linear"]);
+    assert_eq!(providers_of(plan, "reconnect"), ["claude_code"]);
+    assert_eq!(claude.recorded("arguments"), None);
+    assert_eq!(
+        request_lines(&server.finish()),
+        [LIST_EVERY_KIND, READ_SERVED]
+    );
+}
+
 #[test]
 fn create_workflow_on_a_terminal_asks_nothing_and_passes_over_a_grant_that_needs_reconnecting() {
     let tree = Tree::linear_and_claude_code(true);
@@ -8263,7 +8654,7 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     );
     assert_eq!(
         held_grant(&report, "codex")["authorizations"],
-        serde_json::json!([{"runnerId": RUNNER_ID, "availability": "reconnect_required", "nextAction": "reconnect"}])
+        serde_json::json!([{"runnerId": RUNNER_ID, "access": "direct", "availability": "reconnect_required", "nextAction": "reconnect"}])
     );
 
     let connected = run(
@@ -8319,7 +8710,7 @@ fn connecting_what_a_tree_lacks_from_the_doctor_reports_the_grants_it_made_on_th
     assert_eq!(codex_grant["generation"], 3);
     assert_eq!(
         codex_grant["authorizations"],
-        serde_json::json!([{"runnerId": RUNNER_ID, "availability": "pending", "nextAction": "wait_for_runner"}])
+        serde_json::json!([{"runnerId": RUNNER_ID, "access": "direct", "availability": "pending", "nextAction": "wait_for_runner"}])
     );
 
     let requests = server.finish();

@@ -942,6 +942,8 @@ pub enum PublishTarget {
     To(String),
     /// A new record even when the name is taken.
     New,
+    /// A new record with a specific id, for restoring a run under its definition.
+    NewWithId(String),
 }
 
 /// A record read from the home with its `workflows/<id>/` directory.
@@ -973,6 +975,7 @@ pub struct EnabledChange {
 struct PublishPlace {
     name: String,
     resolved: Option<StoredDefinition>,
+    new_id: Option<String>,
 }
 
 /// The first half of a publish of `tree`: refuses a root without `name`
@@ -985,12 +988,21 @@ fn resolve_publish(
     target: PublishTarget,
 ) -> Result<PublishPlace, DefinitionError> {
     let name = tree.name.clone().ok_or(DefinitionError::NameMissing)?;
-    let resolved = match target {
-        PublishTarget::To(id) => Some(read_definition(home, &id)?),
-        PublishTarget::New => None,
-        PublishTarget::Resolve => resolve_by_name(home, &name)?,
+    let (resolved, new_id) = match target {
+        PublishTarget::To(id) => (Some(read_definition(home, &id)?), None),
+        PublishTarget::New => (None, None),
+        PublishTarget::NewWithId(id) => {
+            check_definition_id(&id)?;
+            check_definition_absent(home, &id)?;
+            (None, Some(id))
+        }
+        PublishTarget::Resolve => (resolve_by_name(home, &name)?, None),
     };
-    Ok(PublishPlace { name, resolved })
+    Ok(PublishPlace {
+        name,
+        resolved,
+        new_id,
+    })
 }
 
 /// Records `tree` as a new revision of the target definition with the bindings `named` sets
@@ -1044,7 +1056,11 @@ fn write_publication(
     by: &str,
     snapshot: impl FnOnce(Option<&StoredDefinition>) -> Result<BindingsSnapshot, DefinitionError>,
 ) -> Result<Published, DefinitionError> {
-    let PublishPlace { name, resolved } = place;
+    let PublishPlace {
+        name,
+        resolved,
+        new_id,
+    } = place;
     // Resolution reads every record unlocked; the target's own record is read again under
     // its lock, so a publish that finished in between is extended, never overwritten. A
     // definition this publish creates is reachable by no other until it is renamed into
@@ -1068,7 +1084,7 @@ fn write_publication(
     create_private_directory(&home.workflows_directory())?;
     let (StoredDefinition { mut record, path }, created) = match existing {
         Some(existing) => (existing, false),
-        None => (create_definition(home, name.clone())?, true),
+        None => (create_definition(home, name.clone(), new_id)?, true),
     };
     let n = next_ordinal(&record, &path)?;
     let revision = RevisionRecord {
@@ -1249,6 +1265,9 @@ pub enum DefinitionError {
     NotFound {
         id: String,
     },
+    Exists {
+        id: String,
+    },
     NameAmbiguous {
         name: String,
         ids: Vec<String>,
@@ -1320,6 +1339,7 @@ impl DefinitionError {
             Self::NameMissing => "definition_name_missing",
             Self::IdInvalid { .. } => "definition_id_invalid",
             Self::NotFound { .. } => "definition_not_found",
+            Self::Exists { .. } => "definition_exists",
             Self::NameAmbiguous { .. } => "definition_name_ambiguous",
             Self::RecordInvalid { .. } => "definition_record_invalid",
             Self::BindingsFileInvalid { .. } => "bindings_file_invalid",
@@ -1340,6 +1360,7 @@ impl DefinitionError {
         match self {
             Self::IdInvalid { id }
             | Self::NotFound { id }
+            | Self::Exists { id }
             | Self::PublishConflict { id, .. }
             | Self::TreeNotRetained { id, .. }
             | Self::TreeRetainedModified { id, .. } => Some(id),
@@ -1411,6 +1432,7 @@ impl fmt::Display for DefinitionError {
             Self::NameMissing => formatter.write_str("the root workflow declares no name"),
             Self::IdInvalid { .. } => formatter.write_str("the id is not a definition id"),
             Self::NotFound { id } => write!(formatter, "no definition has the id {id}"),
+            Self::Exists { id } => write!(formatter, "definition id {id} is already taken"),
             Self::NameAmbiguous { name, ids } => write!(
                 formatter,
                 "definitions {} share the name {name}",
@@ -1692,38 +1714,67 @@ fn create_private_directory(path: &Path) -> Result<(), DefinitionError> {
         .map_err(|source| unavailable(path, "create directory", source))
 }
 
+fn check_definition_absent(home: &WorkflowHome, id: &str) -> Result<(), DefinitionError> {
+    let path = home.definition_directory(id);
+    match fs::symlink_metadata(&path) {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(DefinitionError::Exists { id: id.to_owned() }),
+        Err(source) => Err(unavailable(&path, "inspect definition", source)),
+    }
+}
+
 /// A fresh `workflows/.staging-<id>/`, the directory `place_definition` renames to
 /// `workflows/<id>/` once the record is written, and the record a first revision completes;
 /// a taken id is minted again once.
 fn create_definition(
     home: &WorkflowHome,
     name: String,
+    new_id: Option<String>,
 ) -> Result<StoredDefinition, DefinitionError> {
-    let mut retried = false;
-    loop {
-        let id = mint_definition_id();
-        let path = home.workflows_directory().join(staging_name(&id));
+    let stage = |id: &str| {
+        let path = home.workflows_directory().join(staging_name(id));
         match DirBuilder::new().mode(DIRECTORY_MODE).create(&path) {
-            Ok(()) => {
-                return Ok(StoredDefinition {
-                    record: DefinitionRecord {
-                        schema_version: SCHEMA_VERSION,
-                        id,
-                        name,
-                        enabled: true,
-                        current: 0,
-                        revisions: Vec::new(),
-                        cloud_id: None,
-                    },
-                    path,
-                });
+            Ok(()) => Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(DefinitionError::Exists { id: id.to_owned() })
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && !retried => {
-                retried = true;
-            }
-            Err(source) => return Err(unavailable(&path, "create directory", source)),
+            Err(source) => Err(unavailable(&path, "create directory", source)),
         }
-    }
+    };
+    let (id, path) = match new_id {
+        Some(id) => {
+            let path = stage(&id)?;
+            // A concurrent publisher may have placed its definition since resolution.
+            if let Err(error) = check_definition_absent(home, &id) {
+                let _ = fs::remove_dir(&path);
+                return Err(error);
+            }
+            (id, path)
+        }
+        None => {
+            let mut id = mint_definition_id();
+            let path = match stage(&id) {
+                Err(DefinitionError::Exists { .. }) => {
+                    id = mint_definition_id();
+                    stage(&id)?
+                }
+                other => other?,
+            };
+            (id, path)
+        }
+    };
+    Ok(StoredDefinition {
+        record: DefinitionRecord {
+            schema_version: SCHEMA_VERSION,
+            id,
+            name,
+            enabled: true,
+            current: 0,
+            revisions: Vec::new(),
+            cloud_id: None,
+        },
+        path,
+    })
 }
 
 /// Renames a created definition's `workflows/.staging-<id>/` to `workflows/<id>/` once its

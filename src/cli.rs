@@ -2667,7 +2667,7 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!((commands.len(), expected.len() - commands.len()), (151, 34));
+        assert_eq!((commands.len(), expected.len() - commands.len()), (152, 34));
         let root = Cli::command();
         let visible = commands
             .iter()
@@ -2681,7 +2681,7 @@ mod tests {
                 })
             })
             .count();
-        assert_eq!(visible, 150);
+        assert_eq!(visible, 151);
     }
 
     #[test]
@@ -4007,10 +4007,8 @@ mod tests {
         assert_eq!(paths, ["workflow run event"]);
     }
 
-    // `--control` of `workflow run cancel`, which the runner passes, is the tree's one hidden
-    // argument.
     #[test]
-    fn workflow_run_cancel_control_is_the_one_hidden_argument() {
+    fn only_the_runner_publish_and_cancel_options_are_hidden_arguments() {
         fn hidden(command: &clap::Command, prefix: &str, arguments: &mut Vec<String>) {
             for argument in command.get_arguments().filter(|arg| arg.is_hide_set()) {
                 let name = argument
@@ -4024,7 +4022,13 @@ mod tests {
         }
         let mut arguments = Vec::new();
         hidden(&Cli::command(), "", &mut arguments);
-        assert_eq!(arguments, ["workflow run cancel --control"]);
+        assert_eq!(
+            arguments,
+            [
+                "workflow definition publish --id",
+                "workflow run cancel --control"
+            ]
+        );
     }
 
     #[test]

@@ -146,10 +146,10 @@ pub use linear::{
     LinearSessionStatus, LinearTeamList, LinearTeamStateList,
 };
 pub use member_grants::{
-    ActiveMembership, GrantEndedAuthorization, GrantReport, MEMBER_GRANT_PAGE, MemberGrant,
-    MemberGrantApi, MemberGrantApiError, MemberGrantAuthorization, MemberGrantFailure,
-    MemberGrantKind, MemberGrantList, MemberGrantProvider, MemberGrantState, ServedGrantProvider,
-    valid_provider_id,
+    ActiveMembership, GrantAuthorizationTarget, GrantEndedAuthorization, GrantReport,
+    MEMBER_GRANT_PAGE, MemberGrant, MemberGrantApi, MemberGrantApiError, MemberGrantAuthorization,
+    MemberGrantFailure, MemberGrantKind, MemberGrantList, MemberGrantProvider, MemberGrantState,
+    ServedGrantProvider, valid_provider_id,
 };
 pub use organizations::{
     AcceptInvitationOutcome, AcceptedInvitationMembership, AuditActor, AuditProjectionWarning,
@@ -203,8 +203,9 @@ pub use runs::{
     RunCancellationReceipt, RunCancellationReceiptMode, RunCancellationReceiptState,
     RunCancellationResolutionKind, RunClaimRelease, RunContinuationDefinition,
     RunContinuationEnvelope, RunContinuationPreparation, RunContinuationReceipt,
-    RunContinuationRequest, RunContinuationWorkspaceModified, RunControl, RunControlAnswer,
-    RunControlKind, RunControlRequest, RunControlSubmission, RunControlWait, RunCreationAcceptance,
+    RunContinuationRequest, RunContinuationRequestRunner, RunContinuationRunner,
+    RunContinuationWorkspaceModified, RunControl, RunControlAnswer, RunControlKind,
+    RunControlRequest, RunControlSubmission, RunControlWait, RunCreationAcceptance,
     RunCreationPending, RunDefinitionSelection, RunFailure, RunHeldRunState, RunInterruption,
     RunInterruptionPhase, RunLinearLifecycle, RunLinearLifecycleUpdate, RunList, RunListFilter,
     RunObservation, RunPublicationHandoffState, RunRead, RunRetryFailureCode, RunRetryReceipt,
@@ -532,12 +533,14 @@ mod tests {
                 envelope.run.portable_result,
                 models::run::PortableResult::Absent
             );
-            let workspace = &envelope
+            let workspace = envelope
                 .run
                 .continuation
                 .as_ref()
                 .expect("continuation")
-                .workspace;
+                .workspace
+                .as_ref()
+                .expect("retained workspace");
             let actual =
                 serde_json::to_value(workspace.preparation).expect("serialize preparation");
             assert_eq!(actual, stage);
@@ -545,6 +548,55 @@ mod tests {
             assert_eq!(workspace.prior_execution_root, "/runner/work");
             assert_eq!(workspace.start_snapshot.is_some(), stage == "ready");
         }
+    }
+
+    #[test]
+    fn continuation_submission_preserves_explicit_runner_selection() {
+        for runner in [None, Some("replacement")] {
+            let mut body = serde_json::json!({"fromSteps": ["rerun"], "definition": "inherited"});
+            if let Some(runner) = runner {
+                body["runner"] = runner.into();
+            }
+            let request: super::RunContinuationRequest =
+                serde_json::from_value(body.clone()).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), body);
+        }
+    }
+
+    #[test]
+    fn handover_envelope_carries_the_record_without_a_workspace() {
+        use super::RunContinuationRunner;
+        use super::runs::valid_staged_continuation;
+
+        let envelope: generated::models::RunContinuationEnvelope = serde_json::from_str(
+            include_str!("../tests/fixtures/run-continuation-handover.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            envelope.request.runner,
+            Some(generated::models::run_continuation_receipt::Runner::Replacement)
+        );
+        let record = envelope.request.record.unwrap();
+        assert_eq!(record.attempt_number, 1);
+        assert_eq!(record.sequence, 7);
+        assert_eq!(record.stored_at, "2026-08-23T12:00:30Z");
+        let mut run = envelope.run;
+        let continuation = run.continuation.as_ref().unwrap();
+        assert_eq!(continuation.runner, RunContinuationRunner::Replacement);
+        assert!(continuation.workspace.is_none());
+        assert!(valid_staged_continuation(&run));
+
+        run.continuation.as_mut().unwrap().runner = RunContinuationRunner::Retaining;
+        assert!(!valid_staged_continuation(&run));
+
+        let pending: generated::models::RunContinuationEnvelope = serde_json::from_str(
+            include_str!("../tests/fixtures/run-continuation-pending.json"),
+        )
+        .unwrap();
+        let continuation = run.continuation.as_mut().unwrap();
+        continuation.runner = RunContinuationRunner::Replacement;
+        continuation.workspace = pending.run.continuation.unwrap().workspace;
+        assert!(!valid_staged_continuation(&run));
     }
 
     #[test]

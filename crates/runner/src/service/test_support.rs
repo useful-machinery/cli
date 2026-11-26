@@ -2437,6 +2437,7 @@ esac
         reservations: std::collections::BTreeMap<String, u64>,
         confirmed: std::collections::BTreeSet<String>,
         kept: Option<(u64, String)>,
+        storing_assignment: Option<String>,
         pub(in crate::service) dropped_store: Option<Vec<u8>>,
         pub(in crate::service) answered_store: Option<Vec<u8>>,
         pub(in crate::service) disconnected: bool,
@@ -2459,7 +2460,7 @@ esac
             ))
         }
 
-        fn kept_json(&self, path: &str) -> Option<Value> {
+        pub(in crate::service) fn kept_json(&self, path: &str) -> Option<Value> {
             let (_, manifest) = self.kept_manifest()?;
             let entry = manifest["entries"]
                 .as_array()?
@@ -2494,6 +2495,22 @@ esac
                 .any(|r| !commits.insert(&r.body))
         }
 
+        fn record_facts(&self, run: &str, sequence: u64, digest: &str) -> Value {
+            let manifest = &self.objects[digest];
+            let index: Value = serde_json::from_slice(manifest).unwrap();
+            let sizes = index["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|file| file["sizeBytes"].as_u64());
+            json!({
+                "runId": run, "engineRunId": index["run"], "attemptNumber": 1,
+                "sequence": sequence, "manifest": {"sha256": digest, "sizeBytes": manifest.len()},
+                "fileCount": sizes.clone().count(), "totalSizeBytes": sizes.sum::<u64>(),
+                "storedAt": "2026-11-10T12:05:00Z"
+            })
+        }
+
         fn read_record(
             &self,
             address: std::net::SocketAddr,
@@ -2505,10 +2522,18 @@ esac
             let target = request.target.split('?').next().unwrap();
             let path: Vec<_> = target.trim_start_matches('/').split('/').collect();
             match (method, path.as_slice()) {
-                ("GET", ["objects", digest]) => Some(match self.objects.get(*digest) {
-                    Some(bytes) => (200, "application/octet-stream", bytes.clone()),
-                    None => (404, "application/octet-stream", vec![]),
-                }),
+                ("GET", ["objects", digest]) => {
+                    assert!(
+                        !request
+                            .headers
+                            .iter()
+                            .any(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                    );
+                    Some(match self.objects.get(*digest) {
+                        Some(bytes) => (200, "application/octet-stream", bytes.clone()),
+                        None => (404, "application/octet-stream", vec![]),
+                    })
+                }
                 ("GET", ["v1", "organizations", _, "runs", run, "record"]) => {
                     let Some((sequence, digest)) = &self.kept else {
                         let problem = json!({
@@ -2521,19 +2546,9 @@ esac
                             serde_json::to_vec(&problem).unwrap(),
                         ));
                     };
-                    let manifest = &self.objects[digest];
-                    let index: Value = serde_json::from_slice(manifest).unwrap();
-                    let sizes = index["entries"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .filter_map(|file| file["sizeBytes"].as_u64());
-                    Some(json_reply(json!({
-                        "runId": run, "engineRunId": index["run"], "attemptNumber": 1,
-                        "sequence": sequence, "manifest": {"sha256": digest, "sizeBytes": manifest.len()},
-                        "fileCount": sizes.clone().count(), "totalSizeBytes": sizes.sum::<u64>(),
-                        "storedAt": "2026-11-10T12:05:00Z", "expiresAt": null
-                    })))
+                    let mut facts = self.record_facts(run, *sequence, digest);
+                    facts["expiresAt"] = Value::Null;
+                    Some(json_reply(facts))
                 }
                 (
                     "POST",
@@ -2589,6 +2604,40 @@ esac
                 return (200, Value::Null);
             }
             let body: Value = serde_json::from_slice(&request.body).unwrap();
+            if request.target.ends_with("/download-capabilities") {
+                let Some((sequence, digest)) = &self.kept else {
+                    return (
+                        200,
+                        json!({"schemaVersion":1,"outcome":"refused","reason":"record_absent"}),
+                    );
+                };
+                let mut keys: Vec<&str> = body["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap())
+                    .collect();
+                if keys.is_empty() {
+                    keys.push(digest);
+                }
+                let mut files = Vec::new();
+                for key in keys {
+                    let Some(bytes) = self.objects.get(key) else {
+                        return (
+                            200,
+                            json!({"schemaVersion":1,"outcome":"refused","reason":"file_unavailable"}),
+                        );
+                    };
+                    files.push(json!({"sha256":key,"sizeBytes":bytes.len(),
+                        "url":format!("http://{address}/objects/{key}?signed=yes")}));
+                }
+                let record = self.record_facts("run_01k0z6r1w8f4jy2m7q9v3x5abj", *sequence, digest);
+                return (
+                    200,
+                    json!({"schemaVersion":1,"outcome":"issued","record":record,
+                    "files":files,"capabilityExpiresAt":"2999-01-01T00:00:00Z"}),
+                );
+            }
             if request.target.ends_with("/upload-capabilities") {
                 let files = body["files"].as_array().unwrap().iter().map(|file| {
                     let key = file["sha256"].as_str().unwrap();
@@ -2612,7 +2661,10 @@ esac
             assert!(request.target.ends_with("/commit"));
             let sequence = body["sequence"].as_u64().unwrap();
             let digest = body["manifest"]["sha256"].as_str().unwrap();
-            if let Some((kept, key)) = &self.kept {
+            let assignment = body["assignmentId"].as_str().unwrap();
+            if self.storing_assignment.as_deref() == Some(assignment)
+                && let Some((kept, key)) = &self.kept
+            {
                 if *kept > sequence {
                     return (
                         200,
@@ -2657,6 +2709,7 @@ esac
                     json!({"schemaVersion":1,"outcome":"incomplete","missingCount":missing.len(),"missing":missing}),
                 );
             }
+            self.storing_assignment = Some(assignment.to_owned());
             self.kept = Some((sequence, digest.into()));
             (
                 200,
@@ -2750,6 +2803,7 @@ esac
                                 (
                                     "POST",
                                     "/v1/runner/run-records/upload-capabilities"
+                                        | "/v1/runner/run-records/download-capabilities"
                                         | "/v1/runner/run-records/commit"
                                 )
                             ) || method == "PUT" && request.target.starts_with("/objects/")
@@ -3094,6 +3148,7 @@ esac
                 attempt_number,
                 execution_spec,
                 continuation: None,
+                handover: None,
                 credential_mode: None,
             },
             log,

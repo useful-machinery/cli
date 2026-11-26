@@ -8325,12 +8325,7 @@ fn continuation_of(
     steps: &[&str],
     suffix: &str,
 ) -> AssignmentOffer {
-    let mut next = prior.clone();
-    next.effect_id = format!("eff_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
-    next.assignment_id = format!("asn_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
-    next.attempt_id = format!("atm_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
-    next.execution_spec.execution_spec_id = format!("xsp_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
-    next.attempt_number = prior.attempt_number + 1;
+    let mut next = next_attempt(prior, suffix);
     let definition_source = prior
         .execution_spec
         .source
@@ -8348,6 +8343,35 @@ fn continuation_of(
         reexecuted_steps: steps.iter().map(|step| (*step).to_owned()).collect(),
         inherited_steps: Vec::new(),
         prior_settlement_snapshot: None,
+    }));
+    next
+}
+
+fn next_attempt(prior: &AssignmentOffer, suffix: &str) -> AssignmentOffer {
+    let mut next = prior.clone();
+    next.effect_id = format!("eff_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
+    next.assignment_id = format!("asn_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
+    next.attempt_id = format!("atm_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
+    next.execution_spec.execution_spec_id = format!("xsp_01k0z6r1w8f4jy2m7q9v3x5{suffix}");
+    next.attempt_number = prior.attempt_number + 1;
+    next.continuation = None;
+    next.handover = None;
+    next
+}
+
+fn handover_of(prior: &AssignmentOffer, steps: &[&str], suffix: &str) -> AssignmentOffer {
+    let mut next = next_attempt(prior, suffix);
+    next.handover = Some(Box::new(useful_runner_protocol::HandoverOffer {
+        prior_attempt_id: prior.attempt_id.clone(),
+        definition_source: prior
+            .execution_spec
+            .source
+            .as_ref()
+            .map(|s| s.workflow_definition_source.clone()),
+        effective_capacity: prior.execution_spec.capacity.clone(),
+        prior_manifest_digest: prior.execution_spec.capacity.source_closure_digest.clone(),
+        request: json!({"fromSteps": steps, "definition": "inherited", "runner": "replacement"}),
+        reexecuted_steps: steps.iter().map(|s| (*s).to_owned()).collect(),
     }));
     next
 }
@@ -9894,12 +9918,21 @@ fn record_fixture_with_bound(
     files: &'static [TreeFile],
     bound: Option<Duration>,
 ) -> (Fixture, crate::telemetry::TestCapture) {
+    record_fixture_with_environment(gateway, files, bound, &[])
+}
+
+fn record_fixture_with_environment(
+    gateway: &RecordGateway,
+    files: &'static [TreeFile],
+    bound: Option<Duration>,
+    variables: &[(&str, &str)],
+) -> (Fixture, crate::telemetry::TestCapture) {
     let (recorder, capture) = crate::telemetry::test_recorder("rbt_fixture");
     let mut fixture = fixture_sourced(
         TREE_DIGEST,
         "exited",
         "null",
-        &[],
+        variables,
         Some(recorder),
         |deps| {
             let deps = match bound {
@@ -10323,6 +10356,141 @@ async fn recover_on_clean_host(gateway: &RecordGateway, run: &str, sequence: u64
     assert_eq!(logged_lines(&root, "calls"), calls);
 }
 
+// The replacement starts with the staged tree and bindings that preparation downloaded.
+async fn restore_recovery_record(
+    gateway: &RecordGateway,
+    private: &Path,
+    tree: &WorkflowTreeV1RunnerProjection,
+) -> Result<PathBuf, &'static str> {
+    let layout = super::TreeLayout::under(private);
+    fs::create_dir(&layout.tree).unwrap();
+    fs::create_dir(&layout.home).unwrap();
+    for file in RECOVERY_TREE {
+        fs::write(layout.tree.join(file.path), file.bytes).unwrap();
+    }
+    fs::write(
+        &layout.bindings,
+        serde_json::to_vec(&tree.bindings).unwrap(),
+    )
+    .unwrap();
+    let command = super::UsefulCommand {
+        executable: built_useful(),
+        environment: crate::agent_login::CommandEnvironment::process(EnvironmentSnapshot::new([
+            ("PATH", std::env::var_os("PATH").unwrap()),
+            ("HOME", private.to_owned().into_os_string()),
+        ])),
+        home: layout.home,
+        log: super::RunLog::new(layout.log.clone()),
+        activity: super::activity_logging_to(&layout.log),
+        fence: super::CommandFence::new(),
+        sleeper: Arc::new(crate::service::TokioSleeper),
+        bound: super::command::SHORT_COMMAND_BOUND,
+        disk_gate: None,
+    };
+    let delivery = super::Delivery::new(
+        Arc::new(super::HttpRecordBroker::for_test(
+            &gateway.endpoint,
+            "replacement",
+        )),
+        super::Scope::new("replacement", "attempt-b"),
+        layout.record_files,
+        Duration::from_secs(60),
+    );
+    let cancellation =
+        super::CancellationPolicy::new(super::CancellationSource::new(), Duration::ZERO);
+    super::record_restore::restore(Some(&delivery), &command, private, tree, &cancellation).await
+}
+
+#[tokio::test]
+async fn handover_record_restores_the_kept_run_under_its_definition() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let (mut prior, _, _) = start_recovery(&gateway).await;
+    lose_recovery_runner(&mut prior).await;
+    let tree = prior.offer.execution_spec.workflow_tree.as_ref().unwrap();
+    let record = gateway.state.lock().unwrap().kept_json("run.json").unwrap();
+    gateway
+        .state
+        .lock()
+        .unwrap()
+        .set_fault(RecordFault::Close(1));
+    let replacement = tempfile::tempdir().unwrap();
+    let directory = restore_recovery_record(&gateway, replacement.path(), tree)
+        .await
+        .unwrap();
+    let home = replacement.path().join("home");
+    let definition = home
+        .join("workflows")
+        .join(record["definition"].as_str().unwrap());
+    let id = record["id"].as_str().unwrap();
+    assert_eq!(directory, definition.join("runs").join(id));
+    let revision = record["revision"].as_u64().unwrap();
+    assert!(
+        definition
+            .join("revisions")
+            .join(revision.to_string())
+            .join(super::RESOLUTION_FILE)
+            .is_file()
+    );
+    let shown = recovery_command(
+        tokio::process::Command::new(built_useful())
+            .args(["workflow", "run", "show", id])
+            .env("USEFUL_HOME", &home),
+    )
+    .await;
+    assert_eq!(shown["record"]["state"], record["state"]);
+    assert_eq!(
+        shown["attempts"].as_array().unwrap().len() as u64,
+        record["attempts"].as_u64().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn handover_record_failures_leave_the_replacement_without_a_run() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let (mut prior, _, _) = start_recovery(&gateway).await;
+    lose_recovery_runner(&mut prior).await;
+    let tree = prior.offer.execution_spec.workflow_tree.as_ref().unwrap();
+    for reason in [
+        "record_absent",
+        "record_gone",
+        "assignment_fenced",
+        "record_definition_mismatch",
+        "record_altered",
+    ] {
+        let mut offered = tree.clone();
+        {
+            let mut state = gateway.state.lock().unwrap();
+            let fault = match reason {
+                "assignment_fenced" => RecordFault::Status(409),
+                "record_definition_mismatch" => {
+                    offered.digest = TREE_DIGEST.into();
+                    RecordFault::None
+                }
+                "record_altered" => {
+                    let bytes = state
+                        .objects
+                        .values_mut()
+                        .find(|bytes| bytes.as_slice() == b"record-a")
+                        .unwrap();
+                    bytes[0] ^= 1;
+                    RecordFault::None
+                }
+                reason => RecordFault::Answer(
+                    json!({"schemaVersion":1,"outcome":"refused","reason":reason}),
+                ),
+            };
+            state.set_fault(fault);
+        }
+        let replacement = tempfile::tempdir().unwrap();
+        assert_eq!(
+            restore_recovery_record(&gateway, replacement.path(), &offered).await,
+            Err(reason)
+        );
+        assert!(!replacement.path().join("home/workflows").exists());
+        assert!(!replacement.path().join("home/runs").exists());
+    }
+}
+
 // SC-RECORD-7
 #[tokio::test]
 async fn recovery_catches_up_after_a_reconnect() {
@@ -10433,5 +10601,343 @@ fn tree_broker_requests_follow_the_serving_target() {
                 deadline,
             );
         },
+    );
+}
+
+const HANDOVER_STAGES: &[TreeFile] = &[
+    TreeFile {
+        path: "workflow.yaml",
+        bytes: br#"schemaVersion: 1
+name: staged
+environmentPassthrough: [SHARED]
+outcomes: [landed, failed]
+steps:
+  design:
+    kind: workflow
+    workflow: design.yaml
+    on: {planned: build, failed: exit.failed}
+  build:
+    kind: workflow
+    workflow: build.yaml
+    inputs:
+      revision: {ref: outputs.design.revision}
+      path: {ref: outputs.design.path}
+      branch: {ref: outputs.design.branch}
+      pr: {ref: outputs.design.pr}
+    on: {built: exit.landed, failed: {wait: repair, then: build}}
+"#,
+        executable: false,
+    },
+    TreeFile {
+        path: "design.yaml",
+        bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+outcomes: [planned, failed]
+outcome: {from: outputs.plan.verdict, onFailure: failed}
+steps:
+  plan:
+    kind: cmd
+    workspace: new
+    command:
+      argv:
+        - sh
+        - -ec
+        - |
+          test ! -e undeclared
+          echo design >> "$SHARED/calls"
+          git -C "$SHARED/repository" rev-parse HEAD > revision
+          printf plan.txt > path
+          printf plan > branch
+          printf https://example.test/pull/12 > pr
+          printf planned > verdict
+    outputs:
+      revision: {kind: text, from: path, path: revision}
+      path: {kind: text, from: path, path: path}
+      branch: {kind: text, from: path, path: branch}
+      pr: {kind: text, from: path, path: pr}
+      verdict: {kind: text, from: path, path: verdict}
+exports:
+  revision: {ref: outputs.plan.revision}
+  path: {ref: outputs.plan.path}
+  branch: {ref: outputs.plan.branch}
+  pr: {ref: outputs.plan.pr}
+"#,
+        executable: false,
+    },
+    TreeFile {
+        path: "build.yaml",
+        bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+inputs:
+  revision: {kind: text}
+  path: {kind: text}
+  branch: {kind: text}
+  pr: {kind: text}
+outcomes: [built, failed]
+outcome: {from: outputs.checkout.verdict, onFailure: failed}
+steps:
+  checkout:
+    kind: cmd
+    workspace: new
+    inputs:
+      revision: {ref: inputs.revision}
+      path: {ref: inputs.path}
+      branch: {ref: inputs.branch}
+      pr: {ref: inputs.pr}
+    command:
+      argv:
+        - sh
+        - -ec
+        - |
+          test -z "$(ls -A)"
+          values="$USEFUL_STEP_INPUTS/values"
+          test "$(cat "$values/pr")" = https://example.test/pull/12
+          echo build >> "$SHARED/calls"
+          git init -q
+          git fetch -q "$SHARED/repository" "$(cat "$values/branch")"
+          test "$(git show "$(cat "$values/revision"):$(cat "$values/path")")" = approved
+          printf built > verdict
+    outputs:
+      verdict: {kind: text, from: path, path: verdict}
+"#,
+        executable: false,
+    },
+];
+
+fn handover_fixture(gateway: &RecordGateway, files: &'static [TreeFile], shared: &Path) -> Fixture {
+    let (mut fixture, _) = record_fixture_with_environment(
+        gateway,
+        files,
+        None,
+        &[("SHARED", shared.to_str().unwrap())],
+    );
+    no_source_offer(&mut fixture);
+    fixture
+}
+
+// SC-HANDOVER-3
+#[tokio::test]
+async fn handover_builds_with_the_design_exports_on_a_replacement_runner() {
+    for reachable in [true, false] {
+        let gateway = RecordGateway::new(RecordFault::None);
+        let shared = tempfile::tempdir().unwrap();
+        let repo = shared.path().join("repository");
+        fs::create_dir(&repo).unwrap();
+        run_fixture_git(&repo, &["init", "-q", "-b", "plan"]);
+        fs::write(repo.join("plan.txt"), b"approved").unwrap();
+        run_fixture_git(&repo, &["add", "."]);
+        run_fixture_git(
+            &repo,
+            &[
+                "-c",
+                "user.name=design",
+                "-c",
+                "user.email=design@example.test",
+                "commit",
+                "-qm",
+                "plan",
+            ],
+        );
+        let mut prior = handover_fixture(&gateway, HANDOVER_STAGES, shared.path());
+        prior
+            .offer
+            .execution_spec
+            .workflow_tree
+            .as_mut()
+            .unwrap()
+            .stop_before = Some("build".into());
+        let workspace = start_record_tree(&mut prior).await;
+        fs::write(workspace.join("undeclared"), b"private").unwrap();
+        wait_for_record_condition(|| gateway.state.lock().unwrap().kept_step_succeeded("design"))
+            .await;
+        lose_recovery_runner(&mut prior).await;
+        if !reachable {
+            fs::rename(&repo, shared.path().join("offline")).unwrap();
+        }
+
+        let mut replacement = handover_fixture(&gateway, HANDOVER_STAGES, shared.path());
+        replacement.offer = handover_of(&prior.offer, &["build"], "hn2");
+        let workspace = start_record_tree(&mut replacement).await;
+        // The deliberate stop before build travelled with A's record. Once B has
+        // replaced it with its first record, lift that stop as a member would.
+        wait_for_record_condition(|| {
+            gateway
+                .state
+                .lock()
+                .unwrap()
+                .kept_json("run.json")
+                .is_some_and(|record| record["attempts"] == 2 && record["state"] == "waiting")
+        })
+        .await;
+        send_control(
+            &mut replacement,
+            CONTROL_ID,
+            json!({"kind":"lift","wait":null,"before":"build"}),
+        );
+        if !reachable {
+            wait_for_reports(&mut replacement.manager, |reports| {
+                reports.iter().any(|report| {
+                    matches!(report, ExecutionReport::TreeProgress { progress, .. }
+                    if progress.wait.as_ref().is_some_and(|wait| wait.kind == "repair"))
+                })
+            })
+            .await;
+            // End the failed build at its repair wait to observe the assignment B retains.
+            cancel_assignment(&mut replacement);
+        }
+        let reports = finished_reports(&mut replacement.manager).await;
+        assert_eq!(
+            chosen_outcome(&reports).as_deref(),
+            Some(if reachable { "landed" } else { "canceled" }),
+            "{reports:#?}"
+        );
+        assert_eq!(logged_lines(shared.path(), "calls"), ["design", "build"]);
+        assert!(reported_steps(&reports).contains(&observed(json!([]), 2, "design", "inherited")));
+        assert_eq!(
+            gateway.state.lock().unwrap().kept_run_state().as_deref(),
+            Some("exited")
+        );
+        if !reachable {
+            assert!(
+                reported_steps(&reports)
+                    .iter()
+                    .any(|step| step["step"] == "checkout" && step["state"] == "failed")
+            );
+            assert_eq!(
+                retention_reports(&settled_observations(&mut replacement.manager).await),
+                [(
+                    replacement.offer.assignment_id.clone(),
+                    replacement.offer.attempt_id.clone(),
+                    workspace.to_str().unwrap().to_owned(),
+                )]
+            );
+        }
+    }
+}
+
+const HANDOVER_CHECKOUT: &[TreeFile] = &[TreeFile {
+    path: "workflow.yaml",
+    bytes: br#"schemaVersion: 1
+name: checkout
+environmentPassthrough: [SHARED]
+steps:
+  checkout:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -ec, 'test ! -e file && echo checkout >> "$SHARED/calls" && printf base > file']}
+  edit:
+    kind: cmd
+    dependsOn: [checkout]
+    command: {argv: [sh, -ec, 'echo edit >> "$SHARED/calls" && printf edited >> file']}
+  test:
+    kind: cmd
+    dependsOn: [edit]
+    command: {argv: [sh, -ec, 'echo test >> "$SHARED/calls" && test "$(cat file)" = baseedited && test -f "$SHARED/ready" && printf passed > result']}
+    outputs:
+      result: {kind: text, from: path, path: result}
+  notify:
+    kind: cmd
+    workspace: none
+    inputs:
+      result: {ref: outputs.test.result}
+    command: {argv: [sh, -ec, 'test ! -e file && test "$(cat "$USEFUL_STEP_INPUTS/values/result")" = passed && echo notify >> "$SHARED/calls"']}
+"#,
+    executable: false,
+}];
+
+// SC-HANDOVER-4
+#[tokio::test]
+async fn handover_rebuilds_the_workspace_before_the_requested_step() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut prior = handover_fixture(&gateway, HANDOVER_CHECKOUT, shared.path());
+    let reports = execute(&mut prior).await;
+    assert_eq!(
+        finished_payload(&reports, &prior.offer)["outcome"]["outcome"],
+        "failed"
+    );
+    fs::write(shared.path().join("ready"), b"").unwrap();
+    let mut replacement = handover_fixture(&gateway, HANDOVER_CHECKOUT, shared.path());
+    replacement.offer = handover_of(&prior.offer, &["test"], "hn2");
+    let reports = execute(&mut replacement).await;
+    assert_eq!(
+        finished_payload(&reports, &replacement.offer)["outcome"]["outcome"],
+        "succeeded",
+        "{reports:#?}"
+    );
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        [
+            "checkout", "edit", "test", "checkout", "edit", "test", "notify"
+        ]
+    );
+    assert_eq!(
+        gateway.state.lock().unwrap().kept_json("run.json").unwrap()["attempts"],
+        2
+    );
+}
+
+// SC-HANDOVER-5
+#[tokio::test]
+async fn refused_handover_preserves_the_kept_record_and_a_full_retry_runs_every_step() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let (mut prior, _, _) = start_recovery(&gateway).await;
+    lose_recovery_runner(&mut prior).await;
+    let before = gateway.state.lock().unwrap().kept_manifest().unwrap();
+    let (mut replacement, _) = record_fixture_with_bound(&gateway, RECOVERY_TREE, None);
+    replacement.offer = handover_of(&prior.offer, &["second"], "hn2");
+    // Both runners' source brokers serve the same pinned commit.
+    run_fixture_git(
+        &replacement.source,
+        &["fetch", prior.source.to_str().unwrap(), "HEAD"],
+    );
+    run_fixture_git(&replacement.source, &["reset", "--hard", "FETCH_HEAD"]);
+    let workspace = start_record_tree(&mut replacement).await;
+    for step in ["first", "second", "third"] {
+        fs::write(workspace.join(format!("gate-{step}")), b"").unwrap();
+    }
+    let reports = finished_reports(&mut replacement.manager).await;
+    let result = finished_payload(&reports, &replacement.offer);
+    assert_eq!(result["outcome"]["outcome"], "failed", "{result}");
+    assert_eq!(
+        result["diagnostic"],
+        json!({"stage":"tree_run_handover_refused", "declineCause":"handover_execution_root_required", "validationStep":"second"})
+    );
+    assert!(!workspace.join("calls").exists());
+    assert_eq!(
+        before,
+        gateway.state.lock().unwrap().kept_manifest().unwrap()
+    );
+
+    let retry = next_attempt(&replacement.offer, "hn3");
+    let (decline, ready) = prepare_continued(
+        &mut replacement.manager,
+        &retry,
+        "eff_01k0z6r1w8f4jy2m7q9v3x5hp3",
+    )
+    .await;
+    assert_eq!((decline, ready), (None, false));
+    let (workspace, _) = accepted_roots(&replacement.manager);
+    for step in ["first", "second", "third"] {
+        fs::write(workspace.join(format!("gate-{step}")), b"").unwrap();
+    }
+    let calls = fs::File::create_new(workspace.join("calls")).unwrap();
+    start_offered_with(
+        &mut replacement.manager,
+        &retry,
+        [
+            "eff_01k0z6r1w8f4jy2m7q9v3x5hs3",
+            "eff_01k0z6r1w8f4jy2m7q9v3x5ha3",
+        ],
+    )
+    .spawn();
+    let reports = finished_reports(&mut replacement.manager).await;
+    assert_eq!(
+        finished_payload(&reports, &retry)["outcome"]["outcome"],
+        "succeeded"
+    );
+    assert_eq!(
+        std::io::read_to_string(calls).unwrap(),
+        "first\nsecond\nthird\n"
     );
 }

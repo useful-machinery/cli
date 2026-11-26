@@ -80,6 +80,10 @@ pub(super) struct Command {
     #[arg(long, help = NEW_HELP)]
     new: bool,
 
+    /// Create a local definition under the id a portable run record names.
+    #[arg(long, hide = true, value_name = "ID", conflicts_with_all = ["to", "new"])]
+    id: Option<String>,
+
     #[command(flatten)]
     in_effect: InEffect,
 
@@ -191,6 +195,12 @@ struct Ready {
 impl Command {
     pub(super) fn execute(self) -> CommandResult {
         let json = self.options.json;
+        if self.id.is_some() && self.on == Some(On::Project) {
+            return Err(CommandFailure::with_exit_code(
+                anyhow!("--id requires local publication"),
+                ExitCode::UsageError,
+            ));
+        }
         let options = binding_options(self.binding, self.binding_default)
             .map_err(|error| CommandFailure::with_exit_code(error, ExitCode::UsageError))?;
         let leaf = Leaf {
@@ -276,7 +286,9 @@ impl Command {
             },
             (_, None) => match WorkflowHome::from_environment() {
                 Ok(home) => {
-                    let target = if self.new {
+                    let target = if let Some(id) = self.id {
+                        PublishTarget::NewWithId(id)
+                    } else if self.new {
                         PublishTarget::New
                     } else {
                         PublishTarget::Resolve

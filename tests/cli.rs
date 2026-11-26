@@ -84,6 +84,8 @@ mod runner_administration;
 mod runner_agent_login;
 #[path = "cli/runner_enrollment.rs"]
 mod runner_enrollment;
+#[path = "cli/runner_ephemeral.rs"]
+mod runner_ephemeral;
 #[path = "cli/runner_home.rs"]
 mod runner_home;
 #[path = "cli/runner_prune.rs"]

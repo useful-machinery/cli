@@ -452,6 +452,28 @@ fn active_organizations(
     })
 }
 
+pub(super) fn personal_pool(
+    deployment: &Deployment,
+    options: &super::Options,
+    organization: &str,
+) -> anyhow::Result<Result<String, ExitCode>> {
+    match super::super::super::runner::with_api(
+        deployment,
+        options.http.transport_policy(),
+        &PrincipalAuthenticationArgs::default(),
+        |api| api.get_personal_pool(organization),
+    )? {
+        Ok(pool) => Ok(Ok(pool.id)),
+        Err(failure) => report_unread(
+            deployment,
+            options.json,
+            Family::Document,
+            Unread::Runner(failure),
+        )
+        .map(Err),
+    }
+}
+
 /// Every runner registered in `organizations`, each read to its last page with the member's
 /// human session.
 fn registered(

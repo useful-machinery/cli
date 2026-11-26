@@ -11,7 +11,9 @@
 //! authorized Cloud control with the `useful workflow run` control command it names. A continuation
 //! attempt adopts the run an earlier attempt created instead (`adopt`): it downloads and publishes
 //! nothing, keeps the resolution record the first attempt wrote and drives the run directory the
-//! retained home holds, applying its deliveries and controls in the same loop.
+//! retained home holds, applying its deliveries and controls in the same loop. A handover
+//! downloads the tree in preparation and fetches the kept record under the started lease.
+//! It publishes the record's definition and restores the run into a new home.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
@@ -43,6 +45,7 @@ mod command;
 mod download;
 mod exports;
 mod record_delivery;
+mod record_restore;
 mod records;
 mod resume_loop;
 mod steps;
@@ -367,6 +370,13 @@ enum TreeStart {
     /// The home's run, resumed from these steps, or, with none, from where its record
     /// stands.
     Adopt(Vec<String>),
+    /// The record is fetched after Cloud starts the assignment and authorizes downloads.
+    Handover {
+        steps: Vec<String>,
+        private: PathBuf,
+        execution_root: PathBuf,
+        tree: Box<WorkflowTreeV1RunnerProjection>,
+    },
 }
 
 /// What a tree run takes from its assignment's offer: the assignment, under which the connection
@@ -387,7 +397,7 @@ pub(super) struct TreeRun {
     sleeper: Arc<dyn Sleeper>,
     useful: UsefulCommand,
     start: TreeStart,
-    runs: PathBuf,
+    runs: Option<PathBuf>,
     documents: PathBuf,
     intervals: ResumeIntervals,
     /// The trigger deliveries for the run's assignment.
@@ -409,7 +419,7 @@ impl TreeRun {
         sleeper: &Arc<dyn Sleeper>,
         useful: UsefulCommand,
         start: TreeStart,
-        runs: PathBuf,
+        runs: Option<PathBuf>,
         layout: TreeLayout,
     ) -> Self {
         Self {
@@ -481,25 +491,33 @@ pub(super) struct TreePreparation<'a> {
     pub(super) private: &'a Path,
     pub(super) workspace: &'a Path,
     pub(super) environment: &'a CommandEnvironment,
-    /// The check of an assignment admitted in `cloud`; none for any other.
+    /// The check of an assignment admitted in `cloud`, which a fresh run's preparation
+    /// makes and a handover's does not; none for any other.
     pub(super) credential_check: Option<&'a CredentialCheck>,
     pub(super) deadline: PreparationDeadline,
     pub(super) cancellation: &'a CaptureCancellation,
     pub(super) sleeper: Arc<dyn Sleeper>,
 }
 
-/// Downloads, verifies and publishes the tree and stages the run inputs, on the
-/// calling blocking worker. A publish that refuses the tree declines the assignment
+pub(super) enum PreparationStart<'a> {
+    Create(ResolvedInputs),
+    Handover(&'a [String]),
+}
+
+/// Downloads and verifies the tree and stages its bindings on the calling blocking
+/// worker. A handover publishes after its record arrives. A fresh run also stages
+/// its inputs and publishes here. A publish that refuses the tree declines the assignment
 /// `workflow_source_invalid` (cause `workflow_tree_publication_refused`) with the validation
 /// facts its report gives, the path only when it is one of the offered tree's files; a
 /// published digest other than the spec's declines it `workflow_source_digest_mismatch`
-/// (cause `workflow_tree_digest_mismatch`). Once the digest is verified, an assignment
-/// admitted in `cloud` is checked against the providers the published files call for, and
-/// declined as the check says before anything is created.
+/// (cause `workflow_tree_digest_mismatch`). Once the digest is verified, a fresh run's
+/// assignment admitted in `cloud` is checked against the providers the published files call
+/// for, and declined as the check says before anything is created. A handover is not
+/// checked: it publishes once it has started, when nothing can decline it.
 pub(super) fn prepare(
     dependencies: &TreeRunDependencies,
     preparation: &TreePreparation<'_>,
-    inputs: &ResolvedInputs,
+    start: PreparationStart<'_>,
 ) -> Result<TreeRun, AssignmentDecline> {
     let layout = TreeLayout::under(preparation.private);
     let broker = dependencies.broker.as_deref().ok_or_else(|| {
@@ -521,13 +539,12 @@ pub(super) fn prepare(
         preparation.deadline,
     )
     .map_err(download_decline)?;
-    let staged = (|| {
+    (|| {
         DirBuilder::new().mode(0o700).create(&layout.home)?;
         write_private(
             &layout.bindings,
             &serde_json::to_vec(&preparation.tree.bindings).map_err(std::io::Error::other)?,
-        )?;
-        stage_inputs(&layout.inputs, inputs)
+        )
     })()
     .map_err(|_| environment_decline("workflow_tree_publication"))?;
     let useful = UsefulCommand {
@@ -545,6 +562,45 @@ pub(super) fn prepare(
             .as_ref()
             .map(RunnerDiskGate::environment_value),
     };
+    let (start, runs) = match start {
+        PreparationStart::Create(inputs) => {
+            let staged = stage_inputs(&layout.inputs, &inputs)
+                .map_err(|_| environment_decline("workflow_tree_publication"))?;
+            let (start, runs) = prepare_create(preparation, &useful, &layout, staged)?;
+            (start, Some(runs))
+        }
+        PreparationStart::Handover(steps) => (
+            TreeStart::Handover {
+                steps: steps.to_vec(),
+                private: preparation.private.to_owned(),
+                execution_root: preparation.workspace.to_owned(),
+                tree: Box::new(preparation.tree.clone()),
+            },
+            None,
+        ),
+    };
+    Ok(TreeRun::new(
+        dependencies,
+        &TreeOffer {
+            attempt_id: preparation.attempt_id,
+            assignment_id: preparation.assignment_id,
+            execution_spec: preparation.execution_spec,
+            pending: &preparation.tree.pending_deliveries,
+        },
+        &preparation.sleeper,
+        useful,
+        start,
+        runs,
+        layout,
+    ))
+}
+
+fn prepare_create(
+    preparation: &TreePreparation<'_>,
+    useful: &UsefulCommand,
+    layout: &TreeLayout,
+    staged: Vec<OsString>,
+) -> Result<(TreeStart, PathBuf), AssignmentDecline> {
     let fenced = || {
         AssignmentDecline::RunnerUnable(RunnerUnableReason::SourceServiceUnavailable)
             .diagnosed("workflow_tree_publication", "assignment_fenced")
@@ -553,7 +609,7 @@ pub(super) fn prepare(
         return Err(fenced());
     }
     let published = command::publish(
-        &useful,
+        useful,
         &layout.tree,
         &layout.bindings,
         preparation.cancellation,
@@ -599,13 +655,10 @@ pub(super) fn prepare(
         check.check(&layout.tree, &preparation.tree.workflow_path)?;
     }
     let definition = layout.home.join("workflows").join(&published.definition);
-    write_private(
-        &definition
-            .join("revisions")
-            .join(published.revision.to_string())
-            .join(RESOLUTION_FILE),
-        &serde_json::to_vec(&resolution_record(&preparation.tree.resolution))
-            .map_err(|_| environment_decline("workflow_tree_publication"))?,
+    write_resolution(
+        &definition,
+        published.revision,
+        &preparation.tree.resolution,
     )
     .map_err(|_| environment_decline("workflow_tree_publication"))?;
     let runs = definition.join("runs");
@@ -634,23 +687,13 @@ pub(super) fn prepare(
         staged,
         stop_before,
     );
-    Ok(TreeRun::new(
-        dependencies,
-        &TreeOffer {
-            attempt_id: preparation.attempt_id,
-            assignment_id: preparation.assignment_id,
-            execution_spec: preparation.execution_spec,
-            pending: &preparation.tree.pending_deliveries,
-        },
-        &preparation.sleeper,
-        useful,
+    Ok((
         TreeStart::Create {
             arguments: create_arguments,
             first,
             pending_stop,
         },
         runs,
-        layout,
     ))
 }
 
@@ -713,7 +756,7 @@ pub(super) fn adopt(
         &adoption.sleeper,
         useful,
         TreeStart::Adopt(adoption.steps.to_vec()),
-        runs,
+        Some(runs),
         layout,
     ))
 }
@@ -907,6 +950,20 @@ fn stage_inputs(directory: &Path, inputs: &ResolvedInputs) -> std::io::Result<Ve
         }
     }
     Ok(arguments)
+}
+
+fn write_resolution(
+    definition: &Path,
+    revision: u64,
+    resolution: &serde_json::Value,
+) -> std::io::Result<()> {
+    write_private(
+        &definition
+            .join("revisions")
+            .join(revision.to_string())
+            .join(RESOLUTION_FILE),
+        &serde_json::to_vec(&resolution_record(resolution))?,
+    )
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

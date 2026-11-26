@@ -759,6 +759,7 @@ fn offer(suffix: &str) -> AssignmentOffer {
             workflow_tree: None,
         },
         continuation: None,
+        handover: None,
         credential_mode: None,
     }
 }
@@ -2056,6 +2057,7 @@ fn decoded_offer_from_frame(bytes: &[u8]) -> AssignmentOffer {
         attempt_number,
         execution_spec: *execution_spec,
         continuation: None,
+        handover: None,
         credential_mode: None,
     }
 }

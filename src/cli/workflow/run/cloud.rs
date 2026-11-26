@@ -10,9 +10,9 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use serde::Serialize;
 use useful_api::{
-    HttpClient, Run, RunApi, RunClaimRelease, RunControl, RunControlAnswer, RunControlKind,
-    RunControlRequest, RunControlSubmission, RunControlWait, RunFailure, RunRead, RunState,
-    RunSubjectClaim,
+    HttpClient, Run, RunApi, RunClaimRelease, RunContinuationRequestRunner, RunControl,
+    RunControlAnswer, RunControlKind, RunControlRequest, RunControlSubmission, RunControlWait,
+    RunFailure, RunRead, RunState, RunSubjectClaim,
 };
 use useful_execution::{ContinuingControl, WaitKind};
 use useful_human_auth::Deployment;
@@ -414,13 +414,14 @@ impl CloudRun {
         steps: Vec<String>,
         expected_version: Option<i64>,
         wait: RunWaitArgs,
+        runner: Option<RunContinuationRequestRunner>,
     ) -> cli::CommandResult {
         let Some(found) = self.found.take() else {
             return Err(anyhow!("the Cloud run to continue was not looked up").into());
         };
         let deployment = found.deployment.clone();
         let missed = missed(found, command, self.json);
-        self.continuation(steps, expected_version, wait)
+        self.continuation(steps, expected_version, wait, runner)
             .submit(deployment, missed)
     }
 
@@ -486,7 +487,7 @@ impl CloudRun {
             RunState::Failed | RunState::Cancelled | RunState::Interrupted | RunState::Rejected => {
                 match positioned_step(&run) {
                     Some(step) => self
-                        .continuation(vec![step], expected_version, wait)
+                        .continuation(vec![step], expected_version, wait, None)
                         .submit(found.deployment, unmissed()),
                     None => self.write_refusal(
                         RETRY_COMMAND,
@@ -507,11 +508,13 @@ impl CloudRun {
         steps: Vec<String>,
         expected_version: Option<i64>,
         wait: RunWaitArgs,
+        runner: Option<RunContinuationRequestRunner>,
     ) -> ContinuationSubmission {
         ContinuationSubmission::new(
             (self.organization, self.run_id),
             steps,
             expected_version,
+            runner,
             wait,
             CommonArgs::new(self.json, self.authentication, self.http),
         )

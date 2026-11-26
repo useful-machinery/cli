@@ -36,6 +36,11 @@ pub struct RunContinuationReceipt {
     pub reexecuted_steps: Vec<String>,
     #[serde(rename = "inheritedSteps")]
     pub inherited_steps: Vec<models::RunContinuationReceiptInheritedStepsInner>,
+    /// Present with record only on a handover receipt.
+    #[serde(rename = "runner", skip_serializing_if = "Option::is_none")]
+    pub runner: Option<Runner>,
+    #[serde(rename = "record", skip_serializing_if = "Option::is_none")]
+    pub record: Option<Box<models::RunContinuationReceiptRecord>>,
 }
 
 impl RunContinuationReceipt {
@@ -60,6 +65,20 @@ impl RunContinuationReceipt {
             definition_source: definition_source.map(Box::new),
             reexecuted_steps,
             inherited_steps,
+            runner: None,
+            record: None,
         }
+    }
+}
+/// Present with record only on a handover receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Runner {
+    #[serde(rename = "replacement")]
+    Replacement,
+}
+
+impl Default for Runner {
+    fn default() -> Runner {
+        Self::Replacement
     }
 }

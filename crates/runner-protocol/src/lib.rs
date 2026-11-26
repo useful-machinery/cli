@@ -58,6 +58,8 @@ pub enum RunnerFrame {
         /// Advertises `treeNoSource: 1`: this runner executes a definition-backed run with
         /// no source, so Cloud may offer it one.
         tree_no_source: bool,
+        /// Advertises `treeHandover: 1` when this runner can take a handed-over tree run.
+        tree_handover: bool,
         /// Advertises `holdsWaitingRuns: 1`: this runner takes another run while every run it
         /// holds waits, so Cloud may offer it one.
         holds_waiting_runs: bool,
@@ -1253,6 +1255,17 @@ pub struct ContinuationOffer {
     pub prior_settlement_snapshot: Option<Value>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HandoverOffer {
+    pub prior_attempt_id: String,
+    pub definition_source: Option<WorkflowDefinitionSourceV1RunnerProjection>,
+    pub effective_capacity: ExecutionCapacityV1RunnerProjection,
+    pub prior_manifest_digest: WorkflowSourceClosureDigestV1RunnerProjection,
+    pub request: Value,
+    pub reexecuted_steps: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutionLeasePolicy {
     pub schema_version: u64,
@@ -1465,6 +1478,7 @@ pub enum CloudFrame {
         attempt_number: u64,
         execution_spec: Box<ExecutionSpecV1RunnerProjection>,
         continuation: Option<Box<ContinuationOffer>>,
+        handover: Option<Box<HandoverOffer>>,
         credential_mode: Option<CredentialMode>,
     },
     AssignmentPrepare {
@@ -1624,6 +1638,7 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             tree_withdraw,
             tree_integration_bindings,
             tree_no_source,
+            tree_handover,
             holds_waiting_runs,
             credential_mode,
         } => {
@@ -1642,6 +1657,9 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }
             if *tree_no_source {
                 payload["treeNoSource"] = json!(1);
+            }
+            if *tree_handover {
+                payload["treeHandover"] = json!(1);
             }
             if *holds_waiting_runs {
                 payload["holdsWaitingRuns"] = json!(1);
@@ -2516,19 +2534,8 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                 encoded_outbox_bytes,
             };
             let credential_mode = frame.payload.credential_mode.map(CredentialMode::from);
-            let continuation = frame
-                .payload
-                .continuation
-                .map(|value| {
-                    serde_json::to_value(value)
-                        .map_err(|_| DecodeError::InvalidFrame("continuation"))
-                        .and_then(|value| {
-                            serde_json::from_value(value)
-                                .map_err(|_| DecodeError::InvalidFrame("continuation"))
-                        })
-                })
-                .transpose()?
-                .map(Box::new);
+            let continuation = offer_details(frame.payload.continuation, "continuation")?;
+            let handover = offer_details(frame.payload.handover, "handover")?;
             Ok(cloud(CloudFrame::AssignmentOffer {
                 envelope,
                 effect_id: frame.payload.effect_id.to_string(),
@@ -2553,6 +2560,7 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                     workflow_tree,
                 }),
                 continuation,
+                handover,
                 credential_mode,
             }))
         }
@@ -2808,6 +2816,19 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "run_control" => variant(value, Frame::CloudRunControl),
         _ => Err(DecodeError::InvalidFrame("type")),
     }
+}
+
+fn offer_details<T: serde::Serialize, U: serde::de::DeserializeOwned>(
+    details: Option<T>,
+    field: &'static str,
+) -> Result<Option<Box<U>>, DecodeError> {
+    details
+        .map(|value| {
+            serde_json::to_value(value)
+                .and_then(serde_json::from_value)
+                .map_err(|_| DecodeError::InvalidFrame(field))
+        })
+        .transpose()
 }
 
 fn repository_sources_projection(
@@ -3446,6 +3467,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeWithdraw",
             "treeIntegrationBindings",
             "treeNoSource",
+            "treeHandover",
             "holdsWaitingRuns",
             "credentialMode",
         ],
@@ -3460,7 +3482,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
         ],
         "tree_progress" => &["steps"],
         "welcome" => &["credentialMode"],
-        "assignment_offer" => &["continuation", "credentialMode"],
+        "assignment_offer" => &["continuation", "handover", "credentialMode"],
         "workspace_retention_report" => &["settlementSnapshot"],
         "trigger_delivery_applied" => &["action", "code"],
         "run_control_applied" => &["code", "actionOutcome"],
@@ -3871,6 +3893,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-no-source.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-handover.json"
+        )),
     ];
 
     const INVALID_FIXTURES: &[&[u8]] = &[
@@ -4146,6 +4172,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-no-source-unknown.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-handover-unknown.json"
+        )),
     ];
 
     #[test]
@@ -4343,6 +4373,7 @@ mod tests {
             tree_withdraw: false,
             tree_integration_bindings: false,
             tree_no_source: false,
+            tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
         };
@@ -4361,6 +4392,7 @@ mod tests {
             tree_withdraw: false,
             tree_integration_bindings: false,
             tree_no_source: false,
+            tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
         };
@@ -4378,6 +4410,7 @@ mod tests {
             tree_withdraw: true,
             tree_integration_bindings: false,
             tree_no_source: false,
+            tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
         };
@@ -4387,6 +4420,7 @@ mod tests {
         assert_eq!(value["payload"]["treeWithdraw"], 1);
         assert!(value["payload"].get("treeIntegrationBindings").is_none());
         assert!(value["payload"].get("treeNoSource").is_none());
+        assert!(value["payload"].get("treeHandover").is_none());
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
 
         let integrating = RunnerFrame::Hello {
@@ -4397,6 +4431,7 @@ mod tests {
             tree_withdraw: true,
             tree_integration_bindings: true,
             tree_no_source: true,
+            tree_handover: true,
             holds_waiting_runs: false,
             credential_mode: false,
         };
@@ -4405,6 +4440,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["treeIntegrationBindings"], 1);
         assert_eq!(value["payload"]["treeNoSource"], 1);
+        assert_eq!(value["payload"]["treeHandover"], 1);
         assert!(value["payload"].get("holdsWaitingRuns").is_none());
 
         let holding = RunnerFrame::Hello {
@@ -4415,6 +4451,7 @@ mod tests {
             tree_withdraw: true,
             tree_integration_bindings: true,
             tree_no_source: true,
+            tree_handover: true,
             holds_waiting_runs: true,
             credential_mode: false,
         };
@@ -4432,6 +4469,7 @@ mod tests {
             tree_withdraw: true,
             tree_integration_bindings: true,
             tree_no_source: true,
+            tree_handover: true,
             holds_waiting_runs: true,
             credential_mode: true,
         };
@@ -4439,6 +4477,29 @@ mod tests {
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
         let value: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(value["payload"]["credentialMode"], 1);
+    }
+
+    #[test]
+    fn handover_offer_decodes_and_excludes_workspace_continuation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/runner-protocol/v1");
+        let valid = std::fs::read(root.join("valid/cloud-assignment-offer-handover.json")).unwrap();
+        assert!(matches!(
+            decode_cloud_frame(&valid).unwrap(),
+            CloudFrame::AssignmentOffer {
+                handover: Some(_),
+                continuation: None,
+                ..
+            }
+        ));
+        let invalid = std::fs::read(
+            root.join("invalid/cloud-assignment-offer-handover-with-continuation.json"),
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_cloud_frame(&invalid),
+            Err(DecodeError::InvalidFrame("schema"))
+        ));
     }
 
     #[test]

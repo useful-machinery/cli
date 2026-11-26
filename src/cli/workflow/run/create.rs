@@ -1510,6 +1510,7 @@ async fn execute_owned_attempt_with(
                     from_steps: Vec::new(),
                     workflow: None,
                     execution_root: None,
+                    handover: false,
                     leaf,
                     edge: Some(edge.into()),
                     bridge,

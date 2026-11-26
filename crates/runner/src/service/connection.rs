@@ -1459,6 +1459,7 @@ impl BufferedEffect {
                 attempt_number,
                 execution_spec,
                 continuation,
+                handover,
                 credential_mode,
                 ..
             } => {
@@ -1471,6 +1472,7 @@ impl BufferedEffect {
                     attempt_number,
                     execution_spec: *execution_spec,
                     continuation,
+                    handover,
                     credential_mode: credential_mode.map(Into::into),
                 };
                 (
@@ -2994,6 +2996,8 @@ pub(crate) fn opening_hello(
         tree_integration_bindings: true,
         // It executes a tree run in an empty workspace without a source.
         tree_no_source: true,
+        // It restores Cloud's kept record into a fresh assignment for a handover.
+        tree_handover: true,
         // It takes another run while every run it holds waits.
         holds_waiting_runs: true,
         // It applies the credential mode Cloud names where the service has its agent-login
@@ -3897,6 +3901,7 @@ mod tests {
             attempt_number,
             execution_spec: *execution_spec,
             continuation: None,
+            handover: None,
             credential_mode: None,
         }
     }
@@ -5202,6 +5207,7 @@ mod tests {
             assert_eq!(hello["payload"]["treeWithdraw"], 1);
             assert_eq!(hello["payload"]["treeIntegrationBindings"], 1);
             assert_eq!(hello["payload"]["treeNoSource"], 1);
+            assert_eq!(hello["payload"]["treeHandover"], 1);
             assert_eq!(hello["payload"]["holdsWaitingRuns"], 1);
             assert_eq!(hello["payload"]["credentialMode"], 1);
             socket.send(welcome()).await.expect("send welcome");

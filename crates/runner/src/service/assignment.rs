@@ -100,6 +100,7 @@ pub(super) struct AssignmentOffer {
     pub(super) attempt_number: u64,
     pub(super) execution_spec: ExecutionSpecV1RunnerProjection,
     pub(super) continuation: Option<Box<ContinuationOffer>>,
+    pub(super) handover: Option<Box<useful_runner_protocol::HandoverOffer>>,
     /// The credential mode the offer names. Not compared by
     /// `same_assignment`: Cloud names the mode as it stands at each delivery, so a
     /// redelivery that names another is still the same assignment.
@@ -2938,6 +2939,7 @@ fn same_assignment(left: &AssignmentOffer, right: &AssignmentOffer) -> bool {
         && left.attempt_number == right.attempt_number
         && left.execution_spec == right.execution_spec
         && left.continuation == right.continuation
+        && left.handover == right.handover
 }
 
 fn start_matches_offer(start: &AssignmentStart, offer: &AssignmentOffer) -> bool {

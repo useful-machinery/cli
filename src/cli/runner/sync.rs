@@ -357,6 +357,7 @@ pub(super) fn runner_step(status: CredentialStatus, login: Option<Login<'_>>) ->
                 .to_owned(),
         ),
         NextAction::None
+        | NextAction::ResolveRunnerConflict
         | NextAction::WaitForRunner
         | NextAction::AuthorizeRunner
         | NextAction::Connect => None,

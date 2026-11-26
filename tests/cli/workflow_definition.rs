@@ -3461,6 +3461,7 @@ fn gateway_waiting_evaluation(id: &str) -> Value {
         }),
     );
     evaluation["state"] = json!("retry_waiting");
+    evaluation["event"]["actor"] = json!({"id": "linear-user-7", "type": "user"});
     evaluation["reason"] = json!("issue_blocked");
     evaluation["nextAttemptAt"] = json!(CLOUD_NEXT_READ);
     evaluation["settledAt"] = Value::Null;
@@ -7192,13 +7193,23 @@ fn definition_evaluations_ask_for_representation_4_and_show_an_evaluation_with_i
     };
     let stdout = show(CLOUD_WAITING_EVALUATION);
     assert_eq!(field(&stdout, "event: "), "issue.unblocked_in_state AUTO-7");
+    let mut lines = stdout.lines();
+    lines.find(|line| line.starts_with("event: ")).unwrap();
+    assert_eq!(
+        lines
+            .next()
+            .and_then(|line| line.strip_prefix("event actor: ")),
+        Some("user linear-user-7")
+    );
     assert_wait(&field(&stdout, "blocker wait: "), "AUTO-2, issue-c");
     assert_eq!(field(&stdout, "next attempt: "), CLOUD_NEXT_READ);
     assert_wait(
         &field(&show(CLOUD_UNBLOCKED_EVALUATION), "blocker wait: "),
         " -",
     );
-    assert_eq!(field(&show(CLOUD_EVALUATION), "blocker wait: "), "-");
+    let stdout = show(CLOUD_EVALUATION);
+    assert_eq!(field(&stdout, "blocker wait: "), "-");
+    assert_eq!(field(&stdout, "event actor: "), "-");
     assert!(home.workflow_entries().is_empty());
 }
 

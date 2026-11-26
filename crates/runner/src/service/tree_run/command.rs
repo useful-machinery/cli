@@ -429,7 +429,25 @@ pub(in crate::service) fn publish(
         .enable_all()
         .build()
         .map_err(|_| PublishFailure::Launch)?;
-    let arguments = vec![
+    runtime.block_on(publish_as(
+        useful,
+        tree,
+        bindings,
+        None,
+        bound,
+        cancellation.cancelled(),
+    ))
+}
+
+pub(super) async fn publish_as(
+    useful: &UsefulCommand,
+    tree: &Path,
+    bindings: &Path,
+    definition: Option<&str>,
+    bound: Duration,
+    abandon: impl Future<Output = ()>,
+) -> Result<Published, PublishFailure> {
+    let mut arguments = vec![
         OsString::from("workflow"),
         "definition".into(),
         "publish".into(),
@@ -438,15 +456,18 @@ pub(in crate::service) fn publish(
         bindings.into(),
         "--json".into(),
     ];
-    let end = runtime
-        .block_on(run_short(
-            useful,
-            arguments,
-            ShortOutput::Captured(PUBLISH_OUTPUT_LIMIT),
-            bound,
-            cancellation.cancelled(),
-        ))
-        .map_err(|_| PublishFailure::Launch)?;
+    if let Some(id) = definition {
+        arguments.extend(["--id".into(), id.into()]);
+    }
+    let end = run_short(
+        useful,
+        arguments,
+        ShortOutput::Captured(PUBLISH_OUTPUT_LIMIT),
+        bound,
+        abandon,
+    )
+    .await
+    .map_err(|_| PublishFailure::Launch)?;
     let ShortEnd::Exited {
         status,
         captured: stdout,
@@ -471,6 +492,39 @@ pub(in crate::service) fn publish(
         }),
         _ => Err(PublishFailure::Refused(RefusalReport::default())),
     }
+}
+
+/// Restore the verified portable record into the assignment's useful home.
+pub(super) async fn restore_record(
+    useful: &UsefulCommand,
+    directory: &Path,
+    cancellation: &CancellationSource,
+) -> Result<PathBuf, &'static str> {
+    let arguments = vec![
+        "workflow".into(),
+        "run".into(),
+        "record".into(),
+        "restore".into(),
+        directory.into(),
+        "--json".into(),
+    ];
+    let end = run_short(
+        useful,
+        arguments,
+        ShortOutput::Captured(PUBLISH_OUTPUT_LIMIT),
+        useful.bound,
+        cancelled(cancellation),
+    )
+    .await
+    .map_err(|_| "tree_run_launch_failed")?;
+    if let ShortEnd::Exited { status, captured } = end
+        && status.success()
+        && let Ok(document) = serde_json::from_slice::<Value>(&captured)
+        && let Some(directory) = document["runDirectory"].as_str()
+    {
+        return Ok(PathBuf::from(directory));
+    }
+    Err("record_restore_refused")
 }
 
 /// How a supervised `create` or `resume` ended.
@@ -531,7 +585,7 @@ impl Drop for SupervisedChild {
 /// `useful workflow run resume RUN --json`: continues a resolved wait, an abandoned attempt
 /// or an unchained `continued` edge, and reports a held wait unchanged.
 pub(in crate::service) fn resume_arguments(run_directory: &Path) -> Vec<OsString> {
-    resume_from_arguments(run_directory, &[])
+    resume_from_arguments(run_directory, &[], None)
 }
 
 /// `useful workflow run retry RUN --from STEP... --json`, one `--from` per step in order:
@@ -541,6 +595,7 @@ pub(in crate::service) fn resume_arguments(run_directory: &Path) -> Vec<OsString
 pub(in crate::service) fn resume_from_arguments(
     run_directory: &Path,
     steps: &[String],
+    handover_root: Option<&Path>,
 ) -> Vec<OsString> {
     let leaf = if steps.is_empty() { "resume" } else { "retry" };
     let mut arguments: Vec<OsString> = vec![
@@ -551,6 +606,17 @@ pub(in crate::service) fn resume_from_arguments(
     ];
     for step in steps {
         arguments.extend(["--from".into(), step.into()]);
+    }
+    continuation_options(arguments, handover_root)
+}
+
+/// Continue the restored attempt in the replacement assignment's execution root.
+fn continuation_options(
+    mut arguments: Vec<OsString>,
+    handover_root: Option<&Path>,
+) -> Vec<OsString> {
+    if let Some(root) = handover_root {
+        arguments.extend(["--execution-root".into(), root.into(), "--handover".into()]);
     }
     arguments.push("--json".into());
     arguments
@@ -1351,14 +1417,19 @@ fn option(name: &str, value: &str) -> OsString {
 
 /// `useful workflow run retry RUN --json`: on the run's `repair` or `host` wait, records the
 /// retry and continues the run as `resume` does.
-pub(in crate::service) fn retry_arguments(run_directory: &Path) -> Vec<OsString> {
-    vec![
-        "workflow".into(),
-        "run".into(),
-        "retry".into(),
-        run_directory.into(),
-        "--json".into(),
-    ]
+pub(in crate::service) fn retry_arguments(
+    run_directory: &Path,
+    handover_root: Option<&Path>,
+) -> Vec<OsString> {
+    continuation_options(
+        vec![
+            "workflow".into(),
+            "run".into(),
+            "retry".into(),
+            run_directory.into(),
+        ],
+        handover_root,
+    )
 }
 
 fn stop_arguments(run_directory: &Path, step: &str, reason: &str) -> Vec<OsString> {

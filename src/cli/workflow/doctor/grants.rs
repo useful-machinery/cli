@@ -15,7 +15,7 @@ use useful_support::Availability;
 
 use super::super::super::account::grant;
 use super::super::super::account::grant::projection::{
-    MemberStatus, Provider, grant_authorization_status, grant_subject,
+    Access, MemberStatus, Provider, grant_authorization_status, grant_runners, grant_subject,
 };
 
 /// The member's unrevoked grants, as read for one invocation, and the runner `--runner` named.
@@ -87,12 +87,13 @@ impl Held<'_> {
         let nearest = self
             .of_provider(provider)
             .map(|grant| {
-                let authorization = grant
-                    .authorizations
-                    .iter()
-                    .find(|authorization| authorization.runner_id == runner);
-                let status = grant_authorization_status(grant, authorization);
-                (grant, authorization.is_some(), status)
+                let runners = grant_runners(grant);
+                let authorized = runners.get(runner);
+                let status = authorized.map_or_else(
+                    || grant_authorization_status(grant, None),
+                    |entry| entry.status(grant),
+                );
+                (grant, authorized.is_some(), status)
             })
             .min_by_key(|(_, authorized, status)| (!usable(status.availability), !authorized));
         let Some((grant, _, status)) = nearest else {
@@ -197,6 +198,7 @@ struct GrantView<'a> {
 #[serde(rename_all = "camelCase")]
 struct RunnerView<'a> {
     runner_id: &'a str,
+    access: Access,
     #[serde(flatten)]
     status: MemberStatus,
 }
@@ -206,16 +208,13 @@ impl<'a> GrantView<'a> {
     /// grant's own status when none is reported.
     fn new(grant: &'a MemberGrant, runner: Option<&str>) -> Self {
         let subject = grant_subject(grant);
-        let authorizations: Vec<_> = grant
-            .authorizations
-            .iter()
-            .filter(|authorization| runner.is_none_or(|runner| authorization.runner_id == runner))
-            .map(|authorization| RunnerView {
-                runner_id: &authorization.runner_id,
-                status: MemberStatus::new(
-                    grant_authorization_status(grant, Some(authorization)),
-                    subject,
-                ),
+        let authorizations: Vec<_> = grant_runners(grant)
+            .into_iter()
+            .filter(|(id, _)| runner.is_none_or(|wanted| *id == wanted))
+            .map(|(runner_id, entry)| RunnerView {
+                runner_id,
+                access: entry.access,
+                status: MemberStatus::new(entry.status(grant), subject),
             })
             .collect();
         let (organization_id, identity_id) = match grant.kind {
@@ -228,9 +227,9 @@ impl<'a> GrantView<'a> {
             generation: grant.generation,
             organization_id,
             identity_id,
-            status: authorizations
-                .is_empty()
-                .then(|| MemberStatus::new(grant_authorization_status(grant, None), subject)),
+            status: (authorizations.is_empty()
+                && (runner.is_some() || grant.authorizations.is_empty()))
+            .then(|| MemberStatus::new(grant_authorization_status(grant, None), subject)),
             authorizations,
         }
     }
@@ -256,7 +255,12 @@ impl ProviderView<'_> {
                 (None, None) => writeln!(output)?,
             }
             for authorization in &grant.authorizations {
-                writeln!(output, "      runner {}", authorization.runner_id)?;
+                writeln!(
+                    output,
+                    "      runner {} ({})",
+                    authorization.runner_id,
+                    authorization.access.as_str()
+                )?;
                 authorization.status.write_human(output, "        ")?;
             }
             if let Some(status) = &grant.status {

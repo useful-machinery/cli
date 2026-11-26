@@ -55,7 +55,7 @@ impl Availability {
     /// The next action this availability fixes, where it fixes one; `None`
     /// where the next action depends on the facts it was mapped from:
     /// `delivery_failed` (`sync_runner` or `check_target`), `not_delivered`
-    /// (`none` or `resolve_service_login`) and `not_connected` (`none`,
+    /// (`none`, `resolve_service_login` or `resolve_runner_conflict`) and `not_connected` (`none`,
     /// `authorize_runner` or `connect`).
     pub const fn fixed_next_action(self) -> Option<NextAction> {
         match self {
@@ -84,6 +84,8 @@ pub enum NextAction {
     CheckTarget,
     /// Remove the service's own login, or keep using it.
     ResolveServiceLogin,
+    /// End the other login's authorization on the runner.
+    ResolveRunnerConflict,
     /// Authorize a runner for an agent login that has none in force.
     AuthorizeRunner,
     /// Connect a provider the member has nothing unrevoked for.
@@ -92,13 +94,14 @@ pub enum NextAction {
 
 impl NextAction {
     /// Every next action, in declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::None,
         Self::Reconnect,
         Self::WaitForRunner,
         Self::SyncRunner,
         Self::CheckTarget,
         Self::ResolveServiceLogin,
+        Self::ResolveRunnerConflict,
         Self::AuthorizeRunner,
         Self::Connect,
     ];
@@ -111,6 +114,7 @@ impl NextAction {
             Self::WaitForRunner => "wait_for_runner",
             Self::SyncRunner => "sync_runner",
             Self::CheckTarget => "check_target",
+            Self::ResolveRunnerConflict => "resolve_runner_conflict",
             Self::ResolveServiceLogin => "resolve_service_login",
             Self::AuthorizeRunner => "authorize_runner",
             Self::Connect => "connect",

@@ -53,8 +53,8 @@ pub use doctor::{
 };
 pub use enrollment::{
     ActivationArtifact, ActivationArtifactParts, AmbiguousCause, ArtifactDestination,
-    ArtifactWriteError, EnrollmentError, EnrollmentOutcome, EnrollmentResponse, HeldJoinKey,
-    JoinKey, JoinKeyArtifact, JoinKeyHold, JoinOutcome, JoinRefusal, JoinRetry,
+    ArtifactWriteError, EnrollmentError, EnrollmentOutcome, EnrollmentResponse, EphemeralSession,
+    HeldJoinKey, JoinKey, JoinKeyArtifact, JoinKeyHold, JoinOutcome, JoinRefusal, JoinRetry,
     PrivateArtifactError, PrivateArtifactFile, PublicationStage, RecordedOptions, RegisteredRunner,
     RegistrationAuthority, RegistrationConflict, RegistrationConflictKind, RegistrationError,
     RegistrationOutcome, RegistrationStage, RegistrationTarget, RejoinOutcome,
@@ -65,6 +65,7 @@ pub use enrollment::{
 };
 pub use service::{Config, ConfigError};
 pub use service::{JoinKeyMode, Rejoin, RejoinAnswer, ServiceEnd};
+pub use service::{Retirement, RetirementCause};
 
 #[derive(Debug)]
 pub struct ServiceError(service::ServiceError);
@@ -95,6 +96,23 @@ pub fn run(
     join_key: JoinKeyMode,
 ) -> Result<ServiceEnd, ServiceError> {
     service::run(config, service_version, join_key).map_err(ServiceError)
+}
+
+/// How an ephemeral runner's service ended and what happened to its registration.
+pub struct EphemeralServiceEnd {
+    pub service: Result<ServiceEnd, ServiceError>,
+    pub retirement: Retirement,
+}
+
+/// Serves a newly joined runner without a rejoin key, then attempts to give its
+/// registration back using the credential current at the end of service.
+pub fn run_ephemeral(config: Config, service_version: &str) -> EphemeralServiceEnd {
+    let (service, retirement) = service::run_ephemeral(config, service_version)
+        .unwrap_or_else(|error| (Err(error), Retirement::Kept(RetirementCause::CouldNotStart)));
+    EphemeralServiceEnd {
+        service: service.map_err(ServiceError),
+        retirement,
+    }
 }
 
 #[cfg(feature = "test-fixtures")]

@@ -28,7 +28,7 @@ With --all, every step runs again as a new attempt, from the run's retained work
 
 With neither, a run waiting for repair or for its host is retried from the stage that failed: the retry is recorded, with the replacement profiles of --agent-profiles when given, and the run continues in the same command; a host wait's retry runs no requires.check. On either wait, a stage whose child run failed continues that child in place, inheriting its completed steps and rerunning the rest. An ended run that did not succeed continues from the stage it stood at: for a workflow of edges the step its latest attempt started last, for a Cloud run the step of the position it reported, and otherwise every step its latest attempt left unfinished; a run that names none is refused, naming --from and --all. In any other state, a run that is running or waits on another kind of wait, the command changes nothing and names the commands that apply.
 
-A run under the home runs in the previous attempt's execution root unless --execution-root names another. For a Cloud run the command asks Cloud for the continuation, the retry, or the repair the runner applies, under one request key sent again if the response is lost; --expected-version requires the run's version, and --wait follows a continuation until it settles, within --timeout. A retry with --all is always followed. Cloud's acceptance is not the runner's application.";
+A run under the home runs in the previous attempt's execution root unless --execution-root names another. For a Cloud run the command asks Cloud for the continuation, the retry, or the repair the runner applies, under one request key sent again if the response is lost; --expected-version requires the run's version, and --wait follows a continuation until it settles, within --timeout. A retry with --all is always followed. Cloud's acceptance is not the runner's application. If the Cloud run lost its runner, request a replacement with useful workflow run handover RUN.";
 
 const COMMAND: &str = "useful workflow run retry";
 
@@ -65,6 +65,14 @@ pub(super) struct Command {
         help = "Existing execution root, for a run under the useful home; defaults to the previous attempt's root"
     )]
     execution_root: Option<PathBuf>,
+
+    #[arg(
+        long,
+        requires = "execution_root",
+        conflicts_with = "all",
+        help = "Continue only if the selected work can run without the previous execution root"
+    )]
+    handover: bool,
 
     #[arg(
         long,
@@ -159,6 +167,9 @@ impl Command {
     /// Reruns the Cloud run the lookup found: `--from` as the continuation request, `--all` as
     /// the retry request, and neither as `CloudRun::retry` chooses.
     fn in_cloud(self, run: InCloud) -> super::super::super::CommandResult {
+        if self.handover {
+            return Err(super::handover::local_option_on_cloud());
+        }
         if let Some(option) = [
             self.workflow.as_ref().map(|_| "--workflow"),
             self.execution_root.as_ref().map(|_| "--execution-root"),
@@ -199,7 +210,7 @@ impl Command {
         } else if self.from_steps.is_empty() {
             cloud.retry(self.expected_version, wait)
         } else {
-            cloud.continue_from(COMMAND, self.from_steps, self.expected_version, wait)
+            cloud.continue_from(COMMAND, self.from_steps, self.expected_version, wait, None)
         }
     }
 
@@ -543,6 +554,7 @@ impl Command {
                 from_steps,
                 workflow: self.workflow.clone(),
                 execution_root: self.execution_root.clone(),
+                handover: self.handover,
                 leaf: super::create::ExecutionLeaf::Retry,
                 edge: None,
                 bridge: None,
@@ -624,6 +636,7 @@ impl Command {
                 from_steps: Vec::new(),
                 workflow: self.workflow.clone(),
                 execution_root: self.execution_root.clone(),
+                handover: self.handover,
                 leaf: super::create::ExecutionLeaf::Retry,
                 edge: None,
                 bridge: None,

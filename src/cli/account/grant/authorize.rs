@@ -9,7 +9,7 @@ use useful_api::{
 };
 use useful_human_auth::Deployment;
 
-use super::authorization::{AuthorizationView, write_authorized};
+use super::authorization::{AuthorizationView, MadeView, write_authorized};
 use super::confirmation::{self, Confirmation, Kind, NATIVE_AUTHORIZE, Stated, Statement};
 use super::runner_choice::{self, Acting};
 use super::{
@@ -18,16 +18,14 @@ use super::{
 };
 
 pub(super) const ABOUT: &str =
-    "Authorize a runner to use one of your grants or tokens, or all of them";
+    "Authorize your personal pool for a grant, or a runner for one or all grants and tokens";
 
 /// The remedy for a Codex grant authorized for another runner, which `useful account integration
 /// authorize` reports: a Codex grant serves one runner, and another sign-in cannot make a second
 /// grant for another runner, since a held grant is refused or replaced in place.
 pub(in crate::cli) const MOVE_CODEX_GRANT: &str = "A Codex grant serves one runner at a time. To move it to this runner, end its authorization for the other, which `useful account integration show INTEGRATION` names, then authorize this one:\n  useful account integration deauthorize INTEGRATION --runner RUNNER --yes";
 
-/// `useful account integration authorize INTEGRATION [--runner RUNNER]` or `useful account
-/// integration authorize --all [--runner RUNNER]`; given no `--runner` it names the runners it can
-/// act on instead.
+/// Select one grant and a runner or personal pool. With `--all`, authorize only a runner.
 #[derive(Debug, Args)]
 #[group(id = "target", args = ["grant", "all"], required = true, multiple = false)]
 pub(in crate::cli) struct Command {
@@ -42,6 +40,12 @@ pub(in crate::cli) struct Command {
 
     #[arg(long, value_name = "RUNNER", help = RUNNER_HELP)]
     runner: Option<String>,
+
+    #[arg(long, conflicts_with_all = ["runner", "all"], help = "Select your personal runner pool")]
+    personal_pool: bool,
+
+    #[command(flatten)]
+    org: crate::cli::context::OrgArgs,
 
     #[command(flatten)]
     confirmation: Confirmation<Self>,
@@ -89,10 +93,12 @@ pub(in crate::cli) enum Made {
 }
 
 impl Made {
-    pub(super) fn view(&self) -> AuthorizationView<'_> {
+    pub(super) fn view(&self) -> anyhow::Result<MadeView<'_>> {
         match self {
-            Self::Grant(authorization) => AuthorizationView::made(authorization),
-            Self::Token(authorization) => AuthorizationView::of_token(authorization),
+            Self::Grant(authorization) => MadeView::grant(authorization),
+            Self::Token(authorization) => {
+                Ok(MadeView::Runner(AuthorizationView::of_token(authorization)))
+            }
         }
     }
 }
@@ -138,7 +144,15 @@ const fn refuses_one_subject(failure: &MemberGrantFailure) -> bool {
 }
 
 impl Command {
-    pub(super) fn run(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    pub(super) fn run(self, deployment: &Deployment) -> crate::cli::CommandResult {
+        super::check_pool_org(&self.org, self.personal_pool)?;
+        if self.personal_pool {
+            return self.run_pool(deployment);
+        }
+        self.run_runner(deployment).map_err(Into::into)
+    }
+
+    fn run_runner(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
         let options = &self.options;
         let policy = options.http.transport_policy();
         let runner = RunnerArgs {
@@ -177,6 +191,62 @@ impl Command {
             |api, subject| authorize(api, IntegrationTokenOwner::Member, subject, runner_id, &key),
             |api_url, subject, made, json| write(api_url, subject, &made, json),
         )
+    }
+
+    fn run_pool(&self, deployment: &Deployment) -> crate::cli::CommandResult {
+        let action = confirmation::PoolAction::Authorize;
+        let name = self
+            .grant
+            .as_ref()
+            .context("personal pool authorization requires a grant")?;
+        let options = &self.options;
+        let selection = match super::PoolSelection::read::<Self>(
+            action,
+            deployment,
+            options,
+            name,
+            &self.org,
+            self.confirmation.yes,
+        )? {
+            Ok(selection) => selection,
+            Err(exit) => return Ok(exit),
+        };
+        let grant = &selection.grant;
+        let pool = match runner_choice::personal_pool(deployment, options, &selection.organization)?
+        {
+            Ok(pool) => pool,
+            Err(exit) => return Ok(exit),
+        };
+        if let Err(exit) = selection.confirm::<Self>(
+            action,
+            format_args!(
+                "Authorizing your personal pool {pool} for grant {}:",
+                grant.id
+            ),
+        )? {
+            return Ok(exit);
+        }
+        let key = useful_support::generate_idempotency_key()
+            .context("generate grant authorization request key")?;
+        let api_url = deployment.fingerprint().api_url();
+        let answer = super::with_api(deployment, options, |api| {
+            replayed(|| {
+                api.authorize(
+                    &grant.id,
+                    useful_api::GrantAuthorizationTarget::PersonalPool(&pool),
+                    &key,
+                )
+            })
+        })?;
+        Ok(match answer {
+            Ok(authorization) => write_authorized(
+                api_url,
+                super::Holder::Grant(&grant.id),
+                Made::Grant(authorization).view()?,
+                options.json,
+            )?,
+            Err(failure) => output::pool_report(api_url, &failure).write(api_url, options.json)?,
+        })
     }
 
     /// The runner `authorize --all` acts on, named by `--runner` among the runners of every
@@ -366,9 +436,14 @@ pub(in crate::cli) fn authorize(
     key: &str,
 ) -> Result<Made, MemberGrantFailure> {
     match subject {
-        Subject::Grant(grant) => {
-            replayed(|| api.authorize(&grant.id, runner_id, key)).map(Made::Grant)
-        }
+        Subject::Grant(grant) => replayed(|| {
+            api.authorize(
+                &grant.id,
+                useful_api::GrantAuthorizationTarget::Runner(runner_id),
+                key,
+            )
+        })
+        .map(Made::Grant),
         Subject::Token(token) => {
             replayed(|| api.authorize_integration_token(owner, &token.id, runner_id, key))
                 .map(Made::Token)
@@ -383,7 +458,7 @@ pub(in crate::cli) fn write(
     made: &Made,
     json: bool,
 ) -> anyhow::Result<ExitCode> {
-    write_authorized(api_url, subject.holder(), made.view(), json)
+    write_authorized(api_url, subject.holder(), made.view()?, json)
 }
 
 /// Authorizes `runner_id` for `subject` unless it already is, reporting a refusal of this one

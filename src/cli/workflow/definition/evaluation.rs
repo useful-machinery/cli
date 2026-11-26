@@ -248,6 +248,13 @@ fn write_evaluation(
         report::wire(evaluation.event_name),
         event_subject(evaluation)
     )?;
+    let event = serde_json::to_value(&evaluation.event).unwrap_or(Value::Null);
+    let actor = &event["actor"];
+    let actor_label = match (actor["id"].as_str(), actor["type"].as_str()) {
+        (Some(id), Some(kind)) => format!("{} {}", display(kind), display(id)),
+        (id, _) => or_dash(id),
+    };
+    writeln!(out, "event actor: {actor_label}")?;
     writeln!(
         out,
         "connection: {}",

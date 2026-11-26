@@ -2,6 +2,7 @@
 //! mapped to one availability and one next action, with the command or step that next action names.
 //! `useful account integration list` prints it; Cloud's API carries the facts only.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use serde::Serialize;
@@ -20,12 +21,89 @@ pub(in crate::cli) fn grant_authorization_status(
     grant: &MemberGrant,
     authorization: Option<&MemberGrantAuthorization>,
 ) -> CredentialStatus {
-    let active = grant.state == MemberGrantState::GrantStateActive;
+    status_from_report(grant, authorization.map(|auth| auth.report.as_deref()))
+}
+
+/// How the owner's grant reaches a runner.
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(in crate::cli) enum Access {
+    Direct,
+    Pool,
+    Both,
+}
+
+impl Access {
+    pub(in crate::cli) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Pool => "pool",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// The single hold both authorization targets describe for the same runner.
+pub(in crate::cli) struct GrantRunner<'a> {
+    pub(in crate::cli) access: Access,
+    pub(in crate::cli) report: Option<&'a GrantReport>,
+    pub(in crate::cli) conflict: bool,
+}
+
+impl GrantRunner<'_> {
+    pub(in crate::cli) fn status(&self, grant: &MemberGrant) -> CredentialStatus {
+        if self.conflict && grant.state == MemberGrantState::GrantStateActive {
+            return CredentialStatus {
+                availability: Availability::NotDelivered,
+                next_action: NextAction::ResolveRunnerConflict,
+            };
+        }
+        status_from_report(grant, Some(self.report))
+    }
+}
+
+pub(in crate::cli) fn grant_runners(grant: &MemberGrant) -> BTreeMap<&str, GrantRunner<'_>> {
+    let mut runners: BTreeMap<_, _> = grant
+        .authorizations
+        .iter()
+        .filter_map(|auth| {
+            Some((
+                auth.runner_id.as_deref()?,
+                GrantRunner {
+                    access: Access::Direct,
+                    report: auth.report.as_deref(),
+                    conflict: false,
+                },
+            ))
+        })
+        .collect();
+    for runner in grant
+        .authorizations
+        .iter()
+        .filter_map(|auth| auth.runners.as_deref())
+        .flatten()
+    {
+        runners
+            .entry(runner.runner_id.as_str())
+            .and_modify(|entry| entry.access = Access::Both)
+            .or_insert_with(|| GrantRunner {
+                access: Access::Pool,
+                report: runner.report.as_deref(),
+                conflict: runner.conflict == Some(true),
+            });
+    }
+    runners
+}
+
+fn status_from_report(
+    grant: &MemberGrant,
+    authorization: Option<Option<&GrantReport>>,
+) -> CredentialStatus {
     if grant.kind == MemberGrantKind::GrantKindNative {
         return native_status(
-            active,
+            grant.state == MemberGrantState::GrantStateActive,
             grant.generation,
-            authorization.map(|authorization| authorization.report.as_deref()),
+            authorization,
         );
     }
     let (availability, next_action) = match (grant.state, authorization) {
@@ -287,6 +365,9 @@ fn member_step(next_action: NextAction, subject: Subject<'_>) -> Option<String> 
             "the deployment does not serve this coding agent for the runner's operating system"
                 .to_owned(),
         ),
+        (NextAction::ResolveRunnerConflict, _) => Some(
+            "the runner holds another login for this coding agent. Its owner can end that authorization with `useful account integration deauthorize INTEGRATION --runner RUNNER --yes`".to_owned(),
+        ),
         (NextAction::ResolveServiceLogin, _) => Some(
             "the runner's service uses its own login; remove it from the service's environment or home to use the agent login"
                 .to_owned(),
@@ -353,6 +434,30 @@ mod tests {
             report["lastUse"] = last_use.into();
         }
         report
+    }
+
+    #[test]
+    fn native_pool_runners_map_their_report_or_conflict() {
+        let mut grant = native("active", None);
+        let pool = serde_json::json!({
+            "id": "aga_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "runnerPoolId": "rpl_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "organizationId": "org_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "createdAt": "2026-11-01T09:05:00Z",
+            "runners": [
+                {"runnerId": "ready", "conflict": false, "report": report("ready", Some(3), Some("accepted"))},
+                {"runnerId": "conflict", "conflict": true}
+            ]
+        });
+        grant.authorizations = vec![serde_json::from_value(pool).unwrap()];
+        let runners = super::grant_runners(&grant);
+        assert_eq!(
+            runners["ready"].status(&grant),
+            status(Availability::Available, NextAction::None)
+        );
+        let conflict = runners["conflict"].status(&grant);
+        assert_eq!(conflict.availability, Availability::NotDelivered);
+        assert_eq!(conflict.next_action.as_str(), "resolve_runner_conflict");
     }
 
     // The owner's view of a native grant's authorization and of the grant.

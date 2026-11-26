@@ -28,6 +28,11 @@ mod show;
 
 use std::collections::BTreeSet;
 
+use crate::cli::{
+    CommandFailure, HttpOptions,
+    context::{self, OrgArgs},
+};
+use anyhow::Context;
 use clap::{Args, Subcommand};
 
 use super::super::integration_token;
@@ -93,9 +98,9 @@ impl Command {
             &["account", "integration"],
             "configure Useful Machinery grant access",
             |command, deployment| match command {
-                GrantCommand::Authorize(command) => command.run(deployment).map_err(Into::into),
+                GrantCommand::Authorize(command) => command.run(deployment),
                 GrantCommand::Connect(command) => command.run(deployment),
-                GrantCommand::Deauthorize(command) => command.run(deployment).map_err(Into::into),
+                GrantCommand::Deauthorize(command) => command.run(deployment),
                 GrantCommand::List(command) => command.run(deployment).map_err(Into::into),
                 GrantCommand::Reconnect(command) => command.run(deployment),
                 GrantCommand::Disconnect(command) => command.run(deployment).map_err(Into::into),
@@ -383,10 +388,12 @@ impl Subject {
             Self::Grant(grant) => grant
                 .authorizations
                 .iter()
-                .map(|authorization| InForce {
-                    id: &authorization.id,
-                    runner_id: &authorization.runner_id,
-                    organization_id: &authorization.organization_id,
+                .filter_map(|authorization| {
+                    Some(InForce {
+                        id: &authorization.id,
+                        runner_id: authorization.runner_id.as_deref()?,
+                        organization_id: &authorization.organization_id,
+                    })
                 })
                 .collect(),
             Self::Token(token) => token
@@ -504,6 +511,107 @@ fn state_then_act<C: Stated, T>(
         Ok(value) => write(api_url, subject, value, json),
         Err(failure) => output::failure(api_url, &failure, json),
     }
+}
+
+/// The grant and organization selected for a personal pool operation. Only authorization
+/// needs to look up the current pool. Ending it uses the grant's authorization in force.
+struct PoolSelection {
+    grant: Box<MemberGrant>,
+    organization: String,
+    asks: bool,
+}
+
+impl PoolSelection {
+    fn read<C: Stated>(
+        action: confirmation::PoolAction,
+        deployment: &Deployment,
+        options: &Options,
+        name: &GrantArg,
+        org: &OrgArgs,
+        yes: bool,
+    ) -> Result<Result<Self, ExitCode>, CommandFailure> {
+        let asks = match confirmation::asks_with::<C>(
+            yes,
+            options.json,
+            || action.lines::<C>(None),
+            action.action(),
+        )? {
+            Ok(asks) => asks,
+            Err(exit) => return Ok(Err(exit)),
+        };
+        let grant = match read_subject(deployment, options, name, |id| {
+            format!("{} {id} --personal-pool --yes", C::COMMAND)
+        })? {
+            Ok(Subject::Grant(grant)) => grant,
+            Ok(Subject::Token(_)) => {
+                return Err(CommandFailure::with_exit_code(
+                    anyhow::anyhow!(
+                        "a token is authorized for a runner, not for a personal pool; use --runner RUNNER"
+                    ),
+                    ExitCode::UsageError,
+                ));
+            }
+            Err(exit) => return Ok(Err(exit)),
+        };
+        let organization = match grant.kind {
+            MemberGrantKind::GrantKindNative => grant
+                .organization_id
+                .clone()
+                .context("native grant omitted organizationId")?,
+            MemberGrantKind::GrantKindOAuth => {
+                let named = org.named_in_process()?;
+                match organization::resolve(
+                    deployment,
+                    HttpOptions {
+                        allow_insecure_http: options.http.allow_insecure_http,
+                    },
+                    named.as_ref().map(|named| named.organization.as_str()),
+                )? {
+                    Ok(Ok(organization)) => organization.id,
+                    Ok(Err(organizations)) => return Err(context::unresolved(&organizations)),
+                    Err(failure) => {
+                        return Ok(Err(output::failure(
+                            deployment.fingerprint().api_url(),
+                            &failure,
+                            options.json,
+                        )?));
+                    }
+                }
+            }
+        };
+        Ok(Ok(Self {
+            grant,
+            organization,
+            asks,
+        }))
+    }
+
+    fn authorization(&self) -> Option<&useful_api::MemberGrantAuthorization> {
+        self.grant.authorizations.iter().find(|authorization| {
+            authorization.runner_pool_id.is_some()
+                && authorization.organization_id == self.organization
+        })
+    }
+
+    fn confirm<C: Stated>(
+        &self,
+        action: confirmation::PoolAction,
+        heading: std::fmt::Arguments<'_>,
+    ) -> anyhow::Result<Result<(), ExitCode>> {
+        confirmation::state(heading, &action.lines::<C>(Some(self.grant.kind)))?;
+        confirmation::go_on(self.asks)
+    }
+}
+
+/// `--org` selects an OAuth grant's personal pool.
+fn check_pool_org(org: &OrgArgs, personal_pool: bool) -> Result<(), CommandFailure> {
+    if org.given() && !personal_pool {
+        return Err(CommandFailure::with_exit_code(
+            anyhow::anyhow!("--org requires --personal-pool"),
+            ExitCode::UsageError,
+        ));
+    }
+    Ok(())
 }
 
 /// What the command line of `authorize` or `deauthorize` names of the runner: the value of

@@ -797,6 +797,7 @@ fn offer() -> AssignmentOffer {
         project_id: "prj_01k0z6r1w8f4jy2m7q9v3x5abc".to_owned(),
         attempt_id: "atm_01k0z6r1w8f4jy2m7q9v3x5abg".to_owned(),
         attempt_number: 1,
+        handover: None,
         execution_spec: useful_runner_protocol::ExecutionSpecV1RunnerProjection {
             execution_spec_id: "xsp_01k0z6r1w8f4jy2m7q9v3x5abg".to_owned(),
             schema_version: 1,

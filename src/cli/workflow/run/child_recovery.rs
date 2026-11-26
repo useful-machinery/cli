@@ -296,6 +296,7 @@ async fn prepare_stage(
         workflow: &workflow,
         from: &from,
         execution_root,
+        handover: false,
         tree: Some(tree),
     };
     let environment = admitted.execution().environment().clone();
@@ -529,6 +530,7 @@ async fn prepare_nested(
         workflow: &workflow,
         from: &from,
         execution_root,
+        handover: false,
         tree: Some(tree),
     };
     let environment = admitted.execution().environment().clone();
@@ -687,6 +689,7 @@ pub(super) async fn prepare_abandoned(
         workflow: &workflow,
         from: &from,
         execution_root: admitted.execution().root().to_owned(),
+        handover: false,
         tree: Some(tree),
     };
     let environment = admitted.execution().environment().clone();

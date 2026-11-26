@@ -15,16 +15,22 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// GrantAuthorization : One runner a grant is authorized for, in force.
+/// GrantAuthorization : An authorization in force. Exactly one of runnerId and runnerPoolId is present.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GrantAuthorization {
     /// The authorization's opaque identifier, `pga_` for an OAuth grant's and `aga_` for a native grant's.
     #[serde(rename = "id")]
     pub id: String,
     /// The runner registration the grant is authorized for.
-    #[serde(rename = "runnerId")]
-    pub runner_id: String,
-    /// The organization of the runner registration.
+    #[serde(rename = "runnerId", skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<String>,
+    /// The owner's personal runner pool.
+    #[serde(rename = "runnerPoolId", skip_serializing_if = "Option::is_none")]
+    pub runner_pool_id: Option<String>,
+    /// Present exactly for a pool authorization. The registrations the pool currently holds, oldest first.
+    #[serde(rename = "runners", skip_serializing_if = "Option::is_none")]
+    pub runners: Option<Vec<models::GrantAuthorizationRunner>>,
+    /// The organization of the authorized runner or pool.
     #[serde(rename = "organizationId")]
     pub organization_id: String,
     /// When the authorization was made.
@@ -37,16 +43,13 @@ pub struct GrantAuthorization {
 }
 
 impl GrantAuthorization {
-    /// One runner a grant is authorized for, in force.
-    pub fn new(
-        id: String,
-        runner_id: String,
-        organization_id: String,
-        created_at: String,
-    ) -> GrantAuthorization {
+    /// An authorization in force. Exactly one of runnerId and runnerPoolId is present.
+    pub fn new(id: String, organization_id: String, created_at: String) -> GrantAuthorization {
         GrantAuthorization {
             id,
-            runner_id,
+            runner_id: None,
+            runner_pool_id: None,
+            runners: None,
             organization_id,
             created_at,
             delivery: None,

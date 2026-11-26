@@ -2560,6 +2560,7 @@ mod tests {
             attempt_number,
             execution_spec: *execution_spec,
             continuation: None,
+            handover: None,
             credential_mode: None,
         }
     }

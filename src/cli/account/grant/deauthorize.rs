@@ -16,10 +16,9 @@ use super::{
     state_then_act, subject_and_runner,
 };
 
-pub(super) const ABOUT: &str = "End a runner's authorization for one of your grants or tokens";
+pub(super) const ABOUT: &str = "End a runner or personal pool authorization for an integration";
 
-/// `useful account integration deauthorize INTEGRATION [--runner RUNNER]`; given no `--runner` it
-/// names the runners the grant or token is authorized for instead.
+/// End a personal pool authorization of a grant or a runner authorization of a grant or token.
 #[derive(Debug, Args)]
 pub(in crate::cli) struct Command {
     #[arg(value_name = "INTEGRATION", value_parser = super::parse_grant, help = GRANT_HELP)]
@@ -27,6 +26,16 @@ pub(in crate::cli) struct Command {
 
     #[arg(long, value_name = "RUNNER", help = RUNNER_HELP)]
     runner: Option<String>,
+
+    #[arg(
+        long,
+        conflicts_with = "runner",
+        help = "Select your personal runner pool"
+    )]
+    personal_pool: bool,
+
+    #[command(flatten)]
+    org: crate::cli::context::OrgArgs,
 
     #[command(flatten)]
     confirmation: Confirmation<Self>,
@@ -59,7 +68,86 @@ impl Stated for Command {
 }
 
 impl Command {
-    pub(super) fn run(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
+    pub(super) fn run(self, deployment: &Deployment) -> crate::cli::CommandResult {
+        super::check_pool_org(&self.org, self.personal_pool)?;
+        if self.personal_pool {
+            return self.run_pool(deployment);
+        }
+        self.run_runner(deployment).map_err(Into::into)
+    }
+
+    fn run_pool(&self, deployment: &Deployment) -> crate::cli::CommandResult {
+        let options = &self.options;
+        let action = super::confirmation::PoolAction::Deauthorize;
+        let selection = match super::PoolSelection::read::<Self>(
+            action,
+            deployment,
+            options,
+            &self.grant,
+            &self.org,
+            self.confirmation.yes,
+        )? {
+            Ok(selection) => selection,
+            Err(exit) => return Ok(exit),
+        };
+        let api_url = deployment.fingerprint().api_url();
+        let Some(authorization) = selection.authorization() else {
+            return super::output::pool_report(api_url, &MemberGrantFailure::AuthorizationNotFound)
+                .write(api_url, options.json)
+                .map_err(Into::into);
+        };
+        let pool = authorization
+            .runner_pool_id
+            .as_deref()
+            .context("pool authorization omitted runnerPoolId")?;
+        let before = &selection.grant;
+        if let Err(exit) = selection.confirm::<Self>(
+            action,
+            format_args!(
+                "Ending your personal pool {pool}'s authorization for grant {}:",
+                before.id
+            ),
+        )? {
+            return Ok(exit);
+        }
+        let key = useful_support::generate_idempotency_key()
+            .context("generate grant deauthorization request key")?;
+        let after = match super::with_api(deployment, options, |api| {
+            end_grant_authorization(api, before, &authorization.id, &key)
+        })? {
+            Ok(after) => after,
+            Err(failure) => {
+                return super::output::pool_report(api_url, &failure)
+                    .write(api_url, options.json)
+                    .map_err(Into::into);
+            }
+        };
+        let ended = after.as_ref().map(|after| {
+            let previously_ended = before.ended_authorizations.as_deref().unwrap_or_default();
+            let covered = authorization.runners.as_deref().unwrap_or_default();
+            ended_authorization_views(after.ended_authorizations.as_deref().unwrap_or_default())
+                .into_iter()
+                .filter(|ended| {
+                    covered
+                        .iter()
+                        .any(|runner| runner.runner_id == ended.authorization.runner_id)
+                        && !previously_ended
+                            .iter()
+                            .any(|old| old.id == ended.authorization.id)
+                })
+                .collect()
+        });
+        write_deauthorized(
+            api_url,
+            super::Holder::Grant(&before.id),
+            &authorization.id,
+            super::authorization::EndedTarget::pool(pool, ended),
+            options.json,
+        )
+        .map_err(Into::into)
+    }
+
+    fn run_runner(self, deployment: &Deployment) -> anyhow::Result<ExitCode> {
         let options = &self.options;
         let runner = RunnerArgs {
             named: self.runner.as_deref(),
@@ -130,12 +218,7 @@ pub(in crate::cli) fn deauthorize(
         Subject::Grant(grant) => {
             let authorization_id =
                 authorization_id.ok_or(MemberGrantFailure::AuthorizationNotFound)?;
-            replayed(|| api.deauthorize(&grant.id, &authorization_id, key))?;
-            // A native grant's runner kept a copy; the read only reports its removal and stop,
-            // and its failure leaves the authorization ended.
-            let after = (grant.kind == MemberGrantKind::GrantKindNative)
-                .then(|| api.get(&grant.id).ok())
-                .flatten();
+            let after = end_grant_authorization(api, grant, &authorization_id, key)?;
             Ok((authorization_id, after))
         }
         Subject::Token(token) => {
@@ -148,6 +231,19 @@ pub(in crate::cli) fn deauthorize(
             Ok((authorization_id, None))
         }
     }
+}
+
+fn end_grant_authorization(
+    api: &MemberGrantApi,
+    grant: &MemberGrant,
+    id: &str,
+    key: &str,
+) -> Result<Option<MemberGrant>, MemberGrantFailure> {
+    replayed(|| api.deauthorize(&grant.id, id, key))?;
+    // A failure to read the removal and stop leaves the authorization ended.
+    Ok((grant.kind == MemberGrantKind::GrantKindNative)
+        .then(|| api.get(&grant.id).ok())
+        .flatten())
 }
 
 /// Reports `runner_id`'s ended authorization of `subject`.
@@ -169,8 +265,7 @@ pub(in crate::cli) fn write(
         api_url,
         subject.holder(),
         &authorization_id,
-        runner_id,
-        ended,
+        super::authorization::EndedTarget::runner(runner_id, ended),
         json,
     )
 }

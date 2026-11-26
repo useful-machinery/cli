@@ -24,7 +24,14 @@ pub(crate) const RETIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("replace", &[]),
     ("activation-file", &[]),
     ("at", &[]),
-    ("from", &["workflow run retry", "workflow run upgrade"]),
+    (
+        "from",
+        &[
+            "workflow run handover",
+            "workflow run retry",
+            "workflow run upgrade",
+        ],
+    ),
     ("installation-id", &[]),
     ("gitlab-connection-id", &[]),
     ("repository-id", &["org integration repository list"]),

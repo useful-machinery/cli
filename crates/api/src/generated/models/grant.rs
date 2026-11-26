@@ -36,7 +36,7 @@ pub struct Grant {
     /// The RFC 3339 time at which the grant was created.
     #[serde(rename = "createdAt")]
     pub created_at: String,
-    /// The runners the grant is authorized for, in force, oldest first.
+    /// The grant's runner and pool authorizations in force, oldest first.
     #[serde(rename = "authorizations")]
     pub authorizations: Vec<models::GrantAuthorization>,
     /// For an OAuth grant, the member's identity link the grant is bound to.

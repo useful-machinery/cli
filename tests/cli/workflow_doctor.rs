@@ -1988,7 +1988,7 @@ fn workflow_doctor_shows_the_members_grants_beside_each_requirement() {
         assert_eq!(grant[account], account_id, "{kind}");
         assert_eq!(
             grant["authorizations"],
-            json!([{"runnerId": RUNNER_ID, "availability": "available", "nextAction": "none"}]),
+            json!([{"runnerId": RUNNER_ID, "access": "direct", "availability": "available", "nextAction": "none"}]),
             "{kind}"
         );
         assert!(grant.get("availability").is_none(), "{grant}");
@@ -2074,7 +2074,7 @@ fn workflow_doctor_reports_each_grant_on_the_named_runner() {
         let grant = held(&named, kind);
         assert_eq!(
             grant["authorizations"],
-            json!([{"runnerId": RUNNER_ID, "availability": "available", "nextAction": "none"}]),
+            json!([{"runnerId": RUNNER_ID, "access": "direct", "availability": "available", "nextAction": "none"}]),
             "{kind}"
         );
         assert!(grant.get("availability").is_none(), "{grant}");
@@ -2130,7 +2130,7 @@ fn workflow_doctor_reports_each_grant_on_the_named_runner() {
         let report = json_report(&output);
         assert_eq!(
             held(&report, "codex")["authorizations"],
-            json!([{"runnerId": RUNNER_ID, "availability": availability, "nextAction": next_action}]),
+            json!([{"runnerId": RUNNER_ID, "access": "direct", "availability": availability, "nextAction": next_action}]),
             "{runner_report:?}"
         );
         assert_judged(
@@ -2399,6 +2399,51 @@ fn workflow_doctor_on_a_runner_meets_a_need_with_a_grant_it_can_use() {
             assert_judged(&report, kind, "met", "grant_usable", Some("grant"));
         }
         assert_eq!(deployment.linear_list_requests().len(), 1);
+    }
+}
+
+// SC-GRANTAUTH-3
+#[test]
+fn workflow_doctor_judges_a_pool_runners_login_and_conflict() {
+    let tree = single_file_tree(LINEAR_WORKFLOW);
+    for (conflict, report, expected) in [
+        (
+            false,
+            Some(runner_report("ready", Some("accepted"))),
+            "grant",
+        ),
+        (true, None, "conflict"),
+        (false, Some(runner_report("foreign_login", None)), "host"),
+    ] {
+        let mut grant = claude_code_grant(None);
+        let mut pool =
+            super::grant::pool_authorization("aga_01k0z6r1w8f4jy2m7q9v3x5abf", ORGANIZATION_ID);
+        let mut runner = json!({"runnerId": RUNNER_ID, "conflict": conflict});
+        if let Some(report) = report {
+            runner["report"] = report;
+        }
+        pool["runners"] = json!([runner]);
+        grant["authorizations"] = json!([pool]);
+        let deployment = Deployment::signed_in(ready_linear_reads(&[grant]));
+        let output = deployment.doctor_on(&tree, true, RUNNER_ID);
+        let report = json_report(&output);
+        assert_eq!(
+            held(&report, "claude_code")["authorizations"][0]["access"],
+            "pool"
+        );
+        match expected {
+            "conflict" => assert_grant_fails(
+                &report,
+                "claude_code",
+                "missing",
+                "grant_not_ready",
+                "resolve_runner_conflict",
+                "useful account integration deauthorize",
+            ),
+            "host" => assert_judged(&report, "claude_code", "met", "host_login", Some("host")),
+            _ => assert_judged(&report, "claude_code", "met", "grant_usable", Some("grant")),
+        }
+        assert_only_reads(deployment);
     }
 }
 

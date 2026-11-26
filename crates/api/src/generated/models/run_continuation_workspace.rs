@@ -15,6 +15,7 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
+/// RunContinuationWorkspace : Present only for a continuation on the retaining runner.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunContinuationWorkspace {
     #[serde(rename = "executionRoot")]
@@ -37,6 +38,7 @@ pub struct RunContinuationWorkspace {
 }
 
 impl RunContinuationWorkspace {
+    /// Present only for a continuation on the retaining runner.
     pub fn new(
         execution_root: String,
         prior_execution_root: String,

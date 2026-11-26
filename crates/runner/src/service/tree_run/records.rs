@@ -598,6 +598,7 @@ pub(in crate::service) enum ClassifiedEnd {
         command: RefusedCommand,
         step: String,
         code: Option<String>,
+        validation_step: Option<String>,
     },
     /// `cancellation` reached the first `retry --from` before it started an engine
     /// attempt: the record still reads `exited` as the earlier attempt left it.
@@ -611,6 +612,8 @@ pub(in crate::service) enum RefusedCommand {
     Create,
     /// An adopted run's `useful workflow run retry --from`.
     Resume,
+    Handover,
+    HandoverRecord,
 }
 
 impl RefusedCommand {
@@ -619,6 +622,8 @@ impl RefusedCommand {
         match self {
             Self::Create => "tree_run_create_refused",
             Self::Resume => "tree_run_continuation_refused",
+            Self::Handover => "tree_run_handover_refused",
+            Self::HandoverRecord => "tree_run_handover_record_unavailable",
         }
     }
 }
@@ -636,10 +641,14 @@ pub(in crate::service) fn conclude_classified(end: &ClassifiedEnd) -> TreeConclu
             command,
             step,
             code,
+            validation_step,
         } => {
             let mut diagnostic = json!({ "stage": command.stage() });
             if let Some(code) = code.as_deref().filter(|code| is_diagnostic_slug(code)) {
                 diagnostic["declineCause"] = json!(code);
+            }
+            if let Some(step) = validation_step {
+                diagnostic["validationStep"] = json!(step);
             }
             (
                 TransportResult::Failed {

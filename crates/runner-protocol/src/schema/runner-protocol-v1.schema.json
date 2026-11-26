@@ -1178,6 +1178,7 @@
                 "treeWithdraw": {"const": 1},
                 "treeIntegrationBindings": {"const": 1},
                 "treeNoSource": {"const": 1},
+                "treeHandover": {"const": 1},
                 "holdsWaitingRuns": {"const": 1},
                 "credentialMode": {"const": 1},
                 "workspaceRecoveryRoot": {
@@ -1954,6 +1955,19 @@
       },
       "required": ["priorAssignmentId", "priorAttemptId", "requiredRunnerBootId", "executionRoot", "effectiveCapacity", "priorManifestDigest", "request", "reexecutedSteps", "inheritedSteps", "priorSettlementSnapshot"]
     },
+    "HandoverOffer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "priorAttemptId": { "$ref": "#/$defs/attemptId" },
+        "definitionSource": { "$ref": "#/$defs/WorkflowDefinitionSource" },
+        "effectiveCapacity": { "$ref": "#/$defs/ExecutionCapacity" },
+        "priorManifestDigest": { "$ref": "#/$defs/WorkflowSourceClosureDigest" },
+        "request": { "type": "object" },
+        "reexecutedSteps": { "type": "array", "minItems": 0, "items": { "type": "string" } }
+      },
+      "required": ["priorAttemptId", "effectiveCapacity", "priorManifestDigest", "request", "reexecutedSteps"]
+    },
     "CloudAssignmentOffer": {
       "allOf": [
         {
@@ -1990,6 +2004,9 @@
                 "executionSpec": {
                   "$ref": "#/$defs/ExecutionSpec"
                 },
+                "handover": {
+                  "$ref": "#/$defs/HandoverOffer"
+                },
                 "continuation": {
                   "$ref": "#/$defs/ContinuationOffer"
                 },
@@ -1998,8 +2015,15 @@
                 }
               },
               "if": {"properties": {"executionSpec": {"properties": {"schemaVersion": {"const": 4}}}}},
-              "then": {"properties": {"continuation": {"not": {"required": ["definitionSource"]}}}},
-              "else": {"properties": {"continuation": {"required": ["definitionSource"]}}},
+              "then": {"properties": {
+                "continuation": {"not": {"required": ["definitionSource"]}},
+                "handover": {"not": {"required": ["definitionSource"]}}
+              }},
+              "else": {"properties": {
+                "continuation": {"required": ["definitionSource"]},
+                "handover": {"required": ["definitionSource"]}
+              }},
+              "dependentSchemas": {"handover": {"not": {"required": ["continuation"]}}},
               "required": [
                 "effectId",
                 "assignmentId",

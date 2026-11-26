@@ -82,6 +82,9 @@ fn definition_run_refusal_code(problem_type: &str) -> Option<&'static str> {
         "https://api.usefulmachinery.com/problems/continuation-step-required" => {
             Some("continuation_step_required")
         }
+        "https://api.usefulmachinery.com/problems/run-record-unavailable" => {
+            Some("run_record_unavailable")
+        }
         "https://api.usefulmachinery.com/problems/tree-continuation-unavailable" => {
             Some("tree_continuation_unavailable")
         }
@@ -89,8 +92,10 @@ fn definition_run_refusal_code(problem_type: &str) -> Option<&'static str> {
     }
 }
 pub type RunContinuationEnvelope = models::RunContinuationEnvelope;
+pub type RunContinuationRunner = models::run_continuation::Runner;
 pub type RunContinuationReceipt = models::RunContinuationReceipt;
 pub type RunContinuationRequest = models::RunContinuationRequest;
+pub type RunContinuationRequestRunner = models::run_continuation_request::Runner;
 pub type RunContinuationDefinition = models::RunContinuationRequestDefinition;
 pub type RunContinuationWorkspaceModified = models::RunContinuationWorkspaceModified;
 pub type RunRetryReceipt = models::RunRetryReceipt;
@@ -1339,11 +1344,25 @@ fn validate_continuation_envelope(
         || envelope.run.current_attempt_number < receipt.attempt_number
         || (request_id.is_none() && envelope.run.current_attempt_number != receipt.attempt_number)
         || submitted.is_some_and(|submitted| {
+            let runner = match submitted.runner {
+                Some(RunContinuationRequestRunner::Replacement) => {
+                    RunContinuationRunner::Replacement
+                }
+                Some(RunContinuationRequestRunner::Retaining) | None => {
+                    RunContinuationRunner::Retaining
+                }
+            };
             envelope
                 .run
                 .continuation
                 .as_ref()
-                .is_none_or(|continuation| continuation.request.as_ref() != submitted)
+                .is_none_or(|continuation| {
+                    continuation.runner != runner
+                        || continuation.request.from_steps != submitted.from_steps
+                        || continuation.request.definition != submitted.definition
+                        || continuation.request.expected_run_version
+                            != submitted.expected_run_version
+                })
         })
         || (envelope.run.current_attempt_number == receipt.attempt_number
             && (envelope.run.current_attempt_id != receipt.attempt_id
@@ -2114,11 +2133,15 @@ fn valid_portable_result(run: &Run) -> bool {
     matches!(run.portable_result, models::run::PortableResult::Available) == delivered
 }
 
-fn valid_staged_continuation(run: &Run) -> bool {
+pub(super) fn valid_staged_continuation(run: &Run) -> bool {
     let Some(continuation) = &run.continuation else {
         return true;
     };
-    let workspace = &continuation.workspace;
+    let workspace = match (continuation.runner, continuation.workspace.as_deref()) {
+        (RunContinuationRunner::Replacement, None) => return true,
+        (RunContinuationRunner::Retaining, Some(workspace)) => workspace,
+        _ => return false,
+    };
     if !workspace
         .prior_settlement_snapshot
         .as_deref()
@@ -2649,6 +2672,7 @@ mod run_client_tests {
                 "definition_run_not_continuable",
             ),
             ("continuation-step-required", "continuation_step_required"),
+            ("run-record-unavailable", "run_record_unavailable"),
             (
                 "tree-continuation-unavailable",
                 "tree_continuation_unavailable",

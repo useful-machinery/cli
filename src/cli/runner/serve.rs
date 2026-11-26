@@ -23,10 +23,11 @@ use useful_execution::{
 use useful_human_auth::Deployment;
 use useful_runner::{
     ActivationArtifact, AmbiguousCause, Config, EnrollmentError, EnrollmentOutcome,
-    EnrollmentResponse, HeldJoinKey, JoinKey, JoinKeyArtifact, JoinKeyHold, JoinKeyMode,
-    JoinOutcome, JoinRefusal, JoinRetry, RecordedOptions, RegisteredRunner, RegistrationAuthority,
-    RegistrationConflict, RegistrationConflictKind, RegistrationError, RegistrationOutcome,
-    RegistrationStage, RegistrationTarget, Rejoin, RejoinAnswer, RejoinOutcome, ServiceEnd,
+    EnrollmentResponse, EphemeralSession, HeldJoinKey, JoinKey, JoinKeyArtifact, JoinKeyHold,
+    JoinKeyMode, JoinOutcome, JoinRefusal, JoinRetry, RecordedOptions, RegisteredRunner,
+    RegistrationAuthority, RegistrationConflict, RegistrationConflictKind, RegistrationError,
+    RegistrationOutcome, RegistrationStage, RegistrationTarget, Rejoin, RejoinAnswer,
+    RejoinOutcome, Retirement, ServiceEnd,
 };
 use useful_support::generate_idempotency_key;
 
@@ -71,16 +72,21 @@ pub(super) struct Command {
     idle_timeout: Option<Duration>,
 
     /// Read a single-runner key or a pool's join key from a protected file or
-    /// explicit stdin when the host holds no enrolled state, or rejoin the pool
+    /// explicit stdin on a fresh or ephemeral start, or rejoin the pool
     /// when Cloud deleted the runner of a host that joined with a key;
     /// USEFUL_RUNNER_JOIN_KEY may hold the key instead.
     #[arg(long, value_name = "PATH|-")]
     join_key_file: Option<PathBuf>,
 
     /// Read a single-runner key or a pool's join key pasted at a prompt that
-    /// does not echo it when the host holds no enrolled state; needs a terminal.
+    /// does not echo it on a fresh or ephemeral start; needs a terminal.
     #[arg(long)]
     join_key: bool,
+
+    /// Join with a pool key as a new runner on each start and retire its
+    /// registration when serving ends. Keep the host's enrolled state intact.
+    #[arg(long, conflicts_with_all = ["personal", "pool", "replace_credential"])]
+    ephemeral: bool,
 
     /// Enroll a second credential for this host's runner with the single-runner
     /// key --join-key-file gives, or resend the staged replacement, switch the
@@ -144,6 +150,36 @@ impl Command {
                 return Err(error.into());
             }
         };
+        let configuration_failure = |error| {
+            discover();
+            config_load_error(&config_path, error)
+        };
+        if self.ephemeral {
+            let source =
+                join_key.ok_or_else(|| ephemeral_key_error("no pool join key was given"))?;
+            Config::validate_before_join(&config_path).map_err(configuration_failure)?;
+            let session =
+                EphemeralSession::begin(&config_path).context("start ephemeral runner session")?;
+            let JoinKey::Pool(key) = source.read()? else {
+                return Err(ephemeral_key_error("a single-runner key was given"));
+            };
+            let (pi, claude_code, codex) = discover();
+            join_unless_enrolled(session.config_path(), key)?;
+            let config = configure_harness_installations(
+                load_config(session.config_path())?,
+                pi,
+                claude_code,
+                codex,
+            );
+            let outcome = serve_ephemeral(config.with_idle_timeout(self.idle_timeout));
+            if let Err(error) = session.end() {
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "warning: remove ephemeral runner credentials: {error}"
+                );
+            }
+            return outcome;
+        }
         // A host whose state file is present holds enrolled state: it serves
         // with it and never reads a sign-in, and a configuration or state
         // that does not load is the start's failure. It reads a join key given
@@ -153,10 +189,6 @@ impl Command {
         // host's registration record, sending nothing. The journal its own
         // completed join left is removed before it serves, as the second copy
         // of the credential secret it is.
-        let configuration_failure = |error| {
-            discover();
-            config_load_error(&config_path, error)
-        };
         let enrolled = Config::holds_enrolled_state(&config_path);
         let (config, (pi_installation, claude_code_installation, codex_installation), join_key) =
             match (enrolled, join_key, registration) {
@@ -271,6 +303,53 @@ type HarnessInstallations = (
     Option<ValidatedCodexInstallation>,
 );
 
+fn ephemeral_key_error(cause: &str) -> super::super::CommandFailure {
+    super::super::CommandFailure::with_exit_code(
+        anyhow::anyhow!(
+            "start ephemeral runner: {cause}\n\nGive a pool join key with --join-key-file PATH|-, --join-key or {JOIN_KEY_VARIABLE}."
+        ),
+        ExitCode::UsageError,
+    )
+}
+
+fn serve_ephemeral(config: Config) -> super::super::CommandResult {
+    let runner_id = config.runner_id().to_owned();
+    let end = useful_runner::run_ephemeral(config, crate::build_info::VERSION);
+    let mut stderr = io::stderr().lock();
+    match end.retirement {
+        Retirement::Retired => {
+            let _ = writeln!(stderr, "✓ Runner registration {runner_id} retired.");
+        }
+        Retirement::Kept(cause) => {
+            let _ = writeln!(
+                stderr,
+                "Retirement of runner {runner_id} was not confirmed: {cause}.\n\nWait for the pool's offline removal, or have an owner or the personal pool's member run:\n  useful runner delete {runner_id}"
+            );
+        }
+    }
+    match end.service.map_err(service_failure)? {
+        ServiceEnd::Stopped => Ok(ExitCode::Success),
+        ServiceEnd::CredentialRefused => Err(super::super::CommandFailure::with_exit_code(
+            anyhow::anyhow!(
+                "serve ephemeral runner {runner_id}: Cloud refused its credential; its registration may be gone or disabled\n\nStart again with --ephemeral and a pool join key to join as a new runner."
+            ),
+            ExitCode::GeneralFailure,
+        )),
+        ServiceEnd::Rejoined => Err(anyhow::anyhow!(
+            "serve ephemeral runner {runner_id}: service reported a rejoin without a join key"
+        )
+        .into()),
+    }
+}
+
+fn service_failure(error: useful_runner::ServiceError) -> super::super::CommandFailure {
+    let exit_code = service_exit_code(error.requires_operator_recovery());
+    super::super::CommandFailure::with_exit_code(
+        anyhow::Error::new(error).context("serve enrolled runner assignments"),
+        exit_code,
+    )
+}
+
 /// Runs the service until it ends. A rejoined host is served again in the
 /// same process, as the new runner its reloaded state names, with the
 /// harness installations the start discovered and no join key.
@@ -294,13 +373,7 @@ fn serve(
             crate::build_info::VERSION,
             join_key,
         )
-        .map_err(|error| {
-            let exit_code = service_exit_code(error.requires_operator_recovery());
-            super::super::CommandFailure::with_exit_code(
-                anyhow::Error::new(error).context("serve enrolled runner assignments"),
-                exit_code,
-            )
-        })?;
+        .map_err(service_failure)?;
         if let Some(result) = finished_service(end) {
             return result;
         }

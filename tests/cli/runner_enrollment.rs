@@ -644,6 +644,16 @@ impl ServeProcess {
         (status, self.collected_stderr())
     }
 
+    pub(super) fn terminate(self) -> (ExitStatus, String) {
+        let id = i32::try_from(self.child.id()).unwrap();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(id),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        self.wait_for_exit()
+    }
+
     pub(super) fn stop(mut self) -> String {
         if self.exited().is_none() {
             self.child.kill().unwrap();
@@ -665,31 +675,35 @@ impl Drop for ServeProcess {
 pub(super) struct ConnectionWitness {
     pub(super) url: String,
     /// The endpoint's HTTP origin, for a fake Cloud route such as a join.
-    base: String,
+    pub(super) base: String,
     requests: mpsc::Receiver<String>,
 }
 
 impl ConnectionWitness {
     pub(super) fn new() -> Self {
-        Self::answering(None)
+        Self::answering(None, "")
     }
 
     /// A connection endpoint that refuses the runner's credential with 401
     /// and reports each request once the runner has closed the connection,
     /// that is, once it has read the refusal.
     pub(super) fn rejecting() -> Self {
-        Self::answering(Some(
+        Self::answering_every_request(
             b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n".to_vec(),
-        ))
+        )
     }
 
     /// A fake Cloud route that gives every request it receives `response`,
     /// and so records a request it was not expected to receive.
-    fn answering_every_request(response: Vec<u8>) -> Self {
-        Self::answering(Some(response))
+    pub(super) fn answering_every_request(response: Vec<u8>) -> Self {
+        Self::answering(Some(response), "")
     }
 
-    fn answering(response: Option<Vec<u8>>) -> Self {
+    pub(super) fn retiring(response: Vec<u8>) -> Self {
+        Self::answering(Some(response), "POST /v1/runner/registration/retire ")
+    }
+
+    fn answering(response: Option<Vec<u8>>, prefix: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let url = format!("ws://{address}/v1/runner/connect");
@@ -700,7 +714,7 @@ impl ConnectionWitness {
                     break;
                 };
                 let request = String::from_utf8_lossy(&read_request(&mut stream)).into_owned();
-                if let Some(response) = &response {
+                if let Some(response) = response.as_ref().filter(|_| request.starts_with(prefix)) {
                     let _ = stream.write_all(response);
                     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
                     let _ = io::copy(&mut stream, &mut io::sink());
@@ -718,7 +732,7 @@ impl ConnectionWitness {
     }
 
     /// The requests received so far.
-    fn received(&self) -> Vec<String> {
+    pub(super) fn received(&self) -> Vec<String> {
         self.requests.try_iter().collect()
     }
 
@@ -790,7 +804,7 @@ fn assert_joined_state(host: &JoinHost, index: usize, connection_url: &str) -> S
         .to_owned()
 }
 
-fn assert_join_request(request: &str, secret: &str) {
+pub(super) fn assert_join_request(request: &str, secret: &str) {
     assert_join_request_with_body(
         request,
         secret,
@@ -2096,7 +2110,7 @@ fn assert_enrolled_state(host: &JoinHost) -> String {
         .to_owned()
 }
 
-fn assert_silent(cloud: &TcpListener) {
+pub(super) fn assert_silent(cloud: &TcpListener) {
     cloud.set_nonblocking(true).unwrap();
     assert_eq!(
         cloud.accept().unwrap_err().kind(),

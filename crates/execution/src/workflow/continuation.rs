@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::Path;
 
 use super::admission::{ResolvedInput, ResolvedInputs};
 use super::document::{DeclaredWorkspace, FailurePolicy, Output};
-use super::resolution::ResolvedWorkflow;
+use super::resolution::{ResolvedWorkflow, resolve_workflow_file};
 use super::validated::{
     ResolvedOutputSource, ResolvedValueSource, Scheduling, StepWorkspace, ValidatedEdgeTarget,
     ValidatedMessageSource, ValidatedStep, ValidatedWorkflow, WorkflowNode, WorkflowNodeRole,
@@ -252,6 +253,98 @@ pub enum AdmissionViolation {
     Reference {
         reference: String,
     },
+    HandoverExecutionRootRequired {
+        id: String,
+        child: Option<String>,
+    },
+}
+
+pub(crate) fn handover_violations(
+    workflow: &ValidatedWorkflow,
+    partition: &Partition,
+    copy_root: Option<&Path>,
+) -> Vec<AdmissionViolation> {
+    let mut pending = partition
+        .reexecuted
+        .iter()
+        .chain(&partition.revalidated)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut visited = BTreeSet::new();
+    let mut children = BTreeMap::new();
+    let mut violations = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let step = &workflow.steps[id];
+        match step {
+            ValidatedStep::Workflow(stage) => {
+                // Later attempts can take a backward edge in this same execution root.
+                for target in stage.edges.values() {
+                    edge_step_targets(target, &mut pending);
+                }
+                let paths = copy_root.and_then(|root| {
+                    child_execution_root_steps(root, &stage.workflow, &mut children)
+                });
+                match paths {
+                    Some(paths) => violations.extend(paths.into_iter().map(|child| {
+                        AdmissionViolation::HandoverExecutionRootRequired {
+                            id: id.to_owned(),
+                            child: Some(child),
+                        }
+                    })),
+                    None => violations.push(AdmissionViolation::HandoverExecutionRootRequired {
+                        id: id.to_owned(),
+                        child: None,
+                    }),
+                }
+            }
+            ValidatedStep::Command(_) | ValidatedStep::Agent(_) => {
+                if step.common().workspace == StepWorkspace::Starting {
+                    violations.push(AdmissionViolation::HandoverExecutionRootRequired {
+                        id: id.to_owned(),
+                        child: None,
+                    });
+                }
+            }
+        }
+    }
+    sort_violations(&mut violations, workflow);
+    violations
+}
+
+/// Relative step paths in a child that require the execution root. An unreadable child or
+/// a recursive file reference makes the calling workflow step ineligible.
+fn child_execution_root_steps(
+    root: &Path,
+    file: &str,
+    files: &mut BTreeMap<String, Option<Vec<String>>>,
+) -> Option<Vec<String>> {
+    if let Some(paths) = files.get(file) {
+        return paths.clone();
+    }
+    files.insert(file.to_owned(), None);
+    let workflow = resolve_workflow_file(root, &root.join(file))
+        .ok()?
+        .definition;
+    let mut paths = Vec::new();
+    for id in &workflow.presentation_order {
+        let step = &workflow.steps[id];
+        match step {
+            ValidatedStep::Workflow(stage) => {
+                let nested = child_execution_root_steps(root, &stage.workflow, files)?;
+                paths.extend(nested.into_iter().map(|path| format!("{id}.{path}")));
+            }
+            ValidatedStep::Command(_) | ValidatedStep::Agent(_) => {
+                if step.common().workspace == StepWorkspace::Starting {
+                    paths.push(id.clone());
+                }
+            }
+        }
+    }
+    files.insert(file.to_owned(), Some(paths.clone()));
+    Some(paths)
 }
 
 /// Project immutable run values by the replacement declaration, without borrowing
@@ -428,6 +521,7 @@ pub(crate) fn sort_violations(violations: &mut [AdmissionViolation], workflow: &
                 reference.split('.').nth(1).unwrap_or(""),
                 reference.as_str(),
             ),
+            AdmissionViolation::HandoverExecutionRootRequired { id, .. } => (3, id.as_str(), ""),
         };
         (
             reason,
@@ -704,6 +798,93 @@ steps:
                 "{id}"
             );
         }
+    }
+
+    // SC-HANDOVER-1
+    #[test]
+    fn handover_judges_the_resolved_workspaces_of_steps_the_attempt_can_run() {
+        let judge = |steps: &str, lost: &[&str]| {
+            let workflow =
+                super::super::validation::validate(super::super::decode(steps.as_bytes()).unwrap())
+                    .unwrap();
+            let selected = partition(
+                &workflow,
+                &["test".to_owned()],
+                &BTreeSet::new(),
+                &lost.iter().map(|id| (*id).to_owned()).collect(),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            handover_violations(&workflow, &selected, None)
+        };
+        let rebuilt = r#"schemaVersion: 1
+steps:
+  checkout: {kind: cmd, workspace: new, command: {argv: ["true"]}}
+  edit: {kind: cmd, dependsOn: [checkout], command: {argv: ["true"]}}
+  test: {kind: cmd, dependsOn: [edit], command: {argv: ["true"]}}
+"#;
+        assert!(judge(rebuilt, &["checkout"]).is_empty());
+
+        let starting = r#"schemaVersion: 1
+steps:
+  prepare: {kind: cmd, command: {argv: ["true"]}}
+  test: {kind: cmd, dependsOn: [prepare], command: {argv: ["true"]}}
+"#;
+        assert_eq!(
+            judge(starting, &[]),
+            [AdmissionViolation::HandoverExecutionRootRequired {
+                id: "test".to_owned(),
+                child: None,
+            }]
+        );
+        let none = starting.replace("dependsOn:", "workspace: none, dependsOn:");
+        assert!(judge(&none, &[]).is_empty());
+    }
+
+    // SC-HANDOVER-1
+    #[test]
+    fn handover_judges_children_reached_by_a_backward_edge() {
+        let copy = tempfile::tempdir().unwrap();
+        let root = copy.path();
+        std::fs::write(
+            root.join("root.yaml"),
+            r#"schemaVersion: 1
+steps:
+  design: {kind: workflow, workflow: design.yaml, on: {succeeded: build, failed: exit.failed}}
+  build: {kind: workflow, workflow: build.yaml, on: {succeeded: exit.succeeded, failed: design}}
+"#,
+        )
+        .unwrap();
+        let child = r#"schemaVersion: 1
+steps:
+  prepare: {kind: cmd, command: {argv: ["true"]}}
+"#;
+        std::fs::write(root.join("design.yaml"), child).unwrap();
+        std::fs::write(
+            root.join("build.yaml"),
+            child.replace("kind: cmd", "kind: cmd, workspace: new"),
+        )
+        .unwrap();
+        let workflow =
+            super::super::resolution::resolve_workflow_file(root, &root.join("root.yaml"))
+                .unwrap()
+                .definition;
+        let selected = partition(
+            &workflow,
+            &["build".to_owned()],
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(selected.inherited, ["design"]);
+        assert_eq!(
+            handover_violations(&workflow, &selected, Some(root)),
+            [AdmissionViolation::HandoverExecutionRootRequired {
+                id: "design".to_owned(),
+                child: Some("prepare".to_owned()),
+            }]
+        );
     }
 
     #[test]

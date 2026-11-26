@@ -17,12 +17,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunContinuationRequest {
+    /// Steps to re-execute. Empty resumes the run where its record stands.
     #[serde(rename = "fromSteps")]
     pub from_steps: Vec<String>,
     #[serde(rename = "definition")]
     pub definition: Box<models::RunContinuationRequestDefinition>,
     #[serde(rename = "expectedRunVersion", skip_serializing_if = "Option::is_none")]
     pub expected_run_version: Option<i64>,
+    /// Where the attempt may run. The default, retaining, uses the runner boot that kept the workspace. Replacement uses any eligible runner in the run's pools and continues from Cloud's kept record.
+    #[serde(rename = "runner", skip_serializing_if = "Option::is_none")]
+    pub runner: Option<Runner>,
 }
 
 impl RunContinuationRequest {
@@ -34,6 +38,21 @@ impl RunContinuationRequest {
             from_steps,
             definition: Box::new(definition),
             expected_run_version: None,
+            runner: None,
         }
+    }
+}
+/// Where the attempt may run. The default, retaining, uses the runner boot that kept the workspace. Replacement uses any eligible runner in the run's pools and continues from Cloud's kept record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Runner {
+    #[serde(rename = "retaining")]
+    Retaining,
+    #[serde(rename = "replacement")]
+    Replacement,
+}
+
+impl Default for Runner {
+    fn default() -> Runner {
+        Self::Retaining
     }
 }

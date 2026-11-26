@@ -8,7 +8,7 @@ use super::workflow_continue::{
     attempt_count, chained, completed, decide, decide_each, loop_tree, ordinals_of,
     partition_event, read_json, wait_tree,
 };
-use super::workflow_run::{TreeBundle, isolated_command, run_record};
+use super::workflow_run::{TreeBundle, isolated_command, run_record, workflow_run_schema};
 use super::workflow_run_control::{
     LiveRun, OPERATOR, PublishedWaitTree, attempt_result, refused, states, step_states,
 };
@@ -113,6 +113,46 @@ fn a_restored_run_shows_as_it_did() {
         "record create",
         "destination_exists",
     );
+}
+
+#[test]
+fn publishing_with_the_records_definition_id_restores_the_run_under_that_definition() {
+    let published = PublishedWaitTree::new();
+    let root = published.bundle.execution_root().parent().unwrap();
+    let record = root.join("record");
+    let other = root.join("home-b");
+    let (_, run, _) = published.run("blocked");
+    success(create(Path::new(published.home.path()), &run, &record));
+
+    let publish = || {
+        let mut command = isolated_command(&[]);
+        command
+            .args(["workflow", "definition", "publish"])
+            .arg(published.bundle.source_root())
+            .args(["--id", &published.definition, "--on", "local", "--json"])
+            .env("USEFUL_HOME", &other);
+        signed_out(command)
+    };
+    let report = success(publish());
+    assert_eq!(report["definition"]["id"], published.definition);
+    assert_eq!(report["revision"]["n"], 1);
+    let definition = other.join("workflows").join(&published.definition);
+    let restored = success(restore(&other, &record));
+    let directory = definition.join("runs").join(&run);
+    assert_eq!(restored["runDirectory"], directory.to_str().unwrap());
+    assert!(directory.is_dir());
+    assert!(!other.join("runs").join(&run).exists());
+
+    let before = fs::read(definition.join("definition.json")).unwrap();
+    let refused = publish();
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let report: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "definition_exists");
+    assert_eq!(
+        fs::read(definition.join("definition.json")).unwrap(),
+        before
+    );
+    assert!(!definition.join("revisions/2").exists());
 }
 
 #[test]
@@ -293,7 +333,7 @@ fn check_binary_copy(root: &Path) {
     assert_eq!(fs::read_to_string(root.join("calls")).unwrap(), "second\n");
 }
 
-fn retry_after_move(bundle: &TreeBundle, from: &str) -> (Output, PathBuf) {
+fn restored_retry(bundle: &TreeBundle, from: &str) -> (Command, PathBuf, PathBuf) {
     let root = bundle.execution_root().parent().unwrap();
     let home = root.join("home-a");
     let counter = root.join("check-base-calls");
@@ -305,8 +345,6 @@ fn retry_after_move(bundle: &TreeBundle, from: &str) -> (Output, PathBuf) {
     assert_eq!(terminal["result"]["primaryIssue"]["node"]["id"], from);
     let id = id(&terminal);
     let (other, new) = move_run(bundle, &home, id);
-    let workspace = other.join("runs").join(id).join("workspaces/candidate");
-    assert!(!workspace.exists());
     let mut retry = run_command(
         &other,
         &[
@@ -319,7 +357,112 @@ fn retry_after_move(bundle: &TreeBundle, from: &str) -> (Output, PathBuf) {
         ],
     );
     retry.env("PHASE", "continuation").env("COUNTER", &counter);
+    (retry, other.join("runs").join(id), new)
+}
+
+fn retry_after_move(bundle: &TreeBundle, from: &str) -> (Output, PathBuf) {
+    let (retry, run, _) = restored_retry(bundle, from);
+    let workspace = run.join("workspaces/candidate");
+    assert!(!workspace.exists());
     (signed_out(retry), workspace)
+}
+
+// SC-HANDOVER-1
+#[test]
+fn handover_rebuilds_the_checkout_in_an_empty_root() {
+    let bundle = TreeBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE]
+steps:
+  checkout:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -ec, 'printf base > file.txt']}
+  edit:
+    kind: cmd
+    dependsOn: [checkout]
+    command: {argv: [sh, -ec, 'printf edited >> file.txt']}
+  test:
+    kind: cmd
+    dependsOn: [edit]
+    command: {argv: [sh, -ec, 'test "$(cat file.txt)" = baseedited && test "$PHASE" = continuation']}
+"#,
+    );
+    let (mut retry, _, new) = restored_retry(&bundle, "test");
+    retry.arg("--handover");
+    let output = signed_out(retry);
+    let terminal = completed(&output);
+    assert_eq!(terminal["attemptNumber"], 2);
+    assert_eq!(terminal["outcome"], "succeeded");
+    assert_eq!(
+        partition_event(&output)["continuation"]["rebuiltWorkspaces"],
+        serde_json::json!(["checkout"])
+    );
+    assert_eq!(
+        step_states(&terminal["result"]),
+        states(&[
+            ("checkout", "succeeded"),
+            ("edit", "succeeded"),
+            ("test", "succeeded")
+        ])
+    );
+    assert_eq!(fs::read_dir(new).unwrap().count(), 0);
+}
+
+fn handover_refusal(output: Output) -> Value {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(workflow_run_schema().is_valid(&result), "{result}");
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["phase"], "continuation");
+    result
+}
+
+// SC-HANDOVER-1
+#[test]
+fn handover_refuses_the_selected_execution_root_step_before_an_attempt() {
+    let bundle = TreeBundle::new(
+        r#"schemaVersion: 1
+environmentPassthrough: [PHASE]
+steps:
+  prepare:
+    kind: cmd
+    command: {argv: [sh, -c, 'true']}
+  test:
+    kind: cmd
+    dependsOn: [prepare]
+    command: {argv: [sh, -ec, 'test "$PHASE" = continuation && touch ran']}
+"#,
+    );
+    let (mut retry, run, new) = restored_retry(&bundle, "test");
+    retry.arg("--handover");
+    let before = super::workflow_run_list::snapshot(&run);
+    let result = handover_refusal(signed_out(retry));
+    assert_eq!(result["diagnostics"].as_array().unwrap().len(), 1);
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "handover_execution_root_required");
+    assert_eq!(
+        diagnostic["location"],
+        serde_json::json!({"kind": "execution_root_step", "id": "test"})
+    );
+    assert_eq!(attempt_count(&run), 1);
+    assert_eq!(super::workflow_run_list::snapshot(&run), before);
+
+    let home = new.with_file_name("home-b");
+    let mut retry = run_command(
+        &home,
+        &[
+            "retry",
+            run.file_name().unwrap().to_str().unwrap(),
+            "--from",
+            "test",
+            "--execution-root",
+            new.to_str().unwrap(),
+        ],
+    );
+    retry.env("PHASE", "continuation");
+    assert_eq!(completed(&signed_out(retry))["attemptNumber"], 2);
+    assert!(new.join("ran").is_file());
 }
 
 // SC-CONTINUE-16
@@ -576,7 +719,7 @@ exports:
     bundle
 }
 
-fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
+fn restored_stage_retry(bundle: &TreeBundle) -> (Command, PathBuf, PathBuf, PathBuf) {
     let root = bundle.execution_root().parent().unwrap();
     let home = root.join("home-a");
     let counter = root.join("calls");
@@ -592,10 +735,39 @@ fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
         &["retry", id, "--execution-root", new.to_str().unwrap()],
     );
     retry.env("PHASE", "continuation").env("COUNTER", &counter);
+    (retry, other.join("runs").join(id), new, counter)
+}
+
+fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
+    let (retry, restored, new, counter) = restored_stage_retry(bundle);
     chained(&signed_out(retry));
-    let restored = other.join("runs").join(id);
     assert_eq!(run_record(&restored)["outcome"], "landed");
     (restored, new, fs::read_to_string(counter).unwrap())
+}
+
+// SC-HANDOVER-1
+#[test]
+fn handover_judges_a_waiting_stage_by_its_child_workspaces() {
+    let bundle = repair_tree(BuildWorkspace::ExecutionRoot);
+    let (mut retry, run, _, _) = restored_stage_retry(&bundle);
+    retry.arg("--handover");
+    let result = handover_refusal(signed_out(retry));
+    assert!(result["diagnostics"].as_array().unwrap().iter().any(|diagnostic|
+        diagnostic["code"] == "handover_execution_root_required"
+            && diagnostic["location"] == serde_json::json!({"kind": "execution_root_step", "id": "build", "child": "prepare"})
+    ), "{result}");
+    let build = run.join("children/build");
+    assert_eq!(ordinals_of(&build), ["000001"]);
+    assert_eq!(attempt_count(&build.join("000001")), 1);
+
+    let bundle = repair_tree(BuildWorkspace::Checkout);
+    let (mut retry, run, _, _) = restored_stage_retry(&bundle);
+    retry.arg("--handover");
+    chained(&signed_out(retry));
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    let build = run.join("children/build");
+    assert_eq!(ordinals_of(&build), ["000001"]);
+    assert_eq!(attempt_count(&build.join("000001")), 2);
 }
 
 // SC-CONTINUE-18

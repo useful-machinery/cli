@@ -645,6 +645,7 @@ pub(super) fn resolve(
                 from_steps: Vec::new(),
                 workflow: None,
                 execution_root: None,
+                handover: false,
                 leaf: super::create::ExecutionLeaf::Control(control),
                 edge: None,
                 bridge: None,

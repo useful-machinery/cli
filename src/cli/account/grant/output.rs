@@ -8,11 +8,13 @@ use super::super::super::ApiFailureReport;
 use super::super::super::integration_token::{self, Tokens};
 use super::Subject;
 use super::authorization::{
-    AuthorizationView, EndedAuthorizationView, Holder, ended_authorization_views,
+    AuthorizationTargetView, EndedAuthorizationView, Holder, MadeView, ended_authorization_views,
     write_revoked_runners, write_session_note,
 };
 use super::authorize::{MOVE_CODEX_GRANT, Outcome};
-use super::projection::{MemberStatus, Provider, grant_authorization_status, grant_subject};
+use super::projection::{
+    MemberStatus, Provider, grant_authorization_status, grant_runners, grant_subject,
+};
 use super::runner_choice::{Nothing, Runner};
 use crate::exit_code::{ExitCode, OutcomeClass};
 use useful_api::{GrantUse, MemberGrant, MemberGrantFailure, MemberGrantKind, RunnerFailure};
@@ -85,7 +87,7 @@ struct GrantView<'a> {
     state: &'static str,
     generation: i64,
     created_at: &'a str,
-    authorizations: Vec<AuthorizationView<'a>>,
+    authorizations: Vec<AuthorizationTargetView<'a>>,
     // The grant's own availability and next action when no runner is authorized for it.
     #[serde(flatten)]
     status: Option<MemberStatus>,
@@ -199,6 +201,14 @@ impl<'a> GrantView<'a> {
         // A native grant's exchange with each runner is part of its detail; an OAuth grant
         // has none.
         let exchange = detail && grant.kind == MemberGrantKind::GrantKindNative;
+        let runners = grant_runners(grant);
+        let authorizations: Vec<_> = grant
+            .authorizations
+            .iter()
+            .filter_map(|auth| {
+                AuthorizationTargetView::new(auth, Some((grant, &runners)), exchange)
+            })
+            .collect();
         Self {
             id: &grant.id,
             provider: grant.provider.as_str(),
@@ -209,24 +219,10 @@ impl<'a> GrantView<'a> {
             state: grant.state.as_str(),
             generation: grant.generation,
             created_at: &grant.created_at,
-            authorizations: grant
-                .authorizations
-                .iter()
-                .map(|authorization| {
-                    AuthorizationView::of_grant(
-                        authorization,
-                        MemberStatus::new(
-                            grant_authorization_status(grant, Some(authorization)),
-                            subject,
-                        ),
-                        exchange,
-                    )
-                })
-                .collect(),
-            status: grant
-                .authorizations
+            status: authorizations
                 .is_empty()
                 .then(|| MemberStatus::new(grant_authorization_status(grant, None), subject)),
+            authorizations,
             detail: detail.then(|| DetailView::new(grant)),
         }
     }
@@ -725,7 +721,7 @@ struct AuthorizedGrantView<'a> {
     kind: &'static str,
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    authorization: Option<AuthorizationView<'a>>,
+    authorization: Option<MadeView<'a>>,
 }
 
 /// One token's outcome under `authorize --all`.
@@ -739,7 +735,7 @@ struct AuthorizedTokenView<'a> {
     organization_id: Option<&'a str>,
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    authorization: Option<AuthorizationView<'a>>,
+    authorization: Option<MadeView<'a>>,
 }
 
 #[derive(Serialize)]
@@ -784,10 +780,10 @@ pub(in crate::cli) fn write_authorize_all(
         Outcome::OtherOrganization => "other_organization",
         Outcome::Refused(failure) => report(deployment, failure).outcome,
     };
-    fn made(outcome: &Outcome) -> Option<AuthorizationView<'_>> {
+    fn made(outcome: &Outcome) -> anyhow::Result<Option<MadeView<'_>>> {
         match outcome {
-            Outcome::Authorized(made) => Some(made.view()),
-            _ => None,
+            Outcome::Authorized(made) => made.view().map(Some),
+            _ => Ok(None),
         }
     }
     let mut grant_views = Vec::new();
@@ -799,7 +795,7 @@ pub(in crate::cli) fn write_authorize_all(
                 provider: grant.provider.as_str(),
                 kind: grant.kind.as_str(),
                 outcome: named(outcome),
-                authorization: made(outcome),
+                authorization: made(outcome)?,
             }),
             Subject::Token(token) => token_views.push(AuthorizedTokenView {
                 integration_token_id: &token.id,
@@ -807,7 +803,7 @@ pub(in crate::cli) fn write_authorize_all(
                 side: integration_token::side(token),
                 organization_id: token.organization_id.as_deref(),
                 outcome: named(outcome),
-                authorization: made(outcome),
+                authorization: made(outcome)?,
             }),
         }
     }
@@ -869,7 +865,7 @@ pub(in crate::cli) fn write_authorize_all(
         )?;
         match outcome {
             Outcome::Authorized(made) => {
-                writeln!(stdout, " (authorization {})", made.view().id)?;
+                writeln!(stdout, " (authorization {})", made.view()?.id())?;
             }
             Outcome::OtherOrganization => {
                 writeln!(
@@ -926,6 +922,14 @@ fn write_subject_failure(
 /// A grant operation's failure as the member reads it: each refusal of a grant or runner name
 /// with exit status 1 and its remedy.
 pub(in crate::cli) fn report(deployment: &str, failure: &MemberGrantFailure) -> ApiFailureReport {
+    report_target(deployment, failure, false)
+}
+
+pub(super) fn pool_report(deployment: &str, failure: &MemberGrantFailure) -> ApiFailureReport {
+    report_target(deployment, failure, true)
+}
+
+fn report_target(deployment: &str, failure: &MemberGrantFailure, pool: bool) -> ApiFailureReport {
     const SUBJECT: &str = "grant";
     let refused = |outcome, summary: &str, remedy: &str| {
         ApiFailureReport::new(outcome, summary, remedy, OutcomeClass::GeneralFailure)
@@ -969,10 +973,35 @@ pub(in crate::cli) fn report(deployment: &str, failure: &MemberGrantFailure) -> 
             "error: runner not found in an organization this grant can serve",
             "List the organization's runners and use a runner ID:\n  useful runner list --org ORG",
         ),
+        MemberGrantFailure::RunnerPoolNotFound => refused(
+            "runner_pool_not_found",
+            "error: personal pool not found in the grant's organization",
+            "List the organization's pools:\n  useful runner pool list --org ORG",
+        ),
+        MemberGrantFailure::RunnerPoolUnavailable => refused(
+            "runner_pool_unavailable",
+            "error: a Codex login serves one runner at a time",
+            "Authorize one runner for it:\n  useful account integration authorize codex --runner RUNNER --yes",
+        ),
+        MemberGrantFailure::RunnerHoldsLogin if pool => refused(
+            "runner_holds_login",
+            "error: the pool already holds another login for this coding agent",
+            "End the other login's pool authorization first:\n  useful account integration deauthorize INTEGRATION --personal-pool --yes",
+        ),
+        MemberGrantFailure::AlreadyAuthorized if pool => refused(
+            "already_authorized",
+            "error: this grant is already authorized for the pool",
+            "Show the grant's authorizations:\n  useful account integration show INTEGRATION",
+        ),
+        MemberGrantFailure::AuthorizationNotFound if pool => refused(
+            "authorization_not_found",
+            "error: the personal pool holds no authorization of this grant",
+            "Show the grant's authorizations:\n  useful account integration show INTEGRATION",
+        ),
         MemberGrantFailure::RunnerHoldsLogin => refused(
             "runner_holds_login",
             "error: that runner already holds a login of this coding agent",
-            "The owner of the login that runner holds must end its authorization first:\n  useful account integration deauthorize INTEGRATION --runner RUNNER --yes",
+            "The owner of the login that runner holds must end its authorization first, for the runner or for the personal pool that holds it:\n  useful account integration deauthorize INTEGRATION --runner RUNNER --yes\n  useful account integration deauthorize INTEGRATION --personal-pool --yes",
         ),
         MemberGrantFailure::AlreadyAuthorized => refused(
             "already_authorized",

@@ -499,6 +499,8 @@ impl FamilyFailure for MemberGrantFailure {
             | Self::MaterialInvalid
             | Self::LimitReached
             | Self::RunnerNotFound
+            | Self::RunnerPoolNotFound
+            | Self::RunnerPoolUnavailable
             | Self::RunnerHoldsLogin
             | Self::AlreadyAuthorized
             | Self::AuthorizationNotFound

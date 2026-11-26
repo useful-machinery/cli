@@ -815,6 +815,27 @@
               "additionalProperties": false,
               "required": [
                 "kind",
+                "id"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "execution_root_step"
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "child": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
                 "id",
                 "priorState"
               ],

@@ -412,6 +412,33 @@ fn new_beside_a_name_mints_a_second_and_resolution_then_refuses_naming_both() {
 }
 
 #[test]
+fn creating_with_a_given_id_refuses_invalid_ids_and_existing_staging_directories() {
+    let home = Home::new();
+    let tree = Tree::engineering().validated();
+    let publish_to_id = |id: &str| {
+        publish_named(
+            &home.home,
+            &tree,
+            PublishTarget::NewWithId(id.to_owned()),
+            Some(&engineering_bindings()),
+            &[],
+            "tester",
+        )
+    };
+    let error = publish_to_id("engineering").expect_err("a name is not an id");
+    assert_eq!(error.code(), "definition_id_invalid");
+    assert!(!home.path("workflows").exists());
+
+    let id = "def_01jabcdefghjkmnpqrstvwxyz0";
+    let staging = home.path("workflows").join(staging_name(id));
+    fs::create_dir_all(&staging).unwrap();
+    let error = publish_to_id(id).expect_err("another publish owns staging");
+    assert_eq!(error.code(), "definition_exists");
+    assert_eq!(fs::read_dir(staging).unwrap().count(), 0);
+    assert!(!home.path("workflows").join(id).exists());
+}
+
+#[test]
 fn to_an_unknown_id_is_not_found_and_to_a_differently_named_record_renames_it() {
     let home = Home::new();
     let unknown = "def_01jabcdefghjkmnpqrstvwxyz0";

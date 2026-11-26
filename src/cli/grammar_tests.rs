@@ -5,7 +5,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 
 use super::Cli;
 
-const LEAVES: &str = "accept add answer approve authorize archive cancel connect create credentials deauthorize decline delete disable disconnect doctor download drain enable end event hand-back interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
+const LEAVES: &str = "accept add answer approve authorize archive cancel connect create credentials deauthorize decline delete disable disconnect doctor download drain enable end event hand-back handover interrupt issue leave link list login logout pause propose prune publish reconnect reference release remove replay restore resume retry revoke rotate schema seal serve show signup sync test unarchive unpause update upgrade upload validate version view watch";
 const GROUPS: &str = "account artifact audit credential definition delegation delivery event identity input input-set integration invitation join-key key linear member org pool project publication record repository run runner secret service team evaluation webhook workflow";
 const COMMON: [&str; 3] = ["json", "api-key-file", "allow-insecure-http"];
 // These leaves have no limit/cursor contract; see cli/docs/output-style.md.
@@ -1162,12 +1162,43 @@ fn parameterized_option_classes_are_isolated_but_ratchet_within_each_class() {
     );
 }
 
+#[test]
+fn handover_takes_cloud_continuation_options() {
+    let command = ["useful", "workflow", "run", "handover", "run_1"];
+    let options = [
+        "--from",
+        "build",
+        "--from",
+        "test",
+        "--expected-version",
+        "7",
+        "--wait",
+        "--timeout",
+        "5m",
+        "--org",
+        "acme",
+        "--json",
+    ];
+    assert!(super::parse(command.into_iter().chain(options)).is_ok());
+    let error = super::parse(command.into_iter().chain(["--execution-root", "root"])).unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
 // `resume` keeps `--workflow` and `--execution-root` and takes no `--from`; `retry` takes
 // `--from` or `--all`, and `--workflow` with neither `--all`.
 #[test]
 fn resume_and_retry_take_their_options() {
     let resume = ["useful", "workflow", "run", "resume", "run_1"];
     let retry = ["useful", "workflow", "run", "retry", "run_1"];
+    for command in [resume, retry] {
+        let options = ["--handover", "--execution-root", "root"];
+        assert!(super::parse(command.into_iter().chain(options)).is_ok());
+        let error = super::parse(command.into_iter().chain(["--handover"])).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
     for accepted in [
         &[][..],
         &["--workflow", "repair.yaml", "--execution-root", "root"][..],
@@ -1215,6 +1246,7 @@ fn resume_and_retry_take_their_options() {
     for conflicting in [
         &["--all", "--from", "build"][..],
         &["--all", "--workflow", "repair.yaml"][..],
+        &["--all", "--execution-root", "root", "--handover"][..],
     ] {
         let input = retry.iter().chain(conflicting).copied();
         let error = super::parse(input).unwrap_err();

@@ -93,6 +93,55 @@ impl Statement {
     }
 }
 
+/// What selecting a personal pool changes about a grant command's statement.
+#[derive(Clone, Copy)]
+pub(super) enum PoolAction {
+    Authorize,
+    Deauthorize,
+}
+
+impl PoolAction {
+    pub(super) const fn action(self) -> &'static str {
+        match self {
+            Self::Authorize => "to authorize the personal pool",
+            Self::Deauthorize => "to end the personal pool's authorization",
+        }
+    }
+
+    pub(super) fn lines<C: Stated>(self, kind: Option<MemberGrantKind>) -> Vec<String> {
+        let common = match self {
+            Self::Authorize => {
+                "every runner your personal pool holds now or later can use the grant without further approval"
+            }
+            Self::Deauthorize => "a runner's own authorization stays in force",
+        };
+        let mut lines = vec![common.to_owned()];
+        for grant_kind in [
+            MemberGrantKind::GrantKindOAuth,
+            MemberGrantKind::GrantKindNative,
+        ] {
+            if kind.is_some_and(|kind| kind != grant_kind) {
+                continue;
+            }
+            let subject = Kind::Grant(grant_kind);
+            let statements = match (self, grant_kind) {
+                (Self::Authorize, _) => C::STATEMENT.of(subject),
+                (Self::Deauthorize, MemberGrantKind::GrantKindOAuth) => &[
+                    "no runner is issued a token through the pool again; a token already issued expires on its own lifetime",
+                ][..],
+                (Self::Deauthorize, MemberGrantKind::GrantKindNative) => &[
+                    "each runner holding the login only through the pool is asked to stop the run it serves, whichever member started it",
+                ][..],
+            };
+            lines.extend(statements.iter().map(|line| match kind {
+                Some(_) => (*line).to_owned(),
+                None => format!("for {}, {line}", subject.subject()),
+            }));
+        }
+        lines
+    }
+}
+
 /// A leaf that states what acting does before it acts, and in place of acting when `--yes` is
 /// missing where it cannot ask: `authorize` who can use the grant, `revoke` and `deauthorize`
 /// the runs that will be asked to stop.
@@ -219,7 +268,7 @@ impl<C: Stated> FromArgMatches for Confirmation<C> {
                 stated: PhantomData,
             });
         }
-        Err(missing_yes::<C>())
+        Err(missing_yes::<C>(C::STATEMENT.every_line(), C::ACTION))
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -236,13 +285,22 @@ pub(in crate::cli) fn asks<C: Stated>(
     yes: bool,
     json: bool,
 ) -> anyhow::Result<Result<bool, ExitCode>> {
+    asks_with::<C>(yes, json, || C::STATEMENT.every_line(), C::ACTION)
+}
+
+pub(super) fn asks_with<C: Stated>(
+    yes: bool,
+    json: bool,
+    lines: impl FnOnce() -> Vec<String>,
+    action: &str,
+) -> anyhow::Result<Result<bool, ExitCode>> {
     if yes {
         return Ok(Ok(false));
     }
     if !json && can_ask() {
         return Ok(Ok(true));
     }
-    missing_yes::<C>()
+    missing_yes::<C>(lines(), action)
         .format(&mut super::super::super::Cli::command())
         .print()?;
     Ok(Err(ExitCode::UsageError))
@@ -250,23 +308,16 @@ pub(in crate::cli) fn asks<C: Stated>(
 
 /// The refusal of a missing `--yes` for the leaf `C`: what acting does for both kinds, since
 /// it is made before the grant is read, and the remedy that names `--yes`.
-fn missing_yes<C: Stated>() -> clap::Error {
+fn missing_yes<C: Stated>(lines: Vec<String>, action: &str) -> clap::Error {
     let mut error = usage_error::<C>(ErrorKind::MissingRequiredArgument);
     error.insert(
         ContextKind::InvalidArg,
         ContextValue::Strings(vec![format!("--{YES}")]),
     );
-    let remedy = format!("{}, run the command again with --{YES}", C::ACTION);
+    let remedy = format!("{action}, run the command again with --{YES}");
     error.insert(
         ContextKind::Suggested,
-        ContextValue::StyledStrs(
-            C::STATEMENT
-                .every_line()
-                .into_iter()
-                .chain([remedy])
-                .map(Into::into)
-                .collect(),
-        ),
+        ContextValue::StyledStrs(lines.into_iter().chain([remedy]).map(Into::into).collect()),
     );
     error
 }

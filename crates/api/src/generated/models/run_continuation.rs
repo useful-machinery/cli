@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunContinuation {
+    #[serde(rename = "runner")]
+    pub runner: Runner,
     #[serde(rename = "request")]
-    pub request: Box<models::RunContinuationRequest>,
+    pub request: Box<models::RunContinuationProjectedRequest>,
     #[serde(rename = "fromSteps")]
     pub from_steps: Vec<String>,
     #[serde(rename = "reexecutedSteps")]
@@ -27,26 +29,40 @@ pub struct RunContinuation {
     pub inherited_steps: Vec<models::RunContinuationReceiptInheritedStepsInner>,
     #[serde(rename = "definitionSource")]
     pub definition_source: Box<models::RunContinuationDefinitionSource>,
-    #[serde(rename = "workspace")]
-    pub workspace: Box<models::RunContinuationWorkspace>,
+    #[serde(rename = "workspace", skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Box<models::RunContinuationWorkspace>>,
 }
 
 impl RunContinuation {
     pub fn new(
-        request: models::RunContinuationRequest,
+        runner: Runner,
+        request: models::RunContinuationProjectedRequest,
         from_steps: Vec<String>,
         reexecuted_steps: Vec<String>,
         inherited_steps: Vec<models::RunContinuationReceiptInheritedStepsInner>,
         definition_source: models::RunContinuationDefinitionSource,
-        workspace: models::RunContinuationWorkspace,
     ) -> RunContinuation {
         RunContinuation {
+            runner,
             request: Box::new(request),
             from_steps,
             reexecuted_steps,
             inherited_steps,
             definition_source: Box::new(definition_source),
-            workspace: Box::new(workspace),
+            workspace: None,
         }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Runner {
+    #[serde(rename = "retaining")]
+    Retaining,
+    #[serde(rename = "replacement")]
+    Replacement,
+}
+
+impl Default for Runner {
+    fn default() -> Runner {
+        Self::Retaining
     }
 }

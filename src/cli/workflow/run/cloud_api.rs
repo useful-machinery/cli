@@ -1763,6 +1763,7 @@ mod tests {
     fn cloud_run_reader_distinguishes_pending_preparation_from_portable_result() {
         let mut document = serde_json::to_value(run(RunState::Running)).unwrap();
         document["continuation"] = serde_json::json!({
+            "runner": "retaining",
             "request": { "fromSteps": ["rerun"], "definition": "inherited" },
             "fromSteps": ["rerun"], "reexecutedSteps": ["rerun"],
             "inheritedSteps": [{"id": "produce", "priorState": "succeeded", "definitionChanged": false}],
@@ -1782,9 +1783,9 @@ mod tests {
             serde_json::to_value(pending.portable_result).unwrap(),
             "absent"
         );
-        let continuation = pending.continuation.as_ref().unwrap();
-        assert!(continuation.workspace.start_snapshot.is_none());
-        assert!(continuation.workspace.quiescence.is_none());
+        let workspace = pending.continuation.unwrap().workspace.unwrap();
+        assert!(workspace.start_snapshot.is_none());
+        assert!(workspace.quiescence.is_none());
         document["state"] = serde_json::json!("interrupted");
         document["interruption"] = serde_json::json!({
             "phase": "accepted", "cause": "retained_workspace_unavailable",
@@ -1797,6 +1798,7 @@ mod tests {
                 .continuation
                 .unwrap()
                 .workspace
+                .unwrap()
                 .start_snapshot
                 .is_none()
         );

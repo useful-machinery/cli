@@ -15,17 +15,23 @@
 use crate::generated::models;
 use serde::{Deserialize, Serialize};
 
-/// AuthorizeGrantRunnerRequest : The runner a member authorizes to use one of their grants.
+/// AuthorizeGrantRunnerRequest : The runner or personal pool a member authorizes to use one of their grants.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuthorizeGrantRunnerRequest {
     /// A runner registration of an organization the owner is an active member of; for a native grant, of the grant's organization.
-    #[serde(rename = "runnerId")]
-    pub runner_id: String,
+    #[serde(rename = "runnerId", skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<String>,
+    /// The owner's personal runner pool.
+    #[serde(rename = "runnerPoolId", skip_serializing_if = "Option::is_none")]
+    pub runner_pool_id: Option<String>,
 }
 
 impl AuthorizeGrantRunnerRequest {
-    /// The runner a member authorizes to use one of their grants.
-    pub fn new(runner_id: String) -> AuthorizeGrantRunnerRequest {
-        AuthorizeGrantRunnerRequest { runner_id }
+    /// The runner or personal pool a member authorizes to use one of their grants.
+    pub fn new() -> AuthorizeGrantRunnerRequest {
+        AuthorizeGrantRunnerRequest {
+            runner_id: None,
+            runner_pool_id: None,
+        }
     }
 }

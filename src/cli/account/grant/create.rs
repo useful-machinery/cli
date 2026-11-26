@@ -658,10 +658,11 @@ fn supplied_on(grants: &[MemberGrant], provider: ProviderArg, runner_id: &str) -
     grants
         .iter()
         .filter(|grant| replacement::holds(grant, provider.grant().as_str(), None))
-        .flat_map(|grant| &grant.authorizations)
-        .any(|authorization| {
-            authorization.runner_id == runner_id
-                && authorization.report.as_ref().is_some_and(|report| {
+        .any(|grant| {
+            projection::grant_runners(grant)
+                .get(runner_id)
+                .and_then(|runner| runner.report)
+                .is_some_and(|report| {
                     report.state == AgentLoginReportState::AgentLoginReportStateForeignLogin
                 })
         })

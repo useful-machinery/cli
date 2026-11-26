@@ -106,12 +106,23 @@ impl MemberGrantState {
 
 const MATERIAL_INVALID: &str = "https://api.usefulmachinery.com/problems/grant-material-invalid";
 const RUNNER_NOT_FOUND: &str = "https://api.usefulmachinery.com/problems/grant-runner-not-found";
+const RUNNER_POOL_NOT_FOUND: &str =
+    "https://api.usefulmachinery.com/problems/grant-runner-pool-not-found";
+const RUNNER_POOL_UNAVAILABLE: &str =
+    "https://api.usefulmachinery.com/problems/grant-runner-pool-unavailable";
 const RUNNER_CONFLICT: &str = "https://api.usefulmachinery.com/problems/grant-runner-conflict";
 const ALREADY_AUTHORIZED: &str =
     "https://api.usefulmachinery.com/problems/grant-already-authorized";
 const AUTHORIZATION_NOT_FOUND: &str =
     "https://api.usefulmachinery.com/problems/grant-authorization-not-found";
 const KIND_MISMATCH: &str = "https://api.usefulmachinery.com/problems/grant-kind-mismatch";
+
+/// The one runner or personal pool a member authorizes for a grant.
+#[derive(Clone, Copy, Debug)]
+pub enum GrantAuthorizationTarget<'a> {
+    Runner(&'a str),
+    PersonalPool(&'a str),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MemberGrantFailure {
@@ -125,6 +136,8 @@ pub enum MemberGrantFailure {
     MaterialInvalid,
     LimitReached,
     RunnerNotFound,
+    RunnerPoolNotFound,
+    RunnerPoolUnavailable,
     RunnerHoldsLogin,
     AlreadyAuthorized,
     AuthorizationNotFound,
@@ -221,7 +234,7 @@ pub(crate) static SHARED_PROBLEMS: [ProblemRow<MemberGrantFailure>; 6] = [
 ];
 
 /// The problems only the operations on the grants resource answer.
-static GRANT_PROBLEMS: [ProblemRow<MemberGrantFailure>; 8] = [
+static GRANT_PROBLEMS: [ProblemRow<MemberGrantFailure>; 10] = [
     (
         StatusCode::NOT_FOUND,
         problem::GRANT_NOT_FOUND,
@@ -241,6 +254,16 @@ static GRANT_PROBLEMS: [ProblemRow<MemberGrantFailure>; 8] = [
         StatusCode::NOT_FOUND,
         RUNNER_NOT_FOUND,
         MemberGrantFailure::RunnerNotFound,
+    ),
+    (
+        StatusCode::NOT_FOUND,
+        RUNNER_POOL_NOT_FOUND,
+        MemberGrantFailure::RunnerPoolNotFound,
+    ),
+    (
+        StatusCode::CONFLICT,
+        RUNNER_POOL_UNAVAILABLE,
+        MemberGrantFailure::RunnerPoolUnavailable,
     ),
     (
         StatusCode::CONFLICT,
@@ -502,16 +525,21 @@ impl MemberGrantApi {
         Ok((memberships, page.next_cursor))
     }
 
-    /// Authorizes one runner for the grant.
+    /// Authorizes one runner or personal pool for the grant.
     pub fn authorize(
         &self,
         grant_id: &str,
-        runner_id: &str,
+        target: GrantAuthorizationTarget<'_>,
         key: &str,
     ) -> Result<MemberGrantAuthorization, MemberGrantFailure> {
-        let body = serialize_body(&models::AuthorizeGrantRunnerRequest::new(
-            runner_id.to_owned(),
-        ))?;
+        let (runner, pool) = match target {
+            GrantAuthorizationTarget::Runner(id) => (Some(id), None),
+            GrantAuthorizationTarget::PersonalPool(id) => (None, Some(id)),
+        };
+        let body = serialize_body(&models::AuthorizeGrantRunnerRequest {
+            runner_id: runner.map(str::to_owned),
+            runner_pool_id: pool.map(str::to_owned),
+        })?;
         let authorization: MemberGrantAuthorization = self.post(
             &self.endpoint(&[grant_id, "authorizations"]),
             key,
@@ -520,7 +548,10 @@ impl MemberGrantApi {
             problems(),
         )?;
         let prefix = authorization_prefix(grant_id).ok_or_else(invalid)?;
-        if authorization.runner_id != runner_id || !valid_authorization(&authorization, prefix) {
+        if authorization.runner_id.as_deref() != runner
+            || authorization.runner_pool_id.as_deref() != pool
+            || !valid_authorization(&authorization, prefix)
+        {
             return Err(invalid());
         }
         Ok(authorization)
@@ -805,16 +836,49 @@ fn valid_grant(value: &MemberGrant) -> bool {
         .all(|time| time.as_deref().is_none_or(|time| !time.is_empty()))
 }
 
-/// An authorization checked as an agent login's is, naming its organization.
 fn valid_authorization(value: &MemberGrantAuthorization, prefix: &str) -> bool {
-    valid_authorization_record(
-        prefix,
-        &value.id,
-        &value.runner_id,
-        &value.created_at,
-        value.delivery.as_deref(),
-        value.report.as_deref(),
-    ) && useful_support::valid_typed_id(&value.organization_id, "org_")
+    if !useful_support::valid_typed_id(&value.organization_id, "org_") {
+        return false;
+    }
+    match (&value.runner_id, &value.runner_pool_id, &value.runners) {
+        (Some(runner), None, None) => valid_authorization_record(
+            prefix,
+            &value.id,
+            runner,
+            &value.created_at,
+            value.delivery.as_deref(),
+            value.report.as_deref(),
+        ),
+        (None, Some(pool), Some(runners)) => {
+            useful_support::valid_typed_id(&value.id, prefix)
+                && useful_support::valid_typed_id(pool, "rpl_")
+                && !value.created_at.is_empty()
+                && value.delivery.is_none()
+                && value.report.is_none()
+                && runners
+                    .iter()
+                    .all(|runner| match (prefix, runner.conflict) {
+                        ("pga_", None) => {
+                            useful_support::valid_typed_id(&runner.runner_id, "rnr_")
+                                && runner.delivery.is_none()
+                                && runner.report.is_none()
+                        }
+                        ("aga_", Some(conflict)) => {
+                            (!conflict || (runner.delivery.is_none() && runner.report.is_none()))
+                                && valid_authorization_record(
+                                    prefix,
+                                    &value.id,
+                                    &runner.runner_id,
+                                    &value.created_at,
+                                    runner.delivery.as_deref(),
+                                    runner.report.as_deref(),
+                                )
+                        }
+                        _ => false,
+                    })
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug)]
@@ -867,6 +931,18 @@ mod tests {
             ),
             (409, "quantity-limit-reached", &grant[..], F::LimitReached),
             (404, "grant-runner-not-found", &grant[..], F::RunnerNotFound),
+            (
+                404,
+                "grant-runner-pool-not-found",
+                &grant[..],
+                F::RunnerPoolNotFound,
+            ),
+            (
+                409,
+                "grant-runner-pool-unavailable",
+                &grant[..],
+                F::RunnerPoolUnavailable,
+            ),
             (
                 409,
                 "grant-runner-conflict",
@@ -1081,6 +1157,148 @@ mod tests {
                 request.starts_with(&format!("GET /api/v1/me/grants/{id}?vocabulary=2 ")),
                 "{request}"
             );
+        }
+    }
+
+    #[test]
+    fn authorizing_a_pool_checks_the_only_target_in_the_answer() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let grant = "pgr_01k0z6r1w8f4jy2m7q9v3x5abc";
+        let pool = "rpl_01k0z6r1w8f4jy2m7q9v3x5abc";
+        let runner = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
+        for (mut answer, valid) in [
+            (
+                serde_json::json!({"runnerPoolId": pool, "runners": []}),
+                true,
+            ),
+            (
+                serde_json::json!({"runnerPoolId": "rpl_01k0z6r1w8f4jy2m7q9v3x5abd", "runners": []}),
+                false,
+            ),
+            (serde_json::json!({"runnerId": runner}), false),
+            (
+                serde_json::json!({"runnerId": runner, "runnerPoolId": pool, "runners": []}),
+                false,
+            ),
+        ] {
+            answer["id"] = "pga_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            answer["organizationId"] = "org_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            answer["createdAt"] = "2026-11-06T09:00:00Z".into();
+            let body = answer.to_string();
+            let server = useful_test_support::ScriptedHttpServer::respond(format!(
+                "HTTP/1.1 201 Created\r\nIdempotency-Key: pool-test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            ).into_bytes());
+            let api = MemberGrantApi::new(
+                &server.api_url,
+                "test-token",
+                HttpTransportPolicy::AllowInsecureHttp,
+            )
+            .unwrap();
+            let result = api.authorize(
+                grant,
+                GrantAuthorizationTarget::PersonalPool(pool),
+                "pool-test",
+            );
+            server.finish_one();
+            if valid {
+                assert_eq!(result.unwrap().runner_pool_id.as_deref(), Some(pool));
+            } else {
+                assert_eq!(result.unwrap_err(), invalid());
+            }
+        }
+    }
+
+    #[test]
+    fn a_grant_authorization_names_exactly_one_runner_or_pool() {
+        let runner = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
+        let pool = "rpl_01k0z6r1w8f4jy2m7q9v3x5abc";
+        for (target, valid) in [
+            (
+                serde_json::json!({"runnerPoolId": pool, "runners": [{"runnerId": runner}]}),
+                true,
+            ),
+            (
+                serde_json::json!({"runnerPoolId": pool, "runners": []}),
+                true,
+            ),
+            (
+                serde_json::json!({"runnerId": runner, "runnerPoolId": pool, "runners": []}),
+                false,
+            ),
+            (serde_json::json!({}), false),
+            (
+                serde_json::json!({"runnerId": runner, "runners": []}),
+                false,
+            ),
+            (serde_json::json!({"runnerPoolId": pool}), false),
+            (
+                serde_json::json!({"runnerPoolId": pool, "runners": [{"runnerId": pool}]}),
+                false,
+            ),
+        ] {
+            let mut auth = target;
+            auth["id"] = "pga_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            auth["organizationId"] = "org_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            auth["createdAt"] = "2026-11-01T09:05:00Z".into();
+            let grant = grant(serde_json::json!({"authorizations": [auth]}));
+            assert_eq!(valid_grant(&grant), valid, "{grant:?}");
+        }
+    }
+
+    #[test]
+    fn pool_runner_state_is_specific_to_native_grants() {
+        let runner = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
+        let delivery = serde_json::json!({"generation": 1, "deliveredAt": "2026-11-01T09:06:00Z"});
+        let report = serde_json::json!({"state": "ready", "generation": 1, "reportedAt": "2026-11-01T09:07:00Z"});
+        for (mut state, native_ok) in [
+            (
+                serde_json::json!({"conflict": false, "delivery": delivery}),
+                true,
+            ),
+            (
+                serde_json::json!({"conflict": false, "report": report}),
+                true,
+            ),
+            (serde_json::json!({"conflict": true}), true),
+            (
+                serde_json::json!({"conflict": true, "delivery": delivery}),
+                false,
+            ),
+            (
+                serde_json::json!({"conflict": true, "report": report}),
+                false,
+            ),
+            (serde_json::json!({"delivery": delivery}), false),
+            (serde_json::json!({"report": report}), false),
+            (
+                serde_json::json!({"conflict": false, "delivery": {"generation": 0, "deliveredAt": "2026-11-01T09:06:00Z"}}),
+                false,
+            ),
+        ] {
+            state["runnerId"] = runner.into();
+            let mut auth = serde_json::json!({
+                "id": "aga_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "runnerPoolId": "rpl_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "organizationId": "org_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "createdAt": "2026-11-01T09:05:00Z",
+                "runners": [state],
+            });
+            assert_eq!(
+                valid_grant(&native(
+                    serde_json::json!({"provider": "claude_code", "authorizations": [auth]})
+                )),
+                native_ok,
+                "{auth}"
+            );
+            auth["runnerId"] = runner.into();
+            assert!(!valid_grant(&native(
+                serde_json::json!({"provider": "claude_code", "authorizations": [auth]})
+            )));
+            auth.as_object_mut().unwrap().remove("runnerId");
+            auth["id"] = "pga_01k0z6r1w8f4jy2m7q9v3x5abc".into();
+            assert!(!valid_grant(&grant(
+                serde_json::json!({"authorizations": [auth]})
+            )));
         }
     }
 

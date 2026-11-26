@@ -308,6 +308,8 @@ type RootObservation = (u64, Vec<Value>, Option<TreeProgressWait>);
 /// or changed one is, and the last sequence.
 struct Progress<'a> {
     delivery: Option<RecordProgress>,
+    // Keep the previous assignment's record until the engine starts a new attempt.
+    restored_attempt: Option<u64>,
     sink: ReportSink<'a>,
     sequence: u64,
     last: Option<RootObservation>,
@@ -374,7 +376,15 @@ impl Progress<'_> {
     ) -> Result<(), DriveFailure> {
         run.activity()
             .record_read(published_read(record, wait, &steps));
-        if let Some(delivery) = self.delivery.as_mut() {
+        if self
+            .restored_attempt
+            .is_some_and(|restored| record.attempts > restored)
+        {
+            self.restored_attempt = None;
+        }
+        if self.restored_attempt.is_none()
+            && let Some(delivery) = self.delivery.as_mut()
+        {
             delivery.observe(record, wait, &steps);
         }
         let observed = match (record.state, wait) {
@@ -518,6 +528,7 @@ pub(super) async fn drive(run: &TreeRun, sink: ReportSink<'_>) -> Result<TreeEnd
         run,
         progress: Progress {
             delivery: record_progress,
+            restored_attempt: None,
             sink,
             sequence: 0,
             last: None,
@@ -533,11 +544,26 @@ pub(super) async fn drive(run: &TreeRun, sink: ReportSink<'_>) -> Result<TreeEnd
     let drive = async {
         let end = drive_to_end(&mut driver).await;
         if let Some(progress) = &driver.progress.delivery {
-            progress
-                .signal
-                .send_replace(super::record_delivery::Signal::Final(
-                    driver.directory.clone(),
-                ));
+            use super::record_delivery::Signal;
+            // A pending delivery or cancellation can end a restored run without
+            // starting an engine attempt. Its changed terminal record belongs to this
+            // assignment. A refusal leaves only the earlier assignment's record.
+            let settled = end.as_ref().is_ok_and(|end| {
+                end.classified.is_none()
+                    && end
+                        .record
+                        .as_ref()
+                        .is_some_and(|record| record.state == RecordState::Exited)
+            });
+            let signal = if matches!(run.start, TreeStart::Handover { .. })
+                && !settled
+                && (driver.directory.is_none() || driver.progress.restored_attempt.is_some())
+            {
+                Signal::Unstored
+            } else {
+                Signal::Final(driver.directory.clone())
+            };
+            progress.signal.send_replace(signal);
         }
         let _ = finished.send(());
         end
@@ -572,6 +598,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                 return Ok(TreeEnd {
                     classified: Some(ClassifiedEnd::Refused {
                         command: RefusedCommand::Create,
+                        validation_step: None,
                         step: first.clone(),
                         code,
                     }),
@@ -584,7 +611,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                 .and_then(|document| document["runDirectory"].as_str())
             {
                 Some(reported) => Some(PathBuf::from(reported)),
-                None => locate(&run.runs).await,
+                None => locate(driver.runs()?).await,
             };
             driver.set_directory(directory);
             if let Some(directory) = driver.directory.clone()
@@ -594,8 +621,49 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
             }
             exit
         }
-        TreeStart::Adopt(steps) => {
-            let directory = locate(&run.runs).await;
+        TreeStart::Adopt(steps) | TreeStart::Handover { steps, .. } => {
+            let directory = match &run.start {
+                TreeStart::Handover { private, tree, .. } => {
+                    let restored: Result<_, &str> = async {
+                        let directory = super::record_restore::restore(
+                            run.delivery.as_ref(),
+                            &run.useful,
+                            private,
+                            tree,
+                            &run.cancellation,
+                        )
+                        .await?;
+                        let (record, _) = observe_record(directory.clone())
+                            .await
+                            .ok_or("record_altered")?;
+                        Ok((directory, record.attempts))
+                    }
+                    .await;
+                    match restored {
+                        Ok((directory, attempts)) => {
+                            driver.progress.restored_attempt = Some(attempts);
+                            Some(directory)
+                        }
+                        Err(reason) => {
+                            if let Some(cancellation) =
+                                run.cancellation.source().cancellation_reason()
+                            {
+                                return Ok(TreeEnd::of(None, None, Some(cancellation)));
+                            }
+                            return handover_failure(
+                                steps,
+                                private,
+                                &tree.workflow_path,
+                                RefusedCommand::HandoverRecord,
+                                Some(reason.into()),
+                                None,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                _ => locate(driver.runs()?).await,
+            };
             driver.set_directory(directory);
             let ended = match driver.directory.clone() {
                 Some(directory) => {
@@ -606,8 +674,11 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                 }
                 None => false,
             };
-            match (driver.directory.clone(), steps.first()) {
-                (Some(directory), Some(first)) if !ended => {
+            match driver.directory.clone() {
+                Some(directory)
+                    if !ended
+                        && (!steps.is_empty() || driver.progress.restored_attempt.is_some()) =>
+                {
                     let adopted_record = observe_record(directory.clone())
                         .await
                         .map(|(record, _)| record);
@@ -631,11 +702,17 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                         },
                         (None, _) => {
                             driver
-                                .command(command::resume_from_arguments(&directory, steps))
+                                .command(command::resume_from_arguments(
+                                    &directory,
+                                    steps,
+                                    driver.handover_root(),
+                                ))
                                 .await?
                         }
                     };
-                    if exit.cancellation.is_none()
+                    if let TreeStart::Adopt(_) = &run.start
+                        && let Some(first) = steps.first()
+                        && exit.cancellation.is_none()
                         && let Some(code) = refusal(exit.document.as_ref())
                     {
                         // The loop never reads a refused run; its steps are reported here.
@@ -651,6 +728,7 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
                             classified: Some(ClassifiedEnd::Refused {
                                 command: RefusedCommand::Resume,
                                 step: first.clone(),
+                                validation_step: None,
                                 code,
                             }),
                             ..TreeEnd::after(None, exit)
@@ -669,6 +747,34 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
     let mut entered_wait: Option<String> = None;
     let mut resumed_running: Option<u64> = None;
     loop {
+        if let TreeStart::Handover {
+            steps,
+            private,
+            tree,
+            ..
+        } = &run.start
+            && driver.progress.restored_attempt.is_some()
+            && exit.cancellation.is_none()
+            && let Some(code) = refusal(exit.document.as_ref())
+        {
+            let step = exit.document.as_ref().and_then(|document| {
+                let location = &document["diagnostics"][0]["location"];
+                (location["kind"] == "execution_root_step")
+                    .then(|| location["id"].as_str())
+                    .flatten()
+                    .filter(|step| useful_support::is_identifier(step))
+                    .map(str::to_owned)
+            });
+            return handover_failure(
+                steps,
+                private,
+                &tree.workflow_path,
+                RefusedCommand::Handover,
+                code,
+                step,
+            )
+            .await;
+        }
         let observed = match &driver.directory {
             Some(directory) => driver.observe(directory.clone()).await,
             None => None,
@@ -763,12 +869,65 @@ async fn drive_to_end(driver: &mut Driver<'_>) -> Result<TreeEnd, DriveFailure> 
             }
         }
         exit = driver
-            .command(command::resume_arguments(&directory))
+            .command(command::resume_from_arguments(
+                &directory,
+                &[],
+                driver.handover_root(),
+            ))
             .await?;
     }
 }
 
+/// Name the step the handover could not start. On a record failure without a
+/// named step, the staged tree still identifies the first root step.
+async fn handover_failure(
+    steps: &[String],
+    private: &Path,
+    workflow_path: &str,
+    command: RefusedCommand,
+    code: Option<String>,
+    validation_step: Option<String>,
+) -> Result<TreeEnd, DriveFailure> {
+    let step = match validation_step.as_ref().or(steps.first()) {
+        Some(step) => step.clone(),
+        None => {
+            let tree_directory = super::TreeLayout::under(private).tree;
+            let path = workflow_path.to_owned();
+            tokio::task::spawn_blocking(move || super::first_step(&tree_directory, &path))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .ok_or(DriveFailure::Cause("workflow_tree_first_step_unavailable"))?
+                .step
+        }
+    };
+    Ok(TreeEnd {
+        classified: Some(ClassifiedEnd::Refused {
+            command,
+            step,
+            code,
+            validation_step,
+        }),
+        ..TreeEnd::of(None, None, None)
+    })
+}
+
 impl Driver<'_> {
+    fn handover_root(&self) -> Option<&Path> {
+        match (&self.run.start, self.progress.restored_attempt) {
+            (TreeStart::Handover { execution_root, .. }, Some(_)) => Some(execution_root),
+            _ => None,
+        }
+    }
+
+    fn runs(&self) -> Result<&Path, DriveFailure> {
+        self.run
+            .runs
+            .as_deref()
+            .or_else(|| self.directory.as_deref().and_then(Path::parent))
+            .ok_or(DriveFailure::Cause("tree_run_directory_unavailable"))
+    }
+
     /// Keeps `directory` as the run's directory, and publishes it in the run's activity as
     /// where the run's directory is, which decides nothing.
     fn set_directory(&mut self, directory: Option<PathBuf>) {
@@ -791,7 +950,7 @@ impl Driver<'_> {
         let supervised = command::supervise(
             &run.useful,
             arguments,
-            run.runs.clone(),
+            self.runs()?.to_owned(),
             &run.documents,
             run.cancellation.source(),
             run.cancellation.grace(),
@@ -826,7 +985,7 @@ impl Driver<'_> {
                 () = run.controls.arrived(), if applying.is_terminated() => {}
                 () = run.sleeper.sleep(run.intervals.record) => {
                     if self.directory.is_none() {
-                        let directory = locate(&run.runs).await;
+                        let directory = locate(self.runs()?).await;
                         self.set_directory(directory);
                     }
                     if let Some(directory) = self.directory.clone()
@@ -1072,13 +1231,18 @@ impl Driver<'_> {
             }
         }
         if let (RunControlAction::Retry { .. }, Some(wait)) = (&control.action, wait) {
-            let exit = self.command(command::retry_arguments(directory)).await?;
+            let exit = self
+                .command(command::retry_arguments(directory, self.handover_root()))
+                .await?;
             let outcome =
                 command::retry_outcome(&self.run.useful, exit.document.clone(), directory, wait)
                     .await;
             let applied = matches!(outcome, RunControlOutcome::Applied { .. });
             self.report_control(control.control_id, outcome)?;
-            return Ok((applied || exit.cancellation.is_some()).then_some(Woken::Ran(exit)));
+            let handover_refused = self.progress.restored_attempt.is_some()
+                && refusal(exit.document.as_ref()).is_some();
+            return Ok((applied || handover_refused || exit.cancellation.is_some())
+                .then_some(Woken::Ran(exit)));
         }
         let Some(outcome) = command::apply_control(
             &self.run.useful,
@@ -1153,7 +1317,7 @@ impl Driver<'_> {
         if command::leaves_record(reason) {
             return Ok(TreeEnd::of(Some(record), None, Some(reason)));
         }
-        let _ = command::cancel_run(&self.run.useful, &self.run.runs).await;
+        let _ = command::cancel_run(&self.run.useful, self.runs()?).await;
         let record = match self.observe(directory.to_owned()).await {
             Some(observed) => {
                 self.flush(&observed.record, observed.steps, Some(reason))?;

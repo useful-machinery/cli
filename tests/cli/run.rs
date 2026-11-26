@@ -54,6 +54,7 @@ pub(super) mod continuation_command_tests {
         run["workflowDefinitionSource"]["workflowSourceClosureDigest"]["value"] =
             serde_json::json!(PRIOR);
         run["continuation"] = serde_json::json!({
+            "runner": "retaining",
             "request": {"fromSteps": ["build", "test"], "definition": "inherited", "expectedRunVersion": 7},
             "fromSteps": ["build", "test"], "reexecutedSteps": ["build", "test"],
             "inheritedSteps": [{"id":"source", "priorState":"inherited", "definitionChanged":false}],
@@ -132,6 +133,7 @@ pub(super) mod continuation_command_tests {
             .collect::<Vec<_>>();
         let server = std::thread::spawn(move || {
             let mut requests = Vec::new();
+            let mut admission = None;
             for step in steps {
                 let (mut stream, _) = listener.accept().unwrap();
                 let captured = request_text(&mut stream);
@@ -180,17 +182,37 @@ pub(super) mod continuation_command_tests {
                         body["request"]["acceptedAt"] = serde_json::json!("2026-08-11T12:00:00Z");
                     }
                     if step == "submitted" {
-                        let submitted: serde_json::Value =
+                        let mut submitted: serde_json::Value =
                             serde_json::from_str(captured.split("\r\n\r\n").nth(1).unwrap())
                                 .unwrap();
                         let steps = submitted["fromSteps"].clone();
                         body = envelope("preparing");
                         body["request"]["reexecutedSteps"] = steps.clone();
                         body["request"]["inheritedSteps"] = serde_json::json!([]);
+                        if submitted.as_object_mut().unwrap().remove("runner")
+                            == Some(serde_json::json!("replacement"))
+                        {
+                            body["request"]["runner"] = serde_json::json!("replacement");
+                            body["request"]["record"] = serde_json::json!({
+                                "attemptNumber": 1, "sequence": 4, "storedAt": "2026-08-10T11:59:00Z"
+                            });
+                            body["run"]["continuation"]["runner"] =
+                                serde_json::json!("replacement");
+                            body["run"]["continuation"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("workspace");
+                        }
                         body["run"]["continuation"]["request"] = submitted;
                         body["run"]["continuation"]["fromSteps"] = steps.clone();
                         body["run"]["continuation"]["reexecutedSteps"] = steps;
                         body["run"]["continuation"]["inheritedSteps"] = serde_json::json!([]);
+                        admission = Some(body.clone());
+                    } else if step == "submitted-succeeded" {
+                        body = admission
+                            .take()
+                            .expect("a previously submitted continuation");
+                        body["run"]["state"] = serde_json::json!("succeeded");
                     }
                     if step == "changed-request" {
                         body["run"]["continuation"]["request"]["fromSteps"] =
