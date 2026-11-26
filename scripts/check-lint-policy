@@ -141,7 +141,7 @@ cleanup() {
 trap cleanup EXIT
 
 cp clippy.toml "$lint_fixture/"
-python3 - "$public_root/Cargo.toml" "$lint_fixture/Cargo.toml" <<'PY'
+python3 - Cargo.toml tests/Cargo.toml "$lint_fixture/Cargo.toml" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -149,6 +149,20 @@ import tomllib
 
 source = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 workspace = source["workspace"]
+workspace_lints = workspace["lints"]
+driver_lints = tomllib.loads(Path(sys.argv[2]).read_text(encoding="utf-8")).get("lints", {})
+for group in sorted(workspace_lints.keys() | driver_lints.keys()):
+    expected = workspace_lints.get(group, {})
+    actual = driver_lints.get(group, {})
+    for name in sorted(expected.keys() | actual.keys()):
+        if expected.get(name) != actual.get(name):
+            sys.exit(
+                f"tests/Cargo.toml lint {group}.{name} differs from [workspace.lints]: "
+                f"expected {expected.get(name)!r}, got {actual.get(name)!r}"
+            )
+    if group not in workspace_lints or group not in driver_lints:
+        sys.exit(f"tests/Cargo.toml lint table {group} differs from [workspace.lints]")
+
 package = workspace["package"]
 lines = [
     "[package]",
@@ -160,9 +174,9 @@ lines = [
 ]
 for group in ("rust", "clippy"):
     lines.extend(("", f"[lints.{group}]"))
-    for name, value in workspace["lints"][group].items():
+    for name, value in workspace_lints[group].items():
         lines.append(f"{name} = {json.dumps(value)}")
-Path(sys.argv[2]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+Path(sys.argv[3]).write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 mkdir -p "$lint_fixture/src"
 cp tests/fixtures/lint-policy/*.rs "$lint_fixture/src/"

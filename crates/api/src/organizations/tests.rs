@@ -771,15 +771,9 @@ fn update_and_membership_list_classify_only_their_contracted_failures() {
     }
 }
 
-// The listing asks for vocabulary 7, and a page in it decodes whose records name a connection
-// authorization, with the connection it authorizes and its runs, a workflow definition's deletion,
-// with its state and version, a schedule's pause, with its trigger, a GitHub installation's
-// authority verification, with the GitHub user who proved it, an issue of an authorization's
-// installation to a runner, with the permissions issued, and a run record's deletion, with its
-// reason.
 #[test]
 fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
-    let page = serde_json::to_vec(&serde_json::json!({"items": [{
+    let mut page = serde_json::json!({"items": [{
         "id": "aud_01k0z6r1w8f4jy2m7q9v3x5abc",
         "occurredAt": "2026-11-18T12:00:00Z",
         "retention": {
@@ -866,8 +860,26 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
         "action": "run_record.deleted",
         "subject": {"kind": "run", "id": "run_01k0z6r1w8f4jy2m7q9v3x5abc"},
         "changes": [{"field": "reason", "after": "expired"}]
-    }]}))
-    .unwrap();
+    }]});
+    for (suffix, action, kind, prefix, state) in [
+        ("j", "connected", "slack_connection", "scn_", "active"),
+        (
+            "k",
+            "authorization_started",
+            "slack_authorization_session",
+            "sas_",
+            "pending",
+        ),
+    ] {
+        let mut item = page["items"][0].clone();
+        item["id"] = format!("aud_01k0z6r1w8f4jy2m7q9v3x5ab{suffix}").into();
+        item["action"] = format!("slack_connection.{action}").into();
+        item["subject"] =
+            serde_json::json!({"kind": kind, "id": format!("{prefix}01k0z6r1w8f4jy2m7q9v3x5abc")});
+        item["changes"] = serde_json::json!([{"field": "state", "after": state}]);
+        page["items"].as_array_mut().unwrap().push(item);
+    }
+    let page = serde_json::to_vec(&page).unwrap();
     let server = ScriptedHttpServer::respond(response("200 OK", Some(JSON_MEDIA_TYPE), &[], &page));
     let outcome =
         list_organization_audit_records(&http_client(), &server.api_url, TOKEN, "acme", None, None)
@@ -943,14 +955,22 @@ fn audit_listing_asks_for_the_vocabulary_this_release_decodes() {
         run_deletion["changes"],
         serde_json::json!([{"field": "reason", "after": "expired"}])
     );
+    assert_eq!(
+        encoded["items"][6]["subject"],
+        serde_json::json!({"kind": "slack_connection", "id": "scn_01k0z6r1w8f4jy2m7q9v3x5abc"})
+    );
+    assert_eq!(
+        encoded["items"][7]["subject"],
+        serde_json::json!({"kind": "slack_authorization_session", "id": "sas_01k0z6r1w8f4jy2m7q9v3x5abc"})
+    );
     server.finish_one();
 
     for (limit, cursor, query) in [
-        (None, None, "?vocabulary=8"),
+        (None, None, "?vocabulary=9"),
         (
             Some(100),
             Some("opaque cursor"),
-            "?limit=100&cursor=opaque+cursor&vocabulary=8",
+            "?limit=100&cursor=opaque+cursor&vocabulary=9",
         ),
     ] {
         let page = serde_json::to_vec(&serde_json::json!({"items": []})).unwrap();

@@ -536,6 +536,29 @@ fn runner_initialization_probes_path_once_and_remains_command_capable_without_co
     assert_eq!(incompatible.recorded_probes(), b"--version\n");
 }
 
+#[test]
+fn runner_serve_does_not_fall_back_after_the_first_path_candidate_fails() {
+    let runner_directory = private_credential_directory();
+    let config_path = write_runner_config(
+        &runner_directory,
+        "https://not-a-websocket.example.test/v1/runner/connect",
+    );
+    let incompatible = PiFixture::new("0.99.0", COMPLETE_HELP, true);
+    let compatible = PiFixture::new("0.84.2", COMPLETE_HELP, true);
+    let path =
+        std::env::join_paths([incompatible.path_directory(), compatible.path_directory()]).unwrap();
+
+    let output = run_with_env(
+        &["runner", "serve", "--config", config_path.as_str()],
+        &[("PATH", path.to_str().unwrap())],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_invalid_runner_gateway(&output);
+    assert_eq!(incompatible.recorded_probes(), b"--version\n");
+    assert!(compatible.recorded_probes().is_empty());
+}
+
 fn runner_serve_stderr_against_terminating_gateway(fixture: &PiFixture) -> std::process::Output {
     // The gateway rejects the upgrade so Runner Serve terminates after startup.
     let gateway = OneShotServer::respond("400 Bad Request", None, &[]);

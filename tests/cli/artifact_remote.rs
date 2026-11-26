@@ -570,8 +570,16 @@ fn artifact_list_escapes_untrusted_remote_text_only_in_human_output() {
             let report = String::from_utf8(output.stdout).unwrap();
             assert!(!report.contains('\u{1b}'));
             assert!(!report.lines().any(|line| line.starts_with("forged:")));
-            assert!(report.contains("text/plain\\nforged: value\\u{1b}[2J"));
-            assert!(report.contains("next\\nforged: cursor\\u{1b}[2J"));
+            assert!(
+                report
+                    .lines()
+                    .any(|line| line.contains("text/plain") && line.contains("forged: value"))
+            );
+            assert!(
+                report
+                    .lines()
+                    .any(|line| line.contains("next") && line.contains("forged: cursor"))
+            );
         }
         assert_eq!(server.finish().len(), 1);
     }

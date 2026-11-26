@@ -5035,8 +5035,7 @@ fn a_repair_retry_refuses_a_child_that_failed_only_in_its_finalizer() {
 
 /// The root workflow fixture of the engineering lifecycle, whose `release` control trigger
 /// cancels on a departure to `$canceled` and withdraws otherwise.
-const ENGINEERING_ROOT: &str =
-    include_str!("../../crates/execution/tests/fixtures/workflow/v1/valid/root-workflow.yaml");
+const ENGINEERING_ROOT: &str = include_str!("../fixtures/workflow/v1/valid/root-workflow.yaml");
 
 /// The claim's admission observation `updatedAt`, T.
 const ADMITTED_AT: &str = "2026-11-10T10:00:00Z";

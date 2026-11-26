@@ -486,6 +486,24 @@ fn capture_accepts_tree_copied_from_baseline() {
 }
 
 #[test]
+fn capture_runs_no_repository_configured_fsmonitor() {
+    let fixture = GitFixture::new();
+    let outside = tempfile::tempdir().unwrap();
+    let program = outside.path().join("fsmonitor");
+    let marker = outside.path().join("marker");
+    fs::write(&program, "#!/bin/sh\n: > \"${0%/*}/marker\"\nexit 1\n").unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    git(
+        &fixture.repository,
+        &["config", "core.fsmonitor", program.to_str().unwrap()],
+    );
+
+    fixture.capture().unwrap().abort();
+
+    assert!(!marker.exists(), "capture ran the repository's fsmonitor");
+}
+
+#[test]
 fn zero_delta_carries_metadata_without_a_carrier_or_budget_charge() {
     let fixture = GitFixture::new();
     let baseline = fixture.capture.baseline_oid().to_owned();

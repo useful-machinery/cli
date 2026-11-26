@@ -7,7 +7,8 @@ use super::*;
 use crate::workflow::agent::{AgentOutcome, CapturedJson};
 
 const CWD: &str = "/execution/worktree";
-const RESPONSE_SUCCESS: &[u8] = include_bytes!("fixtures/response-success.jsonl");
+const RESPONSE_SUCCESS: &[u8] =
+    include_bytes!("../../../../../tests/fixtures/pi-json-v1/response-success.jsonl");
 const CONTEXT_BOUNDARIES: &[u8] = include_bytes!("fixtures/context-boundaries.jsonl");
 const NATIVE_RECOVERY: &[u8] = include_bytes!("fixtures/native-recovery.jsonl");
 const SIBLING_RESULT_CORRECTION: &[u8] = include_bytes!("fixtures/sibling-result-correction.jsonl");

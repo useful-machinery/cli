@@ -9,13 +9,13 @@ use serde::Serialize;
 use serde_json::Value;
 use useful_api::{
     GitHubFailure, GitHubInstallation, GitLabFailure, LinearConnection, LinearFailure,
-    UnreachableCategory,
+    ResourceFailure, SlackConnection, SlackFailure, UnreachableCategory,
 };
 use useful_human_auth::Deployment;
 
 use super::authorization::{self, InForce};
 use super::token::OrgTokens;
-use super::{github, gitlab, linear};
+use super::{github, gitlab, linear, slack};
 use crate::cli::account::grant::output as grant_output;
 use crate::cli::context::{self, OrgArgs};
 use crate::cli::integration_token::Tokens;
@@ -28,7 +28,7 @@ use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str =
     "List the organization's connections with their authorizations, and its tokens";
-/// The page size GitLab's and Linear's lists are read in, the most either route serves.
+/// The page size the paginated connection routes serve.
 const PAGE: i32 = 100;
 
 pub(super) type Options = CommonArgs<ConnectionJson, PrincipalAuthenticationArgs>;
@@ -55,17 +55,19 @@ pub(in crate::cli) enum Provider {
     Github,
     Gitlab,
     Linear,
+    Slack,
 }
 
 impl Provider {
     /// Every provider, in the order the list prints them.
-    pub(super) const ALL: [Self; 3] = [Self::Github, Self::Gitlab, Self::Linear];
+    pub(super) const ALL: [Self; 4] = [Self::Github, Self::Gitlab, Self::Linear, Self::Slack];
 
     pub(in crate::cli) const fn as_str(self) -> &'static str {
         match self {
             Self::Github => "github",
             Self::Gitlab => "gitlab",
             Self::Linear => "linear",
+            Self::Slack => "slack",
         }
     }
 
@@ -75,6 +77,7 @@ impl Provider {
             Self::Github => "github",
             Self::Gitlab => "gitlab.com",
             Self::Linear => "linear",
+            Self::Slack => "slack",
         }
     }
 }
@@ -121,6 +124,7 @@ pub(in crate::cli) enum Refusal {
     Github(GitHubFailure),
     Gitlab(GitLabFailure),
     Linear(LinearFailure),
+    Slack(SlackFailure),
 }
 
 impl Refusal {
@@ -130,10 +134,12 @@ impl Refusal {
         match self {
             Self::Github(GitHubFailure::Forbidden)
             | Self::Gitlab(GitLabFailure::Forbidden)
+            | Self::Slack(SlackFailure::Resource(ResourceFailure::Forbidden))
             | Self::Linear(LinearFailure::Forbidden) => Some("forbidden"),
             // GitHub's and Linear's clients classify every 5xx answer, a 503 among them, as an
             // unreachable server; GitLab's names a deployment without the capability apart.
             Self::Github(GitHubFailure::Unreachable(UnreachableCategory::Server))
+            | Self::Slack(SlackFailure::NotServed)
             | Self::Gitlab(GitLabFailure::ServiceUnavailable)
             | Self::Linear(LinearFailure::Unreachable {
                 category: UnreachableCategory::Server,
@@ -160,6 +166,15 @@ impl Refusal {
             Self::Gitlab(failure) => {
                 gitlab::failure(deployment, organization, options.json, failure, None)
             }
+            Self::Slack(failure) => slack::failure_output(
+                deployment,
+                organization,
+                None,
+                None,
+                &failure,
+                authentication,
+                options.json,
+            ),
             Self::Linear(failure) => linear::failure_output(
                 deployment,
                 organization,
@@ -234,10 +249,14 @@ fn list(
     // API key reaches neither.
     let session = options.authentication.kind() == PrincipalAuthenticationKind::HumanSession;
     let policy = options.http.transport_policy();
-    if session && !items.is_empty() {
+    let mut authorizable = items
+        .iter_mut()
+        .filter(|item| item.provider != Provider::Slack.as_str())
+        .peekable();
+    if session && authorizable.peek().is_some() {
         match authorization::in_force(deployment, policy, organization, None)? {
             Ok(Some(authorizations)) => {
-                for item in &mut items {
+                for item in authorizable {
                     item.authorizations = Some(InForce::of(&authorizations, &item.id));
                 }
             }
@@ -281,6 +300,7 @@ pub(in crate::cli) enum Record {
     Gitlab(Value),
     // Boxed: a Linear connection is several times the size of the other records.
     Linear(Box<LinearConnection>),
+    Slack(Box<SlackConnection>),
 }
 
 impl Record {
@@ -289,6 +309,7 @@ impl Record {
             Self::Github(_) => Provider::Github,
             Self::Gitlab(_) => Provider::Gitlab,
             Self::Linear(_) => Provider::Linear,
+            Self::Slack(_) => Provider::Slack,
         }
     }
 
@@ -297,6 +318,7 @@ impl Record {
             Self::Github(installation) => &installation.id,
             Self::Gitlab(connection) => connection["id"].as_str().unwrap_or_default(),
             Self::Linear(connection) => &connection.id,
+            Self::Slack(connection) => &connection.id,
         }
     }
 
@@ -305,6 +327,7 @@ impl Record {
             Self::Github(installation) => github::installation_state(installation.state),
             Self::Gitlab(connection) => connection["state"].as_str().unwrap_or_default(),
             Self::Linear(connection) => linear::status(&connection.status),
+            Self::Slack(connection) => slack::status(connection.status),
         }
     }
 
@@ -314,6 +337,7 @@ impl Record {
             Self::Github(installation) => Some(&installation.provider_account_login),
             Self::Gitlab(connection) => connection["instanceUrl"].as_str(),
             Self::Linear(connection) => connection.workspace_name.as_deref(),
+            Self::Slack(connection) => Some(&connection.workspace_name),
         }
     }
 
@@ -324,6 +348,7 @@ impl Record {
             Self::Github(installation) => Some(&installation.provider_account_login),
             Self::Gitlab(connection) => connection["providerUser"]["username"].as_str(),
             Self::Linear(connection) => connection.workspace_name.as_deref(),
+            Self::Slack(connection) => Some(&connection.workspace_name),
         }
     }
 
@@ -342,6 +367,7 @@ impl Record {
             Self::Github(installation) => serde_json::to_value(installation)
                 .context("serialize GitHub installation binding")?,
             Self::Gitlab(connection) => connection.clone(),
+            Self::Slack(connection) => slack::connection_view(connection),
             Self::Linear(connection) => serde_json::to_value(linear::connection_view(connection))
                 .context("serialize Linear connection")?,
         };
@@ -353,7 +379,7 @@ impl Record {
             connection,
             authority: match self {
                 Self::Github(installation) => Some(github::authority(installation)),
-                Self::Gitlab(_) | Self::Linear(_) => None,
+                Self::Gitlab(_) | Self::Linear(_) | Self::Slack(_) => None,
             },
             authorizations: None,
         })
@@ -388,6 +414,23 @@ pub(in crate::cli) fn read<F: JsonOutputKind>(
         })?
         .map(|connections| connections.into_iter().map(Record::Gitlab).collect())
         .map_err(Refusal::Gitlab),
+        Provider::Slack => slack::with_api(deployment, options, |api| {
+            let invalid = ResourceFailure::InvalidResponse {
+                credential_rejected: false,
+            }
+            .into();
+            every_page(invalid, |cursor| {
+                let page = api.list(organization, Some(PAGE), cursor)?;
+                Ok((page.items, page.next_cursor))
+            })
+        })?
+        .map(|connections| {
+            connections
+                .into_iter()
+                .map(|connection| Record::Slack(Box::new(connection)))
+                .collect()
+        })
+        .map_err(Refusal::Slack),
         Provider::Linear => linear::with_api(deployment, options, |api| {
             let invalid = LinearFailure::InvalidResponse {
                 credential_rejected: false,

@@ -27,7 +27,7 @@ use crate::service::assignment::test_support::{
     enqueue_transitions, finished_assignment_reports, finished_reports, hold_lease_time,
     keep_agent_logins_in, prepare_continued, prepare_offered, queued_assignment_reports,
     renew_lease, settled_observations, start_offered, start_offered_with,
-    wait_for_assignment_reports, wait_for_reports,
+    wait_for_assignment_reports, wait_for_assignment_settled, wait_for_reports,
 };
 use crate::service::assignment::{
     AssignmentCancel, AssignmentManager, AssignmentObservation, AssignmentOffer, AssignmentRelease,
@@ -3157,6 +3157,9 @@ async fn an_offer_is_taken_while_the_held_run_waits_and_each_run_ends_alone() {
     let lease_time = hold_lease_time(&mut fixture.manager);
     let first = fixture.offer.clone();
     let second = other_offer(&first, '6');
+    let work = fixture._temporary.path().join("work").join(BOOT);
+    let first_directory = work.join(&first.assignment_id);
+    let second_directory = work.join(&second.assignment_id);
     let first_log = per_run_log(&fixture, &first);
     let second_log = per_run_log(&fixture, &second);
     // The first run's `resume` holds its wait until the test answers `continue`; the second
@@ -3177,6 +3180,7 @@ async fn an_offer_is_taken_while_the_held_run_waits_and_each_run_ends_alone() {
         reported_state(reports, "running")
     })
     .await;
+    assert!(first_directory.is_dir());
 
     lease_time.advance(Duration::from_secs(1));
     assert_eq!(
@@ -3196,6 +3200,10 @@ async fn an_offer_is_taken_while_the_held_run_waits_and_each_run_ends_alone() {
         Some(ExecutionReport::TreeFinished { outcome, .. }) if outcome["outcome"] == "succeeded"
     ));
     assert_eq!(chosen_outcome(&first_reports).as_deref(), Some("landed"));
+    wait_for_assignment_settled(&mut fixture.manager, &first.assignment_id).await;
+    assert!(!first_directory.exists());
+    assert!(second_directory.is_dir());
+    assert!(second_directory.join("workspace").is_dir());
     assert_eq!(
         terminal_count(&queued_assignment_reports(
             &mut fixture.manager,

@@ -42,6 +42,7 @@ const LIST_ACME_GITLAB: &str =
     "GET /api/v1/organizations/acme/connections/gitlab?limit=100 HTTP/1.1";
 const LIST_ACME_LINEAR: &str =
     "GET /api/v1/organizations/acme/connections/linear?limit=100 HTTP/1.1";
+const LIST_ACME_SLACK: &str = "GET /api/v1/organizations/acme/connections/slack?limit=100 HTTP/1.1";
 const LIST_ACME_AUTHORIZATIONS: &str =
     "GET /api/v1/organizations/acme/connection-authorizations?limit=200 HTTP/1.1";
 const AUTHORIZE_ACME_CONNECTION: &str =
@@ -842,6 +843,7 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
                 serde_json::json!({"items": [], "nextCursor": null}),
             ),
             json_http_response("200 OK", serde_json::json!({"items": []})),
+            json_http_response("200 OK", serde_json::json!({"items": []})),
             project_authorizations(RUNNER_ID),
             serving_tokens(),
             tokens(&[acme_buildkite()]),
@@ -855,6 +857,7 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
         LIST_ACME_INSTALLATIONS,
         LIST_ACME_GITLAB,
         LIST_ACME_LINEAR,
+        LIST_ACME_SLACK,
         LIST_ACME_AUTHORIZATIONS,
         READ_SERVED,
         LIST_ACME_TOKENS,
@@ -928,6 +931,7 @@ fn list_prints_each_connections_authorizations_and_then_the_organizations_tokens
             "200 OK",
             serde_json::json!({"items": [], "nextCursor": null}),
         ),
+        json_http_response("200 OK", serde_json::json!({"items": []})),
         json_http_response("200 OK", serde_json::json!({"items": []})),
         problem("403 Forbidden", 403, "forbidden"),
         serving_tokens(),

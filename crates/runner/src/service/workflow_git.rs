@@ -1363,13 +1363,15 @@ mod tests {
     };
 
     const FIXTURE_ORIGIN: &str = "https://github.example/acme/private.git";
+    const FIXTURE_ASSIGNMENT_ID: &str = "asn_01k0z6r1w8f4jy2m7q9v3x5abc";
 
     struct FixtureBroker {
         origin: Arc<str>,
         credentials: Mutex<VecDeque<(Vec<u8>, OffsetDateTime)>>,
         revocations: Mutex<VecDeque<WorkflowGitRevocationOutcome>>,
         expiries: BTreeMap<Vec<u8>, OffsetDateTime>,
-        revoked_tokens: Mutex<Vec<Vec<u8>>>,
+        issued_assignments: Mutex<Vec<String>>,
+        revoked_credentials: Mutex<Vec<(String, Vec<u8>)>>,
     }
 
     impl FixtureBroker {
@@ -1387,8 +1389,18 @@ mod tests {
                 credentials: Mutex::new(credentials.iter().cloned().collect()),
                 revocations: Mutex::new(revocations.into_iter().collect()),
                 expiries: credentials.into_iter().collect(),
-                revoked_tokens: Mutex::new(Vec::new()),
+                issued_assignments: Mutex::new(Vec::new()),
+                revoked_credentials: Mutex::new(Vec::new()),
             }
+        }
+
+        fn assert_revocations(&self, expected: &[(&str, &[u8])]) {
+            let calls = self.revoked_credentials.lock().unwrap();
+            let actual: Vec<_> = calls
+                .iter()
+                .map(|(assignment, token)| (assignment.as_str(), token.as_slice()))
+                .collect();
+            assert_eq!(actual, expected);
         }
     }
 
@@ -1412,9 +1424,13 @@ mod tests {
 
         fn issue_workflow_git(
             &self,
-            _assignment_id: &str,
+            assignment_id: &str,
             cancellation: &CaptureCancellation,
         ) -> Result<ProviderCredential, CredentialBrokerFailure> {
+            self.issued_assignments
+                .lock()
+                .unwrap()
+                .push(assignment_id.to_owned());
             super::super::source::ensure_broker_current(cancellation)?;
             let (token, expires_at) = self
                 .credentials
@@ -1432,10 +1448,14 @@ mod tests {
 
         fn revoke_workflow_git(
             &self,
-            _assignment_id: &str,
+            assignment_id: &str,
             token: &[u8],
         ) -> Result<WorkflowGitRevocation, CredentialBrokerFailure> {
-            self.revoked_tokens.lock().unwrap().push(token.to_vec());
+            let call_count = {
+                let mut calls = self.revoked_credentials.lock().unwrap();
+                calls.push((assignment_id.to_owned(), token.to_vec()));
+                calls.len()
+            };
             let outcome = self
                 .revocations
                 .lock()
@@ -1447,7 +1467,7 @@ mod tests {
                 .get(token)
                 .ok_or(CredentialBrokerFailure::InvalidResponse)?;
             Ok(WorkflowGitRevocation::GitHub {
-                issuance_id: format!("gti_{}", self.revoked_tokens.lock().unwrap().len()),
+                issuance_id: format!("gti_{call_count}"),
                 outcome,
                 provider_expires_at,
             })
@@ -1551,15 +1571,12 @@ mod tests {
         authority: &WorkflowGitAuthority,
         broker: &FixtureBroker,
         expected_summary: RevocationSummary,
-        expected_tokens: &[&[u8]],
+        expected_revocations: &[(&str, &[u8])],
     ) -> WorkflowGitTeardownReport {
         let report = authority.teardown(ProcessQuiescence::Proven);
         assert!(report.local_state_destroyed);
         assert_eq!(report.summary, expected_summary);
-        assert_eq!(
-            broker.revoked_tokens.lock().unwrap().as_slice(),
-            expected_tokens
-        );
+        broker.assert_revocations(expected_revocations);
         report
     }
 
@@ -1636,17 +1653,23 @@ mod tests {
     }
 
     fn install(fixture: &Fixture, broker: Arc<FixtureBroker>) -> WorkflowGitAuthority {
-        install_with_clock(fixture, broker, Arc::new(crate::service::TokioSleeper))
+        install_with_clock(
+            fixture,
+            broker,
+            FIXTURE_ASSIGNMENT_ID,
+            Arc::new(crate::service::TokioSleeper),
+        )
     }
 
     fn install_with_clock(
         fixture: &Fixture,
         broker: Arc<FixtureBroker>,
+        assignment_id: &str,
         clock: Arc<dyn Sleeper>,
     ) -> WorkflowGitAuthority {
         WorkflowGitAuthority::install(WorkflowGitInstall {
             broker,
-            assignment_id: "asn_01k0z6r1w8f4jy2m7q9v3x5abc",
+            assignment_id,
             origin: Arc::from(FIXTURE_ORIGIN),
             canonical_origin: None,
             replace_origin: false,
@@ -2030,6 +2053,63 @@ mod tests {
     }
 
     #[test]
+    fn each_assignment_issues_and_revokes_only_its_own_workflow_git_credentials() {
+        let second_assignment_id = "asn_01k0z6r1w8f4jy2m7q9v3x5abd";
+        let first_fixture = fixture();
+        let second_fixture = fixture();
+        let expires = useful_support::utc_now() + time::Duration::hours(1);
+        let first_token = b"first-runtime-token".as_slice();
+        let second_token = b"second-runtime-token".as_slice();
+        let broker = fixture_broker(
+            [(first_token, expires), (second_token, expires)],
+            [WorkflowGitRevocationOutcome::Revoked; 2],
+        );
+        let first = install(&first_fixture, Arc::clone(&broker));
+        let second = install_with_clock(
+            &second_fixture,
+            Arc::clone(&broker),
+            second_assignment_id,
+            Arc::new(crate::service::TokioSleeper),
+        );
+        let _first_lease = activate(&first);
+        let _second_lease = activate(&second);
+
+        assert_eq!(
+            request(&first, "acme/private.git").as_deref(),
+            Some(first_token)
+        );
+        assert_eq!(
+            request(&second, "acme/private.git").as_deref(),
+            Some(second_token)
+        );
+        assert_eq!(
+            broker.issued_assignments.lock().unwrap().as_slice(),
+            [FIXTURE_ASSIGNMENT_ID, second_assignment_id]
+        );
+
+        teardown_and_assert_revocations(
+            &first,
+            &broker,
+            RevocationSummary::FullyRevoked,
+            &[(FIXTURE_ASSIGNMENT_ID, first_token)],
+        );
+
+        assert_eq!(
+            request(&second, "acme/private.git").as_deref(),
+            Some(second_token)
+        );
+        teardown_and_assert_revocations(
+            &second,
+            &broker,
+            RevocationSummary::FullyRevoked,
+            &[
+                (FIXTURE_ASSIGNMENT_ID, first_token),
+                (second_assignment_id, second_token),
+            ],
+        );
+    }
+
+    #[test]
     fn replacement_issuances_are_revoked_independently_and_report_partial_residual() {
         let fixture = fixture();
         let first_expiry = useful_support::utc_now() + time::Duration::seconds(5);
@@ -2060,8 +2140,8 @@ mod tests {
             &broker,
             RevocationSummary::PartialResidualUntilExpiry,
             &[
-                b"first-runtime-token".as_slice(),
-                b"second-runtime-token".as_slice(),
+                (FIXTURE_ASSIGNMENT_ID, b"first-runtime-token"),
+                (FIXTURE_ASSIGNMENT_ID, b"second-runtime-token"),
             ],
         );
         assert_eq!(report.observations.len(), 2);
@@ -2081,7 +2161,12 @@ mod tests {
             ],
             [WorkflowGitRevocationOutcome::Revoked],
         );
-        let authority = install_with_clock(&fixture, Arc::clone(&broker), Arc::clone(&clock));
+        let authority = install_with_clock(
+            &fixture,
+            Arc::clone(&broker),
+            FIXTURE_ASSIGNMENT_ID,
+            Arc::clone(&clock),
+        );
         activate(&authority);
         assert_eq!(
             request(&authority, "acme/private.git"),
@@ -2107,7 +2192,7 @@ mod tests {
             &authority,
             &broker,
             RevocationSummary::SettledByRevocationAndExpiry,
-            &[b"live-runtime-token".as_slice()],
+            &[(FIXTURE_ASSIGNMENT_ID, b"live-runtime-token")],
         );
         assert_eq!(report.observations.len(), 2);
     }
@@ -2128,10 +2213,7 @@ mod tests {
 
         assert!(report.local_state_destroyed);
         assert_eq!(report.summary, RevocationSummary::ResidualUntilExpiry);
-        assert_eq!(
-            broker.revoked_tokens.lock().unwrap().as_slice(),
-            [b"revoke-failure-token".as_slice()]
-        );
+        broker.assert_revocations(&[(FIXTURE_ASSIGNMENT_ID, b"revoke-failure-token")]);
         assert!(!authority.inner.helper_path.exists());
         assert!(!authority.inner.socket_path.exists());
     }
@@ -2157,10 +2239,7 @@ mod tests {
 
         assert!(report.local_state_destroyed);
         assert_eq!(report.summary, RevocationSummary::FullyRevoked);
-        assert_eq!(
-            broker.revoked_tokens.lock().unwrap().as_slice(),
-            [b"process-loss-token".as_slice()]
-        );
+        broker.assert_revocations(&[(FIXTURE_ASSIGNMENT_ID, b"process-loss-token")]);
         assert_eq!(
             fs::read(workload_credential).unwrap(),
             b"synthetic workload material"

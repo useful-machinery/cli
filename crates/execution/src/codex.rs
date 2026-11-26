@@ -706,7 +706,7 @@ mod tests {
 
     fn copy_named_schema_fixture(destination: &Path, name: &Path) {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/codex-app-server-v1-schema")
+            .join("../../tests/fixtures/codex-app-server-v1-schema")
             .join(name);
         for relative in REQUIRED_SCHEMA_FILES {
             fs::copy(fixture.join(relative), destination.join(relative)).unwrap();

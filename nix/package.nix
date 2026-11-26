@@ -92,11 +92,9 @@ let
     SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
   };
 
-  # The test gate injects fixed values shaped like a rolling version and build
-  # identity, so its result is independent of the package's identity. The tests
-  # compare the binary with whichever values were injected, and the package's
-  # postInstall verifies the real ones. `checks.useful-cli` in the flake requires
-  # this derivation; the package itself does not.
+  # The test builds use fixed version and identity values. The process suite
+  # checks those values on its candidate; the package's postInstall checks the
+  # release binary's own version and identity.
   testVersion = "0.0.0-dev.0+rev.0000000000000000000000000000000000000000";
   testBuildIdentity = "0000000000000000000000000000000000000000";
 
@@ -113,6 +111,7 @@ let
     };
   };
 
+  # Run the workspace crate tests and the architecture test.
   nextestTests = craneLib.cargoNextest (
     testArgs
     // {
@@ -131,8 +130,25 @@ let
       '';
     }
   );
-  # Compile the standalone manifest against its own lock and exercise the actual
-  # packaged program. The native nextest derivation selects a different workspace.
+
+  e2eCandidate = craneLib.mkCargoDerivation (
+    testArgs
+    // {
+      inherit src;
+      cargoArtifacts = testCargoArtifacts;
+      CARGO_PROFILE = "";
+      env = testArgs.env // testProfileEnv;
+      buildPhaseCargoCommand = "cargo build --locked --workspace --all-features --bins";
+      installPhaseCommand = ''
+        mkdir -p "$out/bin"
+        cp "''${CARGO_TARGET_DIR:-target}/debug/useful" "$out/bin/useful"
+      '';
+      doInstallCargoArtifacts = false;
+    }
+  );
+
+  # Build the driver against its own lock. Run the entire process suite against
+  # the test candidate and two smoke tests against the packaged release binary.
   e2eTests = craneLib.mkCargoDerivation {
     # Keep the implementation out of the driver's build sandbox. The executable
     # enters separately below, just as a rewrite candidate would.
@@ -141,10 +157,6 @@ let
       fileset = lib.fileset.unions [
         ../tests
         ../scripts/test-e2e
-        ../crates/test-support/src
-        ../crates/execution/tests/fixtures
-        ../crates/execution/src/workflow/pi/fixtures
-        ../crates/execution/src/workflow/pi-json-v1-extension/src/conformance/fake-provider.ts
         ../docs/command-migration.md
         ../docs/workflow-v1.md
         ../examples
@@ -158,10 +170,18 @@ let
     nativeBuildInputs = [
       cargo-nextest
       git
+      python3
     ];
     # The candidate builds its HTTP client before reading local runs.
-    env = certificateEnv // testProfileEnv;
+    env =
+      certificateEnv
+      // testProfileEnv
+      // {
+        USEFUL_TEST_VERSION = testVersion;
+        USEFUL_TEST_BUILD_IDENTITY = testBuildIdentity;
+      };
     buildPhaseCargoCommand = ''
+      bash scripts/test-e2e ${e2eCandidate}/bin/useful --features candidate-checkpoints --no-fail-fast
       bash scripts/test-e2e ${package}/bin/useful \
         -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run)'
     '';

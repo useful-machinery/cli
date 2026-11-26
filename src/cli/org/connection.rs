@@ -1,9 +1,10 @@
-//! `useful org integration`: the organization's connections to GitHub, GitLab and Linear, its
+//! `useful org integration`: the organization's connections to GitHub, GitLab, Linear and Slack, its
 //! tokens of token services, and the runners authorized for either. Each provider keeps its own
 //! client, failures and output in its module here; a token is acted on through
 //! `integration_token` and a connection authorization in `authorization`.
 mod authorization;
 mod authorize;
+mod consent;
 mod create;
 mod github;
 mod gitlab;
@@ -14,6 +15,7 @@ mod reconnect;
 mod remove;
 mod repository;
 mod show;
+mod slack;
 pub(in crate::cli) mod target;
 mod team;
 mod token;

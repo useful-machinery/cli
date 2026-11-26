@@ -55,6 +55,75 @@ pub enum LifecycleAction {
     Delete,
 }
 
+/// Common identity and timestamps on a provider connection or authorization session.
+/// Requests accept organization slugs, whereas responses name the canonical organization.
+pub(crate) struct ProviderRecord<'a> {
+    pub id: &'a str,
+    pub organization_id: &'a str,
+    pub created_at: &'a str,
+}
+
+impl ProviderRecord<'_> {
+    fn validate(
+        &self,
+        prefix: &str,
+        expected_id: Option<&str>,
+        timestamp: &str,
+    ) -> Result<(), ResourceFailure> {
+        if !useful_support::valid_typed_id(self.id, prefix)
+            || expected_id.is_some_and(|id| self.id != id)
+            || self.organization_id.is_empty()
+            || self.created_at.is_empty()
+            || timestamp.is_empty()
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_connection(
+        &self,
+        prefix: &str,
+        expected_id: Option<&str>,
+        updated_at: &str,
+        generation: i64,
+    ) -> Result<(), ResourceFailure> {
+        self.validate(prefix, expected_id, updated_at)?;
+        if generation < 1 {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_session(
+        &self,
+        prefix: &str,
+        expected_id: Option<&str>,
+        expires_at: &str,
+        pending: bool,
+        authorization_url: Option<&str>,
+    ) -> Result<(), ResourceFailure> {
+        self.validate(prefix, expected_id, expires_at)?;
+        if authorization_url.is_some_and(|url| !pending || !valid_authorization_url(url)) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
+/// Whether `url` is a consent URL the CLI may print for a browser: HTTPS with a host, and no
+/// control character, credentials or fragment.
+pub(crate) fn valid_authorization_url(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|parsed| {
+        !url.chars().any(char::is_control)
+            && parsed.scheme() == "https"
+            && parsed.host_str().is_some()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.fragment().is_none()
+    })
+}
+
 /// The problem types a resource maps to `InvalidInput` (400 and 422) and `Conflict` (409).
 pub(crate) struct ProblemVocabulary {
     pub bad_request: &'static [&'static str],

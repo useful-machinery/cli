@@ -1095,7 +1095,7 @@ fn write_connection_required(
 fn connecting(org: &str, provider: Provider) -> String {
     let required = match provider {
         Provider::Gitlab => " --token-file PATH --kind KIND",
-        Provider::Github | Provider::Linear => "",
+        Provider::Github | Provider::Linear | Provider::Slack => "",
     };
     format!(
         "useful org integration connect {}{required} --org {org}",

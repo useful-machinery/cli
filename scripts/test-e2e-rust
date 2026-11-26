@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+cargo build --locked --workspace --all-features --bins --example internal-worker
+export USEFUL_TEST_VERSION="${USEFUL_TEST_VERSION:-${USEFUL_VERSION:-0.0.0-dev}}"
+export USEFUL_TEST_BUILD_IDENTITY="${USEFUL_TEST_BUILD_IDENTITY:-${USEFUL_RELEASE_COMMIT:-${USEFUL_BUILD_IDENTITY:-unknown}}}"
+exec scripts/test-e2e "${CARGO_TARGET_DIR:-target}/debug/useful" --features candidate-checkpoints "$@"

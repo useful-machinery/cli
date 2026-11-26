@@ -6,13 +6,13 @@ use useful_human_auth::Deployment;
 use super::list::{Options, Provider};
 use super::target::{self, Integration};
 use super::token::{OrgTokens, member_session};
-use super::{github, gitlab, linear};
+use super::{github, gitlab, linear, slack};
 use crate::cli::context::OrgArgs;
 use crate::cli::{CommandResult, ConfirmationArgs};
 
 pub(super) const ABOUT: &str =
     "Remove one of the organization's connections, or erase its token of a token service";
-const AFTER_HELP: &str = "Providers:\n  A GitHub binding or a GitLab connection is disconnected. A Linear connection is disconnected\n  and keeps its workspace held, or with --release-workspace is deleted and releases it.\n  --expected-version, --idempotency-key and --delegator-principal-id belong to a GitLab\n  connection; without --expected-version the command reads the connection's current version.\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
+const AFTER_HELP: &str = "Providers:\n  A GitHub binding or a GitLab connection is disconnected. A Linear connection is disconnected\n  and keeps its workspace held, or with --release-workspace is deleted and releases it. Disconnecting a Slack connection releases its workspace.\n  --expected-version, --idempotency-key and --delegator-principal-id belong to a GitLab\n  connection; without --expected-version the command reads the connection's current version.\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -68,7 +68,7 @@ impl Command {
                 member_session(
                     &options.authentication,
                     &format!(
-                        "{service}, which is not github, gitlab or linear and so can only name a token service"
+                        "{service}, which is not github, gitlab, linear or slack and so can only name a token service"
                     ),
                 )?;
                 return target::execute_in(org, options, deployment, |options, organization| {
@@ -123,6 +123,15 @@ impl Command {
                     },
                 )
             }
+            Provider::Slack => target::execute(
+                connection,
+                org,
+                options,
+                deployment,
+                |options, organization, resolved| {
+                    slack::disconnect(deployment, options, organization, resolved.id())
+                },
+            ),
             Provider::Linear => {
                 let action = if release_workspace {
                     linear::Action::Delete

@@ -2369,6 +2369,18 @@ pub(super) mod test_support {
             .collect()
     }
 
+    /// Waits for one assignment's root to be released or retained.
+    pub(in crate::service) async fn wait_for_assignment_settled(
+        manager: &mut AssignmentManager,
+        assignment_id: &str,
+    ) {
+        wait_until(manager, |manager| {
+            manager.drain_events();
+            !manager.held.contains_key(assignment_id)
+        })
+        .await;
+    }
+
     /// Whether a root cleanup failed, fencing this boot from further offers.
     pub(in crate::service) fn cleanup_failed(manager: &mut AssignmentManager) -> bool {
         manager.drain_events();

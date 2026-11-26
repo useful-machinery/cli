@@ -1,6 +1,7 @@
 //! Linear through `useful org integration`: the authorization sessions `create linear` and
 //! `reconnect` start and observe, and the reads and removals of a Linear connection.
 use super::authorization::InForce;
+use super::consent::{self, emit};
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -15,15 +16,9 @@ use useful_api::{
 };
 use useful_human_auth::Deployment;
 
-use super::super::super::{
-    CommonArgs, JsonOutputKind, PrincipalAuthenticationArgs, ceremony_poll_interval, retry_delay,
-    wait_for_poll,
-};
+use super::super::super::{CommonArgs, JsonOutputKind, PrincipalAuthenticationArgs, retry_delay};
 
-/// The options of a leaf that starts a Linear authorization session, whose `--json` writes one
-/// document per state.
-pub(super) type Options =
-    CommonArgs<super::super::super::StreamingJson, PrincipalAuthenticationArgs>;
+pub(super) use super::consent::Options;
 
 /// How `create linear` and `reconnect` of a Linear connection authorize and whether they
 /// wait; the command's `--timeout` bounds the wait.
@@ -90,9 +85,75 @@ pub(in crate::cli) fn with_api<F: JsonOutputKind, T>(
     )
 }
 
-#[derive(Clone)]
-struct Recovery {
-    session: Option<String>,
+impl consent::Provider for LinearApi {
+    const NAME: &'static str = "Linear";
+    const AUTHORIZATION_CONTEXT: &'static str = "Linear authorization";
+    const LIFECYCLE_CONTEXT: &'static str = "Linear connection lifecycle";
+    type Session = LinearSession;
+    type Failure = LinearFailure;
+    type StartOptions = bool;
+
+    fn with_api<F: JsonOutputKind, T>(
+        deployment: &Deployment,
+        options: &CommonArgs<F, PrincipalAuthenticationArgs>,
+        f: impl FnMut(&Self) -> Result<T, LinearFailure>,
+    ) -> anyhow::Result<Result<T, LinearFailure>> {
+        with_api(deployment, options, f)
+    }
+
+    fn start(
+        &self,
+        org: &str,
+        connection: Option<&str>,
+        key: &str,
+        state_updates: &bool,
+    ) -> Result<LinearSession, LinearFailure> {
+        self.start(org, connection, key, *state_updates)
+    }
+
+    fn session(&self, org: &str, id: &str) -> Result<LinearSession, LinearFailure> {
+        self.session(org, id)
+    }
+
+    fn session_id(session: &LinearSession) -> &str {
+        &session.id
+    }
+
+    fn pending(session: &LinearSession) -> bool {
+        session.status == LinearSessionStatus::LinearSessionPending
+    }
+
+    fn unreachable(failure: &LinearFailure) -> bool {
+        matches!(failure, LinearFailure::Unreachable { .. })
+    }
+
+    fn polling_backoff(failure: &LinearFailure) -> Option<Duration> {
+        match failure {
+            LinearFailure::RateLimited { retry_after } => Some(retry_delay(*retry_after)),
+            _ => None,
+        }
+    }
+
+    fn session_output(
+        d: &Deployment,
+        org: &str,
+        session: &LinearSession,
+        json: bool,
+    ) -> anyhow::Result<ExitCode> {
+        session_output(d, org, session, json)
+    }
+
+    fn failure_output(
+        d: &Deployment,
+        org: &str,
+        id: Option<&str>,
+        key: Option<&str>,
+        failure: &LinearFailure,
+        auth: crate::cli::PrincipalAuthenticationKind,
+        json: bool,
+    ) -> anyhow::Result<ExitCode> {
+        failure_output(d, org, id, key, failure, auth, json)
+    }
 }
 
 /// Starts a Linear authorization session in `organization`, connecting a new workspace, or with
@@ -106,224 +167,15 @@ pub(super) fn authorize(
     authorization: Authorization,
     timeout: Option<Duration>,
 ) -> super::super::super::CommandResult {
-    let key = useful_support::generate_idempotency_key()
-        .context("generate Linear authorization request key")?;
-    let Authorization {
-        state_updates,
-        no_wait,
-    } = authorization;
-    let timeout = if no_wait {
-        None
-    } else {
-        Some(timeout.unwrap_or(Duration::from_secs(900)))
-    };
-    let recovery = Recovery { session: None };
-    let signal_deployment = deployment.clone();
-    let signal_organization = organization.clone();
-    let json = options.json;
-    let timeout_deployment = signal_deployment.clone();
-    let timeout_organization = signal_organization.clone();
-    super::super::super::execute_mutation_with_signals_and_deferred_timeout(
-        "Linear authorization",
-        recovery,
+    consent::authorize::<LinearApi>(
+        deployment,
+        options,
+        organization,
+        connection,
+        authorization.state_updates,
+        authorization.no_wait,
         timeout,
-        move |control, timeout_start| {
-            if !control.begin_dispatch() {
-                return Ok(ExitCode::Interrupted);
-            }
-            let result = with_api(&deployment, &options, |api| {
-                // A lost response may have committed the session. Replay only this key.
-                match api.start(&organization, connection.as_deref(), &key, state_updates) {
-                    Err(LinearFailure::Unreachable { .. }) => {
-                        api.start(&organization, connection.as_deref(), &key, state_updates)
-                    }
-                    result => result,
-                }
-            })?;
-            let session = match result {
-                Ok(session) => session,
-                Err(failure) => {
-                    return finish(control, || {
-                        failure_output(
-                            &deployment,
-                            &organization,
-                            None,
-                            None,
-                            &failure,
-                            options.authentication.kind(),
-                            json,
-                        )
-                    });
-                }
-            };
-            if !control.update_recovery(Recovery {
-                session: Some(session.id.clone()),
-            }) {
-                return Ok(ExitCode::Interrupted);
-            }
-            if no_wait || session.status != LinearSessionStatus::LinearSessionPending {
-                return finish(control, || {
-                    session_output(&deployment, &organization, &session, json)
-                });
-            }
-            if control.is_cancelled() {
-                return Ok(ExitCode::Interrupted);
-            }
-            session_output(&deployment, &organization, &session, json)?;
-            timeout_start.start();
-            observe(&deployment, &organization, &session.id, &options, control)
-        },
-        move |signal, snapshot| {
-            if !snapshot.dispatched {
-                return Ok(signal);
-            }
-            stopped(
-                &signal_deployment,
-                &signal_organization,
-                &snapshot.recovery,
-                signal,
-                json,
-            )
-        },
-        {
-            let d = timeout_deployment;
-            let org = timeout_organization;
-            move |snapshot| stopped(&d, &org, &snapshot.recovery, ExitCode::GeneralFailure, json)
-        },
     )
-}
-
-fn finish<R>(
-    control: &super::super::super::OperationControl<R>,
-    output: impl FnOnce() -> anyhow::Result<ExitCode>,
-) -> super::super::super::CommandResult {
-    super::super::super::complete_operation(control, || output().map_err(Into::into))
-}
-fn stopped(
-    d: &Deployment,
-    org: &str,
-    recovery: &Recovery,
-    signal: ExitCode,
-    json: bool,
-) -> super::super::super::CommandResult {
-    status_output(
-        d,
-        org,
-        stop_outcome(signal),
-        recovery.session.as_deref(),
-        json,
-    )?;
-    Ok(signal)
-}
-
-fn stop_outcome(signal: ExitCode) -> &'static str {
-    if signal == ExitCode::GeneralFailure {
-        "timed_out"
-    } else {
-        "observation_stopped"
-    }
-}
-
-fn observe(
-    d: &Deployment,
-    org: &str,
-    id: &str,
-    options: &Options,
-    control: &super::super::super::OperationControl<Recovery>,
-) -> super::super::super::CommandResult {
-    let mut next = ceremony_poll_interval();
-    loop {
-        if !wait_for_poll(control, next, &super::super::super::SystemObservationClock) {
-            return Ok(ExitCode::Interrupted);
-        }
-        let result = with_api(d, options, |api| api.session(org, id))?;
-        match result {
-            Ok(session) if session.status == LinearSessionStatus::LinearSessionPending => {
-                next = ceremony_poll_interval()
-            }
-            Ok(session) => {
-                return finish(control, || session_output(d, org, &session, options.json));
-            }
-            Err(LinearFailure::RateLimited { retry_after }) => next = retry_delay(retry_after),
-            Err(failure) => {
-                return finish(control, || {
-                    failure_output(
-                        d,
-                        org,
-                        Some(id),
-                        None,
-                        &failure,
-                        options.authentication.kind(),
-                        options.json,
-                    )
-                });
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::super::super::{CEREMONY_POLL_INTERVAL, POLL_WAIT_SLICE};
-    use super::*;
-
-    #[test]
-    fn polling_rate_limit_never_precedes_retry_after() {
-        assert_eq!(retry_delay(Some(9)), Duration::from_secs(9));
-        assert_eq!(retry_delay(None), CEREMONY_POLL_INTERVAL);
-        assert_eq!(retry_delay(Some(0)), CEREMONY_POLL_INTERVAL);
-        assert_eq!(retry_delay(Some(3)), CEREMONY_POLL_INTERVAL);
-        assert_eq!(retry_delay(Some(600)), Duration::from_secs(600));
-        assert_eq!(stop_outcome(ExitCode::GeneralFailure), "timed_out");
-        assert_eq!(stop_outcome(ExitCode::Interrupted), "observation_stopped");
-    }
-
-    #[test]
-    fn poll_wait_honors_cadence_and_server_backoff_without_real_time() {
-        let clock =
-            super::super::super::super::observation_test_support::ControlledObservationClock::new(
-                useful_support::monotonic_now(),
-            );
-        let control = super::super::super::super::OperationControl::new(Recovery { session: None });
-        assert!(wait_for_poll(&control, CEREMONY_POLL_INTERVAL, &clock));
-        assert!(wait_for_poll(&control, retry_delay(Some(9)), &clock));
-        let sleeps = clock.into_sleeps();
-        assert!(sleeps.iter().all(|slice| *slice <= POLL_WAIT_SLICE));
-        assert_eq!(sleeps.iter().sum::<Duration>(), Duration::from_secs(14));
-    }
-
-    #[test]
-    fn long_retry_after_stops_when_observation_is_cancelled() {
-        use std::cell::Cell;
-        use std::time::Instant;
-
-        struct CancellingClock<'a> {
-            now: Cell<Instant>,
-            slices: Cell<usize>,
-            control: &'a super::super::super::super::OperationControl<Recovery>,
-        }
-        impl super::super::super::super::ObservationClock for CancellingClock<'_> {
-            fn now(&self) -> Instant {
-                self.now.get()
-            }
-            fn sleep(&self, duration: Duration) {
-                self.now.set(self.now.get() + duration);
-                self.slices.set(self.slices.get() + 1);
-                let _ = self.control.claim_signal();
-            }
-        }
-        let control = super::super::super::super::OperationControl::new(Recovery {
-            session: Some("known-session".into()),
-        });
-        let clock = CancellingClock {
-            now: Cell::new(useful_support::monotonic_now()),
-            slices: Cell::new(0),
-            control: &control,
-        };
-        assert!(!wait_for_poll(&control, retry_delay(Some(3600)), &clock));
-        assert_eq!(clock.slices.get(), 1);
-        assert_eq!(control.recovery().session.as_deref(), Some("known-session"));
-    }
 }
 
 /// Shows the Linear authorization session `session` of `organization` to the owner who started
@@ -334,18 +186,7 @@ pub(super) fn show_session<F: JsonOutputKind>(
     organization: &str,
     session: &str,
 ) -> anyhow::Result<ExitCode> {
-    match with_api(d, options, |api| api.session(organization, session))? {
-        Ok(read) => session_output(d, organization, &read, options.json),
-        Err(failure) => failure_output(
-            d,
-            organization,
-            Some(session),
-            None,
-            &failure,
-            options.authentication.kind(),
-            options.json,
-        ),
-    }
+    consent::show_session::<LinearApi, F>(d, options, organization, session)
 }
 /// Shows the Linear connection `connection` of `organization`.
 pub(super) fn show<F: JsonOutputKind>(
@@ -400,64 +241,17 @@ pub(super) fn remove<F: JsonOutputKind + Send + 'static>(
     connection: String,
     action: Action,
 ) -> super::super::super::CommandResult {
-    let key = useful_support::generate_idempotency_key()
-        .context("generate Linear lifecycle request key")?;
-    let signal_d = d.clone();
-    let signal_org = organization.clone();
-    let signal_id = connection.clone();
-    let signal_key = key.clone();
-    let json = options.json;
-    super::super::super::execute_mutation_with_signals(
-        "Linear connection lifecycle",
-        (),
-        move |control| {
-            if !control.begin_dispatch() {
-                return Ok(ExitCode::Interrupted);
-            }
-            let result = with_api(&d, &options, |api| {
-                let call = || match action {
-                    Action::Disconnect => {
-                        api.disconnect(&organization, &connection, &key).map(Some)
-                    }
-                    Action::Delete => api.delete(&organization, &connection, &key).map(|()| None),
-                };
-                match call() {
-                    Err(LinearFailure::Unreachable { .. }) => call(),
-                    result => result,
-                }
-            })?;
-            finish(control, || match result {
-                Ok(read) => connection_output(
-                    &d,
-                    &organization,
-                    &connection,
-                    read.as_ref(),
-                    (action.outcome(), None),
-                    json,
-                ),
-                Err(failure) => failure_output(
-                    &d,
-                    &organization,
-                    None,
-                    Some(&key),
-                    &failure,
-                    options.authentication.kind(),
-                    json,
-                ),
-            })
+    consent::remove::<LinearApi, F, _>(
+        d,
+        options,
+        organization,
+        connection,
+        move |api, org, id, key| match action {
+            Action::Disconnect => api.disconnect(org, id, key).map(Some),
+            Action::Delete => api.delete(org, id, key).map(|()| None),
         },
-        move |signal, snapshot| {
-            if !snapshot.dispatched {
-                return Ok(signal);
-            }
-            lifecycle_stopped(
-                &signal_d,
-                &signal_org,
-                &signal_id,
-                &signal_key,
-                signal,
-                json,
-            )
+        move |d, org, id, read, json| {
+            connection_output(d, org, id, read.as_ref(), (action.outcome(), None), json)
         },
     )
 }
@@ -634,9 +428,6 @@ pub(in crate::cli) fn status(s: &useful_api::linear_connection::Status) -> &'sta
         Deleted => "deleted",
     }
 }
-fn emit(value: &impl Serialize) -> anyhow::Result<()> {
-    super::super::super::write_json_line(value).context("write JSON connection event")
-}
 fn session_output(
     d: &Deployment,
     org: &str,
@@ -769,60 +560,6 @@ fn connection_output(
         }
     }
     Ok(ExitCode::Success)
-}
-fn lifecycle_stopped(
-    d: &Deployment,
-    org: &str,
-    id: &str,
-    key: &str,
-    signal: ExitCode,
-    json: bool,
-) -> super::super::super::CommandResult {
-    let output = || -> anyhow::Result<()> {
-        if json {
-            emit(
-                &serde_json::json!({"schemaVersion":1,"deployment":d.fingerprint().api_url(),
-                "organizationRef":org,"connectionId":id,"idempotencyKey":key,"outcome":"commitment_unknown"}),
-            )?;
-        } else {
-            writeln!(
-                io::stderr().lock(),
-                "error: Linear connection operation interrupted\nconnection: {id}\nrequest key: {key}\n\nShow the connection before repeating this operation."
-            )?;
-        }
-        Ok(())
-    };
-    output().map_err(super::super::super::CommandFailure::from)?;
-    Ok(signal)
-}
-
-fn status_output(
-    d: &Deployment,
-    org: &str,
-    outcome: &str,
-    id: Option<&str>,
-    json: bool,
-) -> anyhow::Result<()> {
-    if json {
-        emit(
-            &serde_json::json!({"schemaVersion":1,"deployment":d.fingerprint().api_url(),"organizationRef":org,"outcome":outcome,"sessionId":id}),
-        )
-    } else {
-        let mut err = io::stderr().lock();
-        writeln!(
-            err,
-            "error: Linear authorization {}",
-            outcome.replace('_', " ")
-        )?;
-        if let Some(id) = id {
-            writeln!(err, "session: {id}")?;
-        }
-        writeln!(
-            err,
-            "\nIf a session is known, show it before starting another authorization. Otherwise, inspect existing connections with the initiating owner before retrying."
-        )?;
-        Ok(())
-    }
 }
 pub(in crate::cli) fn failure_output(
     d: &Deployment,

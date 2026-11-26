@@ -101,11 +101,11 @@ snapshots, PTYs and runner sessions. It reads expected release metadata from
 Pass nextest filters after the executable to run a subset. Run the full selection on each
 supported OS to exercise its platform-specific cases. Some fixtures replace `PATH`
 with test tools, so a script launcher should use an absolute interpreter path.
-The public suite runs a selection against its extracted release archive. The private
-`cli-nix` check also runs the standalone launcher against the installed package.
+Both `./scripts/check` and the private `cli-nix` check run the full selection, including
+the checkpoint cases, against an all-features build of the same source. `cli-nix` also
+runs two smoke tests against the installed package.
 
-The driver observes the candidate from outside, so it also relies on three properties
-that no command prints:
+The driver checks candidate behavior beyond command output.
 
 - `version --json` names the launched file. Its `executablePath` and the supplied path
   must be the same file once both are canonicalized, so a launcher reports itself and not
@@ -120,6 +120,16 @@ that no command prints:
   ignores it reaches the same results at the production cadence, where about fifty cases
   take 5 s or more and two take over half of nextest's two-minute limit. The Rust CLI
   honors it in a build with `test-fixtures`, which `--all-features` enables.
+- The driver sets `USEFUL_TEST_METADATA_CLEANUP_IDENTITY` on many of its `useful runner
+  serve` invocations. While it is set, a candidate that normally records work-root cleanup
+  identities in extended attributes must store them elsewhere. The Nix build sandbox
+  where CI runs the suite rejects extended attributes. The Rust CLI uses directory
+  metadata in a `test-fixtures` build.
+
+The driver sets `USEFUL_TEST_BINARY` to the supplied executable and unsets
+`USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE`. `USEFUL_TEST_ENVIRONMENT_WITNESS`,
+`USEFUL_TEST_HELD_RUN_LOCKS`, `USEFUL_TEST_HELD_RUN_LOCKS_RELEASE` and
+`USEFUL_TEST_CLAUDE_FLOW` are inputs to the driver's own fixtures only.
 
 The reviewed command inventory is `tests/fixtures/command-tree.txt`. The driver probes
 retired options on each path, including hidden commands. It executes the 13 design
@@ -129,12 +139,12 @@ produced.
 
 Fifteen additional cases force an exact ordering between workflow processes. A
 qualification build of either implementation can run them with
-`scripts/test-e2e /absolute/path/to/useful --features candidate-checkpoints`. Build the Rust
-qualification executable with `cargo build --locked --workspace --all-features --bins
---example internal-worker`. The driver supplies a path in one of these
-variables. At the named point the candidate creates an empty sibling file with the
-listed extension and waits until the supplied path exists. A candidate that waits 30 s
-without seeing the path fails the command instead of hanging.
+`scripts/test-e2e /absolute/path/to/useful --features candidate-checkpoints`. For Rust,
+`scripts/test-e2e-rust` builds the qualification executable and runs the driver with the
+checkpoint cases enabled. Pass nextest arguments to it to select a subset. The driver
+supplies a path in one of the variables below. At the named point the candidate creates
+an empty sibling file with the listed extension and waits until the supplied path exists.
+A candidate that waits 30 s without seeing the path fails the command.
 
 | Variable | Extension | Point in the command |
 | --- | --- | --- |
@@ -144,9 +154,9 @@ without seeing the path fails the command instead of hanging.
 | `USEFUL_TEST_RELEASE_GATE` | `.releasing` | In an attempt that ends the run: under the controls lock, after spending withdrawals, before the final record |
 | `USEFUL_TEST_BEGIN_GATE` | `.beginning` | Before a new attempt that does not continue an edge takes the controls lock to check for an outstanding withdrawal |
 
-The release suite also exercises approval, upgrade, interruption and cancellation
-through the installed CLI. Two workspace tests inspect the injected Rust TUI lifecycle
-and the Linux guard's private registration handshake. PTY and process-lifecycle
+The process suite also exercises approval, upgrade, interruption and cancellation
+through the supplied executable. The execution crate's own tests inspect the injected Rust TUI
+lifecycle and the Linux guard's private registration handshake. PTY and process-lifecycle
 tests cover their user-visible behavior in the executable suite.
 
 From the platform root, the three pinned-harness scripts accept
@@ -158,18 +168,16 @@ Code response exports with local provider fixtures. The default native gates als
 exercise the implementation's internal adapters. Real-service runner and workflow
 qualification adds Gateway and Coordinator interoperability evidence.
 
-Rust unit and integration tests run through cargo-nextest with the checked-in
-`.config/nextest.toml` policy. Both `./scripts/check` and the production Nix package select the
-locked workspace with all targets and all features. Nix injects the package version and build
-identity into its complete run, which is where the injected-version contract is proved; the local
-suite builds once without injection. The current workspace is binary-only and has no
-documentation-test target; formatting, Clippy, and structural checks remain explicit parts of the
-broader local suite rather than Nix package checks. The local suite packages and verifies the
-release archive from the binary its integration tests already built rather than compiling an
-optimized binary; optimized builds are produced only by the Nix package and release builds.
-When `USEFUL_CLI_SUITE_TESTS_RUN_BY` names a step, `./scripts/check` skips the workspace build, the
-nextest run, and the release-archive check; it is the private pipeline's switch for a step that
-already ran the suite on the same source, and the public workflow never sets it.
+The workspace nextest run covers the crates' tests and `tests/architecture.rs` with the
+checked-in `.config/nextest.toml` policy. It selects the locked workspace with all targets
+and all features. The process suite runs only through the standalone driver. Nix runs
+both suites and injects the package version and build identity into the build under test
+and the driver's `USEFUL_TEST_VERSION` and `USEFUL_TEST_BUILD_IDENTITY`. The local suite
+uses development defaults and reuses the binary from the process suite to package and
+verify the release archive. The Nix package and release builds compile optimized binaries.
+When `USEFUL_CLI_SUITE_TESTS_RUN_BY` names a step that already ran the suites on the same
+source, `./scripts/check` skips the workspace build, both test suites and the
+release-archive check. The public workflow never sets this switch.
 
 Nextest gives each selected test its own process, preventing a child forked by one test from
 inheriting another test's open descriptors. This isolation does not prevent races among processes

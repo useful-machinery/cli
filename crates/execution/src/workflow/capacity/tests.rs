@@ -70,7 +70,7 @@ struct Expected {
 fn cloud_capacity_limits_match_shared_contract() {
     let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/workflow/v1/capacity-contract.json"
+        "/../../tests/fixtures/workflow/v1/capacity-contract.json"
     )))
     .unwrap();
     let number = |path: &[&str]| -> u64 {
@@ -331,7 +331,7 @@ fn presentation_capacity_preserves_undecorated_bases_and_admits_maximum_aliases(
 #[test]
 fn shared_recovery_capacity_vectors_match_the_resolver_owned_calculation() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/workflow/v1/recovery-capacity-vectors.json");
+        .join("../../tests/fixtures/workflow/v1/recovery-capacity-vectors.json");
     let fixture: Fixture = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(fixture.schema_version, 1);
 

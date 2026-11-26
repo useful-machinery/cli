@@ -217,17 +217,19 @@ export CARGO_TERM_COLOR=never
 # off unless the caller that owns a persistent, size-bounded target enables it.
 export CARGO_INCREMENTAL=${CARGO_INCREMENTAL:-0}
 cargo fmt --all -- --check
+cargo fmt --manifest-path tests/Cargo.toml --all -- --check
 "$public_root/scripts/check-msrv"
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo clippy --locked --manifest-path tests/Cargo.toml --all-targets --all-features -- -D warnings
 "$public_root/scripts/check-lint-policy"
 # A caller that already builds and runs this suite on the same source, such as
 # the private pipeline's cli-nix step, names itself in USEFUL_CLI_SUITE_TESTS_RUN_BY.
-# The source, format, MSRV and lint checks above still run; the workspace
-# build, the test run and the release-archive check that reuses its binary do
-# not. The public workflow never sets the variable, so its suite stays complete.
+# Both entry points still run the source, format, MSRV and lint checks above.
+# The public workflow runs the workspace build, both test suites and the
+# release-archive check as well.
 tests_run_by=${USEFUL_CLI_SUITE_TESTS_RUN_BY:-}
 if [[ -n $tests_run_by ]]; then
-  printf 'Workspace build, nextest run and release-archive check skipped: run by %s on this source.\n' \
+  printf 'Workspace build, workspace and process test suites, and release-archive check skipped: run by %s on this source.\n' \
     "$tests_run_by"
 else
   # --all-targets builds the example as a test harness, not as a worker.
@@ -242,20 +244,22 @@ else
   # exec costs about 65 ms per test on macOS, roughly 15 s across this suite, and
   # only guards an interactive job-control race that this noninteractive check
   # never meets.
-  # On macOS many tests wait on child processes, so run about 1.6 test threads
-  # per CPU there (16 on a 10-CPU host); see .config/nextest.toml. Linux hosts
-  # keep nextest's one thread per CPU.
-  if [[ $(uname -s) == Darwin ]]; then
-    # A separate assignment, so that a failed count stops the suite.
-    online_cpus=$(nproc)
-    export NEXTEST_TEST_THREADS=$((online_cpus * 8 / 5))
-  fi
-  NEXTEST_DOUBLE_SPAWN=0 cargo nextest run --locked --workspace --all-targets --all-features
+  (
+    # On macOS many adapter tests wait on child processes, so run about 1.6
+    # workspace test threads per CPU. Linux keeps nextest's one thread per CPU.
+    if [[ $(uname -s) == Darwin ]]; then
+      # A separate assignment, so that a failed count stops the suite.
+      online_cpus=$(nproc)
+      export NEXTEST_TEST_THREADS=$((online_cpus * 8 / 5))
+    fi
+    NEXTEST_DOUBLE_SPAWN=0 cargo nextest run --locked --workspace --all-targets --all-features
+  )
+  "$public_root/scripts/test-e2e-rust" --no-fail-fast
 
   # The packaging checks exercise archive layout, embedded authoring assets, and
   # isolated execution, none of which depend on optimization level. Reuse the
-  # binary the integration tests just built instead of a second, optimized
-  # compilation of the whole crate; the Nix package and release builds compile
+  # binary the process suite just tested instead of a second, optimized
+  # compilation of the whole crate. The Nix package and release builds compile
   # optimized binaries with the injected version and identity and run this suite
   # against them. Those publication paths keep the packager's maximum default
   # compression; this layout check packs the large debug binary at the fastest
@@ -276,15 +280,6 @@ else
         --archive "$archive" \
         --target "$host_target" \
         --version 0.0.0-dev
-      # Also compile the independent driver and exercise its selection of the
-      # packaged executable. The workspace run above already ran the shared cases.
-      # The archive holds the all-features build, so the driver is compiled with its
-      # checkpoint cases and one of them holds a command at a gate: nothing else
-      # builds or runs that configuration of the standalone driver.
-      tar -xzf "$archive" -C "$release_dist"
-      "$public_root/scripts/test-e2e" "$release_dist/useful-0.0.0-dev-$host_target/useful" \
-        --features candidate-checkpoints \
-        -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run) | test(a_withdraw_refused_at_the_run_lock_appends_nothing)'
       ;;
     *)
       printf 'Skipped release-package execution on unsupported host target: %s\n' \

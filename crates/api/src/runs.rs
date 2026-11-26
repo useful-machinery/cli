@@ -28,11 +28,12 @@ const RUN_CREATION_REJECTED: &str =
 // HTML-sensitive bytes sixfold; workflow paths and display/placement names add
 // less than 3 MiB at their admitted bounds. Keep the larger budget list-only.
 const MAX_RUN_LIST_BODY_BYTES: usize = 16 * 1024 * 1024;
-/// The most items a page of a run's controls holds, the API's `limit` bound.
+/// The API's page size limit for run controls and held starts.
 const MAX_PAGE_ITEMS: usize = 100;
 
 pub type Run = models::Run;
 pub type RunList = models::RunList;
+pub type HeldStart = models::HeldStart;
 pub type RunObservation = models::RunObservation;
 /// Whether another run its runner holds is working or waiting.
 pub type RunHeldRunState = models::run_held_run::State;
@@ -116,6 +117,7 @@ pub type RunPublicationHandoffState = models::run_publication_handoff::State;
 pub type RunSubjectClaim = models::RunSubjectClaim;
 pub type RunSubjectClaimState = models::run_subject_claim::State;
 pub type RunTriggerDelivery = models::RunTriggerDelivery;
+pub type RunSlackMessage = models::RunSlackMessage;
 pub type RunControl = models::RunControl;
 pub type RunControlRequest = models::RunControlRequest;
 pub type RunControlKind = models::RunControlKind;
@@ -663,6 +665,33 @@ impl<'a> RunApi<'a> {
         }
     }
 
+    /// One page of the run's Slack messages, oldest first, with the next page's cursor.
+    pub fn list_run_slack_messages(
+        &self,
+        organization: &str,
+        run_id: &str,
+        limit: Option<u32>,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<RunSlackMessage>, Option<String>), RunFailure> {
+        use models::run_slack_message::{Kind, State};
+
+        let body = self.read_run_page(organization, run_id, "slack-messages", limit, cursor)?;
+        let list: models::RunSlackMessageList =
+            serde_json::from_slice(&body).map_err(|_| RunFailure::protocol(false))?;
+        if valid_next_cursor(list.next_cursor.as_deref())
+            && list.items.iter().all(|item| {
+                useful_support::valid_typed_id(&item.id, "slm_")
+                    && item.attempt >= 1
+                    && item.reason.is_some() == matches!(item.state, State::Skipped | State::Failed)
+                    && item.outcome.is_some() == (item.kind == Kind::RunSettled)
+            })
+        {
+            Ok((list.items, list.next_cursor))
+        } else {
+            Err(RunFailure::protocol(false))
+        }
+    }
+
     /// One page of the controls accepted for the definition-backed run `run_id`, newest
     /// first, with the next page's cursor; `limit` and `cursor` select the page. Each control
     /// is the JSON object Cloud sent, read only for its id, so a kind or state this release
@@ -1001,6 +1030,52 @@ impl<'a> RunApi<'a> {
         Ok(list)
     }
 
+    /// One page of the organization's held starts and its next cursor, optionally
+    /// filtered by project.
+    pub fn list_held_starts(
+        &self,
+        organization: &str,
+        project_id: Option<&str>,
+        limit: Option<u16>,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<HeldStart>, Option<String>), RunFailure> {
+        let mut endpoint = Url::parse(&self.held_starts_endpoint(organization))
+            .map_err(|_| RunFailure::protocol(false))?;
+        if limit.is_some() || cursor.is_some() || project_id.is_some() {
+            let mut query = endpoint.query_pairs_mut();
+            if let Some(limit) = limit {
+                query.append_pair("limit", &limit.to_string());
+            }
+            if let Some(cursor) = cursor {
+                query.append_pair("cursor", cursor);
+            }
+            if let Some(project_id) = project_id {
+                query.append_pair("projectId", project_id);
+            }
+        }
+        let response =
+            self.read_response_with_limit(endpoint.as_str(), None, MAX_RUN_LIST_BODY_BYTES)?;
+        if response.status != StatusCode::OK {
+            return Err(classify_failure(&response, RunOperation::Get));
+        }
+        require_media_type(&response, JSON_MEDIA_TYPE, false)?;
+        let list: models::HeldStartList =
+            serde_json::from_slice(&response.body).map_err(|_| RunFailure::protocol(false))?;
+        if valid_next_cursor(list.next_cursor.as_deref())
+            && list.items.len() <= MAX_PAGE_ITEMS
+            && list.items.iter().all(|item| {
+                useful_support::valid_typed_id(&item.evaluation_id, "wev_")
+                    && useful_support::valid_typed_id(&item.project_id, "prj_")
+                    && useful_support::valid_typed_id(&item.definition_id, "def_")
+                    && item.revision >= 1
+            })
+        {
+            Ok((list.items, list.next_cursor))
+        } else {
+            Err(RunFailure::protocol(false))
+        }
+    }
+
     pub fn get(&self, organization: &str, run_id: &str) -> Result<RunRead, RunFailure> {
         self.get_with_timeout(organization, run_id, None)
     }
@@ -1065,6 +1140,14 @@ impl<'a> RunApi<'a> {
     fn collection_endpoint(&self, organization: &str) -> String {
         format!(
             "{}/v1/organizations/{}/runs",
+            self.configuration.base_path.trim_end_matches('/'),
+            apis::urlencode(organization)
+        )
+    }
+
+    fn held_starts_endpoint(&self, organization: &str) -> String {
+        format!(
+            "{}/v1/organizations/{}/held-starts",
             self.configuration.base_path.trim_end_matches('/'),
             apis::urlencode(organization)
         )
@@ -3259,7 +3342,6 @@ mod run_client_tests {
     #[test]
     fn a_trigger_delivery_page_of_any_length_decodes() {
         let length = 101;
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let delivery = serde_json::json!({
             "id": "wtd_01k0z6r1w8f4jy2m7q9v3x5abc", "definitionId": "def_01k0z6r1w8f4jy2m7q9v3x5abc",
             "revision": 3, "triggerName": "withdraw-on-hold",
@@ -3276,32 +3358,54 @@ mod run_client_tests {
             "acceptedAt": "2026-08-10T12:04:31Z", "deliveredAt": "2026-08-10T12:04:32Z",
             "settledAt": "2026-08-10T12:04:33Z",
         });
-        let body = serde_json::to_vec(&serde_json::json!({
-            "items": vec![delivery; length],
-            "nextCursor": "older-deliveries",
-        }))
-        .unwrap();
-        let mut response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: {PRIVATE_CACHE_CONTROL}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        )
-        .into_bytes();
-        response.extend_from_slice(&body);
-        let server = useful_test_support::ScriptedHttpServer::respond(response);
-        let storage = HttpClient::new(HttpTransportPolicy::AllowInsecureHttp).unwrap();
-        let api = RunApi::new(
-            &server.api_url,
-            "fixture-token",
-            HttpTransportPolicy::AllowInsecureHttp,
-            &storage,
-        )
-        .unwrap();
-        let (items, cursor) = api
-            .list_trigger_deliveries("acme", "run_01k0z6r1w8f4jy2m7q9v3x5abc", None, None)
-            .unwrap();
+        let page = serde_json::json!({
+            "items": vec![delivery; length], "nextCursor": "older-deliveries",
+        });
+        let (listed, _) = read_test_page(&page, |api| {
+            api.list_trigger_deliveries("acme", "run_01k0z6r1w8f4jy2m7q9v3x5abc", None, None)
+        });
+        let (items, cursor) = listed.unwrap();
         assert_eq!(items.len(), length);
         assert_eq!(cursor.as_deref(), Some("older-deliveries"));
-        server.finish_one();
+    }
+
+    #[test]
+    fn list_run_slack_messages_reads_the_page_and_refuses_inconsistent_messages() {
+        let item = serde_json::json!({
+            "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abc", "kind": "run_started",
+            "attempt": 1, "outcome": null, "state": "posted", "reason": null,
+            "createdAt": "2026-08-10T12:04:31Z", "updatedAt": "2026-08-10T12:04:32Z",
+        });
+        let list = |item: &serde_json::Value| {
+            read_test_page(
+                &serde_json::json!({"items": [item], "nextCursor": "newer"}),
+                |api| {
+                    api.list_run_slack_messages(
+                        "acme",
+                        "run_01k0z6r1w8f4jy2m7q9v3x5abc",
+                        Some(100),
+                        None,
+                    )
+                },
+            )
+            .0
+        };
+        let (items, cursor) = list(&item).unwrap();
+        assert_eq!(serde_json::json!(items), serde_json::json!([item]));
+        assert_eq!(cursor.as_deref(), Some("newer"));
+        for (field, value) in [
+            ("id", serde_json::json!("run_01k0z6r1w8f4jy2m7q9v3x5abc")),
+            ("state", serde_json::json!("skipped")),
+            ("outcome", serde_json::json!("failed")),
+            ("attempt", serde_json::json!(0)),
+        ] {
+            let mut invalid = item.clone();
+            invalid[field] = value;
+            assert!(
+                matches!(list(&invalid), Err(RunFailure::Protocol { .. })),
+                "{invalid}"
+            );
+        }
     }
 
     /// What `list_run_controls` answers.
@@ -3310,6 +3414,15 @@ mod run_client_tests {
     /// The controls page `page` read through `list_run_controls` with a `limit` of 100, and
     /// the request line it sent.
     fn listed_run_controls(page: &serde_json::Value) -> (ListedRunControls, String) {
+        read_test_page(page, |api| {
+            api.list_run_controls("acme", "run_01k0z6r1w8f4jy2m7q9v3x5abc", Some(100), None)
+        })
+    }
+
+    fn read_test_page<T>(
+        page: &serde_json::Value,
+        read: impl FnOnce(&RunApi<'_>) -> T,
+    ) -> (T, String) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let body = serde_json::to_vec(page).unwrap();
         let mut response = format!(
@@ -3327,8 +3440,7 @@ mod run_client_tests {
             &storage,
         )
         .unwrap();
-        let listed =
-            api.list_run_controls("acme", "run_01k0z6r1w8f4jy2m7q9v3x5abc", Some(100), None);
+        let listed = read(&api);
         let request = server.finish_one();
         (listed, request.lines().next().unwrap().to_owned())
     }
@@ -3386,6 +3498,145 @@ mod run_client_tests {
             let (listed, _) = listed_run_controls(&page);
             assert_eq!(listed, Err(RunFailure::protocol(false)), "{page}");
         }
+    }
+
+    fn held_start_item() -> serde_json::Value {
+        serde_json::json!({
+            "evaluationId": "wev_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "projectId": "prj_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "definitionId": "def_01k0z6r1w8f4jy2m7q9v3x5abc",
+            "definitionName": "engineering",
+            "revision": 3,
+            "triggerName": "start",
+            "issue": {"id": "issue-7", "identifier": "AUTO-7"},
+            "blockers": [{"id": "issue-6", "identifier": null}],
+            "ownerPrincipalId": null,
+            "heldSince": "2026-08-10T12:04:31Z",
+            "expiresAt": "2026-08-11T12:04:31Z",
+        })
+    }
+
+    type ListedHeldStarts = Result<(Vec<HeldStart>, Option<String>), RunFailure>;
+
+    fn listed_held_starts(
+        status: &str,
+        media_type: &str,
+        body: &[u8],
+        project_id: Option<&str>,
+        limit: Option<u16>,
+        cursor: Option<&str>,
+    ) -> (ListedHeldStarts, String) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {media_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(body);
+        let server = useful_test_support::ScriptedHttpServer::respond(response);
+        let storage = HttpClient::new(HttpTransportPolicy::AllowInsecureHttp).unwrap();
+        let api = RunApi::new(
+            &server.api_url,
+            "fixture-token",
+            HttpTransportPolicy::AllowInsecureHttp,
+            &storage,
+        )
+        .unwrap();
+        let listed = api.list_held_starts("acme", project_id, limit, cursor);
+        let request = server.finish_one();
+        (listed, request.lines().next().unwrap().to_owned())
+    }
+
+    #[test]
+    fn list_held_starts_reads_a_page_without_cache_control() {
+        let item = held_start_item();
+        let items = serde_json::json!([item]);
+        let body = serde_json::to_vec(&serde_json::json!({
+            "items": items,
+            "nextCursor": "older-starts",
+        }))
+        .unwrap();
+        let (listed, request) = listed_held_starts(
+            "200 OK",
+            JSON_MEDIA_TYPE,
+            &body,
+            Some("prj_01k0z6r1w8f4jy2m7q9v3x5abc"),
+            Some(100),
+            None,
+        );
+        assert_eq!(
+            request,
+            "GET /api/v1/organizations/acme/held-starts?limit=100&projectId=prj_01k0z6r1w8f4jy2m7q9v3x5abc HTTP/1.1"
+        );
+        let (listed_items, cursor) = listed.unwrap();
+        assert_eq!(serde_json::to_value(listed_items).unwrap(), items);
+        assert_eq!(cursor.as_deref(), Some("older-starts"));
+
+        let (listed, request) = listed_held_starts(
+            "200 OK",
+            JSON_MEDIA_TYPE,
+            br#"{"items":[]}"#,
+            None,
+            None,
+            Some("older-starts"),
+        );
+        assert_eq!(
+            request,
+            "GET /api/v1/organizations/acme/held-starts?cursor=older-starts HTTP/1.1"
+        );
+        assert_eq!(listed, Ok((vec![], None)));
+    }
+
+    #[test]
+    fn list_held_starts_refuses_invalid_page_fields() {
+        let item = held_start_item();
+        let mut invalid_pages = vec![
+            serde_json::json!({"items": vec![item.clone(); 101]}),
+            serde_json::json!({"items": [item], "nextCursor": ""}),
+        ];
+        for (field, value) in [
+            (
+                "evaluationId",
+                serde_json::json!("run_01k0z6r1w8f4jy2m7q9v3x5abc"),
+            ),
+            (
+                "projectId",
+                serde_json::json!("run_01k0z6r1w8f4jy2m7q9v3x5abc"),
+            ),
+            (
+                "definitionId",
+                serde_json::json!("run_01k0z6r1w8f4jy2m7q9v3x5abc"),
+            ),
+            ("revision", serde_json::json!(0)),
+        ] {
+            let mut invalid_item = item.clone();
+            invalid_item[field] = value;
+            invalid_pages.push(serde_json::json!({"items": [invalid_item]}));
+        }
+        for page in invalid_pages {
+            let body = serde_json::to_vec(&page).unwrap();
+            let (listed, _) =
+                listed_held_starts("200 OK", JSON_MEDIA_TYPE, &body, None, None, None);
+            assert_eq!(listed, Err(RunFailure::protocol(false)), "{page}");
+        }
+    }
+
+    #[test]
+    fn list_held_starts_classifies_a_not_found_problem() {
+        let problem = create_problem_response(StatusCode::NOT_FOUND, "not-found", &[]);
+        let (listed, request) = listed_held_starts(
+            "404 Not Found",
+            "application/problem+json",
+            &problem.body,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            request,
+            "GET /api/v1/organizations/acme/held-starts HTTP/1.1"
+        );
+        assert_eq!(listed, Err(RunFailure::NotFound));
     }
 
     #[test]

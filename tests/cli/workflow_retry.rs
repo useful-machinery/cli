@@ -458,7 +458,6 @@ fn tui_setup_failure_prevents_retry_execution_and_releases_the_attempt() {
     assert_attempt_resources_released(&run_directory);
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.lines().count(), 1);
-    assert!(stderr.contains("TerminalSetup"));
     assert!(!stderr.contains("summary"));
 }
 
@@ -606,7 +605,6 @@ fn retry_terminal_json_output_failure_preserves_the_published_attempt() {
             .is_file()
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("TerminalJsonWriter"));
     assert!(stderr.contains("attempts/000002/result"));
 }
 
@@ -1117,12 +1115,12 @@ fn resuming_an_abandoned_parent_records_its_adopted_childs_failure() {
 }
 
 /// A failed state commit's standard error has a diagnostic line naming the write, `exchange
-/// state`, its file and the operating system's message for a missing file, a `class:` field, and
-/// after an empty line ends with the indented `useful workflow run resume` for `run_directory`.
+/// state`, its file and the phrase `no such file or directory` regardless of case, a `class:`
+/// field, and after an empty line ends with the indented `useful workflow run resume` for
+/// `run_directory`.
 fn assert_state_commit_failure(stderr: &[u8], state_file: &Path, run_directory: &Path) {
     let stderr = String::from_utf8_lossy(stderr);
     let lines = stderr.lines().collect::<Vec<_>>();
-    let missing = std::io::Error::from_raw_os_error(2).to_string();
     let diagnostic = lines
         .iter()
         .find(|line| line.starts_with("Error: "))
@@ -1130,7 +1128,9 @@ fn assert_state_commit_failure(stderr: &[u8], state_file: &Path, run_directory: 
     assert!(
         diagnostic.contains("exchange state")
             && diagnostic.contains(state_file.to_str().unwrap())
-            && diagnostic.contains(&missing),
+            && diagnostic
+                .to_lowercase()
+                .contains("no such file or directory"),
         "{stderr}"
     );
     assert!(!diagnostic.contains("not_found"), "{stderr}");

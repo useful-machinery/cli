@@ -1174,8 +1174,7 @@ steps:
 
 #[test]
 fn a_step_workspace_validates_and_an_ambiguous_one_names_its_step() {
-    let valid =
-        include_str!("../../crates/execution/tests/fixtures/workflow/v1/valid/step-workspace.yaml");
+    let valid = include_str!("../fixtures/workflow/v1/valid/step-workspace.yaml");
     let bundle = WorkflowBundle::valid();
     bundle.replace_workflow(valid);
     let file = validate(&bundle, true);
@@ -1200,7 +1199,7 @@ fn a_step_workspace_validates_and_an_ambiguous_one_names_its_step() {
     }
 
     bundle.replace_workflow(include_str!(
-        "../../crates/execution/tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+        "../fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
     ));
     let output = validate(&bundle, true);
     assert_eq!(output.status.code(), Some(1));

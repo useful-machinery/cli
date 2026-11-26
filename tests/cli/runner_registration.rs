@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use super::organization::{LIST_CURRENT_MEMBERSHIPS, OTHER_IN_EFFECT_ID, active_memberships};
 use super::runner_administration::{
     ACTIVATION_ID, ACTIVATION_SECRET, MEMBER_ID, ORGANIZATION, ORGANIZATION_ID, POOL_ID, RUNNER_ID,
-    activation_issuance_body, activation_issued_response_with, current_principal_response,
+    TOKEN, activation_issuance_body, activation_issued_response_with, current_principal_response,
     pool_list_body, prepared_runner, registration_created_response, request_body,
 };
 use super::runner_enrollment::{
@@ -240,8 +240,41 @@ fn personal_registers_enrolls_and_serves_a_host_with_no_state() {
         requests[0]
     );
     let body = assert_signed_in_registration_request(&requests[1]);
+    assert_eq!(
+        header_value(&requests[1], "authorization"),
+        format!("Bearer {TOKEN}")
+    );
     assert!(body.get("runnerPoolId").is_none(), "{body}");
     assert_activation_and_enrollment(&requests[2], &enrollment);
+
+    let session_tokens = [
+        ("access", TOKEN),
+        ("refresh", "unique-fixture-refresh-token"),
+    ];
+    for (destination, contents) in [
+        ("the enrollment request", enrollment.as_str()),
+        ("the runner connection request", connection.as_str()),
+        ("standard error", stderr.as_str()),
+    ] {
+        for (kind, token) in session_tokens {
+            assert!(
+                !contents.contains(token),
+                "{destination} holds the session's {kind} token"
+            );
+        }
+    }
+    for file in files_under(host.root.path()) {
+        let bytes = fs::read(&file).unwrap();
+        for (kind, token) in session_tokens {
+            assert!(
+                !bytes
+                    .windows(token.len())
+                    .any(|part| part == token.as_bytes()),
+                "{} holds the session's {kind} token",
+                file.display()
+            );
+        }
+    }
 }
 
 // `USEFUL_ORG` names the organization when `--org` does not.

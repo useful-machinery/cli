@@ -6,8 +6,8 @@ use reqwest::{StatusCode, Url};
 use super::generated::{apis, models};
 use super::http_client::zeroize_generated_bearer_access_token;
 use super::resource::{
-    ProblemVocabulary, ResourceFailure, classify_error, invalid, receive_closed_json_response,
-    receive_json_response, resource_configuration,
+    ProblemVocabulary, ProviderRecord, ResourceFailure, classify_error, invalid,
+    receive_closed_json_response, receive_json_response, resource_configuration,
 };
 use super::{HttpTransportPolicy, problem};
 
@@ -272,16 +272,12 @@ fn validate_connection(
     _organization: &str,
     id: Option<&str>,
 ) -> Result<LinearConnection, LinearFailure> {
-    if !useful_support::valid_typed_id(&value.id, "lcn_")
-        || value.organization_id.is_empty()
-        || id.is_some_and(|id| value.id != id)
-        || value.lifecycle_generation < 1
-        || value.created_at.is_empty()
-        || value.updated_at.is_empty()
-    {
-        return Err(invalid());
+    ProviderRecord {
+        id: &value.id,
+        organization_id: &value.organization_id,
+        created_at: &value.created_at,
     }
-    // Organization refs may be slugs; the connection carries the canonical organization ID.
+    .validate_connection("lcn_", id, &value.updated_at, value.lifecycle_generation)?;
     Ok(value)
 }
 
@@ -290,31 +286,18 @@ fn validate_session(
     organization: &str,
     id: Option<&str>,
 ) -> Result<LinearSession, LinearFailure> {
-    if !useful_support::valid_typed_id(&value.id, "las_")
-        || value.organization_id.is_empty()
-        || id.is_some_and(|id| value.id != id)
-        || value.created_at.is_empty()
-        || value.expires_at.is_empty()
-    {
-        return Err(invalid());
+    ProviderRecord {
+        id: &value.id,
+        organization_id: &value.organization_id,
+        created_at: &value.created_at,
     }
-    if value.status != models::linear_authorization_session::Status::LinearSessionPending
-        && value.authorization_url.is_some()
-    {
-        return Err(invalid());
-    }
-    if let Some(url) = &value.authorization_url {
-        let parsed = Url::parse(url).map_err(|_| invalid())?;
-        if url.chars().any(char::is_control)
-            || parsed.scheme() != "https"
-            || parsed.host_str().is_none()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.fragment().is_some()
-        {
-            return Err(invalid());
-        }
-    }
+    .validate_session(
+        "las_",
+        id,
+        &value.expires_at,
+        value.status == LinearSessionStatus::LinearSessionPending,
+        value.authorization_url.as_deref(),
+    )?;
     if let Some(connection) = &value.result_connection {
         validate_connection((**connection).clone(), organization, None)?;
     }

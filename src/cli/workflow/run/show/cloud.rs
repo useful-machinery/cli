@@ -1,7 +1,7 @@
 //! The read of a Cloud run by `useful workflow run show RUN`: the run the lookup found in the
-//! organization in effect, read through the public API with, for a definition-backed run, the
-//! newest page of its controls and, when it holds a subject claim, of its trigger deliveries,
-//! and the automatic Publication its hand-off started. With `--wait` the run is read every
+//! organization in effect, its Slack messages and the automatic Publication its hand-off
+//! started. A definition-backed run also lists its controls and, when it holds a subject
+//! claim, its trigger deliveries. With `--wait` the run is read every
 //! two seconds, each observed state on standard error, until it and its hand-off are final.
 //! Nothing under the `useful` home is read or written.
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use serde::Serialize;
 use serde_json::Value;
-use useful_api::{Publication, Run, RunFailure, RunRead, RunTriggerDelivery};
+use useful_api::{Publication, Run, RunFailure, RunRead, RunSlackMessage, RunTriggerDelivery};
 
 use super::super::cloud::{failure_diagnostic, wire};
 use super::super::cloud_api::observation::{self, ObservationContext};
@@ -30,6 +30,8 @@ use crate::exit_code::ExitCode;
 const SHOWN_DELIVERIES: u32 = 100;
 /// The most controls `show` reads, the API's page bound.
 const SHOWN_CONTROLS: u32 = 100;
+/// The most Slack messages `show` reads, the API's page bound.
+const SHOWN_SLACK_MESSAGES: u32 = 100;
 /// The run fields a definition-backed run's read carries and a run by `workflowPath` may
 /// leave out; `show` reports an absent one as null.
 const OBSERVED_FIELDS: [&str; 6] = [
@@ -198,23 +200,18 @@ type Page<T> = (Vec<T>, Option<String>);
 struct Listings {
     deliveries: Option<Page<RunTriggerDelivery>>,
     controls: Option<Page<Value>>,
+    slack_messages: Option<Page<RunSlackMessage>>,
 }
 
-/// For a definition-backed run the newest page of its controls and, when it holds a claim,
-/// of its trigger deliveries; a run by `workflowPath` has neither, and Cloud answers its
-/// controls 404, so nothing is read for one.
+/// The first page of the run's Slack messages. A definition-backed run also has controls
+/// and, when it holds a claim, trigger deliveries.
 fn listings(
     cloud: &InCloud,
     options: &RunOptions,
     run: &Run,
 ) -> anyhow::Result<Result<Listings, RunFailure>> {
-    if !matches!(run.definition, Some(Some(_))) {
-        return Ok(Ok(Listings {
-            deliveries: None,
-            controls: None,
-        }));
-    }
-    let claimed = matches!(run.subject_claim, Some(Some(_)));
+    let defined = matches!(run.definition, Some(Some(_)));
+    let claimed = defined && matches!(run.subject_claim, Some(Some(_)));
     cloud_api::with_api(
         &cloud.deployment,
         options.http.transport_policy(),
@@ -230,15 +227,26 @@ fn listings(
             } else {
                 None
             };
-            let controls = api.list_run_controls(
+            let controls = if defined {
+                Some(api.list_run_controls(
+                    &cloud.organization,
+                    &cloud.run_id,
+                    Some(SHOWN_CONTROLS),
+                    None,
+                )?)
+            } else {
+                None
+            };
+            let slack_messages = api.list_run_slack_messages(
                 &cloud.organization,
                 &cloud.run_id,
-                Some(SHOWN_CONTROLS),
+                Some(SHOWN_SLACK_MESSAGES),
                 None,
             )?;
             Ok(Listings {
                 deliveries,
-                controls: Some(controls),
+                controls,
+                slack_messages: Some(slack_messages),
             })
         },
     )
@@ -336,6 +344,8 @@ struct Document<'a> {
     more_deliveries: bool,
     controls: Option<&'a [Value]>,
     more_controls: bool,
+    slack_messages: Option<&'a [RunSlackMessage]>,
+    more_slack_messages: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostics: Option<[Diagnostic; 1]>,
 }
@@ -382,6 +392,8 @@ impl Report {
             more_deliveries: false,
             controls: None,
             more_controls: false,
+            slack_messages: None,
+            more_slack_messages: false,
             diagnostics: None,
         }
     }
@@ -401,6 +413,7 @@ impl Report {
         let run = value(typed)?;
         let (deliveries, more_deliveries) = paged(listings.deliveries);
         let (controls, more_controls) = paged(listings.controls);
+        let (slack_messages, more_slack_messages) = paged(listings.slack_messages);
         if self.json {
             cli::write_pretty_json(&Document {
                 on: Some(on(typed)),
@@ -410,6 +423,8 @@ impl Report {
                 more_deliveries,
                 controls: controls.as_deref(),
                 more_controls,
+                slack_messages: slack_messages.as_deref(),
+                more_slack_messages,
                 ..self.document("shown", ExitCode::Success)
             })
         } else {
@@ -418,6 +433,7 @@ impl Report {
                 (typed, &run, publication),
                 (deliveries.as_deref(), more_deliveries),
                 (controls.as_deref(), more_controls),
+                (slack_messages.as_deref(), more_slack_messages),
             )
         }
         .with_context(|| format!("write {COMMAND} output"))?;
@@ -495,20 +511,22 @@ impl Report {
 
 /// The run as `show` prints it without `--json`: its identity and state, what it is and was
 /// asked to run, its owner, route and what it waits for, its definition and claim, workflow
-/// outcome, rejection, latest progress, exits with their mirror results, its controls and
-/// deliveries, then its sources, inputs, context, cancellation, hand-off, automatic
+/// outcome, rejection, latest progress, exits with their mirror results, its controls,
+/// deliveries and Slack messages, then its sources, inputs, context, cancellation, hand-off, automatic
 /// Publication, interruption, continuation, failure, artifact delivery, times, placement,
-/// assignment and connection, and its Linear binding, each fact once. `deliveries` and
-/// `controls` are each a listing, if read, and whether more remain. A held claim of an exited
+/// assignment and connection, and its Linear binding, each fact once. Each listing carries
+/// the items read and whether more remain. A held claim of an exited
 /// run adds what it holds and the release command.
 fn write_plain(
     report: &Report,
     read: (&Run, &Value, Option<&Publication>),
     deliveries: (Option<&[RunTriggerDelivery]>, bool),
     controls: (Option<&[Value]>, bool),
+    slack_messages: (Option<&[RunSlackMessage]>, bool),
 ) -> io::Result<()> {
     let mut out = Vec::new();
-    write_report(&mut out, report, read, deliveries, controls).map_err(io::Error::other)?;
+    write_report(&mut out, report, read, deliveries, controls, slack_messages)
+        .map_err(io::Error::other)?;
     let mut stdout = io::stdout().lock();
     stdout.write_all(&out)?;
     stdout.flush()
@@ -520,6 +538,7 @@ fn write_report(
     (typed, run, publication): (&Run, &Value, Option<&Publication>),
     deliveries: (Option<&[RunTriggerDelivery]>, bool),
     controls: (Option<&[Value]>, bool),
+    slack_messages: (Option<&[RunSlackMessage]>, bool),
 ) -> anyhow::Result<()> {
     writeln!(out, "run: {}", field(run, "id"))?;
     writeln!(
@@ -565,6 +584,7 @@ fn write_report(
     write_exits(out, &run["exits"])?;
     write_controls(out, controls.0, controls.1)?;
     write_deliveries(out, deliveries.0, deliveries.1)?;
+    write_slack_messages(out, slack_messages.0, slack_messages.1)?;
     cloud_api::write_run_sources_through_continuation(out, typed)?;
     cloud_api::write_automatic_publication(out, Some(typed), publication)?;
     cloud_api::write_run_failure(out, typed)?;
@@ -805,6 +825,37 @@ fn write_deliveries(
     }
     if more {
         writeln!(out, "older deliveries: not shown")?;
+    }
+    Ok(())
+}
+
+fn write_slack_messages(
+    out: &mut impl Write,
+    messages: Option<&[RunSlackMessage]>,
+    more: bool,
+) -> io::Result<()> {
+    let Some(messages) = messages.filter(|messages| !messages.is_empty()) else {
+        return Ok(());
+    };
+    writeln!(out, "slack messages:")?;
+    for message in messages {
+        write!(
+            out,
+            "  {} · attempt {}",
+            wire(message.kind),
+            message.attempt
+        )?;
+        if let Some(outcome) = message.outcome {
+            write!(out, " · outcome {}", wire(outcome))?;
+        }
+        write!(out, " · {}", wire(message.state))?;
+        if let Some(reason) = message.reason {
+            write!(out, " {}", wire(reason))?;
+        }
+        writeln!(out)?;
+    }
+    if more {
+        writeln!(out, "newer slack messages: not shown")?;
     }
     Ok(())
 }

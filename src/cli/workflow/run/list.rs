@@ -1,7 +1,7 @@
 //! `useful workflow run list`: the runs under the `useful` home, the live ones or every run
 //! under `--all`, read without taking a run lock or changing a directory, and then one page of
 //! the Cloud runs of the organization in effect, those of the project in effect when one is, in
-//! one listing whose every row says where the run executes.
+//! one listing whose every row says where the run executes, followed by the held starts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -11,7 +11,7 @@ use anyhow::{Context as _, anyhow};
 use clap::Args;
 use serde::Serialize;
 use serde_json::Value;
-use useful_api::{CommonOrganizationFailure, RunFailure, RunListFilter};
+use useful_api::{CommonOrganizationFailure, HeldStart, RunApi, RunFailure, RunListFilter};
 use useful_execution::{
     ListedRun, LocalRunDirectoryError, RunState, WaitRecord, WorkflowHome, WorkflowRunRecord,
     list_runs, normalize_terminal_path, normalize_terminal_scalar, position_path, read_definition,
@@ -28,7 +28,9 @@ use crate::cli::{
 use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str = "List workflow runs under the useful home and in Cloud";
-pub(super) const AFTER_HELP: &str = "The runs under the useful home are listed first, and then one page of the Cloud runs of the organization in effect, those of the project in effect when one is. --owner, --definition and --drift select among the runs under the home, so they list those alone. --limit and --cursor page the Cloud runs: the runs under the home are listed with the first page alone.";
+pub(super) const AFTER_HELP: &str = "The runs under the useful home are listed first, and then one page of the Cloud runs of the organization in effect, those of the project in effect when one is. --owner, --definition and --drift select among the runs under the home, so they list those alone. --limit and --cursor page the Cloud runs. The runs under the home are listed with the first page alone.
+
+Held starts for blocked tickets follow the runs, in the places selected by --on. The listing omits held starts when it reads only the local runs or uses --cursor, --state-group, --created-after or --integration-context.";
 const COMMAND: &str = "useful workflow run list";
 const ON_HELP: &str = "List only the runs of one place (default: every place)";
 const DEPLOYMENT_CONTEXT: &str = "configure Useful Machinery runs";
@@ -129,13 +131,14 @@ struct Local {
     hidden: usize,
 }
 
-/// Whether Cloud was asked, and where, with the rows of the page it answered that `--on` and
-/// `--waiting` keep, each item as Cloud returned it, and the page's next cursor; or why not.
+/// Whether Cloud was asked, and where, with the runs and held starts the options keep,
+/// each item as Cloud returned it, and the run page's next cursor; or why not.
 enum Cloud {
     Asked {
         organization: String,
         project: Option<String>,
         rows: Vec<(Place, Value)>,
+        held_starts: Vec<(Place, Value)>,
         next_cursor: Option<String>,
     },
     NotAsked(Why),
@@ -297,8 +300,8 @@ impl Command {
         Ok(Local { runs, hidden })
     }
 
-    /// One page of the Cloud runs of the organization in effect, and of the project in effect
-    /// when one is; `Err` with the exit of a failure already written.
+    /// One page of Cloud runs and the held starts of the organization and any project in
+    /// effect; `Err` with the exit of a failure already written.
     fn cloud(
         &self,
         context: &[(String, String)],
@@ -351,12 +354,16 @@ impl Command {
             .state_group
             .as_deref()
             .or((!self.all).then_some("active"));
-        let page = target::session(
+        let include_held_starts = self.cursor.is_none()
+            && self.state_group.is_none()
+            && self.created_after.is_none()
+            && context.is_empty();
+        let listing = target::session(
             &deployment,
             &self.options.authentication,
             &self.options.http,
             |api| {
-                api.list(
+                let page = api.list(
                     &organization,
                     RunListFilter {
                         limit: self.limit,
@@ -366,14 +373,21 @@ impl Command {
                         created_after: self.created_after.as_deref(),
                         context,
                     },
-                )
+                )?;
+                let held_starts = if include_held_starts {
+                    list_held_starts(api, &organization, project.as_deref())?
+                } else {
+                    Vec::new()
+                };
+                Ok((page, held_starts))
             },
         )?;
-        Ok(Ok(match page {
-            Ok(page) => Cloud::Asked {
+        Ok(Ok(match listing {
+            Ok((page, held_starts)) => Cloud::Asked {
                 organization,
                 project,
                 rows: self.kept(&page.items)?,
+                held_starts: self.kept_held_starts(&held_starts)?,
                 next_cursor: page.next_cursor,
             },
             // A session Cloud rejects again once refreshed is nobody signed in, as a missing one.
@@ -438,13 +452,37 @@ impl Command {
         Ok(rows)
     }
 
-    /// The listing: the local rows, then the Cloud rows.
+    /// The held starts whose place `--on` keeps.
+    fn kept_held_starts(&self, items: &[HeldStart]) -> anyhow::Result<Vec<(Place, Value)>> {
+        let mut rows = Vec::new();
+        for item in items {
+            let place = if item.owner_principal_id.is_some() {
+                Place::Personal
+            } else {
+                Place::Project
+            };
+            if self.on.is_none_or(|on| on == place) {
+                let item = serde_json::to_value(item).context("encode a held start")?;
+                rows.push((place, item));
+            }
+        }
+        Ok(rows)
+    }
+
+    /// The listing: the local rows, the Cloud rows, then the held starts.
     fn write(&self, local: &Local, cloud: &Cloud) -> CommandResult {
-        let (rows, next): (&[(Place, Value)], _) = match cloud {
+        let (rows, held_starts, next) = match cloud {
             Cloud::Asked {
-                rows, next_cursor, ..
-            } => (rows, next_cursor.as_deref()),
-            Cloud::NotAsked(_) => (&[], None),
+                rows,
+                held_starts,
+                next_cursor,
+                ..
+            } => (
+                rows.as_slice(),
+                held_starts.as_slice(),
+                next_cursor.as_deref(),
+            ),
+            Cloud::NotAsked(_) => ([].as_slice(), [].as_slice(), None),
         };
         if self.options.json {
             super::super::super::write_pretty_json(&ListDocument {
@@ -467,14 +505,34 @@ impl Command {
                         })
                     }))
                     .collect(),
+                held_starts: held_starts
+                    .iter()
+                    .map(|(place, item)| Placed {
+                        on: place.as_str(),
+                        row: item,
+                    })
+                    .collect(),
                 cloud: asked(cloud),
             })
         } else {
-            write_plain(local, rows, next, self.all)
+            write_plain(local, rows, held_starts, next, self.all)
         }
         .with_context(|| format!("write {COMMAND} output"))?;
         Ok(ExitCode::Success)
     }
+}
+
+fn list_held_starts(
+    api: &RunApi<'_>,
+    organization: &str,
+    project: Option<&str>,
+) -> Result<Vec<HeldStart>, RunFailure> {
+    crate::cli::paging::every_page(
+        RunFailure::Protocol {
+            credential_rejected: false,
+        },
+        |cursor| api.list_held_starts(organization, project, Some(100), cursor),
+    )
 }
 
 fn usage(message: impl Into<String>) -> CommandFailure {
@@ -585,11 +643,12 @@ pub(super) fn or_dash(value: Option<&str>) -> String {
 }
 
 /// The listing's lines, each led by where its run executes: the local runs, then the Cloud
-/// runs, then the next cursor of the Cloud page and, when `hidden` exited local runs were left
-/// out, an empty line and their count.
+/// runs, then the next cursor of the Cloud page, the held starts and any count of hidden
+/// exited local runs.
 fn write_plain(
     local: &Local,
     cloud: &[(Place, Value)],
+    held_starts: &[(Place, Value)],
     next: Option<&str>,
     all: bool,
 ) -> io::Result<()> {
@@ -609,6 +668,12 @@ fn write_plain(
     }
     if let Some(cursor) = next {
         writeln!(stdout, "next cursor: {}", visible_text(cursor))?;
+    }
+    if !held_starts.is_empty() {
+        writeln!(stdout, "\n── held starts ──")?;
+        for (place, item) in held_starts {
+            write_held_start(&mut stdout, *place, item)?;
+        }
     }
     if local.hidden > 0 {
         let hidden = local.hidden;
@@ -663,7 +728,7 @@ fn write_local(out: &mut impl Write, run: &ListedRun, current: Option<u64>) -> i
 /// A Cloud run led by its place, then its name, project, workflow, update time, wait, placement
 /// and integration context on lines of their own; `item` is the run as Cloud returned it.
 fn write_cloud(out: &mut impl Write, place: Place, item: &Value) -> io::Result<()> {
-    let text = |value: &Value| value.as_str().map_or_else(|| "—".to_owned(), visible_text);
+    let text = cloud_text;
     writeln!(
         out,
         "{} · {}  {}  {}",
@@ -708,6 +773,44 @@ fn write_cloud(out: &mut impl Write, place: Place, item: &Value) -> io::Result<(
     Ok(())
 }
 
+fn cloud_text(value: &Value) -> String {
+    value.as_str().map_or_else(|| "—".to_owned(), visible_text)
+}
+
+fn held_issue_name(issue: &Value) -> String {
+    if issue["identifier"].is_null() {
+        cloud_text(&issue["id"])
+    } else {
+        cloud_text(&issue["identifier"])
+    }
+}
+
+fn write_held_start(out: &mut impl Write, place: Place, item: &Value) -> io::Result<()> {
+    writeln!(
+        out,
+        "{} · {}",
+        place.as_str(),
+        cloud_text(&item["evaluationId"])
+    )?;
+    writeln!(out, "  ticket: {}", held_issue_name(&item["issue"]))?;
+    writeln!(
+        out,
+        "  definition: {} ({})",
+        cloud_text(&item["definitionName"]),
+        cloud_text(&item["definitionId"])
+    )?;
+    let blockers = item["blockers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(held_issue_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(out, "  blockers: {blockers}")?;
+    writeln!(out, "  held since: {}", cloud_text(&item["heldSince"]))?;
+    writeln!(out, "  expires: {}", cloud_text(&item["expiresAt"]))
+}
+
 pub(super) use super::super::state_name;
 
 fn listed(run: &ListedRun, current: Option<u64>) -> Listed<'_> {
@@ -744,6 +847,7 @@ struct ListDocument<'a> {
     /// The exited local runs the default left out.
     exited_hidden: usize,
     runs: Vec<Row<'a>>,
+    held_starts: Vec<Placed<&'a Value>>,
     cloud: Asked<'a>,
 }
 
@@ -755,7 +859,7 @@ enum Row<'a> {
     Cloud(Placed<&'a Value>),
 }
 
-/// A row and where its run executes, `on`.
+/// A row and the place it belongs to, `on`.
 #[derive(Serialize)]
 struct Placed<B: Serialize> {
     on: &'static str,

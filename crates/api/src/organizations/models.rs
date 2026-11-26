@@ -207,6 +207,8 @@ pub enum OrganizationAuditSubjectKind {
     GithubInstallation,
     GitlabConnection,
     GitlabCandidate,
+    SlackAuthorizationSession,
+    SlackConnection,
     LinearAuthorizationSession,
     LinearConnection,
     LinearEvaluation,
@@ -1200,6 +1202,11 @@ impl TryFrom<models::OrganizationAuditSubject> for OrganizationAuditSubject {
             Kind::GithubInstallation => (OrganizationAuditSubjectKind::GithubInstallation, "ghi_"),
             Kind::GitlabConnection => (OrganizationAuditSubjectKind::GitlabConnection, "glc_"),
             Kind::GitlabCandidate => (OrganizationAuditSubjectKind::GitlabCandidate, "glca_"),
+            Kind::SlackAuthorizationSession => (
+                OrganizationAuditSubjectKind::SlackAuthorizationSession,
+                "sas_",
+            ),
+            Kind::SlackConnection => (OrganizationAuditSubjectKind::SlackConnection, "scn_"),
             Kind::LinearAuthorizationSession => (
                 OrganizationAuditSubjectKind::LinearAuthorizationSession,
                 "las_",

@@ -71,6 +71,8 @@ jobs:
           set -euo pipefail
           cargo check --locked --workspace --all-targets --all-features \
             --target aarch64-apple-darwin
+          cargo check --locked --manifest-path tests/Cargo.toml --all-targets --all-features \
+            --target aarch64-apple-darwin
 
   verify_release:
     name: Verify release candidate

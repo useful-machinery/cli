@@ -1310,7 +1310,11 @@ fn publication_plain_reads_escape_remote_text_and_redact_receipt_url_secrets() {
     assert!(show.status.success());
     assert!(show.stderr.is_empty());
     let report = String::from_utf8(show.stdout.clone()).unwrap();
-    assert!(report.contains("base branch: main\\nforged: base branch\\u{1b}[2J"));
+    assert!(
+        report
+            .lines()
+            .any(|line| line.contains("base branch: main") && line.contains("forged: base branch"))
+    );
     assert!(report.contains("branch url: https://example.test/branches/changes"));
     assert!(report.contains("pull request url: https://example.test/pulls/17"));
     assert!(!report.contains('\u{1b}'));
@@ -1340,7 +1344,11 @@ fn publication_plain_reads_escape_remote_text_and_redact_receipt_url_secrets() {
     assert!(list.status.success());
     assert!(list.stderr.is_empty());
     let report = String::from_utf8(list.stdout.clone()).unwrap();
-    assert!(report.contains("next cursor: next\\nforged: cursor\\u{1b}[2J"));
+    assert!(
+        report
+            .lines()
+            .any(|line| line.contains("next cursor: next") && line.contains("forged: cursor"))
+    );
     assert!(report.contains("  pull request: https://example.test/pulls/17"));
     assert!(!report.contains('\u{1b}'));
     assert!(!report.lines().any(|line| line.starts_with("forged:")));

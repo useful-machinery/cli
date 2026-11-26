@@ -7,16 +7,15 @@ description = "Command-line interface and runner for Useful Machinery"
 license = "Apache-2.0"
 repository = "https://github.com/useful-machinery/cli"
 publish = false
+autotests = false
 
 [[bin]]
 name = "useful"
 path = "src/main.rs"
 
-[features]
-# The workspace suite includes implementation internals and workflow checkpoint cases.
-default = ["rust-cli-tests"]
-rust-cli-tests = ["candidate-checkpoints"]
-candidate-checkpoints = []
+[[test]]
+name = "architecture"
+path = "tests/architecture.rs"
 
 [workspace]
 members = [
@@ -135,14 +134,5 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-flate2.workspace = true
-fs4.workspace = true
-futures-util.workspace = true
-jsonschema.workspace = true
-rustix = { workspace = true, features = ["event", "pty"] }
 useful-execution = { workspace = true, features = ["test-fixtures"] }
 useful-runner = { workspace = true, features = ["test-fixtures"] }
-useful-support = { workspace = true, features = ["test-fixtures"] }
-useful-test-support.workspace = true
-tokio = { workspace = true, features = ["sync"] }
-tokio-tungstenite.workspace = true

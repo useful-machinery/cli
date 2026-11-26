@@ -104,7 +104,7 @@ impl Selection {
                 Provider::Github => {
                     "A GitHub installation's repositories are chosen on GitHub. List the ones it grants:\n  useful org integration repository list INTEGRATION"
                 }
-                Provider::Gitlab | Provider::Linear => target::NAME_ANOTHER,
+                Provider::Gitlab | Provider::Linear | Provider::Slack => target::NAME_ANOTHER,
             };
             return target::refuse(command, &[Provider::Gitlab], given, remedy);
         }
@@ -163,7 +163,7 @@ impl List {
         } = self;
         let given = connection.provider();
         let read = match given {
-            Provider::Linear => {
+            Provider::Linear | Provider::Slack => {
                 return target::refuse("repository list", &PROVIDERS, given, target::NAME_ANOTHER);
             }
             Provider::Github => match query.given() {

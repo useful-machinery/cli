@@ -14,8 +14,7 @@ use crate::cli::{
 use crate::exit_code::ExitCode;
 
 pub(in crate::cli) const VALUE_NAME: &str = "INTEGRATION";
-pub(super) const HELP: &str =
-    "Connection ID, or github, gitlab or linear for the organization's connection to it";
+pub(super) const HELP: &str = "Connection ID (ghi_, glc_, lcn_ or scn_), or github, gitlab, linear or slack for the organization's connection to it";
 
 /// A connection as the command line names it, parsed with no request.
 #[derive(Clone, Debug)]
@@ -36,8 +35,8 @@ impl Target {
             .find(|provider| useful_support::valid_typed_id(value, prefix(*provider)))
             .map(|provider| Self::Id(provider, value.to_owned()))
             .ok_or_else(|| {
-                "connection must be an exact ghi_, glc_ or lcn_ identifier, or github, gitlab or \
-                 linear"
+                "connection must be an exact ghi_, glc_, lcn_ or scn_ identifier, or github, gitlab, linear or \
+                 slack"
                     .to_owned()
             })
     }
@@ -52,7 +51,7 @@ impl Target {
 
 /// What `INTEGRATION` names on a leaf that also acts on the organization's token of a token
 /// service: a connection, or a token by its service, any provider id that is neither a built-in
-/// provider's nor `github`, `gitlab` or `linear`.
+/// provider's nor `github`, `gitlab`, `linear` or `slack`.
 #[derive(Clone, Debug)]
 pub(in crate::cli) enum Integration {
     Connection(Target),
@@ -60,7 +59,7 @@ pub(in crate::cli) enum Integration {
 }
 
 impl Integration {
-    pub(super) const HELP: &'static str = "Connection ID, github, gitlab or linear for the organization's connection to it, or a token service for the organization's token of it";
+    pub(super) const HELP: &'static str = "Connection ID (ghi_, glc_, lcn_ or scn_), github, gitlab, linear or slack for the organization's connection to it, or a token service for the organization's token of it";
 
     pub(super) fn parse(value: &str) -> Result<Self, String> {
         Target::parse(value).map(Self::Connection).or_else(|_| {
@@ -68,8 +67,8 @@ impl Integration {
                 && useful_api::MemberGrantProvider::from_wire(value).is_none())
             .then(|| Self::Token(value.to_owned()))
             .ok_or_else(|| {
-                "integration must be an exact ghi_, glc_ or lcn_ identifier, github, gitlab or \
-                 linear, or a token service's name"
+                "integration must be an exact ghi_, glc_, lcn_ or scn_ identifier, github, gitlab, linear or \
+                 slack, or a token service's name"
                     .to_owned()
             })
         })
@@ -82,6 +81,7 @@ const fn noun(provider: Provider) -> &'static str {
         Provider::Github => "a GitHub binding",
         Provider::Gitlab => "a GitLab connection",
         Provider::Linear => "a Linear connection",
+        Provider::Slack => "a Slack connection",
     }
 }
 
@@ -170,6 +170,7 @@ const fn prefix(provider: Provider) -> &'static str {
         Provider::Github => "ghi_",
         Provider::Gitlab => "glc_",
         Provider::Linear => "lcn_",
+        Provider::Slack => "scn_",
     }
 }
 
@@ -223,7 +224,7 @@ pub(in crate::cli) fn resolve<F: JsonOutputKind>(
             // The options `create` requires for the provider, so the remedy runs as written.
             let required = match provider {
                 Provider::Gitlab => " --token-file PATH --kind KIND",
-                Provider::Github | Provider::Linear => "",
+                Provider::Github | Provider::Linear | Provider::Slack => "",
             };
             writeln!(
                 io::stderr().lock(),
@@ -259,6 +260,11 @@ pub(in crate::cli) fn in_use(record: &Record) -> bool {
                 Some("active" | "credential_required")
             )
         }
+        Record::Slack(connection) => matches!(
+            connection.status,
+            useful_api::slack_connection::Status::Active
+                | useful_api::slack_connection::Status::RecoveryRequired
+        ),
         Record::Linear(connection) => matches!(
             connection.status,
             LinearStatus::Active | LinearStatus::RecoveryRequired

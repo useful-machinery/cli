@@ -2487,7 +2487,7 @@ fn a_limited_edge_continues_at_a_step_until_its_limit_and_then_takes_else() {
 fn host_wait_workflow() -> String {
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/workflow/v1/valid/workflow-step-host-wait.yaml"),
+            .join("../../tests/fixtures/workflow/v1/valid/workflow-step-host-wait.yaml"),
     )
     .unwrap()
 }
@@ -4561,7 +4561,7 @@ finalizers:
 #[test]
 fn step_workspace_rejections_name_the_step() {
     let ambiguous = include_str!(
-        "../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+        "../../../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
     );
     let mixed_controls =
         ambiguous.replace("  join:\n", "  join:\n    dependsOn: [seed, candidate]\n");
@@ -4576,7 +4576,7 @@ fn step_workspace_rejections_name_the_step() {
     }
     assert_failure(
         include_str!(
-            "../../../tests/fixtures/workflow/v1/resolution-invalid/new-workspace-cwd/workflow.yaml"
+            "../../../../../tests/fixtures/workflow/v1/resolution-invalid/new-workspace-cwd/workflow.yaml"
         ),
         ValidationFailureKind::NewWorkspaceCwd,
         ValidationLocation::Step {
@@ -4585,7 +4585,7 @@ fn step_workspace_rejections_name_the_step() {
     );
     assert_failure(
         include_str!(
-            "../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
+            "../../../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
         ),
         ValidationFailureKind::EstablishedWorkspaceGitBranch,
         ValidationLocation::StepOutput {
@@ -4723,7 +4723,7 @@ fn runs_steps_in_execution_root_uses_resolved_workspaces() {
 #[test]
 fn none_workspace_rejections_name_the_step() {
     let ambiguous = include_str!(
-        "../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
+        "../../../../../tests/fixtures/workflow/v1/resolution-invalid/workspace-ambiguous/workflow.yaml"
     );
     let read = ambiguous.replace("  join:\n", "  join:\n    workspace: read\n");
     let mut after = read.replace("workspace: read", "workspace: none");
@@ -4737,7 +4737,7 @@ fn none_workspace_rejections_name_the_step() {
     }
     assert_failure(
         include_str!(
-            "../../../tests/fixtures/workflow/v1/resolution-invalid/none-workspace-cwd/workflow.yaml"
+            "../../../../../tests/fixtures/workflow/v1/resolution-invalid/none-workspace-cwd/workflow.yaml"
         ),
         ValidationFailureKind::NoneWorkspaceCwd,
         ValidationLocation::Step {
@@ -4747,7 +4747,7 @@ fn none_workspace_rejections_name_the_step() {
     // Without its prerequisite `capture` runs in the execution root, where the output is
     // accepted, so the rejection below is the `none` declaration's alone.
     let starting = include_str!(
-        "../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
+        "../../../../../tests/fixtures/workflow/v1/resolution-invalid/established-workspace-git-branch/workflow.yaml"
     ).replace("    dependsOn: [candidate]\n", "");
     validate_yaml(&starting).unwrap();
     let capture = starting.replace("  capture:\n", "  capture:\n    workspace: none\n");

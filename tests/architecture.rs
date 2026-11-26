@@ -36,6 +36,7 @@ const INTERNAL_PACKAGES: [&str; 8] = [
     "useful-support",
     "useful-test-support",
 ];
+const TEST_SUPPORT_SOURCES: &str = "tests/test-support/src";
 
 #[test]
 fn workspace_members_and_edges_match_final_graph() {
@@ -139,9 +140,7 @@ fn workspace_members_and_edges_match_final_graph() {
         ("useful-cli", "useful-human-auth", "normal"),
         ("useful-cli", "useful-runner", "normal"),
         ("useful-cli", "useful-runner", "dev"),
-        ("useful-cli", "useful-support", "dev"),
         ("useful-cli", "useful-support", "normal"),
-        ("useful-cli", "useful-test-support", "dev"),
         ("useful-api", "useful-support", "normal"),
         ("useful-api", "useful-test-support", "dev"),
         ("useful-human-auth", "useful-api", "normal"),
@@ -179,8 +178,8 @@ fn moved_sources_have_one_final_owner_and_private_generated_api() {
         "src/idempotency.rs",
         "src/test_support.rs",
         "tests/liv_2331_remediation_repro.rs",
-        "tests/fixtures/codex-app-server-v1-schema",
-        "tests/fixtures/workflow/v1",
+        "crates/execution/tests/fixtures/codex-app-server-v1-schema",
+        "crates/execution/tests/fixtures/workflow/v1",
     ] {
         assert!(
             !root.join(obsolete).exists(),
@@ -188,12 +187,12 @@ fn moved_sources_have_one_final_owner_and_private_generated_api() {
         );
     }
     for owned in [
-        "crates/execution/tests/fixtures/codex-app-server-v1-schema",
-        "crates/execution/tests/fixtures/workflow/v1",
+        "tests/fixtures/codex-app-server-v1-schema",
+        "tests/fixtures/workflow/v1",
     ] {
         assert!(
             root.join(owned).is_dir(),
-            "execution-owned fixture is absent from {owned}"
+            "CLI test fixture is absent from {owned}"
         );
     }
     assert!(
@@ -782,7 +781,7 @@ fn runner_test_waits_hold_no_literal_real_time_bound() {
     let root = cli_root();
     let mut violations = Vec::new();
     let mut files = rust_sources(&root.join(RUNNER_SOURCES));
-    files.extend(rust_sources(&root.join("crates/test-support/src")));
+    files.extend(rust_sources(&root.join(TEST_SUPPORT_SOURCES)));
 
     for file in files {
         let relative = file.strip_prefix(&root).unwrap();
@@ -917,7 +916,12 @@ fn all_package_sources(root: &Path) -> Vec<PathBuf> {
     let crates = root.join("crates");
     for member in fs::read_dir(&crates).expect("read crates directory") {
         let member = member.expect("read crates member");
-        files.extend(rust_sources(&member.path().join("src")));
+        let sources = if member.file_name() == "test-support" {
+            root.join(TEST_SUPPORT_SOURCES)
+        } else {
+            member.path().join("src")
+        };
+        files.extend(rust_sources(&sources));
     }
     files.sort();
     files

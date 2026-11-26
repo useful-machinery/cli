@@ -402,12 +402,12 @@ library members occupy their final roots:
   assignment execution, artifact delivery, and telemetry. It depends only on support,
   runner-protocol, and execution in production and uses test-support only for tests.
 
-The binary depends on support, API, execution, runner, and human-auth in production
-and on test-support for tests. Its dev dependencies enable only the `test-fixtures`
-seams used by root tests; production dependencies do not expose fixture constructors.
+The binary depends on support, API, execution, runner, and human-auth in production.
+Its unit tests use two dev dependencies, `useful-execution` and `useful-runner`, both with
+`test-fixtures` enabled.
 Commands, service credential policy, build identity, and exit policy remain rooted in
-`src/`. There is one `useful` executable, Cargo continues to provide
-`CARGO_BIN_EXE_useful`, and the archive shape is unchanged.
+`src/`. The process suite under `tests/` uses a standalone driver built from
+`tests/Cargo.toml` and run against a supplied `useful` executable.
 
 The remaining seams have this closed ownership matrix:
 

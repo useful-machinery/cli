@@ -907,39 +907,6 @@ fn resume_settles_the_restored_abandoned_attempt() {
     check_resumed_second_step(&other, &new, id);
 }
 
-#[cfg(feature = "rust-cli-tests")]
-#[test]
-fn resume_continues_a_record_captured_during_the_second_step() {
-    use rustix::process::Signal;
-    let bundle = binary_output_tree();
-    let root = bundle.execution_root().parent().unwrap();
-    let home = root.join("home-a");
-    let other = root.join("home-b");
-    let record = root.join("record");
-    let new = root.join("execution-b");
-    fs::create_dir(&new).unwrap();
-    let mut live = hold_second_step(&bundle, &home);
-    let list = success(run(&home, &["list"]));
-    let id = list["runs"][0]["id"].as_str().unwrap();
-    let shown = success(run(&home, &["show", id]));
-    let directory = Path::new(shown["runDirectory"].as_str().unwrap());
-    let files = root.join("files");
-    fs::create_dir(&files).unwrap();
-    let mut capture = useful_execution::PortableRecordCapture::new(&files);
-    let captured = super::poll_until(
-        "a stable capture of the running step",
-        || capture.capture(directory),
-        |result| !matches!(result, Err(error) if error.code() == "run_changing"),
-    )
-    .unwrap();
-    useful_execution::assemble_portable_record(&captured.manifest, &files, &record).unwrap();
-    success(restore(&other, &record));
-    assert!(!live.signal(Signal::KILL).status.success());
-    drop(live);
-    discard_source_host(&bundle, &home);
-    check_resumed_second_step(&other, &new, id);
-}
-
 fn check_resumed_second_step(other: &Path, new: &Path, id: &str) {
     let status = success(run(other, &["show", id]));
     assert_eq!(status["recovery"]["status"], "abandoned");

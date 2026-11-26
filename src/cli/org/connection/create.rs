@@ -9,7 +9,7 @@ use useful_human_auth::Deployment;
 
 use super::list::Provider;
 use super::token::{OrgTokens, member_session};
-use super::{github, gitlab, linear, target};
+use super::{github, gitlab, linear, slack, target};
 use crate::cli::context::OrgArgs;
 use crate::cli::integration_token;
 use crate::cli::{CommandFailure, CommandResult, WaitTimeoutArgs, with_human_session_api};
@@ -19,7 +19,7 @@ pub(super) const ABOUT: &str =
     "Connect a provider to the organization, or store its token of a token service";
 /// The help of `--from-file`, which `connect` and `reconnect` share.
 pub(super) const FROM_FILE_HELP: &str = "Read the organization's token of a token service from an owned mode-0600 file, or - for standard input";
-const AFTER_HELP: &str = "Providers:\n  github lists the organization's installations, begins a setup session and prints the URL\n  to open to install the GitHub App and the URL to open to prove at GitHub which account you\n  are, opening the latter where this machine has a browser. It then waits for the proof and\n  completes the installation it can, or the one --installation names, unless --no-wait is\n  given. Show the session:\n    useful org integration show SESSION\n  gitlab creates a connection, stages the token --token-file names, waits for GitLab to\n  verify it, asks for the verified identity to be confirmed and activates it. Without a\n  terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  linear prints the URL to open to approve a Linear workspace and waits for the approval\n  unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
+const AFTER_HELP: &str = "Providers:\n  github lists the organization's installations, begins a setup session and prints the URL\n  to open to install the GitHub App and the URL to open to prove at GitHub which account you\n  are, opening the latter where this machine has a browser. It then waits for the proof and\n  completes the installation it can, or the one --installation names, unless --no-wait is\n  given. Show the session:\n    useful org integration show SESSION\n  gitlab creates a connection, stages the token --token-file names, waits for GitLab to\n  verify it, asks for the verified identity to be confirmed and activates it. Without a\n  terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  linear and slack print the URL to open to approve a workspace and wait for the approval\n  unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -27,7 +27,7 @@ pub(super) struct Command {
     #[arg(
         value_name = "PROVIDER",
         value_parser = Connected::parse,
-        help = "Provider to connect, github, gitlab or linear, or a token service your deployment serves"
+        help = "Provider to connect, github, gitlab, linear or slack, or a token service your deployment serves"
     )]
     provider: Connected,
 
@@ -78,7 +78,10 @@ impl Connected {
         {
             return Ok(Self::Service(value.to_owned()));
         }
-        Err("provider must be github, gitlab or linear, or a token service's name".to_owned())
+        Err(
+            "provider must be github, gitlab, linear or slack, or a token service's name"
+                .to_owned(),
+        )
     }
 }
 
@@ -116,7 +119,7 @@ impl Command {
                 (linear.state_updates_given(), &[Provider::Linear]),
                 (
                     linear.no_wait().then_some("--no-wait"),
-                    &[Provider::Github, Provider::Linear],
+                    &[Provider::Github, Provider::Linear, Provider::Slack],
                 ),
             ],
         ) {
@@ -144,6 +147,18 @@ impl Command {
                         organization,
                         instance,
                         staged,
+                        wait.timeout,
+                    )
+                })
+            }
+            Provider::Slack => {
+                target::execute_in(org, options, deployment, |options, organization| {
+                    slack::authorize(
+                        deployment,
+                        options,
+                        organization,
+                        None,
+                        linear.no_wait(),
                         wait.timeout,
                     )
                 })
@@ -193,7 +208,7 @@ impl Command {
         member_session(
             &self.options.authentication,
             &format!(
-                "{service}, which is not github, gitlab or linear and so can only name a token service"
+                "{service}, which is not github, gitlab, linear or slack and so can only name a token service"
             ),
         )?;
         let from_file = self.from_file;

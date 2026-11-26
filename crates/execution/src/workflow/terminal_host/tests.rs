@@ -1271,6 +1271,66 @@ async fn terminal_input_is_inert_until_execution_is_activated() {
 }
 
 #[tokio::test]
+async fn scripted_host_notifies_help_and_quit_eligibility_lifecycle() {
+    let (_temporary, _workflow, view, _) = scripted_host_view();
+    let cancellation = CancellationSource::new();
+    let area = Rect::new(0, 0, 80, 24);
+    let (boundary, input, mut actions) =
+        ScriptedTerminalBoundary::new(area, [], BoundaryFailures::default());
+    let mut host = WorkflowTerminalHost::start_with_boundary(
+        view.clone(),
+        cancellation.clone(),
+        false,
+        boundary,
+    )
+    .unwrap();
+    wait_for_action(&mut actions, BoundaryAction::Setup).await;
+    wait_for_action(&mut actions, BoundaryAction::Draw(area)).await;
+    host.activate_execution().unwrap();
+
+    input
+        .send(ScriptedInput::Event(TerminalInputEvent::Quit))
+        .unwrap();
+    wait_for_action(
+        &mut actions,
+        BoundaryAction::Input(TerminalInputEvent::Quit),
+    )
+    .await;
+    wait_for_action(&mut actions, BoundaryAction::Draw(area)).await;
+    assert_eq!(cancellation.cancellation_reason(), None);
+
+    input
+        .send(ScriptedInput::Event(TerminalInputEvent::Help))
+        .unwrap();
+    wait_for_action(
+        &mut actions,
+        BoundaryAction::Lifecycle(TerminalLifecycleEvent::HelpOpened),
+    )
+    .await;
+    input
+        .send(ScriptedInput::Event(TerminalInputEvent::Escape))
+        .unwrap();
+    wait_for_action(
+        &mut actions,
+        BoundaryAction::Input(TerminalInputEvent::Escape),
+    )
+    .await;
+
+    view.mark_adapter_lifecycle_completed();
+    wait_for_action(
+        &mut actions,
+        BoundaryAction::Lifecycle(TerminalLifecycleEvent::QuitEligible),
+    )
+    .await;
+    input
+        .send(ScriptedInput::Event(TerminalInputEvent::Quit))
+        .unwrap();
+    assert_eq!(host.wait().await.unwrap(), TerminalHostExit::Quit);
+    wait_for_action(&mut actions, BoundaryAction::Restore).await;
+    assert_eq!(cancellation.cancellation_reason(), None);
+}
+
+#[tokio::test]
 async fn scripted_input_keeps_q_inert_during_execution_and_restores_after_cancellation() {
     let (_temporary, workflow, view, now) = scripted_host_view();
     let cancellation = CancellationSource::new();

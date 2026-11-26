@@ -522,6 +522,8 @@ const fn audit_subject_kind(kind: OrganizationAuditSubjectKind) -> &'static str 
         OrganizationAuditSubjectKind::WebhookDelivery => "webhook_delivery",
         OrganizationAuditSubjectKind::RepositoryConnection => "repository_connection",
         OrganizationAuditSubjectKind::Assignment => "assignment",
+        OrganizationAuditSubjectKind::SlackAuthorizationSession => "slack_authorization_session",
+        OrganizationAuditSubjectKind::SlackConnection => "slack_connection",
         OrganizationAuditSubjectKind::LinearAuthorizationSession => "linear_authorization_session",
         OrganizationAuditSubjectKind::LinearConnection => "linear_connection",
         OrganizationAuditSubjectKind::LinearEvaluation => "linear_evaluation",

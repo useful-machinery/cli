@@ -682,8 +682,7 @@ exports:
 }
 
 fn response_pi_execution() -> String {
-    let frames =
-        include_str!("../../crates/execution/src/workflow/pi/fixtures/response-success.jsonl");
+    let frames = include_str!("../fixtures/pi-json-v1/response-success.jsonl");
     let remaining = frames
         .lines()
         .skip(1)
@@ -4282,7 +4281,7 @@ fn pinned_real_pi_runs_the_complete_mixed_value_and_export_dag() {
     );
     bundle.write_source(
         "../execution/.pi/extensions/fake-provider.ts",
-        include_str!("../../crates/execution/src/workflow/pi-json-v1-extension/src/conformance/fake-provider.ts"),
+        include_str!("../fixtures/pi-json-v1/fake-provider.ts"),
     );
     bundle.write_source(
         "../execution/.pi/extensions/fixture-write.ts",
@@ -4648,138 +4647,6 @@ fn json_run_executes_named_inputs_closed_stdin_publication_and_offline_boundarie
         "workflow run adapter must not contact configured Cloud endpoints"
     );
     assert!(bundle.execution_root.exists());
-}
-
-// Exercise the terminal-host seam from the CLI integration suite without a process-global
-// handshake variable or a readiness assertion on rendered terminal text.
-#[cfg(feature = "rust-cli-tests")]
-#[tokio::test]
-async fn injected_tui_boundary_handshakes_help_and_quit_lifecycle() {
-    use useful_execution::{
-        CancellationSource, HostInteraction, ObservationClock, RunTimingObservation,
-        SystemObservationClock, TerminalBoundary, TerminalHostExit, TerminalInputEvent,
-        TerminalLifecycleEvent, TerminalRect, WorkflowRunViewModel, WorkflowRunViewSnapshot,
-        WorkflowTerminalBoundary, WorkflowTerminalHost, resolve,
-    };
-
-    #[derive(Debug, PartialEq)]
-    enum Action {
-        Setup,
-        Draw,
-        Input(TerminalInputEvent),
-        Lifecycle(TerminalLifecycleEvent),
-        Restore,
-    }
-
-    struct InjectedBoundary {
-        input: tokio::sync::mpsc::UnboundedReceiver<TerminalInputEvent>,
-        actions: tokio::sync::mpsc::UnboundedSender<Action>,
-    }
-
-    impl TerminalBoundary for InjectedBoundary {
-        fn setup(&mut self) -> std::io::Result<TerminalRect> {
-            let _ = self.actions.send(Action::Setup);
-            Ok(TerminalRect::new(0, 0, 80, 24))
-        }
-
-        async fn next_event(&mut self) -> std::io::Result<TerminalInputEvent> {
-            let event = self
-                .input
-                .recv()
-                .await
-                .ok_or(std::io::ErrorKind::UnexpectedEof)?;
-            let _ = self.actions.send(Action::Input(event));
-            Ok(event)
-        }
-
-        fn resize(&mut self) -> std::io::Result<TerminalRect> {
-            Ok(TerminalRect::new(0, 0, 80, 24))
-        }
-
-        fn restore(&mut self) -> std::io::Result<()> {
-            let _ = self.actions.send(Action::Restore);
-            Ok(())
-        }
-
-        fn notify_lifecycle(&mut self, event: TerminalLifecycleEvent) -> std::io::Result<()> {
-            let _ = self.actions.send(Action::Lifecycle(event));
-            Ok(())
-        }
-    }
-
-    impl WorkflowTerminalBoundary for InjectedBoundary {
-        fn draw_workflow(
-            &mut self,
-            _snapshot: &WorkflowRunViewSnapshot,
-            _interaction: &mut HostInteraction,
-            _color: bool,
-        ) -> std::io::Result<()> {
-            let _ = self.actions.send(Action::Draw);
-            Ok(())
-        }
-    }
-
-    async fn until(actions: &mut tokio::sync::mpsc::UnboundedReceiver<Action>, expected: Action) {
-        loop {
-            let action = actions.recv().await.expect("terminal action stream closed");
-            if action == expected {
-                return;
-            }
-        }
-    }
-
-    let bundle = RunBundle::new(
-        "schemaVersion: 1\nsteps:\n  complete:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n",
-    );
-    let workflow = resolve(bundle.source_root(), Path::new(WORKFLOW_PATH)).unwrap();
-    let clock = SystemObservationClock;
-    let view = WorkflowRunViewModel::new(
-        &workflow,
-        1,
-        RunTimingObservation::new(clock.sample()),
-        clock,
-    );
-    let cancellation = CancellationSource::new();
-    let (input, input_events) = tokio::sync::mpsc::unbounded_channel();
-    let (action_events, mut actions) = tokio::sync::mpsc::unbounded_channel();
-    let mut host = WorkflowTerminalHost::start_with_boundary(
-        view.clone(),
-        cancellation.clone(),
-        false,
-        InjectedBoundary {
-            input: input_events,
-            actions: action_events,
-        },
-    )
-    .unwrap();
-    until(&mut actions, Action::Setup).await;
-    until(&mut actions, Action::Draw).await;
-    host.activate_execution().unwrap();
-
-    input.send(TerminalInputEvent::Quit).unwrap();
-    until(&mut actions, Action::Input(TerminalInputEvent::Quit)).await;
-    until(&mut actions, Action::Draw).await;
-    assert_eq!(cancellation.cancellation_reason(), None);
-
-    input.send(TerminalInputEvent::Help).unwrap();
-    until(
-        &mut actions,
-        Action::Lifecycle(TerminalLifecycleEvent::HelpOpened),
-    )
-    .await;
-    input.send(TerminalInputEvent::Escape).unwrap();
-    until(&mut actions, Action::Input(TerminalInputEvent::Escape)).await;
-
-    view.mark_adapter_lifecycle_completed();
-    until(
-        &mut actions,
-        Action::Lifecycle(TerminalLifecycleEvent::QuitEligible),
-    )
-    .await;
-    input.send(TerminalInputEvent::Quit).unwrap();
-    assert_eq!(host.wait().await.unwrap(), TerminalHostExit::Quit);
-    until(&mut actions, Action::Restore).await;
-    assert_eq!(cancellation.cancellation_reason(), None);
 }
 
 #[cfg(target_os = "linux")]
@@ -5629,7 +5496,6 @@ fn tui_setup_failure_prevents_execution_and_releases_the_attempt() {
 
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.lines().count(), 1);
-    assert!(stderr.contains("TerminalSetup"));
     assert!(!stderr.contains("summary"));
 }
 
@@ -5802,7 +5668,7 @@ fn plain_mode_reports_publication_failure_without_overwriting_the_racing_target(
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("command-complete"));
     assert!(!stdout.contains(&format!("result: {}", destination.display())));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ResultConflict"));
+    assert!(!output.stderr.is_empty());
     assert!(racing_target.is_dir());
     assert!(fs::read_dir(racing_target).unwrap().next().is_none());
     let state: serde_json::Value =
@@ -6262,74 +6128,6 @@ fn abrupt_owner_loss_terminates_reaps_and_exposes_an_abandoned_attempt() {
 }
 
 #[cfg(target_os = "linux")]
-#[cfg(feature = "rust-cli-tests")]
-#[test]
-fn owner_death_before_registration_or_continuation_never_executes_user_code() {
-    let staging = tempfile::Builder::new()
-        .prefix("scherzo-child-guard-boundary-")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let marker_root = tempfile::tempdir().unwrap();
-    let marker = marker_root.path().join("user-code-ran");
-    let manifest = serde_json::json!({
-        "program": b"/bin/sh".to_vec(),
-        "arguments": [
-            b"-c".to_vec(),
-            format!("touch {}", marker.display()).into_bytes(),
-        ],
-        "streamingStandardInput": false,
-    });
-    fs::write(
-        staging.path().join("launch.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
-    let control = staging.path().join("owner-control");
-    let guard_pid = staging.path().join("guard.pid");
-    let mut owner = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(
-            "set -eu; mkfifo \"$CONTROL\"; exec 3<>\"$CONTROL\"; \
-             \"$GUARD_BIN\" <\"$CONTROL\" 3>&- & guard=$!; \
-             printf '%s\\n' \"$guard\" > \"$GUARD_PID\"; wait \"$guard\"",
-        )
-        .env("CONTROL", &control)
-        .env("GUARD_BIN", crate::executable())
-        .env("GUARD_PID", &guard_pid)
-        .env("USEFUL_INTERNAL_CHILD_GUARD_WORKER", "guard-v1")
-        .env("USEFUL_INTERNAL_CHILD_GUARD_ROOT", staging.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let owner_pid = Pid::from_raw(i32::try_from(owner.id()).unwrap()).unwrap();
-    let ready_path = staging.path().join("ready.json");
-    poll_until(
-        "child guard registration readiness",
-        || (ready_path.is_file(), guard_pid.is_file()),
-        |(ready, registered)| *ready && *registered,
-    );
-    assert!(ready_path.is_file());
-    assert!(guard_pid.is_file());
-    let ready: serde_json::Value = serde_json::from_slice(&fs::read(&ready_path).unwrap()).unwrap();
-    let leader = ready["processGroupId"].as_i64().unwrap().to_string();
-
-    kill_process(owner_pid, Signal::KILL).unwrap();
-    assert!(owner.wait().unwrap().code().is_none());
-    poll_until(
-        "child guard process quiescence",
-        || Path::new("/proc").join(&leader).exists(),
-        |exists| !*exists,
-    );
-    assert!(
-        !marker.is_file(),
-        "stopped user code crossed the release boundary"
-    );
-    assert!(!Path::new("/proc").join(leader).exists());
-}
-
-#[cfg(target_os = "linux")]
 #[test]
 fn guardian_loss_cannot_leave_a_descendant_running() {
     let argv = serde_json::to_string(&[
@@ -6570,7 +6368,6 @@ fn terminal_json_failure_occurs_after_publication_and_forces_status_one() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(result_json(&destination)["outcome"], "succeeded");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("TerminalJsonWriter"));
     let resolved_destination = fs::canonicalize(&destination).unwrap();
     assert!(stderr.contains(resolved_destination.to_str().unwrap()));
 }

@@ -548,7 +548,7 @@ pub(super) fn not_served(service: &str, served: &[ServedTokenService], example: 
         .chain(served.iter().map(|served| served.name.as_str()))
         .collect();
     format!(
-        "{service} is neither github, gitlab nor linear, nor a token service this deployment \
+        "{service} is neither github, gitlab, linear nor slack, nor a token service this deployment \
          serves\n\nName one of {}:\n  {example}",
         given.join(", ")
     )

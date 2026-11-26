@@ -794,7 +794,7 @@ mod tests {
 
     const ROOT_WORKFLOW: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/workflow/v1/valid/root-workflow.yaml"
+        "/../../tests/fixtures/workflow/v1/valid/root-workflow.yaml"
     ));
 
     #[derive(Clone, Debug, Eq, PartialEq)]

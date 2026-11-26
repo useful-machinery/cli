@@ -5,14 +5,14 @@
 //! the models do not name (grant material above all) can reach a caller.
 use std::fmt;
 
-use reqwest::{StatusCode, Url};
+use reqwest::StatusCode;
 
 use super::generated::{apis, models};
 use super::http_client::zeroize_generated_bearer_access_token;
 use super::member_grants::{PROVIDER_VOCABULARY, oauth_provider};
 use super::resource::{
     ProblemFailure, ProblemRow, ResourceFailure, classify_problem_error, expect_problem_status,
-    receive_raw, resource_configuration, validate_json_media_type,
+    receive_raw, resource_configuration, valid_authorization_url, validate_json_media_type,
 };
 use super::{HttpTransportPolicy, UnreachableCategory, problem};
 
@@ -268,17 +268,6 @@ fn validate_session(value: GrantSession, id: Option<&str>) -> Result<GrantSessio
         return Err(invalid());
     }
     Ok(value)
-}
-
-fn valid_authorization_url(url: &str) -> bool {
-    Url::parse(url).is_ok_and(|parsed| {
-        !url.chars().any(char::is_control)
-            && parsed.scheme() == "https"
-            && parsed.host_str().is_some()
-            && parsed.username().is_empty()
-            && parsed.password().is_none()
-            && parsed.fragment().is_none()
-    })
 }
 
 #[derive(Debug)]

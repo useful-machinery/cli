@@ -303,7 +303,9 @@ const fn refused(failure: &CommonOrganizationFailure) -> ProjectFailure {
 
 impl CreateCommand {
     fn execute(self, deployment: &Deployment) -> super::CommandResult {
-        if let Some(refusal) = connection::reach::refuse_linear(self.connection.as_ref()) {
+        if let Some(refusal) =
+            connection::reach::refuse_non_repository_provider(self.connection.as_ref())
+        {
             return refusal;
         }
         let Self {
@@ -609,7 +611,9 @@ enum RepositoryChange {
 
 impl UpdateCommand {
     fn execute(self, deployment: &Deployment) -> super::CommandResult {
-        if let Some(refusal) = connection::reach::refuse_linear(self.connection.as_ref()) {
+        if let Some(refusal) =
+            connection::reach::refuse_non_repository_provider(self.connection.as_ref())
+        {
             return refusal;
         }
         let Self {

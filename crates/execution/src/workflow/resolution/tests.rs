@@ -498,7 +498,7 @@ fn oversized_retained_source_is_rejected_before_it_can_exhaust_the_closure_budge
 #[test]
 fn shared_cloud_and_runner_rejection_fixtures_fail_resolution() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/workflow/v1/resolution-invalid");
+        .join("../../tests/fixtures/workflow/v1/resolution-invalid");
     let mut roots = fs::read_dir(&fixtures)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -519,7 +519,7 @@ fn shared_cloud_and_runner_rejection_fixtures_fail_resolution() {
 #[test]
 fn shared_cloud_and_runner_closure_fixture_has_the_normative_digest() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/workflow/v1/closure/complete");
+        .join("../../tests/fixtures/workflow/v1/closure/complete");
     let expected: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("expected.json")).unwrap()).unwrap();
     let workflow_path = expected["workflowPath"].as_str().unwrap();

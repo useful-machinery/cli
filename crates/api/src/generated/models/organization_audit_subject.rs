@@ -64,6 +64,10 @@ pub enum Kind {
     GitlabConnection,
     #[serde(rename = "gitlab_candidate")]
     GitlabCandidate,
+    #[serde(rename = "slack_authorization_session")]
+    SlackAuthorizationSession,
+    #[serde(rename = "slack_connection")]
+    SlackConnection,
     #[serde(rename = "linear_authorization_session")]
     LinearAuthorizationSession,
     #[serde(rename = "linear_connection")]

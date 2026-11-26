@@ -294,7 +294,7 @@ fn acceptance_requires_explicit_service_authentication_and_proposal_rejects_it()
         "service.key",
     ]);
     assert_eq!(propose.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&propose.stderr).contains("unexpected argument"));
+    assert!(String::from_utf8_lossy(&propose.stderr).contains("--api-key-file"));
 }
 
 #[test]

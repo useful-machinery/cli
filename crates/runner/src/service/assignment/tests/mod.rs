@@ -2355,7 +2355,7 @@ fn replacement_capacity_is_checked_and_reserved_from_the_effective_definition() 
 fn runner_admission_limits_match_shared_contract() {
     let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../execution/tests/fixtures/workflow/v1/capacity-contract.json"
+        "/../../tests/fixtures/workflow/v1/capacity-contract.json"
     )))
     .unwrap();
     let number = |path: &[&str]| -> u64 {

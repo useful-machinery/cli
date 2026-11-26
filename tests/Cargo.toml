@@ -11,19 +11,34 @@ candidate-checkpoints = []
 
 [workspace]
 
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "deny"
+warnings = "deny"
+
+[lints.clippy]
+# `forbid` conflicts with group-level allows emitted by Clap derives.
+allow_attributes_without_reason = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+disallowed_methods = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
+
 # The loopback HTTP and Git fixtures are shared with the native suite.
 [lib]
 name = "useful_test_support"
-path = "../crates/test-support/src/lib.rs"
+path = "test-support/src/lib.rs"
 test = false
 doctest = false
 
 [[test]]
 name = "cli"
 path = "cli.rs"
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("rust-cli-tests"))'] }
 
 [dependencies]
 rustix = { version = "1.1.4", features = ["event", "pty", "fs", "net", "process", "termios"] }

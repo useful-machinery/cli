@@ -632,7 +632,7 @@ fn a_trigger_rule_outside_its_grammar_is_refused() {
 fn the_where_grammar_accepts_exactly_the_shared_corpus() {
     let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/workflow/v1/trigger-rule-grammar.json"
+        "/../../tests/fixtures/workflow/v1/trigger-rule-grammar.json"
     )))
     .unwrap();
     let rules = |key: &str| -> Vec<&str> {
@@ -1055,7 +1055,7 @@ fn queue_latest_needs_a_root_subject_and_the_tree_keeps_the_busy_behavior() {
 /// The engineering root with its bindings declared under the integrations they belong to.
 const NESTED_ROOT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/workflow/v1/valid/root-integration-bindings.yaml"
+    "/../../tests/fixtures/workflow/v1/valid/root-integration-bindings.yaml"
 ));
 
 /// `TRIGGER_ROOT` half migrated: `linear` declares `team` beside the flat block, and the start

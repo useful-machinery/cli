@@ -46,6 +46,14 @@ const FAKE_PROVIDER_EXTENSION: &str = include_str!(concat!(
 const PINNED_TEST_WATCHDOG: Duration = Duration::from_secs(20);
 const MODEL_NAME: &str = "useful-fake/conformance";
 
+#[test]
+fn fake_provider_fixture_matches_the_extension_project() {
+    assert_eq!(
+        FAKE_PROVIDER_EXTENSION.as_bytes(),
+        include_bytes!("../../../../../tests/fixtures/pi-json-v1/fake-provider.ts")
+    );
+}
+
 fn conformance_executable() -> Option<PathBuf> {
     let expected_suffix = format!("-pi-{PI_JSON_V1_QUALIFICATION_VERSION}/bin/pi");
     std::env::var_os("USEFUL_PI_CONFORMANCE_EXECUTABLE")

@@ -42,6 +42,8 @@ required_files=(
   scripts/check-pi-json-v1-extension
   scripts/check-public-api-boundary
   scripts/check-structure
+  scripts/test-e2e
+  scripts/test-e2e-rust
   scripts/strict-devenv
   scripts/test-strict-devenv
   scripts/classify-release-path
@@ -82,7 +84,7 @@ required_files=(
   crates/support/src/lib.rs
   crates/support/src/timing.rs
   crates/test-support/Cargo.toml
-  crates/test-support/src/lib.rs
+  tests/test-support/src/lib.rs
   tests/fixtures/lint-policy/broadly_suppressed.rs
   tests/fixtures/lint-policy/main.rs
   tests/fixtures/lint-policy/ordinary_production.rs

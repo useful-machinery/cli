@@ -36,6 +36,7 @@ mod runners;
 mod runs;
 mod service_principals;
 mod signup;
+mod slack;
 mod webhooks;
 mod workflow_definitions;
 
@@ -105,6 +106,7 @@ pub use generated::models::{
 pub use generated::models::{
     linear_authorization_session, linear_connection, linear_connection_error,
 };
+pub use generated::models::{slack_authorization_session, slack_connection};
 pub use github::{
     GitHubAccountType, GitHubApi, GitHubFailure, GitHubInstallation, GitHubInstallationState,
     GitHubRepository, GitHubRepositoryList, GitHubSetupInstallation, GitHubSetupPendingRequest,
@@ -198,7 +200,7 @@ pub use runners::{
     RunnerPool, RunnerPoolList, RunnerRegistration, RunnerRegistrationList, RunnerRegistrationMode,
 };
 pub use runs::{
-    ContinuationAdmissionViolation, CreateRunInput, RetryConflict, Run, RunApi,
+    ContinuationAdmissionViolation, CreateRunInput, HeldStart, RetryConflict, Run, RunApi,
     RunArtifactDelivery, RunCancellation, RunCancellationEnvelope, RunCancellationMode,
     RunCancellationReceipt, RunCancellationReceiptMode, RunCancellationReceiptState,
     RunCancellationResolutionKind, RunClaimRelease, RunContinuationDefinition,
@@ -209,8 +211,8 @@ pub use runs::{
     RunCreationPending, RunDefinitionSelection, RunFailure, RunHeldRunState, RunInterruption,
     RunInterruptionPhase, RunLinearLifecycle, RunLinearLifecycleUpdate, RunList, RunListFilter,
     RunObservation, RunPublicationHandoffState, RunRead, RunRetryFailureCode, RunRetryReceipt,
-    RunRetryRejection, RunRetryState, RunState, RunSubjectClaim, RunSubjectClaimState,
-    RunTriggerDelivery, valid_integration_context,
+    RunRetryRejection, RunRetryState, RunSlackMessage, RunState, RunSubjectClaim,
+    RunSubjectClaimState, RunTriggerDelivery, valid_integration_context,
 };
 pub use service_principals::{
     CreateServicePrincipalOutcome, IssueServiceCredentialOutcome, IssuedServiceApiKey,
@@ -220,6 +222,9 @@ pub use service_principals::{
     revoke_service_credential,
 };
 pub use signup::{SignupError, SignupOutcome, signup_human};
+pub use slack::{
+    SlackApi, SlackConnection, SlackConnectionList, SlackFailure, SlackSession, SlackSessionStatus,
+};
 pub use webhooks::{
     Mutation as WebhookMutation, WebhookApi, WebhookDelivery, WebhookDeliveryList, WebhookFailure,
     WebhookSubscription, WebhookSubscriptionList,

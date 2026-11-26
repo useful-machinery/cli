@@ -16,11 +16,11 @@ use crate::workflow::tree::validate_workflow_tree;
 
 const ROOT_WORKFLOW: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/workflow/v1/valid/root-workflow.yaml"
+    "/../../tests/fixtures/workflow/v1/valid/root-workflow.yaml"
 ));
 const NESTED_ROOT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/workflow/v1/valid/root-integration-bindings.yaml"
+    "/../../tests/fixtures/workflow/v1/valid/root-integration-bindings.yaml"
 ));
 const DESIGN_WORKFLOW: &str = r#"schemaVersion: 1
 inputs:

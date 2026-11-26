@@ -1060,14 +1060,15 @@ or rate limited, and exit 1 for other rejected or unavailable outcomes.
 ## Organization integrations
 
 `useful org integration` acts as the organization in effect (`--org`). `INTEGRATION` names a
-connection, the organization's GitHub App installation, GitLab token or Linear authorization,
+connection, the organization's GitHub App installation, GitLab token or Linear or Slack
+authorization,
 or the organization's token of a token service, by its service. A workflow's `as: org`
 credentials are met from these commands.
 
-List the connections of the organization in effect to GitHub, GitLab and Linear in one
-list, each with its ID, provider, state and name (the GitHub account, the GitLab instance
-or the Linear workspace) and the connection authorizations in force for it, and then the
-organization's tokens:
+List the connections of the organization in effect to GitHub, GitLab, Linear and Slack in
+one list, each with its ID, provider, state and name (the GitHub account, the GitLab
+instance or the Linear or Slack workspace) and the connection authorizations in force for
+it, and then the organization's tokens:
 
 ```sh
 useful org integration list --org acme-labs
@@ -1079,15 +1080,16 @@ The command reads every page of each provider's list, so it takes no `--limit` o
 caller may not read, as GitHub's for a member who is not an owner, or which the
 deployment does not serve is named as not listed with its reason, and the command still
 succeeds when another provider was read. For GitHub and Linear any server error is
-reported as a list the deployment does not serve. With `--json` it writes one object whose
+reported as a list the deployment does not serve; for Slack only the deployment's answer
+that Slack is not configured is. With `--json` it writes one object whose
 `connections` carry each connection, with its `authorizations` where that read was answered,
 and whose `tokens` carry the organization's tokens; `unlisted` names each provider not listed
 with `reason` `forbidden` or `service_unavailable`. `useful account integration list` shows
 nothing of the organization's.
 
-Show one connection. `INTEGRATION` is a connection's ID (`ghi_`, `glc_` or `lcn_`), or
-`github`, `gitlab` or `linear` for the organization's one connection to that provider that
-has not been removed or revoked, or else its only one. A provider that names several
+Show one connection. `INTEGRATION` is a connection's ID (`ghi_`, `glc_`, `lcn_` or `scn_`),
+or `github`, `gitlab`, `linear` or `slack` for the organization's one connection to that
+provider that has not been removed or revoked, or else its only one. A provider that names several
 connections is refused (exit 2) with each one's ID, state and name, and one that names none
 is refused (exit 1) naming `useful org integration connect`; in either case nothing is sent
 after the read of that provider's list:
@@ -1099,7 +1101,8 @@ useful org integration show ghi_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs --jso
 
 A GitHub binding is shown with the repositories it grants while it is `active`; with
 `--json` it is one object with `outcome` `shown`, `installation` and, for an active binding,
-`items`. A GitLab or Linear connection is shown as that provider's own commands show it.
+`items`. A GitLab, Linear or Slack connection is shown as that provider's own commands show
+it.
 
 ### GitHub
 
@@ -1357,6 +1360,32 @@ by replaying a key in a later invocation. A known session ID remains available o
 timeout, interruption, or polling failure. `recovery_required` is not success; inspect the
 connection and start a deliberate reauthorization if appropriate. No response includes
 Linear tokens, authorization codes, or PKCE verifiers.
+
+### Slack
+
+An active organization owner can connect one Slack workspace. As with Linear, the
+deployment manages the OAuth exchange and the CLI prints the consent URL without opening a
+browser, then polls the session until it ends (up to 15 minutes; `--timeout` stops
+earlier and `--no-wait` returns after the URL):
+
+```sh
+useful org integration connect slack --org acme-labs
+useful org integration show sas_01k0z6r1w8f4jy2m7q9v3x5abc --org acme-labs
+useful org integration show slack --org acme-labs
+useful org integration reconnect slack --org acme-labs
+useful org integration disconnect slack --org acme-labs --yes
+```
+
+`show` reports the workspace, the status, the granted scopes and the last error with the
+time it was observed. `reconnect` reauthorizes a connection that is `active` or
+`recovery_required`. Disconnecting erases the credential, releases the workspace and is
+final for that connection: `reconnect` of a disconnected connection is refused (exit 1),
+and `connect slack` makes a new one. A Slack connection is authorized for no runner and
+reaches no repository or team, so `authorize`, `deauthorize`, `repository list`,
+`team list` and a project's `--integration` refuse it (exit 2) before any request. On a
+deployment without Slack configured these commands report `service_unavailable` (exit 4).
+`--json` events, the one repeat of a lost response under the same request key, and what a
+timeout or an interruption reports are as for Linear.
 
 ### Tokens and connection authorizations
 
@@ -2904,10 +2933,10 @@ every live run was read, its 500 newest ended ones; runs of several definitions 
 place holds is refused `run_not_found`, saying where the command looked and whether Cloud was
 not asked because nobody is signed in or no organization is in effect. A run under the home
 is read without a request or a sign-in. A Cloud run is read with its definition, subject
-claim, workflow state, cancellation, latest progress, exits, newest controls and newest
-trigger deliveries, beside its version, attempt, sources, inputs, placement and Linear
-binding; its `--json` document adds `on` (`personal` for a run with an owner, `project`
-otherwise) and `deployment`. `--wait` and `--timeout` follow a Cloud run until it is final;
+claim, workflow state, cancellation, latest progress, exits, newest controls, newest
+trigger deliveries and first 100 Slack messages, beside its version, attempt, sources,
+inputs, placement and Linear binding; its `--json` document adds `on` (`personal` for a run
+with an owner, `project` otherwise) and `deployment`. `--wait` and `--timeout` follow a Cloud run until it is final;
 `--attempt N` keeps one attempt of a local run.
 
 The control commands `answer`, `approve`, `hand-back`, `pause`, `unpause`, `resume`, `retry`,
@@ -3273,7 +3302,10 @@ placement when available, then the next cursor. `--json` prints one document who
 each run under the home with `on` `local` and each Cloud run with `on` beside the item as the
 API returned it, and whose `cloud` says whether Cloud was asked: `asked` true with
 `organizationRef`, `projectId` when a project narrowed it and `nextCursor`, or `asked` false
-with `reason` (`local_only`, `signed_out`, `no_organization` or `unreachable`). When nobody is
+with `reason` (`local_only`, `signed_out`, `no_organization` or `unreachable`). Held starts
+for blocked tickets follow the runs in text and appear in `heldStarts` in JSON. They are
+included when Cloud is asked without `--cursor`, `--state-group`, `--created-after` or
+`--integration-context`. When nobody is
 signed in, no organization is in effect or Cloud cannot be reached, the command lists the runs
 under the home, exits 0 and says on standard error why Cloud was not asked; with `--on
 personal` or `--on project` it fails as a Cloud read does. Context is private: avoid shell-history exposure when
@@ -3582,8 +3614,8 @@ same facts with a remedy. Such a refusal created no run and is never
 is unconfirmed: a transport failure, a `5xx`, or an unreadable response after dispatch.
 Progress goes to stderr. `workflow run show` of a Cloud run prints one document with
 `command`, `outcome` (`shown`, `pending`, `refused`, `timed_out` or `observation_stopped`),
-`on`, `deployment`, `organizationRef`, `runId`, `run`, `publication`, `deliveries` and
-`controls`, a failure's code under `diagnostics`. Human show results show the Run's automatic publication
+`on`, `deployment`, `organizationRef`, `runId`, `run`, `publication`, `deliveries`,
+`controls` and `slackMessages`, a failure's code under `diagnostics`. Human show results show the Run's automatic publication
 handoff and any observed Publication state, outcome, receipt disposition, failure, and
 redacted confirmed pull-request URL separately from execution. After the run's actor,
 `workflow run show` prints one `credential PROVIDER:` line for each provider whose credential source

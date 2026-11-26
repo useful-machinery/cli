@@ -6,7 +6,7 @@ use std::process::{Output, Stdio};
 use serde_json::{Value, json};
 
 use super::poll_until;
-use super::run_command::{ORGANIZATION, PROJECT_ID, RUN_ID, prepared_run};
+use super::run_command::{DEFINITION_ID, ORGANIZATION, PROJECT_ID, RUN_ID, prepared_run};
 use super::workflow_continue::{chained, completed, decide, decide_each, loop_tree, read_json};
 use super::workflow_definition::Home;
 use super::workflow_run::{isolated_command, run_record};
@@ -627,6 +627,19 @@ pub(super) fn page_response(page: &Value) -> Vec<u8> {
     )
 }
 
+fn held_page_response(page: &Value) -> Vec<u8> {
+    http_response_with_headers(
+        "200 OK",
+        Some("application/json"),
+        &[],
+        &serde_json::to_vec(page).unwrap(),
+    )
+}
+
+pub(super) fn empty_held_page_response() -> Vec<u8> {
+    held_page_response(&json!({"items": []}))
+}
+
 fn parsed(output: &Output) -> Value {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     serde_json::from_slice(&output.stdout).unwrap()
@@ -656,10 +669,10 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
         &["--org", ORGANIZATION, "--json"],
         true,
         &[],
-        vec![page_response(&page)],
+        vec![page_response(&page), empty_held_page_response()],
     );
     let document = parsed(&output);
-    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(
         requests[0].contains(&format!("/v1/organizations/{ORGANIZATION}/runs?"))
             && requests[0].contains("stateGroup=active")
@@ -685,7 +698,7 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
         &["--org", ORGANIZATION],
         true,
         &[],
-        vec![page_response(&page)],
+        vec![page_response(&page), empty_held_page_response()],
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = String::from_utf8(output.stdout).unwrap();
@@ -702,10 +715,10 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
         &["--org", ORGANIZATION, "--all", "--json"],
         true,
         &[],
-        vec![page_response(&page)],
+        vec![page_response(&page), empty_held_page_response()],
     );
     assert_eq!(parsed(&output)["runs"].as_array().unwrap().len(), 3);
-    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(!requests[0].contains("stateGroup"), "{requests:?}");
 
     let (output, requests) = cloud_list(
@@ -713,9 +726,10 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
         &["--org", ORGANIZATION, "--waiting", "--json"],
         true,
         &[],
-        vec![page_response(&page)],
+        vec![page_response(&page), empty_held_page_response()],
     );
     let document = parsed(&output);
+    assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(requests[0].contains("stateGroup=active"), "{requests:?}");
     let runs = document["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2, "{document}");
@@ -745,14 +759,16 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
         &["--org", ORGANIZATION, "--project", PROJECT_ID, "--json"],
         true,
         &[],
-        vec![page_response(&page)],
+        vec![page_response(&page), empty_held_page_response()],
     );
     let document = parsed(&output);
-    assert_eq!(requests.len(), 1, "{requests:?}");
-    assert!(
-        requests[0].contains(&format!("projectId={PROJECT_ID}")),
-        "{requests:?}"
-    );
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    for request in &requests {
+        assert!(
+            request.contains(&format!("projectId={PROJECT_ID}")),
+            "{request}"
+        );
+    }
     assert_eq!(document["cloud"]["projectId"], PROJECT_ID, "{document}");
 
     let (output, requests) = cloud_list(
@@ -772,6 +788,184 @@ fn list_prints_the_home_and_then_one_page_of_cloud_runs() {
     assert_eq!(
         ids(document["runs"].as_array().unwrap()),
         [local_id.as_str()]
+    );
+}
+
+#[test]
+fn list_prints_held_starts_after_the_runs() {
+    let home = Home::new();
+    let page = cloud_page();
+    let held_item = |evaluation_id: &str, issue, owner, blockers| {
+        json!({
+            "evaluationId": evaluation_id,
+            "projectId": PROJECT_ID,
+            "definitionId": DEFINITION_ID,
+            "definitionName": "engineering\nprimary",
+            "revision": 3,
+            "triggerName": "start",
+            "issue": issue,
+            "blockers": blockers,
+            "ownerPrincipalId": owner,
+            "heldSince": "2026-08-10T12:04:31Z",
+            "expiresAt": "2026-08-11T12:04:31Z",
+        })
+    };
+    let owned_id = "wev_01k0z6r1w8f4jy2m7q9v3x5abc";
+    let unowned_id = "wev_01k0z6r1w8f4jy2m7q9v3x5abd";
+    let owned = held_item(
+        owned_id,
+        json!({"id": "issue-7", "identifier": "AUTO-7"}),
+        json!("prn_01k0z6r1w8f4jy2m7q9v3x5abc"),
+        json!([
+            {"id": "issue-6", "identifier": "AUTO-6"},
+            {"id": "issue-8", "identifier": "AUTO-8"},
+        ]),
+    );
+    let mut unowned = held_item(
+        unowned_id,
+        json!({"id": "issue-9", "identifier": null}),
+        Value::Null,
+        json!([{"id": "issue-10", "identifier": null}]),
+    );
+    unowned["definitionName"] = Value::Null;
+    let responses = || {
+        vec![
+            page_response(&page),
+            held_page_response(&json!({"items": [owned], "nextCursor": "older-starts"})),
+            held_page_response(&json!({"items": [unowned]})),
+        ]
+    };
+    let list = |args: &[&str], replies| {
+        cloud_list(
+            &home,
+            &[&["--org", ORGANIZATION][..], args].concat(),
+            true,
+            &[],
+            replies,
+        )
+    };
+
+    let (output, requests) = list(&["--json"], responses());
+    let document = parsed(&output);
+    assert_eq!(requests.len(), 3, "{requests:?}");
+    assert!(
+        requests[1].contains(&format!("/v1/organizations/{ORGANIZATION}/held-starts?"))
+            && requests[1].contains("limit=100")
+            && requests[2].contains("cursor=older-starts")
+            && requests[2].contains("limit=100"),
+        "{requests:?}"
+    );
+    let personal = placed(&owned, "personal");
+    let project = placed(&unowned, "project");
+    let both = json!([personal, project]);
+    assert_eq!(document["heldStarts"], both, "{document}");
+    let (empty, _) = list(
+        &["--json"],
+        vec![page_response(&page), empty_held_page_response()],
+    );
+    let empty = parsed(&empty);
+    assert_eq!(empty["heldStarts"], json!([]), "{empty}");
+    assert_eq!(document["runs"], empty["runs"], "{document}");
+    assert_eq!(document["cloud"], empty["cloud"], "{document}");
+
+    let (output, _) = list(&[], responses());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = String::from_utf8(output.stdout).unwrap();
+    let (runs, held) = report.split_once("next cursor: next-page").unwrap();
+    assert!(runs.contains(RUN_ID), "{report}");
+    let (heading, entries) = held.split_once(owned_id).unwrap();
+    assert!(heading.contains("held starts"), "{report}");
+    let (owned_entry, unowned_entry) = entries.split_once(unowned_id).unwrap();
+    for (entry, fields) in [
+        (
+            owned_entry,
+            &["AUTO-7", "AUTO-6", "AUTO-8", r"engineering\x0aprimary"][..],
+        ),
+        (unowned_entry, &["issue-9", "issue-10", "—"][..]),
+    ] {
+        for field in fields.iter().copied().chain([
+            DEFINITION_ID,
+            "2026-08-10T12:04:31Z",
+            "2026-08-11T12:04:31Z",
+        ]) {
+            assert!(entry.contains(field), "{report}");
+        }
+    }
+    let (output, _) = list(&[], vec![page_response(&page), empty_held_page_response()]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        !String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("held starts")
+    );
+
+    for (args, expected) in [
+        (&["--waiting"][..], both.clone()),
+        (&["--all"][..], both),
+        (&["--on", "personal"][..], json!([personal])),
+        (&["--on", "project"][..], json!([project])),
+    ] {
+        let (output, _) = list(&[args, &["--json"]].concat(), responses());
+        assert_eq!(parsed(&output)["heldStarts"], expected, "{args:?}");
+    }
+
+    for args in [
+        &["--cursor", "prior-page"][..],
+        &["--state-group", "terminal"],
+        &["--created-after", "2025-01-01T00:00:00Z"],
+        &["--integration-context", "source=linear"],
+    ] {
+        let (output, requests) = list(&[args, &["--json"]].concat(), vec![page_response(&page)]);
+        assert_eq!(requests.len(), 1, "{args:?}: {requests:?}");
+        assert_eq!(parsed(&output)["heldStarts"], json!([]), "{args:?}");
+    }
+    for args in [
+        &["--owner", "me"][..],
+        &["--definition", DEFINITION_ID],
+        &["--on", "local"],
+    ] {
+        let (output, requests) =
+            cloud_list(&home, &[args, &["--json"]].concat(), true, &[], vec![]);
+        assert!(requests.is_empty(), "{args:?}: {requests:?}");
+        assert_eq!(parsed(&output)["heldStarts"], json!([]), "{args:?}");
+    }
+
+    let (output, requests) = list(
+        &["--json"],
+        vec![
+            page_response(&page),
+            http_response_with_headers(
+                "404 Not Found",
+                Some("application/problem+json"),
+                &[],
+                br#"{"type":"https://api.usefulmachinery.com/problems/not-found","title":"Not Found","status":404}"#,
+            ),
+        ],
+    );
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refused["outcome"], "refused", "{refused}");
+    assert_eq!(refused["diagnostics"][0]["code"], "not_found", "{refused}");
+
+    let (output, requests) = list(
+        &["--json"],
+        [
+            vec![page_response(&page)],
+            ["older-starts", "oldest-starts", "older-starts"]
+                .map(|next| held_page_response(&json!({"items": [], "nextCursor": next})))
+                .to_vec(),
+        ]
+        .concat(),
+    );
+    assert_eq!(requests.len(), 4, "{requests:?}");
+    assert!(requests[3].contains("cursor=oldest-starts"), "{requests:?}");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refused["outcome"], "refused", "{refused}");
+    assert_eq!(
+        refused["diagnostics"][0]["code"], "protocol_error",
+        "{refused}"
     );
 }
 

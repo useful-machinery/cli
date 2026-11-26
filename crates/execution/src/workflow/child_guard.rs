@@ -1453,6 +1453,89 @@ mod tests {
         assert_eq!(output, b"received:exact input\n");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owner_death_before_registration_never_executes_user_code() {
+        let staging = tempfile::Builder::new()
+            .prefix(TEMPORARY_DIRECTORY_PREFIX)
+            .tempdir_in("/tmp")
+            .unwrap();
+        let marker_root = tempfile::tempdir().unwrap();
+        let marker = marker_root.path().join("user-code-ran");
+        let manifest = LaunchManifest {
+            program: b"/bin/sh".to_vec(),
+            arguments: vec![
+                b"-c".to_vec(),
+                b"touch \"$1\"".to_vec(),
+                b"sh".to_vec(),
+                marker.as_os_str().as_bytes().to_vec(),
+            ],
+            streaming_standard_input: false,
+        };
+        fs::write(
+            staging.path().join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let control = staging.path().join("owner-control");
+        let guard_pid = staging.path().join("guard.pid");
+        let ready_path = staging.path().join(READY_FILE);
+        let mut owner = StdCommand::new("/bin/sh")
+            .arg("-c")
+            .arg(
+                "set -eu; mkfifo \"$CONTROL\"; exec 3<>\"$CONTROL\"; \
+                 \"$GUARD_BIN\" <\"$CONTROL\" 3>&- & guard=$!; \
+                 printf '%s\\n' \"$guard\" > \"$GUARD_PID\"; wait \"$guard\"",
+            )
+            .env("CONTROL", &control)
+            .env("GUARD_BIN", child_guard_worker_executable().unwrap())
+            .env("GUARD_PID", &guard_pid)
+            .env(INTERNAL_WORKER_ENVIRONMENT, GUARD_WORKER)
+            .env(INTERNAL_ROOT_ENVIRONMENT, staging.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let owner_pid = Pid::from_raw(i32::try_from(owner.id()).unwrap()).unwrap();
+        let timeout = Duration::from_secs(30);
+        let started = useful_support::monotonic_now();
+        let leader_path = loop {
+            let (ready, pid_written) = (ready_path.is_file(), guard_pid.is_file());
+            if ready && pid_written {
+                break fs::read(&ready_path).and_then(|bytes| {
+                    let ready: ReadyIdentity =
+                        serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                    Ok(Path::new("/proc").join(ready.process_group_id.to_string()))
+                });
+            }
+            if useful_support::elapsed(started) >= timeout {
+                let _ = kill_process(owner_pid, Signal::KILL);
+                let _ = owner.wait();
+                panic!("guard readiness timed out: ready file={ready}, pid file={pid_written}");
+            }
+            useful_support::sleep(WORKER_POLL_INTERVAL);
+        };
+
+        kill_process(owner_pid, Signal::KILL).unwrap();
+        assert_eq!(owner.wait().unwrap().signal(), Some(Signal::KILL.as_raw()));
+        let leader_path = leader_path.unwrap();
+        let started = useful_support::monotonic_now();
+        while leader_path.try_exists().unwrap() {
+            assert!(
+                useful_support::elapsed(started) < timeout,
+                "guard quiescence timed out: {} still exists",
+                leader_path.display()
+            );
+            useful_support::sleep(WORKER_POLL_INTERVAL);
+        }
+        assert!(
+            !marker.try_exists().unwrap(),
+            "stopped user code crossed the release boundary"
+        );
+    }
+
     #[test]
     fn activity_lease_drop_unlocks_an_inherited_descriptor() {
         let staging = tempfile::tempdir().unwrap();

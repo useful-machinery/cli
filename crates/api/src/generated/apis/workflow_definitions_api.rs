@@ -156,6 +156,19 @@ pub enum GetWorkflowDefinitionRevisionOutlineError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`list_held_starts`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ListHeldStartsError {
+    Status400(models::Problem),
+    Status401(models::Problem),
+    Status403(models::Problem),
+    Status404(models::Problem),
+    Status500(models::Problem),
+    Status503(models::Problem),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`list_workflow_definition_evaluations`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -1013,6 +1026,85 @@ pub fn get_workflow_definition_revision_outline(
         let content = resp.text()?;
         let entity: Option<GetWorkflowDefinitionRevisionOutlineError> =
             serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// Requires active organization membership. Lists held starts newest first by acceptance then id. The cursor is bound to the organization and both filters.
+pub fn list_held_starts(
+    configuration: &configuration::Configuration,
+    organization_ref: &str,
+    limit: Option<i32>,
+    cursor: Option<&str>,
+    project_id: Option<&str>,
+    definition_id: Option<&str>,
+) -> Result<models::HeldStartList, Error<ListHeldStartsError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_organization_ref = organization_ref;
+    let p_query_limit = limit;
+    let p_query_cursor = cursor;
+    let p_query_project_id = project_id;
+    let p_query_definition_id = definition_id;
+
+    let uri_str = format!(
+        "{}/v1/organizations/{organizationRef}/held-starts",
+        configuration.base_path,
+        organizationRef = crate::generated::apis::urlencode(p_path_organization_ref)
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref param_value) = p_query_limit {
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_cursor {
+        req_builder = req_builder.query(&[("cursor", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_project_id {
+        req_builder = req_builder.query(&[("projectId", &param_value.to_string())]);
+    }
+    if let Some(ref param_value) = p_query_definition_id {
+        req_builder = req_builder.query(&[("definitionId", &param_value.to_string())]);
+    }
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    if let Some(ref token) = configuration.bearer_access_token {
+        req_builder = req_builder.bearer_auth(token.to_owned());
+    };
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req)?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text()?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => {
+                return Err(Error::from(serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::HeldStartList`",
+                )));
+            }
+            ContentType::Unsupported(unknown_type) => {
+                return Err(Error::from(serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::HeldStartList`"
+                ))));
+            }
+        }
+    } else {
+        let content = resp.text()?;
+        let entity: Option<ListHeldStartsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

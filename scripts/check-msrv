@@ -55,4 +55,6 @@ fi
 msrv_target_dir=${CARGO_TARGET_DIR:-$public_root/target}/msrv
 CARGO_TARGET_DIR="$msrv_target_dir" RUSTC="$USEFUL_MSRV_RUSTC" \
   "$USEFUL_MSRV_CARGO" check --locked --workspace --all-targets --all-features
+CARGO_TARGET_DIR="$msrv_target_dir" RUSTC="$USEFUL_MSRV_RUSTC" \
+  "$USEFUL_MSRV_CARGO" check --locked --manifest-path tests/Cargo.toml --all-targets --all-features
 printf 'All targets and features compile with Rust %s.\n' "$actual_rustc_version"

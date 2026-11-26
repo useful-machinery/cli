@@ -140,29 +140,17 @@ fn executable() -> &'static std::path::Path {
 }
 
 fn fixture_root() -> &'static Path {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if option_env!("CARGO_BIN_EXE_useful").is_some() {
-        manifest
-    } else {
-        manifest.parent().expect("e2e fixtures live under cli/")
-    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("e2e fixtures live under cli/")
 }
 
 fn version() -> String {
-    std::env::var("USEFUL_TEST_VERSION").unwrap_or_else(|_| {
-        option_env!("USEFUL_VERSION")
-            .unwrap_or(env!("CARGO_PKG_VERSION"))
-            .into()
-    })
+    std::env::var("USEFUL_TEST_VERSION").unwrap_or_else(|_| "0.0.0-dev".into())
 }
 
 fn build_identity() -> String {
-    std::env::var("USEFUL_TEST_BUILD_IDENTITY").unwrap_or_else(|_| {
-        option_env!("USEFUL_RELEASE_COMMIT")
-            .or(option_env!("USEFUL_BUILD_IDENTITY"))
-            .unwrap_or("unknown")
-            .into()
-    })
+    std::env::var("USEFUL_TEST_BUILD_IDENTITY").unwrap_or_else(|_| "unknown".into())
 }
 
 struct TestPty {
@@ -701,23 +689,6 @@ fn private_credential_directory() -> tempfile::TempDir {
     fs::set_permissions(directory.path(), Permissions::from_mode(0o700))
         .expect("temporary credential directory should be private");
     directory
-}
-
-#[cfg(all(target_os = "linux", feature = "rust-cli-tests"))]
-fn wait_for_refresh_lock_attempt(process_id: u32) {
-    let descriptor_directory = format!("/proc/{process_id}/fd");
-    poll_until(
-        "the rejected CLI process opening the deployment refresh lock",
-        || {
-            fs::read_dir(&descriptor_directory)
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter_map(|entry| fs::read_link(entry.path()).ok())
-                .any(|path| path.to_string_lossy().contains(".refresh."))
-        },
-        |attempted| *attempted,
-    );
 }
 
 fn write_runner_config(directory: &tempfile::TempDir, connection_url: &str) -> String {
@@ -1823,14 +1794,10 @@ fn concurrent_processes_exchange_one_rotating_refresh_token_once() {
     let refresh_request = oauth.next_request();
     assert!(refresh_request.starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
     server.release_paused_response();
-    // The rejected process now needs the exchange the other one holds. The workspace suite
-    // on Linux watches it reach the refresh lock. Any other run gives it time to start a
-    // competing exchange, which the issuer's single response would leave unanswered, so a
+    // The rejected process now needs the exchange the other one holds. Give it time to start
+    // a competing exchange, which the issuer's single response would leave unanswered, so a
     // process that does not wait for the holder fails here instead of reading the rotated
     // sign-in by luck.
-    #[cfg(all(target_os = "linux", feature = "rust-cli-tests"))]
-    wait_for_refresh_lock_attempt(first.id());
-    #[cfg(not(all(target_os = "linux", feature = "rust-cli-tests")))]
     sleep(Duration::from_millis(500));
     oauth.release_paused_response();
     assert!(oauth.finish().is_empty());

@@ -419,7 +419,7 @@ fn reauthorization_targets_only_the_requested_connection() {
 #[test]
 fn reconnect_of_the_provider_reauthorizes_the_connection_its_list_names() {
     let (server, _dir, credential) = prepared(vec![
-        linear_list(&[
+        connection_list(&[
             linear_connection(SECOND_CONNECTION, "deleted"),
             linear_connection(CONNECTION, "recovery_required"),
         ]),
@@ -1092,6 +1092,7 @@ fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
             serde_json::json!({"items":[connection()],"nextCursor":"linear-page-2"}),
         ),
         json_http_response("200 OK", serde_json::json!({"items":[second]})),
+        connection_list(&[slack_connection("active")]),
         no_authorizations(),
         serving_nothing(),
     ]);
@@ -1135,15 +1136,17 @@ fn org_connection_list_reads_every_page_of_each_provider_into_one_list() {
             ),
             ("linear", CONNECTION, "active", "Research"),
             ("linear", SECOND_CONNECTION, "disconnected", "Platform"),
+            ("slack", SLACK_CONNECTION, "active", "Engineering"),
         ]
     );
+    assert!(items[4].get("authorizations").is_none());
     assert_eq!(items[0]["connection"]["providerInstallationId"], "713");
     assert_eq!(items[1]["connection"]["version"], 3);
     assert_eq!(items[2]["connection"]["workspaceId"], "workspace-1");
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
 
     let requests = server.finish();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 7);
     assert!(requests[0].starts_with(&format!(
         "GET /api/v1/organizations/{ORG}/github/installations HTTP/1.1\r\n"
     )));
@@ -1209,6 +1212,7 @@ fn org_connection_list_names_the_providers_it_could_not_list() {
             serde_json::json!({"items":[gitlab_connection()],"nextCursor":null}),
         ),
         refused("503 Service Unavailable", 503, "service-unavailable"),
+        refused("503 Service Unavailable", 503, "service-unavailable"),
         no_authorizations(),
         serving_nothing(),
     ]);
@@ -1226,10 +1230,11 @@ fn org_connection_list_names_the_providers_it_could_not_list() {
         serde_json::json!([
             {"provider":"github","reason":"forbidden"},
             {"provider":"linear","reason":"service_unavailable"},
+            {"provider":"slack","reason":"service_unavailable"},
         ])
     );
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
-    assert_eq!(server.finish().len(), 5);
+    assert_eq!(server.finish().len(), 6);
 }
 
 #[test]
@@ -1237,6 +1242,7 @@ fn org_connection_list_with_every_provider_refused_ends_with_the_first_failure()
     let (server, _dir, credential) = prepared(vec![
         refused("403 Forbidden", 403, "forbidden"),
         refused("403 Forbidden", 403, "forbidden"),
+        refused("503 Service Unavailable", 503, "service-unavailable"),
         refused("503 Service Unavailable", 503, "service-unavailable"),
     ]);
 
@@ -1248,7 +1254,7 @@ fn org_connection_list_with_every_provider_refused_ends_with_the_first_failure()
     assert_eq!(document["organizationRef"], ORG);
     assert!(document.get("items").is_none(), "{document}");
     assert_no_secret_output(&output, &[TOKEN, SECRET]);
-    assert_eq!(server.finish().len(), 3);
+    assert_eq!(server.finish().len(), 4);
 }
 
 fn show_connection(server: &ScriptedServer, credential: &str, connection: &str) -> Output {
@@ -1273,7 +1279,7 @@ fn linear_connection(id: &str, status: &str) -> serde_json::Value {
     value["status"] = status.into();
     value
 }
-fn linear_list(items: &[serde_json::Value]) -> Vec<u8> {
+fn connection_list(items: &[serde_json::Value]) -> Vec<u8> {
     json_http_response("200 OK", serde_json::json!({ "items": items }))
 }
 fn linear_list_request(request: &str) -> bool {
@@ -1285,7 +1291,7 @@ fn linear_list_request(request: &str) -> bool {
 #[test]
 fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
     let (server, _dir, credential) = prepared(vec![
-        linear_list(&[
+        connection_list(&[
             linear_connection(SECOND_CONNECTION, "deleted"),
             connection(),
         ]),
@@ -1313,7 +1319,7 @@ fn org_connection_show_of_a_provider_shows_its_connection_in_use() {
 #[test]
 fn org_connection_show_of_a_provider_with_one_removed_connection_shows_it() {
     let (server, _dir, credential) = prepared(vec![
-        linear_list(&[linear_connection(SECOND_CONNECTION, "disconnected")]),
+        connection_list(&[linear_connection(SECOND_CONNECTION, "disconnected")]),
         no_authorizations(),
         json_http_response(
             "200 OK",
@@ -1333,7 +1339,7 @@ fn org_connection_show_of_a_provider_with_one_removed_connection_shows_it() {
 #[test]
 fn org_connection_show_of_a_provider_naming_several_connections_names_them_and_sends_nothing_more()
 {
-    let (server, _dir, credential) = prepared(vec![linear_list(&[
+    let (server, _dir, credential) = prepared(vec![connection_list(&[
         connection(),
         linear_connection(SECOND_CONNECTION, "active"),
     ])]);
@@ -1353,7 +1359,7 @@ fn org_connection_show_of_a_provider_naming_several_connections_names_them_and_s
 
 #[test]
 fn org_connection_show_of_a_provider_with_no_connection_names_create() {
-    let (server, _dir, credential) = prepared(vec![linear_list(&[])]);
+    let (server, _dir, credential) = prepared(vec![connection_list(&[])]);
 
     let output = show_connection(&server, &credential, "linear");
 
@@ -1595,6 +1601,245 @@ fn org_connection_mutations_refuse_another_providers_connection_or_option_withou
             String::from_utf8_lossy(&output.stderr).contains(needed),
             "{args:?}: {output:?}"
         );
+    }
+    assert!(server.finish().is_empty());
+}
+
+const SLACK_SESSION: &str = "sas_01k0z6r1w8f4jy2m7q9v3x5abc";
+const SLACK_CONNECTION: &str = "scn_01k0z6r1w8f4jy2m7q9v3x5abc";
+const SLACK_URL: &str = "https://slack.com/oauth/v2/authorize?state=public";
+const ERROR_TIME: &str = "2026-09-05T12:01:00Z";
+
+fn slack_session(status: &str) -> serde_json::Value {
+    let mut session = session(status);
+    session["id"] = SLACK_SESSION.into();
+    if status == "pending" {
+        session["authorizationUrl"] = SLACK_URL.into();
+    }
+    session
+}
+
+fn slack_connection(status: &str) -> serde_json::Value {
+    serde_json::json!({"id": SLACK_CONNECTION, "organizationId": ORG_ID, "status": status,
+        "workspaceId":"T001","workspaceName":"Engineering","grantedScopes":["chat:write"],
+        "lifecycleGeneration":1,"createdAt":"2026-09-05T12:00:00Z","updatedAt":ERROR_TIME,
+        "lastError":{"reasonCode":"credential_refresh_ambiguous","observedAt":ERROR_TIME}})
+}
+
+fn integration(server: &ScriptedServer, credential: &str, args: &[&str]) -> Output {
+    let command = [
+        &["org", "integration"][..],
+        args,
+        &["--org", ORG, "--json", "--allow-insecure-http"],
+    ]
+    .concat();
+    env_run(server, credential, &command)
+}
+
+fn slack_path(method: &str, suffix: &str) -> String {
+    format!("{method} /api/v1/organizations/{ORG}/connections/slack{suffix} HTTP/1.1")
+}
+
+// SC-SLACK-1
+#[test]
+fn connect_slack_waits_for_workspace_consent_and_reports_the_active_connection() {
+    let mut completed = slack_session("completed");
+    completed["resultConnection"] = slack_connection("active");
+    let (server, _dir, credential) = prepared(vec![
+        json_http_response("201 Created", slack_session("pending")),
+        json_http_response("200 OK", completed),
+    ]);
+    let output = integration(&server, &credential, &["connect", "slack"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let events = lines(&output);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["outcome"], "pending");
+    assert_eq!(events[0]["session"]["authorizationUrl"], SLACK_URL);
+    assert_eq!(events[1]["outcome"], "completed");
+    assert_eq!(events[1]["session"]["resultConnection"]["status"], "active");
+    assert_eq!(
+        events[1]["session"]["resultConnection"]["workspaceName"],
+        "Engineering"
+    );
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].lines().next().unwrap(),
+        slack_path("POST", "/authorization-sessions")
+    );
+    assert_eq!(
+        request_body(&requests[0]),
+        serde_json::json!({"operation":"connect"})
+    );
+    assert_eq!(
+        requests[1].lines().next().unwrap(),
+        slack_path("GET", &format!("/authorization-sessions/{SLACK_SESSION}"))
+    );
+}
+
+#[test]
+fn slack_consent_reports_role_loss_unavailable_service_and_failed_or_pending_sessions() {
+    let mut failed = slack_session("failed");
+    failed["reasonCode"] = "workspace_reserved".into();
+    let (server, _dir, credential) = prepared(vec![
+        refused("503 Service Unavailable", 503, "service-unavailable"),
+        refused("403 Forbidden", 403, "forbidden"),
+        json_http_response("201 Created", slack_session("pending")),
+        json_http_response("200 OK", failed),
+        json_http_response("201 Created", slack_session("pending")),
+    ]);
+    for (expected, code, args) in [
+        ("service_unavailable", 4, vec!["connect", "slack"]),
+        ("forbidden", 1, vec!["connect", "slack"]),
+        ("failed", 1, vec!["connect", "slack"]),
+        ("pending", 0, vec!["connect", "slack", "--no-wait"]),
+    ] {
+        let output = integration(&server, &credential, &args);
+        assert_eq!(output.status.code(), Some(code), "{output:?}");
+        let events = lines(&output);
+        let last = events.last().unwrap();
+        assert_eq!(last["outcome"], expected);
+        if expected == "failed" {
+            assert_eq!(last["session"]["reasonCode"], "workspace_reserved");
+        }
+    }
+    assert_eq!(server.finish().len(), 5);
+}
+
+#[test]
+fn slack_reconnect_uses_the_live_connection_and_refuses_a_disconnected_workspace() {
+    let mut pending = slack_session("pending");
+    pending["operation"] = "reauthorize".into();
+    pending["connectionId"] = SLACK_CONNECTION.into();
+    let (server, _dir, credential) = prepared(vec![
+        connection_list(&[slack_connection("active")]),
+        json_http_response("201 Created", pending),
+        connection_list(&[slack_connection("disconnected")]),
+        json_http_response("200 OK", slack_connection("disconnected")),
+    ]);
+    let output = reconnect(&server, &credential, "slack");
+    assert!(output.status.success(), "{output:?}");
+    for target in ["slack", SLACK_CONNECTION] {
+        let output = reconnect(&server, &credential, target);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let document = &lines(&output)[0];
+        assert_eq!(document["outcome"], "conflict");
+        assert!(
+            document
+                .to_string()
+                .contains("useful org integration connect slack")
+        );
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        request_body(&requests[1]),
+        serde_json::json!({"operation":"reauthorize", "connectionId":SLACK_CONNECTION})
+    );
+    assert_eq!(
+        requests[2].lines().next().unwrap(),
+        slack_path("GET", "?limit=100")
+    );
+    assert_eq!(
+        requests[3].lines().next().unwrap(),
+        slack_path("GET", &format!("/{SLACK_CONNECTION}"))
+    );
+}
+
+#[test]
+fn slack_list_and_show_read_only_the_connection_or_session_named() {
+    let record = slack_connection("active");
+    let page = connection_list(std::slice::from_ref(&record));
+    let (server, _dir, credential) = prepared(vec![
+        page.clone(),
+        page,
+        json_http_response("200 OK", record),
+        json_http_response("200 OK", slack_session("pending")),
+    ]);
+    let output = list_connections(&server, &credential, &["--provider", "slack"]);
+    assert!(output.status.success(), "{output:?}");
+    let item = &lines(&output)[0]["items"][0];
+    assert_eq!(item["name"], "Engineering");
+    assert!(item.get("authorizations").is_none());
+    for target in ["slack", SLACK_CONNECTION] {
+        let output = show_connection(&server, &credential, target);
+        assert!(output.status.success(), "{output:?}");
+        let record = &lines(&output)[0]["connection"];
+        assert_eq!(record["status"], "active");
+        assert_eq!(record["workspaceName"], "Engineering");
+        assert_eq!(record["grantedScopes"], serde_json::json!(["chat:write"]));
+        assert_eq!(
+            record["lastError"],
+            serde_json::json!({"reasonCode":"credential_refresh_ambiguous","observedAt":ERROR_TIME})
+        );
+    }
+    let output = show_connection(&server, &credential, SLACK_SESSION);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(lines(&output)[0]["session"]["id"], SLACK_SESSION);
+    let requests = server.finish();
+    let paths: Vec<_> = requests.iter().map(|r| r.lines().next().unwrap()).collect();
+    assert_eq!(
+        paths,
+        [
+            slack_path("GET", "?limit=100"),
+            slack_path("GET", "?limit=100"),
+            slack_path("GET", &format!("/{SLACK_CONNECTION}")),
+            slack_path("GET", &format!("/authorization-sessions/{SLACK_SESSION}"))
+        ]
+    );
+}
+
+#[test]
+fn slack_disconnect_repeats_a_lost_response_under_one_key() {
+    let (server, _dir, credential) = prepared(vec![
+        connection_list(&[slack_connection("active")]),
+        Vec::new(),
+        json_http_response("200 OK", slack_connection("disconnected")),
+    ]);
+    let output = integration(&server, &credential, &["disconnect", "slack", "--yes"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(lines(&output)[0]["outcome"], "disconnected");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    let key = header_value(&requests[1], "idempotency-key");
+    assert!(!key.is_empty());
+    assert_eq!(key, header_value(&requests[2], "idempotency-key"));
+    for request in &requests[1..] {
+        assert_eq!(
+            request.lines().next().unwrap(),
+            slack_path("POST", &format!("/{SLACK_CONNECTION}/disconnect"))
+        );
+    }
+}
+
+#[test]
+fn slack_refuses_release_workspace_and_commands_for_other_providers_before_any_request() {
+    let (server, _dir, credential) = prepared(vec![]);
+    for args in [
+        &["disconnect", "slack", "--yes", "--release-workspace"][..],
+        &[
+            "authorize",
+            "slack",
+            "--project",
+            "P",
+            "--runner",
+            "R",
+            "--yes",
+        ],
+        &[
+            "deauthorize",
+            SLACK_CONNECTION,
+            "--project",
+            "P",
+            "--runner",
+            "R",
+            "--yes",
+        ],
+        &["team", "list", "slack"],
+        &["repository", "list", "slack"],
+    ] {
+        let output = integration(&server, &credential, args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
     }
     assert!(server.finish().is_empty());
 }

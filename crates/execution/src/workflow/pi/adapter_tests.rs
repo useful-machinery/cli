@@ -56,7 +56,8 @@ use crate::workflow::test_support::{
 const MAXIMUM_INPUT_BYTES: u64 = MAXIMUM_AGENT_PROMPT_BYTES;
 const TEST_WATCHDOG: Duration = Duration::from_secs(10);
 const RECORDED_CWD: &str = "/execution/worktree";
-const RESPONSE_SUCCESS: &str = include_str!("fixtures/response-success.jsonl");
+const RESPONSE_SUCCESS: &str =
+    include_str!("../../../../../tests/fixtures/pi-json-v1/response-success.jsonl");
 const NATIVE_RECOVERY: &str = include_str!("fixtures/native-recovery.jsonl");
 const TERMINAL_TOOL_USE: &str = include_str!("fixtures/terminal-tool-use.jsonl");
 const STREAMED_THINKING: &str = "**Reading package.json contents**";

@@ -54,11 +54,13 @@ impl Reached {
     }
 }
 
-/// Refuses a `--integration` that names a Linear connection, a usage error written before any
+/// Refuses a `--integration` that names a provider without repository access, a usage error written before any
 /// request; `None` for any other connection, or none.
-pub(in crate::cli) fn refuse_linear(connection: Option<&Target>) -> Option<CommandResult> {
+pub(in crate::cli) fn refuse_non_repository_provider(
+    connection: Option<&Target>,
+) -> Option<CommandResult> {
     let given = connection?.provider();
-    (given == Provider::Linear)
+    (!PROVIDERS.contains(&given))
         .then(|| target::refuse("--integration", &PROVIDERS, given, target::NAME_ANOTHER))
 }
 
@@ -77,8 +79,11 @@ pub(in crate::cli) fn find<F: JsonOutputKind>(
     let Some(connection) = connection else {
         return among_all(deployment, options, organization, repository);
     };
-    if connection.provider() == Provider::Linear {
-        bail!("a Linear connection reaches no repository");
+    if !PROVIDERS.contains(&connection.provider()) {
+        bail!(
+            "a {} connection reaches no repository",
+            connection.provider().as_str()
+        );
     }
     if let (Target::Id(provider, id), RepositoryRef::Id(repository_id)) = (&connection, repository)
     {
@@ -235,7 +240,9 @@ fn reaches<F: JsonOutputKind>(
             })
         })?
         .map_err(Refusal::Gitlab),
-        Provider::Linear => bail!("a Linear connection reaches no repository"),
+        Provider::Linear | Provider::Slack => {
+            bail!("a {} connection reaches no repository", provider.as_str())
+        }
     })
 }
 

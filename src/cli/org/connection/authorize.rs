@@ -10,8 +10,8 @@ use useful_api::{ConnectionAuthorizationRuns, MemberGrantApi};
 use useful_human_auth::Deployment;
 
 use super::authorization::{self, CONNECTION_DEAUTHORIZE, Reaching, RouteFailure, Scope, Unready};
-use super::list::Options;
-use super::target::{Integration, Target, VALUE_NAME};
+use super::list::{Options, Provider};
+use super::target::{self, Integration, Target, VALUE_NAME};
 use super::token::{GROUP, ORG_TOKEN_AUTHORIZE, OrgTokens, member_session};
 use crate::cli::account::grant::authorization::Holder;
 use crate::cli::account::grant::confirmation::{
@@ -243,6 +243,16 @@ fn run<C: Stated>(leaf: Leaf, arguments: Arguments, deployment: &Deployment) -> 
         ))
     };
     let name = leaf.name();
+    if let Some(Integration::Connection(connection)) = &target
+        && connection.provider() == Provider::Slack
+    {
+        return target::refuse(
+            name,
+            &[Provider::Github, Provider::Gitlab, Provider::Linear],
+            Provider::Slack,
+            target::NAME_ANOTHER,
+        );
+    }
     let acting = match (target, project) {
         (Some(Integration::Token(service)), Some(_)) => {
             return usage(format!(

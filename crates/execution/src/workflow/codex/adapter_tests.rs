@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::io::{BufRead, Read as _, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,6 +61,9 @@ fn conformance_executable() -> PathBuf {
 
 pub(crate) const FAKE_CODEX: &str = r#"#!/bin/sh
 set -eu
+if [ -n "${CODEX_FIXTURE_ENVIRONMENT:-}" ]; then
+  env > "$CODEX_FIXTURE_ENVIRONMENT"
+fi
 for argument in "$@"; do
   printf '%s\0' "$argument"
   case "$argument" in
@@ -327,6 +331,12 @@ impl ProcessFixture {
                 }),
             ),
         ]);
+        if scenario == "capture-environment" {
+            environment.insert(
+                OsString::from("CODEX_FIXTURE_ENVIRONMENT"),
+                controls.join("environment").into_os_string(),
+            );
+        }
         if let Some(address) = provider_address {
             environment.insert(
                 OsString::from("CODEX_FIXTURE_PROVIDER_ADDRESS"),
@@ -2587,6 +2597,62 @@ pub(super) mod normal {
                 OsStr::new("stdio://"),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn codex_child_receives_exactly_the_admitted_environment() {
+        let fixture = ProcessFixture::new("capture-environment", AgentValueMode::None, 1024);
+        let expected = fixture
+            .invocation
+            .as_ref()
+            .unwrap()
+            .process()
+            .environment()
+            .clone();
+        let (_fixture, outcome, started) = with_watchdog(run_fixture(fixture)).await;
+        assert_completed_without_value(outcome, started);
+
+        let record = expected
+            .variable(OsStr::new("CODEX_FIXTURE_ENVIRONMENT"))
+            .unwrap();
+        let bytes = std::fs::read(record).unwrap();
+        let recorded = bytes
+            .strip_suffix(b"\n")
+            .unwrap()
+            .split(|&byte| byte == b'\n')
+            .map(|entry| {
+                let mut fields = entry.splitn(2, |&byte| byte == b'=');
+                let name = OsStr::from_bytes(fields.next().unwrap());
+                let value = OsStr::from_bytes(fields.next().unwrap());
+                (name, value)
+            })
+            // /bin/sh can export these names before the script starts.
+            .filter(|(name, _)| !matches!(name.as_bytes(), b"PWD" | b"SHLVL" | b"_" | b"OLDPWD"))
+            .collect::<BTreeMap<_, _>>();
+        for name in [
+            "USEFUL_INTERNAL_CHILD_GUARD_WORKER",
+            "USEFUL_INTERNAL_CHILD_GUARD_ROOT",
+            "USEFUL_INTERNAL_CHILD_GUARD_PARENT",
+        ] {
+            assert!(
+                !recorded.contains_key(OsStr::new(name)),
+                "Codex received {name}"
+            );
+        }
+        assert_eq!(
+            recorded.keys().copied().collect::<Vec<_>>(),
+            expected
+                .variables()
+                .keys()
+                .map(OsString::as_os_str)
+                .collect::<Vec<_>>(),
+        );
+        for (name, value) in expected.variables() {
+            assert!(
+                recorded[name.as_os_str()] == value,
+                "Codex rewrote {name:?}"
+            );
+        }
     }
 
     #[test]

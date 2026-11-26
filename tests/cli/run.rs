@@ -175,6 +175,8 @@ pub(super) mod continuation_command_tests {
                         projection("interrupted")
                     } else if step == "show-third" {
                         projection("third")
+                    } else if step == "slack-messages" {
+                        serde_json::json!({"items": []})
                     } else {
                         envelope(&step)
                     };
@@ -384,7 +386,7 @@ pub(super) mod continuation_command_tests {
         args.push("--wait");
         let (waited, _) = execute(&["preparing", "third"], &args);
         let (shown, _) = execute(
-            &["show-third"],
+            &["show-third", "slack-messages"],
             &[
                 "workflow",
                 "run",
@@ -410,7 +412,7 @@ pub(super) mod continuation_command_tests {
             ("show-interrupted", "retained_workspace_unavailable"),
         ] {
             let (output, requests) = execute(
-                &[state],
+                &[state, "slack-messages"],
                 &[
                     "workflow",
                     "run",
@@ -422,8 +424,8 @@ pub(super) mod continuation_command_tests {
                 ],
             );
             assert_eq!(output.status.code(), Some(0), "{output:?}");
-            assert_eq!(requests.len(), 1);
-            assert!(requests[0].starts_with("GET "));
+            assert_eq!(requests.len(), 2);
+            assert!(requests.iter().all(|request| request.starts_with("GET ")));
             let text = String::from_utf8(output.stdout).unwrap();
             assert!(text.contains(marker));
             assert!(text.contains("reexecution partition: build, test"));
@@ -435,7 +437,7 @@ pub(super) mod continuation_command_tests {
     #[test]
     fn show_wait_observes_boot_loss_without_submitting_another_attempt() {
         let (output, requests) = execute(
-            &["show-running", "show-interrupted"],
+            &["show-running", "show-interrupted", "slack-messages"],
             &[
                 "workflow",
                 "run",
@@ -562,7 +564,7 @@ pub(super) mod continuation_command_tests {
         );
         assert_eq!(requests.len(), 2);
         let (human, reads) = execute(
-            &["show-third"],
+            &["show-third", "slack-messages"],
             &[
                 "workflow",
                 "run",
@@ -574,7 +576,7 @@ pub(super) mod continuation_command_tests {
             ],
         );
         assert_eq!(human.status.code(), Some(0), "{human:?}");
-        assert_eq!(reads.len(), 1);
+        assert_eq!(reads.len(), 2);
         let text = String::from_utf8(human.stdout).unwrap();
         assert!(text.contains("reexecution partition: test"));
         assert!(text.contains("inherited: source (prior: inherited"));
@@ -1603,8 +1605,15 @@ fn list_runs_accepts_full_pages_with_large_valid_contexts() {
     };
     let earlier = page(false);
     let body = page(true);
-    let (server, _directory, credential_path) =
-        prepared_run(vec![reply(&earlier), reply(&body), reply(&body)]);
+    let empty_held = super::workflow_run_list::empty_held_page_response;
+    let (server, _directory, credential_path) = prepared_run(vec![
+        reply(&earlier),
+        empty_held(),
+        reply(&body),
+        empty_held(),
+        reply(&body),
+        empty_held(),
+    ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let arguments = [
         "workflow",
@@ -1645,7 +1654,7 @@ fn list_runs_accepts_full_pages_with_large_valid_contexts() {
     let parsed = serde_json::from_slice::<serde_json::Value>(&structured.stdout).unwrap();
     assert_eq!(parsed["runs"], listed_cloud_rows(&body));
     assert_eq!(parsed["cloud"]["nextCursor"], "next-page");
-    assert_eq!(server.finish().len(), 3);
+    assert_eq!(server.finish().len(), 6);
 }
 
 fn acceptance_body(run_id: &str, replayed: bool) -> Vec<u8> {
@@ -1848,7 +1857,7 @@ fn run_show_preserves_the_bound_existing_request_in_handoff_history() {
         "kind":"existing_change_request", "number":42, "providerChangeRequestId":"420",
         "sourceRef":"human/feature", "expectedHeadOid":"0123456789abcdef0123456789abcdef01234567"
     });
-    let (output, server) = run_show_with_response(run_response(body.clone()));
+    let (output, server) = run_show_with_responses(path_run_responses(body.clone()));
     assert!(
         output.status.success(),
         "stdout={} stderr={}",
@@ -1882,13 +1891,13 @@ fn run_show_reports_the_run_actor() {
     ] {
         let mut body = run_body();
         body["actor"] = actor.clone();
-        let (output, server) = run_show_with_response(run_response(body.clone()));
+        let (output, server) = run_show_with_responses(path_run_responses(body.clone()));
         assert!(output.status.success());
         let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(shown["run"]["actor"], actor);
         server.finish();
 
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -1967,13 +1976,13 @@ fn run_show_reports_each_providers_credential_source() {
         let mut body = run_body();
         body["actor"] = serde_json::json!({"kind": "app"});
         body["credentialSources"] = value.clone();
-        let (output, server) = run_show_with_response(run_response(body.clone()));
+        let (output, server) = run_show_with_responses(path_run_responses(body.clone()));
         assert!(output.status.success());
         let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(shown["run"]["credentialSources"], value);
         server.finish();
 
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -2059,13 +2068,13 @@ fn run_show_reports_each_declared_integrations_source() {
         if let Some(value) = &value {
             body["integrationSources"] = value.clone();
         }
-        let (output, server) = run_show_with_response(run_response(body.clone()));
+        let (output, server) = run_show_with_responses(path_run_responses(body.clone()));
         assert!(output.status.success());
         let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(shown["run"].get("integrationSources"), value.as_ref());
         server.finish();
 
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -2118,7 +2127,7 @@ fn waiting_for_repair(mut body: serde_json::Value, step: serde_json::Value) -> s
 
 /// The plain `useful workflow run show` report of `body`.
 fn run_show_plain(body: serde_json::Value) -> String {
-    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
@@ -2257,7 +2266,9 @@ fn list_runs_names_a_listed_runs_wait() {
         &[("Cache-Control", "private, no-store")],
         &serde_json::to_vec(&body).unwrap(),
     );
-    let (server, _directory, credential_path) = prepared_run(vec![reply.clone(), reply]);
+    let empty_held = super::workflow_run_list::empty_held_page_response;
+    let (server, _directory, credential_path) =
+        prepared_run(vec![reply.clone(), empty_held(), reply, empty_held()]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let arguments = [
         "workflow",
@@ -2288,7 +2299,7 @@ fn list_runs_names_a_listed_runs_wait() {
     assert_eq!(structured.status.code(), Some(0), "{structured:?}");
     let parsed: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(parsed["runs"], listed_cloud_rows(&body), "{parsed}");
-    server.finish();
+    assert_eq!(server.finish().len(), 4);
 }
 
 // `useful workflow run list` reads a listed run whose `workflowWait` and closed `workflowProgress`
@@ -2321,7 +2332,10 @@ fn list_runs_names_a_listed_wait_for_the_host() {
         &[("Cache-Control", "private, no-store")],
         &serde_json::to_vec(&body).unwrap(),
     );
-    let (server, _directory, credential_path) = prepared_run(vec![reply]);
+    let (server, _directory, credential_path) = prepared_run(vec![
+        reply,
+        super::workflow_run_list::empty_held_page_response(),
+    ]);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
@@ -2339,7 +2353,7 @@ fn list_runs_names_a_listed_wait_for_the_host() {
     let waits = wait_lines(&report);
     assert_eq!(waits.len(), 1, "{report}");
     assert!(waits[0].contains("host"), "{report}");
-    server.finish();
+    assert_eq!(server.finish().len(), 2);
 }
 
 // `useful workflow run show --wait` of a Cloud run prints each observed state on standard
@@ -2354,8 +2368,11 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
         "attempt": 2, "position": ["land"], "wait": null,
         "reportedAt": "2026-08-10T12:09:00Z",
     });
-    let (server, _directory, credential_path) =
-        prepared_run(vec![run_response(waiting), run_response(finished.clone())]);
+    let (server, _directory, credential_path) = prepared_run(vec![
+        run_response(waiting),
+        run_response(finished.clone()),
+        empty_slack_messages(),
+    ]);
     let output = run_with_env(
         &[
             "workflow",
@@ -2395,15 +2412,16 @@ fn show_wait_names_the_wait_and_follows_to_the_final_state() {
         result["run"]["workflowProgress"],
         finished["workflowProgress"]
     );
-    assert_eq!(server.finish().len(), 2);
+    assert_eq!(server.finish().len(), 3);
 }
 
 #[test]
 fn generated_client_requests_name_the_cli_version_in_the_user_agent() {
-    let (output, server) = run_show_with_response(run_response(run_body_with_state("succeeded")));
+    let (output, server) =
+        run_show_with_responses(path_run_responses(run_body_with_state("succeeded")));
 
     assert!(output.status.success());
-    let request = server.finish().pop().unwrap();
+    let request = server.finish().remove(0);
     assert_eq!(
         header_value(&request, "user-agent"),
         format!("useful/{}", crate::version())
@@ -3494,8 +3512,20 @@ pub(super) fn assert_invalid_response(output: &Output) {
     }
 }
 
+fn path_run_responses(run: serde_json::Value) -> Vec<Vec<u8>> {
+    vec![run_response(run), empty_slack_messages()]
+}
+
+fn empty_slack_messages() -> Vec<u8> {
+    workflow_run_cloud::slack_messages_response(&[], false)
+}
+
 fn run_show_with_response(response: Vec<u8>) -> (Output, ScriptedServer) {
-    let (server, _directory, credential_path) = prepared_run(vec![response]);
+    run_show_with_responses(vec![response])
+}
+
+fn run_show_with_responses(responses: Vec<Vec<u8>>) -> (Output, ScriptedServer) {
+    let (server, _directory, credential_path) = prepared_run(responses);
     let environment = deployment_environment(&server.api_url, &credential_path);
     let output = run_with_env(
         &[
@@ -3590,7 +3620,7 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
                 "diagnostic": {"stage":"acceptance", "deliveryPhase":"artifact_upload",
                     "deliveryCode":"future_delivery_code", "errorType":"future_handoff_error"}}
         });
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
@@ -3646,7 +3676,7 @@ fn show_wait_separates_failed_publication_handoff_from_execution() {
                 )));
             }
         }
-        assert_eq!(server.finish().len(), 1);
+        assert_eq!(server.finish().len(), 2);
     }
 }
 
@@ -3696,6 +3726,7 @@ fn human_run_observation_reports_failed_automatic_publication() {
                 &[("Cache-Control", "private, no-store")],
                 &serde_json::to_vec(&publication).unwrap(),
             ),
+            empty_slack_messages(),
         ]);
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
@@ -3749,7 +3780,7 @@ fn human_run_observation_reports_failed_automatic_publication() {
         assert!(report.contains(&format!(
             "useful workflow run publication show {publication_id} --run {RUN_ID}"
         )));
-        assert_eq!(server.finish().len(), 2);
+        assert_eq!(server.finish().len(), 3);
     }
 }
 
@@ -3804,6 +3835,7 @@ fn human_run_observation_reports_successful_automatic_publication_url() {
                 &[("Cache-Control", "private, no-store")],
                 &serde_json::to_vec(&publication).unwrap(),
             ),
+            empty_slack_messages(),
         ]);
         let mut args = vec![
             "workflow",
@@ -3829,7 +3861,7 @@ fn human_run_observation_reports_successful_automatic_publication_url() {
         assert!(report.contains("pull request url: https://example.test/review/42"));
         assert!(!report.contains("secret"));
         assert!(!report.contains("token=private"));
-        assert_eq!(server.finish().len(), 2);
+        assert_eq!(server.finish().len(), 3);
     }
 }
 
@@ -3851,6 +3883,7 @@ fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
             publication_response(queued.clone()),
             run_response(started.clone()),
             publication_response(automatic_publication(outcome)),
+            empty_slack_messages(),
         ]);
         let output = run_with_env(
             &[
@@ -3886,7 +3919,7 @@ fn show_wait_tracks_automatic_attempt_through_handoff_and_publication() {
         assert!(result["error"].is_null());
         assert!(!output.stderr.is_empty());
         let requests = server.finish();
-        assert_eq!(requests.len(), 5);
+        assert_eq!(requests.len(), 6);
         for request in &requests {
             assert!(
                 request.starts_with("GET "),
@@ -3909,8 +3942,11 @@ fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
     failed["failure"] = serde_json::json!({
         "phase": "branch", "code": "provider_unavailable", "retryable": true
     });
-    let (server, _directory, credential_path) =
-        prepared_run(vec![run_response(run), publication_response(failed)]);
+    let (server, _directory, credential_path) = prepared_run(vec![
+        run_response(run),
+        publication_response(failed),
+        empty_slack_messages(),
+    ]);
     let output = run_with_env(
         &[
             "workflow",
@@ -3936,7 +3972,7 @@ fn show_wait_keeps_successful_execution_separate_from_failed_publication() {
         "provider_unavailable"
     );
     assert_eq!(document["error"], serde_json::Value::Null);
-    assert_eq!(server.finish().len(), 2);
+    assert_eq!(server.finish().len(), 3);
 }
 
 // Run waits preserve a terminal existing-target path-policy refusal
@@ -3962,6 +3998,7 @@ fn run_wait_decodes_existing_target_workflow_policy_failure() {
     let (server, _directory, credential_path) = prepared_run(vec![
         run_response(run),
         publication_response(failed.clone()),
+        empty_slack_messages(),
     ]);
     let output = run_with_env(
         &[
@@ -4015,10 +4052,14 @@ fn run_wait_decodes_gitlab_merge_request_failure_phase() {
     failed["failure"] = serde_json::json!({"phase": "merge_request", "code": "provider_unavailable", "retryable": true});
     for (phase, valid) in [("merge_request", true), ("pull_request", false)] {
         failed["failure"]["phase"] = serde_json::json!(phase);
-        let (server, _directory, credential_path) = prepared_run(vec![
+        let mut responses = vec![
             run_response(run.clone()),
             publication_response(failed.clone()),
-        ]);
+        ];
+        if valid {
+            responses.push(empty_slack_messages());
+        }
+        let (server, _directory, credential_path) = prepared_run(responses);
         let output = run_with_env(
             &[
                 "workflow",
@@ -4052,6 +4093,7 @@ fn run_plain_publication_outcomes_do_not_invent_a_new_pull_request() {
         let (server, _directory, credential_path) = prepared_run(vec![
             run_response(run),
             publication_response(automatic_publication(outcome)),
+            empty_slack_messages(),
         ]);
         let output = run_with_env(
             &[
@@ -4075,7 +4117,7 @@ fn run_plain_publication_outcomes_do_not_invent_a_new_pull_request() {
         );
         assert_eq!(report.contains("  pull request url: "), pull_request);
         assert!(!report.contains("(created, open)"));
-        assert_eq!(server.finish().len(), 2);
+        assert_eq!(server.finish().len(), 3);
     }
 }
 
@@ -5660,7 +5702,7 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
                 "kind": "step_state_changed", "stepId": "build", "targetState": "running"},
             "lastDecline": null
         });
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
@@ -5702,7 +5744,9 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
                     "deliveries": null,
                     "moreDeliveries": false,
                     "controls": null,
-                    "moreControls": false
+                    "moreControls": false,
+                    "slackMessages": [],
+                    "moreSlackMessages": false
                 })
             );
         } else {
@@ -5739,7 +5783,7 @@ fn run_show_reports_the_complete_projection_in_plain_and_json_modes() {
                 );
             }
         }
-        let request = server.finish().pop().unwrap();
+        let request = server.finish().remove(0);
         assert!(request.starts_with(&format!(
             "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID} HTTP/1.1\r\n"
         )));
@@ -5764,6 +5808,7 @@ fn run_show_of_a_run_with_no_source_prints_source_none_and_its_definition() {
         let (server, _directory, credential_path) = prepared_run(vec![
             run_response(body.clone()),
             workflow_run_cloud::controls_response(&[], false),
+            empty_slack_messages(),
         ]);
         let env = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec![
@@ -5853,7 +5898,7 @@ fn run_show_lists_the_other_runs_its_runner_holds() {
     for json in [false, true] {
         let mut body = run_body();
         body["observation"] = observation_held_with_two_runs();
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
@@ -5914,7 +5959,7 @@ fn linear_lifecycle_show(view: Option<serde_json::Value>, json: bool) -> (Output
     if let Some(view) = view {
         body["linearLifecycle"] = view;
     }
-    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
     let environment = deployment_environment(&server.api_url, &credential_path);
     let mut args = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
     if json {
@@ -5944,7 +5989,7 @@ fn linear_lifecycle_show_writes_the_view_unchanged_and_one_line_per_member() {
     assert_eq!(shown["command"], "useful workflow run show");
     assert_eq!(shown["outcome"], "shown");
     assert_eq!(shown["run"]["linearLifecycle"], view);
-    let request = server.finish().pop().unwrap();
+    let request = server.finish().remove(0);
     assert!(request.starts_with(&format!(
         "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID} HTTP/1.1\r\n"
     )));
@@ -6057,13 +6102,9 @@ fn linear_lifecycle_show_reports_absence_and_refuses_a_wrong_pair() {
     );
     server.finish();
 
-    let (output, server) = linear_lifecycle_show(
-        Some(linear_lifecycle_body(
-            "awaiting_event",
-            Some("team_unmapped"),
-        )),
-        true,
-    );
+    let mut invalid = run_body();
+    invalid["linearLifecycle"] = linear_lifecycle_body("awaiting_event", Some("team_unmapped"));
+    let (output, server) = run_show_with_response(run_response(invalid));
     assert_invalid_response(&output);
     server.finish();
 }
@@ -6266,7 +6307,7 @@ fn linear_lifecycle_list_reports_absence_and_refuses_invalid_updates() {
 fn run_show_carries_the_linear_lifecycle_binding_only_when_present() {
     let mut body = run_body();
     body["linearLifecycle"] = linear_lifecycle_body("awaiting_event", None);
-    let (output, server) = run_show_with_response(run_response(body.clone()));
+    let (output, server) = run_show_with_responses(path_run_responses(body.clone()));
     assert!(output.status.success());
     let shown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(shown["outcome"], "shown");
@@ -6280,7 +6321,7 @@ fn run_show_carries_the_linear_lifecycle_binding_only_when_present() {
         if with_binding {
             body["linearLifecycle"] = linear_lifecycle_body("awaiting_event", None);
         }
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -6336,7 +6377,7 @@ fn run_show_displays_terminal_failure_and_rejection() {
     ] {
         let mut body = run_body_with_state(state);
         body[field] = evidence;
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -6357,7 +6398,7 @@ fn run_show_displays_terminal_failure_and_rejection() {
         );
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains(expected), "{text}");
-        assert_eq!(server.finish().len(), 1);
+        assert_eq!(server.finish().len(), 2);
     }
 }
 
@@ -6372,7 +6413,7 @@ fn run_show_json_keeps_harness_failure_and_input_size_diagnostic() {
             "observedBytes": 1048577}
     });
     for json in [true, false] {
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
@@ -6398,7 +6439,7 @@ fn run_show_json_keeps_harness_failure_and_input_size_diagnostic() {
                 );
             }
         }
-        assert_eq!(server.finish().len(), 1);
+        assert_eq!(server.finish().len(), 2);
     }
 }
 
@@ -6427,7 +6468,7 @@ fn run_show_json_keeps_workflow_validation_diagnostic() {
     let mut body = run_body_with_state("rejected");
     body["rejection"] = workflow_validation_rejection();
     for json in [true, false] {
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
         if json {
@@ -6457,7 +6498,7 @@ fn run_show_json_keeps_workflow_validation_diagnostic() {
                 "runner diagnostic rendered in {text}"
             );
         }
-        assert_eq!(server.finish().len(), 1);
+        assert_eq!(server.finish().len(), 2);
     }
 }
 
@@ -6477,7 +6518,7 @@ fn grant_required_rejection(providers: Option<&[&str]>) -> serde_json::Value {
 fn shown_rejection(rejection: &serde_json::Value, json: bool) -> Output {
     let mut body = run_body_with_state("rejected");
     body["rejection"] = rejection.clone();
-    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
     let environment = deployment_environment(&server.api_url, &credential_path);
     let mut arguments = vec!["workflow", "run", "show", RUN_ID, "--org", ORGANIZATION];
     if json {
@@ -6490,7 +6531,7 @@ fn shown_rejection(rejection: &serde_json::Value, json: bool) -> Output {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(server.finish().len(), 1);
+    assert_eq!(server.finish().len(), 2);
     output
 }
 
@@ -6614,7 +6655,7 @@ fn run_show_renders_cancellation_interruption_and_artifact_delivery() {
         "phase": "upload",
         "code": "carrier_upload_failed"
     });
-    let (server, _directory, credential_path) = prepared_run(vec![run_response(body)]);
+    let (server, _directory, credential_path) = prepared_run(path_run_responses(body));
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
@@ -6660,7 +6701,7 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
         "rejected",
     ] {
         let (server, _directory, credential_path) =
-            prepared_run(vec![run_response(run_body_with_state(state))]);
+            prepared_run(path_run_responses(run_body_with_state(state)));
         let environment = deployment_environment(&server.api_url, &credential_path);
 
         let output = run_with_env(
@@ -6688,7 +6729,7 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
         assert_eq!(result["run"]["id"], RUN_ID);
         assert_eq!(result["run"]["state"], state);
         let requests = server.finish();
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 2);
         assert!(requests[0].starts_with(&format!(
             "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID} HTTP/1.1\r\n"
         )));
@@ -6698,7 +6739,7 @@ fn show_wait_emits_terminal_json_for_every_execution_outcome() {
 #[test]
 fn show_wait_emits_the_terminal_plain_projection() {
     let (server, _directory, credential_path) =
-        prepared_run(vec![run_response(run_body_with_state("failed"))]);
+        prepared_run(path_run_responses(run_body_with_state("failed")));
     let environment = deployment_environment(&server.api_url, &credential_path);
 
     let output = run_with_env(
@@ -6844,6 +6885,7 @@ fn show_wait_refreshes_authentication_and_recovers_from_one_server_failure() {
             }),
         ),
         run_response(run_body_with_state("succeeded")),
+        empty_slack_messages(),
     ]);
     let credential_directory = private_credential_directory();
     let credential_path = credential_directory.path().join("credentials.json");
@@ -6884,7 +6926,7 @@ fn show_wait_refreshes_authentication_and_recovers_from_one_server_failure() {
     assert_eq!(result["run"]["id"], RUN_ID);
     assert_no_secret_output(&output, &[TOKEN, REFRESHED_TOKEN]);
     let requests = server.finish();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(requests[0].starts_with("GET /api/v1/organizations/"));
     assert!(requests[1].starts_with("POST /auth/oauth/token HTTP/1.1\r\n"));
     assert!(requests[2].starts_with("GET /api/v1/organizations/"));
@@ -7121,7 +7163,7 @@ fn run_show_accepts_lease_expiry_with_either_stop_confirmation() {
             "stopConfirmed": stop_confirmed
         });
 
-        let (output, server) = run_show_with_response(run_response(body));
+        let (output, server) = run_show_with_responses(path_run_responses(body));
 
         assert!(output.status.success());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -7140,7 +7182,7 @@ fn run_show_prints_the_lease_loss_reason_after_the_cause() {
         let mut body = run_body_with_state("interrupted");
         body["interruption"]["cause"] = serde_json::json!("execution_lease_expired");
         body["interruption"]["leaseLoss"] = serde_json::json!(lease_loss);
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(body.clone())]);
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(body.clone()));
         let output = run_with_env(
             &[
                 "workflow",
@@ -7164,7 +7206,7 @@ fn run_show_prints_the_lease_loss_reason_after_the_cause() {
         }
         server.finish();
 
-        let (output, server) = run_show_with_response(run_response(body));
+        let (output, server) = run_show_with_responses(path_run_responses(body));
         assert!(output.status.success());
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
@@ -7710,6 +7752,7 @@ pub(crate) mod workflow_run_show {
                 run_response(owned),
                 deliveries_response(false),
                 controls_response(&[], false),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -7747,6 +7790,7 @@ pub(crate) mod workflow_run_show {
                 run_response(definition_run()),
                 deliveries_response(false),
                 controls_response(&[], false),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -8053,6 +8097,100 @@ mod workflow_run_cloud {
         run_response(page)
     }
 
+    pub(super) fn slack_messages_response(items: &[serde_json::Value], more: bool) -> Vec<u8> {
+        let mut page = serde_json::json!({"items": items});
+        if more {
+            page["nextCursor"] = serde_json::json!("newer-messages");
+        }
+        run_response(page)
+    }
+
+    fn slack_messages_route() -> String {
+        format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/slack-messages?limit=100")
+    }
+
+    fn slack_messages(outcome: &str, state: &str, reason: &str) -> [serde_json::Value; 2] {
+        [
+            serde_json::json!({
+                "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abc", "kind": "run_started",
+                "attempt": 1, "outcome": null, "state": "posted", "reason": null,
+                "createdAt": "2026-08-10T12:04:00Z", "updatedAt": "2026-08-10T12:04:01Z"
+            }),
+            serde_json::json!({
+                "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abd", "kind": "run_settled",
+                "attempt": 1, "outcome": outcome, "state": state, "reason": reason,
+                "createdAt": "2026-08-10T12:05:00Z", "updatedAt": "2026-08-10T12:05:01Z"
+            }),
+        ]
+    }
+
+    #[test]
+    fn cloud_show_reports_slack_messages_in_event_order_with_their_delivery_result() {
+        let home = tempfile::tempdir().unwrap();
+        let items = slack_messages("failed", "failed", "slack_unavailable");
+        let mut run = definition_run();
+        run["state"] = serde_json::json!("failed");
+        for json in [true, false] {
+            let (output, requests) = show_in_cloud(
+                RUN_ID,
+                if json { &["--json"] } else { &[] },
+                vec![
+                    run_response(run.clone()),
+                    deliveries_response(false),
+                    controls_response(&[], false),
+                    slack_messages_response(&items, !json),
+                ],
+                home.path(),
+            );
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(route(requests.last().unwrap()), slack_messages_route());
+            if json {
+                let shown = document(&output);
+                assert_eq!(shown["slackMessages"], serde_json::json!(items));
+                assert_eq!(shown["moreSlackMessages"], false);
+            } else {
+                let text = String::from_utf8(output.stdout).unwrap();
+                let (_, lines) = reported_list(&text, "slack messages").unwrap();
+                assert_eq!(
+                    lines,
+                    [
+                        "run_started · attempt 1 · posted",
+                        "run_settled · attempt 1 · outcome failed · failed slack_unavailable",
+                    ]
+                );
+                assert!(text.contains("newer slack messages: not shown"), "{text}");
+            }
+        }
+    }
+
+    // SC-SLACKTHREAD-5: a run without a member or owner records both messages as skipped.
+    #[test]
+    fn cloud_show_explains_both_skipped_slack_messages_when_the_run_has_no_member() {
+        let home = tempfile::tempdir().unwrap();
+        let mut items = slack_messages("succeeded", "skipped", "no_member");
+        items[0]["state"] = serde_json::json!("skipped");
+        items[0]["reason"] = serde_json::json!("no_member");
+        let (output, _) = show_in_cloud(
+            RUN_ID,
+            &[],
+            vec![
+                run_response(run_body_with_state("succeeded")),
+                slack_messages_response(&items, false),
+            ],
+            home.path(),
+        );
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let (_, lines) = reported_list(&text, "slack messages").unwrap();
+        assert_eq!(
+            lines,
+            [
+                "run_started · attempt 1 · skipped no_member",
+                "run_settled · attempt 1 · outcome succeeded · skipped no_member",
+            ]
+        );
+    }
+
     fn released_claim() -> Vec<u8> {
         http_response_with_headers(
             "200 OK",
@@ -8140,6 +8278,7 @@ mod workflow_run_cloud {
                 run_response(definition_run()),
                 deliveries_response(true),
                 controls_response(&[], false),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -8157,6 +8296,7 @@ mod workflow_run_cloud {
                 format!(
                     "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/controls?limit=100"
                 ),
+                slack_messages_route(),
             ]
         );
         let shown = document(&output);
@@ -8215,6 +8355,7 @@ mod workflow_run_cloud {
                 run_response(definition_run()),
                 deliveries_response(false),
                 controls_response(&[], false),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -8266,6 +8407,7 @@ mod workflow_run_cloud {
                 run_response(run),
                 deliveries_response(false),
                 controls_response(&[], false),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -8580,7 +8722,7 @@ mod workflow_run_cloud {
         let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
-            vec![run_response(fixture.clone())],
+            path_run_responses(fixture.clone()),
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -8592,7 +8734,7 @@ mod workflow_run_cloud {
             fixture["observation"]["waiting"]
         );
 
-        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(fixture)], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(fixture), home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_reports_owned_route(&String::from_utf8(output.stdout).unwrap());
 
@@ -8602,7 +8744,7 @@ mod workflow_run_cloud {
         let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
-            vec![run_response(unowned.clone())],
+            path_run_responses(unowned.clone()),
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -8614,7 +8756,7 @@ mod workflow_run_cloud {
             run["observation"].get("waiting"),
             Some(&serde_json::Value::Null)
         );
-        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(unowned)], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(unowned), home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(reported(&text, "owner"), Some("none"), "{text}");
@@ -8622,7 +8764,7 @@ mod workflow_run_cloud {
         assert_eq!(reported(&text, "waiting"), None, "{text}");
 
         let unrecognized = queued_owned_run(serde_json::json!({"reason": "runners_asleep"}));
-        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(unrecognized)], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(unrecognized), home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(reported(&text, "waiting"), Some("runners_asleep"), "{text}");
@@ -8639,7 +8781,7 @@ mod workflow_run_cloud {
         let (output, _) = show_in_cloud(
             RUN_ID,
             &["--json"],
-            vec![run_response(held.clone())],
+            path_run_responses(held.clone()),
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -8648,14 +8790,14 @@ mod workflow_run_cloud {
             held["observation"]["heldWith"]
         );
 
-        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(held)], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(held), home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_reports_held_runs(&String::from_utf8(output.stdout).unwrap());
 
         let (output, _) = show_in_cloud(
             RUN_ID,
             &[],
-            vec![run_response(queued_owned_run(offline_since_last_seen()))],
+            path_run_responses(queued_owned_run(offline_since_last_seen())),
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -8666,9 +8808,9 @@ mod workflow_run_cloud {
     // `useful workflow run show` names the same owner, route and waiting reason.
     #[test]
     fn run_show_reports_a_runs_owner_route_and_what_it_waits_for() {
-        let (server, _directory, credential_path) = prepared_run(vec![run_response(
+        let (server, _directory, credential_path) = prepared_run(path_run_responses(
             queued_owned_run(offline_since_last_seen()),
-        )]);
+        ));
         let environment = deployment_environment(&server.api_url, &credential_path);
         let output = run_with_env(
             &[
@@ -8695,11 +8837,16 @@ mod workflow_run_cloud {
         let (output, requests) = show_in_cloud(
             RUN_ID,
             &["--json"],
-            vec![run_response(run_body())],
+            path_run_responses(run_body()),
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            route(&requests[0]),
+            format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}")
+        );
+        assert_eq!(route(&requests[1]), slack_messages_route());
         let shown = document(&output);
         for field in [
             "definition",
@@ -8716,10 +8863,14 @@ mod workflow_run_cloud {
         assert_eq!(shown["moreDeliveries"], false);
         assert_eq!(shown["controls"], serde_json::Value::Null);
         assert_eq!(shown["moreControls"], false);
+        assert_eq!(shown["slackMessages"], serde_json::json!([]));
+        assert_eq!(shown["moreSlackMessages"], false);
 
-        let (output, _) = show_in_cloud(RUN_ID, &[], vec![run_response(run_body())], home.path());
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(run_body()), home.path());
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert!(String::from_utf8(output.stdout).unwrap().contains(RUN_ID));
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains(RUN_ID));
+        assert!(reported_list(&text, "slack messages").is_none(), "{text}");
     }
 
     /// The definition-backed run its runner withdrew: its attempt exited `withdrawn` with the
@@ -8793,12 +8944,13 @@ mod workflow_run_cloud {
                 run_response(withdrawn_run()),
                 deliveries_response(false),
                 controls_response(&controls, true),
+                empty_slack_messages(),
             ],
             home.path(),
         );
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(
-            requests.last().map(|request| route(request)),
+            requests.get(2).map(|request| route(request)),
             Some(
                 format!(
                     "GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/controls?limit=100"
@@ -8820,6 +8972,7 @@ mod workflow_run_cloud {
                 run_response(withdrawn_run()),
                 deliveries_response(false),
                 controls_response(&controls, true),
+                empty_slack_messages(),
             ],
             home.path(),
         );
@@ -8902,6 +9055,28 @@ mod workflow_run_cloud {
                 server_error(),
             ],
             home.path(),
+        );
+        let (failed_slack, _) = show_in_cloud(
+            RUN_ID,
+            &["--json"],
+            vec![
+                run_response(withdrawn_run()),
+                deliveries_response(false),
+                controls_response(&[], false),
+                server_error(),
+            ],
+            home.path(),
+        );
+        assert_eq!(failed_slack.status.code(), failed_controls.status.code());
+        let slack_refusal = document(&failed_slack);
+        assert_eq!(slack_refusal["outcome"], "refused");
+        assert_eq!(
+            slack_refusal["diagnostics"],
+            document(&failed_controls)["diagnostics"]
+        );
+        assert_eq!(
+            slack_refusal.get("slackMessages"),
+            Some(&serde_json::Value::Null)
         );
         let refused = document(&failed_controls);
         assert_eq!(refused["outcome"], "refused", "{refused}");

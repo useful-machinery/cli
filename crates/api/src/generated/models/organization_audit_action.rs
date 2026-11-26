@@ -205,6 +205,14 @@ pub enum OrganizationAuditAction {
     GitlabConnectionCredentialRejected,
     #[serde(rename = "gitlab_repository.selection")]
     GitlabRepositorySelection,
+    #[serde(rename = "slack_connection.authorization_started")]
+    SlackConnectionAuthorizationStarted,
+    #[serde(rename = "slack_connection.connected")]
+    SlackConnectionConnected,
+    #[serde(rename = "slack_connection.reauthorized")]
+    SlackConnectionReauthorized,
+    #[serde(rename = "slack_connection.disconnected")]
+    SlackConnectionDisconnected,
     #[serde(rename = "linear_connection.authorization_started")]
     LinearConnectionAuthorizationStarted,
     #[serde(rename = "linear_connection.connected")]
@@ -437,6 +445,12 @@ impl std::fmt::Display for OrganizationAuditAction {
                 write!(f, "gitlab_connection.credential_rejected")
             }
             Self::GitlabRepositorySelection => write!(f, "gitlab_repository.selection"),
+            Self::SlackConnectionAuthorizationStarted => {
+                write!(f, "slack_connection.authorization_started")
+            }
+            Self::SlackConnectionConnected => write!(f, "slack_connection.connected"),
+            Self::SlackConnectionReauthorized => write!(f, "slack_connection.reauthorized"),
+            Self::SlackConnectionDisconnected => write!(f, "slack_connection.disconnected"),
             Self::LinearConnectionAuthorizationStarted => {
                 write!(f, "linear_connection.authorization_started")
             }

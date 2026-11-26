@@ -16,7 +16,7 @@ use super::validated::ValidatedHarness;
 use super::*;
 
 fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workflow/v1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/workflow/v1")
 }
 
 fn canonical_valid_fixture() -> Vec<u8> {

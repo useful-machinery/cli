@@ -1052,7 +1052,9 @@ mod tests {
 
     use super::*;
     use crate::claude_code::CLAUDE_CODE_STREAM_JSON_V1_QUALIFICATION_VERSION as QUALIFICATION_VERSION;
-    use crate::workflow::agent::AgentFailureCause;
+    use crate::workflow::agent::{AgentFailure, AgentFailureCause};
+    use crate::workflow::evidence::{FailurePhase, failure_detail};
+    use crate::workflow::step_runtime::{StepExecutionFailure, StepFailureCause};
 
     const SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
     const RESPONSE_FIXTURE: &[u8] =
@@ -1187,6 +1189,23 @@ mod tests {
             );
         };
         *diagnostic
+    }
+
+    fn projected_failure_diagnostic(reader: &StreamReader) -> Value {
+        let Some(DecidingResult::Failed(detail)) = reader.deciding_result() else {
+            panic!(
+                "expected a failed result, got {:?}",
+                reader.deciding_result()
+            );
+        };
+        let failure = AgentFailure::new(AgentFailureCause::HarnessFailed { detail: *detail });
+        failure_detail(
+            FailurePhase::Execution,
+            &StepFailureCause::Execution(StepExecutionFailure::Agent(failure)),
+        )
+        .unwrap()
+        .runner_diagnostic()
+        .unwrap()
     }
 
     fn successful_text(reader: &StreamReader) -> &ResultText {
@@ -1871,6 +1890,7 @@ mod tests {
 
     #[test]
     fn structured_claude_terminal_reason_is_classified_without_result_text() {
+        const RESULT_TEXT: &str = "private sentinel /path token";
         for (reason, expected, status) in [
             ("rate_limit", "rate_limited", None),
             ("context_window_exceeded", "context_window_exceeded", None),
@@ -1883,13 +1903,20 @@ mod tests {
                     json!({"type": "result", "subtype": "error_during_execution",
                         "is_error": true, "terminal_reason": reason,
                         "api_error_status": status,
-                        "result": "private sentinel /path token", "session_id": SESSION_ID}),
+                        "result": RESULT_TEXT, "session_id": SESSION_ID}),
                 ]),
                 AgentValueKind::Response,
             );
             let diagnostic = failure_diagnostic(&reader);
             assert_eq!(diagnostic.harness_error, Some(expected));
             assert_eq!(diagnostic.http_status, status);
+            let projected = projected_failure_diagnostic(&reader);
+            let mut exact = json!({"harnessError": expected, "harnessFailure": "model_error"});
+            if let Some(status) = status {
+                exact["httpStatus"] = json!(status);
+            }
+            assert_eq!(projected, exact, "terminal reason: {reason}");
+            assert!(!projected.to_string().contains(RESULT_TEXT));
         }
         // A `terminal_reason` other than `completed` fails a `result` that says it succeeded,
         // and its text is no response (2.1.321's refused session).
@@ -1897,11 +1924,17 @@ mod tests {
             &framed(&[
                 json!({"type": "result", "subtype": "success", "is_error": false,
                 "terminal_reason": "turn_setup_failed", "num_turns": 0,
-                "result": "Claude Code didn't start."}),
+                "result": RESULT_TEXT}),
             ]),
             AgentValueKind::Response,
         );
         assert_eq!(failure_diagnostic(&reader).harness_error, Some("other"));
+        let projected = projected_failure_diagnostic(&reader);
+        assert_eq!(
+            projected,
+            json!({"harnessError": "other", "harnessFailure": "model_error"})
+        );
+        assert!(!projected.to_string().contains(RESULT_TEXT));
     }
 
     #[test]
@@ -1976,25 +2009,10 @@ mod tests {
                 ]),
                 AgentValueKind::None,
             );
-            let Some(DecidingResult::Failed(detail)) = reader.deciding_result().cloned() else {
-                panic!("expected a failed result");
-            };
             let diagnostic = failure_diagnostic(&reader);
             assert_eq!(diagnostic.harness_error, Some(expected));
             assert_eq!(diagnostic.http_status, selected_status);
-            let failure =
-                crate::workflow::agent::AgentFailure::new(AgentFailureCause::HarnessFailed {
-                    detail,
-                });
-            let projected = crate::workflow::evidence::failure_detail(
-                crate::workflow::evidence::FailurePhase::Execution,
-                &crate::workflow::step_runtime::StepFailureCause::Execution(
-                    crate::workflow::step_runtime::StepExecutionFailure::Agent(failure),
-                ),
-            )
-            .unwrap()
-            .runner_diagnostic()
-            .unwrap();
+            let projected = projected_failure_diagnostic(&reader);
             let mut exact = json!({"harnessError": expected, "harnessFailure": "model_error"});
             if let Some(status) = selected_status {
                 exact["httpStatus"] = json!(status);

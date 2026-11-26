@@ -1184,7 +1184,7 @@ fn project_create_with_a_connection_id_and_a_repository_id_reads_nothing_first()
 }
 
 #[test]
-fn project_create_refuses_a_linear_connection_and_a_bare_repository_name_before_any_request() {
+fn project_create_refuses_workspace_connections_and_a_bare_repository_name_before_any_request() {
     for args in [
         &[
             "widget",
@@ -1192,6 +1192,13 @@ fn project_create_refuses_a_linear_connection_and_a_bare_repository_name_before_
             "acme/widget",
             "--integration",
             "lcn_01k0z6r1w8f4jy2m7q9v3x5abc",
+        ][..],
+        &[
+            "widget",
+            "--repository",
+            "acme/widget",
+            "--integration",
+            "scn_01k0z6r1w8f4jy2m7q9v3x5abc",
         ][..],
         &["widget", "--repository", "widget"][..],
     ] {

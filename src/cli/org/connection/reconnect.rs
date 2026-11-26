@@ -11,14 +11,14 @@ use super::create::{FROM_FILE_HELP, from_file_refused};
 use super::list::Provider;
 use super::target::{self, Integration, Target};
 use super::token::{OrgTokens, member_session};
-use super::{github, gitlab, linear};
+use super::{github, gitlab, linear, slack};
 use crate::cli::context::OrgArgs;
 use crate::cli::{CommandFailure, CommandResult, WaitTimeoutArgs};
 use crate::exit_code::ExitCode;
 
 pub(super) const ABOUT: &str =
     "Renew the access of one of the organization's connections, or store its token's next version";
-const AFTER_HELP: &str = "Providers:\n  A GitHub binding is renewed for its own installation once you prove at GitHub that you\n  administer it: the command prints the URL to open, opens it where this machine has a\n  browser and waits for the proof unless --no-wait is given. A disconnected binding becomes\n  active again and an active one has its repositories refreshed. A binding GitHub revoked cannot be reconnected; make a new connection instead:\n    useful org integration connect github\n  A GitLab connection is given the token --token-file names: the command stages it, waits\n  for GitLab to verify it, asks for the verified identity to be confirmed and activates it.\n  Without a terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  A Linear connection is reauthorized: the command prints the URL to open and waits for the\n  approval unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
+const AFTER_HELP: &str = "Providers:\n  A GitHub binding is renewed for its own installation once you prove at GitHub that you\n  administer it: the command prints the URL to open, opens it where this machine has a\n  browser and waits for the proof unless --no-wait is given. A disconnected binding becomes\n  active again and an active one has its repositories refreshed. A binding GitHub revoked cannot be reconnected; make a new connection instead:\n    useful org integration connect github\n  A GitLab connection is given the token --token-file names: the command stages it, waits\n  for GitLab to verify it, asks for the verified identity to be confirmed and activates it.\n  Without a terminal, confirm it with --expected-provider-user-id and --dedicated-automation.\n  A Linear or Slack connection is reauthorized: the command prints the URL to open and waits for the\n  approval unless --no-wait is given. Show a session it stopped observing:\n    useful org integration show SESSION\n  For a disconnected Slack workspace, run useful org integration connect slack.\n\nGitLab setup guide: https://docs.usefulmachinery.com/agent/gitlab-setup.md";
 
 #[derive(Debug, Args)]
 #[command(after_help = AFTER_HELP)]
@@ -86,7 +86,7 @@ impl Command {
                 member_session(
                     &options.authentication,
                     &format!(
-                        "{service}, which is not github, gitlab or linear and so can only name a token service"
+                        "{service}, which is not github, gitlab, linear or slack and so can only name a token service"
                     ),
                 )?;
                 return target::execute_in(org, options, deployment, |options, organization| {
@@ -112,7 +112,7 @@ impl Command {
                 (linear.state_updates_given(), &[Provider::Linear]),
                 (
                     linear.no_wait().then_some("--no-wait"),
-                    &[Provider::Github, Provider::Linear],
+                    &[Provider::Github, Provider::Linear, Provider::Slack],
                 ),
             ],
         ) {
@@ -158,6 +158,22 @@ impl Command {
                     },
                 )
             }
+            Provider::Slack => target::execute(
+                connection,
+                org,
+                options,
+                deployment,
+                |options, organization, resolved| {
+                    slack::reconnect(
+                        deployment,
+                        options,
+                        organization,
+                        resolved,
+                        linear.no_wait(),
+                        wait.timeout,
+                    )
+                },
+            ),
             Provider::Linear => target::execute(
                 connection,
                 org,

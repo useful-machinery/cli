@@ -9,8 +9,7 @@ use tempfile::TempDir;
 
 use super::{CREDENTIALS_FILE_VARIABLE, run_with_env};
 
-const ROOT_WORKFLOW: &str =
-    include_str!("../../crates/execution/tests/fixtures/workflow/v1/valid/root-workflow.yaml");
+const ROOT_WORKFLOW: &str = include_str!("../fixtures/workflow/v1/valid/root-workflow.yaml");
 const DESIGN_WORKFLOW: &str = r#"schemaVersion: 1
 inputs:
   ticket:
@@ -716,9 +715,8 @@ fn mirror_states_must_be_declared_linear_state_bindings() {
 }
 
 /// The engineering root with its bindings declared under the integrations they belong to.
-pub(super) const NESTED_ROOT: &str = include_str!(
-    "../../crates/execution/tests/fixtures/workflow/v1/valid/root-integration-bindings.yaml"
-);
+pub(super) const NESTED_ROOT: &str =
+    include_str!("../fixtures/workflow/v1/valid/root-integration-bindings.yaml");
 
 /// The one rejection of the nested root with `from` replaced by `to` once.
 fn nested_rejection(from: &str, to: &str) -> (String, Value) {
@@ -3003,12 +3001,22 @@ fn respond(state: &mut GatewayState, request: &GatewayRequest, address: &str) ->
             &json!({"items":state.runs.values().collect::<Vec<_>>(),"nextCursor":null }),
         );
     }
+    if route == format!("GET {organization}/held-starts") {
+        return super::workflow_run_list::empty_held_page_response();
+    }
     if let Some(id) = route.strip_prefix(&format!("GET {runs}/"))
         && state.runs.contains_key(id)
     {
         let mut body = super::run_command::run_body_with_state("running");
         body["id"] = id.into();
         return super::run_command::run_response(body);
+    }
+    if let Some(id) = route
+        .strip_prefix(&format!("GET {runs}/"))
+        .and_then(|rest| rest.strip_suffix("/slack-messages"))
+        && state.runs.contains_key(id)
+    {
+        return super::workflow_run_list::page_response(&json!({"items": []}));
     }
     let keyed = |status: &str, body: Value| {
         super::http_response_with_headers(

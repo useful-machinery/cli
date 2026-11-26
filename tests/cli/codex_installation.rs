@@ -47,8 +47,8 @@ impl CodexFixture {
         let executable = directory.path().join("codex-real");
         let path_executable = directory.path().join("codex");
         let probe_log = directory.path().join("probes.log");
-        let schema_fixture = crate::fixture_root()
-            .join("crates/execution/tests/fixtures/codex-app-server-v1-schema");
+        let schema_fixture =
+            crate::fixture_root().join("tests/fixtures/codex-app-server-v1-schema");
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)

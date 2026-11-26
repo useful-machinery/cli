@@ -3,7 +3,7 @@ use super::organization::{
 };
 use super::*;
 
-const TOKEN: &str = "unique-runner-command-token-sentinel";
+pub(super) const TOKEN: &str = "unique-runner-command-token-sentinel";
 const SERVICE_API_KEY: &str =
     "crd_01k0z6r1w8f4jy2m7q9v3x5abc.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 pub(super) const ORGANIZATION: &str = "acme-research";
