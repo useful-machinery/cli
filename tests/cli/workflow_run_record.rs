@@ -418,7 +418,7 @@ fn handover_refusal(output: Output) -> Value {
     result
 }
 
-// SC-HANDOVER-1
+// SC-HANDOVER-7
 #[test]
 fn handover_refuses_the_selected_execution_root_step_before_an_attempt() {
     let bundle = TreeBundle::new(
@@ -559,7 +559,7 @@ steps:
     assert_eq!(fs::read_to_string(counter).unwrap(), "initial\n");
 }
 
-// SC-CONTINUE-16
+// SC-CONTINUE-21
 #[test]
 fn retry_of_a_none_step_leaves_the_restored_workspace_absent() {
     let bundle = TreeBundle::new(
@@ -745,7 +745,7 @@ fn retry_restored_stage(bundle: &TreeBundle) -> (PathBuf, PathBuf, String) {
     (restored, new, fs::read_to_string(counter).unwrap())
 }
 
-// SC-HANDOVER-1
+// SC-HANDOVER-1, SC-HANDOVER-7
 #[test]
 fn handover_judges_a_waiting_stage_by_its_child_workspaces() {
     let bundle = repair_tree(BuildWorkspace::ExecutionRoot);
@@ -810,7 +810,7 @@ fn a_restored_stage_rebuilds_its_workspace_in_the_same_child() {
     assert_eq!(fs::read_dir(new).unwrap().count(), 0);
 }
 
-// SC-CONTINUE-18
+// SC-CONTINUE-22
 #[test]
 fn a_restored_stage_rechecks_a_replayed_write() {
     let bundle = repair_tree(BuildWorkspace::AmendedCheckout);
@@ -824,7 +824,7 @@ fn a_restored_stage_rechecks_a_replayed_write() {
     );
 }
 
-// SC-CONTINUE-18
+// SC-CONTINUE-23
 #[test]
 fn a_restored_stage_using_the_execution_root_starts_a_new_child() {
     let bundle = repair_tree(BuildWorkspace::ExecutionRoot);
@@ -892,6 +892,7 @@ fn hold_second_step(bundle: &TreeBundle, home: &Path) -> LiveRun {
     live
 }
 
+// SC-RECORD-6
 #[test]
 fn resume_settles_the_restored_abandoned_attempt() {
     use rustix::process::Signal;
@@ -906,7 +907,6 @@ fn resume_settles_the_restored_abandoned_attempt() {
     check_resumed_second_step(&other, &new, id);
 }
 
-// SC-RECORD-6
 #[cfg(feature = "rust-cli-tests")]
 #[test]
 fn resume_continues_a_record_captured_during_the_second_step() {

@@ -4,6 +4,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use useful_support::{Availability, CredentialStatus, NextAction, is_identifier};
 
+use super::enrollment::present;
+
 pub(crate) const REQUEST_LIMIT: usize = 4_096;
 pub(crate) const RESPONSE_LIMIT: usize = 65_536;
 /// The bound of the four large answers, the open `overview` and `assignment` and the closed
@@ -14,6 +16,7 @@ pub(crate) const OVERVIEW_RESPONSE_LIMIT: usize = 1_048_576;
 pub enum Operation {
     Status,
     ReloadCredential,
+    DrainRegistration,
     SyncAgentLogins,
 }
 
@@ -44,6 +47,10 @@ pub enum ControlError {
     PendingProtocolFailed,
     PendingConnectionFailed,
     StateUpdateFailed,
+    DrainCredentialRefused,
+    DrainNotServed,
+    CloudUnreachable,
+    DrainFailed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -591,6 +598,7 @@ pub struct SyncedAgentLogins {
 pub enum Response {
     Status(StatusSnapshot),
     Reloaded { credential_id: String },
+    Drained,
     AgentLoginsSynced(SyncedAgentLogins),
     Error(ControlError),
 }
@@ -603,6 +611,11 @@ enum EncodedResponse<'a> {
         schema_version: u8,
         outcome: &'static str,
         status: &'a StatusSnapshot,
+    },
+    Drained {
+        #[serde(rename = "schemaVersion")]
+        schema_version: u8,
+        outcome: &'static str,
     },
     Reloaded {
         #[serde(rename = "schemaVersion")]
@@ -630,22 +643,24 @@ enum EncodedResponse<'a> {
     },
 }
 
+// A member present in a closed answer must have its stated type, null refused, even
+// when another outcome would allow that member to be absent.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DecodedResponse {
     schema_version: u8,
     outcome: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     status: Option<StatusSnapshot>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     credential_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     agent_logins: Option<AgentLoginReadiness>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     unanswered_checks: Option<Vec<UnansweredCheck>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     credential_mode: Option<CredentialMode>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     error: Option<ControlError>,
 }
 
@@ -667,6 +682,7 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<ControlRequest, ControlErro
     let request = request_object(bytes)?;
     match request.get("operation").and_then(serde_json::Value::as_str) {
         Some("status") => Ok(ControlRequest::Operation(Operation::Status)),
+        Some("drain_registration") => Ok(ControlRequest::Operation(Operation::DrainRegistration)),
         Some("reload_credential") => Ok(ControlRequest::Operation(Operation::ReloadCredential)),
         Some("sync_agent_logins") => Ok(ControlRequest::Operation(Operation::SyncAgentLogins)),
         Some("overview") => Ok(ControlRequest::Overview),
@@ -786,6 +802,7 @@ fn requested_run_element(element: &serde_json::Value) -> Option<OverviewRunEleme
 pub(crate) fn encode_request(operation: Operation) -> Vec<u8> {
     encode_operation(match operation {
         Operation::Status => "status",
+        Operation::DrainRegistration => "drain_registration",
         Operation::ReloadCredential => "reload_credential",
         Operation::SyncAgentLogins => "sync_agent_logins",
     })
@@ -809,6 +826,10 @@ pub(crate) fn encode_response(response: &Response) -> Result<Vec<u8>, ProtocolFa
             schema_version: 1,
             outcome: "ok",
             status,
+        },
+        Response::Drained => EncodedResponse::Drained {
+            schema_version: 1,
+            outcome: "drained",
         },
         Response::Reloaded { credential_id } => EncodedResponse::Reloaded {
             schema_version: 1,
@@ -862,6 +883,7 @@ pub(crate) fn decode_response(bytes: &[u8]) -> Result<Response, ProtocolFailure>
         ("ok", Some(status), None, None, None, None, None) if valid_status(&status) => {
             Ok(Response::Status(status))
         }
+        ("drained", None, None, None, None, None, None) => Ok(Response::Drained),
         ("reloaded", None, Some(credential_id), None, None, None, None)
             if super::validation::valid_typed_id(&credential_id, "rrc_") =>
         {
@@ -2359,6 +2381,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registration_drain_round_trips_each_fixture_and_refuses_extra_members() {
+        let request = overview_fixture("valid/drain-registration-request.json");
+        let Ok(ControlRequest::Operation(operation)) = decode_request(&request) else {
+            panic!("drain request refused");
+        };
+        assert_eq!(encode_request(operation), request);
+        for path in [
+            "valid/drained-response.json",
+            "valid/drain-credential-refused-response.json",
+            "valid/drain-not-served-response.json",
+            "valid/cloud-unreachable-response.json",
+            "valid/drain-failed-response.json",
+        ] {
+            let fixture = overview_fixture(path);
+            let answer = decode_response(&fixture).unwrap();
+            assert_eq!(encode_response(&answer).unwrap(), fixture, "{path}");
+        }
+        assert_eq!(
+            decode_request(&overview_fixture(
+                "invalid/drain-registration-request-extra-member.json"
+            )),
+            Err(ControlError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_response(&overview_fixture(
+                "invalid/drained-response-extra-member.json"
+            )),
+            Err(ProtocolFailure::Invalid)
+        );
+    }
+
+    #[test]
     fn protocol_is_closed_and_lf_delimited() {
         assert_eq!(
             decode_request(b"{\"schemaVersion\":1,\"operation\":\"status\"}\n"),
@@ -3477,6 +3531,13 @@ mod tests {
                 "pending_connection_failed",
             ),
             (ControlError::StateUpdateFailed, "state_update_failed"),
+            (
+                ControlError::DrainCredentialRefused,
+                "drain_credential_refused",
+            ),
+            (ControlError::DrainNotServed, "drain_not_served"),
+            (ControlError::CloudUnreachable, "cloud_unreachable"),
+            (ControlError::DrainFailed, "drain_failed"),
         ];
         let cli_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let schema: serde_json::Value = serde_json::from_slice(

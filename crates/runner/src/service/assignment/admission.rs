@@ -80,6 +80,7 @@ impl AssignmentManager {
             guard_processes,
             run_ended: Arc::new(Notify::new()),
             idle_run_ended: Arc::new(Notify::new()),
+            drain_run_ended: Arc::new(Notify::new()),
         }
     }
 

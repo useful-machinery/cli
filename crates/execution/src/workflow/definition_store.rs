@@ -33,7 +33,7 @@ use super::schema_common::{
     DIGEST_PREFIX, digest_hex, is_identifier, is_prefixed_ulid, lowercase_hex, utc_timestamp,
 };
 use super::tree::ValidatedTree;
-use super::tree_copy::{self, FileOperationError, TreeCopyError, write_tree_copy};
+use super::tree_copy::{self, FileOperationError, TreeCopyError};
 use crate::owned_tree::remove_open_tree_at;
 
 const USEFUL_HOME_VARIABLE: &str = "USEFUL_HOME";
@@ -1866,8 +1866,10 @@ fn write_record(definition: &Path, record: &DefinitionRecord) -> Result<(), Defi
     Ok(())
 }
 
-/// Copies `tree` to `trees/sha256/<hex>/` through a `.staging-<hex>-<ulid>` sibling unless
-/// a copy is already there, which is kept as found.
+/// Copies `tree` into a `.staging-<hex>-<ulid>` sibling, renames it to `trees/sha256/<hex>/`
+/// while its root is writable, then seals the placed root: macOS refuses to rename a directory
+/// its owner cannot write, so the root's seal cannot come first. An existing copy is kept as
+/// found.
 fn write_tree(home: &WorkflowHome, tree: &ValidatedTree) -> Result<(), DefinitionError> {
     let trees = home.trees_directory();
     create_private_directory(&trees)?;
@@ -1889,7 +1891,7 @@ fn write_tree(home: &WorkflowHome, tree: &ValidatedTree) -> Result<(), Definitio
     );
     tree_copy::mkdir(&parent, &staging_name)?;
     let staging = tree_copy::open_directory_at(&parent, &staging_name)?;
-    let written = write_tree_copy(
+    let written = tree_copy::write_tree_contents(
         &staging,
         tree.files.iter().map(|(path, file)| (path.as_str(), file)),
         &tree.programs,
@@ -1910,6 +1912,7 @@ fn write_tree(home: &WorkflowHome, tree: &ValidatedTree) -> Result<(), Definitio
     };
     match renamed {
         Ok(()) => {
+            tree_copy::seal_directory(&staging)?;
             let _ = tree_copy::sync_directory(&parent);
             Ok(())
         }

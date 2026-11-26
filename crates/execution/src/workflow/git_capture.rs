@@ -8,10 +8,12 @@
 //! Capture does not provide snapshot isolation from arbitrary concurrent repository mutation. The
 //! final head and cleanliness observations detect changes present at that boundary only.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -511,21 +513,16 @@ impl GitCaptureContext {
             .is_some_and(|projection| projection.workspace == CloudGitWorkspace::InitialCheckout)
         {
             let status = context
-                .run_source(
-                    &[
-                        "status",
-                        "--porcelain=v1",
-                        "-z",
-                        "--untracked-files=normal",
-                        "--ignore-submodules=none",
-                    ],
-                    ProcessInput::None,
-                    1,
-                    cancellation,
-                    true,
-                    None,
-                )
-                .map_err(admission_process_failure)?;
+                .read_workspace_status(cancellation)
+                .map_err(|failure| match failure {
+                    WorkspaceStatusFailure::Process(failure) => admission_process_failure(failure),
+                    WorkspaceStatusFailure::FilterConfig(output) if output.stdout.truncated => {
+                        GitWorkspaceAdmissionFailure::GitOutputLimitExceeded
+                    }
+                    WorkspaceStatusFailure::FilterConfig(_) => {
+                        GitWorkspaceAdmissionFailure::GitUnavailable
+                    }
+                })?;
             if !status.status.success()
                 || status.stdout.truncated
                 || !status.stdout.bytes.is_empty()
@@ -724,22 +721,14 @@ impl GitCaptureContext {
         let head_oid = self.read_head(cancellation)?;
 
         let clean = self
-            .run_source(
-                &[
-                    "status",
-                    "--porcelain=v1",
-                    "-z",
-                    "--untracked-files=normal",
-                    "--ignore-submodules=none",
-                ],
-                ProcessInput::None,
-                1,
-                cancellation,
-                true,
-                None,
-            )
-            .map_err(|failure| {
-                capture_process_failure(failure, GitCaptureFailure::CleanlinessUnavailable)
+            .read_workspace_status(cancellation)
+            .map_err(|failure| match failure {
+                WorkspaceStatusFailure::Process(failure) => {
+                    capture_process_failure(failure, GitCaptureFailure::CleanlinessUnavailable)
+                }
+                WorkspaceStatusFailure::FilterConfig(output) => {
+                    command_failed(&output, GitCaptureFailure::CleanlinessUnavailable)
+                }
             })?;
         if !clean.status.success() {
             return Err(command_failed(
@@ -1220,6 +1209,44 @@ impl GitCaptureContext {
         )
     }
 
+    fn read_workspace_status(
+        &self,
+        cancellation: &CaptureCancellation,
+    ) -> Result<ProcessOutput, WorkspaceStatusFailure> {
+        let configuration = self
+            .run_source(
+                &[
+                    "config",
+                    "--null",
+                    "--name-only",
+                    "--get-regexp",
+                    r"^filter\.",
+                ],
+                ProcessInput::None,
+                MAXIMUM_SMALL_OUTPUT_BYTES,
+                cancellation,
+                true,
+                None,
+            )
+            .map_err(WorkspaceStatusFailure::Process)?;
+        let Some(overrides) = filter_driver_overrides(&configuration) else {
+            return Err(WorkspaceStatusFailure::FilterConfig(configuration));
+        };
+        let arguments = [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            // `dirty` starts no Git inside a submodule, as `all` does not, and still reports
+            // a staged change to a submodule entry, which `all` hides.
+            "--ignore-submodules=dirty",
+        ]
+        .map(OsString::from);
+        let command = self.git_command(&arguments, true, None, &overrides);
+        self.run_source_command(command, &arguments, ProcessInput::None, 1, cancellation)
+            .map_err(WorkspaceStatusFailure::Process)
+    }
+
     fn require_single_repository(
         &self,
         cancellation: &CaptureCancellation,
@@ -1291,11 +1318,28 @@ impl GitCaptureContext {
         no_lazy_fetch: bool,
         shallow_file: Option<&Path>,
     ) -> Result<ProcessOutput, ProcessFailure> {
+        let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
+        let command = self.git_command(&arguments, no_lazy_fetch, shallow_file, &[]);
+        self.run_source_command(
+            command,
+            &arguments,
+            input,
+            maximum_stdout_bytes,
+            cancellation,
+        )
+    }
+
+    fn run_source_command(
+        &self,
+        mut command: Command,
+        arguments: &[OsString],
+        input: ProcessInput<'_>,
+        maximum_stdout_bytes: usize,
+        cancellation: &CaptureCancellation,
+    ) -> Result<ProcessOutput, ProcessFailure> {
         if !self.git_metadata_is_bound() {
             return Err(ProcessFailure::ExecutionRootRebound);
         }
-        let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
-        let mut command = self.git_command(&arguments, no_lazy_fetch, shallow_file);
         self.root
             .bind_command_ref(&mut command)
             .map_err(|failure| match failure {
@@ -1308,7 +1352,7 @@ impl GitCaptureContext {
             })?;
         execute_process(
             command,
-            git_command_description(&arguments),
+            git_command_description(arguments),
             input,
             maximum_stdout_bytes,
             cancellation,
@@ -1324,7 +1368,7 @@ impl GitCaptureContext {
         cancellation: &CaptureCancellation,
     ) -> Result<ProcessOutput, ProcessFailure> {
         execute_process(
-            self.git_command(arguments, true, None),
+            self.git_command(arguments, true, None, &[]),
             git_command_description(arguments),
             input,
             maximum_stdout_bytes,
@@ -1338,11 +1382,17 @@ impl GitCaptureContext {
         arguments: &[OsString],
         no_lazy_fetch: bool,
         shallow_file: Option<&Path>,
+        config_overrides: &[OsString],
     ) -> Command {
         let mut command = Command::new(self.git_program.as_os_str());
         command
             .args(EXECUTION_ROOT_GIT_ARGUMENTS)
             .args(["-c", "fetch.writeCommitGraph=false"])
+            .args(
+                config_overrides
+                    .iter()
+                    .flat_map(|setting| [OsStr::new("-c"), setting.as_os_str()]),
+            )
             .args(arguments)
             .env_clear();
         for (name, value) in self.environment.variables() {
@@ -1394,8 +1444,12 @@ impl GitCaptureContext {
             OsString::from("--window=0"),
             OsString::from("--depth=0"),
         ];
-        let mut command =
-            self.git_command(&arguments, self.disable_implicit_fetch, Some(shallow_file));
+        let mut command = self.git_command(
+            &arguments,
+            self.disable_implicit_fetch,
+            Some(shallow_file),
+            &[],
+        );
         self.root
             .bind_command_ref(&mut command)
             .map_err(|_| PackStreamFailure::Process(ProcessFailure::ExecutionRootRebound))?;
@@ -1533,6 +1587,49 @@ fn source_authority_snapshot(output: &ProcessOutput) -> Option<Arc<[u8]>> {
         Some(1) if output.stdout.bytes.is_empty() => Some(Arc::from([])),
         _ => None,
     }
+}
+
+fn filter_driver_overrides(output: &ProcessOutput) -> Option<Vec<OsString>> {
+    if output.stdout.truncated {
+        return None;
+    }
+    let keys = output.stdout.bytes.as_slice();
+    match output.status.code() {
+        Some(1) if keys.is_empty() => return Some(Vec::new()),
+        Some(0) => {}
+        _ => return None,
+    }
+
+    let mut names = BTreeSet::new();
+    for key in keys.strip_suffix(b"\0")?.split(|byte| *byte == 0) {
+        let subsection_and_variable = key.strip_prefix(b"filter.")?;
+        let Some(separator) = subsection_and_variable
+            .iter()
+            .rposition(|byte| *byte == b'.')
+        else {
+            continue;
+        };
+        let name = &subsection_and_variable[..separator];
+        // Git splits each command-line configuration override at its first '='.
+        if name.contains(&b'=') {
+            return None;
+        }
+        names.insert(name);
+    }
+    Some(
+        names
+            .into_iter()
+            .flat_map(|name| {
+                [
+                    b".clean=".as_slice(),
+                    b".smudge=",
+                    b".process=",
+                    b".required=false",
+                ]
+                .map(|setting| OsString::from_vec([b"filter.", name, setting].concat()))
+            })
+            .collect(),
+    )
 }
 
 fn contains_gitlink(bytes: &[u8]) -> bool {
@@ -1711,6 +1808,11 @@ enum ProcessFailure {
     Io,
     Input,
     StreamClosed,
+}
+
+enum WorkspaceStatusFailure {
+    Process(ProcessFailure),
+    FilterConfig(ProcessOutput),
 }
 
 struct BoundedOutput {

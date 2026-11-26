@@ -55,7 +55,7 @@ fn a_file_or_environment_key_joins_and_a_stop_retires_with_the_joined_credential
         let (status, stderr) = serve.terminate();
 
         assert_eq!(status.code(), Some(0), "{stderr}");
-        let requests = witness.received();
+        let requests = witness.settled();
         let retirements: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
         assert_eq!(retirements.len(), 1);
         let request = retirements[0];
@@ -130,8 +130,8 @@ fn a_refused_connection_exits_without_rejoining_or_retiring() {
 
     assert_eq!(status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("--ephemeral"), "{stderr}");
-    assert_eq!(join.received().len(), 1);
-    let requests = witness.received();
+    assert_eq!(join.settled().len(), 1);
+    let requests = witness.settled();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("GET /v1/runner/connect "));
     assert_clean(&host);
@@ -171,35 +171,38 @@ fn a_second_ephemeral_start_is_refused_before_it_joins() {
     let (status, stderr) = start(&host).wait_for_exit();
 
     assert_eq!(status.code(), Some(1), "{stderr}");
-    assert_eq!(join.received().len(), 1);
+    assert_eq!(join.settled().len(), 1);
     let (status, stderr) = serve.terminate();
     assert_eq!(status.code(), Some(0), "{stderr}");
 }
 
 #[tokio::test]
 async fn an_idle_timeout_ends_ephemeral_service_and_retires_the_registration() {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    assert_ephemeral_stop_retires(&["--idle-timeout", "1s"], None).await;
+}
 
+#[tokio::test]
+async fn a_drained_exit_ends_ephemeral_service_and_retires_the_registration() {
+    assert_ephemeral_stop_retires(&["--exit-when-drained"], Some("draining")).await;
+}
+
+async fn assert_ephemeral_stop_retires(options: &[&str], mode: Option<&str>) {
     use super::runner_status::{
-        accept_runner_connection_answering, accept_runner_socket, cloud_observation_ack,
-        cloud_welcome,
+        accept_runner_connection_answering, accept_runner_socket, answer_until_runner_stops,
+        cloud_welcome_with_mode,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
     let server = api_test_support::ScriptedHttpServer::respond(join_response(0, &url));
     let host = JoinHost::new(&join_key_artifact(&join_base(&server), &future_expiry()));
-    let serve = host.serve(
-        &[
-            "--ephemeral",
-            "--join-key-file",
-            host.key_file.to_str().unwrap(),
-            "--idle-timeout",
-            "1s",
-        ],
-        &[],
-    );
+    let mut args = vec![
+        "--ephemeral",
+        "--join-key-file",
+        host.key_file.to_str().unwrap(),
+    ];
+    args.extend_from_slice(options);
+    let serve = host.serve(&args, &[]);
     let retirements = std::sync::Mutex::new(Vec::new());
     let routes = |request: &[u8]| {
         let request = String::from_utf8_lossy(request).into_owned();
@@ -210,31 +213,28 @@ async fn an_idle_timeout_ends_ephemeral_service_and_retires_the_registration() {
             http_response("404 Not Found", None, b"")
         }
     };
-    let mut socket =
-        accept_runner_socket(accept_runner_connection_answering(&listener, &routes).await).await;
-    // The connection ends when the idle runner stops; no signal is sent to it.
-    while let Some(Ok(Message::Text(text))) = socket.next().await {
-        let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
-        if frame["type"] == "hello" {
-            socket.send(cloud_welcome()).await.unwrap();
-        }
-        if let Some(message_id) = frame["messageId"].as_str() {
-            let sequence = frame["sequence"].as_u64().unwrap();
-            socket
-                .send(cloud_observation_ack(message_id, sequence))
-                .await
-                .unwrap();
-        }
-    }
-    let mut exited = tokio::task::spawn_blocking(move || serve.wait_for_exit());
+    let mut welcomed_at = None;
+    let cloud = async {
+        let socket =
+            accept_runner_socket(accept_runner_connection_answering(&listener, &routes).await)
+                .await;
+        answer_until_runner_stops(
+            socket,
+            cloud_welcome_with_mode(mode),
+            None,
+            &mut welcomed_at,
+        )
+        .await;
+        accept_runner_connection_answering(&listener, &routes).await
+    };
+    let exited = tokio::task::spawn_blocking(move || serve.wait_for_exit());
     let (status, stderr) = tokio::select! {
-        _ = accept_runner_connection_answering(&listener, &routes) => {
-            panic!("the idle ephemeral runner reconnected")
-        }
-        exited = &mut exited => exited.unwrap(),
+        _ = cloud => panic!("the ephemeral runner reconnected"),
+        exited = exited => exited.unwrap(),
     };
 
     assert_eq!(status.code(), Some(0), "{stderr}");
+    assert!(welcomed_at.is_some(), "the runner never said hello");
     let runner = join_response_body(0, &url);
     let retirements = retirements.into_inner().unwrap();
     assert_eq!(retirements.len(), 1, "{stderr}");

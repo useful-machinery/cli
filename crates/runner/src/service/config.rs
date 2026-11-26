@@ -101,6 +101,13 @@ impl AssignmentConfig {
     }
 }
 
+/// Stop when the registration is draining and the runner has released its work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrainExit {
+    /// Maximum time to wait for held work after learning that the registration is draining.
+    pub deadline: Option<Duration>,
+}
+
 #[derive(Clone)]
 pub struct Config {
     endpoint: Url,
@@ -114,6 +121,7 @@ pub struct Config {
     minimum_free_disk_bytes: u64,
     repository_url_policy: RepositoryUrlPolicy,
     idle_timeout: Option<Duration>,
+    drain_exit: Option<DrainExit>,
     pi_installation: Option<ValidatedPiInstallation>,
     claude_code_installation: Option<ValidatedClaudeCodeInstallation>,
     codex_installation: Option<ValidatedCodexInstallation>,
@@ -125,6 +133,7 @@ impl fmt::Debug for Config {
             .debug_struct("Config")
             .field("endpoint", &self.endpoint)
             .field("idle_timeout", &self.idle_timeout())
+            .field("drain_exit", &self.drain_exit())
             .field("credential", &self.credential)
             .field("kept_runs", &self.assignment.kept_runs())
             .field("build_caches", &self.assignment.build_caches())
@@ -268,6 +277,7 @@ impl Config {
             minimum_free_disk_bytes: useful_execution::DEFAULT_MINIMUM_FREE_DISK_BYTES,
             repository_url_policy,
             idle_timeout: None,
+            drain_exit: None,
             pi_installation: None,
             claude_code_installation: None,
             codex_installation: None,
@@ -342,6 +352,16 @@ impl Config {
 
     pub(crate) fn idle_timeout(&self) -> Option<Duration> {
         self.idle_timeout
+    }
+
+    /// The drain behavior requested for this invocation of the serving process.
+    pub fn with_drain_exit(mut self, drain_exit: Option<DrainExit>) -> Self {
+        self.drain_exit = drain_exit;
+        self
+    }
+
+    pub(crate) fn drain_exit(&self) -> Option<DrainExit> {
+        self.drain_exit
     }
 
     pub fn pi_installation(&self) -> Option<&ValidatedPiInstallation> {

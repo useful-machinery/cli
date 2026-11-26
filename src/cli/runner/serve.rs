@@ -22,7 +22,7 @@ use useful_execution::{
 };
 use useful_human_auth::Deployment;
 use useful_runner::{
-    ActivationArtifact, AmbiguousCause, Config, EnrollmentError, EnrollmentOutcome,
+    ActivationArtifact, AmbiguousCause, Config, DrainExit, EnrollmentError, EnrollmentOutcome,
     EnrollmentResponse, EphemeralSession, HeldJoinKey, JoinKey, JoinKeyArtifact, JoinKeyHold,
     JoinKeyMode, JoinOutcome, JoinRefusal, JoinRetry, RecordedOptions, RegisteredRunner,
     RegistrationAuthority, RegistrationConflict, RegistrationConflictKind, RegistrationError,
@@ -68,8 +68,16 @@ pub(super) struct Command {
     config: Option<PathBuf>,
 
     /// Stop after holding no run for this long, from 1s to 7d (s, m, h or d).
-    #[arg(long, value_name = "DURATION", value_parser = parse_idle_timeout, conflicts_with = "replace_credential")]
+    #[arg(long, value_name = "DURATION", value_parser = parse_stop_duration, conflicts_with = "replace_credential")]
     idle_timeout: Option<Duration>,
+
+    /// Exit after Cloud reports this runner draining and all held runs and reports finish.
+    #[arg(long, conflicts_with = "replace_credential")]
+    exit_when_drained: bool,
+
+    /// Start a graceful stop after draining for this long, from 1s to 7d (s, m, h or d).
+    #[arg(long, value_name = "DURATION", value_parser = parse_stop_duration, requires = "exit_when_drained")]
+    drain_deadline: Option<Duration>,
 
     /// Read a single-runner key or a pool's join key from a protected file or
     /// explicit stdin on a fresh or ephemeral start, or rejoin the pool
@@ -154,6 +162,9 @@ impl Command {
             discover();
             config_load_error(&config_path, error)
         };
+        let drain_exit = self.exit_when_drained.then_some(DrainExit {
+            deadline: self.drain_deadline,
+        });
         if self.ephemeral {
             let source =
                 join_key.ok_or_else(|| ephemeral_key_error("no pool join key was given"))?;
@@ -171,7 +182,11 @@ impl Command {
                 claude_code,
                 codex,
             );
-            let outcome = serve_ephemeral(config.with_idle_timeout(self.idle_timeout));
+            let outcome = serve_ephemeral(
+                config
+                    .with_idle_timeout(self.idle_timeout)
+                    .with_drain_exit(drain_exit),
+            );
             if let Err(error) = session.end() {
                 let _ = writeln!(
                     io::stderr().lock(),
@@ -287,11 +302,12 @@ impl Command {
             &installations,
             join_key,
             self.idle_timeout,
+            drain_exit,
         )
     }
 }
 
-fn parse_idle_timeout(value: &str) -> Result<Duration, String> {
+fn parse_stop_duration(value: &str) -> Result<Duration, String> {
     crate::cli::parse_duration_within(value, 1, 1..=604_800)
         .map(|seconds| Duration::from_secs(u64::from(seconds)))
         .ok_or_else(|| "must be a whole number of seconds, minutes, hours or days, from 1s to 7d, such as 90s or 5m".to_owned())
@@ -359,6 +375,7 @@ fn serve(
     installations: &HarnessInstallations,
     mut join_key: JoinKeyMode,
     idle_timeout: Option<Duration>,
+    drain_exit: Option<DrainExit>,
 ) -> super::super::CommandResult {
     loop {
         let (pi_installation, claude_code_installation, codex_installation) = installations.clone();
@@ -369,7 +386,9 @@ fn serve(
             codex_installation,
         );
         let end = useful_runner::run(
-            config_with_installations.with_idle_timeout(idle_timeout),
+            config_with_installations
+                .with_idle_timeout(idle_timeout)
+                .with_drain_exit(drain_exit),
             crate::build_info::VERSION,
             join_key,
         )
@@ -1390,10 +1409,10 @@ mod tests {
             ("12h", 43_200),
             ("7d", 604_800),
         ] {
-            assert_eq!(parse_idle_timeout(value), Ok(Duration::from_secs(seconds)));
+            assert_eq!(parse_stop_duration(value), Ok(Duration::from_secs(seconds)));
         }
         for value in ["", "0s", "5", "1.5m", "+5m", "8d", "604801s"] {
-            assert!(parse_idle_timeout(value).is_err(), "{value:?}");
+            assert!(parse_stop_duration(value).is_err(), "{value:?}");
         }
     }
 

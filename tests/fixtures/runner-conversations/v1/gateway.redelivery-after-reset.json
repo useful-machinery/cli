@@ -14,6 +14,7 @@
         "payload": {
           "credentialMode": 1,
           "holdsWaitingRuns": 1,
+          "registrationMode": 1,
           "runnerVersion": "«ver»",
           "treeContinuation": 1,
           "treeExecution": 1,
@@ -48,6 +49,7 @@
           },
           "pingIntervalSeconds": 60,
           "pongTimeoutSeconds": 120,
+          "registrationMode": "enabled",
           "sessionId": "rsn_01ky7dhjg00000000000000001"
         },
         "payloadVersion": 1,

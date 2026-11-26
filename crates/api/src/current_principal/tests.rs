@@ -5,7 +5,7 @@ use std::thread;
 use super::*;
 use crate::HttpTransportPolicy;
 use crate::http_util::MAX_RESPONSE_BODY_BYTES;
-use useful_test_support::{ScriptedHttpServer, read_request};
+use useful_test_support::{ScriptedHttpServer, SilentHttpPeer, read_request};
 
 type TestServer = ScriptedHttpServer;
 
@@ -286,9 +286,7 @@ fn response_body_is_bounded_before_any_status_is_reported() {
 
 #[test]
 fn request_deadline_maps_to_timeout() {
-    let body = br#"{"id":"prn_fixture","type":"human","state":"active"}"#;
-    let mut server =
-        TestServer::respond_when_released(response("200 OK", Some(JSON_MEDIA_TYPE), body));
+    let server = SilentHttpPeer::hold().expect("silent HTTP peer should bind");
 
     let outcome = get_current_principal_with_timeout(
         &http_client(),
@@ -302,8 +300,6 @@ fn request_deadline_maps_to_timeout() {
         outcome,
         CurrentPrincipalOutcome::Unreachable(UnreachableCategory::Timeout)
     );
-    server.release_response();
-    server.finish_one();
 }
 
 #[test]

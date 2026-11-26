@@ -299,7 +299,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 
 // Decodes a member that is present, null included, as `Some`; serde's
 // `default` leaves an absent member `None`.
-fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,

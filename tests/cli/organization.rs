@@ -2641,6 +2641,25 @@ fn org_list_with_no_organization_in_effect_prints_its_page_and_does_not_fail() {
     assert!(output.stderr.is_empty());
 }
 
+#[test]
+fn org_list_reports_an_unusable_variable_and_still_prints_its_page() {
+    let (output, requests) = org_list(
+        vec![active_memberships(&[
+            (IN_EFFECT_ID, "acme-research"),
+            (OTHER_IN_EFFECT_ID, "dunder"),
+        ])],
+        &["--json"],
+        &[("USEFUL_ORG", "not an organization")],
+    );
+
+    let value = listed_document(&output);
+    assert!(value.get("organizationInEffect").is_none(), "{value}");
+    assert_eq!(value["items"].as_array().unwrap().len(), 2);
+    assert_eq!(request_lines(&requests), [LIST_MEMBERSHIP_PAGE]);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("USEFUL_ORG"), "{stderr}");
+}
+
 const PAM_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abc";
 const COLLEAGUE_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abd";
 const SERVICE_MEMBERSHIP: &str = "mem_01k0z6r1w8f4jy2m7q9v3x5abe";

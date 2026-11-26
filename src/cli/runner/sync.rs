@@ -84,7 +84,7 @@ impl Command {
         let synced = match useful_runner::request(&socket_path, Operation::SyncAgentLogins) {
             Ok(Response::AgentLoginsSynced(synced)) => synced,
             Ok(Response::Error(error)) => return Err(control_failure(error)),
-            Ok(Response::Status(_) | Response::Reloaded { .. }) => {
+            Ok(Response::Status(_) | Response::Reloaded { .. } | Response::Drained) => {
                 return Err(CommandFailure::for_outcome(
                     anyhow!("Runner Serve control protocol is invalid"),
                     OutcomeClass::Protocol,

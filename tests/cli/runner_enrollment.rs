@@ -1,9 +1,11 @@
 use super::*;
 
+use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Child, ExitStatus};
 
+use api_test_support::watchdog::{FIXTURE_WAIT_BASE, host_scaled_recv};
 use base64::Engine as _;
 
 const RUNNER_ID: &str = "rnr_01k0z6r1w8f4jy2m7q9v3x5abc";
@@ -676,6 +678,7 @@ pub(super) struct ConnectionWitness {
     pub(super) url: String,
     /// The endpoint's HTTP origin, for a fake Cloud route such as a join.
     pub(super) base: String,
+    address: SocketAddr,
     requests: mpsc::Receiver<String>,
 }
 
@@ -727,6 +730,7 @@ impl ConnectionWitness {
         Self {
             url,
             base: format!("http://{address}"),
+            address,
             requests,
         }
     }
@@ -734,6 +738,29 @@ impl ConnectionWitness {
     /// The requests received so far.
     pub(super) fn received(&self) -> Vec<String> {
         self.requests.try_iter().collect()
+    }
+
+    /// Collects pending requests after the runner has opened all its connections
+    /// to this endpoint. The witness processes those connections before the marker.
+    pub(super) fn settled(&self) -> Vec<String> {
+        const MARKER: &str = "GET /witness-settled HTTP/1.1\r\n\r\n";
+        let mut stream = TcpStream::connect(self.address).unwrap();
+        stream.write_all(MARKER.as_bytes()).unwrap();
+        drop(stream);
+
+        let mut requests = Vec::new();
+        loop {
+            let request = host_scaled_recv(
+                "connection witness marker",
+                FIXTURE_WAIT_BASE,
+                &self.requests,
+            )
+            .unwrap();
+            if request == MARKER {
+                return requests;
+            }
+            requests.push(request);
+        }
     }
 
     pub(super) fn next_connection(&self, serve: &mut ServeProcess) -> Option<String> {

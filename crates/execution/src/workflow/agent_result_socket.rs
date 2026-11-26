@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use rustix::net::{RecvFlags, recv};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -332,7 +332,7 @@ async fn read_request_frame<Request: DeserializeOwned, Clock: CoordinatorClock>(
 }
 
 async fn write_response_frame<Response: Serialize>(
-    stream: &mut UnixStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     stop: &mut watch::Receiver<bool>,
     response: &Response,
     maximum_frame_bytes: NonZeroU64,
@@ -352,7 +352,10 @@ async fn write_response_frame<Response: Serialize>(
         result = stream.write_all(&frame) => result,
     };
     written?;
-    stream.shutdown().await
+    match stream.shutdown().await {
+        Err(error) if error.kind() == io::ErrorKind::NotConnected => Ok(()),
+        result => result,
+    }
 }
 
 async fn wait_for_stop(stop: &mut watch::Receiver<bool>) {
@@ -453,4 +456,92 @@ pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 pub(crate) fn remove_materialized_file(path: &Path) -> Result<(), io::Error> {
     ignore_not_found(fs::remove_file(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::num::NonZeroU64;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use tokio::io::AsyncWrite;
+    use tokio::sync::watch;
+
+    use super::write_response_frame;
+
+    struct ResponseStream {
+        written: Vec<u8>,
+        write_error: Option<io::ErrorKind>,
+        shutdown_error: io::ErrorKind,
+    }
+
+    impl AsyncWrite for ResponseStream {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if let Some(kind) = self.write_error {
+                return Poll::Ready(Err(kind.into()));
+            }
+            self.written.extend_from_slice(bytes);
+            Poll::Ready(Ok(bytes.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(self.shutdown_error.into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_delivery_when_peer_closes_after_the_response_frame() {
+        let mut stream = ResponseStream {
+            written: Vec::new(),
+            write_error: None,
+            shutdown_error: io::ErrorKind::NotConnected,
+        };
+        let (_stop_sender, mut stop) = watch::channel(false);
+        let response = serde_json::json!({ "accepted": true });
+
+        let delivered =
+            write_response_frame(&mut stream, &mut stop, &response, NonZeroU64::MAX).await;
+
+        assert_eq!(stream.written, b"\0\0\0\x11{\"accepted\":true}");
+        assert_eq!(delivered.map_err(|error| error.kind()), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn reports_write_errors_and_other_shutdown_errors() {
+        let mut write_fails = ResponseStream {
+            written: Vec::new(),
+            write_error: Some(io::ErrorKind::NotConnected),
+            shutdown_error: io::ErrorKind::BrokenPipe,
+        };
+        let mut shutdown_fails = ResponseStream {
+            written: Vec::new(),
+            write_error: None,
+            shutdown_error: io::ErrorKind::BrokenPipe,
+        };
+        let (_stop_sender, mut stop) = watch::channel(false);
+        let response = serde_json::json!({ "accepted": true });
+
+        let write_error =
+            write_response_frame(&mut write_fails, &mut stop, &response, NonZeroU64::MAX).await;
+        let shutdown_error =
+            write_response_frame(&mut shutdown_fails, &mut stop, &response, NonZeroU64::MAX).await;
+
+        assert_eq!(
+            write_error.map_err(|error| error.kind()),
+            Err(io::ErrorKind::NotConnected)
+        );
+        assert_eq!(
+            shutdown_error.map_err(|error| error.kind()),
+            Err(io::ErrorKind::BrokenPipe)
+        );
+    }
 }

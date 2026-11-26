@@ -8569,7 +8569,7 @@ mod workflow_run_cloud {
         assert!(!waiting.contains("runners_offline"), "{text}");
     }
 
-    // SC-RUN-7: Cloud show names a run's owner, the rule that routed it, the pools it may
+    // SC-PLACEMENT-2: Cloud show names a run's owner, the rule that routed it, the pools it may
     // use and, while it is queued, what it waits for in words; it says when a run has no
     // owner or route, shows an unrecognized reason as given, and passes all three through
     // under --json as received.

@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::*;
 use anyhow::Context as _;
 use useful_api::MAX_RESPONSE_BODY_BYTES;
-use useful_test_support::{ScriptedHttpServer, read_request};
+use useful_test_support::{ScriptedHttpServer, SilentHttpPeer, read_request};
 
 fn deployment(server: &ScriptedHttpServer) -> anyhow::Result<Deployment> {
     let issuer = format!(
@@ -385,10 +385,7 @@ fn invalid_device_and_token_payloads_are_protocol_errors() -> anyhow::Result<()>
 
 #[test]
 fn oauth_request_deadline_bounds_the_complete_exchange() -> anyhow::Result<()> {
-    // Keep the peer pending so this isolated check observes only the production
-    // request deadline; release it deterministically after classification.
-    let mut server =
-        ScriptedHttpServer::respond_when_released(json_response("200 OK", serde_json::json!({}))?);
+    let server = SilentHttpPeer::hold()?;
 
     let client = HttpClient::new(HttpTransportPolicy::AllowInsecureHttp)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -399,8 +396,6 @@ fn oauth_request_deadline_bounds_the_complete_exchange() -> anyhow::Result<()> {
         &[],
         Duration::from_millis(20),
     ) else {
-        server.release_response();
-        server.finish_one();
         anyhow::bail!("slow OAuth request should time out");
     };
 
@@ -408,8 +403,6 @@ fn oauth_request_deadline_bounds_the_complete_exchange() -> anyhow::Result<()> {
         error,
         AuthorizationError::Unreachable(UnreachableCategory::Timeout)
     ));
-    server.release_response();
-    server.finish_one();
     Ok(())
 }
 

@@ -1278,10 +1278,11 @@ impl MirroredWaitTree {
     }
 }
 
-// SC-LOCALRUN-12: a mirrored run comments when it starts, naming the run by its id and the command
-// that shows it, when its stage exits and when it waits; `withdraw` skips the state write when a
-// person already moved the issue out of the owned state, `cancel` moves an issue still in it to the
-// bound `Canceled`, and `show` lists every write.
+// SC-MIRROR-1: a mirrored run comments when it starts, naming its id and the command that shows
+// it, when its stage exits and when it waits. Withdrawal skips the state write when a person
+// already moved the issue out of the owned state, and `show` lists every write.
+// SC-MIRROR-2: a run that ends `canceled` moves an issue still in the owned state to the state
+// bound for that outcome; here `cancel --control cancel` ends a waiting run.
 #[test]
 fn a_tickets_lifecycle_is_mirrored_and_show_lists_every_write() {
     let tree = MirroredWaitTree::publish(MIRRORED_WAIT_HEADER);
@@ -1475,9 +1476,9 @@ fn a_live_withdrawn_run_fires_its_withdrawn_outcome_once() {
     );
 }
 
-// SC-LOCALRUN-15: SIGINT to the process of a mirrored run interrupts its stage, whose repair
-// wait's `onWait` comment begins with the interruption, and the run writes no `onOutcome`; a
-// live run ended by `cancel`, even from a shell without the key, still writes
+// SC-RUNCONTROL-4: SIGINT to the process of a mirrored run interrupts its stage, whose repair
+// wait's `onWait` comment begins with the interruption, and the run writes no `onOutcome`.
+// SC-MIRROR-4: a live run ended by `cancel`, even from a shell without the key, still writes
 // `onOutcome.canceled`.
 #[test]
 fn an_interrupted_run_mirrors_its_wait_and_a_cancelled_one_its_outcome() {
@@ -1725,7 +1726,7 @@ fn refused_without_key(output: &Output, leaf: &str) {
     }
 }
 
-// SC-LOCALRUN-17: `cancel`, and `cancel --control cancel`, of a mirrored waiting run from a
+// SC-MIRROR-3: `cancel`, and `cancel --control cancel`, of a mirrored waiting run from a
 // shell with no Linear credential, its `LINEAR_API_KEY` unset or empty and no grant token, are
 // refused before anything changes and nothing is sent, and the same `cancel` with the key ends
 // the run `withdrawn` and moves its issue.
@@ -1768,7 +1769,7 @@ fn ending_a_mirrored_waiting_run_without_the_key_is_refused_before_anything_chan
     );
 }
 
-// SC-LOCALRUN-17: the check before `cancel` ends a mirrored waiting run is for any Linear
+// SC-MIRROR-3: the check before `cancel` ends a mirrored waiting run is for any Linear
 // credential: a token file that is missing and an empty `USEFUL_LINEAR_ACCESS_TOKEN` are none,
 // so it still refuses, and from a shell whose only credential is `USEFUL_LINEAR_ACCESS_TOKEN`
 // it proceeds and moves the issue with that token.

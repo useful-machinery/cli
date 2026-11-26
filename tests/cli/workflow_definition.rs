@@ -1062,7 +1062,7 @@ fn a_non_utf8_path_and_a_tree_over_64_mib_are_refused() {
     assert_eq!(codes[0].1["kind"], "tree");
 }
 
-// SC-WFDEF-1: a root-only block in a stage file the root runs through a `workflow` step fails
+// SC-WFDEF-3: a root-only block in a stage file the root runs through a `workflow` step fails
 // the root at that step, and the root's failure is listed alone, without the start trigger's own
 // failure.
 #[test]
@@ -2262,7 +2262,7 @@ fn list_prints_every_definition_sorted_by_name_then_id() {
     home.assert_no_runs();
 }
 
-// SC-WFDEF-2
+// SC-WFDEF-2, SC-WFDEF-4
 #[test]
 fn show_prints_the_record_its_revisions_and_the_current_bindings() {
     let home = Home::new();

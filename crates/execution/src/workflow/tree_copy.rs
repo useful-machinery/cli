@@ -50,11 +50,19 @@ impl From<FileOperationError> for TreeCopyError {
     }
 }
 
-/// Writes `files` read-only under `directory`: files `0444`, or `0555` when the source had
-/// the owner execute bit, and directories `0555`, each set once its contents are written,
-/// since a `0555` directory refuses new entries. The `programs` directories exist in the
-/// copy even when they hold no file.
+/// Writes the read-only tree contents, then seals the root directory.
 pub(crate) fn write_tree_copy<'a>(
+    directory: &OwnedFd,
+    files: impl Iterator<Item = (&'a str, &'a TreeFile)>,
+    programs: &'a [String],
+) -> Result<(), TreeCopyError> {
+    write_tree_contents(directory, files, programs)?;
+    Ok(seal_directory(directory)?)
+}
+
+/// Writes files as `0444` (owner-executable files as `0555`) and subdirectories as
+/// `0555`, including empty `programs` directories. Syncs the root with its mode intact.
+pub(crate) fn write_tree_contents<'a>(
     directory: &OwnedFd,
     files: impl Iterator<Item = (&'a str, &'a TreeFile)>,
     programs: &'a [String],
@@ -73,7 +81,8 @@ pub(crate) fn write_tree_copy<'a>(
     for program in programs {
         root.directory(program.trim_end_matches('/'))?;
     }
-    root.write(directory)
+    root.write_contents(directory)?;
+    Ok(sync_directory(directory)?)
 }
 
 #[derive(Default)]
@@ -101,7 +110,7 @@ impl<'a> TreeCopyDirectory<'a> {
         Ok(directory)
     }
 
-    fn write(&self, handle: &OwnedFd) -> Result<(), TreeCopyError> {
+    fn write_contents(&self, handle: &OwnedFd) -> Result<(), FileOperationError> {
         for (name, file) in &self.files {
             let mode = if file.executable {
                 Mode::RUSR | Mode::XUSR | Mode::RGRP | Mode::XGRP | Mode::ROTH | Mode::XOTH
@@ -112,15 +121,21 @@ impl<'a> TreeCopyDirectory<'a> {
         }
         for (name, directory) in &self.directories {
             mkdir(handle, name)?;
-            directory.write(&open_directory_at(handle, name)?)?;
+            let child = open_directory_at(handle, name)?;
+            directory.write_contents(&child)?;
+            seal_directory(&child)?;
         }
-        fchmod(
-            handle,
-            Mode::RUSR | Mode::XUSR | Mode::RGRP | Mode::XGRP | Mode::ROTH | Mode::XOTH,
-        )
-        .map_err(|source| FileOperationError::at(handle, ".", "set permissions", source))?;
-        Ok(sync_directory(handle)?)
+        Ok(())
     }
+}
+
+pub(crate) fn seal_directory(handle: &OwnedFd) -> Result<(), FileOperationError> {
+    fchmod(
+        handle,
+        Mode::RUSR | Mode::XUSR | Mode::RGRP | Mode::XGRP | Mode::ROTH | Mode::XOTH,
+    )
+    .map_err(|source| FileOperationError::at(handle, ".", "set permissions", source))?;
+    sync_directory(handle)
 }
 
 pub(super) fn file_locator(parent: &OwnedFd, name: impl AsRef<std::ffi::OsStr>) -> PathBuf {
@@ -203,3 +218,6 @@ pub(super) fn sync_directory(directory: &OwnedFd) -> Result<(), FileOperationErr
         .sync_all()
         .map_err(|source| FileOperationError::at(directory, ".", "sync directory", source))
 }
+
+#[cfg(test)]
+mod tests;

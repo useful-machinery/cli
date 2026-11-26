@@ -1007,6 +1007,71 @@ mod tests {
         assert!(!marker.exists());
     }
 
+    struct ReadOnlySnapshotGit;
+
+    impl CommandRunner for ReadOnlySnapshotGit {
+        fn run(
+            &self,
+            command: CommandRequest<'_>,
+        ) -> Result<crate::process::CommandOutput, CommandProbeError> {
+            assert_eq!(command.program, Path::new("git"));
+            let mut arguments = command.args;
+            while let [
+                "--no-pager" | "--no-optional-locks" | "--no-replace-objects",
+                rest @ ..,
+            ]
+            | ["-c", _, rest @ ..] = arguments
+            {
+                arguments = rest;
+            }
+            assert!(
+                matches!(
+                    arguments,
+                    ["rev-parse", "--show-toplevel"]
+                        | [
+                            "ls-files",
+                            "--cached",
+                            "--others",
+                            "--exclude-standard",
+                            "-z"
+                        ]
+                        | ["ls-files", "--cached", "--stage", "-z"]
+                ),
+                "unexpected snapshot Git invocation: {:?}",
+                command.args
+            );
+            SystemCommandRunner.run(command)
+        }
+    }
+
+    #[test]
+    fn snapshot_with_inert_filter_configuration_uses_read_only_git_commands() {
+        let repository = repository();
+        let root = repository.path();
+        git(
+            root,
+            &["config", "filter.snapshot-fixture.required", "true"],
+        );
+        fs::write(
+            root.join(".gitattributes"),
+            b"tracked filter=snapshot-fixture\n",
+        )
+        .unwrap();
+        fs::write(root.join("tracked"), b"changed\n").unwrap();
+
+        let start = capture_with(root, None, &ReadOnlySnapshotGit, &mut NoopSnapshotObserver);
+        let settlement = capture_with(
+            root,
+            Some(WorkspaceSnapshotSettlementV1::Engine),
+            &ReadOnlySnapshotGit,
+            &mut NoopSnapshotObserver,
+        );
+
+        assert!(start.validate(false));
+        assert!(settlement.validate(true));
+        assert_eq!(available(&start), available(&settlement));
+    }
+
     #[test]
     fn snapshot_starts_no_lazy_fetch_for_a_sparse_index_missing_a_tree() {
         let repository = repository();

@@ -1012,7 +1012,7 @@ fn continuation_refuses_a_required_consumer_of_a_skipped_inherited_output() {
     }
 }
 
-// SC-WFCOND-5: a continuation re-executes a `firstOf` consumer, which chooses again from
+// SC-WFCOND-6: a continuation re-executes a `firstOf` consumer, which chooses again from
 // re-executed and inherited sources, and is refused only when every source was inherited
 // skipped.
 #[test]
@@ -4253,9 +4253,9 @@ impl QueueStub {
     }
 }
 
-// `merge` admitted to the queue waits for the pull request `design` exported; `resume` holds
-// while it is queued, reading Mergify with `MERGIFY_TOKEN` when it is set and else with the
-// GitHub token, refuses a condition it cannot read, and continues at `merge` once the pull
+// SC-CONTINUE-19: `merge` admitted to the queue waits for the pull request `design` exported;
+// `resume` holds while it is queued, reading Mergify with `MERGIFY_TOKEN` when it is set and else
+// with the GitHub token, refuses a condition it cannot read, and continues at `merge` once the pull
 // request is merged.
 #[test]
 fn an_external_wait_holds_while_queued_and_continues_once_merged() {
@@ -4537,9 +4537,9 @@ fn a_cloud_runner_command_reads_the_queue_with_the_offered_github_token_alone() 
     assert_eq!(attempt_count(&run), 1);
 }
 
-/// The engineering shape (SC-CONTINUE-8): the loop tree's root with `review` handing back to
-/// `fix` under a limit of two and `merge` repairing itself under a limit of three, each limit's
-/// `else` a repair wait, and `merge` admitted to the external wait for the queue.
+/// The engineering shape (SC-CONTINUE-8, SC-CONTINUE-19): the loop tree's root with `review`
+/// handing back to `fix` under a limit of two and `merge` repairing itself under a limit of three,
+/// each limit's `else` a repair wait, and `merge` admitted to the external wait for the queue.
 const ENGINEERING_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -4608,10 +4608,10 @@ fn chained_outcomes(output: &std::process::Output) -> Vec<String> {
         .collect()
 }
 
-// SC-CONTINUE-8: the review hands back to `fix` twice under its limit and the third time waits
-// for a repair; the retried review proceeds, `merge` repairs itself twice and is admitted to
-// the queue with the inherited `design`'s pull request, and the run lands once it merges,
-// every attempt shown with its reason and edge.
+// SC-CONTINUE-8, SC-CONTINUE-19: the review hands back to `fix` twice under its limit and the third
+// time waits for a repair; the retried review proceeds, `merge` repairs itself twice and is
+// admitted to the queue with the inherited `design`'s pull request, and the run lands once it
+// merges, every attempt shown with its reason and edge.
 #[test]
 fn the_engineering_shape_loops_repairs_and_lands_through_the_queue() {
     let bundle = loop_tree_with(
@@ -4804,7 +4804,7 @@ mod cloud {
         )
     }
 
-    // SC-HANDOVER-6
+    // SC-HANDOVER-6, SC-HANDOVER-10
     #[test]
     fn handover_reports_the_record_and_observes_the_replacement_attempt() {
         for wait in [false, true] {

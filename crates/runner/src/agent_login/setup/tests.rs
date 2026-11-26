@@ -1829,7 +1829,7 @@ fn assert_reported(
     );
 }
 
-// SC-GRANT-2
+// SC-RUNNERGRANT-1
 #[tokio::test]
 async fn a_pass_reports_the_readiness_it_changed_before_it_ends() {
     let fixture = Fixture::new(naming(FAKE_AGENT_LOGIN_ID, 1));

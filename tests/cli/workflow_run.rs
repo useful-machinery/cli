@@ -1343,7 +1343,7 @@ pub(super) fn input_sources(steps: &serde_json::Value) -> BTreeMap<String, serde
         .collect()
 }
 
-// SC-WFCOND-5
+// SC-WFCOND-5, SC-WFCOND-7
 #[test]
 fn a_first_of_joins_the_branch_that_ran_or_blocks_when_none_did() {
     let bundle = RunBundle::new(FIRST_OF_WORKFLOW);
@@ -3417,7 +3417,7 @@ fn untested_advisory_lines(output: &Output) -> usize {
         .count()
 }
 
-// SC-AGENT-6
+// SC-AGENT-14
 #[test]
 fn retry_of_an_untested_harness_run_writes_the_advisory_once_more() {
     let pi = PiFixture::with_execution("1.4.0", COMPLETE_HELP, true, &response_pi_execution());
@@ -4440,7 +4440,7 @@ fn local_run_forwards_only_declared_host_environment() {
     }
 }
 
-// SC-WFEXEC-8
+// SC-WFEXEC-8, SC-WFEXEC-11
 #[test]
 fn local_run_delivers_a_declared_integrations_names_to_every_step() {
     let observe = |name: &str, declaration: &str| {
@@ -9360,7 +9360,7 @@ fn the_runner_disk_gate_at_zero_holds_nothing_and_a_malformed_one_starts_nothing
     );
 }
 
-// SC-WFEXEC-9: declared inputs cross the workspace boundary, while files follow
+// SC-STEPWS-1, SC-STEPWS-3: declared inputs cross the workspace boundary, while files follow
 // the selected workspace.
 #[test]
 fn a_new_step_starts_from_its_declared_inputs_alone() {
@@ -9415,7 +9415,7 @@ steps:
     }
 }
 
-// SC-WFEXEC-10
+// SC-STEPWS-2
 #[test]
 fn a_none_step_runs_from_its_declared_inputs_and_a_read_step_shares_the_workspace() {
     let bundle = RunBundle::new(

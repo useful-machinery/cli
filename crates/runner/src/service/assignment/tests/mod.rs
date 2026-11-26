@@ -5118,6 +5118,57 @@ fn authority_offsets(authority: &LeaseAuthority) -> Vec<Duration> {
 }
 
 #[test]
+fn lease_schedule_matches_runner_timing_fixture() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../../tests/fixtures/runner-timing/v1/cases.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schemaVersion"], 1);
+    let (clock, _control, _waits) = controlled_lease_clock();
+    let basis = clock.now().unwrap();
+
+    for case in fixture["lease"].as_array().unwrap() {
+        let welcome = serde_json::to_vec(&json!({
+            "protocolVersion": 1,
+            "direction": "cloud_to_runner",
+            "messageId": "cmsg_01ky7dhjg00000000000000002",
+            "sentAt": NOW,
+            "type": "welcome",
+            "payloadVersion": 1,
+            "payload": {
+                "sessionId": "rsn_01ky7dhjg00000000000000001",
+                "pingIntervalSeconds": 60,
+                "pongTimeoutSeconds": 120,
+                "leasePolicy": case["policy"]
+            }
+        }))
+        .unwrap();
+        let CloudFrame::Welcome { lease_policy, .. } = decode_cloud_frame(&welcome).unwrap() else {
+            panic!("fixture decoded as another Cloud frame");
+        };
+        let grace = Duration::from_millis(case["cancellationGraceMilliseconds"].as_u64().unwrap());
+        let authority = LeaseAuthority::derive(1, basis, &lease_policy, grace).unwrap();
+        let duration =
+            |field: &str| Duration::from_nanos(case["expected"][field].as_u64().unwrap());
+        let expected = [
+            "renewalRequestNanoseconds",
+            "cancellationStartNanoseconds",
+            "forceStopStartNanoseconds",
+            "forceStopEndNanoseconds",
+            "localExpiryNanoseconds",
+        ]
+        .map(duration);
+        assert_eq!(authority_offsets(&authority), expected, "{}", case["name"]);
+        assert_eq!(
+            authority.renewal_retry_interval,
+            duration("renewalRetryIntervalNanoseconds"),
+            "{}: renewal retry interval",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 fn welcomed_policy_requires_two_complete_renewal_leads() {
     for (renewal_budget_ms, lease_duration_ms, valid) in [
         (5_000, 371_000, true),

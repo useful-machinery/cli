@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::*;
 use crate::HttpTransportPolicy;
 use crate::http_util::MAX_RESPONSE_BODY_BYTES;
-use useful_test_support::ScriptedHttpServer;
+use useful_test_support::{ScriptedHttpServer, SilentHttpPeer};
 
 const TOKEN: &str = "organization-unit-test-token-sentinel";
 const KEY: &str = "organization-unit-test-idempotency-key";
@@ -1235,7 +1235,7 @@ fn unauthorized_status_survives_the_body_deadline() {
 
 #[test]
 fn deadlines_cover_headers_and_reads_do_not_retry() {
-    let mut server = ScriptedHttpServer::respond_when_released(success("200 OK"));
+    let server = SilentHttpPeer::hold().expect("silent HTTP peer should bind");
 
     let outcome = get_organization_with_timeout(
         &http_client(),
@@ -1252,8 +1252,6 @@ fn deadlines_cover_headers_and_reads_do_not_retry() {
             UnreachableCategory::Timeout
         ))
     );
-    server.release_response();
-    server.finish_one();
 }
 
 #[test]

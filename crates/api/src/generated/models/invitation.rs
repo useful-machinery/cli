@@ -52,7 +52,7 @@ pub struct Invitation {
         skip_serializing_if = "Option::is_none"
     )]
     pub replacement_invitation_id: Option<String>,
-    /// Email delivery progress, omitted for direct invitations.
+    /// Email delivery progress, omitted for direct invitations. It is `pending` until the email is sent, a send attempt in progress included.
     #[serde(rename = "deliveryState", skip_serializing_if = "Option::is_none")]
     pub delivery_state: Option<DeliveryState>,
     /// Actual accepter of a recorded successful acceptance; omitted when unavailable or erased.
@@ -141,13 +141,11 @@ impl Default for State {
         Self::Outstanding
     }
 }
-/// Email delivery progress, omitted for direct invitations.
+/// Email delivery progress, omitted for direct invitations. It is `pending` until the email is sent, a send attempt in progress included.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum DeliveryState {
     #[serde(rename = "pending")]
     Pending,
-    #[serde(rename = "leased")]
-    Leased,
     #[serde(rename = "sent")]
     Sent,
     #[serde(rename = "failed")]

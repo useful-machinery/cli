@@ -1,3 +1,5 @@
+use std::io::{self, Write as _};
+
 use anyhow::Context;
 use clap::Args;
 
@@ -32,7 +34,15 @@ impl Command {
             org,
             options,
         } = self;
-        let named = org.named_in_process()?;
+        // An unusable `USEFUL_ORG` names nothing: it is reported, and no later source is asked.
+        let (named, unusable) = match org.named_in_process() {
+            Ok(named) => (named, false),
+            Err(failure) => {
+                writeln!(io::stderr().lock(), "warning: {:#}", failure.error())
+                    .context("write organization result")?;
+                (None, true)
+            }
+        };
         let outcome = options.read(deployment, |client, api_url, access_token| {
             useful_api::list_current_principal_memberships(
                 client,
@@ -45,6 +55,7 @@ impl Command {
         let api_url = deployment.fingerprint().api_url();
         let in_effect = match (named, &outcome) {
             (Some(named), _) => Some(named),
+            (None, _) if unusable => None,
             (None, ListCurrentPrincipalMembershipsOutcome::Listed(page)) => {
                 // A first page with no next page holds every membership, so the organization in
                 // effect is chosen among them without reading them again.

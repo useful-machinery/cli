@@ -800,7 +800,7 @@ steps:
         }
     }
 
-    // SC-HANDOVER-1
+    // SC-HANDOVER-1, SC-HANDOVER-7
     #[test]
     fn handover_judges_the_resolved_workspaces_of_steps_the_attempt_can_run() {
         let judge = |steps: &str, lost: &[&str]| {
@@ -841,7 +841,7 @@ steps:
         assert!(judge(&none, &[]).is_empty());
     }
 
-    // SC-HANDOVER-1
+    // SC-HANDOVER-1, SC-HANDOVER-7
     #[test]
     fn handover_judges_children_reached_by_a_backward_edge() {
         let copy = tempfile::tempdir().unwrap();

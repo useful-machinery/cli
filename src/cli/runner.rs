@@ -1,6 +1,7 @@
 mod cloud;
 mod credential;
 mod doctor;
+mod drain;
 mod join_key;
 mod pool;
 mod prune;
@@ -48,8 +49,8 @@ enum RunnerCommand {
     Disable(ModeCommand),
     #[command(about = doctor::ABOUT)]
     Doctor(doctor::Command),
-    #[command(about = "Drain a runner registration")]
-    Drain(ModeCommand),
+    #[command(about = drain::ABOUT, after_help = drain::AFTER_HELP)]
+    Drain(drain::Command),
     #[command(about = "Enable a runner registration")]
     Enable(ModeCommand),
     #[command(about = join_key::ABOUT)]
@@ -204,16 +205,7 @@ impl Command {
                     )
                 })
             }
-            Some(RunnerCommand::Drain(command)) => {
-                execute_in_cloud(command, |command, deployment| {
-                    command.execute(
-                        deployment,
-                        useful_api::RunnerRegistrationMode::Draining,
-                        "draining",
-                        "✓ Runner draining.",
-                    )
-                })
-            }
+            Some(RunnerCommand::Drain(command)) => command.execute(),
             Some(RunnerCommand::Disable(command)) => {
                 execute_in_cloud(command, |command, deployment| {
                     command.execute(

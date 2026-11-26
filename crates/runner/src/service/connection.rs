@@ -26,12 +26,12 @@ use crate::service::assignment::{
     PendingAssignmentObservation, RetainedObservationFrame, WelcomePolicyFailure,
 };
 use crate::service::config::Config;
-use crate::service::control::LiveStatus;
+use crate::service::control::{LiveStatus, RegistrationModeCell};
 use crate::service::{Sequence, Sleeper};
 use crate::telemetry::{self, Event, Outcome, Recorder};
 use useful_runner_protocol::{
-    CloudFrame, MAXIMUM_ORDINARY_FRAME_BYTES, MAXIMUM_TERMINAL_FRAME_BYTES, RunnerEnvelope,
-    RunnerFrame, decode_cloud_frame, encode_runner_frame,
+    CloudFrame, MAXIMUM_ORDINARY_FRAME_BYTES, MAXIMUM_TERMINAL_FRAME_BYTES, RegistrationMode,
+    RunnerEnvelope, RunnerFrame, decode_cloud_frame, encode_runner_frame,
 };
 
 const SUBPROTOCOL: &str = "um.runner.v1";
@@ -382,6 +382,7 @@ impl<'a> ProtocolLog<'a> {
                 pong_timeout_seconds,
                 lease_policy: _,
                 credential_mode: _,
+                registration_mode: _,
             } => {
                 self.session_id = Some(session_id.clone());
                 (
@@ -398,6 +399,9 @@ impl<'a> ProtocolLog<'a> {
                         ),
                     ],
                 )
+            }
+            CloudFrame::RegistrationMode { envelope, .. } => {
+                (envelope, "registration_mode", Vec::new())
             }
             CloudFrame::ObservationAck {
                 envelope,
@@ -1364,6 +1368,7 @@ where
                 pong_timeout_seconds,
                 lease_policy,
                 credential_mode,
+                registration_mode,
                 ..
             } => {
                 let policy = dependencies
@@ -1386,6 +1391,7 @@ where
                 if let Some(cell) = dependencies.credential_mode {
                     cell.learn(credential_mode.map(Into::into));
                 }
+                dependencies.learn_registration_mode(registration_mode);
                 return Ok(CandidateHandshake {
                     progress,
                     inbound_silence_timeout: Duration::from_secs(pong_timeout_seconds),
@@ -1950,6 +1956,7 @@ pub(super) struct ConnectionDependencies<'a> {
     live_status: Option<&'a LiveStatus>,
     /// The cell every welcome and offer frame writes its credential mode to.
     credential_mode: Option<&'a CredentialModeCell>,
+    registration_mode: Option<&'a RegistrationModeCell>,
 }
 
 impl<'a> ConnectionDependencies<'a> {
@@ -1978,6 +1985,7 @@ impl<'a> ConnectionDependencies<'a> {
             connection_attempt,
             live_status: None,
             credential_mode: None,
+            registration_mode: None,
         }
     }
 
@@ -1991,6 +1999,26 @@ impl<'a> ConnectionDependencies<'a> {
     pub(super) fn with_credential_mode(mut self, credential_mode: &'a CredentialModeCell) -> Self {
         self.credential_mode = Some(credential_mode);
         self
+    }
+
+    pub(super) fn with_registration_mode(mut self, cell: &'a RegistrationModeCell) -> Self {
+        self.registration_mode = Some(cell);
+        self
+    }
+
+    fn learn_registration_mode(&self, mode: Option<RegistrationMode>) {
+        if let Some(cell) = self.registration_mode
+            && cell.send_if_modified(|current| std::mem::replace(current, mode) != mode)
+            && let Some(mode) = mode
+        {
+            self.recorder.record(
+                "runner.registration_mode",
+                [KeyValue::new(
+                    telemetry::attribute::RUNNER_REGISTRATION_MODE,
+                    mode.to_string(),
+                )],
+            );
+        }
     }
 }
 
@@ -2086,6 +2114,7 @@ where
         connection_attempt,
         live_status,
         credential_mode: credential_mode_cell,
+        ..
     } = dependencies;
     let _observation_transport = ObservationTransport { assignment_manager };
     let mut protocol = ProtocolLog::new(
@@ -2394,6 +2423,7 @@ where
                 pong_timeout_seconds,
                 lease_policy,
                 credential_mode,
+                registration_mode,
                 ..
             } if inbound_silence_timeout.is_none() => {
                 let policy_result = assignment_manager
@@ -2422,8 +2452,12 @@ where
                 if let Some(cell) = credential_mode_cell {
                     cell.learn(credential_mode.map(Into::into));
                 }
+                dependencies.learn_registration_mode(registration_mode);
                 outbound_send_timeout = Some(Duration::from_secs(ping_interval_seconds));
                 inbound_silence_timeout = Some(Duration::from_secs(pong_timeout_seconds));
+            }
+            CloudFrame::RegistrationMode { mode, .. } if inbound_silence_timeout.is_some() => {
+                dependencies.learn_registration_mode(Some(mode));
             }
             CloudFrame::ObservationAck {
                 acknowledged_message_id,
@@ -3003,6 +3037,7 @@ pub(crate) fn opening_hello(
         // It applies the credential mode Cloud names where the service has its agent-login
         // setup, which every enrolled service has.
         credential_mode,
+        registration_mode: true,
     })
     .map_err(|_| {
         ConnectionError::terminal(
@@ -3071,14 +3106,15 @@ mod tests {
         effect_acknowledgement, expect_close_frame, expect_opening_hello, fixture_lease_clock,
         fixture_listener, fixture_sleeper, observation_acknowledgement,
         offer_assignment_after_handshake, scripted_duplex, sleep_request,
-        tree_fixture::offer_frame, welcome, welcome_with_credential_mode, with_watchdog,
+        tree_fixture::offer_frame, welcome, welcome_with_credential_mode,
+        welcome_with_registration_mode, with_watchdog,
     };
     use crate::service::workspace::{AssignmentRoot, AssignmentRootCreationError};
     use crate::service::{Sequence, Sleeper};
     use crate::telemetry::{Event, Outcome, Recorder, TestCapture, test_recorder};
     use useful_runner_protocol::{
-        AssignmentDecline, CloudFrame, ExecutionSpecInvalidReason, RunnerEnvelope, RunnerFrame,
-        RunnerUnableReason, decode_cloud_frame,
+        AssignmentDecline, CloudFrame, ExecutionSpecInvalidReason, RegistrationMode,
+        RunnerEnvelope, RunnerFrame, RunnerUnableReason, decode_cloud_frame,
     };
 
     const BOOT_ID: &str = "rbt_01k0z6r1w8f4jy2m7q9v3x5abe";
@@ -3654,6 +3690,60 @@ mod tests {
             if matches!(&message, Message::Pong(payload) if payload.as_ref() == marker) {
                 return;
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn registration_mode_is_learned_from_each_connection_and_logged_on_change() {
+        let context = EstablishedTestContext::new();
+        let (cell, mut learned) = tokio::sync::watch::channel(None);
+        for welcome_mode in [
+            Some(RegistrationMode::Draining),
+            Some(RegistrationMode::Enabled),
+            None,
+        ] {
+            let mut next_sequence = 2;
+            let (inbound, reader, writer, mut outbound) =
+                scripted_duplex(DeterminismTranscript::default());
+            let established = run_established(
+                context.dependencies().with_registration_mode(&cell),
+                context.opening(),
+                &mut next_sequence,
+                reader,
+                writer,
+            );
+            let peer = async {
+                let hello = next_sent(&mut outbound, "hello").await;
+                assert_eq!(hello["payload"]["registrationMode"], 1);
+                let previous = *learned.borrow();
+                inbound.send(welcome_mode.map_or_else(welcome, welcome_with_registration_mode));
+                inbound.send(observation_acknowledgement(OPENING_MESSAGE_ID, 1));
+                read_through(&inbound, &mut outbound, b"welcome").await;
+                assert_eq!(learned.has_changed().unwrap(), previous != welcome_mode);
+                assert_eq!(*learned.borrow_and_update(), welcome_mode);
+                if welcome_mode == Some(RegistrationMode::Draining) {
+                    inbound.send(cloud_frame("registration-mode", json!({"mode": "enabled"})));
+                    read_through(&inbound, &mut outbound, b"enabled").await;
+                    assert!(learned.has_changed().unwrap());
+                    assert_eq!(
+                        *learned.borrow_and_update(),
+                        Some(RegistrationMode::Enabled)
+                    );
+                }
+                inbound.send(Message::Close(None));
+            };
+            let (result, ()) = with_watchdog(async { tokio::join!(established, peer) })
+                .await
+                .expect("connection timed out");
+            result.expect("connection failed");
+            let logged_modes: Vec<_> = context
+                .capture
+                .records()
+                .into_iter()
+                .filter(|record| record["event.name"] == "runner.registration_mode")
+                .map(|record| record["um.runner.registration_mode"].clone())
+                .collect();
+            assert_eq!(logged_modes, [json!("draining"), json!("enabled")]);
         }
     }
 
@@ -6292,7 +6382,7 @@ mod tests {
         }
     }
 
-    // SC-RUNNERENROLL-10: one runner takes two runs through a scripted Gateway. Run A waits on
+    // SC-RUNNERHOST-2: one runner takes two runs through a scripted Gateway. Run A waits on
     // an external wait, run B is offered beside it and starts, A's lease is renewed while B
     // works, A's wait resolves and A ends before B, and each run's frames and grant token file
     // are its own.

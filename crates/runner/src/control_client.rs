@@ -14,6 +14,8 @@ use super::control_protocol::{
 };
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const DRAIN_RESPONSE_TIMEOUT: Duration =
+    crate::service::registration_drain::CONTROL_TIMEOUT.saturating_add(Duration::from_secs(2));
 const RELOAD_RESPONSE_TIMEOUT: Duration = Duration::from_secs(32);
 /// Runner Serve bounds an agent-login sync at `SYNC_BOUND`; the client waits
 /// a little longer for its answer.
@@ -46,6 +48,7 @@ impl std::error::Error for RequestFailure {
 
 pub fn request(socket_path: &Path, operation: Operation) -> Result<Response, RequestFailure> {
     let response_timeout = match operation {
+        Operation::DrainRegistration => DRAIN_RESPONSE_TIMEOUT,
         Operation::Status => IO_TIMEOUT,
         Operation::ReloadCredential => RELOAD_RESPONSE_TIMEOUT,
         Operation::SyncAgentLogins => SYNC_RESPONSE_TIMEOUT,

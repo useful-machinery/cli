@@ -692,15 +692,12 @@ async fn run_reconnect_scenario() -> Vec<String> {
         "source preparation must retain its deadline fence"
     );
     events.retain(|event| event != preparation_deadline);
-    // The kept-run schedule arms its hour from its own task once its startup pass has
-    // run, independently of connection writes, so its position is not protocol either.
+    // The kept-run task arms its hour only after its startup pass runs on the blocking
+    // pool. If the task observes a stop first, it ends without polling the hour. The
+    // timer request's presence and position are independent of the reconnect protocol.
     let kept_run_hour = format!(
         "sleep.requested:{}ms",
         super::KEPT_RUN_PASS_INTERVAL.as_millis()
-    );
-    assert!(
-        events.contains(&kept_run_hour),
-        "the kept-run schedule must arm its hourly pass"
     );
     events.retain(|event| *event != kept_run_hour);
     normalize_retention_reports(normalize_offer_silence_timer_order(events))

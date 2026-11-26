@@ -2327,9 +2327,9 @@ fn upgrade_refused(output: &Output, phase: &str, codes: &[&str]) -> serde_json::
     rejection
 }
 
-// SC-CONTINUE-9: a restart creates a successor on the current revision that inherits `design` and
-// runs from `review` under revision 2, supersedes the waiting predecessor and moves the subject's
-// slot; a refused restart leaves both runs as they were.
+// SC-RUNCONTROL-2, SC-RUNCONTROL-6, SC-RUNCONTROL-7: a restart creates a successor on the current
+// revision that inherits `design` and runs from `review` under revision 2, supersedes the waiting
+// predecessor and moves the subject's slot; a refused restart leaves both runs as they were.
 #[test]
 fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
     let restarted = RestartedSubject::new();
@@ -2668,7 +2668,7 @@ fn a_restarted_successors_design_receives_the_predecessors_answers() {
     assert_eq!(control_count(&successor), 1);
 }
 
-// SC-LOCALRUN-13: after a restart, `list --all` names each run's lineage after its outcome,
+// SC-RUNCONTROL-2: after a restart, `list --all` names each run's lineage after its outcome,
 // `list` the live successor alone, and `show` prints the predecessor and successor and
 // marks the attempts the successor imported.
 #[test]
@@ -2857,7 +2857,7 @@ fn a_restart_sets_text_inputs_of_the_current_revision() {
     assert_eq!(retained("ticket"), "AUTO-1");
 }
 
-// SC-LOCALRUN-14: an upgrade moves a subject's run waiting on `approval` to the current revision
+// SC-RUNCONTROL-3: an upgrade moves a subject's run waiting on `approval` to the current revision
 // with its wait, position, edge counts and attempts carried and no attempt started; the approval
 // recorded on the successor resumes it from `merge` under revision 2 with `design` and `review`
 // inherited.
@@ -3984,7 +3984,7 @@ fn a_resolved_host_wait_continues_the_failed_child_without_repeating_its_complet
     }
 }
 
-// SC-CONTINUE-10: at a fan-out's second element the retry continues that element's child; the
+// SC-CONTINUE-20: at a fan-out's second element the retry continues that element's child; the
 // first element is not run again and the third runs once, after the repaired second plans.
 #[test]
 fn a_repair_retry_continues_the_failed_fan_out_element_before_the_next() {
@@ -4837,11 +4837,11 @@ fn continued_with_the_hand_back_notes(run: &Path, root: &Path, reason: &str, att
     );
 }
 
-// SC-CONTINUE-14: a repair retry of a stage a hand-back started keeps the hand-back's
-// `wait.notes` for that stage, so the step maps the inputs its failed child retained and the same
-// child continues, re-running only its failed step, which reads the notes again; a retry whose
-// own payload carries other notes is still refused before the wait is consumed, and continues the
-// same child once they are gone.
+// SC-CONTINUE-14, SC-CONTINUE-24: a repair retry of a stage a hand-back started keeps the
+// hand-back's `wait.notes` for that stage, so the step maps the inputs its failed child retained
+// and the same child continues, re-running only its failed step, which reads the notes again; a
+// retry whose own payload carries other notes is still refused before the wait is consumed, and
+// continues the same child once they are gone.
 #[test]
 fn a_repair_retry_of_a_handed_back_stage_keeps_the_hand_back_notes() {
     let bundle = stage_tree(STAGE_HAND_BACK_ROOT);
@@ -5559,7 +5559,7 @@ fn a_bare_release_action_refuses_the_event_control_unavailable_and_changes_nothi
 }
 
 /// A root whose `build` stage child runs `prepare` and then the long-running `work`, and whose
-/// failed child waits for a repair at `build` itself (SC-LOCALRUN-15, SC-CONTINUE-11).
+/// failed child waits for a repair at `build` itself (SC-RUNCONTROL-4, SC-CONTINUE-11).
 const INTERRUPT_TREE_ROOT: &str = "schemaVersion: 1
 programs: [bin]
 outcomes: [landed, failed]
@@ -5691,7 +5691,7 @@ fn result_step<'a>(result: &'a serde_json::Value, id: &str) -> &'a serde_json::V
         .unwrap()
 }
 
-// SC-LOCALRUN-15, SC-CONTINUE-11: SIGINT or SIGTERM to the process of a staged run interrupts
+// SC-RUNCONTROL-4, SC-CONTINUE-11: SIGINT or SIGTERM to the process of a staged run interrupts
 // it: the stage's running step fails `interrupted`, the root waits for a repair at the stage
 // with the interruption in its payload, no control is recorded and the command exits 130 or 143;
 // `retry` continues the same child from the interrupted step, `prepare` inherited and the
@@ -6116,7 +6116,7 @@ fn cancel_still_cancels_a_live_staged_run_and_an_interrupted_one() {
     assert_eq!(record["outcome"], "canceled", "{record}");
 }
 
-// SC-LOCALRUN-16: `interrupt` records `control.interrupt` and wakes the one process that holds the
+// SC-RUNCONTROL-5: `interrupt` records `control.interrupt` and wakes the one process that holds the
 // run, which interrupts its stage with `termination_request` and parks the root on its repair wait
 // naming the control; another live run is untouched, and `retry` continues the same child from the
 // interrupted step.

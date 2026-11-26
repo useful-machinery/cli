@@ -212,7 +212,7 @@ fn entries(directory: &Path) -> Vec<String> {
     names
 }
 
-// SC-RUNNERENROLL-13: a live runner reports its build cache measured with nothing due, and
+// SC-RUNNERDISK-2: a live runner reports its build cache measured with nothing due, and
 // an operator's `--all --yes` empties it but for its `CACHEDIR.TAG`, after which another
 // removes nothing.
 #[test]

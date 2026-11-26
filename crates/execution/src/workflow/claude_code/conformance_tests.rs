@@ -550,7 +550,7 @@ async fn pinned_real_claude_code_02_production_driver_returns_one_normalized_res
     .await;
 }
 
-// SC-AGENT-3
+// SC-AGENTOUTCOME-1
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one_turn() {
@@ -614,7 +614,7 @@ async fn pinned_real_claude_code_03_result_tool_corrects_a_rejected_value_in_one
     .await;
 }
 
-// SC-AGENT-7
+// SC-AGENTOUTCOME-2
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03b_the_last_submission_after_a_backgrounded_subagent_stands() {
@@ -786,7 +786,7 @@ async fn pinned_real_claude_code_03d_a_main_thread_background_command_begins_the
     .await;
 }
 
-// SC-AGENT-8
+// SC-AGENTOUTCOME-3
 #[tokio::test]
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_03e_a_subagents_own_background_command_is_waited_for() {

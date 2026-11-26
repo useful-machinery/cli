@@ -1822,6 +1822,25 @@ Once the interval expires, the runner logs `runner.idle_timeout`, stops as it wo
 signal with no work held, and exits 0. It declines an offer arriving as it stops, leaving
 the run queued for another runner or the next start.
 
+With `useful runner serve --exit-when-drained`, the runner exits 0 once it learns
+its registration is draining, holds no working or waiting run, and owes no report.
+It learns the mode when it connects and on Cloud's next presence refresh, every ten
+seconds while connected. Learning that the registration is enabled again cancels a
+pending exit. By default the runner waits indefinitely for held work. Add
+`--drain-deadline 30m` to limit that wait to a duration from `1s` to `7d`, measured
+from when the runner learned it was draining. At the deadline it stops as on a
+termination signal, and held runs settle `interrupted` with cause `executor_shutdown`.
+When `--idle-timeout` is also set, whichever condition is met first stops the runner.
+An ephemeral runner that exits this way tries to retire its registration.
+
+On the host, run `useful runner drain` as the user who runs the runner. This form
+requires neither sign-in nor a runner ID. Add `--config PATH` if the runner uses a
+non-default configuration. Exit 0 means Cloud has marked the registration as draining.
+Within about 10 seconds the connected runner learns of the drain. A runner started with
+`--exit-when-drained` exits once its work and final report are complete. An instance
+termination hook should retry the command on exit 4, which means no runner answered
+or Cloud was unreachable. Other failures report the reason.
+
 Start the same command again to serve as the same runner. If Cloud has since removed a
 key-joined runner after its key's offline removal time, start with a current join key to
 rejoin. A service manager that restarts on any exit starts the runner again after the
@@ -2470,7 +2489,7 @@ output may contain sensitive data, so inspect it only through operator access.
 Use `useful runner doctor` to inspect the local prerequisites currently known to
 the runner. The default set contains only `environment.command.git`. It executes the
 `git` resolved from the runner process's `PATH`, requires a parseable version at least
-`2.29.0`, and reports a pass or failure for that check. Select
+`2.43.0`, and reports a pass or failure for that check. Select
 `execution.harness.pi-json-v1` explicitly to check the `pi` inherited through the same
 operator-controlled `PATH`, select `execution.harness.claude-code-stream-json-v1` to 
 check `claude`, or `execution.harness.codex-app-server-v1` to check `codex` 

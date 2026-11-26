@@ -876,6 +876,135 @@ fn bitmap_capture_matches_preflight_when_head_restores_a_historical_blob() {
 }
 
 #[test]
+fn status_neutralizes_repository_filters_and_disables_submodule_recursion() {
+    let fixture = GitFixture::new();
+    let wrapper = fixture._temporary.path().join("git-with-status-check");
+    let status_seen = fixture._temporary.path().join("status-seen");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+require_override() {
+    expected=$1
+    shift
+    previous=
+    for argument do
+        [ "$previous" = -c ] && [ "$argument" = "$expected" ] && return 0
+        [ "$argument" = status ] && break
+        previous=$argument
+    done
+    exit 91
+}
+
+case " $* " in
+    *" status "*)
+        : > "$ARMED"
+        case " $* " in
+            *" --ignore-submodules=dirty "*) ;;
+            *) exit 92 ;;
+        esac
+        for driver in Fixture.Mixed fixture.Mixed; do
+            require_override "filter.$driver.clean=" "$@"
+            require_override "filter.$driver.smudge=" "$@"
+            require_override "filter.$driver.process=" "$@"
+            require_override "filter.$driver.required=false" "$@"
+        done
+        ;;
+esac
+exec "$REAL_GIT" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    let (admitted, artifacts) = admitted_capture(
+        fixture._temporary.path(),
+        &fixture.repository,
+        [
+            ("REAL_GIT", git_executable().as_os_str()),
+            ("ARMED", status_seen.as_os_str()),
+        ],
+    );
+    let cancellation = CaptureCancellation::default();
+    let capture = GitCaptureContext::admit_with_program(
+        admitted.execution(),
+        &cancellation,
+        wrapper.clone(),
+        GIT_COMMAND_TIMEOUT,
+    )
+    .unwrap();
+    let projection = CloudGitCaptureProjection::new(
+        Arc::from(capture.baseline_oid()),
+        Arc::from("0".repeat(64)),
+        CaptureCancellation::default(),
+    );
+    let cloud_admit = || {
+        GitCaptureContext::admit_with_program_and_cloud(
+            admitted.execution(),
+            &cancellation,
+            Some(&projection),
+            None,
+            wrapper.clone(),
+            GIT_COMMAND_TIMEOUT,
+        )
+    };
+    let capture_changes = || capture.capture("changes", &artifacts, &cancellation);
+
+    git(
+        &fixture.repository,
+        &["config", "filter.Fixture.Mixed.required", "true"],
+    );
+    git(
+        &fixture.repository,
+        &["config", "filter.fixture.Mixed.required", "true"],
+    );
+    git(&fixture.repository, &["config", "filter.bare", "true"]);
+    fs::write(
+        fixture.repository.join(".git/info/attributes"),
+        b"tracked.txt filter=Fixture.Mixed\n",
+    )
+    .unwrap();
+
+    cloud_admit().unwrap();
+    fs::remove_file(&status_seen).unwrap();
+    capture_changes().unwrap().abort();
+    fs::remove_file(&status_seen).unwrap();
+
+    git(
+        &fixture.repository,
+        &["config", "filter.unsupported=name.required", "true"],
+    );
+    assert_eq!(
+        cloud_admit().unwrap_err(),
+        GitWorkspaceAdmissionFailure::GitUnavailable,
+    );
+    assert_eq!(
+        capture_failure(capture_changes()),
+        GitCaptureFailure::CleanlinessUnavailable,
+    );
+    assert!(!status_seen.exists());
+    git(
+        &fixture.repository,
+        &["config", "--unset", "filter.unsupported=name.required"],
+    );
+
+    let tracked = fixture.repository.join("tracked.txt");
+    fs::write(&tracked, b"modified\n").unwrap();
+    File::open(tracked)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    assert_eq!(
+        capture_failure(capture_changes()),
+        GitCaptureFailure::WorkspaceDirty,
+    );
+    fs::remove_file(&status_seen).unwrap();
+    assert_eq!(
+        cloud_admit().unwrap_err(),
+        GitWorkspaceAdmissionFailure::InitialWorkspaceDirty,
+    );
+    assert!(status_seen.is_file());
+}
+
+#[test]
 fn dirty_index_worktree_untracked_and_submodule_states_fail_without_adapter_authorship() {
     for dirty in ["staged", "tracked", "untracked"] {
         let fixture = GitFixture::new();
@@ -910,7 +1039,7 @@ fn dirty_index_worktree_untracked_and_submodule_states_fail_without_adapter_auth
 
     assert_eq!(
         capture_failure(fixture.capture()),
-        GitCaptureFailure::WorkspaceDirty
+        GitCaptureFailure::WorkspaceChanged
     );
     assert_eq!(repository_bytes(&fixture.repository), before);
     assert_eq!(fixture.artifacts.staged_artifact_count(), 0);
@@ -927,6 +1056,24 @@ fn capture_rejects_a_clean_submodule_added_after_admission() {
         GitCaptureFailure::WorkspaceChanged
     );
     assert_eq!(fixture.artifacts.git_reservation_usage(), (0, 0));
+    assert_eq!(fixture.artifacts.staged_artifact_count(), 0);
+}
+
+#[test]
+fn capture_rejects_a_committed_submodule_whose_removal_is_only_staged() {
+    let fixture = GitFixture::new();
+    let submodule_source = fixture._temporary.path().join("submodule-source");
+    add_clean_submodule(&fixture.repository, &submodule_source);
+    git(
+        &fixture.repository,
+        &["update-index", "--force-remove", "nested"],
+    );
+    fs::remove_dir_all(fixture.repository.join("nested")).unwrap();
+
+    assert_eq!(
+        capture_failure(fixture.capture()),
+        GitCaptureFailure::WorkspaceDirty
+    );
     assert_eq!(fixture.artifacts.staged_artifact_count(), 0);
 }
 

@@ -548,7 +548,7 @@ fn handler_launch_refusal_is_classified_like_a_step_command() {
     assert_eq!(view["result"]["steps"][0], *step);
 }
 
-// SC-WFRECOVERY-6
+// SC-WFRECOVERY-6, SC-WFRECOVERY-7
 #[test]
 fn listed_exit_code_classifies_the_failure_without_a_recovery_round() {
     for (name, command) in [

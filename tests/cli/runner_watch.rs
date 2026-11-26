@@ -295,7 +295,7 @@ mod terminal {
         process.master_writer().flush().unwrap();
     }
 
-    // SC-RUNNERENROLL-11: Enter opens the overview's first assignment with its run and its
+    // SC-RUNNERHOST-3: Enter opens the overview's first assignment with its run and its
     // Cloud URL, `k` selects a settled step whose output it reads, and Esc and `q` leave
     // having sent nothing but reads.
     #[test]

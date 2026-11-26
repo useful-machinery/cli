@@ -315,7 +315,6 @@ pub enum InvitationState {
 #[serde(rename_all = "snake_case")]
 pub enum InvitationDeliveryState {
     Pending,
-    Leased,
     Sent,
     Failed,
 }
@@ -603,7 +602,6 @@ impl TryFrom<models::Invitation> for Invitation {
             replacement_invitation_id: value.replacement_invitation_id,
             delivery_state: value.delivery_state.map(|state| match state {
                 models::invitation::DeliveryState::Pending => InvitationDeliveryState::Pending,
-                models::invitation::DeliveryState::Leased => InvitationDeliveryState::Leased,
                 models::invitation::DeliveryState::Sent => InvitationDeliveryState::Sent,
                 models::invitation::DeliveryState::Failed => InvitationDeliveryState::Failed,
             }),

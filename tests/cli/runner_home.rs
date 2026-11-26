@@ -927,14 +927,14 @@ const DOCTOR_AGENT_LOGINS: [&str; 5] = [
 ];
 
 /// `useful runner doctor ARGUMENTS` with `PATH` naming only a Git that reports
-/// 2.42.0, and `USEFUL_HOME` and `HOME` as given: a variable given `None` is
+/// 2.47.0, and `USEFUL_HOME` and `HOME` as given: a variable given `None` is
 /// removed.
 fn doctor_with_homes(
     arguments: &[&str],
     useful_home: Option<&Path>,
     home: Option<&Path>,
 ) -> Output {
-    let git = fake_git("printf '%s\\n' 'git version 2.42.0'");
+    let git = fake_git("printf '%s\\n' 'git version 2.47.0'");
     let mut command = Command::new(crate::executable());
     command
         .args(["runner", "doctor"])

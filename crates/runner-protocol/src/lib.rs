@@ -16,6 +16,8 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 )]
 mod generated;
 
+pub use generated::RunnerRegistrationMode as RegistrationMode;
+
 const PROTOCOL_SCHEMA: &str = include_str!("schema/runner-protocol-v1.schema.json");
 pub const MAXIMUM_ORDINARY_FRAME_BYTES: usize = 262_144;
 pub const MAXIMUM_CONDITION_TRANSITION_FRAME_BYTES: usize = 256 * 1024 * 1024;
@@ -66,6 +68,8 @@ pub enum RunnerFrame {
         /// Advertises `credentialMode: 1`: this runner's release applies the credential mode
         /// Cloud names, so Cloud may name one.
         credential_mode: bool,
+        /// Advertises support for a registration mode in the welcome and during the session.
+        registration_mode: bool,
     },
     WorkspaceRetentionReport {
         envelope: RunnerEnvelope,
@@ -1446,6 +1450,11 @@ pub enum CloudFrame {
         pong_timeout_seconds: u64,
         lease_policy: ExecutionLeasePolicy,
         credential_mode: Option<CredentialMode>,
+        registration_mode: Option<RegistrationMode>,
+    },
+    RegistrationMode {
+        envelope: CloudEnvelope,
+        mode: RegistrationMode,
     },
     ObservationAck {
         envelope: CloudEnvelope,
@@ -1641,6 +1650,7 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             tree_handover,
             holds_waiting_runs,
             credential_mode,
+            registration_mode,
         } => {
             let mut payload = json!({ "runnerVersion": runner_version });
             if *tree_execution {
@@ -1666,6 +1676,9 @@ pub fn encode_runner_frame(frame: &RunnerFrame) -> Result<Vec<u8>, EncodeError> 
             }
             if *credential_mode {
                 payload["credentialMode"] = json!(1);
+            }
+            if *registration_mode {
+                payload["registrationMode"] = json!(1);
             }
             runner_frame_value(envelope, "hello", payload)
         }
@@ -2353,6 +2366,14 @@ fn decode_frame(bytes: &[u8]) -> Result<ValidatedFrame, DecodeError> {
                     fencing_margin_milliseconds: policy.fencing_margin_milliseconds.0.get(),
                 },
                 credential_mode: frame.payload.credential_mode.map(CredentialMode::from),
+                registration_mode: frame.payload.registration_mode,
+            }))
+        }
+        generated::RunnerProtocolVersion1::CloudRegistrationMode(frame) => {
+            let envelope = validated_cloud_envelope!(frame)?;
+            Ok(cloud(CloudFrame::RegistrationMode {
+                envelope,
+                mode: frame.payload.mode,
             }))
         }
         generated::RunnerProtocolVersion1::CloudObservationAck(frame) => {
@@ -2800,6 +2821,7 @@ fn generated_frame(value: Value) -> Result<generated::RunnerProtocolVersion1, De
         "artifact_result_register" => variant(value, Frame::RunnerArtifactResultRegister),
         "artifact_result_confirm" => variant(value, Frame::RunnerArtifactResultConfirm),
         "welcome" => variant(value, Frame::CloudWelcome),
+        "registration_mode" => variant(value, Frame::CloudRegistrationMode),
         "observation_ack" => variant(value, Frame::CloudObservationAck),
         "artifact_carrier_registration" => variant(value, Frame::CloudArtifactCarrierRegistration),
         "artifact_carrier_confirmation" => variant(value, Frame::CloudArtifactCarrierConfirmation),
@@ -3381,6 +3403,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "lastExecutionEventSequence",
             "reason",
         ],
+        "registration_mode" => &["mode"],
         "welcome" => &[
             "sessionId",
             "pingIntervalSeconds",
@@ -3470,6 +3493,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "treeHandover",
             "holdsWaitingRuns",
             "credentialMode",
+            "registrationMode",
         ],
         "execution_transition" => &["diagnostic"],
         "execution_interrupted" | "assignment_interrupted" => &["leaseLoss"],
@@ -3481,7 +3505,7 @@ fn validate_closed_shape(value: &Value) -> Result<(), DecodeError> {
             "exports",
         ],
         "tree_progress" => &["steps"],
-        "welcome" => &["credentialMode"],
+        "welcome" => &["credentialMode", "registrationMode"],
         "assignment_offer" => &["continuation", "handover", "credentialMode"],
         "workspace_retention_report" => &["settlementSnapshot"],
         "trigger_delivery_applied" => &["action", "code"],
@@ -3897,6 +3921,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/valid/hello-tree-handover.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/hello-registration-mode.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-welcome-registration-mode.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/valid/cloud-registration-mode.json"
+        )),
     ];
 
     const INVALID_FIXTURES: &[&[u8]] = &[
@@ -4176,6 +4212,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/runner-protocol/v1/invalid/hello-tree-handover-unknown.json"
         )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/hello-registration-mode-unknown.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-welcome-registration-mode-unknown.json"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/runner-protocol/v1/invalid/cloud-registration-mode-unknown.json"
+        )),
     ];
 
     #[test]
@@ -4376,6 +4424,7 @@ mod tests {
             tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
+            registration_mode: false,
         };
 
         let encoded = encode_runner_frame(&frame).unwrap();
@@ -4395,6 +4444,7 @@ mod tests {
             tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
+            registration_mode: false,
         };
         let encoded = encode_runner_frame(&continuing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4413,6 +4463,7 @@ mod tests {
             tree_handover: false,
             holds_waiting_runs: false,
             credential_mode: false,
+            registration_mode: false,
         };
         let encoded = encode_runner_frame(&withdrawing).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4434,6 +4485,7 @@ mod tests {
             tree_handover: true,
             holds_waiting_runs: false,
             credential_mode: false,
+            registration_mode: false,
         };
         let encoded = encode_runner_frame(&integrating).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4454,6 +4506,7 @@ mod tests {
             tree_handover: true,
             holds_waiting_runs: true,
             credential_mode: false,
+            registration_mode: false,
         };
         let encoded = encode_runner_frame(&holding).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -4472,6 +4525,7 @@ mod tests {
             tree_handover: true,
             holds_waiting_runs: true,
             credential_mode: true,
+            registration_mode: false,
         };
         let encoded = encode_runner_frame(&crediting).unwrap();
         assert!(matches!(decode_frame(&encoded), Ok(ValidatedFrame::Runner)));
@@ -6397,6 +6451,57 @@ mod tests {
         assert!(matches!(
             decode_frame(&one_byte_over),
             Err(DecodeError::InvalidFrame("size"))
+        ));
+    }
+
+    #[test]
+    fn registration_mode_is_advertised_and_named_by_cloud() {
+        for registration_mode in [false, true] {
+            let hello = RunnerFrame::Hello {
+                envelope: maximal_envelope(),
+                runner_version: "0.2.0".to_owned(),
+                tree_execution: false,
+                tree_continuation: false,
+                tree_withdraw: false,
+                tree_integration_bindings: false,
+                tree_no_source: false,
+                tree_handover: false,
+                holds_waiting_runs: false,
+                credential_mode: false,
+                registration_mode,
+            };
+            let value: Value =
+                serde_json::from_slice(&encode_runner_frame(&hello).unwrap()).unwrap();
+            assert_eq!(
+                value["payload"].get("registrationMode"),
+                registration_mode.then_some(&json!(1))
+            );
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/runner-protocol/v1/valid");
+        for (name, expected) in [
+            (
+                "cloud-welcome-registration-mode.json",
+                Some(RegistrationMode::Draining),
+            ),
+            ("cloud-welcome.json", None),
+        ] {
+            let CloudFrame::Welcome {
+                registration_mode, ..
+            } = decode_cloud_frame(&std::fs::read(root.join(name)).unwrap()).unwrap()
+            else {
+                panic!("expected a welcome from {name}");
+            };
+            assert_eq!(registration_mode, expected);
+        }
+        let frame = std::fs::read(root.join("cloud-registration-mode.json")).unwrap();
+        assert!(matches!(
+            decode_cloud_frame(&frame).unwrap(),
+            CloudFrame::RegistrationMode {
+                mode: RegistrationMode::Enabled,
+                ..
+            }
         ));
     }
 

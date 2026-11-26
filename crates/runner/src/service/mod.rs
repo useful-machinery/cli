@@ -11,11 +11,13 @@ mod conversation;
 #[cfg(test)]
 mod determinism_spike;
 mod disk;
+mod drain_stop;
 mod execution;
 mod history;
 mod idle_stop;
 mod kept_runs;
 mod lease_clock;
+pub(crate) mod registration_drain;
 mod retirement;
 mod run_inputs;
 mod source;
@@ -41,7 +43,7 @@ pub(crate) use config::AssignmentConfig;
 pub(crate) use config::BuildCache;
 pub(crate) use config::KeptRunBounds;
 pub(crate) use config::LOG_DIRECTORY;
-pub use config::{Config, ConfigError};
+pub use config::{Config, ConfigError, DrainExit};
 pub use retirement::{Retirement, RetirementCause};
 #[cfg(test)]
 pub(crate) use test_support::{
@@ -246,6 +248,60 @@ pub(crate) trait Sleeper: Send + Sync {
 
 trait Shutdown: Send {
     fn wait(&mut self) -> ShutdownFuture<'_>;
+
+    fn disarm_automatic_stops(&mut self) {}
+}
+
+/// An automatic stop is a first signal only. Once shutdown starts, disarm
+/// every nested watcher so only another operator signal can force an exit.
+struct AutomaticStop<'a> {
+    shutdown: &'a mut dyn Shutdown,
+    expiry: futures_util::future::Fuse<tokio::sync::oneshot::Receiver<()>>,
+    watcher: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl<'a> AutomaticStop<'a> {
+    fn new(
+        shutdown: &'a mut dyn Shutdown,
+        watch: impl Future<Output = ()> + Send + 'static,
+    ) -> Self {
+        use futures_util::FutureExt as _;
+
+        let (expired, expiry) = tokio::sync::oneshot::channel();
+        let watcher = tokio::spawn(async move {
+            watch.await;
+            let _ = expired.send(());
+        });
+        Self {
+            shutdown,
+            expiry: expiry.fuse(),
+            watcher: Some(watcher),
+        }
+    }
+}
+
+impl Shutdown for AutomaticStop<'_> {
+    fn wait(&mut self) -> ShutdownFuture<'_> {
+        Box::pin(async {
+            tokio::select! {
+                () = self.shutdown.wait() => {}
+                Ok(()) = &mut self.expiry, if self.watcher.is_some() => {}
+            }
+        })
+    }
+
+    fn disarm_automatic_stops(&mut self) {
+        if let Some(watcher) = self.watcher.take() {
+            watcher.abort();
+        }
+        self.shutdown.disarm_automatic_stops();
+    }
+}
+
+impl Drop for AutomaticStop<'_> {
+    fn drop(&mut self) {
+        self.disarm_automatic_stops();
+    }
 }
 
 struct ProcessShutdown {
@@ -1244,7 +1300,7 @@ async fn connection_loop_with_work_root(
     }
     let credential_mode = agent_login_setup.is_some();
     let reload_dependencies = ReloadDependencies {
-        target,
+        target: target.clone(),
         boot_id: boot_id.clone(),
         credential_mode,
         frame_source: Arc::clone(&frame_source),
@@ -1284,6 +1340,7 @@ async fn connection_loop_with_work_root(
             ControlServer::bind(
                 path,
                 ControlContext {
+                    target,
                     status: Arc::clone(&live_status),
                     assignments: Arc::clone(&assignment_manager),
                     run_reads: Arc::new(tokio::sync::Semaphore::new(RUN_READ_PLACES)),
@@ -1309,16 +1366,35 @@ async fn connection_loop_with_work_root(
             Arc::clone(&sleeper),
         )
     });
+    let mut drain_stop;
+    let shutdown: &mut dyn Shutdown = match config.drain_exit() {
+        Some(exit) => {
+            drain_stop = AutomaticStop::new(
+                shutdown,
+                drain_stop::watch(
+                    exit,
+                    Arc::clone(&assignment_manager),
+                    Arc::clone(&live_status),
+                    Arc::clone(&sleeper),
+                    Arc::clone(&recorder),
+                ),
+            );
+            &mut drain_stop
+        }
+        None => shutdown,
+    };
     let mut idle_stop;
     let shutdown: &mut dyn Shutdown = match config.idle_timeout() {
         Some(timeout) => {
-            idle_stop = idle_stop::IdleStop::start(
+            idle_stop = AutomaticStop::new(
                 shutdown,
-                timeout,
-                Arc::clone(&assignment_manager),
-                Arc::clone(&live_status),
-                Arc::clone(&sleeper),
-                Arc::clone(&recorder),
+                idle_stop::watch(
+                    timeout,
+                    Arc::clone(&assignment_manager),
+                    Arc::clone(&live_status),
+                    Arc::clone(&sleeper),
+                    Arc::clone(&recorder),
+                ),
             );
             &mut idle_stop
         }
@@ -1425,7 +1501,8 @@ async fn connection_loop_with_work_root(
                 attempt,
             )
             .with_live_status(&live_status)
-            .with_credential_mode(live_status.credential_mode());
+            .with_credential_mode(live_status.credential_mode())
+            .with_registration_mode(&live_status.registration_mode);
             let opening_frame = OpeningHello {
                 boot_id: &boot_id,
                 encoded: &opening,
@@ -1528,6 +1605,7 @@ async fn connection_loop_with_work_root(
                         ActiveEvent::AssignmentNotification => None,
                         ActiveEvent::Shutdown => {
                             shutdown_deadline = Some(begin_shutdown(
+                                shutdown,
                                 &live_status,
                                 &assignment_manager,
                                 &sleeper,
@@ -1564,6 +1642,7 @@ async fn connection_loop_with_work_root(
                         }
                         ConnectedReloadResult::Shutdown => {
                             shutdown_deadline = Some(begin_shutdown(
+                                shutdown,
                                 &live_status,
                                 &assignment_manager,
                                 &sleeper,
@@ -1719,6 +1798,7 @@ async fn connection_loop_with_work_root(
                         if let Some(end) = end {
                             ending = end;
                             shutdown_deadline = Some(begin_shutdown(
+                                shutdown,
                                 &live_status,
                                 &assignment_manager,
                                 &sleeper,
@@ -1754,6 +1834,7 @@ async fn connection_loop_with_work_root(
                         }
                         _ = shutdown.wait() => {
                             shutdown_deadline = Some(begin_shutdown(
+                                shutdown,
                                 &live_status,
                                 &assignment_manager,
                                 &sleeper,
@@ -1857,6 +1938,7 @@ async fn connection_loop_with_work_root(
                 }
                 _ = shutdown.wait() => {
                     shutdown_deadline = Some(begin_shutdown(
+                        shutdown,
                         &live_status,
                         &assignment_manager,
                         &sleeper,
@@ -2015,11 +2097,13 @@ async fn finish_shutdown_cleanup(
 }
 
 fn begin_shutdown(
+    shutdown: &mut dyn Shutdown,
     live_status: &LiveStatus,
     assignment_manager: &Mutex<AssignmentManager>,
     sleeper: &Arc<dyn Sleeper>,
     kept_runs: &KeptRunSchedule,
 ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, ServiceError> {
+    shutdown.disarm_automatic_stops();
     live_status.stopping();
     kept_runs.stop();
     assignment_manager
@@ -2231,7 +2315,8 @@ impl ReloadDependencies {
             &self.assignment_manager,
             attempt,
         )
-        .with_credential_mode(self.live_status.credential_mode());
+        .with_credential_mode(self.live_status.credential_mode())
+        .with_registration_mode(&self.live_status.registration_mode);
         let transport = connection::connect_candidate_transport(dependencies)
             .await
             .map_err(|error| candidate_control_error(&connection_event, error))?;
@@ -2577,6 +2662,8 @@ mod tests {
     use tokio_tungstenite::tungstenite::protocol::CloseFrame;
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+    use super::DrainExit;
+    use super::drain_stop::DRAIN_RETRY_INTERVAL;
     use super::sequence_overflow;
     use super::source::{
         SourceCredentialBroker,
@@ -2591,7 +2678,7 @@ mod tests {
         fixture_sleeper, guarded_processes, holding_step_workflow, observation_acknowledgement,
         offer_assignment_after_handshake, process_exists, require_internal_worker_executable,
         run_fixture_git, scripted_connector, sleep_request, terminal_observation_acknowledgement,
-        welcome, with_watchdog,
+        welcome, welcome_with_registration_mode, with_watchdog,
     };
     use super::workspace::{
         CleanupCancellation, CleanupSleeper, OwnedTree, TreeRemover, WorkRootHook, WorkRootLease,
@@ -2618,6 +2705,7 @@ mod tests {
         ValidatedClaudeCodeInstallation, ValidatedCodexInstallation, ValidatedPiInstallation,
         resolve,
     };
+    use useful_runner_protocol::RegistrationMode;
 
     #[test]
     fn recovery_required_failures_are_closed_to_work_root_ownership() {
@@ -5961,7 +6049,7 @@ mod tests {
         drop(sleep_requests);
     }
 
-    async fn ping_idle_stop_service(socket: &mut FixtureSocket, byte: u8) {
+    async fn ping_serving_runner(socket: &mut FixtureSocket, byte: u8) {
         let ping = vec![byte];
         socket
             .send(Message::Ping(ping.clone().into()))
@@ -5997,7 +6085,7 @@ mod tests {
                 .unwrap();
             let release = sleep_request(&mut requests, timeout).await;
             for byte in [1, 2, 3] {
-                ping_idle_stop_service(&mut socket, byte).await;
+                ping_serving_runner(&mut socket, byte).await;
             }
             while let Ok((duration, _)) = requests.try_recv() {
                 assert_ne!(duration, timeout);
@@ -6037,7 +6125,7 @@ mod tests {
             let (mut socket, accepted) = prepare_offered_assignment(socket, fixture.offer).await;
             acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance").await;
             expiry.release();
-            ping_idle_stop_service(&mut socket, 7).await;
+            ping_serving_runner(&mut socket, 7).await;
             stop.notify_one();
             let interrupted =
                 next_semantic_assignment_frame(&mut socket, "assignment_interrupted", true).await;
@@ -6081,18 +6169,10 @@ mod tests {
             let (mut socket, accepted) = prepare_offered_assignment(socket, fixture.offer).await;
             acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance").await;
             outlived.release();
-            ping_idle_stop_service(&mut socket, 7).await;
+            ping_serving_runner(&mut socket, 7).await;
             socket
-                .send(cloud_frame(
-                    "assignment_release",
-                    "cmsg_01k0z6r1w8f4jy2m7q9v3x5abt",
-                    serde_json::json!({
-                        "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abt",
-                        "assignmentId": accepted["payload"]["assignmentId"],
-                        "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
-                        "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
-                        "reason": "stale_or_invalid_acceptance",
-                    }),
+                .send(assignment_release_frame(
+                    &accepted["payload"]["assignmentId"],
                 ))
                 .await
                 .unwrap();
@@ -6123,6 +6203,323 @@ mod tests {
             .filter(|r| r["event.name"] == "runner.idle_timeout")
             .count();
         assert_eq!(timeouts, 1);
+    }
+
+    fn assignment_release_frame(assignment_id: &serde_json::Value) -> Message {
+        cloud_frame(
+            "assignment_release",
+            "cmsg_01k0z6r1w8f4jy2m7q9v3x5abt",
+            serde_json::json!({
+                "effectId": "eff_01k0z6r1w8f4jy2m7q9v3x5abt",
+                "assignmentId": assignment_id,
+                "runId": "run_01k0z6r1w8f4jy2m7q9v3x5abj",
+                "attemptId": "atm_01k0z6r1w8f4jy2m7q9v3x5abc",
+                "reason": "stale_or_invalid_acceptance",
+            }),
+        )
+    }
+
+    async fn send_registration_mode(socket: &mut FixtureSocket, mode: RegistrationMode) {
+        socket
+            .send(cloud_frame(
+                "registration_mode",
+                match mode {
+                    RegistrationMode::Enabled => "cmsg_01k0z6r1w8f4jy2m7q9v3x5abv",
+                    RegistrationMode::Draining => "cmsg_01k0z6r1w8f4jy2m7q9v3x5abw",
+                },
+                serde_json::json!({"mode": mode}),
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn welcome_with_mode(
+        listener: &tokio::net::TcpListener,
+        mode: RegistrationMode,
+    ) -> FixtureSocket {
+        let mut socket = accept_opened_fixture_socket(listener).await;
+        socket
+            .send(welcome_with_registration_mode(mode))
+            .await
+            .unwrap();
+        socket
+            .send(observation_acknowledgement(
+                "rmsg_00000000000000000000000002",
+                1,
+            ))
+            .await
+            .unwrap();
+        socket
+    }
+
+    fn drain_records(
+        capture: &TestCapture,
+        event: &str,
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        capture
+            .records()
+            .into_iter()
+            .filter(|r| r["event.name"] == event)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn drain_stop_exits_once_an_empty_enabled_service_learns_it_is_draining() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = ConfigFixture::new(&endpoint, test_credential(), true).unwrap();
+        let (sleeper, _requests) = controlled_sleeper();
+        let config = fixture
+            .cloned_config()
+            .with_drain_exit(Some(DrainExit { deadline: None }));
+        let (service, capture, _stop) = spawn_configured_service(config, sleeper);
+        with_watchdog(async {
+            let mut socket = welcome_with_mode(&listener, RegistrationMode::Enabled).await;
+            ping_serving_runner(&mut socket, 1).await;
+            send_registration_mode(&mut socket, RegistrationMode::Draining).await;
+            assert_eq!(service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+        assert_eq!(drain_records(&capture, "runner.drained").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_stop_is_opt_in_even_when_the_welcome_names_draining() {
+        let (listener, endpoint) = fixture_listener().await;
+        let fixture = ConfigFixture::new(&endpoint, test_credential(), true).unwrap();
+        let (sleeper, _requests) = controlled_sleeper();
+        let (service, capture, stop) = spawn_configured_service(fixture.cloned_config(), sleeper);
+        with_watchdog(async {
+            let mut socket = welcome_with_mode(&listener, RegistrationMode::Draining).await;
+            ping_serving_runner(&mut socket, 1).await;
+            stop.notify_one();
+            assert_eq!(service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+        assert!(drain_records(&capture, "runner.drained").is_empty());
+    }
+
+    struct HeldDrain {
+        _temporary: tempfile::TempDir,
+        service: tokio::task::JoinHandle<Result<ServiceEnd, ServiceError>>,
+        capture: TestCapture,
+        stop: ControlledShutdownTrigger,
+        sleeps: tokio::sync::mpsc::UnboundedReceiver<(Duration, SleepRelease)>,
+        socket: FixtureSocket,
+        accepted: serde_json::Value,
+    }
+
+    impl HeldDrain {
+        async fn start(deadline: Option<Duration>) -> Self {
+            Self::start_with_idle_timeout(deadline, None).await
+        }
+
+        async fn start_with_idle_timeout(
+            deadline: Option<Duration>,
+            idle_timeout: Option<Duration>,
+        ) -> Self {
+            let (listener, endpoint) = fixture_listener().await;
+            let fixture = accepted_assignment_config(&endpoint);
+            let (sleeper, sleeps) = controlled_sleeper();
+            let (service, capture, stop) = spawn_configured_service_with_source(
+                fixture
+                    .config
+                    .with_drain_exit(Some(DrainExit { deadline }))
+                    .with_idle_timeout(idle_timeout),
+                sleeper,
+                Some(fixture.source_broker),
+                None,
+            );
+            let socket = welcome_assignment_socket(&listener).await;
+            let (mut socket, accepted) = prepare_offered_assignment(socket, fixture.offer).await;
+            acknowledge_runner_frame(&mut socket, &accepted, "acknowledge acceptance").await;
+            send_registration_mode(&mut socket, RegistrationMode::Draining).await;
+            ping_serving_runner(&mut socket, 1).await;
+            Self {
+                _temporary: fixture.temporary,
+                service,
+                capture,
+                stop,
+                sleeps,
+                socket,
+                accepted,
+            }
+        }
+
+        async fn release_assignment(&mut self) {
+            self.socket
+                .send(assignment_release_frame(
+                    &self.accepted["payload"]["assignmentId"],
+                ))
+                .await
+                .unwrap();
+        }
+
+        async fn acknowledge(&mut self, frame: &str) {
+            let frame: serde_json::Value = serde_json::from_str(frame).unwrap();
+            if frame["messageId"].is_string() {
+                acknowledge_runner_frame(&mut self.socket, &frame, "acknowledge frame").await;
+            }
+        }
+
+        /// Answers the runner until it answers a ping, letting every retry interval the
+        /// drain watcher asks for elapse.
+        async fn serve_through_ping(&mut self, byte: u8) {
+            self.socket
+                .send(Message::Ping(vec![byte].into()))
+                .await
+                .unwrap();
+            loop {
+                tokio::select! {
+                    biased;
+                    Some((duration, interval)) = self.sleeps.recv() => {
+                        if duration == DRAIN_RETRY_INTERVAL {
+                            interval.release();
+                        }
+                    }
+                    message = self.socket.next() => match message {
+                        Some(Ok(Message::Pong(_))) => return,
+                        Some(Ok(Message::Text(frame))) => self.acknowledge(&frame).await,
+                        other => panic!("the runner stopped serving: {other:?}"),
+                    },
+                }
+            }
+        }
+
+        async fn expect_interruption(&mut self) -> serde_json::Value {
+            let interrupted =
+                next_semantic_assignment_frame(&mut self.socket, "assignment_interrupted", true)
+                    .await;
+            assert_eq!(interrupted["payload"]["reason"], "graceful_shutdown");
+            interrupted
+        }
+
+        async fn acknowledge_interruption(&mut self, frame: &serde_json::Value) {
+            self.socket
+                .send(terminal_observation_acknowledgement(
+                    frame["messageId"].as_str().unwrap(),
+                    frame["sequence"].as_u64().unwrap(),
+                ))
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_stop_waits_for_the_held_assignment_to_end() {
+        with_watchdog(async {
+            let mut runner = HeldDrain::start(None).await;
+            runner.release_assignment().await;
+            let end = loop {
+                tokio::select! {
+                    biased;
+                    end = &mut runner.service => break end,
+                    interval = sleep_request(&mut runner.sleeps, DRAIN_RETRY_INTERVAL) => interval.release(),
+                    Some(Ok(Message::Text(frame))) = runner.socket.next() => {
+                        runner.acknowledge(&frame).await;
+                    }
+                }
+            };
+            assert_eq!(end.unwrap().unwrap(), ServiceEnd::Stopped);
+            assert_eq!(drain_records(&runner.capture, "runner.drained").len(), 1);
+        }).await.unwrap();
+    }
+
+    // The idle watcher asks for an interval only once the runner holds nothing, which is
+    // when a drained exit would be taken, so its request marks the moment to look.
+    #[tokio::test]
+    async fn drain_stop_cancels_when_enabled_before_the_release() {
+        let idle_timeout = Duration::from_secs(17);
+        with_watchdog(async {
+            let mut runner = HeldDrain::start_with_idle_timeout(None, Some(idle_timeout)).await;
+            send_registration_mode(&mut runner.socket, RegistrationMode::Enabled).await;
+            runner.serve_through_ping(2).await;
+            // The interval asked for before the assignment was held is not the signal.
+            while runner.sleeps.try_recv().is_ok() {}
+            runner.release_assignment().await;
+            loop {
+                tokio::select! {
+                    biased;
+                    end = &mut runner.service => panic!("the runner exited: {end:?}"),
+                    Some((duration, interval)) = runner.sleeps.recv() => {
+                        if duration == idle_timeout {
+                            break;
+                        }
+                        if duration == DRAIN_RETRY_INTERVAL {
+                            interval.release();
+                        }
+                    }
+                    Some(Ok(Message::Text(frame))) = runner.socket.next() => {
+                        runner.acknowledge(&frame).await;
+                    }
+                }
+            }
+            for byte in [3, 4, 5] {
+                runner.serve_through_ping(byte).await;
+            }
+            assert!(drain_records(&runner.capture, "runner.drained").is_empty());
+            runner.stop.notify_one();
+            assert_eq!(runner.service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+    }
+
+    const TEST_DRAIN_DEADLINE: Duration = Duration::from_secs(23);
+
+    #[tokio::test]
+    async fn drain_stop_deadline_interrupts_the_assignment_and_waits_for_its_acknowledgement() {
+        with_watchdog(async {
+            let mut runner = HeldDrain::start(Some(TEST_DRAIN_DEADLINE)).await;
+            sleep_request(&mut runner.sleeps, TEST_DRAIN_DEADLINE)
+                .await
+                .release();
+            let interrupted = runner.expect_interruption().await;
+            runner.acknowledge_interruption(&interrupted).await;
+            assert_eq!(runner.service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+            let records = drain_records(&runner.capture, "runner.drain_deadline");
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["um.runner.drain_deadline_seconds"], 23);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn drain_stop_reenabling_cancels_the_deadline() {
+        with_watchdog(async {
+            let mut runner = HeldDrain::start(Some(TEST_DRAIN_DEADLINE)).await;
+            let deadline = sleep_request(&mut runner.sleeps, TEST_DRAIN_DEADLINE).await;
+            send_registration_mode(&mut runner.socket, RegistrationMode::Enabled).await;
+            ping_serving_runner(&mut runner.socket, 2).await;
+            deadline.release();
+            ping_serving_runner(&mut runner.socket, 3).await;
+            assert!(drain_records(&runner.capture, "runner.drain_deadline").is_empty());
+            runner.stop.notify_one();
+            let interrupted = runner.expect_interruption().await;
+            runner.acknowledge_interruption(&interrupted).await;
+            assert_eq!(runner.service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn drain_stop_deadline_cannot_force_an_operator_shutdown() {
+        with_watchdog(async {
+            let mut runner = HeldDrain::start(Some(TEST_DRAIN_DEADLINE)).await;
+            let deadline = sleep_request(&mut runner.sleeps, TEST_DRAIN_DEADLINE).await;
+            runner.stop.notify_one();
+            let interrupted = runner.expect_interruption().await;
+            deadline.release();
+            ping_serving_runner(&mut runner.socket, 3).await;
+            runner.acknowledge_interruption(&interrupted).await;
+            assert_eq!(runner.service.await.unwrap().unwrap(), ServiceEnd::Stopped);
+            assert!(drain_records(&runner.capture, "runner.drain_deadline").is_empty());
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

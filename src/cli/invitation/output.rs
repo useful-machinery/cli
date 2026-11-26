@@ -623,7 +623,6 @@ const fn invitation_state(state: InvitationState) -> &'static str {
 const fn delivery_state_text(state: InvitationDeliveryState) -> &'static str {
     match state {
         InvitationDeliveryState::Pending => "pending",
-        InvitationDeliveryState::Leased => "leased",
         InvitationDeliveryState::Sent => "sent",
         InvitationDeliveryState::Failed => "failed",
     }

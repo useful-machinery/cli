@@ -1235,7 +1235,7 @@ fn credential_check_fixture(
     (fixture, issued)
 }
 
-// SC-GRANT-17: a `cloud` run whose tree forwards `GH_TOKEN`, which calls for
+// SC-RUNNERGRANT-16: a `cloud` run whose tree forwards `GH_TOKEN`, which calls for
 // `github`, is started once Cloud issues the GitHub token, and `create` reads the issued token
 // and not the service's.
 #[tokio::test]
@@ -1307,7 +1307,7 @@ async fn cloud_mode_rejects_a_revoked_github_credential_even_when_the_host_has_a
     );
 }
 
-// SC-GRANT-17: a `cloud` run whose tree also binds a `linear.team`, where
+// SC-RUNNERGRANT-17: a `cloud` run whose tree also binds a `linear.team`, where
 // Cloud's provider list does not name `linear`, is rejected `grant_required` naming `linear`
 // alone, once the tree is published and before `create` starts.
 #[tokio::test]
@@ -6285,7 +6285,7 @@ async fn entry_without_a_run_record_is_a_fan_out_element_as_the_engine_reads_it(
     assert_eq!(chosen_outcome(&reports).as_deref(), Some("planned"));
 }
 
-// A runner reports SC-WFEXEC-6's nested run with the frames it has. The root's records carry the
+// A runner reports SC-WFROUTE-1's nested run with the frames it has. The root's records carry the
 // nested stage's position and its carried wait, the step reader finds the stage under its nested
 // run, and a control naming the wait by kind and since resolves it; every frame encodes under the
 // closed protocol schema.
@@ -10491,7 +10491,7 @@ async fn handover_record_failures_leave_the_replacement_without_a_run() {
     }
 }
 
-// SC-RECORD-7
+// SC-CLOUDRECORD-1
 #[tokio::test]
 async fn recovery_catches_up_after_a_reconnect() {
     let gateway = RecordGateway::new(RecordFault::None);
@@ -10516,7 +10516,7 @@ async fn recovery_catches_up_after_a_reconnect() {
     );
 }
 
-// SC-RECORD-8
+// SC-CLOUDRECORD-2
 #[tokio::test]
 async fn recovery_keeps_the_last_complete_record_when_the_runner_is_lost() {
     let gateway = RecordGateway::new(RecordFault::None);
@@ -10537,7 +10537,7 @@ async fn recovery_keeps_the_last_complete_record_when_the_runner_is_lost() {
     recover_on_clean_host(&gateway, &fixture.offer.run_id, first, &["second", "third"]).await;
 }
 
-// SC-RECORD-9
+// SC-CLOUDRECORD-3, SC-CLOUDRECORD-4
 #[tokio::test]
 async fn recovery_after_a_lost_answer_needs_no_runner() {
     for reconnect in [false, true] {
@@ -10715,7 +10715,7 @@ fn handover_fixture(gateway: &RecordGateway, files: &'static [TreeFile], shared:
     fixture
 }
 
-// SC-HANDOVER-3
+// SC-HANDOVER-3, SC-HANDOVER-9
 #[tokio::test]
 async fn handover_builds_with_the_design_exports_on_a_replacement_runner() {
     for reachable in [true, false] {

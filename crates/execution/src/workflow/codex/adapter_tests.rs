@@ -4575,7 +4575,7 @@ pub(super) mod structured_result {
         })
     }
 
-    // SC-AGENT-11
+    // SC-AGENTOUTCOME-4
     #[tokio::test]
     async fn a_lead_result_settles_through_progress_noise_and_builder_traffic() {
         for scenario in [

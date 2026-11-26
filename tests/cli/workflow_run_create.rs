@@ -399,7 +399,7 @@ fn a_definition_run_completes_omitted_inputs_from_the_published_tree() {
     );
 }
 
-// SC-LOCALRUN-11
+// SC-SUBJECT-1
 #[test]
 fn a_definition_run_holds_its_subjects_slot_until_released() {
     let published = Published::engineering();

@@ -837,7 +837,21 @@ pub(crate) fn welcome() -> Message {
 
 /// A welcome that names `mode` as the runner's credential mode, or names none.
 pub(crate) fn welcome_with_credential_mode(mode: Option<CredentialMode>) -> Message {
-    let mut frame = json!({
+    let mut frame = welcome_frame();
+    name_credential_mode(&mut frame, mode);
+    Message::Text(frame.to_string().into())
+}
+
+pub(crate) fn welcome_with_registration_mode(
+    mode: useful_runner_protocol::RegistrationMode,
+) -> Message {
+    let mut frame = welcome_frame();
+    frame["payload"]["registrationMode"] = json!(mode);
+    Message::Text(frame.to_string().into())
+}
+
+fn welcome_frame() -> Value {
+    json!({
         "protocolVersion": 1,
         "direction": "cloud_to_runner",
         "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abc",
@@ -857,9 +871,7 @@ pub(crate) fn welcome_with_credential_mode(mode: Option<CredentialMode>) -> Mess
                 "fencingMarginMilliseconds": 11000
             }
         }
-    });
-    name_credential_mode(&mut frame, mode);
-    Message::Text(frame.to_string().into())
+    })
 }
 
 /// Names `mode` in `frame`'s payload, where it names one.

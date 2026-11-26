@@ -62,12 +62,6 @@ impl ScriptedHttpServer {
         Self::respond_in_sequence(vec![response])
     }
 
-    // Deadline tests keep the response pending until the production timer has
-    // classified the request, then release the fixture through this channel.
-    pub fn respond_when_released(response: Vec<u8>) -> Self {
-        Self::respond_in_sequence_with_pause(vec![response], Some(0))
-    }
-
     pub fn respond_in_sequence(responses: Vec<Vec<u8>>) -> Self {
         Self::respond_in_sequence_with_pause(responses, None)
     }
@@ -335,6 +329,24 @@ pub fn try_read_request_within(
     }
 
     Ok(request)
+}
+
+/// Holds a loopback HTTP listener that never answers. Nothing accepts from it,
+/// so dropping the fixture never waits for the client to send a request.
+pub struct SilentHttpPeer {
+    pub api_url: String,
+    _listener: TcpListener,
+}
+
+impl SilentHttpPeer {
+    pub fn hold() -> std::io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        Ok(Self {
+            api_url: format!("http://{address}/api/"),
+            _listener: listener,
+        })
+    }
 }
 
 /// Holds a loopback port that refuses every connect for as long as the

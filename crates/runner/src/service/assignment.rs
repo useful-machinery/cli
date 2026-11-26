@@ -1259,6 +1259,8 @@ pub(super) struct AssignmentManager {
     run_ended: Arc<Notify>,
     /// A separate permit for the idle watcher, since the kept-run schedule consumes its own.
     idle_run_ended: Arc<Notify>,
+    /// The drain watcher consumes its own run-ended permit.
+    drain_run_ended: Arc<Notify>,
 }
 
 /// The time an admission's grant-token refresh task waits on, and the live
@@ -1308,9 +1310,14 @@ impl AssignmentManager {
         Arc::clone(&self.idle_run_ended)
     }
 
+    pub(in crate::service) fn drain_run_ended(&self) -> Arc<Notify> {
+        Arc::clone(&self.drain_run_ended)
+    }
+
     fn notify_run_ended(&self) {
         self.run_ended.notify_one();
         self.idle_run_ended.notify_one();
+        self.drain_run_ended.notify_one();
     }
 
     /// Holds `assignment` under its assignment ID.

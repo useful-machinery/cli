@@ -63,7 +63,7 @@ pub use enrollment::{
     register_unless_enrolled, remove_completed_enrollment_journal, replacement_disposition,
     resend_staged_enrollment, resend_staged_replacement,
 };
-pub use service::{Config, ConfigError};
+pub use service::{Config, ConfigError, DrainExit};
 pub use service::{JoinKeyMode, Rejoin, RejoinAnswer, ServiceEnd};
 pub use service::{Retirement, RetirementCause};
 
@@ -280,8 +280,28 @@ mod runner_http {
         timeout: Duration,
         cancellation: Option<&CaptureCancellation>,
     ) -> Result<Response, Failure> {
+        post_json_with_client(
+            reqwest::Client::builder(),
+            endpoint,
+            runner_credential,
+            body,
+            json_statuses,
+            timeout,
+            cancellation,
+        )
+    }
+
+    pub(crate) fn post_json_with_client(
+        client: reqwest::ClientBuilder,
+        endpoint: &Url,
+        runner_credential: &Credential,
+        body: Vec<u8>,
+        json_statuses: &[StatusCode],
+        timeout: Duration,
+        cancellation: Option<&CaptureCancellation>,
+    ) -> Result<Response, Failure> {
         useful_support::install_provider();
-        let client = reqwest::Client::builder()
+        let client = client
             .timeout(timeout)
             .build()
             .map_err(|_| Failure::Unavailable)?;

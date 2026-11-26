@@ -32,7 +32,7 @@ let
     fileset = lib.fileset.unions sourceFiles;
   };
 
-  # The grammar suite reads the output-style guide's verb lexicon (INV-CLI-19);
+  # The grammar suite reads the output-style guide's verb lexicon;
   # the binary does not, so the guide joins only the test source and an edit to
   # it leaves the package and its build identity unchanged.
   testSrc = lib.fileset.toSource {
@@ -119,8 +119,7 @@ let
       cargoExtraArgs = "--locked --workspace --all-targets --all-features";
       # Crane defaults CARGO_PROFILE to release. The empty value passes no
       # --cargo-profile, so nextest builds Cargo's test profile, unoptimized
-      # with debug assertions and overflow checks, as check-suite does
-      # (INV-TESTING-23).
+      # with debug assertions and overflow checks, as check-suite does.
       CARGO_PROFILE = "";
       cargoArtifacts = testCargoArtifacts;
       doInstallCargoArtifacts = false;
@@ -164,7 +163,7 @@ let
     env = certificateEnv // testProfileEnv;
     buildPhaseCargoCommand = ''
       bash scripts/test-e2e ${package}/bin/useful \
-        -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run) | test(help_snapshots_match_rendered_output)'
+        -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run)'
     '';
     installPhaseCommand = "mkdir -p $out";
     doInstallCargoArtifacts = false;

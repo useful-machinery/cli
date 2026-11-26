@@ -2476,9 +2476,21 @@ where
                     },
                 ));
             }
-            ChildRunOutcome::Rejected { .. }
-            | ChildRunOutcome::Interrupted
-            | ChildRunOutcome::Cancelled => return Err(StepExecutionFailure::ChildInterrupted),
+            // Only a later fan-out element's child is rejected here. The step is already
+            // running, so it cannot fail at `start`; this record carries the child's code,
+            // which the interruption does not.
+            ChildRunOutcome::Rejected { code } => {
+                tracing::error!(
+                    event = "child_admission_rejected_after_start",
+                    step,
+                    item,
+                    code = %code
+                );
+                return Err(StepExecutionFailure::ChildInterrupted);
+            }
+            ChildRunOutcome::Interrupted | ChildRunOutcome::Cancelled => {
+                return Err(StepExecutionFailure::ChildInterrupted);
+            }
         };
         let Some(ValidatedStep::Workflow(workflow)) = workflow_node(&self.admitted, step) else {
             return Err(StepExecutionFailure::ChildInterrupted);

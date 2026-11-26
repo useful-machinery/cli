@@ -1767,7 +1767,7 @@ fn asked_for(cloud: &FakeAgentLoginCloud) -> Vec<AgentLoginProvider> {
         .collect()
 }
 
-// SC-GRANT-12
+// SC-RUNNERGRANT-14
 #[tokio::test]
 async fn a_gh_token_the_service_sets_reaches_the_step_and_a_grant_fills_only_its_absence() {
     let issuing_every_grant = || {
@@ -2033,7 +2033,7 @@ async fn a_running_assignment_has_its_token_file_replaced_and_an_ended_one_does_
     );
 }
 
-// SC-GRANT-13
+// SC-PROVIDER-2
 #[tokio::test]
 async fn a_running_assignment_has_its_configured_providers_token_file_replaced() {
     let wait = Duration::from_secs(60);

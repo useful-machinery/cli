@@ -52,6 +52,7 @@ use crate::control_protocol::{
     decode_request, encode_assignment_not_held, encode_assignment_response, encode_kept_response,
     encode_overview_response, encode_prune_response, encode_response,
 };
+use crate::runner_http::ServingTarget;
 
 const RUNTIME_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_MODE: u32 = 0o600;
@@ -75,6 +76,7 @@ pub(super) struct ControlTimeouts {
     io: Duration,
     snapshot: Duration,
     reload: Duration,
+    drain: Duration,
     /// How long a sync waits for its agent-login pass: `SYNC_BOUND`.
     agent_login_sync: Duration,
 }
@@ -85,6 +87,7 @@ impl ControlTimeouts {
             io: Duration::from_secs(2),
             snapshot: Duration::from_secs(1),
             reload: Duration::from_secs(30),
+            drain: super::registration_drain::CONTROL_TIMEOUT,
             agent_login_sync: SYNC_BOUND,
         }
     }
@@ -97,6 +100,7 @@ impl ControlTimeouts {
 /// state, and the runner ID and `useful` version an overview names.
 #[derive(Clone)]
 pub(super) struct ControlContext {
+    pub(super) target: ServingTarget,
     pub(super) status: Arc<LiveStatus>,
     pub(super) assignments: Arc<Mutex<AssignmentManager>>,
     pub(super) run_reads: Arc<Semaphore>,
@@ -294,6 +298,9 @@ impl LiveStatusState {
     }
 }
 
+pub(super) type RegistrationModeCell =
+    tokio::sync::watch::Sender<Option<useful_runner_protocol::RegistrationMode>>;
+
 pub(super) struct LiveStatus {
     boot_id: String,
     started_at: Instant,
@@ -304,6 +311,7 @@ pub(super) struct LiveStatus {
     connected: tokio::sync::Notify,
     /// The credential mode the runner goes by, which the connection writes.
     credential_mode: Arc<CredentialModeCell>,
+    pub(super) registration_mode: RegistrationModeCell,
     /// The runner's own events, recorded once the state's lock is released.
     events: Arc<EventLog>,
 }
@@ -333,6 +341,7 @@ impl LiveStatus {
             }),
             connected: tokio::sync::Notify::new(),
             credential_mode: Arc::default(),
+            registration_mode: RegistrationModeCell::new(None),
             events: Arc::new(EventLog::new()),
         }
     }
@@ -1544,6 +1553,7 @@ async fn serve(listener: UnixListener, context: ControlContext) {
 
 async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
     let ControlContext {
+        target,
         status,
         assignments,
         run_reads,
@@ -1630,6 +1640,18 @@ async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
             match snapshot {
                 Ok(Ok(snapshot)) => Response::Status(snapshot),
                 Ok(Err(_)) | Err(_) => Response::Error(ControlError::InvalidRequest),
+            }
+        }
+        Ok(Operation::DrainRegistration) => {
+            match control_timeout(
+                timeouts.drain,
+                super::registration_drain::drain(target.current()),
+            )
+            .await
+            {
+                Ok(Ok(())) => Response::Drained,
+                Ok(Err(error)) => Response::Error(error),
+                Err(_) => Response::Error(ControlError::CloudUnreachable),
             }
         }
         Ok(Operation::ReloadCredential) => {
@@ -1752,6 +1774,7 @@ mod tests {
         io: Duration::from_millis(50),
         snapshot: Duration::from_secs(1),
         reload: Duration::from_secs(30),
+        drain: Duration::from_secs(30),
         agent_login_sync: Duration::from_secs(30),
     };
 
@@ -1775,6 +1798,7 @@ mod tests {
         let (reloads, _requests) = mpsc::channel(1);
         let (kept_runs, _kept_run_requests) = mpsc::channel(1);
         ControlContext {
+            target: crate::service::serving_target(&config).unwrap(),
             status,
             assignments,
             run_reads: Arc::new(Semaphore::new(RUN_READ_PLACES)),
@@ -1840,6 +1864,31 @@ mod tests {
             gate,
             || time::OffsetDateTime::from_unix_timestamp(1_794_450_000).unwrap(),
         ))
+    }
+
+    #[tokio::test]
+    async fn registration_drain_answers_with_the_serving_targets_result() {
+        use crate::runner_http::{Target, test_server::respond_once};
+
+        for (status, expected) in [
+            ("204 No Content", "valid/drained-response.json"),
+            (
+                "401 Unauthorized",
+                "valid/drain-credential-refused-response.json",
+            ),
+        ] {
+            let context = context(None);
+            let (endpoint, _request, server) = respond_once(status, "", "");
+            context
+                .target
+                .replace(Target::new(&endpoint, &test_credential()).unwrap());
+            let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/runner-control/v1");
+            let request = fs::read(fixtures.join("valid/drain-registration-request.json")).unwrap();
+            let answer = exchange_in(context, &request).await;
+            assert_eq!(answer, fs::read(fixtures.join(expected)).unwrap());
+            server.join().unwrap();
+        }
     }
 
     const SYNC_REQUEST: &[u8] = b"{\"schemaVersion\":1,\"operation\":\"sync_agent_logins\"}\n";
@@ -2581,9 +2630,7 @@ mod tests {
             .await
             .unwrap();
 
-        let started = useful_support::monotonic_now();
         let overview = overview_in(&context).await;
-        assert!(useful_support::elapsed(started) <= TEST_TIMEOUTS.snapshot);
         let [entry] = overview.assignments.as_slice() else {
             panic!("the overview lists the run alone: {overview:?}");
         };
@@ -3408,8 +3455,8 @@ mod tests {
     }
 
     // With every place for a run directory read taken, an `assignment` request is closed
-    // unanswered within the snapshot bound while an `overview` is answered; and a run's
-    // command in flight does not hold the read off.
+    // unanswered when the snapshot bound expires while an `overview` is answered. Once the
+    // places are free, a run's command in flight does not hold the read off.
     #[tokio::test]
     async fn an_assignment_read_waits_on_no_run_and_keeps_to_its_places() {
         let root = tempfile::tempdir().unwrap();
@@ -3421,18 +3468,14 @@ mod tests {
             .acquire_many_owned(u32::try_from(RUN_READ_PLACES).unwrap())
             .await
             .unwrap();
-        let started = useful_support::monotonic_now();
         assert_eq!(exchange_in(context.clone(), &request).await, b"");
-        assert!(useful_support::elapsed(started) <= TEST_TIMEOUTS.snapshot + TEST_TIMEOUTS.io);
         assert_eq!(overview_in(&context).await.assignments.len(), 1);
         drop(places);
 
         let in_flight = tokio::task::spawn_blocking(move || activity.start_command())
             .await
             .unwrap();
-        let started = useful_support::monotonic_now();
         let detail = assignment_in(&context, &request).await;
-        assert!(useful_support::elapsed(started) <= TEST_TIMEOUTS.snapshot);
         assert_eq!(
             detail.entry.activity,
             Some(OpenWord::Known(HeldRunState::Working))

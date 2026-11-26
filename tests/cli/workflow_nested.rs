@@ -1071,7 +1071,7 @@ fn a_plain_steps_nested_run_waits_at_its_two_element_path_and_continues_in_place
     );
 }
 
-// SC-WFEXEC-6: the answered carried wait continues the same nested run in a new attempt from
+// SC-WFROUTE-1: the answered carried wait continues the same nested run in a new attempt from
 // `ask`, which receives the answers, with element 1 and nothing before `ask` run again; `work`
 // then fails into a carried repair wait, and the retry continues that failed stage in place, its
 // succeeded `prep` inherited, until the root exits with its outcome.

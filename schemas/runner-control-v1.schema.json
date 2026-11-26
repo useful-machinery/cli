@@ -5,6 +5,7 @@
   "description": "One request or response JSON object. The wire protocol appends exactly one LF and limits requests to 4096 bytes, the overview, assignment, kept and pruned answers to 1048576 bytes and every other response to 65536 bytes, including that LF. Every request is closed, and only three carry more than schemaVersion and operation: the assignment request its assignmentId and, optionally, run and step, and the kept and prune requests exactly all, a boolean. Every answer but the overview and the assignment is closed; those two are open at every level.",
   "oneOf": [
     { "$ref": "#/$defs/statusRequest" },
+    { "$ref": "#/$defs/drainRequest" },
     { "$ref": "#/$defs/reloadRequest" },
     { "$ref": "#/$defs/syncAgentLoginsRequest" },
     { "$ref": "#/$defs/overviewRequest" },
@@ -12,6 +13,7 @@
     { "$ref": "#/$defs/keptRequest" },
     { "$ref": "#/$defs/pruneRequest" },
     { "$ref": "#/$defs/statusResponse" },
+    { "$ref": "#/$defs/drainedResponse" },
     { "$ref": "#/$defs/reloadedResponse" },
     { "$ref": "#/$defs/agentLoginsSyncedResponse" },
     { "$ref": "#/$defs/overviewResponse" },
@@ -28,6 +30,15 @@
       "properties": {
         "schemaVersion": { "const": 1 },
         "operation": { "const": "status" }
+      }
+    },
+    "drainRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "operation"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "operation": { "const": "drain_registration" }
       }
     },
     "reloadRequest": {
@@ -336,6 +347,15 @@
         "schemaVersion": { "const": 1 },
         "outcome": { "const": "ok" },
         "status": { "$ref": "#/$defs/status" }
+      }
+    },
+    "drainedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "outcome"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "outcome": { "const": "drained" }
       }
     },
     "reloadedResponse": {
@@ -1086,6 +1106,10 @@
             "pending_protocol_failed",
             "pending_connection_failed",
             "state_update_failed",
+            "drain_credential_refused",
+            "drain_not_served",
+            "cloud_unreachable",
+            "drain_failed",
             "assignment_not_held"
           ]
         }

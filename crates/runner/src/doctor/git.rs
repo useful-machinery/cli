@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::{CheckDescriptor, DoctorCheck, Outcome, Status};
 use useful_execution::{CommandProbeError, CommandRequest, CommandRunner, SystemCommandRunner};
 
-const MINIMUM_VERSION: GitVersion = GitVersion(2, 29, 0);
+const MINIMUM_VERSION: GitVersion = GitVersion(2, 43, 0);
 /// The bounds of every Git probe the doctor starts.
 pub(super) const SYSTEM_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const MAXIMUM_STDOUT_BYTES: usize = 8 * 1024;
@@ -373,19 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn git_check_accepts_the_minimum_version() {
-        let outcome = check(Ok(output(
-            true,
-            format!("git version {MINIMUM_VERSION}\n").as_bytes(),
-            false,
-        )));
+    fn git_check_rejects_older_versions_and_accepts_the_minimum() {
+        let older = check(Ok(output(true, b"git version 2.42.9\n", false)));
+        assert_eq!(older.status, Status::Fail);
+        assert_eq!(older.code, "version_too_old");
+        assert_eq!(older.details["minimumVersion"], "2.43.0");
 
-        assert_eq!(outcome.status, Status::Pass);
-        assert_eq!(outcome.details["version"], MINIMUM_VERSION.to_string());
-        assert_eq!(
-            outcome.details["minimumVersion"],
-            MINIMUM_VERSION.to_string()
-        );
+        let minimum = check(Ok(output(true, b"git version 2.43.0\n", false)));
+        assert_eq!(minimum.status, Status::Pass);
+        assert_eq!(minimum.details["version"], "2.43.0");
     }
 
     #[test]

@@ -162,8 +162,11 @@ impl ServeStatusFixture {
 }
 
 pub(super) fn cloud_welcome() -> Message {
-    Message::Text(
-        serde_json::json!({
+    cloud_welcome_with_mode(None)
+}
+
+pub(super) fn cloud_welcome_with_mode(mode: Option<&str>) -> Message {
+    let mut welcome = serde_json::json!({
             "protocolVersion": 1,
             "direction": "cloud_to_runner",
             "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abh",
@@ -183,10 +186,11 @@ pub(super) fn cloud_welcome() -> Message {
                     "fencingMarginMilliseconds": 11000
                 }
             }
-        })
-        .to_string()
-        .into(),
-    )
+    });
+    if let Some(mode) = mode {
+        welcome["payload"]["registrationMode"] = mode.into();
+    }
+    Message::Text(welcome.to_string().into())
 }
 
 pub(super) fn cloud_observation_ack(message_id: &str, sequence: u64) -> Message {
@@ -1101,16 +1105,217 @@ fn runner_status_reports_absent_and_refused_sockets_as_not_reachable() {
     assert!(!output.stderr.is_empty());
 }
 
+#[test]
+fn runner_drain_reports_an_absent_local_runner_as_unavailable() {
+    let directory = private_credential_directory();
+    let runtime = tempfile::tempdir_in("/tmp").unwrap();
+    let config = write_status_config(&directory, &runtime.path().join("absent.sock"));
+    assert_eq!(
+        run(&["runner", "drain", "--config", &config]).status.code(),
+        Some(4)
+    );
+}
+
+#[test]
+fn runner_drain_explains_the_serving_runners_refusals() {
+    for (error, exit, cause) in [
+        ("drain_credential_refused", 1, "credential"),
+        ("cloud_unreachable", 4, "Cloud"),
+        ("invalid_request", 1, "useful runner serve"),
+    ] {
+        let directory = private_credential_directory();
+        let runtime = tempfile::tempdir_in("/tmp").unwrap();
+        let socket_path = runtime.path().join("runner.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let config = write_status_config(&directory, &socket_path);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(&stream).read_line(&mut request).unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({"schemaVersion": 1, "operation": "drain_registration"})
+            );
+            writeln!(
+                stream,
+                "{{\"schemaVersion\":1,\"outcome\":\"error\",\"error\":\"{error}\"}}"
+            )
+            .unwrap();
+        });
+        let output = run(&["runner", "drain", "--config", &config]);
+        assert_eq!(output.status.code(), Some(exit), "{error}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(error) && stderr.replace(error, "").contains(cause),
+            "{stderr}"
+        );
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn runner_drain_asks_the_serving_runner_to_post_its_own_registration() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
+    let fixture = ServeStatusFixture::new(&endpoint);
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/runner-registration-retirement/v1/request.json"
+    ))
+    .unwrap();
+    let mut state = enrolled_state_document(&endpoint);
+    state["runnerId"] = expected["runnerId"].clone();
+    fs::write(
+        fixture.state_directory().join("runner.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    let command = runner_enrollment::serve_command(&["--config", &fixture.config]);
+    let mut serve = tokio::process::Command::from(command)
+        .env("HOME", fixture.root.path())
+        .env("USEFUL_HOME", fixture.root.path().join("useful"))
+        .env("PATH", "")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let (mut socket, _) = open_runner_session(&listener).await;
+    let requests = Mutex::new(Vec::new());
+    let routes = |request: &[u8]| {
+        if request.starts_with(b"POST /v1/runner/registration/drain ") {
+            requests
+                .lock()
+                .unwrap()
+                .push(String::from_utf8(request.to_vec()).unwrap());
+            http_response("204 No Content", None, b"")
+        } else {
+            http_response("404 Not Found", None, b"")
+        }
+    };
+    let acknowledgements = async {
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if let Some(id) = frame["messageId"].as_str() {
+                socket
+                    .send(cloud_observation_ack(
+                        id,
+                        frame["sequence"].as_u64().unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+    };
+    let config = fixture.config.clone();
+    let output = tokio::select! {
+        _ = accept_runner_connection_answering(&listener, &routes) => panic!("unexpected reconnection"),
+        () = acknowledgements => panic!("runner disconnected"),
+        output = tokio::task::spawn_blocking(move || run_with_env(
+            &["runner", "drain", "--config", &config],
+            &[("USEFUL_API_URL", "https://cloud-drain-must-not-be-read.example"), ("USEFUL_ORG", "organization-must-not-be-read")],
+        )) => output.unwrap(),
+    };
+    serve.kill().await.unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = requests.into_inner().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        header_value(&requests[0], "authorization"),
+        "Bearer rrc_01k0z6r1w8f4jy2m7q9v3x5abc.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    );
+    let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).unwrap(),
+        expected
+    );
+}
+
 type RunnerSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
 #[tokio::test]
 async fn runner_serve_exits_successfully_after_its_idle_timeout() {
+    let served_for = time_until_serve_exits(&["--idle-timeout", "1s"], cloud_welcome(), None).await;
+    assert!(served_for >= Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn runner_serve_exits_when_welcomed_as_draining() {
+    time_until_serve_exits(
+        &["--exit-when-drained"],
+        cloud_welcome_with_mode(Some("draining")),
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn runner_serve_exits_when_the_registration_changes_to_draining() {
+    let draining = Message::Text(
+        serde_json::json!({
+            "protocolVersion": 1,
+            "direction": "cloud_to_runner",
+            "messageId": "cmsg_01k0z6r1w8f4jy2m7q9v3x5abw",
+            "sentAt": "2026-07-23T00:00:02Z",
+            "type": "registration_mode",
+            "payloadVersion": 1,
+            "payload": {"mode": "draining"}
+        })
+        .to_string()
+        .into(),
+    );
+    time_until_serve_exits(
+        &["--exit-when-drained", "--drain-deadline", "7d"],
+        cloud_welcome_with_mode(Some("enabled")),
+        Some(draining),
+    )
+    .await;
+}
+
+pub(super) async fn answer_until_runner_stops(
+    mut socket: RunnerSocket,
+    welcome: Message,
+    mut update: Option<Message>,
+    welcomed_at: &mut Option<std::time::Instant>,
+) {
+    while let Some(Ok(Message::Text(text))) = socket.next().await {
+        let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if frame["type"] == "hello" {
+            *welcomed_at = Some(monotonic_now());
+            socket.send(welcome.clone()).await.unwrap();
+        }
+        if let Some(message_id) = frame["messageId"].as_str() {
+            let sequence = frame["sequence"].as_u64().unwrap();
+            socket
+                .send(cloud_observation_ack(message_id, sequence))
+                .await
+                .unwrap();
+        }
+        if frame["type"] == "hello"
+            && let Some(update) = update.take()
+        {
+            socket.send(update).await.unwrap();
+        }
+    }
+}
+
+async fn time_until_serve_exits(
+    options: &[&str],
+    welcome: Message,
+    update: Option<Message>,
+) -> Duration {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("ws://{}/v1/runner/connect", listener.local_addr().unwrap());
     let fixture = ServeStatusFixture::new(&endpoint);
     let home = tempfile::tempdir().unwrap();
-    let command =
-        runner_enrollment::serve_command(&["--config", &fixture.config, "--idle-timeout", "1s"]);
+    let mut args = vec!["--config", &fixture.config];
+    args.extend_from_slice(options);
+    let command = runner_enrollment::serve_command(&args);
     let mut serve = tokio::process::Command::from(command)
         .env("HOME", home.path())
         .env("USEFUL_HOME", home.path().join("useful"))
@@ -1123,25 +1328,12 @@ async fn runner_serve_exits_successfully_after_its_idle_timeout() {
         .unwrap();
     let mut welcomed_at = None;
     let server = async {
-        let mut socket = accept_runner_socket(accept_runner_connection(&listener).await).await;
-        while let Some(Ok(Message::Text(text))) = socket.next().await {
-            let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
-            if frame["type"] == "hello" {
-                welcomed_at = Some(monotonic_now());
-                socket.send(cloud_welcome()).await.unwrap();
-            }
-            if let Some(message_id) = frame["messageId"].as_str() {
-                let sequence = frame["sequence"].as_u64().unwrap();
-                socket
-                    .send(cloud_observation_ack(message_id, sequence))
-                    .await
-                    .unwrap();
-            }
-        }
+        let socket = accept_runner_socket(accept_runner_connection(&listener).await).await;
+        answer_until_runner_stops(socket, welcome, update, &mut welcomed_at).await
     };
     let mut wait_for_exit = tokio::task::spawn_blocking(move || {
         let status = poll_until(
-            "the idle runner to exit",
+            "the runner to exit",
             || serve.try_wait().unwrap(),
             Option::is_some,
         )
@@ -1153,10 +1345,7 @@ async fn runner_serve_exits_successfully_after_its_idle_timeout() {
         exited = &mut wait_for_exit => exited.unwrap(),
     };
     assert_eq!(status.code(), Some(0));
-    assert!(
-        exited_at.duration_since(welcomed_at.expect("the runner said hello"))
-            >= Duration::from_secs(1)
-    );
+    exited_at.duration_since(welcomed_at.expect("the runner said hello"))
 }
 
 async fn open_runner_session(

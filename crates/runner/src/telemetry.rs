@@ -161,6 +161,8 @@ pub(crate) mod attribute {
     pub(crate) const PROTOCOL_SENT_AT: &str = "um.protocol.sent_at";
     pub(crate) const PROTOCOL_TIMER: &str = "um.protocol.timer";
     pub(crate) const PROTOCOL_VERSION: &str = "um.protocol.version";
+    pub(crate) const RUNNER_REGISTRATION_MODE: &str = "um.runner.registration_mode";
+    pub(crate) const RUNNER_DRAIN_DEADLINE_SECONDS: &str = "um.runner.drain_deadline_seconds";
     pub(crate) const RUNNER_IDLE_TIMEOUT_SECONDS: &str = "um.runner.idle_timeout_seconds";
     pub(crate) const RUNNER_SESSION_ID: &str = "um.runner.session_id";
     pub(crate) const STEP_ID: &str = "um.step.id";

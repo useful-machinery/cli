@@ -61,6 +61,32 @@ mod tests {
     use super::{Backoff, random_unit};
 
     #[test]
+    fn reconnect_backoff_matches_runner_timing_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/runner-timing/v1/cases.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schemaVersion"], 1);
+        let case = &fixture["backoff"];
+        let duration = |field: &str| Duration::from_millis(case[field].as_u64().unwrap());
+        let mut backoff = Backoff::with_fixed_unit(case["unit"].as_f64().unwrap());
+        assert_eq!(backoff.cap, duration("initialCapMilliseconds"));
+        for delay in case["delaysMilliseconds"].as_array().unwrap() {
+            assert_eq!(
+                backoff.next_delay(),
+                Duration::from_millis(delay.as_u64().unwrap())
+            );
+        }
+        assert_eq!(backoff.cap, duration("maximumCapMilliseconds"));
+        backoff.reset();
+        assert_eq!(backoff.cap, duration("initialCapMilliseconds"));
+        assert_eq!(
+            backoff.next_delay(),
+            duration("afterResetDelayMilliseconds")
+        );
+    }
+
+    #[test]
     fn doubles_the_jitter_cap_until_the_bounded_maximum() {
         let mut backoff = Backoff::new();
         for expected_cap in [1, 2, 4, 8, 16, 30, 30] {

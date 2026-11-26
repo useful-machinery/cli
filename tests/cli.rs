@@ -2275,7 +2275,7 @@ fn runner_doctor_ids(report: &serde_json::Value, member: &str) -> Vec<String> {
 
 #[test]
 fn runner_doctor_reports_list_the_checks_they_did_not_run() {
-    let git_directory = fake_git("printf '%s\\n' 'git version 2.42.0'");
+    let git_directory = fake_git("printf '%s\\n' 'git version 2.47.0'");
     let path = git_directory
         .path()
         .to_str()
@@ -2340,7 +2340,7 @@ fn runner_doctor_reports_list_the_checks_they_did_not_run() {
 #[test]
 fn runner_doctor_reports_git_success_in_human_form() {
     let git_directory = fake_git(
-        "printf '%s\\n' 'git version 2.42.0 unique-raw-command-output'\nprintf '%s\\n' 'unique-child-standard-error' >&2",
+        "printf '%s\\n' 'git version 2.47.0 unique-raw-command-output'\nprintf '%s\\n' 'unique-child-standard-error' >&2",
     );
     let path = git_directory
         .path()
@@ -2358,7 +2358,7 @@ fn runner_doctor_reports_git_success_in_human_form() {
 
 #[test]
 fn runner_doctor_reports_schema_one_json() {
-    let git_directory = fake_git("printf '%s\\n' 'git version 2.42.0'");
+    let git_directory = fake_git("printf '%s\\n' 'git version 2.47.0'");
     let path = git_directory
         .path()
         .to_str()
@@ -2389,10 +2389,10 @@ fn runner_doctor_reports_schema_one_json() {
                 "title": "Git",
                 "status": "pass",
                 "code": "ok",
-                "message": "Git 2.42.0 is available (minimum 2.29.0).",
+                "message": "Git 2.47.0 is available (minimum 2.43.0).",
                 "details": {
-                    "minimumVersion": "2.29.0",
-                    "version": "2.42.0"
+                    "minimumVersion": "2.43.0",
+                    "version": "2.47.0"
                 }
             }],
             "notRun": [
@@ -2438,7 +2438,7 @@ fn runner_doctor_reports_missing_git() {
 #[test]
 fn runner_doctor_rejects_unknown_check_without_running_git() {
     let git_directory =
-        fake_git("printf invoked > \"$MARKER\"\nprintf '%s\\n' 'git version 2.42.0'");
+        fake_git("printf invoked > \"$MARKER\"\nprintf '%s\\n' 'git version 2.47.0'");
     let marker = git_directory.path().join("invoked");
     let path = git_directory
         .path()
@@ -2458,7 +2458,7 @@ fn runner_doctor_rejects_unknown_check_without_running_git() {
 
 #[test]
 fn runner_doctor_does_not_load_human_configuration() {
-    let git_directory = fake_git("printf '%s\\n' 'git version 2.42.0'");
+    let git_directory = fake_git("printf '%s\\n' 'git version 2.47.0'");
     let path = git_directory
         .path()
         .to_str()

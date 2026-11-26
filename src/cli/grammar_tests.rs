@@ -489,6 +489,25 @@ fn entity_identifier_flags_match_the_command_tree_and_parser() {
 }
 
 #[test]
+fn runner_drain_separates_local_and_cloud_targets() {
+    for args in [&[][..], &["--config", "runner.json"]] {
+        let input = ["useful", "runner", "drain"]
+            .into_iter()
+            .chain(args.iter().copied());
+        assert!(super::parse(input).is_ok(), "{args:?}");
+    }
+    for args in [
+        &["runner", "--config", "runner.json"][..],
+        &["--org", "acme"],
+    ] {
+        let input = ["useful", "runner", "drain"]
+            .into_iter()
+            .chain(args.iter().copied());
+        assert!(super::parse(input).is_err(), "{args:?}");
+    }
+}
+
+#[test]
 fn destructive_leaves_require_confirmation_but_runner_modes_do_not() {
     let gated: &[&[&str]] = &[
         &[

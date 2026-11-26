@@ -73,6 +73,9 @@
       "$ref": "#/$defs/CloudWelcome"
     },
     {
+      "$ref": "#/$defs/CloudRegistrationMode"
+    },
+    {
       "$ref": "#/$defs/CloudObservationAck"
     },
     { "$ref": "#/$defs/CloudWorkspaceRegistrationRejected" },
@@ -116,6 +119,7 @@
     "workRootId": {"type": "string", "pattern": "^rwr_[0-7][0-9a-hjkmnp-tv-z]{25}$"},
     "workspaceId": {"type": "string", "pattern": "^rws_[0-7][0-9a-hjkmnp-tv-z]{25}$"},
     "claimGeneration": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "RunnerRegistrationMode": {"type": "string", "enum": ["enabled", "draining"]},
     "RunnerCredentialMode": {"type": "string", "enum": ["cloud", "host"]},
     "RecoveryReason": {"enum": ["workspace_not_found", "recovery_record_unsupported", "recovery_not_established", "recovery_record_invalid", "workspace_identity_mismatch", "host_identity_mismatch", "root_identity_unavailable", "host_identity_unavailable", "prior_owner_unproven", "process_journal_invalid", "claim_generation_stale", "claim_generation_exhausted", "recovery_evidence_unavailable"]},
     "runnerId": {
@@ -1181,6 +1185,7 @@
                 "treeHandover": {"const": 1},
                 "holdsWaitingRuns": {"const": 1},
                 "credentialMode": {"const": 1},
+                "registrationMode": {"const": 1},
                 "workspaceRecoveryRoot": {
                   "type": "object", "additionalProperties": false,
                   "properties": {
@@ -1878,6 +1883,9 @@
                 },
                 "credentialMode": {
                   "$ref": "#/$defs/RunnerCredentialMode"
+                },
+                "registrationMode": {
+                  "$ref": "#/$defs/RunnerRegistrationMode"
                 }
               },
               "required": [
@@ -1886,6 +1894,25 @@
                 "pongTimeoutSeconds",
                 "leasePolicy"
               ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "CloudRegistrationMode": {
+      "allOf": [
+        {"$ref": "#/$defs/CloudEnvelope"},
+        {
+          "properties": {
+            "type": {"const": "registration_mode"},
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {"$ref": "#/$defs/RunnerRegistrationMode"}
+              },
+              "required": ["mode"]
             }
           }
         }

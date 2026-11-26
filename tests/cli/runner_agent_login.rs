@@ -1028,7 +1028,7 @@ fn cloud_counting_credential_requests(request: &[u8]) -> Vec<u8> {
     cloud_with_agent_logins(request)
 }
 
-// SC-GRANT-16: a runner Cloud welcomes in `host` asks Cloud
+// SC-RUNNERGRANT-15: a runner Cloud welcomes in `host` asks Cloud
 // for no login although Cloud would authorize and deliver one; its sync says so and
 // exits 0, its status prints the mode, and no login reaches its directory.
 #[test]

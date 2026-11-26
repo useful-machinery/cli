@@ -456,7 +456,12 @@ fn control_refusal(error: ControlError) -> Vec<String> {
         ControlError::PendingRegistrationMismatch => ("another runner's credential", None),
         ControlError::PendingAuthenticationFailed => ("Cloud refused the credential", None),
         ControlError::PendingProtocolFailed => ("Cloud's answer could not be read", None),
-        ControlError::PendingConnectionFailed => ("the runner could not reach Cloud", None),
+        ControlError::PendingConnectionFailed | ControlError::CloudUnreachable => {
+            ("the runner could not reach Cloud", None)
+        }
+        ControlError::DrainCredentialRefused => ("Cloud refused the runner credential", None),
+        ControlError::DrainNotServed => ("Cloud does not serve the drain request", None),
+        ControlError::DrainFailed => ("the runner could not drain its registration", None),
         ControlError::StateUpdateFailed => ("the runner could not update its state", None),
     };
     let mut facts = vec![format!("{what} ({code})")];

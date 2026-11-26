@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "lease": [
+    {
+      "name": "production lease with one-second grace",
+      "policy": {
+        "schemaVersion": 2,
+        "leaseDurationMilliseconds": 371000,
+        "fencingMarginMilliseconds": 11000,
+        "forceStopAndReapBudgetMilliseconds": 5000,
+        "terminalReportDeliveryBudgetMilliseconds": 5000,
+        "renewalDeliveryBudgetMilliseconds": 5000
+      },
+      "cancellationGraceMilliseconds": 1000,
+      "expected": {
+        "renewalRequestNanoseconds": 119666666666,
+        "renewalRetryIntervalNanoseconds": 30000000000,
+        "cancellationStartNanoseconds": 359000000000,
+        "forceStopStartNanoseconds": 360000000000,
+        "forceStopEndNanoseconds": 365000000000,
+        "localExpiryNanoseconds": 371000000000
+      }
+    },
+    {
+      "name": "production lease with thirty-second grace",
+      "policy": {
+        "schemaVersion": 2,
+        "leaseDurationMilliseconds": 371000,
+        "fencingMarginMilliseconds": 11000,
+        "forceStopAndReapBudgetMilliseconds": 5000,
+        "terminalReportDeliveryBudgetMilliseconds": 5000,
+        "renewalDeliveryBudgetMilliseconds": 5000
+      },
+      "cancellationGraceMilliseconds": 30000,
+      "expected": {
+        "renewalRequestNanoseconds": 110000000000,
+        "renewalRetryIntervalNanoseconds": 30000000000,
+        "cancellationStartNanoseconds": 330000000000,
+        "forceStopStartNanoseconds": 360000000000,
+        "forceStopEndNanoseconds": 365000000000,
+        "localExpiryNanoseconds": 371000000000
+      }
+    },
+    {
+      "name": "production lease with three-hundred-second grace",
+      "policy": {
+        "schemaVersion": 2,
+        "leaseDurationMilliseconds": 371000,
+        "fencingMarginMilliseconds": 11000,
+        "forceStopAndReapBudgetMilliseconds": 5000,
+        "terminalReportDeliveryBudgetMilliseconds": 5000,
+        "renewalDeliveryBudgetMilliseconds": 5000
+      },
+      "cancellationGraceMilliseconds": 300000,
+      "expected": {
+        "renewalRequestNanoseconds": 20000000000,
+        "renewalRetryIntervalNanoseconds": 30000000000,
+        "cancellationStartNanoseconds": 60000000000,
+        "forceStopStartNanoseconds": 360000000000,
+        "forceStopEndNanoseconds": 365000000000,
+        "localExpiryNanoseconds": 371000000000
+      }
+    },
+    {
+      "name": "lease with a forty-five-second renewal budget",
+      "policy": {
+        "schemaVersion": 2,
+        "leaseDurationMilliseconds": 401000,
+        "fencingMarginMilliseconds": 11000,
+        "forceStopAndReapBudgetMilliseconds": 5000,
+        "terminalReportDeliveryBudgetMilliseconds": 5000,
+        "renewalDeliveryBudgetMilliseconds": 45000
+      },
+      "cancellationGraceMilliseconds": 30000,
+      "expected": {
+        "renewalRequestNanoseconds": 120000000000,
+        "renewalRetryIntervalNanoseconds": 45000000000,
+        "cancellationStartNanoseconds": 360000000000,
+        "forceStopStartNanoseconds": 390000000000,
+        "forceStopEndNanoseconds": 395000000000,
+        "localExpiryNanoseconds": 401000000000
+      }
+    }
+  ],
+  "backoff": {
+    "initialCapMilliseconds": 1000,
+    "maximumCapMilliseconds": 30000,
+    "unit": 0.5,
+    "delaysMilliseconds": [500, 1000, 2000, 4000, 8000, 15000, 15000],
+    "afterResetDelayMilliseconds": 500
+  }
+}
