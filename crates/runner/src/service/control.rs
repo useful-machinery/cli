@@ -1565,11 +1565,6 @@ async fn handle_connection(mut stream: UnixStream, context: ControlContext) {
         runner_id,
         version,
     } = context;
-    if stream.peer_cred().ok().map(|credential| credential.uid())
-        != Some(rustix::process::geteuid().as_raw())
-    {
-        return;
-    }
     let request = match read_request(&mut stream, timeouts.io).await {
         Ok(bytes) => decode_request(&bytes),
         Err(()) => Err(ControlError::InvalidRequest),

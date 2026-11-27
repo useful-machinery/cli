@@ -9636,7 +9636,7 @@ async fn hanging_event(log: &Path) -> rustix::process::Pid {
     }
 }
 
-/// Whether `process` has ended, reaping the orphan if the test process adopted it.
+/// Whether `process` has ended.
 async fn ended(process: rustix::process::Pid) -> bool {
     for _ in 0..400 {
         match rustix::process::waitpid(Some(process), rustix::process::WaitOptions::NOHANG) {
@@ -9651,10 +9651,6 @@ async fn ended(process: rustix::process::Pid) -> bool {
 
 /// A fixture whose run waits on an external wait, its `event` hanging.
 fn hanging_event_fixture() -> Fixture {
-    // A test process that ran a guarded step adopts the event's orphan on Linux.
-    // Reproduce that state even when this test runs in its own process.
-    #[cfg(target_os = "linux")]
-    nix::sys::prctl::set_child_subreaper(true).unwrap();
     fixture_with(
         TREE_DIGEST,
         "waiting",

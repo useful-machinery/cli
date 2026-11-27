@@ -24,7 +24,7 @@ use useful_human_auth::Deployment;
 use super::super::super::secret_file::FileMode;
 use super::consent::{ConsentProvider, Options, write_not_reconnected, write_refusal};
 use super::create::{self, Flow, Login, ProviderArg, Store, first_given};
-use super::{GRANT_HELP, GrantArg, Resolved, claude_setup_token, material, output};
+use super::{GRANT_HELP, GrantArg, Resolved, material, output};
 
 pub(super) const ABOUT: &str = "Sign in again to a grant you hold, or store your token's next version, keeping its ID and the runners it is authorized for";
 
@@ -334,6 +334,12 @@ impl Command {
             return Ok(output::write_import_refusal(api_url, &report, json)?);
         };
         let again = || format!("useful account integration reconnect {}", grant.id);
+        let claude_token_remedy = || {
+            format!(
+                "Run claude setup-token and import the token it prints:\n  {} --token-file -",
+                again()
+            )
+        };
         Self::refuse_unsuited(
             name,
             [
@@ -341,6 +347,9 @@ impl Command {
                 (self.wait.timeout.is_some(), "--timeout"),
             ],
             || {
+                if matches!(provider, ProviderArg::ClaudeCode) {
+                    return claude_token_remedy();
+                }
                 format!(
                     "A {name} grant is signed in to again by the coding agent's own sign-in, \
                      which has no consent to wait for:\n  {}",
@@ -365,13 +374,7 @@ impl Command {
                     (self.login, "--login"),
                     (self.device, "--device"),
                 ],
-                || {
-                    format!(
-                        "Run Claude Code's sign-in, or import the token claude setup-token \
-                         printed with --token-file PATH:\n  {}",
-                        again()
-                    )
-                },
+                claude_token_remedy,
             )?,
         }
         let flow = self.flow();
@@ -379,17 +382,9 @@ impl Command {
             Some(material) => Login::Read(material),
             None => flow.sign_in_of(provider),
         };
-        // A Claude Code sign-in the member could not answer is refused before it
-        // starts.
-        if matches!(login, Login::ClaudeCode)
-            && let Some(failure) = claude_setup_token::unanswerable()
-        {
-            let mut report = failure.report();
-            report.remedy = format!(
-                "Run claude setup-token where you can answer it and import the token it prints:\n  \
-                 {} --token-file -",
-                again()
-            );
+        if matches!(login, Login::ClaudeTokenFileRequired) {
+            let mut report = create::claude_token_file_required();
+            report.remedy = claude_token_remedy();
             return Ok(output::write_import_refusal(api_url, &report, json)?);
         }
         if !matches!(login, Login::Read(_))

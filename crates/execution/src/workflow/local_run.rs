@@ -8578,6 +8578,39 @@ pub fn await_begin_gate() -> Result<(), LocalRunDirectoryError> {
     Ok(())
 }
 
+/// Holds named test runs until the driver's release path exists, without changing the runs.
+pub fn hold_test_runs() -> Option<crate::ExecutionOutcome> {
+    #[cfg(feature = "test-fixtures")]
+    if let Some(runs) = std::env::var_os(HOLD_RUNS) {
+        return Some(match hold_runs_until_released(&runs) {
+            Ok(()) => crate::ExecutionOutcome::Succeeded,
+            Err(_) => crate::ExecutionOutcome::Failed,
+        });
+    }
+    None
+}
+
+#[cfg(feature = "test-fixtures")]
+fn hold_runs_until_released(runs: &std::ffi::OsStr) -> Result<(), LocalRunDirectoryError> {
+    let release = std::env::var_os(HOLD_RUNS_RELEASE)
+        .map(PathBuf::from)
+        .ok_or(LocalRunDirectoryError::InvalidPath)?;
+    let mut locks = BTreeMap::new();
+    for path in std::env::split_paths(runs) {
+        let (normalized, root) = open_run_root(&path)?;
+        // Reopening a run would let a second descriptor's close release its process lock.
+        let std::collections::btree_map::Entry::Vacant(entry) = locks.entry(normalized) else {
+            continue;
+        };
+        let lock = open_retry_lock(&root)?;
+        fcntl_lock(&lock, FlockOperation::NonBlockingLockExclusive)
+            .map_err(|source| file_error(&root, LOCK_FILE, "lock", source))?;
+        verify_retry_lock_identity(&root, &lock)?;
+        entry.insert(lock);
+    }
+    await_test_gate_path(release, "held", "the test runs were not released in time")
+}
+
 /// The gate the test seams share: when `variable` names a path, writes the marker beside it
 /// with `extension` and returns once the path exists, or a `File` error after
 /// `TEST_GATE_TIMEOUT`.
@@ -8590,6 +8623,15 @@ fn await_test_gate(
     let Some(gate) = std::env::var_os(variable).map(PathBuf::from) else {
         return Ok(());
     };
+    await_test_gate_path(gate, extension, timed_out)
+}
+
+#[cfg(feature = "test-fixtures")]
+fn await_test_gate_path(
+    gate: PathBuf,
+    extension: &str,
+    timed_out: &'static str,
+) -> Result<(), LocalRunDirectoryError> {
     let marker = gate.with_extension(extension);
     std::fs::write(&marker, b"").map_err(|source| LocalRunDirectoryError::File {
         path: marker,
@@ -8620,6 +8662,10 @@ const SETTLED_GATE: &str = "USEFUL_TEST_SETTLED_GATE";
 const RELEASE_GATE: &str = "USEFUL_TEST_RELEASE_GATE";
 #[cfg(feature = "test-fixtures")]
 const BEGIN_GATE: &str = "USEFUL_TEST_BEGIN_GATE";
+#[cfg(feature = "test-fixtures")]
+const HOLD_RUNS: &str = "USEFUL_TEST_HOLD_RUNS";
+#[cfg(feature = "test-fixtures")]
+const HOLD_RUNS_RELEASE: &str = "USEFUL_TEST_HOLD_RUNS_RELEASE";
 #[cfg(feature = "test-fixtures")]
 const TEST_GATE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(feature = "test-fixtures")]

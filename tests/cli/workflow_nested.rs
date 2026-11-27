@@ -868,10 +868,7 @@ fn an_interrupted_nested_stage_leaves_the_root_in_the_carried_repair_wait() {
         .unwrap();
     super::poll_until(
         "the nested stage's held step",
-        || {
-            execution.join("held-work-a").exists()
-                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
-        },
+        || execution.join("held-work-a").exists() && crate::run_is_owned(&destination),
         |held| *held,
     );
     let run = fs::canonicalize(&destination).unwrap();
@@ -1733,10 +1730,7 @@ fn abandoned_while_held(bundle: &TreeBundle, name: &str, held: &str) -> std::pat
         .unwrap();
     super::poll_until(
         "the nested stage's held step",
-        || {
-            execution.join(format!("held-{held}")).exists()
-                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
-        },
+        || execution.join(format!("held-{held}")).exists() && crate::run_is_owned(&destination),
         |held| *held,
     );
     live.kill().unwrap();

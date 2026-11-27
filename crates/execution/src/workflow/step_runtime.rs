@@ -5,7 +5,6 @@ use std::future::Future;
 use std::io;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -13,6 +12,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, watch};
+
+use crate::process::start_in_new_session;
 
 use super::admission::{
     AdmittedWorkflow, CancellationReason, CancellationSource, EnvironmentSnapshot, ResolvedInput,
@@ -5104,7 +5105,7 @@ impl PreparedCommand {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            command.as_std_mut().process_group(0);
+            start_in_new_session(command.as_std_mut());
             cwd.bind_command(command.as_std_mut());
             let child = command.spawn().map_err(|failure| {
                 StepStartFailure::CommandLaunch(classify_launch_failure(

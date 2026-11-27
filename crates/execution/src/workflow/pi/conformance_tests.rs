@@ -2143,10 +2143,6 @@ fn stubborn_descendant_process_fixture() {
 #[ignore = "requires pinned harness"]
 async fn pinned_real_pi_06_cancellation_kills_a_stubborn_process_group_descendant() {
     let _executable = require_conformance_executable();
-    // Pi, rather than this test process, spawns the stubborn fixture. Adopt that
-    // descendant when Pi exits so the process-group probe can reap it itself.
-    #[cfg(target_os = "linux")]
-    nix::sys::prctl::set_child_subreaper(true).unwrap();
     host_scaled_watchdog("Pi stubborn-descendant", PINNED_TEST_WATCHDOG, async {
         let fixture = RealPiFixture::new(AgentValueMode::None, false, false);
         let mut running = RunningRealPi::launch(fixture);

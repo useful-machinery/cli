@@ -208,6 +208,8 @@ start_background_check check-help-output-style \
   "$public_root/scripts/check-help-output-style"
 start_background_check check-public-api-boundary \
   "$public_root/scripts/check-public-api-boundary"
+start_background_check check-native-free-evidence \
+  "$public_root/scripts/check-native-free-evidence"
 
 cd "$public_root"
 export CARGO_TERM_COLOR=never

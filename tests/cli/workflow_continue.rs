@@ -4074,7 +4074,7 @@ fn a_withdraw_between_chained_attempts_waits_for_the_process_and_is_recorded() {
     );
     let run = fs::canonicalize(&destination).unwrap();
     // Attempt 1 ended `continued`, the run lock is free and the record reads `running`.
-    assert!(crate::lock_holder(&run).unwrap().is_none());
+    assert!(!crate::run_is_owned(&run));
     assert_eq!(run_record(&run)["state"], "running");
     let state = read_json(&run.join("state.json"));
     assert_eq!(state["attempts"][0]["state"], "continued");

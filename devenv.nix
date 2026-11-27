@@ -24,6 +24,7 @@ in
   };
   env.USEFUL_MSRV_CARGO = "${msrvToolchain}/bin/cargo";
   env.USEFUL_MSRV_RUSTC = "${msrvToolchain}/bin/rustc";
+  env.USEFUL_NATIVE_FREE_NODE = "${pkgs.nodejs-slim_26}/bin/node";
   env.USEFUL_CLAUDE_CODE_CONFORMANCE_TOOLS_PATH = pkgs.lib.makeBinPath [
     pkgs.gnused
     pkgs.coreutils

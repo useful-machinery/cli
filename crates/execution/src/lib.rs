@@ -142,8 +142,8 @@ pub use workflow::local_run::{
     acquire_local_continuation, acquire_local_continuation_bridged, acquire_local_retry,
     assemble_portable_record, attempt_controls, await_begin_gate, await_child_start_gate,
     await_release_gate, await_run_lock_gate, await_settled_gate, bind_cloud_continuation_context,
-    child_run_directories, child_runs, create_portable_record, deliver_run_event, inspect_wait,
-    is_run_id, latest_attempt_failed, latest_child_run, list_runs, live_run_view,
+    child_run_directories, child_runs, create_portable_record, deliver_run_event, hold_test_runs,
+    inspect_wait, is_run_id, latest_attempt_failed, latest_child_run, list_runs, live_run_view,
     live_running_steps, load_cloud_continuation_seed, locate_run, lock_holder,
     open_portable_record, portable_record_files, positioned_element, read_durable_record,
     read_local_run_status, read_run_file_bounded, read_run_file_tail, read_run_view,
@@ -369,7 +369,7 @@ pub use codex::CodexAppServerV1Capabilities;
 pub use pi::PiJsonV1Capabilities;
 pub use process::{
     CommandOutput, CommandProbeError, CommandRequest, CommandRunner, ManagedProcessGroup,
-    SystemCommandRunner,
+    SystemCommandRunner, start_in_new_session,
 };
 pub use workflow::CanonicalJsonError;
 pub use workflow::admission::ClaudeCodeStreamJsonV1Admission;

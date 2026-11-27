@@ -1296,16 +1296,15 @@ impl Scope {
     }
 }
 
-/// What the member does about a coding agent whose sign-in failed, besides what its own
-/// failure printed: the agent's program missing from `PATH` is the failure no retry mends.
+pub(super) const CLAUDE_TOKEN_FILE_REMEDY: &str = "Run claude setup-token and import the token it prints:\n  useful account integration connect claude_code --token-file -";
+
+/// What the member can do to connect a coding agent after a failed attempt.
 fn native_remedy(provider: &str) -> Option<&'static str> {
     match provider {
         "codex" => Some(
             "When codex is not on your PATH, install Codex so that it is, or import an auth.json:\n  useful account integration connect codex --from-file PATH",
         ),
-        "claude_code" => Some(
-            "When claude is not on your PATH, install Claude Code so that it is, or import the token claude setup-token printed:\n  useful account integration connect claude_code --token-file PATH",
-        ),
+        "claude_code" => Some(CLAUDE_TOKEN_FILE_REMEDY),
         _ => None,
     }
 }

@@ -937,7 +937,6 @@ struct RunningResultFixture {
     settlement_release: PathBuf,
     process: PathBuf,
     descendant: PathBuf,
-    #[cfg(not(target_os = "linux"))]
     descendant_ready: PathBuf,
     tool_name: String,
     observations: mpsc::UnboundedReceiver<AgentObservationEnvelope>,
@@ -1127,7 +1126,6 @@ where
         settlement_release: fixture.result_settlement_release,
         process: fixture.process,
         descendant: fixture.descendant,
-        #[cfg(not(target_os = "linux"))]
         descendant_ready: fixture.descendant_ready,
         tool_name,
         observations: fixture.observations,
@@ -2045,17 +2043,14 @@ async fn adapter_waits_for_a_terminated_process_group_to_be_observed_absent() {
 
         now_seconds.store(130, Ordering::SeqCst);
         deadline_release.send_replace(true);
-        #[cfg(not(target_os = "linux"))]
-        {
-            read_signal(running.descendant_ready.clone()).await;
-            assert!(!process_group_is_quiescent(process));
-            assert!(matches!(
-                running.terminal.try_recv(),
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-            ));
-            write_signal(running.settlement_release.clone()).await;
-            read_signal(running.process.parent().unwrap().join("detached-done")).await;
-        }
+        read_signal(running.descendant_ready.clone()).await;
+        assert!(!process_group_is_quiescent(process));
+        assert!(matches!(
+            running.terminal.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        write_signal(running.settlement_release.clone()).await;
+        read_signal(running.process.parent().unwrap().join("detached-done")).await;
         assert_agent_failure(
             &running.finish().await,
             AgentFailureCause::ResultSettlementFailed,
@@ -2074,27 +2069,13 @@ async fn detached_stdout_holder_obeys_the_platform_cleanup_boundary() {
             launch_controlled_settlement_fixture("result-bridge-settlement-eof-after-grace").await;
         let mut cleanup = DetachedFixtureCleanup::new(&running.process, &running.descendant);
         advance_result_fixture_to_settlement(&mut running, &mut registered_deadlines).await;
-        #[cfg(target_os = "linux")]
-        {
-            let holder = process_id(&fs::read(&running.descendant).unwrap());
-            assert!(matches!(
-                running.finish().await,
-                AgentOutcome::Completed(CompletedAgentInvocation::Result(_))
-            ));
-            assert!(getpgid(Some(holder)).is_err());
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            now_seconds.store(130, Ordering::SeqCst);
-            deadline_release.send_replace(true);
-            let outcome = (&mut running.terminal).await.unwrap();
-            write_signal(running.settlement_release.clone()).await;
-            read_signal(running.process.parent().unwrap().join("detached-done")).await;
-            (&mut running.task).await.unwrap();
-            assert_agent_failure(&outcome, AgentFailureCause::ResultSettlementFailed);
-        }
-        #[cfg(target_os = "linux")]
-        let _ = (now_seconds, deadline_release);
+        now_seconds.store(130, Ordering::SeqCst);
+        deadline_release.send_replace(true);
+        let outcome = (&mut running.terminal).await.unwrap();
+        write_signal(running.settlement_release.clone()).await;
+        read_signal(running.process.parent().unwrap().join("detached-done")).await;
+        (&mut running.task).await.unwrap();
+        assert_agent_failure(&outcome, AgentFailureCause::ResultSettlementFailed);
         cleanup.disarm();
     })
     .await;
@@ -2624,14 +2605,11 @@ async fn stubborn_descendant_is_forced_at_the_injected_deadline_before_terminal_
 
         deadline_release.send(true).unwrap();
         deadline_task.await.unwrap();
-        #[cfg(not(target_os = "linux"))]
-        {
-            read_signal(fixture.descendant_ready).await;
-            assert!(!process_group_is_quiescent(process));
-            assert!(!task.is_finished());
-            write_signal(fixture.result_settlement_release).await;
-            read_signal(fixture.process.parent().unwrap().join("detached-done")).await;
-        }
+        read_signal(fixture.descendant_ready).await;
+        assert!(!process_group_is_quiescent(process));
+        assert!(!task.is_finished());
+        write_signal(fixture.result_settlement_release).await;
+        read_signal(fixture.process.parent().unwrap().join("detached-done")).await;
         assert_user_cancellation(task, terminal).await;
         assert!(process_group_is_quiescent(process));
         cleanup.disarm();
@@ -2809,22 +2787,14 @@ fn detached_standard_output_holder_process() {
         b"detached\n",
     )
     .unwrap();
-    // Only Linux adopts detached children. Elsewhere the test releases this holder
-    // after observing settlement expiry, so EOF cannot be mistaken for quiescence.
-    #[cfg(target_os = "linux")]
-    loop {
-        std::thread::park();
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let release = std::env::var_os("PI_FIXTURE_RESULT_SETTLEMENT_RELEASE").unwrap();
-        assert!(!fs::read(release).unwrap().is_empty());
-        fs::write(
-            std::env::var_os("PI_FIXTURE_DETACHED_DONE").unwrap(),
-            b"holder-released\n",
-        )
-        .unwrap();
-    }
+    // The test releases this out-of-group holder after observing settlement expiry.
+    let release = std::env::var_os("PI_FIXTURE_RESULT_SETTLEMENT_RELEASE").unwrap();
+    assert!(!fs::read(release).unwrap().is_empty());
+    fs::write(
+        std::env::var_os("PI_FIXTURE_DETACHED_DONE").unwrap(),
+        b"holder-released\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -2899,19 +2869,12 @@ fn run_descendant_reaper_process(descendant_test: &str, ignore_interrupt: bool) 
         WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
     )
     .unwrap();
-    // On Linux the adapter must observe the group absent before reporting terminal.
-    // Waiting here for a test-side release deadlocks that observation when the
-    // descendant's zombie still belongs to this reaper. Non-Linux tests explicitly
-    // hold the zombie to exercise the observable quiescence boundary.
-    #[cfg(not(target_os = "linux"))]
-    {
-        let descendant_ready = std::env::var_os("PI_FIXTURE_DESCENDANT_READY").unwrap();
-        fs::write(descendant_ready, b"descendant-zombie\n").unwrap();
-        let release = std::env::var_os("PI_FIXTURE_RESULT_SETTLEMENT_RELEASE").unwrap();
-        assert!(!fs::read(release).unwrap().is_empty());
-    }
+    // Hold the descendant in the group until the test checks terminal is pending.
+    let descendant_ready = std::env::var_os("PI_FIXTURE_DESCENDANT_READY").unwrap();
+    fs::write(descendant_ready, b"descendant-zombie\n").unwrap();
+    let release = std::env::var_os("PI_FIXTURE_RESULT_SETTLEMENT_RELEASE").unwrap();
+    assert!(!fs::read(release).unwrap().is_empty());
     assert!(!descendant.wait().unwrap().success());
-    #[cfg(not(target_os = "linux"))]
     fs::write(
         std::env::var_os("PI_FIXTURE_DETACHED_DONE").unwrap(),
         b"descendant-reaped\n",

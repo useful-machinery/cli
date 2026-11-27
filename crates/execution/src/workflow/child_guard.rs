@@ -17,21 +17,19 @@ use rustix::process::{
     Pid, Signal, WaitId, WaitIdOptions, WaitOptions, getpid, getppid, kill_process,
     kill_process_group, waitid, waitpid,
 };
-#[cfg(target_os = "linux")]
-use rustix::process::{wait, waitpgid};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 
 use super::super::ExecutionOutcome;
+use crate::process::start_in_new_session;
 
 use super::cancellation::{CancellationFlag, MAXIMUM_CANCELLATION_GRACE};
-#[cfg(any(target_vendor = "apple", test))]
-use super::process_group::process_group_is_quiescent;
 use super::process_group::{
     AuthenticatedProcessGroup, AuthenticatedSignalResult, LeaderState, ProcessIdentityInspector,
     ProcessIdentityObservation, SystemProcessIdentityInspector, capture_process_group_identity,
-    continue_authenticated_process_group, system_process_identity_observation,
-    terminate_authenticated_process_group, terminate_authenticated_process_group_with,
+    continue_authenticated_process_group, process_group_is_quiescent,
+    system_process_identity_observation, terminate_authenticated_process_group,
+    terminate_authenticated_process_group_with,
 };
 #[cfg(not(target_os = "linux"))]
 use super::socket_alias::SOCKET_ALIAS_ROOT;
@@ -60,6 +58,7 @@ const WORKER_FAILURE_FILE: &str = "worker.failure";
 const ACTIVITY_LOCK_FILE: &str = ".activity.lock";
 const TEMPORARY_DIRECTORY_PREFIX: &str = "scherzo-child-guard-v1-";
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const UNREADY_GUARD_GRACE: Duration = Duration::from_secs(1);
 const WORKER_BOUNDARY_TIMEOUT: Duration = MAXIMUM_CANCELLATION_GRACE;
 const MAXIMUM_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 #[cfg(any(not(target_os = "linux"), test))]
@@ -240,7 +239,6 @@ impl StoppedChildGuard {
                 "authenticated child process guards are unavailable",
             ));
         }
-        enable_child_subreaper()?;
         let staging = create_guard_staging()?;
         let activity_lease = create_activity_lease(staging.path())?;
         let standard_input_listener = streaming_standard_input
@@ -264,7 +262,7 @@ impl StoppedChildGuard {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        command.as_std_mut().process_group(0);
+        start_in_new_session(command.as_std_mut());
         configure(command.as_std_mut())?;
         let mut child = command.spawn()?;
         let owner_control = match child.stdin.take() {
@@ -425,7 +423,7 @@ impl StoppedChildGuard {
 
     pub(crate) fn force_stop_blocking(&mut self) -> io::Result<()> {
         let termination = self.request_stop();
-        wait_for_guard_exit(&mut self.child)?;
+        wait_for_guard_exit(&mut self.child, WORKER_BOUNDARY_TIMEOUT)?;
         self.finish_forced_stop(termination)
     }
 
@@ -451,7 +449,7 @@ impl StoppedChildGuard {
 impl Drop for StoppedChildGuard {
     fn drop(&mut self) {
         // EOF is the owner-loss signal. The independent guard remains alive long
-        // enough to terminate and reap the stopped or released process group.
+        // enough to terminate the stopped or released process group and wait for it to exit.
         self.owner_control.take();
     }
 }
@@ -483,6 +481,10 @@ pub(crate) async fn force_stop_direct_child(child: &mut Child) -> Result<(), ()>
 }
 
 fn terminate_unready_guard(child: &mut Child) -> io::Result<()> {
+    // The control pipe is closed. Give the guard time to reap its leader on EOF.
+    if wait_for_guard_exit(child, UNREADY_GUARD_GRACE).is_ok() {
+        return Ok(());
+    }
     if let Some(process_group) = child
         .id()
         .and_then(|process_id| i32::try_from(process_id).ok())
@@ -491,16 +493,16 @@ fn terminate_unready_guard(child: &mut Child) -> io::Result<()> {
         let _ = kill_process_group(process_group, Signal::KILL);
     }
     let _ = child.start_kill();
-    wait_for_guard_exit(child)
+    wait_for_guard_exit(child, WORKER_BOUNDARY_TIMEOUT)
 }
 
-fn wait_for_guard_exit(child: &mut Child) -> io::Result<()> {
+fn wait_for_guard_exit(child: &mut Child, timeout: Duration) -> io::Result<()> {
     let started = useful_support::monotonic_now();
     loop {
         if child.try_wait()?.is_some() {
             return Ok(());
         }
-        if useful_support::elapsed(started) >= WORKER_BOUNDARY_TIMEOUT {
+        if useful_support::elapsed(started) >= timeout {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "child process guard did not exit",
@@ -606,7 +608,6 @@ pub fn run_internal_worker() -> ExecutionOutcome {
 fn run_guard_worker() -> Result<(), ()> {
     let root = internal_root()?;
     read_manifest(&root)?;
-    enable_child_subreaper().map_err(|_| ())?;
     let executable = crate::process::internal_worker_executable().map_err(|_| ())?;
     let exec_boundary = with_staging_socket(&root, EXEC_BOUNDARY_SOCKET, |socket| {
         UnixListener::bind(socket)
@@ -622,31 +623,40 @@ fn run_guard_worker() -> Result<(), ()> {
         )
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .process_group(0);
+        .stderr(Stdio::inherit());
+    start_in_new_session(&mut leader);
     let mut leader = leader.spawn().map_err(|_| ())?;
-    let leader_pid = i32::try_from(leader.id())
-        .ok()
-        .and_then(Pid::from_raw)
-        .ok_or(())?;
-    let (_, stopped) = waitpid(Some(leader_pid), WaitOptions::UNTRACED)
-        .map_err(|_| ())?
-        .ok_or(())?;
-    if !stopped.stopped() {
+    let ready = (|| {
+        let leader_pid = i32::try_from(leader.id())
+            .ok()
+            .and_then(Pid::from_raw)
+            .ok_or(())?;
+        let (_, stopped) = waitpid(Some(leader_pid), WaitOptions::UNTRACED)
+            .map_err(|_| ())?
+            .ok_or(())?;
+        if !stopped.stopped() {
+            return Err(());
+        }
+        let identity = identity_for_stopped_leader(leader_pid)?;
+        let (exec_boundary, _) = exec_boundary.accept().map_err(|_| ())?;
+        exec_boundary
+            .set_read_timeout(Some(WORKER_BOUNDARY_TIMEOUT))
+            .map_err(|_| ())?;
+        write_json_atomic(
+            &root.join(READY_FILE),
+            &ReadyIdentity {
+                process_group_id: identity.process_group().as_raw_pid(),
+                leader_start_identity: identity.leader_start_identity().to_owned(),
+            },
+        )?;
+        Ok((identity, exec_boundary))
+    })();
+    let Ok((identity, mut exec_boundary)) = ready else {
+        // A stopped leader in its own session does not receive SIGHUP when the guard exits.
+        let _ = leader.kill();
+        let _ = leader.wait();
         return Err(());
-    }
-    let identity = identity_for_stopped_leader(leader_pid)?;
-    let (mut exec_boundary, _) = exec_boundary.accept().map_err(|_| ())?;
-    exec_boundary
-        .set_read_timeout(Some(WORKER_BOUNDARY_TIMEOUT))
-        .map_err(|_| ())?;
-    write_json_atomic(
-        &root.join(READY_FILE),
-        &ReadyIdentity {
-            process_group_id: identity.process_group().as_raw_pid(),
-            leader_start_identity: identity.leader_start_identity().to_owned(),
-        },
-    )?;
+    };
 
     let inspector = SystemProcessIdentityInspector;
     let mut continuation = [0_u8; 1];
@@ -702,13 +712,6 @@ fn monitor_guarded_child(
     inspector: &impl ProcessIdentityInspector,
 ) -> Result<(), ()> {
     loop {
-        #[cfg(target_os = "linux")]
-        if running_as_guard_worker()
-            && reap_exited_adopted_descendants(identity.process_group()).is_err()
-        {
-            cleanup_owned_group(root, identity, leader, inspector)?;
-            return Err(());
-        }
         if let Ok(owner_event) = owner_events.try_recv() {
             cleanup_owned_group(root, identity, leader, inspector)?;
             if owner_event == OwnerEvent::Lost {
@@ -818,7 +821,6 @@ fn run_leader_worker() -> Result<(), ()> {
     if getppid() != Some(expected_parent) {
         return Err(());
     }
-    install_parent_death_protection()?;
     let mut exec_boundary = with_staging_socket(&root, EXEC_BOUNDARY_SOCKET, |socket| {
         UnixStream::connect(socket)
     })
@@ -860,24 +862,6 @@ fn run_leader_worker() -> Result<(), ()> {
     Err(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn install_parent_death_protection() -> Result<(), ()> {
-    rustix::process::set_parent_process_death_signal(Some(Signal::KILL)).map_err(|_| ())
-}
-
-#[cfg(target_vendor = "apple")]
-fn install_parent_death_protection() -> Result<(), ()> {
-    // Darwin has no parent-death signal. The leader cannot execute before the
-    // independent guard authenticates and releases it, and the guard's control
-    // pipe turns execution-owner loss into process-group cleanup.
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
-fn install_parent_death_protection() -> Result<(), ()> {
-    Err(())
-}
-
 fn identity_for_stopped_leader(leader: Pid) -> Result<AuthenticatedProcessGroup, ()> {
     let identity = capture_process_group_identity(leader).ok_or(())?;
     if matches!(
@@ -901,11 +885,6 @@ fn cleanup_owned_group(
     terminate_owned_group(identity, inspector)?;
     let status = leader.wait().map_err(|_| ())?;
     reap_owned_process_group(identity.process_group()).map_err(|_| ())?;
-    // Only the dedicated one-invocation guard owns every direct child. Unit-test callers share
-    // their process with unrelated guarded launches and must not sweep those sibling workers.
-    if running_as_guard_worker() {
-        terminate_and_reap_adopted_descendants().map_err(|_| ())?;
-    }
     write_atomic(&root.join(QUIESCED_FILE), b"quiesced\n")?;
     Ok(status)
 }
@@ -933,41 +912,7 @@ fn terminate_owned_group(
     }
 }
 
-#[cfg(target_os = "linux")]
-fn cleanup_adopted_group(
-    identity: &AuthenticatedProcessGroup,
-    _termination: AuthenticatedSignalResult,
-) -> io::Result<()> {
-    let options = WaitIdOptions::EXITED
-        | WaitIdOptions::STOPPED
-        | WaitIdOptions::CONTINUED
-        | WaitIdOptions::NOHANG
-        | WaitIdOptions::NOWAIT;
-    match waitid(WaitId::Pid(identity.process_group()), options) {
-        Ok(_) => {}
-        Err(Errno::CHILD)
-            if matches!(
-                system_process_identity_observation(identity),
-                ProcessIdentityObservation::Absent
-            ) =>
-        {
-            return Ok(());
-        }
-        Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
-    }
-
-    // The execution owner is a child subreaper. Once the guard has exited,
-    // waitid proving that the unreaped leader is now our child pins the recorded
-    // identity without relying on /proc. Signal exactly once while it is pinned,
-    // then reap every adopted member of that group.
-    match kill_process_group(identity.process_group(), Signal::KILL) {
-        Ok(()) | Err(Errno::SRCH) => {}
-        Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
-    }
-    reap_owned_process_group(identity.process_group())
-}
-
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn cleanup_adopted_group(
     identity: &AuthenticatedProcessGroup,
     termination: AuthenticatedSignalResult,
@@ -996,126 +941,7 @@ fn cleanup_adopted_group(
     ))
 }
 
-#[cfg(target_os = "linux")]
-fn reap_owned_process_group(process_group: Pid) -> io::Result<()> {
-    let started = useful_support::monotonic_now();
-    loop {
-        match waitpgid(process_group, WaitOptions::NOHANG) {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                if useful_support::elapsed(started) >= WORKER_BOUNDARY_TIMEOUT {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "guarded process group did not exit",
-                    ));
-                }
-                useful_support::sleep(WORKER_POLL_INTERVAL);
-            }
-            Err(Errno::CHILD) => return Ok(()),
-            Err(Errno::INTR) => {}
-            Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
-        }
-    }
-}
-
-// One guard worker is the subreaper for one invocation. After the original leader exits,
-// surviving descendants become its direct children even when native tools created new sessions.
-#[cfg(target_os = "linux")]
-fn terminate_and_reap_adopted_descendants() -> io::Result<()> {
-    let started = useful_support::monotonic_now();
-    loop {
-        loop {
-            match wait(WaitOptions::NOHANG) {
-                Ok(Some(_)) => {}
-                Ok(None) | Err(Errno::CHILD) => break,
-                Err(Errno::INTR) => {}
-                Err(error) => {
-                    return Err(io::Error::from_raw_os_error(error.raw_os_error()));
-                }
-            }
-        }
-
-        let children = linux_direct_children()?;
-        if children.is_empty() && matches!(wait(WaitOptions::NOHANG), Err(Errno::CHILD)) {
-            return Ok(());
-        }
-        // Do not reap between this snapshot and signalling: an exited direct child remains a
-        // zombie, which pins its PID and prevents an unrelated process from receiving the signal.
-        for child in children {
-            match kill_process(child, Signal::KILL) {
-                Ok(()) | Err(Errno::SRCH) => {}
-                Err(error) => {
-                    return Err(io::Error::from_raw_os_error(error.raw_os_error()));
-                }
-            }
-        }
-
-        if useful_support::elapsed(started) >= WORKER_BOUNDARY_TIMEOUT {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "guarded descendants did not exit",
-            ));
-        }
-        useful_support::sleep(WORKER_POLL_INTERVAL);
-    }
-}
-
-// A nested process group can orphan an exited member to this nearest subreaper while the
-// guarded leader is still waiting for that group to disappear. Reap only those adopted direct
-// children here. The authenticated leader is excluded so its status remains available to the
-// ordinary leader-completion path.
-#[cfg(target_os = "linux")]
-fn reap_exited_adopted_descendants(leader: Pid) -> io::Result<()> {
-    for child in linux_direct_children()? {
-        if child == leader {
-            continue;
-        }
-        match waitpid(Some(child), WaitOptions::NOHANG) {
-            Ok(Some(_)) | Ok(None) | Err(Errno::CHILD) | Err(Errno::INTR) => {}
-            Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
-        }
-    }
-    Ok(())
-}
-
-fn running_as_guard_worker() -> bool {
-    matches!(
-        std::env::var(INTERNAL_WORKER_ENVIRONMENT).as_deref(),
-        Ok(GUARD_WORKER)
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn linux_direct_children() -> io::Result<Vec<Pid>> {
-    let mut children = Vec::new();
-    for task in fs::read_dir("/proc/self/task")? {
-        let task = task?;
-        let direct_children = match fs::read_to_string(task.path().join("children")) {
-            Ok(direct_children) => direct_children,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        };
-        for raw_pid in direct_children.split_ascii_whitespace() {
-            let raw_pid = raw_pid.parse::<i32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid adopted child process")
-            })?;
-            let child = Pid::from_raw(raw_pid).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid adopted child process")
-            })?;
-            if !children.contains(&child) {
-                children.push(child);
-            }
-        }
-    }
-    Ok(children)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn terminate_and_reap_adopted_descendants() -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn reap_owned_process_group(process_group: Pid) -> io::Result<()> {
     let started = useful_support::monotonic_now();
     while !process_group_is_quiescent(process_group) {
@@ -1144,24 +970,6 @@ fn require_quiesced_marker(root: &Path) -> io::Result<()> {
         Ok(_) => Err(io::Error::other("guard cleanup marker is not a file")),
         Err(error) => Err(error),
     }
-}
-
-#[cfg(target_os = "linux")]
-fn enable_child_subreaper() -> io::Result<()> {
-    nix::sys::prctl::set_child_subreaper(true).map_err(io::Error::other)
-}
-
-#[cfg(target_vendor = "apple")]
-fn enable_child_subreaper() -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-fn enable_child_subreaper() -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "authenticated child process guards are unavailable",
-    ))
 }
 
 fn cleanup_owner_staging(root: &Path) {
@@ -1536,6 +1344,72 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guard_reaps_stopped_leader_when_writing_ready_fails() {
+        let staging = tempfile::Builder::new()
+            .prefix(TEMPORARY_DIRECTORY_PREFIX)
+            .tempdir_in("/tmp")
+            .unwrap();
+        let manifest = LaunchManifest {
+            program: b"/bin/true".to_vec(),
+            arguments: vec![],
+            streaming_standard_input: false,
+        };
+        fs::write(
+            staging.path().join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let ready = staging.path().join(READY_FILE);
+        fs::create_dir(&ready).unwrap();
+        fs::write(ready.join("keep"), b"").unwrap();
+
+        let status = StdCommand::new(child_guard_worker_executable().unwrap())
+            .env(INTERNAL_WORKER_ENVIRONMENT, GUARD_WORKER)
+            .env(INTERNAL_ROOT_ENVIRONMENT, staging.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+
+        let mut expected = format!("{INTERNAL_ROOT_ENVIRONMENT}=").into_bytes();
+        expected.extend_from_slice(staging.path().as_os_str().as_bytes());
+        let started = useful_support::monotonic_now();
+        let survivors = loop {
+            let survivors: Vec<_> = fs::read_dir("/proc")
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let pid = Pid::from_raw(entry.file_name().to_str()?.parse().ok()?)?;
+                    let environ = fs::read(entry.path().join("environ")).ok()?;
+                    environ
+                        .split(|byte| *byte == 0)
+                        .any(|variable| variable == expected)
+                        .then_some(pid)
+                })
+                .collect();
+            if survivors.is_empty() || useful_support::elapsed(started) >= Duration::from_secs(1) {
+                break survivors;
+            }
+            useful_support::sleep(WORKER_POLL_INTERVAL);
+        };
+        for &pid in &survivors {
+            let _ = kill_process(pid, Signal::KILL);
+        }
+        assert!(!status.success(), "{status}");
+        assert!(ready.with_extension("tmp").is_file());
+        assert_eq!(
+            fs::read(staging.path().join(WORKER_FAILURE_FILE)).unwrap(),
+            GUARD_WORKER.as_bytes()
+        );
+        assert!(
+            survivors.is_empty(),
+            "stopped leader survived: {survivors:?}"
+        );
+    }
+
     #[test]
     fn activity_lease_drop_unlocks_an_inherited_descriptor() {
         let staging = tempfile::tempdir().unwrap();
@@ -1576,7 +1450,7 @@ mod tests {
         assert_eq!(exit_observations.next(), None);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     fn wait_for_fixture_file(path: &Path) {
         let started = useful_support::monotonic_now();
         while !path.is_file() {
@@ -1587,10 +1461,90 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     fn fixture_pid(path: &Path) -> Pid {
         let raw = fs::read_to_string(path).unwrap().trim().parse().unwrap();
         Pid::from_raw(raw).unwrap()
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    const ESCAPEE_PID_FILE: &str = "USEFUL_GUARD_TEST_ESCAPEE_PID_FILE";
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    #[ignore = "launched as the guarded leader that starts a new session's process"]
+    #[expect(
+        clippy::zombie_processes,
+        reason = "the test checks that this descendant outlives the leader and stops it afterwards"
+    )]
+    fn session_escape_leader_fixture() {
+        let pid_file = PathBuf::from(std::env::var_os(ESCAPEE_PID_FILE).unwrap());
+        StdCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workflow::child_guard::tests::session_escape_descendant_fixture",
+                "--ignored",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_for_fixture_file(&pid_file);
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    #[ignore = "launched as the descendant that leaves the guarded process group"]
+    fn session_escape_descendant_fixture() {
+        rustix::process::setsid().unwrap();
+        let pid_file = PathBuf::from(std::env::var_os(ESCAPEE_PID_FILE).unwrap());
+        write_atomic(&pid_file, getpid().as_raw_pid().to_string().as_bytes()).unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[tokio::test]
+    async fn step_group_quiesces_without_stopping_a_descendant_in_a_new_session() {
+        struct KillEscapeeOnDrop(PathBuf);
+
+        impl Drop for KillEscapeeOnDrop {
+            fn drop(&mut self) {
+                if self.0.is_file() {
+                    let _ = kill_process(fixture_pid(&self.0), Signal::KILL);
+                }
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let escapee = KillEscapeeOnDrop(fixture.path().join("escapee.pid"));
+        let arguments = [
+            OsString::from("--exact"),
+            OsString::from("workflow::child_guard::tests::session_escape_leader_fixture"),
+            OsString::from("--ignored"),
+        ];
+        let environment = [(
+            OsString::from(ESCAPEE_PID_FILE),
+            escapee.0.as_os_str().to_owned(),
+        )];
+        let cancellation = ChildGuardCancellation::default();
+        let mut outer = StoppedChildGuard::spawn_cancellable(
+            &std::env::current_exe().unwrap(),
+            &arguments,
+            &environment,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .unwrap();
+        outer.continue_execution_cancellable(&cancellation).unwrap();
+
+        assert!(outer.wait().await.unwrap().success());
+        assert!(process_group_is_quiescent(outer.identity().process_group()));
+        let escapee_pid = fixture_pid(&escapee.0);
+        assert_eq!(rustix::process::test_kill_process(escapee_pid), Ok(()));
+        assert_eq!(rustix::process::getsid(Some(escapee_pid)), Ok(escapee_pid));
     }
 
     #[cfg(target_os = "linux")]
@@ -1787,7 +1741,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn nested_groups_settle_twice_beneath_a_surviving_subreaper() {
+    fn nested_groups_settle_twice_and_spare_an_unrelated_group() {
         let fixture = tempfile::tempdir().unwrap();
         let sibling_ready = fixture.path().join("sibling.ready");
         let mut sibling_command = StdCommand::new(std::env::current_exe().unwrap());
@@ -1835,7 +1789,6 @@ mod tests {
             .unwrap()
         };
         let outer_group = outer.identity().process_group();
-        assert!(nix::sys::prctl::get_child_subreaper().unwrap());
         let mut standard_output = outer.take_stdout().unwrap();
         let mut standard_error = outer.take_stderr().unwrap();
         outer.continue_execution_cancellable(&cancellation).unwrap();
@@ -1908,7 +1861,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn unavailable_inspection_fails_closed_and_quiesces_descendants() {
-        enable_child_subreaper().unwrap();
         let staging = tempfile::tempdir().unwrap();
         let descendant_file = staging.path().join("descendant.pid");
         let mut leader = StdCommand::new("/bin/sh")

@@ -119,7 +119,7 @@ clap.workspace = true
 libc.workspace = true
 nix.workspace = true
 ring.workspace = true
-rustix = { workspace = true, features = ["event", "pty"] }
+rustix.workspace = true
 useful-api.workspace = true
 useful-execution.workspace = true
 useful-human-auth.workspace = true

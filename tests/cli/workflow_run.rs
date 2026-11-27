@@ -11,7 +11,13 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[cfg(target_os = "linux")]
+use nix::errno::Errno;
+#[cfg(target_os = "linux")]
+use nix::sys::signal::killpg;
 use nix::sys::stat::Mode;
+#[cfg(target_os = "linux")]
+use nix::unistd::Pid as NixPid;
 use nix::unistd::mkfifo;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
@@ -25,6 +31,8 @@ use super::claude_code_installation::{
 use super::codex_installation::CodexFixture;
 use super::pi_installation::{COMPLETE_HELP, PiFixture, quote};
 use super::workflow_definition::{read_json, schema};
+#[cfg(target_os = "linux")]
+use super::workflow_status::wait_for_process_group_quiescence;
 use super::workflow_status::{status_json, status_schema};
 use super::workflow_view::workflow_view_schema;
 use super::{
@@ -401,7 +409,11 @@ const MIRROR_VARIABLES: [&str; 4] = [
 ];
 
 pub(super) fn isolated_command(args: &[String]) -> Command {
-    let mut command = Command::new(crate::executable());
+    isolated_command_for(crate::executable(), args)
+}
+
+fn isolated_command_for(program: &Path, args: &[String]) -> Command {
+    let mut command = Command::new(program);
     command
         .args(args)
         .env_remove(CREDENTIALS_FILE_VARIABLE)
@@ -1151,6 +1163,193 @@ fn command_only_run_remains_harness_independent() {
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(destination.join("state.json")).unwrap()).unwrap();
     assert!(state["attempts"][0].get("finalization").is_none());
+}
+
+const RECORD_STEP_TERMINAL: &str = r#"
+import json, os, sys
+pid = int(sys.argv[2]) if len(sys.argv) > 2 else os.getpid()
+try:
+    os.close(os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY))
+    tty_errno = None
+except OSError as error:
+    tty_errno = error.errno
+with open(sys.argv[1], 'w') as record:
+    json.dump(dict(
+        pid=pid, session=os.getsid(0), group=os.getpgrp(), tty_errno=tty_errno,
+        blocking=dict(stdin=os.get_blocking(0), stdout=os.get_blocking(1), stderr=os.get_blocking(2)),
+    ), record)
+"#;
+
+fn python_executable() -> PathBuf {
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            "import os, sys; print(os.path.abspath(sys.executable))",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
+fn run_with_controlling_terminal(
+    python: &Path,
+    bundle: &RunBundle,
+    configure: impl FnOnce(&mut Command),
+) -> u32 {
+    let mut args = vec![
+        "-c".to_owned(),
+        "import fcntl, os, sys, termios; os.setsid(); \
+         fcntl.ioctl(0, termios.TIOCSCTTY, 0); \
+         os.close(os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)); \
+         os.execv(sys.argv[1], sys.argv[1:])"
+            .to_owned(),
+        crate::executable().to_str().unwrap().to_owned(),
+    ];
+    let mut workflow_args = bundle.args(&bundle.result("controlling-terminal"));
+    workflow_args.insert(workflow_args.len() - 1, "--plain".to_owned());
+    args.extend(workflow_args);
+    let crate::TestPty { master, slave } = crate::open_test_pty(None).unwrap();
+    let mut command = isolated_command_for(python, &args);
+    configure(&mut command);
+    let child = command
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stdin(Stdio::from(slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(command);
+    let reader = std::thread::spawn(move || {
+        let mut transcript = Vec::new();
+        match File::from(master).read_to_end(&mut transcript) {
+            Ok(_) => {}
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => {}
+            Err(error) => panic!("read workflow pseudoterminal: {error}"),
+        }
+        transcript
+    });
+    let session = child.id();
+    let output = child.wait_with_output().unwrap();
+    let transcript = reader.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&transcript),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    session
+}
+
+fn assert_step_has_blocking_streams(record: &serde_json::Value, output_kind: &str) {
+    assert_eq!(
+        record["blocking"],
+        serde_json::json!({ "stdin": true, "stdout": true, "stderr": true }),
+        "with Useful's stdout on {output_kind}: {record}"
+    );
+}
+
+fn assert_step_has_blocking_streams_on_pipe_and_terminal(
+    python: &Path,
+    bundle: &RunBundle,
+    record_path: &Path,
+    configure: impl Fn(&mut Command),
+) {
+    let mut command = isolated_command(&bundle.args(&bundle.result("piped-output")));
+    configure(&mut command);
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_step_has_blocking_streams(&read_json(record_path), "a pipe");
+    fs::remove_file(record_path).unwrap();
+
+    run_with_controlling_terminal(python, bundle, configure);
+    assert_step_has_blocking_streams(&read_json(record_path), "a terminal");
+}
+
+fn assert_step_has_no_controlling_terminal(record_path: &Path, cli_session: u32) {
+    let record = read_json(record_path);
+    let pid = record["pid"].as_u64().unwrap();
+    assert_ne!(pid, u64::from(cli_session), "{record}");
+    assert_eq!(record["session"], pid, "{record}");
+    assert_eq!(record["group"], pid, "{record}");
+    assert_eq!(record["tty_errno"], libc::ENXIO, "{record}");
+}
+
+fn command_step_terminal_bundle(python: &Path) -> (RunBundle, PathBuf) {
+    let record_name = "command-terminal.json";
+    let argv = serde_json::json!([python, "-c", RECORD_STEP_TERMINAL, record_name]);
+    let bundle = RunBundle::new(&format!(
+        "schemaVersion: 1\nsteps:\n  record:\n    kind: cmd\n    command:\n      argv: {argv}\n"
+    ));
+    let record = bundle.execution_root().join(record_name);
+    (bundle, record)
+}
+
+fn claude_code_step_terminal_bundle(python: &Path) -> (RunBundle, PathBuf, ClaudeCodeFixture) {
+    let bundle = RunBundle::new(response_claude_code_agent_source());
+    bundle.write_source("system.md", "system");
+    bundle.write_source("message.md", "prompt");
+    let record = bundle.execution_root().join("claude-terminal.json");
+    let execution = format!(
+        "{} -c {} {} \"$$\" || exit $?\n{}",
+        quote(python.to_str().unwrap()),
+        quote(RECORD_STEP_TERMINAL),
+        quote(record.to_str().unwrap()),
+        response_claude_code_execution_for_version("2.1.235"),
+    );
+    let claude = ClaudeCodeFixture::with_execution(
+        "2.1.235 (Claude Code)",
+        CLAUDE_CODE_COMPLETE_HELP,
+        true,
+        &execution,
+    );
+    (bundle, record, claude)
+}
+
+fn configure_claude_code_step(
+    command: &mut Command,
+    bundle: &RunBundle,
+    claude: &ClaudeCodeFixture,
+) {
+    command
+        .env(
+            "PATH",
+            fixture_path_with_host_tools(&[claude.path_directory()]),
+        )
+        .env("CLAUDE_CONFIG_DIR", bundle.claude_config());
+}
+
+#[test]
+fn command_step_starts_in_a_session_without_a_controlling_terminal() {
+    let python = python_executable();
+    let (bundle, record) = command_step_terminal_bundle(&python);
+    let cli_session = run_with_controlling_terminal(&python, &bundle, |_| {});
+    assert_step_has_no_controlling_terminal(&record, cli_session);
+}
+
+#[test]
+fn claude_code_step_starts_in_a_session_without_a_controlling_terminal() {
+    let python = python_executable();
+    let (bundle, record, claude) = claude_code_step_terminal_bundle(&python);
+    let cli_session = run_with_controlling_terminal(&python, &bundle, |command| {
+        configure_claude_code_step(command, &bundle, &claude);
+    });
+    assert_step_has_no_controlling_terminal(&record, cli_session);
+}
+
+#[test]
+fn command_step_receives_blocking_standard_streams() {
+    let python = python_executable();
+    let (bundle, record) = command_step_terminal_bundle(&python);
+    assert_step_has_blocking_streams_on_pipe_and_terminal(&python, &bundle, &record, |_| {});
+}
+
+#[test]
+fn claude_code_step_receives_blocking_standard_streams() {
+    let python = python_executable();
+    let (bundle, record, claude) = claude_code_step_terminal_bundle(&python);
+    assert_step_has_blocking_streams_on_pipe_and_terminal(&python, &bundle, &record, |command| {
+        configure_claude_code_step(command, &bundle, &claude);
+    });
 }
 
 #[test]
@@ -4815,44 +5014,32 @@ fn tui_holds_the_terminal_from_its_first_step_and_ignores_q_until_the_run_is_rel
 #[test]
 fn tui_releases_outer_private_staging_before_run_lock() {
     let bundle = RunBundle::new(
-        "schemaVersion: 1\nsteps:\n  complete:\n    kind: cmd\n    command:\n      argv: [\"true\"]\n",
+        "schemaVersion: 1\nsteps:\n  complete:\n    kind: cmd\n    command:\n      argv: [sh, -c, \"while [ -e hold ]; do sleep 0.05; done\"]\n",
     );
+    let hold = bundle.execution_root().join("hold");
+    fs::write(&hold, "").unwrap();
     let destination = bundle.result("tui-private-cleanup-order");
     let (master, slave) = open_tui_pty();
     let mut process = spawn_tui_run(&bundle.args(&destination), master, slave);
     process.close_master_writer();
 
-    let lock_released = poll_until(
-        "TUI run lock release",
-        || {
-            std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(destination.join("run.lock"))
-                .ok()
-                .is_some_and(|lock| {
-                    rustix::fs::fcntl_lock(
-                        &lock,
-                        rustix::fs::FlockOperation::NonBlockingLockExclusive,
-                    )
-                    .is_ok()
-                })
-        },
-        |available| *available,
+    poll_until(
+        "TUI run ownership",
+        || crate::run_is_owned(&destination),
+        |owned| *owned,
     );
-    let private_entries = lock_released.then(|| {
-        fs::read_dir(destination.join(".private"))
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>()
-    });
+    fs::remove_file(&hold).unwrap();
+    shown_once_settled(&destination);
+    let private_entries = fs::read_dir(destination.join(".private"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
 
     process.terminate_and_finish();
 
-    assert!(lock_released, "TUI never released run.lock");
     assert!(
-        private_entries.as_ref().unwrap().is_empty(),
-        "run.lock was released before private staging cleanup: {private_entries:?}"
+        private_entries.is_empty(),
+        "TUI released run ownership before private staging cleanup: {private_entries:?}"
     );
 }
 
@@ -5610,13 +5797,7 @@ pub(super) fn assert_attempt_resources_released(run_directory: &Path) {
             .next()
             .is_none()
     );
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(run_directory.join("run.lock"))
-        .unwrap();
-    lock.try_lock().unwrap();
-    fs4::FileExt::unlock(&lock).unwrap();
+    assert!(!crate::run_is_owned(run_directory));
 }
 
 pub(super) fn assert_executor_fault_before_execution(run_directory: &Path, attempt_index: usize) {
@@ -6097,6 +6278,7 @@ fn abrupt_owner_loss_terminates_reaps_and_exposes_an_abandoned_attempt() {
     let mut remaining = Vec::new();
     control.read_to_end(&mut remaining).unwrap();
     assert!(remaining.is_empty());
+    wait_for_process_group_quiescence(guarded_pid.as_raw_pid());
 
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(destination.join("state.json")).unwrap()).unwrap();
@@ -6172,7 +6354,7 @@ fn guardian_loss_cannot_leave_a_descendant_running() {
         )
         .unwrap()
     };
-    let leader = read_pid(&leader_file);
+    let process_group = NixPid::from_raw(read_pid(&leader_file).as_raw_pid());
     let guardian = read_pid(&guardian_file);
     let descendant = read_pid(&descendant_file);
 
@@ -6188,16 +6370,6 @@ fn guardian_loss_cannot_leave_a_descendant_running() {
     );
 
     kill_process(guardian, Signal::KILL).unwrap();
-    let leader_is_zombie = || process_state(leader) == Some(b'Z');
-    poll_until(
-        "zombie process leader retained by subreaper",
-        leader_is_zombie,
-        |zombie| *zombie,
-    );
-    assert!(
-        leader_is_zombie(),
-        "the subreaper must retain the leader identity until cleanup"
-    );
     assert!(
         Path::new("/proc")
             .join(descendant.as_raw_pid().to_string())
@@ -6208,15 +6380,10 @@ fn guardian_loss_cannot_leave_a_descendant_running() {
     kill_process(owner, Signal::CONT).unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
-    let descendant_survived = Path::new("/proc")
-        .join(descendant.as_raw_pid().to_string())
-        .exists();
-    if descendant_survived {
-        let _ = kill_process(descendant, Signal::KILL);
-    }
-    assert!(
-        !descendant_survived,
-        "guard failure left an executing descendant in the authenticated process group"
+    assert_eq!(
+        killpg(process_group, None),
+        Err(Errno::ESRCH),
+        "guard failure left members in the authenticated process group"
     );
 }
 
@@ -8595,7 +8762,7 @@ fn cancelling_the_parent_cancels_its_running_child() {
     let (_bundle, destination, child) = spawn_held_child_tree("cancelled");
     poll_until(
         "the parent holds its run",
-        || crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some()),
+        || crate::run_is_owned(&destination),
         |held| *held,
     );
     let cancel = super::workflow_run_control::run_control(None, "cancel", &destination, &[]);

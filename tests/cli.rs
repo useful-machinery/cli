@@ -14,8 +14,8 @@ use std::io;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -2759,19 +2759,67 @@ fn unknown_commands_are_usage_errors() {
     assert!(output.stdout.is_empty());
 }
 
-// Inspect the advisory lock from the other process, without acquiring it.
-fn lock_holder(run: &Path) -> io::Result<Option<rustix::process::Pid>> {
-    use rustix::process::{Flock, FlockOffsetType, FlockType, fcntl_getlk};
-    let lock = fs::File::open(run.join("run.lock"))?;
-    Ok(fcntl_getlk(
-        &lock,
-        &Flock {
-            start: 0,
-            length: 0,
-            pid: None,
-            typ: FlockType::WriteLock,
-            offset_type: FlockOffsetType::Set,
-        },
-    )?
-    .and_then(|holder| holder.pid))
+fn run_is_owned(run: &Path) -> bool {
+    let Ok(output) = workflow_run::isolated_command(&[])
+        .args(["workflow", "run", "show"])
+        .arg(run)
+        .arg("--json")
+        .output()
+    else {
+        return false;
+    };
+    output.status.success()
+        && serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .is_ok_and(|status| status["recovery"]["status"] == "active")
+}
+
+struct HeldRuns {
+    process: Child,
+    release: PathBuf,
+    _temporary: tempfile::TempDir,
+}
+
+impl HeldRuns {
+    fn hold(runs: &[&Path]) -> Self {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let holder = Self {
+            process: Command::new(executable())
+                .env("USEFUL_TEST_HOLD_RUNS", std::env::join_paths(runs).unwrap())
+                .env("USEFUL_TEST_HOLD_RUNS_RELEASE", &release)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            release,
+            _temporary: temporary,
+        };
+        let marker = holder.release.with_extension("held");
+        poll_until(
+            "the executable's hold marker",
+            || marker.is_file(),
+            |held| *held,
+        );
+        holder
+    }
+
+    fn pid(&self) -> rustix::process::Pid {
+        rustix::process::Pid::from_raw(i32::try_from(self.process.id()).unwrap()).unwrap()
+    }
+}
+
+impl Drop for HeldRuns {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.release, "");
+        let deadline = monotonic_now() + Duration::from_secs(10);
+        while self.process.try_wait().ok().flatten().is_none() {
+            if monotonic_now() >= deadline {
+                let _ = self.process.kill();
+                let _ = self.process.wait();
+                return;
+            }
+            sleep(Duration::from_millis(10));
+        }
+    }
 }

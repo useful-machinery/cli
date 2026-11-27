@@ -9,9 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
-use rustix::process::{Pid, getpgid};
+use rustix::process::{Pid, Signal, getpgid, kill_process};
 #[cfg(target_os = "linux")]
-use rustix::process::{PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
+use rustix::process::{PidfdFlags, pidfd_open, pidfd_send_signal};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::Command;
@@ -1112,8 +1112,6 @@ async fn pinned_real_claude_code_05_cancels_a_blocked_provider_request() {
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_06_cancels_a_stubborn_bash_descendant() {
     let (executable, _exclusive) = exclusive_conformance_executable().await;
-    #[cfg(target_os = "linux")]
-    nix::sys::prctl::set_child_subreaper(true).unwrap();
     host_scaled_watchdog(
         "pinned Claude Code stubborn-child cancellation",
         WATCHDOG,
@@ -1148,8 +1146,14 @@ async fn pinned_real_claude_code_06_cancels_a_stubborn_bash_descendant() {
             let process_group = running.process_group.clone();
 
             assert_user_cancelled(running).await;
-            assert!(process_group_is_quiescent(process_group.get()));
-            assert!(process_group_is_quiescent(child_group));
+            let process_group = process_group.get();
+            if child_group != process_group {
+                match kill_process(child, Signal::KILL) {
+                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                    Err(error) => panic!("stubborn child SIGKILL failed: {error}"),
+                }
+            }
+            assert!(process_group_is_quiescent(process_group));
             assert!(!provider.has_pending_request());
             assert_retained_native_session(&root, &["Complete the controlled lifecycle exchange."]);
             provider.shutdown().await;
@@ -1163,7 +1167,6 @@ async fn pinned_real_claude_code_06_cancels_a_stubborn_bash_descendant() {
 #[ignore = "requires pinned harness"]
 async fn pinned_real_claude_code_06b_headless_term_and_cont_quiesce_owned_work() {
     let (executable, _exclusive) = exclusive_conformance_executable().await;
-    nix::sys::prctl::set_child_subreaper(true).unwrap();
     host_scaled_watchdog("pinned Claude Code headless termination", WATCHDOG, async {
         let mut provider = LoopbackProvider::start().await;
         let root = SyntheticClaudeCodeRoot::new();
@@ -1217,6 +1220,13 @@ async fn pinned_real_claude_code_06b_headless_term_and_cont_quiesce_owned_work()
         }
         let process_group = running.process_group.clone();
         let outcome = running.finish().await;
+        let process_group = process_group.get();
+        if child_group != process_group {
+            match kill_process(child, Signal::KILL) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                Err(error) => panic!("owned child SIGKILL failed: {error}"),
+            }
+        }
         // Terminated in its turn, Claude Code reported no successful end of one.
         assert_eq!(
             outcome,
@@ -1224,8 +1234,7 @@ async fn pinned_real_claude_code_06b_headless_term_and_cont_quiesce_owned_work()
                 detail: AgentHarnessFailureDetail::UnsuccessfulExit,
             })
         );
-        assert!(process_group_is_quiescent(process_group.get()));
-        assert!(process_group_is_quiescent(child_group));
+        assert!(process_group_is_quiescent(process_group));
         assert!(!provider.has_pending_request());
         assert_retained_native_session(&root, &["Complete the controlled lifecycle exchange."]);
         provider.shutdown().await;

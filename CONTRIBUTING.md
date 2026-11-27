@@ -79,7 +79,8 @@ nix shell github:cachix/devenv/2418e1b43797c44de5166176622c8d8fa0149871 \
 
 The project uses its standalone devenv environment to provide the minimum Rust toolchain
 declared in `Cargo.toml` and the pinned Node 24 line used by the private PiJsonV1
-extension project. `./scripts/check` enters that environment through the clean boundary
+extension project. In Devenv, `USEFUL_NATIVE_FREE_NODE` points to the Node 26 executable.
+`./scripts/check` enters that environment through the clean boundary
 and runs the same formatting, linting, testing, source-boundary, and release packaging checks
 used by CI. The canonical check performs a
 locked npm install before checking the extension; run
@@ -110,26 +111,25 @@ The driver checks candidate behavior beyond command output.
 - `version --json` names the launched file. Its `executablePath` and the supplied path
   must be the same file once both are canonicalized, so a launcher reports itself and not
   the interpreter or bundle it starts.
-- The launched process is the one that owns a run. While it owns a run it holds an
-  exclusive POSIX record lock (`fcntl` `F_SETLK`) on the whole of the run directory's
-  `run.lock`. The driver reads the holder's process ID with `F_GETLK` and takes the same
-  lock to stand in for a live process. A launcher therefore replaces itself with the
-  implementation instead of waiting on a child.
+- The launched process owns the run, and its ownership ends when the process exits. The
+  driver observes ownership only through `useful workflow run show RUN --json`, which
+  reports `recovery.status` as `active` while a live process owns the run. The driver can
+  end ownership by killing the launched process. A launcher must replace itself with the
+  implementation so that the process the driver kills owns the run.
 - `USEFUL_TEST_POLL_INTERVAL_MILLISECONDS` is an upper bound on the interval between a
   waiting command's polls of Cloud. The driver sets it on most commands. A build that
   ignores it reaches the same results at the production cadence, where about fifty cases
   take 5 s or more and two take over half of nextest's two-minute limit. The Rust CLI
   honors it in a build with `test-fixtures`, which `--all-features` enables.
-- The driver sets `USEFUL_TEST_METADATA_CLEANUP_IDENTITY` on many of its `useful runner
-  serve` invocations. While it is set, a candidate that normally records work-root cleanup
-  identities in extended attributes must store them elsewhere. The Nix build sandbox
-  where CI runs the suite rejects extended attributes. The Rust CLI uses directory
-  metadata in a `test-fixtures` build.
+
+The programs in `tests/native-free/` use only the Node 26 standard library to hold a run
+and to start, stop and clean up a step's process group as this contract and the canonical
+repository's `docs/product/workflow-execution.md` describe, and `./scripts/check` runs
+them with `scripts/check-native-free-evidence`.
 
 The driver sets `USEFUL_TEST_BINARY` to the supplied executable and unsets
-`USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE`. `USEFUL_TEST_ENVIRONMENT_WITNESS`,
-`USEFUL_TEST_HELD_RUN_LOCKS`, `USEFUL_TEST_HELD_RUN_LOCKS_RELEASE` and
-`USEFUL_TEST_CLAUDE_FLOW` are inputs to the driver's own fixtures only.
+`USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE`. `USEFUL_TEST_ENVIRONMENT_WITNESS` is an
+input to the driver's own fixtures only.
 
 The reviewed command inventory is `tests/fixtures/command-tree.txt`. The driver probes
 retired options on each path, including hidden commands. It executes the 13 design
@@ -137,14 +137,16 @@ scenarios in `tests/fixtures/command-scenarios.json` in a disposable signed-out 
 Stateful cases separately use the IDs, key files, artifacts and receipts earlier commands
 produced.
 
-Fifteen additional cases force an exact ordering between workflow processes. A
-qualification build of either implementation can run them with
+Twenty-two additional cases use the checkpoint gates to order workflow processes or use
+the hold seam to stand in for a live owner. Run them against a qualification build with
 `scripts/test-e2e /absolute/path/to/useful --features candidate-checkpoints`. For Rust,
 `scripts/test-e2e-rust` builds the qualification executable and runs the driver with the
-checkpoint cases enabled. Pass nextest arguments to it to select a subset. The driver
-supplies a path in one of the variables below. At the named point the candidate creates
-an empty sibling file with the listed extension and waits until the supplied path exists.
-A candidate that waits 30 s without seeing the path fails the command.
+checkpoint cases enabled. Pass nextest arguments to it to select a subset.
+
+For a checkpoint gate, the driver supplies a path in one of the variables below. At the
+named point the candidate creates an empty sibling file with the listed extension and
+waits until the supplied path exists. A candidate that waits 30 s without seeing the path
+fails the command.
 
 | Variable | Extension | Point in the command |
 | --- | --- | --- |
@@ -153,6 +155,16 @@ A candidate that waits 30 s without seeing the path fails the command.
 | `USEFUL_TEST_SETTLED_GATE` | `.settled` | After execution settles, before the first read of withdrawals, in an attempt that is not a quiet child |
 | `USEFUL_TEST_RELEASE_GATE` | `.releasing` | In an attempt that ends the run: under the controls lock, after spending withdrawals, before the final record |
 | `USEFUL_TEST_BEGIN_GATE` | `.beginning` | Before a new attempt that does not continue an edge takes the controls lock to check for an outstanding withdrawal |
+
+For the hold seam, the driver launches the candidate without arguments. It sets
+`USEFUL_TEST_HOLD_RUNS` to run directories joined like entries in `PATH` and
+`USEFUL_TEST_HOLD_RUNS_RELEASE` to a path with no extension. The candidate handles the
+hold before parsing arguments. It keeps the default signal dispositions, takes ownership
+of every named run as a command that continues the run would, and leaves the runs
+unchanged. Once it owns them all, it creates an empty `<release>.held` file and waits
+for the release path to exist. It exits 0 when released and exits 1 if it fails to take
+ownership of a named run or if 30 s pass without release. The driver can also end the
+hold by killing the candidate.
 
 The process suite also exercises approval, upgrade, interruption and cancellation
 through the supplied executable. The execution crate's own tests inspect the injected Rust TUI

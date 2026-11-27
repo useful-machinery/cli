@@ -10,10 +10,27 @@ use std::thread;
 use std::time::Duration;
 
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, setsid, waitid};
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const TEST_WORKER_EXECUTABLE: &str = "USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE";
+
+/// Makes the child the leader of a new session and process group before it starts.
+#[allow(
+    unsafe_code,
+    reason = "the pre-exec hook creates the child's session with the async-signal-safe setsid operation"
+)]
+pub fn start_in_new_session(command: &mut Command) {
+    // SAFETY: `setsid` is async-signal-safe, the closure captures nothing, and
+    // error conversion performs no process-global or heap-backed work.
+    unsafe {
+        command.pre_exec(|| {
+            setsid()
+                .map(|_| ())
+                .map_err(|failure| io::Error::from_raw_os_error(failure.raw_os_error()))
+        });
+    }
+}
 
 /// Set when the running executable asks, at startup, whether it was launched in an internal
 /// worker role: that executable dispatches the worker roles and may be its own worker.
@@ -105,7 +122,7 @@ pub struct ManagedProcessGroup {
 
 impl ManagedProcessGroup {
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
-        command.process_group(0);
+        start_in_new_session(command);
         let mut child = command.spawn()?;
         let Some(process_group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) else {
             let _ = child.kill();

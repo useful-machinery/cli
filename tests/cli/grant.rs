@@ -4585,6 +4585,7 @@ fn reconnect_refuses_a_revoked_grant_and_an_option_its_provider_does_not_take() 
         one(&oauth_grant(OAUTH_GRANT_ID, "github", "active")),
         one(&oauth_grant(OAUTH_GRANT_ID, "github", "active")),
         one(&native_grant(NATIVE_GRANT_ID, "active")),
+        one(&claude_grant(OTHER_NATIVE_GRANT_ID, "active")),
     ]);
     let revoked = run_grant(
         &server,
@@ -4597,6 +4598,7 @@ fn reconnect_refuses_a_revoked_grant_and_an_option_its_provider_does_not_take() 
         &["reconnect", OAUTH_GRANT_ID, "--from-file", login][..],
         &["reconnect", OAUTH_GRANT_ID, "--device"],
         &["reconnect", NATIVE_GRANT_ID, "--no-wait"],
+        &["reconnect", OTHER_NATIVE_GRANT_ID, "--no-wait"],
     ] {
         let output = run_grant(&server, &credential, args);
         assert_eq!(
@@ -4606,10 +4608,22 @@ fn reconnect_refuses_a_revoked_grant_and_an_option_its_provider_does_not_take() 
             stderr(&output)
         );
         assert!(output.stdout.is_empty(), "{args:?}");
+        if args[1] == OTHER_NATIVE_GRANT_ID {
+            let remedy = format!("{} --token-file -", reconnect_line(OTHER_NATIVE_GRANT_ID));
+            assert!(stderr(&output).contains(&remedy), "{}", stderr(&output));
+        }
     }
+    let read_claude =
+        format!("GET /api/v1/me/grants/{OTHER_NATIVE_GRANT_ID}?vocabulary=2 HTTP/1.1");
     assert_eq!(
         request_lines(&server.finish()),
-        [READ_OAUTH, READ_OAUTH, READ_OAUTH, READ_NATIVE]
+        [
+            READ_OAUTH,
+            READ_OAUTH,
+            READ_OAUTH,
+            READ_NATIVE,
+            &read_claude
+        ]
     );
 }
 
@@ -4826,7 +4840,7 @@ enum Input<'a> {
     Null,
     /// These bytes on a pipe, as `--token-file -` and `--from-file -` read them.
     Piped(&'a [u8]),
-    /// A terminal these bytes are typed on, which Claude Code's sign-in needs.
+    /// A terminal these bytes are typed on.
     Typed(&'a [u8]),
 }
 
@@ -5148,7 +5162,7 @@ fn reconnect_checks_a_named_file_before_any_request_and_its_provider_before_any_
     let malformed = private_file(directory.path(), "malformed", b"not a token\n");
     let malformed = malformed.to_str().unwrap();
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let home = AmbientHome::new();
 
     // A malformed file is refused before anything is sent.
@@ -5162,6 +5176,7 @@ fn reconnect_checks_a_named_file_before_any_request_and_its_provider_before_any_
         Input::Null,
     );
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert_eq!(claude.recorded("arguments"), None);
     assert!(server.finish().is_empty());
 
     // A Codex login is no Claude Code grant's, nor a Claude Code token a Codex grant's.
@@ -5751,9 +5766,8 @@ fn create_codex_starts_no_sign_in_without_a_session() {
     assert!(server.finish().is_empty());
 }
 
-// `useful account integration connect claude_code`: `claude setup-token` on a terminal `useful` owns, its
-// prompts passed through and the token it prints taken out of what the member sees, or a token the
-// member names, imported for one organization.
+// `useful account integration connect claude_code`: a token the member names, imported for one
+// organization.
 
 fn claude_grant(id: &str, state: &str) -> serde_json::Value {
     let mut grant = codex_grant(id, ORGANIZATION_ID, state);
@@ -5762,89 +5776,11 @@ fn claude_grant(id: &str, state: &str) -> serde_json::Value {
 }
 
 #[test]
-fn create_claude_code_runs_setup_token_on_a_terminal_and_imports_the_token_without_showing_it() {
-    let paste = format!("{PASTE_CODE}\n");
-    for (flow, place, input) in [
-        ("browser", Place::Desktop, Input::Typed(b"")),
-        ("paste", Place::Remote, Input::Typed(paste.as_bytes())),
-    ] {
-        let (server, _directory, credential) = prepared(vec![
-            serving_every(),
-            only_acme(),
-            nothing_held(),
-            stored(CLAUDE_CODE, "201 Created", 1),
-        ]);
-        let claude = FakeProgram::claude(SetupToken::Prints);
-        let home = AmbientHome::new();
-        let fake = Fake {
-            program: Some(&claude),
-            environment: &[(CLAUDE_FLOW, flow)],
-        };
-        let output = run_fake(
-            &server,
-            &credential,
-            &home,
-            fake,
-            place,
-            &["claude_code"],
-            input,
-        );
-
-        assert_eq!(output.status.code(), Some(0), "{flow}: {}", stderr(&output));
-        let text = stdout(&output);
-        for fact in [
-            NATIVE_GRANT_ID,
-            "provider: claude_code",
-            "generation: 1",
-            "acme",
-        ] {
-            assert!(text.contains(fact), "{flow}: {fact}: {text}");
-        }
-        // The sign-in's prompts and what follows the token reach the member on standard
-        // error, the token does not (run_native checks every output for it).
-        let shown = stderr(&output);
-        assert!(shown.contains(CLAUDE_SIGN_IN_URL), "{flow}: {shown}");
-        assert!(shown.contains(AFTER_TOKEN), "{flow}: {shown}");
-        assert_eq!(
-            shown.contains(PASTE_PROMPT),
-            flow == "paste",
-            "{flow}: {shown}"
-        );
-        assert!(!shown.contains("sk-ant-"), "{flow}: {shown}");
-        assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
-        assert_eq!(claude.recorded("terminal").unwrap(), "yes\n", "{flow}");
-        let config = std::path::PathBuf::from(claude.recorded("config").unwrap());
-        assert_ne!(config, home.ambient_claude());
-        assert!(config.starts_with(home.temporary.path()), "{config:?}");
-        assert!(!config.exists());
-        assert!(
-            claude.recorded("mode").unwrap().starts_with("drwx------"),
-            "{:?}",
-            claude.recorded("mode")
-        );
-        let requests = server.finish();
-        assert_eq!(
-            request_lines(&requests),
-            [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT],
-            "{flow}"
-        );
-        assert_imported(&requests[3], ORGANIZATION_ID, CLAUDE_CODE);
-    }
-}
-
-#[test]
-fn a_claude_setup_token_that_fails_stores_nothing_and_reports_provider_login_failed() {
-    let cases = [
-        ("exits nonzero", Some(SetupToken::Exits(3))),
-        ("prints no token", Some(SetupToken::PrintsNothing)),
-        ("is interrupted", Some(SetupToken::Interrupts)),
-        ("is not on PATH", None),
-    ];
-    for (case, setup_token) in cases {
-        let claude = setup_token.map(FakeProgram::claude);
+fn create_claude_code_without_a_token_file_starts_no_sign_in_and_names_it() {
+    let claude = FakeProgram::claude();
+    for (terminal, input) in [(false, Input::Null), (true, Input::Typed(b""))] {
         for json in [false, true] {
-            let (server, _directory, credential) =
-                prepared(vec![serving_every(), only_acme(), nothing_held()]);
+            let (server, _directory, credential) = prepared(vec![]);
             let home = AmbientHome::new();
             let args: &[&str] = if json {
                 &["claude_code", "--json"]
@@ -5855,281 +5791,37 @@ fn a_claude_setup_token_that_fails_stores_nothing_and_reports_provider_login_fai
                 &server,
                 &credential,
                 &home,
-                claude.as_ref(),
+                Some(&claude),
                 Place::Desktop,
                 args,
-                Input::Typed(b""),
+                input,
             );
 
-            assert_eq!(output.status.code(), Some(1), "{case}: {}", stderr(&output));
-            if json {
-                let events = events(&output);
-                assert_eq!(events.len(), 1, "{case}: {events:?}");
-                assert_eq!(events[0]["outcome"], "provider_login_failed", "{case}");
-            } else {
-                assert!(output.stdout.is_empty(), "{case}");
-                assert!(stderr(&output).contains("--token-file"), "{case}");
-            }
             assert_eq!(
-                request_lines(&server.finish()),
-                [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE],
-                "{case}"
-            );
-        }
-    }
-}
-
-#[test]
-fn create_claude_code_without_a_terminal_starts_no_sign_in_and_names_the_token_file() {
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    for json in [false, true] {
-        let (server, _directory, credential) = prepared(vec![]);
-        let home = AmbientHome::new();
-        let args: &[&str] = if json {
-            &["claude_code", "--json"]
-        } else {
-            &["claude_code"]
-        };
-        let output = run_native(
-            &server,
-            &credential,
-            &home,
-            Some(&claude),
-            Place::Desktop,
-            args,
-            Input::Null,
-        );
-
-        assert_eq!(output.status.code(), Some(1), "{json}: {}", stderr(&output));
-        if json {
-            let events = events(&output);
-            assert_eq!(events.len(), 1, "{events:?}");
-            assert_eq!(events[0]["outcome"], "provider_login_failed");
-        } else {
-            assert!(output.stdout.is_empty());
-            assert!(
-                stderr(&output).contains("--token-file"),
-                "{}",
+                output.status.code(),
+                Some(1),
+                "terminal={terminal}, json={json}: {}",
                 stderr(&output)
             );
+            if json {
+                let events = events(&output);
+                assert_eq!(events.len(), 1, "{events:?}");
+                assert_eq!(events[0]["outcome"], "provider_login_failed");
+            } else {
+                assert!(output.stdout.is_empty());
+                assert!(
+                    stderr(&output).contains("--token-file -"),
+                    "{}",
+                    stderr(&output)
+                );
+            }
+            assert!(
+                server.finish().is_empty(),
+                "terminal={terminal}, json={json}"
+            );
+            assert_eq!(claude.recorded("arguments"), None);
         }
-        assert!(server.finish().is_empty(), "{json}");
     }
-    assert_eq!(claude.recorded("arguments"), None);
-}
-
-/// `useful account integration connect claude_code` with the fake `claude` on `PATH` in the browser flow,
-/// standard input `input`, a terminal's secondary side, and its outputs piped, started but not
-/// waited for.
-fn spawn_claude_sign_in(
-    server: &ScriptedServer,
-    credential: &Path,
-    home: &AmbientHome,
-    claude: &Path,
-    input: Stdio,
-) -> std::process::Child {
-    let opener = Opener::new(0);
-    let path = std::env::join_paths([opener.directory.path(), claude]).unwrap();
-    create_command(
-        server,
-        credential,
-        &opener,
-        Place::Desktop,
-        &["claude_code"],
-    )
-    .env("PATH", path)
-    .envs(home.variables())
-    .env(CLAUDE_FLOW, "browser")
-    .stdin(input)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap()
-}
-
-#[test]
-fn input_written_after_the_claude_sign_in_ends_is_left_for_the_next_reader() {
-    let mut server = ScriptedServer::respond_with_paused_last_response(vec![
-        serving_every(),
-        only_acme(),
-        nothing_held(),
-        stored(CLAUDE_CODE, "201 Created", 1),
-    ]);
-    let directory = private_credential_directory();
-    let credential = directory.path().join("credentials.json");
-    write_credential_fixture_for_deployment(
-        &credential,
-        &server.api_url,
-        &server.issuer,
-        TOKEN,
-        "2999-01-01T00:00:00Z",
-    );
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    let home = AmbientHome::new();
-    let pty = open_test_pty(None).unwrap();
-    // The test keeps its own copy of the terminal's secondary side, so what `useful` leaves unread
-    // stays readable.
-    let kept = fs::File::from(pty.slave.try_clone().unwrap());
-    let child = spawn_claude_sign_in(
-        &server,
-        &credential,
-        &home,
-        &claude.bin,
-        Stdio::from(pty.slave),
-    );
-
-    // The import is requested once the sign-in has ended; its answer waits for the input.
-    let requests: Vec<_> = (0..4).map(|_| server.next_request()).collect();
-    let typed = b"typed-after-the-sign-in\n";
-    let mut terminal = fs::File::from(pty.master);
-    terminal.write_all(typed).unwrap();
-    server.release_paused_response();
-    let output = child.wait_with_output().unwrap();
-
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    // The sign-in restored the terminal's line mode, so the typed line waits there whole.
-    let mut ready = [rustix::event::PollFd::new(
-        &kept,
-        rustix::event::PollFlags::IN,
-    )];
-    let wait = rustix::event::Timespec {
-        tv_sec: 20,
-        tv_nsec: 0,
-    };
-    assert_eq!(rustix::event::poll(&mut ready, Some(&wait)).unwrap(), 1);
-    let mut left = vec![0; typed.len() + 1];
-    let count = (&kept).read(&mut left).unwrap();
-    assert_eq!(&left[..count], typed);
-    drop(terminal);
-    assert_eq!(
-        request_lines(&requests),
-        [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT]
-    );
-    assert_imported(&requests[3], ORGANIZATION_ID, CLAUDE_CODE);
-    assert!(server.finish().is_empty());
-    assert_no_secret_output(&output, &[TOKEN, CLAUDE_TOKEN_SENTINEL]);
-    home.assert_untouched_and_clean();
-}
-
-#[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the bound on useful's return is far below the descendant's own life, so real time only separates returning from waiting for the descendant"
-)]
-fn a_descendant_of_the_claude_sign_in_holding_its_terminal_does_not_keep_useful_running() {
-    use super::pi_installation::quote;
-    let (server, _directory, credential) = prepared(vec![
-        serving_every(),
-        only_acme(),
-        nothing_held(),
-        stored(CLAUDE_CODE, "201 Created", 1),
-    ]);
-    // A `claude` that leaves a descendant holding its terminal, deaf to the hangup its end
-    // sends, then prints the token and exits.
-    let fake = tempfile::tempdir().unwrap();
-    let bin = fake.path().join("bin");
-    let descendant = fake.path().join("descendant");
-    fs::create_dir(&bin).unwrap();
-    fs::write(
-        bin.join("claude"),
-        format!(
-            "#!/bin/sh\nPATH={tools}\nexport PATH\n\
-             (trap '' HUP; exec sleep 120) &\n\
-             echo \"$!\" > {descendant}\n\
-             printf '%s\\n' {token}\n",
-            tools = quote(&std::env::var("PATH").unwrap_or_default()),
-            descendant = quote(descendant.to_str().unwrap()),
-            token = quote(CLAUDE_TOKEN),
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(bin.join("claude"), Permissions::from_mode(0o755)).unwrap();
-    let home = AmbientHome::new();
-    let pty = open_test_pty(None).unwrap();
-    let child = spawn_claude_sign_in(&server, &credential, &home, &bin, Stdio::from(pty.slave));
-
-    let (exited, exit) = mpsc::channel();
-    let waiter = thread::spawn(move || {
-        let output = child.wait_with_output();
-        exited.send(()).ok();
-        output
-    });
-    let returned = exit.recv_timeout(Duration::from_secs(20)).is_ok();
-    let holder: i32 = fs::read_to_string(&descendant)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let _ = rustix::process::kill_process(
-        rustix::process::Pid::from_raw(holder).unwrap(),
-        rustix::process::Signal::KILL,
-    );
-    assert!(
-        returned,
-        "useful waited for the descendant holding the terminal"
-    );
-    let output = waiter.join().unwrap().unwrap();
-
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert!(stdout(&output).contains(NATIVE_GRANT_ID));
-    let requests = server.finish();
-    assert_eq!(
-        request_lines(&requests),
-        [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT]
-    );
-    assert_imported(&requests[3], ORGANIZATION_ID, CLAUDE_CODE);
-    assert_no_secret_output(&output, &[TOKEN, CLAUDE_TOKEN_SENTINEL]);
-    home.assert_untouched_and_clean();
-}
-
-#[test]
-fn the_claude_sign_in_leads_its_own_session_with_the_terminal_useful_owns_as_its_controlling_terminal()
- {
-    use super::pi_installation::quote;
-    const ON_ITS_TERMINAL: &str = "claude-wrote-to-its-controlling-terminal";
-    let (server, _directory, credential) = prepared(vec![
-        serving_every(),
-        only_acme(),
-        nothing_held(),
-        stored(CLAUDE_CODE, "201 Created", 1),
-    ]);
-    // A `claude` that goes on only when it leads its own session and has a controlling
-    // terminal, which it writes to; what it writes there reaches the member only when that
-    // terminal is the one `useful` relays.
-    let fake = tempfile::tempdir().unwrap();
-    let bin = fake.path().join("bin");
-    fs::create_dir(&bin).unwrap();
-    fs::write(
-        bin.join("claude"),
-        format!(
-            "#!/bin/sh\nPATH={tools}\nexport PATH\n\
-             python3 -c 'import os, sys; leader = int(sys.argv[1]); \
-             sys.exit(os.getsid(leader) != leader)' \"$$\" || exit 7\n\
-             {{ : < /dev/tty; }} 2>/dev/null || exit 8\n\
-             echo {ON_ITS_TERMINAL} > /dev/tty\n\
-             printf '%s\\n' {token}\n",
-            tools = quote(&std::env::var("PATH").unwrap_or_default()),
-            token = quote(CLAUDE_TOKEN),
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(bin.join("claude"), Permissions::from_mode(0o755)).unwrap();
-    let home = AmbientHome::new();
-    let pty = open_test_pty(None).unwrap();
-    let output = spawn_claude_sign_in(&server, &credential, &home, &bin, Stdio::from(pty.slave))
-        .wait_with_output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert!(stderr(&output).contains(ON_ITS_TERMINAL));
-    let requests = server.finish();
-    assert_eq!(
-        request_lines(&requests),
-        [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT]
-    );
-    assert_imported(&requests[3], ORGANIZATION_ID, CLAUDE_CODE);
-    assert_no_secret_output(&output, &[TOKEN, CLAUDE_TOKEN_SENTINEL]);
-    home.assert_untouched_and_clean();
 }
 
 #[test]
@@ -6147,7 +5839,7 @@ fn create_claude_code_imports_a_named_token_file_or_standard_input_without_runni
             nothing_held(),
             stored(CLAUDE_CODE, "201 Created", 1),
         ]);
-        let claude = FakeProgram::claude(SetupToken::Prints);
+        let claude = FakeProgram::claude();
         let home = AmbientHome::new();
         let output = run_native(
             &server,
@@ -6172,46 +5864,7 @@ fn create_claude_code_imports_a_named_token_file_or_standard_input_without_runni
 }
 
 #[test]
-fn reconnect_claude_code_runs_setup_token_and_stores_the_token_as_the_grants_next_generation() {
-    let (server, _directory, credential) = prepared(vec![
-        page(&[claude_grant(NATIVE_GRANT_ID, "active")], None),
-        serving_every(),
-        stored(CLAUDE_CODE, "200 OK", 3),
-    ]);
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    let home = AmbientHome::new();
-    let output = run_reconnect(
-        &server,
-        &credential,
-        &home,
-        Some(&claude),
-        &["claude_code", "--json"],
-        Input::Typed(b""),
-    );
-
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    let events = events(&output);
-    assert_eq!(events[0]["outcome"], "replaced");
-    assert_eq!(events[0]["grant"]["id"], NATIVE_GRANT_ID);
-    assert_eq!(events[0]["grant"]["generation"], 3);
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
-    let requests = server.finish();
-    let replace = replace_line(NATIVE_GRANT_ID);
-    assert_eq!(
-        request_lines(&requests),
-        [LIST_EVERY_KIND, READ_SERVED, &replace]
-    );
-    assert_eq!(
-        request_body(&requests[2]),
-        serde_json::json!({
-            "recordSchemaVersion": 1,
-            "material": encoded(CLAUDE_TOKEN.as_bytes())
-        })
-    );
-}
-
-#[test]
-fn reconnect_claude_code_takes_a_token_file_and_without_one_needs_a_terminal() {
+fn reconnect_claude_code_takes_a_token_file_and_without_one_starts_no_sign_in() {
     let directory = tempfile::tempdir().unwrap();
     let token = private_file(
         directory.path(),
@@ -6220,9 +5873,13 @@ fn reconnect_claude_code_takes_a_token_file_and_without_one_needs_a_terminal() {
     );
     let token = token.to_str().unwrap();
     let held = || one(&claude_grant(NATIVE_GRANT_ID, "active"));
-    let (server, _directory, credential) =
-        prepared(vec![held(), stored(CLAUDE_CODE, "200 OK", 3), held()]);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let (server, _directory, credential) = prepared(vec![
+        held(),
+        stored(CLAUDE_CODE, "200 OK", 3),
+        held(),
+        held(),
+    ]);
+    let claude = FakeProgram::claude();
     let home = AmbientHome::new();
     let stored = run_reconnect(
         &server,
@@ -6232,32 +5889,34 @@ fn reconnect_claude_code_takes_a_token_file_and_without_one_needs_a_terminal() {
         &[NATIVE_GRANT_ID, "--token-file", token],
         Input::Null,
     );
-    let refused = run_reconnect(
-        &server,
-        &credential,
-        &home,
-        Some(&claude),
-        &[NATIVE_GRANT_ID],
-        Input::Null,
-    );
-
     assert_eq!(stored.status.code(), Some(0), "{}", stderr(&stored));
     assert!(stdout(&stored).contains(&format!("grant: {NATIVE_GRANT_ID}")));
-    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
-    let text = stderr(&refused);
-    assert!(
-        text.contains(&format!(
-            "{} --token-file -",
-            reconnect_line(NATIVE_GRANT_ID)
-        )),
-        "{text}"
-    );
-    assert_eq!(claude.recorded("arguments"), None);
+
+    for input in [Input::Null, Input::Typed(b"")] {
+        let refused = run_reconnect(
+            &server,
+            &credential,
+            &home,
+            Some(&claude),
+            &[NATIVE_GRANT_ID],
+            input,
+        );
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        let text = stderr(&refused);
+        assert!(
+            text.contains(&format!(
+                "{} --token-file -",
+                reconnect_line(NATIVE_GRANT_ID)
+            )),
+            "{text}"
+        );
+        assert_eq!(claude.recorded("arguments"), None);
+    }
     let requests = server.finish();
     let replace = replace_line(NATIVE_GRANT_ID);
     assert_eq!(
         request_lines(&requests),
-        [READ_NATIVE, replace.as_str(), READ_NATIVE]
+        [READ_NATIVE, replace.as_str(), READ_NATIVE, READ_NATIVE]
     );
     assert_eq!(
         request_body(&requests[1]),
@@ -6362,7 +6021,7 @@ fn run_command_in(
     let fakes = Fakes {
         opener,
         programs,
-        environment: &[(CLAUDE_FLOW, "browser")],
+        environment: &[],
         checkout,
     };
     let arguments = [command, args].concat();
@@ -6437,21 +6096,18 @@ fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
             vec![holding(&["github"], false), serving_every(), only_acme()],
             approved("gitlab.com").to_vec(),
             approved("linear").to_vec(),
-            vec![
-                stored(CLAUDE_CODE, "201 Created", 1),
-                stored(CODEX, "201 Created", 1),
-            ],
+            vec![stored(CODEX, "201 Created", 1)],
         ]
         .concat(),
     );
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(&server, &credential, &opener, &[&codex, &claude], args);
 
     assert_eq!(
         output.status.code(),
-        Some(0),
+        Some(1),
         "{args:?}: {}",
         stderr(&output)
     );
@@ -6463,13 +6119,13 @@ fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
         ],
         "{args:?}"
     );
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
+    assert_eq!(claude.recorded("arguments"), None);
     assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
     let text = stdout(&output);
     for fact in [
         "gitlab.com: created",
         "linear: created",
-        "claude_code: created",
+        "claude_code: failed",
         "codex: created",
     ] {
         assert!(text.contains(fact), "{args:?}: {fact}: {text}");
@@ -6488,15 +6144,13 @@ fn create_all_signs_in_to_each_provider_the_member_lacks_in_order() {
             poll.as_str(),
             START_CONSENT,
             poll.as_str(),
-            IMPORT_GRANT,
             IMPORT_GRANT
         ],
         "{args:?}"
     );
     assert_eq!(start_body(&requests[3]), "gitlab.com");
     assert_eq!(start_body(&requests[5]), "linear");
-    assert_imported(&requests[7], ORGANIZATION_ID, CLAUDE_CODE);
-    assert_imported(&requests[8], ORGANIZATION_ID, CODEX);
+    assert_imported(&requests[7], ORGANIZATION_ID, CODEX);
 }
 
 #[test]
@@ -6510,7 +6164,6 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
             vec![
                 json_http_response("201 Created", consent_of("linear", "pending")),
                 polled(denied),
-                stored(CLAUDE_CODE, "201 Created", 1),
                 stored(CODEX, "201 Created", 1),
             ],
         ]
@@ -6518,7 +6171,7 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
     );
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(
         &server,
         &credential,
@@ -6549,8 +6202,9 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
     assert_eq!(events[1]["grant"]["provider"], "gitlab.com");
     assert_eq!(events[3]["outcome"], "failed");
     assert_eq!(events[3]["reason"], "consent_denied");
-    assert_eq!(events[4]["grant"]["provider"], "claude_code");
+    assert_eq!(events[4]["outcome"], "provider_login_failed");
     assert_eq!(events[5]["grant"]["provider"], "codex");
+    assert_eq!(claude.recorded("arguments"), None);
     assert_eq!(
         summary(&events),
         (
@@ -6558,88 +6212,35 @@ fn a_sign_in_that_fails_is_reported_and_the_ones_after_it_still_run() {
             outcomes(&[
                 ("gitlab.com", "created"),
                 ("linear", "failed"),
-                ("claude_code", "created"),
+                ("claude_code", "failed"),
                 ("codex", "created")
             ])
         )
     );
     let requests = server.finish();
-    assert_eq!(request_lines(&requests)[7..], [IMPORT_GRANT, IMPORT_GRANT]);
+    assert_eq!(request_lines(&requests)[7..], [IMPORT_GRANT]);
+    assert_imported(&requests[7], ORGANIZATION_ID, CODEX);
 }
 
-#[test]
-fn without_a_terminal_the_claude_sign_in_fails_and_the_codex_sign_in_after_it_still_runs() {
-    let (server, _directory, credential) = prepared(vec![
-        holding(&["github", "gitlab.com", "linear"], false),
-        serving_every(),
-        only_acme(),
-        stored(CODEX, "201 Created", 1),
-    ]);
-    let opener = Opener::new(0);
-    let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    let home = AmbientHome::new();
-    let fakes = Fakes {
-        opener: &opener,
-        programs: &[&codex, &claude],
-        environment: &[],
-        checkout: None,
-    };
-    let arguments = [GRANT_CREATE, &["--all", "--json"]].concat();
-    let output = run_programs(
-        &server,
-        &credential,
-        &home,
-        fakes,
-        Place::Desktop,
-        &arguments,
-        Input::Null,
-    );
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let events = events(&output);
-    assert_eq!(events[0]["outcome"], "provider_login_failed", "{events:?}");
-    assert_eq!(
-        summary(&events),
-        (
-            "failed".to_owned(),
-            outcomes(&[("claude_code", "failed"), ("codex", "created")])
-        )
-    );
-    assert_eq!(claude.recorded("arguments"), None);
-    assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
-    let requests = server.finish();
-    assert_eq!(
-        request_lines(&requests),
-        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS, IMPORT_GRANT]
-    );
-    assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
-}
-
-/// A directory holding a fake `claude` that runs `then` once it has started, for a sign-in a
+/// A directory holding a fake `program` that runs `then` once it has started, for a sign-in a
 /// signal ends; its `sleep` comes from the test's `PATH`, as `FakeProgram`'s tools do.
-fn signalled_claude(then: &str) -> tempfile::TempDir {
+fn signalled_program(program: &str, then: &str) -> tempfile::TempDir {
     use super::pi_installation::quote;
     let directory = tempfile::tempdir().unwrap();
-    let claude = directory.path().join("claude");
+    let executable = directory.path().join(program);
     let tools = std::env::var("PATH").unwrap_or_default();
     fs::write(
-        &claude,
-        format!(
-            "#!/bin/sh\nPATH={}\nexport PATH\necho claude-sign-in-started\n{then}\n",
-            quote(&tools)
-        ),
+        &executable,
+        format!("#!/bin/sh\nPATH={}\nexport PATH\n{then}\n", quote(&tools)),
     )
     .unwrap();
-    fs::set_permissions(&claude, Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&executable, Permissions::from_mode(0o755)).unwrap();
     directory
 }
 
 #[test]
-fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
-    // How the sign-in ends, and the status and outcome it stops `useful account integration connect` with:
-    // the member's interrupt reaches the sign-in's own terminal, so `claude` alone receives it,
-    // while a signal sent to `useful` is passed to `claude`.
+fn a_signal_that_ends_the_codex_sign_in_stops_the_command_with_its_status() {
+    // A signal can end `codex` directly or reach it through `useful`.
     let cases = [
         ("kill -INT $$", 130, "interrupted"),
         ("kill -TERM $$", 143, "terminated"),
@@ -6648,13 +6249,13 @@ fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
         ("kill -TERM \"$PPID\"\nexec sleep 30", 143, "terminated"),
     ];
     for (then, status, outcome) in cases {
-        let claude = signalled_claude(then);
-        let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
+        let codex = signalled_program("codex", then);
+        let claude = FakeProgram::claude();
         let run = |server: &ScriptedServer, credential: &Path, args: &[&str]| {
             let opener = Opener::new(0);
             let home = AmbientHome::new();
             let path =
-                std::env::join_paths([opener.directory.path(), claude.path(), &codex.bin]).unwrap();
+                std::env::join_paths([opener.directory.path(), codex.path(), &claude.bin]).unwrap();
             let output = typed_output(
                 create_command(server, credential, &opener, Place::Desktop, args)
                     .env("PATH", path)
@@ -6666,7 +6267,15 @@ fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
         };
 
         let (server, _directory, credential) = prepared(vec![
-            holding(&["github", "gitlab.com", "linear"], false),
+            page(
+                &[
+                    oauth_grant(OAUTH_GRANT_ID, "github", "active"),
+                    oauth_grant(OAUTH_GRANT_ID, "gitlab.com", "active"),
+                    oauth_grant(OAUTH_GRANT_ID, "linear", "active"),
+                    claude_grant_of(OTHER_NATIVE_GRANT_ID),
+                ],
+                None,
+            ),
             serving_every(),
             only_acme(),
         ]);
@@ -6679,27 +6288,13 @@ fn a_signal_that_ends_the_claude_sign_in_stops_the_command_with_its_status() {
         );
         assert_eq!(
             summary(&events(&output)),
-            (outcome.to_owned(), outcomes(&[("claude_code", outcome)])),
+            (outcome.to_owned(), outcomes(&[("codex", outcome)])),
             "{then}"
         );
-        assert_eq!(codex.recorded("arguments"), None, "{then}");
+        assert_eq!(claude.recorded("arguments"), None, "{then}");
         assert_eq!(
             request_lines(&server.finish()),
             [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS],
-            "{then}"
-        );
-
-        // A single provider's sign-in that a signal ends is a failed sign-in.
-        let (server, _directory, credential) =
-            prepared(vec![serving_every(), only_acme(), nothing_held()]);
-        let output = run(&server, &credential, &["claude_code", "--json"]);
-        assert_eq!(output.status.code(), Some(1), "{then}: {}", stderr(&output));
-        let events = events(&output);
-        assert_eq!(events.len(), 1, "{then}: {events:?}");
-        assert_eq!(events[0]["outcome"], "provider_login_failed", "{then}");
-        assert_eq!(
-            request_lines(&server.finish()),
-            [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE],
             "{then}"
         );
     }
@@ -6802,22 +6397,22 @@ fn import_outcomes(events: &[serde_json::Value]) -> Vec<&str> {
 #[test]
 fn a_coding_agent_the_deployment_does_not_serve_is_passed_over_before_its_sign_in() {
     // Named alone, it is refused before its organization, its sign-in or an import.
-    let (server, _directory, credential) = prepared(vec![serving(&["github", "codex"])]);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let (server, _directory, credential) = prepared(vec![serving(&["github", "claude_code"])]);
+    let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
     let home = AmbientHome::new();
     let output = run_native(
         &server,
         &credential,
         &home,
-        Some(&claude),
+        Some(&codex),
         Place::Desktop,
-        &["claude_code", "--json"],
-        Input::Typed(b""),
+        &["codex", "--json"],
+        Input::Null,
     );
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert_eq!(import_outcomes(&events(&output)), ["provider_unavailable"]);
-    assert_eq!(claude.recorded("arguments"), None);
+    assert_eq!(codex.recorded("arguments"), None);
     assert_eq!(request_lines(&server.finish()), [READ_SERVED]);
 
     // Without a provider, it is passed over and the coding agent the deployment serves is
@@ -6830,7 +6425,7 @@ fn a_coding_agent_the_deployment_does_not_serve_is_passed_over_before_its_sign_i
     ]);
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(
         &server,
         &credential,
@@ -6868,43 +6463,38 @@ fn a_deployment_that_predates_the_served_providers_read_is_signed_in_to_as_befor
         predating_served(),
         only_acme(),
         nothing_held(),
-        stored(CLAUDE_CODE, "201 Created", 1),
+        stored(CODEX, "201 Created", 1),
     ]);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
     let home = AmbientHome::new();
-    let fake = Fake {
-        program: Some(&claude),
-        environment: &[(CLAUDE_FLOW, "browser")],
-    };
-    let output = run_fake(
+    let output = run_native(
         &server,
         &credential,
         &home,
-        fake,
+        Some(&codex),
         Place::Desktop,
-        &["claude_code"],
-        Input::Typed(b""),
+        &["codex"],
+        Input::Null,
     );
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
+    assert_eq!(codex.recorded("arguments").unwrap(), "login\n");
     let requests = server.finish();
     assert_eq!(
         request_lines(&requests),
         [READ_SERVED, LIST_MEMBERSHIPS, LIST_NATIVE, IMPORT_GRANT]
     );
-    assert_imported(&requests[3], ORGANIZATION_ID, CLAUDE_CODE);
+    assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
 
     let (server, _directory, credential) = prepared(vec![
         holding(&["github", "gitlab.com", "linear"], false),
         predating_served(),
         only_acme(),
-        stored(CLAUDE_CODE, "201 Created", 1),
         stored(CODEX, "201 Created", 1),
     ]);
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(
         &server,
         &credential,
@@ -6913,21 +6503,23 @@ fn a_deployment_that_predates_the_served_providers_read_is_signed_in_to_as_befor
         &["--all", "--json"],
     );
 
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let events = events(&output);
+    assert_eq!(import_outcomes(&events)[0], "provider_login_failed");
     assert_eq!(
-        summary(&events(&output)).1,
-        outcomes(&[("claude_code", "created"), ("codex", "created")])
+        summary(&events),
+        (
+            "failed".to_owned(),
+            outcomes(&[("claude_code", "failed"), ("codex", "created")])
+        )
     );
+    assert_eq!(claude.recorded("arguments"), None);
+    let requests = server.finish();
     assert_eq!(
-        request_lines(&server.finish()),
-        [
-            LIST_EVERY_KIND,
-            READ_SERVED,
-            LIST_MEMBERSHIPS,
-            IMPORT_GRANT,
-            IMPORT_GRANT
-        ]
+        request_lines(&requests),
+        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS, IMPORT_GRANT]
     );
+    assert_imported(&requests[3], ORGANIZATION_ID, CODEX);
 }
 
 /// The answer of a deployment that serves `example`, titled `Example Cloud`, between `github`
@@ -7113,17 +6705,18 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
         holding(&["github", "gitlab.com", "linear"], false),
         serving_every(),
         only_acme(),
-        stored(CLAUDE_CODE, "201 Created", 1),
     ]);
     let opener = Opener::new(0);
     // `claude` alone is on `PATH`.
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(&server, &credential, &opener, &[&claude], &["--all"]);
 
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(claude.recorded("arguments"), None);
     let text = stdout(&output);
     let report = summary_report(&text, "claude_code");
     assert!(report[0].starts_with('✗'), "{text}");
+    assert!(report.contains(&"claude_code: failed"), "{text}");
     assert!(report.contains(&"codex: failed"), "{text}");
     let remedies = remedies(&report);
     assert!(
@@ -7135,6 +6728,7 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
         "{text}"
     );
     for command in [
+        "useful account integration connect claude_code --token-file -",
         "useful account integration connect codex --from-file PATH",
         "useful account integration connect --all",
     ] {
@@ -7145,7 +6739,7 @@ fn a_summary_with_codex_missing_names_installing_it_before_running_the_command_a
     }
     assert_eq!(
         request_lines(&server.finish()),
-        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS, IMPORT_GRANT]
+        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS]
     );
 }
 
@@ -7205,7 +6799,7 @@ fn an_unresolved_organization_passes_over_the_coding_agents_and_the_consents_sti
             );
             let opener = Opener::new(0);
             let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-            let claude = FakeProgram::claude(SetupToken::Prints);
+            let claude = FakeProgram::claude();
             let args: &[&str] = if json {
                 &["--all", "--json"]
             } else {
@@ -7319,7 +6913,7 @@ fn a_coding_agent_held_only_in_another_organization_is_selected_for_the_one_name
     ]);
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(
         &server,
         &credential,
@@ -7377,7 +6971,7 @@ fn an_option_that_needs_a_provider_or_all_with_one_exits_2_before_any_request() 
 #[test]
 fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_without_one() {
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let programs: [&FakeProgram; 2] = [&codex, &claude];
     let cases: [&[&str]; 5] = [
         &["codex", "--no-wait"],
@@ -7398,30 +6992,20 @@ fn a_coding_agent_refuses_the_options_that_wait_for_a_consent_which_still_apply_
             stderr(&output)
         );
         assert!(output.stdout.is_empty(), "{args:?}");
+        if args[0] == "claude_code" {
+            let shown = stderr(&output);
+            assert!(
+                shown.contains("useful account integration connect claude_code --token-file -"),
+                "{shown}"
+            );
+        }
         assert_eq!(codex.recorded("arguments"), None, "{args:?}");
         assert_eq!(claude.recorded("arguments"), None, "{args:?}");
         assert!(server.finish().is_empty(), "{args:?}");
     }
 
-    // `--login` is Codex's: the remedy names Claude Code's own sign-in, the default.
-    let (server, _directory, credential) = prepared(vec![]);
-    let opener = Opener::new(0);
-    let output = run_every(
-        &server,
-        &credential,
-        &opener,
-        &programs,
-        &["claude_code", "--login"],
-    );
-    let shown = stderr(&output);
-    assert!(
-        shown
-            .lines()
-            .any(|line| line.trim() == "useful account integration connect claude_code"),
-        "{shown}"
-    );
-
     // Without a provider, both still apply to the consents.
+    let opener = Opener::new(0);
     let (server, _directory, credential) = prepared(vec![
         holding(&["github", "gitlab.com"], true),
         predating_served(),
@@ -7638,13 +7222,12 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
         [
             vec![nothing_held(), serving_every(), only_acme()],
             approved("linear").to_vec(),
-            vec![stored(CLAUDE_CODE, "201 Created", 1)],
         ]
         .concat(),
     );
     let opener = Opener::new(0);
     let codex = FakeProgram::codex(SignIn::Writes(CODEX_MATERIAL));
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_in(
         &server,
         &credential,
@@ -7654,9 +7237,9 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
         &["--workflow", "root.yaml"],
     );
 
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
+    assert_eq!(claude.recorded("arguments"), None);
     assert_eq!(codex.recorded("arguments"), None);
     let text = stdout(&output);
     for fact in [
@@ -7665,7 +7248,8 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
         "LINEAR_API_KEY",
         "BUILDKITE_API_TOKEN",
         "linear: created",
-        "claude_code: created",
+        "claude_code: failed",
+        "useful account integration connect claude_code --token-file -",
     ] {
         assert!(text.contains(fact), "{fact}: {text}");
     }
@@ -7693,12 +7277,10 @@ fn create_workflow_signs_in_to_only_the_providers_its_tree_calls_for() {
             READ_SERVED,
             LIST_MEMBERSHIPS,
             START_CONSENT,
-            poll.as_str(),
-            IMPORT_GRANT
+            poll.as_str()
         ]
     );
     assert_eq!(start_body(&requests[3]), "linear");
-    assert_imported(&requests[5], ORGANIZATION_ID, CLAUDE_CODE);
 }
 
 #[test]
@@ -7709,10 +7291,9 @@ fn a_held_provider_is_passed_over_and_json_carries_the_plan_before_the_sign_ins(
         holding(&["linear"], false),
         serving_every(),
         only_acme(),
-        stored(CLAUDE_CODE, "201 Created", 1),
     ]);
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_in(
         &server,
         &credential,
@@ -7722,7 +7303,7 @@ fn a_held_provider_is_passed_over_and_json_carries_the_plan_before_the_sign_ins(
         &["--workflow", "root.yaml", "--json"],
     );
 
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let events = events(&output);
     let plan = &events[0];
     assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
@@ -7749,18 +7330,16 @@ fn a_held_provider_is_passed_over_and_json_carries_the_plan_before_the_sign_ins(
         ])
     );
     assert_eq!(events[1]["event"], "import_result");
-    assert_eq!(events[1]["grant"]["provider"], "claude_code");
+    assert_eq!(events[1]["outcome"], "provider_login_failed");
     assert_eq!(
         summary(&events),
-        (
-            "completed".to_owned(),
-            outcomes(&[("claude_code", "created")])
-        )
+        ("failed".to_owned(), outcomes(&[("claude_code", "failed")]))
     );
     assert!(opener.opened(0).is_empty());
+    assert_eq!(claude.recorded("arguments"), None);
     assert_eq!(
         request_lines(&server.finish()),
-        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS, IMPORT_GRANT]
+        [LIST_EVERY_KIND, READ_SERVED, LIST_MEMBERSHIPS]
     );
 }
 
@@ -7791,7 +7370,7 @@ fn create_workflow_passes_over_each_grant_that_needs_reconnecting_naming_its_rec
     let tree = Tree::linear_and_claude_code(true);
     let git = Git::new();
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let (server, _directory, credential) = prepared(vec![
         needing_reconnect(),
         serving_every(),
@@ -7861,7 +7440,7 @@ fn create_workflow_passes_over_a_login_refused_on_a_runner_its_pool_reaches() {
     let tree = Tree::linear_and_claude_code(true);
     let git = Git::new();
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let mut grant = claude_grant_refused(NATIVE_GRANT_ID);
     let direct = grant["authorizations"][0].clone();
     let mut pool = pool_authorization("aga_01k0z6r1w8f4jy2m7q9v3x5abf", ORGANIZATION_ID);
@@ -7971,7 +7550,7 @@ fn create_workflow_holds_a_provider_with_a_healthy_grant_beside_one_that_needs_r
         serving_every(),
     ]);
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_in(
         &server,
         &credential,
@@ -8067,7 +7646,7 @@ fn create_workflow_runner_passes_over_a_coding_agent_the_runners_host_supplies()
     for (runner, responses, expected, supplied) in cases {
         let (server, _directory, credential) = prepared(responses);
         let opener = Opener::new(0);
-        let claude = FakeProgram::claude(SetupToken::Prints);
+        let claude = FakeProgram::claude();
         let mut args = vec!["--workflow", "root.yaml", "--json"];
         args.extend(runner.iter().flat_map(|runner| ["--runner", runner]));
         let output = run_in(
@@ -8140,7 +7719,7 @@ fn create_workflow_runner_refuses_a_name_no_runner_or_several_have_before_the_pl
         globex(),
     ]);
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let run = |runner: &str| {
         run_in(
             &server,
@@ -8232,7 +7811,7 @@ fn create_all_selects_nothing_for_a_grant_that_needs_reconnecting() {
         predating_served(),
     ]);
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
+    let claude = FakeProgram::claude();
     let output = run_every(
         &server,
         &credential,
@@ -8286,8 +7865,8 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         true,
     );
     let git = Git::new();
-    // Ada, a member of Acme alone, holds a GitHub grant; the Linear consent and the Claude Code
-    // sign-in make the other two.
+    // Ada, a member of Acme alone, holds a GitHub grant. The Linear consent and a separate
+    // Claude Code token import make the other two.
     let github = oauth_grant_unauthorized(OAUTH_GRANT_ID);
     let mut linear = oauth_grant(LINEAR_GRANT_ID, "linear", "active");
     linear["authorizations"] = serde_json::json!([]);
@@ -8315,12 +7894,17 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         })
         .collect();
     let (server, _directory, credential) = prepared(vec![
-        // useful account integration connect --workflow workflow.yaml
+        // useful account integration connect --workflow workflow.yaml --runner build-1
+        only_acme(),
+        acme_runners_with_build_1(),
         page(&[github], None),
         serving_every(),
         only_acme(),
         json_http_response("201 Created", consent_of("linear", "pending")),
         polled(consented),
+        // useful account integration connect claude_code --token-file -
+        only_acme(),
+        nothing_held(),
         stored(CLAUDE_CODE, "201 Created", 1),
         // useful account integration list
         page(&held, None),
@@ -8340,38 +7924,31 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         identities(ada()),
     ]);
     let opener = Opener::new(0);
-    let claude = FakeProgram::claude(SetupToken::Prints);
-    // run_in checks that no output carries the token or Ada's own Claude Code configuration
-    // changed.
+    let claude = FakeProgram::claude();
     let created = run_in(
         &server,
         &credential,
         &opener,
         &[&claude],
         git.in_tree(&tree),
-        &["--workflow", "workflow.yaml", "--json"],
-    );
-    let listed = run_grant(&server, &credential, &["list", "--json"]);
-    let authorized_all = run_grant(
-        &server,
-        &credential,
         &[
-            "authorize",
-            "--all",
+            "--workflow",
+            "workflow.yaml",
             "--runner",
-            RUNNER_ID,
-            "--yes",
+            "build-1",
             "--json",
         ],
     );
-    let listed_after = run_grant(&server, &credential, &["list", "--json"]);
 
-    // GitHub is passed over as held, Linear and Claude Code are signed in to, and the variable
-    // of no known kind is listed as unknown.
-    assert_eq!(created.status.code(), Some(0), "{}", stderr(&created));
-    let events = events(&created);
-    let plan = &events[0];
-    assert_eq!(plan["event"], "workflow_requirements", "{events:?}");
+    // GitHub is passed over as held, Linear consent completes, and the variable of no known
+    // kind is listed as unknown. The selection reports that it could not make a Claude Code grant.
+    assert_eq!(created.status.code(), Some(1), "{}", stderr(&created));
+    let selection_events = events(&created);
+    let plan = &selection_events[0];
+    assert_eq!(
+        plan["event"], "workflow_requirements",
+        "{selection_events:?}"
+    );
     assert_eq!(providers_of(plan, "held"), ["github"]);
     assert_eq!(providers_of(plan, "selected"), ["linear", "claude_code"]);
     assert!(
@@ -8386,26 +7963,45 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         "{plan}"
     );
     assert_eq!(
-        summary(&events),
+        summary(&selection_events),
         (
-            "completed".to_owned(),
-            outcomes(&[("linear", "created"), ("claude_code", "created")])
+            "failed".to_owned(),
+            outcomes(&[("linear", "created"), ("claude_code", "failed")])
         )
     );
-    // The Linear consent URL opens, and `claude setup-token` runs on a terminal and shows its
-    // prompts.
-    assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
-    assert_eq!(claude.recorded("arguments").unwrap(), "setup-token\n");
-    assert_eq!(claude.recorded("terminal").unwrap(), "yes\n");
-    assert!(
-        stderr(&created).contains(CLAUDE_SIGN_IN_URL),
-        "{}",
-        stderr(&created)
+    assert_eq!(
+        import_outcomes(&selection_events),
+        ["provider_login_failed"]
     );
+    assert_eq!(opener.opened(1), [format!("1 {}", consent_url("linear"))]);
+
+    // Ada imports the token she obtained separately from the same checkout.
+    let imported = run_programs(
+        &server,
+        &credential,
+        &AmbientHome::new(),
+        Fakes {
+            opener: &opener,
+            programs: &[&claude],
+            environment: &[],
+            checkout: git.in_tree(&tree),
+        },
+        Place::Desktop,
+        &[
+            GRANT_CREATE,
+            &["claude_code", "--token-file", "-", "--json"],
+        ]
+        .concat(),
+        Input::Piped(CLAUDE_TOKEN.as_bytes()),
+    );
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    assert_eq!(events(&imported)[0]["grant"]["id"], NATIVE_GRANT_ID);
+    assert_eq!(claude.recorded("arguments"), None);
 
     // Three grants, none with a runner authorized, each naming the authorization as its next
     // action.
     let grant_ids = [OAUTH_GRANT_ID, LINEAR_GRANT_ID, NATIVE_GRANT_ID];
+    let listed = run_grant(&server, &credential, &["list", "--json"]);
     assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
     let document = json_output(&listed);
     let grants = document["grants"].as_array().unwrap();
@@ -8420,6 +8016,18 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     }
 
     // One command authorizes the runner for each, and the list shows it on each.
+    let authorized_all = run_grant(
+        &server,
+        &credential,
+        &[
+            "authorize",
+            "--all",
+            "--runner",
+            RUNNER_ID,
+            "--yes",
+            "--json",
+        ],
+    );
     assert_eq!(
         authorized_all.status.code(),
         Some(0),
@@ -8432,6 +8040,7 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
         grant_outcomes(&document),
         grant_ids.map(|id| (id.to_owned(), "authorized".to_owned()))
     );
+    let listed_after = run_grant(&server, &credential, &["list", "--json"]);
     assert_eq!(
         listed_after.status.code(),
         Some(0),
@@ -8460,11 +8069,15 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     ];
     let authorizations = grant_ids.map(authorize_line);
     let expected: Vec<&str> = [
+        LIST_MEMBERSHIPS,
+        LIST_ACME_RUNNERS,
         LIST_EVERY_KIND,
         READ_SERVED,
         LIST_MEMBERSHIPS,
         START_CONSENT,
         poll.as_str(),
+        LIST_MEMBERSHIPS,
+        LIST_NATIVE,
         IMPORT_GRANT,
     ]
     .into_iter()
@@ -8474,10 +8087,10 @@ fn connecting_what_a_workflow_needs_leaves_grants_one_command_authorizes_a_runne
     .chain(list)
     .collect();
     assert_eq!(request_lines(&requests), expected);
-    assert_eq!(start_body(&requests[3]), "linear");
+    assert_eq!(start_body(&requests[5]), "linear");
     // The Claude Code grant is made for Acme, which Ada did not name.
-    assert_imported(&requests[5], ORGANIZATION_ID, CLAUDE_CODE);
-    for request in &requests[12..15] {
+    assert_imported(&requests[9], ORGANIZATION_ID, CLAUDE_CODE);
+    for request in &requests[16..19] {
         assert_eq!(
             request_body(request),
             serde_json::json!({"runnerId": RUNNER_ID})
@@ -9033,7 +8646,7 @@ fn a_file_in_no_repository_or_that_does_not_resolve_or_with_a_provider_starts_no
         let git = Git::new();
         let (server, _directory, credential) = prepared(vec![]);
         let opener = Opener::new(0);
-        let claude = FakeProgram::claude(SetupToken::Prints);
+        let claude = FakeProgram::claude();
         let output = run_in(
             &server,
             &credential,
@@ -9190,27 +8803,10 @@ struct FakeProgram {
 
 const DEVICE_CODE_PROMPT: &str = "codex-device-code-prompt";
 
-// How the fake `claude setup-token` ends after it records its invocation and shows the sign-in
-// URL; it takes the flow, a browser or a pasted code, from `CLAUDE_FLOW`.
-enum SetupToken {
-    // Prints the token in colour, as its own line, and a line after it.
-    Prints,
-    Exits(u8),
-    PrintsNothing,
-    // Asks useful to terminate, as a member's interrupt would, and waits to be stopped.
-    Interrupts,
-}
-
-// The token the fake `claude` prints, in the form `CLAUDE_CODE_OAUTH_TOKEN` takes; the part
+// The fixture token in the form `CLAUDE_CODE_OAUTH_TOKEN` takes; the part
 // after `sk-ant-` is a sentinel of its own.
 const CLAUDE_TOKEN: &str = "sk-ant-oat01-private_claude_code_token-sentinel";
 const CLAUDE_TOKEN_SENTINEL: &str = "private_claude_code_token-sentinel";
-const CLAUDE_SIGN_IN_URL: &str =
-    "https://claude.example.test/oauth/authorize?code=true&state=public-fixture-state";
-const CLAUDE_FLOW: &str = "USEFUL_TEST_CLAUDE_FLOW";
-const PASTE_PROMPT: &str = "Paste code here if prompted > ";
-const PASTE_CODE: &str = "public-fixture-paste-code";
-const AFTER_TOKEN: &str = "claude-after-token";
 
 impl FakeProgram {
     // A fake `codex` that records its arguments, CODEX_HOME, that home's mode and its
@@ -9250,42 +8846,10 @@ impl FakeProgram {
         })
     }
 
-    // A fake `claude` that records its arguments, CLAUDE_CONFIG_DIR, that directory's mode and
-    // whether its standard input is its controlling terminal, then shows the sign-in URL. In
-    // the paste flow it then prompts without a line ending and reads a code from its terminal,
-    // going on only when the code is `PASTE_CODE`; in the browser flow it waits a moment, as
-    // the browser's callback would make it.
-    fn claude(setup_token: SetupToken) -> Self {
-        use super::pi_installation::quote;
-        let then = match setup_token {
-            SetupToken::Prints => format!(
-                "printf '\\033[32m%s\\033[0m\\n' {}\necho {AFTER_TOKEN}",
-                quote(CLAUDE_TOKEN)
-            ),
-            SetupToken::Exits(status) => format!("exit {status}"),
-            SetupToken::PrintsNothing => "echo claude-printed-no-token".to_owned(),
-            SetupToken::Interrupts => "kill -TERM \"$PPID\"\nexec sleep 30".to_owned(),
-        };
+    // A fake `claude` that records its arguments and exits.
+    fn claude() -> Self {
         Self::new("claude", "/bin/sh", |record| {
-            format!(
-                "printf '%s\\n' \"$*\" > {arguments}\n\
-                 printf '%s' \"$CLAUDE_CONFIG_DIR\" > {config}\n\
-                 ls -ld \"$CLAUDE_CONFIG_DIR\" > {mode}\n\
-                 if [ -t 0 ] && : < /dev/tty; then echo yes; else echo no; fi > {terminal}\n\
-                 echo {url}\n\
-                 if [ \"${CLAUDE_FLOW}\" = paste ]; then\n\
-                 printf '%s' {prompt}\n\
-                 IFS= read -r code\n\
-                 [ \"$code\" = {PASTE_CODE} ] || {{ echo claude-rejected-the-code; exit 1; }}\n\
-                 else sleep 0.2; fi\n\
-                 {then}\n",
-                arguments = record("arguments"),
-                config = record("config"),
-                mode = record("mode"),
-                terminal = record("terminal"),
-                url = quote(CLAUDE_SIGN_IN_URL),
-                prompt = quote(PASTE_PROMPT),
-            )
+            format!("printf '%s\\n' \"$*\" > {}\nexit 0\n", record("arguments"))
         })
     }
 

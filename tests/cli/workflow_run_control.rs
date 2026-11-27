@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 
@@ -128,6 +129,56 @@ pub(super) fn control_file(run: &Path, document: &serde_json::Value) -> serde_js
 
 pub(super) fn control_count(run: &Path) -> usize {
     fs::read_dir(run.join("controls")).map_or(0, Iterator::count)
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
+fn a_held_run_reads_active_until_its_holder_releases_or_is_killed() {
+    let bundle = wait_tree();
+    let (run, _) = waiting_run(&bundle, "held", "blocked");
+    let read_records =
+        || ["run.json", "state.json", "wait.json"].map(|name| fs::read(run.join(name)).unwrap());
+    let show = || {
+        let output = run_control(None, "show", &run, &[]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        json(&output)
+    };
+    let await_release = || {
+        poll_until("the run to show released ownership", show, |status| {
+            status["recovery"]["status"]
+                .as_str()
+                .is_some_and(|state| state != "active")
+        });
+    };
+    let before = read_records();
+    assert!(!crate::run_is_owned(&run));
+
+    let mut holder = crate::HeldRuns::hold(&[&run]);
+    let status = show();
+    assert_eq!(status["recovery"]["status"], "active", "{status}");
+    assert_eq!(
+        status["retry"],
+        serde_json::json!({"eligible": false, "reason": "run_locked"}),
+        "{status}"
+    );
+    assert_eq!(read_records(), before);
+    fs::write(&holder.release, "").unwrap();
+    assert_eq!(holder.process.wait().unwrap().code(), Some(0));
+    await_release();
+    assert_eq!(read_records(), before);
+
+    let mut holder = crate::HeldRuns::hold(&[&run]);
+    assert_eq!(show()["recovery"]["status"], "active");
+    kill_process(holder.pid(), Signal::KILL).unwrap();
+    assert_eq!(
+        holder.process.wait().unwrap().signal(),
+        Some(Signal::KILL.as_raw())
+    );
+    await_release();
+    assert_eq!(read_records(), before);
 }
 
 fn wait_id(wait: &serde_json::Value) -> String {
@@ -863,10 +914,7 @@ pub(super) fn live_run_held_at_design(bundle: &TreeBundle, name: &str) -> (LiveR
     };
     poll_until(
         "the live run's held step",
-        || {
-            execution.join("held-design").exists()
-                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
-        },
+        || execution.join("held-design").exists() && crate::run_is_owned(&destination),
         |held| *held,
     );
     (live, fs::canonicalize(&destination).unwrap())
@@ -971,11 +1019,15 @@ fn withdraw_ends_a_live_run_after_its_running_stage() {
 }
 
 // A `withdraw` that finds the run held by a command that has not begun its attempt yet (a
-// `retry` preparing one, which this test's own hold of the run lock stands for) reads as
+// `retry` preparing one, which the test holder stands for) reads as
 // pending only what that attempt would honor: the withdrawal the earlier attempt honored does
 // not refuse it, so it is `recorded`, and a second one before it is honored is
 // `withdraw_pending`. The attempt the retry then begins honors it before its stage starts, and
 // spends it: one more retry is not withdrawn.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     let bundle = wait_tree();
@@ -996,7 +1048,7 @@ fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
     assert_eq!(record["state"], "exited", "{record}");
     assert_eq!(record["outcome"], "withdrawn", "{record}");
 
-    let held = hold_lock(&run);
+    let held = crate::HeldRuns::hold(&[&run]);
     let document = recorded(
         &run_control(None, "cancel", &run, &WITHDRAW),
         "cancel",
@@ -1046,10 +1098,14 @@ fn a_withdraw_while_a_command_prepares_an_attempt_reads_only_what_it_honors() {
 }
 
 // A withdrawal recorded for a command that held the run and ended without beginning an attempt
-// (an evaluation of a held wait, which this test's own hold of the run lock stands for) stays
+// (an evaluation of a held wait, which the test holder stands for) stays
 // pending on the waiting run, and does not refuse the next `withdraw`: that one ends the run
 // `withdrawn` at its wait with the outcome's write. The runner relies on this to finish a
 // withdrawal it reported `recorded`.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() {
     let tree = EngineeringWaitTree::publish();
@@ -1069,7 +1125,7 @@ fn a_withdraw_ends_a_waiting_run_whose_recorded_withdrawal_no_attempt_honored() 
         )
     };
 
-    let held = hold_lock(&run);
+    let held = crate::HeldRuns::hold(&[&run]);
     let pending = recorded(&withdraw(), "cancel", &run);
     assert_eq!(pending["control"]["wait"], serde_json::Value::Null);
     drop(held);
@@ -1472,7 +1528,9 @@ fn a_withdraw_refused_at_the_run_lock_appends_nothing() {
     let bundle = wait_tree();
     let (run, _) = waiting_run(&bundle, "locked", "blocked");
     let mut held = None;
-    let output = withdrawn_at_the_lock(&bundle, &run, || held = Some(hold_lock(&run)));
+    let output = withdrawn_at_the_lock(&bundle, &run, || {
+        held = Some(crate::HeldRuns::hold(&[&run]));
+    });
     refused(&output, "cancel", "run_locked");
     assert_eq!(control_count(&run), 0);
     drop(held);
@@ -2449,10 +2507,7 @@ fn a_restart_moves_a_waiting_subject_to_the_current_revision() {
     };
     poll_until(
         "the successor's held merge",
-        || {
-            execution.join("held-merge").exists()
-                && crate::lock_holder(successor).is_ok_and(|holder| holder.is_some())
-        },
+        || execution.join("held-merge").exists() && crate::run_is_owned(successor),
         |held| *held,
     );
     let before = (records(predecessor), records(successor));
@@ -4593,13 +4648,13 @@ fn plan_carrier(child: &Path) -> PathBuf {
 }
 
 // A retry whose wait names a child the run does not own for that step, or whose child's
-// record, tree, retained outputs or lock do not match, is refused before the parent's wait
-// is consumed: no child step runs, no attempt begins and no file changes, and the recorded
+// record, tree or retained outputs do not match, is refused before the parent's wait is
+// consumed: no child step runs, no attempt begins and no file changes, and the recorded
 // retry control still resolves the wait for a later resume.
 #[test]
 fn a_repair_retry_refuses_an_unowned_or_altered_child() {
     type Alteration = fn(&Path, &Path);
-    let cases: [(&str, Alteration, Option<&str>); 8] = [
+    let cases: [(&str, Alteration, Option<&str>); 7] = [
         (
             "another ordinal",
             |run, _| {
@@ -4668,44 +4723,61 @@ fn a_repair_retry_refuses_an_unowned_or_altered_child() {
             },
             None,
         ),
-        ("a live child lock", |_, _| {}, Some("run_locked")),
     ];
     for (case, alter, code) in cases {
-        let bundle = stage_tree(STAGE_TREE_ROOT);
-        let root = bundle.execution_root();
-        fs::write(root.join("plan.md"), "unfenced").unwrap();
-        let (run, _) = repair_waiting_stage(&bundle, "refused", &[]);
-        let child = run.join("children/design/000001");
-        fs::write(root.join("plan.md"), "fenced").unwrap();
-        fs::write(root.join("sentinel"), case).unwrap();
-        let held = (case == "a live child lock").then(|| hold_lock(&child));
-        alter(&run, &child);
-        let before = StageSnapshot::take(&run, root);
-
-        let output = run_control(None, "retry", &run, &[]);
-        assert_eq!(output.status.code(), Some(1), "{case}: {output:?}");
-        if let Some(code) = code {
-            let document = json(&output);
-            assert_eq!(document["outcome"], "rejected", "{case}: {document}");
-            assert_eq!(
-                document["diagnostics"][0]["code"], code,
-                "{case}: {document}"
-            );
-        }
-        before.assert_unchanged(&run, root, case);
-        assert_eq!(stage_counts(root), [1, 1, 1], "{case}");
-        assert_eq!(control_count(&run), 1, "{case}");
-
-        // Once the lock is released, the recorded control continues the same child.
-        if held.is_some() {
-            drop(held);
-            let terminal = completed(&resume(&run));
-            assert_eq!(terminal["outcome"], "succeeded", "{case}: {terminal}");
-            assert_eq!(ordinals_of(&run.join("children/design")), ["000001"]);
-            assert_eq!(attempt_count(&child), 2, "{case}");
-            assert_eq!(stage_counts(root), [1, 1, 2], "{case}");
-        }
+        let (bundle, run) = repair_retry_refusal_fixture(case);
+        alter(&run, &run.join("children/design/000001"));
+        assert_repair_retry_refused(&run, bundle.execution_root(), case, code);
     }
+}
+
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
+#[test]
+fn a_repair_retry_refuses_a_live_child_until_its_owner_releases_it() {
+    let case = "a live child lock";
+    let (bundle, run) = repair_retry_refusal_fixture(case);
+    let root = bundle.execution_root();
+    let child = run.join("children/design/000001");
+    let held = crate::HeldRuns::hold(&[&child]);
+    assert_repair_retry_refused(&run, root, case, Some("run_locked"));
+
+    // Once the lock is released, the recorded control continues the same child.
+    drop(held);
+    let terminal = completed(&resume(&run));
+    assert_eq!(terminal["outcome"], "succeeded", "{case}: {terminal}");
+    assert_eq!(ordinals_of(&run.join("children/design")), ["000001"]);
+    assert_eq!(attempt_count(&child), 2, "{case}");
+    assert_eq!(stage_counts(root), [1, 1, 2], "{case}");
+}
+
+fn repair_retry_refusal_fixture(case: &str) -> (TreeBundle, PathBuf) {
+    let bundle = stage_tree(STAGE_TREE_ROOT);
+    let root = bundle.execution_root();
+    fs::write(root.join("plan.md"), "unfenced").unwrap();
+    let (run, _) = repair_waiting_stage(&bundle, "refused", &[]);
+    fs::write(root.join("plan.md"), "fenced").unwrap();
+    fs::write(root.join("sentinel"), case).unwrap();
+    (bundle, run)
+}
+
+fn assert_repair_retry_refused(run: &Path, root: &Path, case: &str, code: Option<&str>) {
+    let before = StageSnapshot::take(run, root);
+    let output = run_control(None, "retry", run, &[]);
+    assert_eq!(output.status.code(), Some(1), "{case}: {output:?}");
+    if let Some(code) = code {
+        let document = json(&output);
+        assert_eq!(document["outcome"], "rejected", "{case}: {document}");
+        assert_eq!(
+            document["diagnostics"][0]["code"], code,
+            "{case}: {document}"
+        );
+    }
+    before.assert_unchanged(run, root, case);
+    assert_eq!(stage_counts(root), [1, 1, 1], "{case}");
+    assert_eq!(control_count(run), 1, "{case}");
 }
 
 // The inputs the waiting step would map for the child must be the ones its run retained; a
@@ -5645,10 +5717,7 @@ fn held_stage(bundle: &TreeBundle, name: &str) -> (PathBuf, LiveRun) {
     };
     poll_until(
         "the stage's held step",
-        || {
-            execution.join("held-work").exists()
-                && crate::lock_holder(&destination).is_ok_and(|holder| holder.is_some())
-        },
+        || execution.join("held-work").exists() && crate::run_is_owned(&destination),
         |held| *held,
     );
     (fs::canonicalize(&destination).unwrap(), live)
@@ -6125,7 +6194,7 @@ fn interrupt_parks_one_live_run_and_retry_continues_its_stage() {
     let root = bundle.execution_root();
     let (run, mut live) = held_stage(&bundle, "first");
     let other_bundle = interrupt_tree();
-    let (other, other_live) = held_stage(&other_bundle, "second");
+    let (other, mut other_live) = held_stage(&other_bundle, "second");
 
     let output = run_control(None, "interrupt", &run, &["--reason", "pausing"]);
     let document = recorded_as(&output, "interrupt", "interrupted", &run);
@@ -6157,7 +6226,8 @@ fn interrupt_parks_one_live_run_and_retry_continues_its_stage() {
 
     // The other run's process still holds it, running, with nothing recorded on it.
     assert_eq!(run_record(&other)["state"], "running");
-    assert_eq!(crate::lock_holder(&other).unwrap(), Some(other_live.pid()));
+    assert!(crate::run_is_owned(&other));
+    assert!(other_live.process.try_wait().unwrap().is_none());
     assert_eq!(control_count(&other), 0);
     assert_eq!(control_count(&other.join("children/build/000001")), 0);
     drop(other_live);
@@ -6176,18 +6246,6 @@ fn interrupt_parks_one_live_run_and_retry_continues_its_stage() {
     assert_eq!(build_counts(root), [1, 2]);
 }
 
-/// Takes the `run.lock` of `run` in this process, as a live process would hold it; nothing
-/// here may open that lock file again while the lock is held.
-fn hold_lock(run: &Path) -> fs::File {
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(run.join("run.lock"))
-        .unwrap();
-    rustix::fs::fcntl_lock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
-    lock
-}
-
 /// `interrupt` on `run` refused with `code`, with no control written.
 fn interrupt_refused(run: &Path, code: &str) {
     let before = control_count(run);
@@ -6196,9 +6254,8 @@ fn interrupt_refused(run: &Path, code: &str) {
     assert_eq!(control_count(run), before, "{code}");
 }
 
-// `interrupt` refuses, before writing anything, an exited run, a waiting run of any kind, a
-// `running` run whose process is gone, and a live root whose positioned stage has no running
-// child.
+// `interrupt` refuses, before writing anything, an exited run, a waiting run of any kind and
+// a `running` run whose process is gone.
 #[test]
 fn interrupt_refuses_a_run_it_cannot_interrupt() {
     let bundle = interrupt_tree();
@@ -6232,12 +6289,19 @@ fn interrupt_refuses_a_run_it_cannot_interrupt() {
     live.process.wait().unwrap();
     assert_eq!(run_record(&abandoned)["state"], "running");
     interrupt_refused(&abandoned, "run_not_live");
+}
 
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
+#[test]
+fn interrupt_refuses_a_live_run_between_stages() {
     // A live root whose position names `design`, whose latest child exited, or `review`,
     // which has no child.
     let bundle = wait_tree();
     let (run, _) = waiting_run(&bundle, "between-stages", "blocked");
-    let held = hold_lock(&run);
+    let held = crate::HeldRuns::hold(&[&run]);
     assert_eq!(run_record(&run)["position"], serde_json::json!(["design"]));
     interrupt_refused(&run, "child_not_live");
     rewrite_json(&run.join("run.json"), |record| {
@@ -6396,9 +6460,19 @@ fn a_control_verb_refused_for_the_runs_state_names_the_verbs_that_apply() {
     ] {
         refused_in_state(run, leaf, args, code, verbs);
     }
+}
 
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
+#[test]
+fn a_control_verb_refused_for_a_held_run_names_the_running_verbs() {
     // A run a live process holds is running.
-    let held = hold_lock(&answer);
+    let bundle = wait_tree();
+    decide(&bundle, "review", "approve");
+    let (answer, _) = waiting_run(&bundle, "state-answer", "blocked");
+    let held = crate::HeldRuns::hold(&[&answer]);
     refused_in_state(
         &answer,
         "approve",
@@ -6444,83 +6518,13 @@ fn an_interrupt_of_a_run_the_home_lacks_is_not_found_and_asks_no_cloud() {
     assert!(server.finish().is_empty());
 }
 
-/// The test `LockHolder` launches.
-const LOCK_HOLDER_FIXTURE: &str = "workflow_run_control::run_lock_holder_fixture";
-const HELD_LOCKS_VARIABLE: &str = "USEFUL_TEST_HELD_RUN_LOCKS";
-const HELD_LOCKS_RELEASE_VARIABLE: &str = "USEFUL_TEST_HELD_RUN_LOCKS_RELEASE";
-
-/// A process that holds run locks and installs no signal handler, as a `useful` that predates
-/// the wake-up does, until it is dropped.
-struct LockHolder {
-    process: Child,
-    release: PathBuf,
-}
-
-impl LockHolder {
-    /// Holds the `run.lock` of each of `runs` until `release` exists.
-    fn hold(runs: &[&Path], release: PathBuf) -> Self {
-        let locks = std::env::join_paths(runs.iter().map(|run| run.join("run.lock"))).unwrap();
-        let holder = Self {
-            process: std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--ignored", "--exact", LOCK_HOLDER_FIXTURE, "--nocapture"])
-                .env(HELD_LOCKS_VARIABLE, locks)
-                .env(HELD_LOCKS_RELEASE_VARIABLE, &release)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap(),
-            release,
-        };
-        let pid = holder.pid();
-        poll_until(
-            "the fixture's run locks",
-            || {
-                runs.iter()
-                    .all(|run| crate::lock_holder(run).is_ok_and(|held| held == Some(pid)))
-            },
-            |held| *held,
-        );
-        holder
-    }
-
-    fn pid(&self) -> Pid {
-        Pid::from_raw(i32::try_from(self.process.id()).unwrap()).unwrap()
-    }
-}
-
-impl Drop for LockHolder {
-    fn drop(&mut self) {
-        let _ = fs::write(&self.release, "");
-        let deadline = crate::monotonic_now() + std::time::Duration::from_secs(10);
-        while self.process.try_wait().ok().flatten().is_none() {
-            if crate::monotonic_now() >= deadline {
-                let _ = self.process.kill();
-                let _ = self.process.wait();
-                return;
-            }
-            crate::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-}
-
-#[test]
-#[ignore = "launched as a process that holds run locks"]
-fn run_lock_holder_fixture() {
-    let locks = std::env::var_os(HELD_LOCKS_VARIABLE).unwrap();
-    let release = PathBuf::from(std::env::var_os(HELD_LOCKS_RELEASE_VARIABLE).unwrap());
-    let held = std::env::split_paths(&locks)
-        .map(|path| hold_lock(path.parent().unwrap()))
-        .collect::<Vec<_>>();
-    while !release.exists() {
-        crate::sleep(std::time::Duration::from_millis(10));
-    }
-    drop(held);
-}
-
 // A process that does not act on the wake-up leaves the interrupt `interrupt_pending` after the
 // wait, recorded and the process alive; a later attempt of the run, woken, does not act on that
 // earlier control.
+#[cfg_attr(
+    not(feature = "candidate-checkpoints"),
+    ignore = "requires workflow qualification checkpoints"
+)]
 #[test]
 fn an_unanswered_interrupt_is_pending_and_no_later_attempt_acts_on_it() {
     let bundle = interrupt_tree();
@@ -6529,7 +6533,7 @@ fn an_unanswered_interrupt_is_pending_and_no_later_attempt_acts_on_it() {
     let child = run.join("children/build/000001");
     live.process.kill().unwrap();
     live.process.wait().unwrap();
-    let mut holder = LockHolder::hold(&[&run, &child], bundle.result("holder-release"));
+    let mut holder = crate::HeldRuns::hold(&[&run, &child]);
 
     // A shortened polling cadence shortens the wait for the release with it.
     let output = control_command(None, "interrupt", &run, &["--reason", "pausing"])
@@ -6546,7 +6550,7 @@ fn an_unanswered_interrupt_is_pending_and_no_later_attempt_acts_on_it() {
     assert_eq!(run_record(&run)["state"], "running");
     drop(holder);
 
-    // The killed process's `work` was stopped with it (its guard's parent-death protection),
+    // The killed process's guard stopped `work` when the control pipe reached end of file,
     // so a later attempt holds at `work` again.
     let mut later = held_again(root, "resume", &run, &[]);
     kill_process(later.pid(), Signal::URG).unwrap();

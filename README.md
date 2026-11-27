@@ -496,14 +496,9 @@ useful account integration connect codex
 useful account integration connect codex --device --org acme
 useful account integration connect codex --from-file ~/backup/auth.json
 
-# For claude_code this runs `claude setup-token` with a private temporary configuration
-# directory (mode 0700) that it removes afterwards; your own Claude Code configuration is never
-# read or changed. Its prompts appear in your terminal and what you type, such as a code to
-# paste, reaches it; the token it prints is imported and never shown. Without a terminal on
-# standard input the command fails at once, starting no sign-in, and names --token-file -.
-# --token-file imports a token claude setup-token printed from an owned mode-0600 file, or -
-# for standard input, instead.
-useful account integration connect claude_code
+# For claude_code, run `claude setup-token` and import the token it prints. --token-file PATH
+# reads a file you own with mode 0600. --token-file - reads standard input.
+useful account integration connect claude_code --token-file PATH
 useful account integration connect claude_code --token-file - --org acme < token.txt
 
 # For a token service the deployment serves, such as mergify or buildkite, store its token.
@@ -532,26 +527,30 @@ useful account integration reconnect mergify --from-file ~/secrets/mergify-token
 
 # Sign in again to a grant you hold, named by its ID or by its provider when you hold one grant
 # of it; the grant keeps its ID and the runners it is authorized for, and the command asks
-# nothing. For a coding agent it runs the same sign-in create runs, or imports the login
-# --from-file (Codex) or --token-file (Claude Code) names, and stores it as the grant's next
-# generation. For an OAuth grant it runs the provider's consent: approve it as the account the
-# grant is linked to. Approved as another account, the consent makes or renews that account's own
+# nothing. For Codex, it runs the same sign-in as connect or imports the login --from-file
+# names. For Claude Code, run `claude setup-token` and pass the new token with --token-file.
+# The command stores the new login as the grant's next generation. For an OAuth grant it
+# runs the provider's consent: approve it as the account the grant is linked to. Approved as
+# another account, the consent makes or renews that account's own
 # grant and leaves the named one as it was; the command then names the grant the consent made
 # and exits 1. An option that does not suit the grant's provider exits 2 before any sign-in.
 useful account integration reconnect codex
 useful account integration reconnect agl_01k0z6r1w8f4jy2m7q9v3x5abc --token-file - < token.txt
 useful account integration reconnect linear --no-wait --json
 
-# With --all, run the sign-in of each provider you hold no active or reconnect_required grant
-# of, one after another: github, gitlab.com, linear, each other OAuth
-# provider this deployment serves in the order it names them, claude_code, codex. Each
+# With --all, visit each provider you hold no active or reconnect_required grant of, one after
+# another in this order: github, gitlab.com, linear, each other OAuth provider this deployment
+# serves in the order it names them, claude_code, codex. Each
 # provider's name is printed on standard error before its prompts. A sign-in that
 # fails does not stop the ones after it; a provider this deployment does not serve is reported
 # provider_unavailable and passed over. The coding agents' grants are for the organization in
 # effect, as above; when no source names one, a coding agent you hold nowhere is reported
-# organization_required and passed over, and the consents still run. The command ends with one outcome per provider and exits 1
-# when any sign-in failed or every provider selected was passed over; an interrupt or a
-# termination signal during a sign-in ends it there with status 130 or 143. --device applies to
+# organization_required and passed over, and the consents still run. When the command reaches
+# Claude Code, it reports provider_login_failed and continues. Import its token separately with
+# useful account integration connect claude_code --token-file PATH. The command ends with one
+# outcome per provider and exits 1 when any provider failed or every provider selected was passed
+# over. An interrupt or a termination signal during a sign-in ends it there with status 130
+# or 143. --device applies to
 # the Codex sign-in; --no-wait and --timeout apply to the consents. --from-file and --token-file
 # need a provider. With --json each provider's events are followed by a summary event. Given
 # no provider, --all or --workflow, the command signs in to nothing and exits 2.
@@ -566,6 +565,7 @@ useful account integration connect --all --org acme --json
 # run. Without --source-root each file is bounded by the root of the Git repository that holds
 # it, and a file in no repository is refused with exit 2. A file that does not resolve is
 # reported as useful workflow validate reports it, with exit 1. --workflow does not take a provider.
+# Claude Code is reported provider_login_failed as with --all, with the command to import its token.
 # A provider every grant of which you hold needs reconnecting (its consent lapsed, or a runner
 # reported its login refused) is passed over without a sign-in or a question: the plan names it
 # as needing reconnecting, and it is reported reconnect_required, naming useful account integration
@@ -2813,9 +2813,10 @@ key.
 
 If you are not signed in and name no runner, the doctor still prints the report, every
 requirement `unverified`, and says on standard error that Useful Machinery was not asked; with
-`--runner` it exits 3. It runs no step of the workflow, signs in to nothing and changes nothing:
-`useful account integration connect --workflow` signs in to what the workflows lack, and `useful account
-integration authorize` authorizes a runner for a grant.
+`--runner` it exits 3. It runs no step of the workflow, signs in to nothing and changes nothing.
+Use `useful account integration connect --workflow` to start the sign-ins the workflows need
+and identify any Claude Code token to import. `useful account integration authorize` authorizes
+a runner for a grant.
 
 ```sh
 # List what a workflow tree needs and what the organization's connections meet.

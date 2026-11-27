@@ -38,10 +38,7 @@ const ATTEMPT_RECORD_HEADER: &str = "useful-runner-serve/attempt/v1";
 const CLEANUP_AUTHORITY_PREFIX: &str = ".useful-runner-serve-cleanup-v1-";
 const CLEANUP_AUTHORITY_STAGING_PREFIX: &str = ".useful-runner-serve-cleanup-staging-";
 const CLEANUP_AUTHORITY_HEADER: &str = "useful-runner-serve/cleanup-authority/v1";
-const CLEANUP_IDENTITY_ATTRIBUTE: &str = "user.useful.runner-cleanup-v1";
 const CLEANUP_IDENTITY_BYTES: usize = 32;
-#[cfg(feature = "test-fixtures")]
-const METADATA_CLEANUP_IDENTITY_VARIABLE: &str = "USEFUL_TEST_METADATA_CLEANUP_IDENTITY";
 const BOOT_MARKER: &[u8] = b"useful-runner-serve/boot-root/v1\n";
 const ASSIGNMENT_MARKER: &[u8] = b"useful-runner-serve/assignment-root/v1\n";
 // Historical boots are read for the startup report and removed only by the
@@ -357,73 +354,16 @@ impl WorkRootHook for NoopWorkRootHook {
     fn before_child_enumeration(&self) {}
 }
 
-trait CleanupIdentityStore: Send + Sync {
-    fn read(&self, directory: &OwnedFd) -> Result<Option<[u8; CLEANUP_IDENTITY_BYTES]>, ()>;
-    fn create(
-        &self,
-        directory: &OwnedFd,
-        identity: &[u8; CLEANUP_IDENTITY_BYTES],
-    ) -> Result<(), ()>;
-}
-
-struct ExtendedAttributeCleanupIdentityStore;
-
-impl CleanupIdentityStore for ExtendedAttributeCleanupIdentityStore {
-    fn read(&self, directory: &OwnedFd) -> Result<Option<[u8; CLEANUP_IDENTITY_BYTES]>, ()> {
-        let mut buffer = [0_u8; CLEANUP_IDENTITY_BYTES + 1];
-        match rustix::fs::fgetxattr(directory, CLEANUP_IDENTITY_ATTRIBUTE, &mut buffer) {
-            Ok(length) if length == CLEANUP_IDENTITY_BYTES => {
-                let mut identity = [0_u8; CLEANUP_IDENTITY_BYTES];
-                identity.copy_from_slice(&buffer[..CLEANUP_IDENTITY_BYTES]);
-                Ok(Some(identity))
-            }
-            Ok(_) => Err(()),
-            Err(error) if missing_cleanup_identity(error) => Ok(None),
-            Err(_) => Err(()),
-        }
-    }
-
-    fn create(
-        &self,
-        directory: &OwnedFd,
-        identity: &[u8; CLEANUP_IDENTITY_BYTES],
-    ) -> Result<(), ()> {
-        rustix::fs::fsetxattr(
-            directory,
-            CLEANUP_IDENTITY_ATTRIBUTE,
-            identity,
-            rustix::fs::XattrFlags::CREATE,
-        )
-        .map_err(|_| ())
-    }
-}
-
-// Unit tests exercise cleanup state transitions on filesystems such as the Nix
-// build sandbox that intentionally reject extended attributes. Device and inode
-// identity preserves replacement detection without weakening the system store.
-#[cfg(any(test, feature = "test-fixtures"))]
-struct MetadataCleanupIdentityStore;
-
-#[cfg(any(test, feature = "test-fixtures"))]
-impl CleanupIdentityStore for MetadataCleanupIdentityStore {
-    fn read(&self, directory: &OwnedFd) -> Result<Option<[u8; CLEANUP_IDENTITY_BYTES]>, ()> {
-        let metadata = fstat(directory).map_err(|_| ())?;
-        let device = normalized_device(metadata.st_dev);
-        let mut identity = [0_u8; CLEANUP_IDENTITY_BYTES];
-        identity[..8].copy_from_slice(&device.to_le_bytes());
-        identity[8..16].copy_from_slice(&metadata.st_ino.to_le_bytes());
-        identity[16..24].copy_from_slice(&(!device).to_le_bytes());
-        identity[24..].copy_from_slice(&(!metadata.st_ino).to_le_bytes());
-        Ok(Some(identity))
-    }
-
-    fn create(
-        &self,
-        _directory: &OwnedFd,
-        _identity: &[u8; CLEANUP_IDENTITY_BYTES],
-    ) -> Result<(), ()> {
-        Err(())
-    }
+fn read_cleanup_identity(directory: &OwnedFd) -> Result<[u8; CLEANUP_IDENTITY_BYTES], ()> {
+    let metadata = fstat(directory).map_err(|_| ())?;
+    let device = normalized_device(metadata.st_dev);
+    let inode = metadata.st_ino;
+    let mut identity = [0_u8; CLEANUP_IDENTITY_BYTES];
+    identity[..8].copy_from_slice(&device.to_le_bytes());
+    identity[8..16].copy_from_slice(&inode.to_le_bytes());
+    identity[16..24].copy_from_slice(&(!device).to_le_bytes());
+    identity[24..].copy_from_slice(&(!inode).to_le_bytes());
+    Ok(identity)
 }
 
 #[derive(Clone)]
@@ -431,7 +371,6 @@ pub(super) struct WorkspaceFilesystem {
     remover: Arc<dyn TreeRemover>,
     sleeper: Arc<dyn CleanupSleeper>,
     hook: Arc<dyn WorkRootHook>,
-    cleanup_identity: Arc<dyn CleanupIdentityStore>,
     workspace_release_spawner: Arc<dyn WorkspaceReleaseSpawner>,
 }
 
@@ -441,36 +380,13 @@ impl WorkspaceFilesystem {
             remover: Arc::new(SystemTreeRemover),
             sleeper: Arc::new(InterruptibleSleeper),
             hook: Arc::new(NoopWorkRootHook),
-            cleanup_identity: Arc::new(ExtendedAttributeCleanupIdentityStore),
             workspace_release_spawner: Arc::new(ThreadWorkspaceReleaseSpawner),
         }
-    }
-
-    /// The filesystem of a serving runner's work root: the system's, except
-    /// that a `test-fixtures` build started with
-    /// `USEFUL_TEST_METADATA_CLEANUP_IDENTITY` set keeps cleanup identities in
-    /// directory metadata, as `testing` does, so the end-to-end tests of
-    /// `useful runner serve` can release a boot root in the Nix build sandbox,
-    /// which rejects extended attributes. Any other build reads no variable.
-    fn serving() -> Self {
-        #[cfg(feature = "test-fixtures")]
-        {
-            if std::env::var_os(METADATA_CLEANUP_IDENTITY_VARIABLE).is_some() {
-                return Self::testing();
-            }
-        }
-        Self::system()
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn testing() -> Self {
-        Self {
-            remover: Arc::new(SystemTreeRemover),
-            sleeper: Arc::new(InterruptibleSleeper),
-            hook: Arc::new(NoopWorkRootHook),
-            cleanup_identity: Arc::new(MetadataCleanupIdentityStore),
-            workspace_release_spawner: Arc::new(ThreadWorkspaceReleaseSpawner),
-        }
+        Self::system()
     }
 
     #[cfg(test)]
@@ -479,26 +395,10 @@ impl WorkspaceFilesystem {
         sleeper: Arc<dyn CleanupSleeper>,
         hook: Arc<dyn WorkRootHook>,
     ) -> Self {
-        Self::injected_with_cleanup_identity(
-            remover,
-            sleeper,
-            hook,
-            Arc::new(MetadataCleanupIdentityStore),
-        )
-    }
-
-    #[cfg(test)]
-    fn injected_with_cleanup_identity(
-        remover: Arc<dyn TreeRemover>,
-        sleeper: Arc<dyn CleanupSleeper>,
-        hook: Arc<dyn WorkRootHook>,
-        cleanup_identity: Arc<dyn CleanupIdentityStore>,
-    ) -> Self {
         Self {
             remover,
             sleeper,
             hook,
-            cleanup_identity,
             workspace_release_spawner: Arc::new(ThreadWorkspaceReleaseSpawner),
         }
     }
@@ -757,13 +657,9 @@ struct CleanupAuthorityProof {
 }
 
 impl CleanupAuthorityProof {
-    fn create(
-        authority: &WorkRootAuthority,
-        tree: &OwnedTree,
-        cleanup_identity_store: &dyn CleanupIdentityStore,
-    ) -> Result<Self, ()> {
+    fn create(authority: &WorkRootAuthority, tree: &OwnedTree) -> Result<Self, ()> {
         authority.validate()?;
-        let cleanup_identity = tree.prepare_cleanup_identity(cleanup_identity_store)?;
+        let cleanup_identity = tree.prepare_cleanup_identity()?;
         let record =
             CleanupAuthorityRecord::for_tree(authority.work_root(), tree, cleanup_identity)?;
         let contents = record.encode();
@@ -855,7 +751,6 @@ fn verify_private_file_identity(path: &Path, file: &File) -> Result<(), ()> {
 struct CleanupEngine {
     remover: Arc<dyn TreeRemover>,
     sleeper: Arc<dyn CleanupSleeper>,
-    cleanup_identity: Arc<dyn CleanupIdentityStore>,
     cancellation: Arc<CleanupCancellation>,
     authority: WorkRootAuthority,
     serialized: Arc<Mutex<()>>,
@@ -893,11 +788,7 @@ impl CleanupEngine {
         {
             return CleanupResult::Quarantined(CleanupFailure::Safety);
         }
-        let proof = match CleanupAuthorityProof::create(
-            &self.authority,
-            tree,
-            self.cleanup_identity.as_ref(),
-        ) {
+        let proof = match CleanupAuthorityProof::create(&self.authority, tree) {
             Ok(proof) => proof,
             Err(()) => return CleanupResult::Quarantined(CleanupFailure::Safety),
         };
@@ -911,10 +802,7 @@ impl CleanupEngine {
             if self.authority.validate().is_err() || proof.validate().is_err() {
                 return CleanupResult::Quarantined(CleanupFailure::Safety);
             }
-            match tree.validate_during_cleanup(
-                self.cleanup_identity.as_ref(),
-                &proof.record.cleanup_identity,
-            ) {
+            match tree.validate_during_cleanup(&proof.record.cleanup_identity) {
                 Ok(TreePresence::Missing) => return self.finish_removal(tree, proof),
                 Ok(TreePresence::Present) => {}
                 Err(()) => return CleanupResult::Quarantined(CleanupFailure::Safety),
@@ -1128,26 +1016,15 @@ impl OwnedTree {
         })
     }
 
-    fn prepare_cleanup_identity(
-        &self,
-        cleanup_identity_store: &dyn CleanupIdentityStore,
-    ) -> Result<[u8; CLEANUP_IDENTITY_BYTES], ()> {
+    fn prepare_cleanup_identity(&self) -> Result<[u8; CLEANUP_IDENTITY_BYTES], ()> {
         if !matches!(self.validate_linked_directory()?, TreePresence::Present) {
             return Err(());
         }
         self.validate_marker(false)?;
         let directory = self.directory()?;
-        if let Some(identity) = cleanup_identity_store.read(directory.as_ref())? {
-            sync_directory(directory.as_ref())?;
-            return Ok(identity);
-        }
-        let mut identity = [0_u8; CLEANUP_IDENTITY_BYTES];
-        getrandom::fill(&mut identity).map_err(|_| ())?;
-        cleanup_identity_store.create(directory.as_ref(), &identity)?;
+        let identity = read_cleanup_identity(directory.as_ref())?;
         sync_directory(directory.as_ref())?;
-        (cleanup_identity_store.read(directory.as_ref())? == Some(identity))
-            .then_some(identity)
-            .ok_or(())
+        Ok(identity)
     }
 
     fn sync_parent(&self) -> Result<(), ()> {
@@ -1160,14 +1037,13 @@ impl OwnedTree {
 
     fn validate_during_cleanup(
         &self,
-        cleanup_identity_store: &dyn CleanupIdentityStore,
         cleanup_identity: &[u8; CLEANUP_IDENTITY_BYTES],
     ) -> Result<TreePresence, ()> {
         match self.validate_linked_directory()? {
             TreePresence::Missing => return Ok(TreePresence::Missing),
             TreePresence::Present => {}
         }
-        if cleanup_identity_store.read(self.directory()?.as_ref())? != Some(*cleanup_identity) {
+        if read_cleanup_identity(self.directory()?.as_ref())? != *cleanup_identity {
             return Err(());
         }
         self.validate_marker(true)?;
@@ -1214,19 +1090,6 @@ impl OwnedTree {
             Ok(()) => Ok(()),
             Err(()) if may_be_missing && marker.is_missing() => Ok(()),
             Err(()) => Err(()),
-        }
-    }
-}
-
-fn missing_cleanup_identity(error: Errno) -> bool {
-    error == Errno::NODATA || {
-        #[cfg(target_vendor = "apple")]
-        {
-            error == Errno::NOATTR
-        }
-        #[cfg(not(target_vendor = "apple"))]
-        {
-            false
         }
     }
 }
@@ -1493,7 +1356,7 @@ pub(super) struct WorkRootLease {
 
 impl WorkRootLease {
     pub(super) fn acquire(work_root: &Path, boot_id: &str) -> Result<Arc<Self>, WorkRootError> {
-        Self::acquire_with(work_root, boot_id, WorkspaceFilesystem::serving())
+        Self::acquire_with(work_root, boot_id, WorkspaceFilesystem::system())
     }
 
     #[cfg(test)]
@@ -1542,7 +1405,6 @@ impl WorkRootLease {
         let engine = CleanupEngine {
             remover: filesystem.remover,
             sleeper: filesystem.sleeper,
-            cleanup_identity: filesystem.cleanup_identity,
             cancellation: Arc::clone(&cancellation),
             authority: authority.clone(),
             serialized: Arc::new(Mutex::new(())),
@@ -4829,6 +4691,28 @@ mod tests {
         assert_eq!(event["um.teardown.owned_processes_stopped"], false);
         assert_eq!(event["um.teardown.runner_credentials_removed"], true);
         assert_eq!(event["um.teardown.runner_credentials_revoked"], true);
+    }
+
+    #[test]
+    fn a_serving_work_root_releases_its_boot_root_without_an_extended_attribute() {
+        let root = private_work_root();
+        let owner = WorkRootLease::acquire(root.path(), BOOT_A).unwrap();
+        let boot_directory = File::open(owner.boot_path()).unwrap();
+
+        assert_eq!(
+            owner.release_boot_root_pending().wait(),
+            CleanupResult::Released
+        );
+        assert!(!owner.boot_path().exists());
+
+        let size = rustix::fs::flistxattr(&boot_directory, &mut [0_u8; 0]).unwrap_or_default();
+        let mut attributes = vec![0; size];
+        let size = rustix::fs::flistxattr(&boot_directory, &mut attributes).unwrap_or_default();
+        assert!(
+            !attributes[..size]
+                .split(|&byte| byte == 0)
+                .any(|name| name.starts_with(b"user."))
+        );
     }
 
     #[test]

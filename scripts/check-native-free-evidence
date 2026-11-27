@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+public_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+if [[ -z ${USEFUL_NATIVE_FREE_NODE:-} ]]; then
+  echo 'Set USEFUL_NATIVE_FREE_NODE to the Node 26 executable.' >&2
+  exit 1
+fi
+if [[ $("$USEFUL_NATIVE_FREE_NODE" --version) != v26.* ]]; then
+  echo 'USEFUL_NATIVE_FREE_NODE must be a Node 26 executable.' >&2
+  exit 1
+fi
+
+"$USEFUL_NATIVE_FREE_NODE" --test "$public_root/tests/native-free/*.test.mjs"

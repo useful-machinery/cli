@@ -19,6 +19,9 @@ use std::env;
 use crate::exit_code::ExitCode;
 
 fn main() -> ExitCode {
+    if let Some(outcome) = useful_execution::hold_test_runs() {
+        return outcome.into();
+    }
     if useful_execution::child_guard_worker_requested() {
         return useful_execution::run_child_guard_worker().into();
     }
@@ -34,9 +37,6 @@ fn main() -> ExitCode {
         } else {
             ExitCode::GeneralFailure
         };
-    }
-    if cli::account::grant::controlling_terminal::requested() {
-        return cli::account::grant::controlling_terminal::run();
     }
 
     match cli::parse(env::args_os()) {

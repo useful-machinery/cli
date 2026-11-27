@@ -9,9 +9,9 @@
 //! admission applies the root's passthrough to each step, so no step sees a runner-private
 //! name.
 //!
-//! Each runs in its own process group, killed when the runner abandons the command, and its
-//! stderr, with the stdout the runner reads back, goes to the run's log, which keeps at most
-//! `MAXIMUM_LOG_BYTES` and then ends with one `LOG_TRUNCATED` line. Every command but
+//! Each starts a new session with its own process group, killed when the runner abandons the
+//! command. Its stderr, with the stdout the runner reads back, goes to the run's log, which
+//! keeps at most `MAXIMUM_LOG_BYTES` and then ends with one `LOG_TRUNCATED` line. Every command but
 //! `create`, `resume` and `retry`, which run the workflow, is short: it is abandoned once
 //! `SHORT_COMMAND_BOUND` passes, an `event` or a control command also at the assignment's
 //! cancellation, and the publication at the preparation's cancellation or deadline.
@@ -41,7 +41,8 @@ use serde_json::Value;
 use useful_execution::{
     CONTROL_ANSWER, CONTROL_APPROVE, CONTROL_HAND_BACK, CONTROL_LIFT, CONTROL_RETRY,
     CancellationReason, CancellationSource, CaptureCancellation, ControlEvent,
-    LocalRunDirectoryError, RUNNER_DISK_GATE_ENVIRONMENT, WITHDRAWN_OUTCOME, wait_identity,
+    LocalRunDirectoryError, RUNNER_DISK_GATE_ENVIRONMENT, WITHDRAWN_OUTCOME, start_in_new_session,
+    wait_identity,
 };
 use useful_runner_protocol::{
     RunControlAction, RunControlAnswer, RunControlOutcome, RunWaitEvent, RunWaitEventOutcome,
@@ -162,8 +163,8 @@ impl UsefulCommand {
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(Stdio::piped())
-            .process_group(0)
             .kill_on_drop(true);
+        start_in_new_session(command.as_std_mut());
         let mut child = command.spawn()?;
         let pump = LogPump::start(child.stderr.take(), self.log.clone());
         let group = child

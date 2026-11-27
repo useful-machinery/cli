@@ -65,18 +65,12 @@ pub(super) fn status_json(run_directory: &Path) -> (std::process::Output, serde_
 }
 
 #[cfg(target_os = "linux")]
-fn wait_for_process_group_quiescence(process_group: i32) {
-    let process_group_path = Path::new("/proc").join(process_group.to_string());
+pub(super) fn wait_for_process_group_quiescence(process_group: i32) {
     let process_group = NixPid::from_raw(process_group);
     let _final_observation = poll_until(
         "guarded process group quiescence",
-        || {
-            (
-                killpg(process_group, None::<nix::sys::signal::Signal>),
-                process_group_path.exists(),
-            )
-        },
-        |(observation, leader_exists)| matches!(observation, Err(Errno::ESRCH)) && !leader_exists,
+        || killpg(process_group, None),
+        |observation| matches!(observation, Err(Errno::ESRCH)),
     );
 }
 

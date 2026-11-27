@@ -557,9 +557,7 @@ pub(super) fn write_private_json(path: &Path, document: &serde_json::Value) {
 }
 
 /// `useful runner serve ARGUMENTS` with telemetry off and no join key, organization or
-/// project inherited from the suite's environment. Its work root keeps cleanup identities in
-/// directory metadata, so a service run that ends, such as the one a rejoin ends, can release
-/// its boot root in the Nix build sandbox, which rejects extended attributes.
+/// project inherited from the suite's environment.
 pub(super) fn serve_command(arguments: &[&str]) -> Command {
     let mut command = Command::new(crate::executable());
     command
@@ -571,9 +569,7 @@ pub(super) fn serve_command(arguments: &[&str]) -> Command {
     for variable in RUNNER_TELEMETRY_VARIABLES {
         command.env_remove(variable);
     }
-    command
-        .env("OTEL_SDK_DISABLED", "true")
-        .env("USEFUL_TEST_METADATA_CLEANUP_IDENTITY", "1");
+    command.env("OTEL_SDK_DISABLED", "true");
     command
 }
 

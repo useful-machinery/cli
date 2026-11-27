@@ -439,8 +439,9 @@ fn execution_facade_exports_only_its_process_interfaces() {
             "CommandRunner",
             "ManagedProcessGroup",
             "SystemCommandRunner",
+            "start_in_new_session",
         ]),
-        "execution must expose exactly the six inventoried process interfaces",
+        "execution must expose exactly the inventoried process interfaces",
     );
 
     let mut violations = Vec::new();

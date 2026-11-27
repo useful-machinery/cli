@@ -10,8 +10,8 @@ use zeroize::Zeroizing;
 use crate::cli::context::{self, InEffect, OrgArgs};
 use crate::cli::integration_token;
 use crate::cli::workflow::doctor::roots::Roots;
-use crate::cli::{CommandFailure, HttpOptions, NoAuthenticationArgs};
-use crate::exit_code::ExitCode;
+use crate::cli::{ApiFailureReport, CommandFailure, HttpOptions, NoAuthenticationArgs};
+use crate::exit_code::{ExitCode, OutcomeClass};
 use useful_api::{
     AgentLoginReportState, IntegrationTokenOwner, MemberGrant, MemberGrantApi, MemberGrantFailure,
     MemberGrantKind, MemberGrantProvider, ServedGrantProvider, ServedTokenService,
@@ -25,8 +25,7 @@ use super::organization::Organization;
 use super::program::Stop;
 use super::projection::{self, Provider};
 use super::{
-    browser, claude_setup_token, codex_login, material, organization, output, replacement,
-    replayed, runner_choice,
+    browser, codex_login, material, organization, output, replacement, replayed, runner_choice,
 };
 
 pub(super) const ABOUT: &str =
@@ -262,7 +261,7 @@ impl Ordered {
 /// The order `useful account integration connect` signs in to several providers in, that of
 /// [`projection::providers`] for the providers `served` names: the OAuth providers first, whose
 /// consents need only a browser anywhere, the deployment's other OAuth providers after the built-in
-/// ones, then the coding agents, whose sign-ins run on this machine.
+/// ones, then the coding agents.
 fn order(served: &[ServedGrantProvider]) -> Vec<Ordered> {
     projection::providers(served)
         .into_iter()
@@ -365,21 +364,18 @@ enum SignIn {
     Native(ProviderArg, Login),
 }
 
-/// A coding agent's login: read from a file or stream the member names, before any network
-/// use, or made by a sign-in `useful` runs in a directory it made once the command has settled
-/// where the login is stored.
+/// The source of a coding agent's login, or a missing Claude Code token file.
 pub(super) enum Login {
+    /// A file or stream the member named, read before any network use.
     Read(Zeroizing<Vec<u8>>),
-    /// `codex` with these arguments.
+    /// `codex` with these arguments, run in a private home after settling where to store the login.
     Codex(&'static [&'static str]),
-    /// `claude setup-token` on a terminal `useful` owns.
-    ClaudeCode,
+    ClaudeTokenFileRequired,
 }
 
-/// The providers one invocation signs in to, in [`order`]: the OAuth providers' consents, then
-/// the coding agents', among them those the deployment does not serve, which are passed over,
-/// and with `--workflow` the providers whose every held grant needs reconnecting, which are passed
-/// over too.
+/// The providers one invocation handles, in [`order`]: the OAuth providers' consents, then
+/// the coding agents' imports. The selection passes over coding agents the deployment does
+/// not serve and, with `--workflow`, providers whose every held grant needs reconnecting.
 struct Selection {
     /// The providers wanted, in [`order`].
     order: Vec<Ordered>,
@@ -589,6 +585,15 @@ fn unsuited(option: &str, name: &str, remedy: &str) -> CommandFailure {
     )
 }
 
+pub(super) fn claude_token_file_required() -> ApiFailureReport {
+    ApiFailureReport::new(
+        "provider_login_failed",
+        "error: Claude Code grants require --token-file",
+        output::CLAUDE_TOKEN_FILE_REMEDY,
+        OutcomeClass::GeneralFailure,
+    )
+}
+
 /// The refusal of `name`, which the deployment serves as neither an OAuth provider nor a token
 /// service, exit 2, naming the providers `served` lists, the built-in ones first, then the
 /// coding agents, then `token_services`.
@@ -707,14 +712,11 @@ impl Command {
             SignIn::Native(provider, login) => {
                 let named = self.org.named_in_process()?;
                 let flow = self.flow(named.as_ref());
-                // A Claude Code sign-in the member could not answer is refused before the first
-                // request.
-                if matches!(login, Login::ClaudeCode)
-                    && let Some(failure) = claude_setup_token::unanswerable()
-                {
+                // A missing Claude Code token is refused before the first request.
+                if matches!(login, Login::ClaudeTokenFileRequired) {
                     return Ok(output::write_import_refusal(
                         deployment.fingerprint().api_url(),
-                        &failure.report(),
+                        &claude_token_file_required(),
                         self.options.json,
                     )?);
                 }
@@ -746,7 +748,7 @@ impl Command {
     /// The sign-in the provider and options name; a file or stream is read here, so that an
     /// insecurely held or malformed one is refused with exit 2 before any network use, as is an
     /// option that does not suit the provider: a source of another provider, or for a coding
-    /// agent, whose sign-in has no consent, `--no-wait` or `--timeout`.
+    /// agent, `--no-wait` or `--timeout`.
     fn sign_in(&self, provider: ProviderArg) -> Result<SignIn, CommandFailure> {
         let name = provider.grant().as_str();
         let unsuited = |option: &str, remedy: &str| unsuited(option, name, remedy);
@@ -756,6 +758,9 @@ impl Command {
                 (self.wait.timeout.is_some(), "--timeout"),
             ])
         {
+            if matches!(provider, ProviderArg::ClaudeCode) {
+                return Err(unsuited(option, output::CLAUDE_TOKEN_FILE_REMEDY));
+            }
             return Err(unsuited(
                 option,
                 &format!(
@@ -793,11 +798,7 @@ impl Command {
                     (self.login, "--login"),
                     (self.device, "--device"),
                 ]) {
-                    return Err(unsuited(
-                        option,
-                        "Run Claude Code's sign-in, or import the token claude setup-token \
-                         printed with --token-file PATH:\n  useful account integration connect claude_code",
-                    ));
+                    return Err(unsuited(option, output::CLAUDE_TOKEN_FILE_REMEDY));
                 }
                 return Ok(SignIn::Native(
                     ProviderArg::ClaudeCode,
@@ -805,7 +806,7 @@ impl Command {
                         Some(path) => Login::Read(material::read_claude_code_token(path).map_err(
                             |error| CommandFailure::with_exit_code(error, ExitCode::UsageError),
                         )?),
-                        None => Login::ClaudeCode,
+                        None => Login::ClaudeTokenFileRequired,
                     },
                 ));
             }
@@ -976,13 +977,11 @@ impl Flow<'_> {
         }
     }
 
-    /// The flow over a derivation of workflow files, which `useful account integration connect
-    /// --workflow` runs and nothing else does: signs in to the providers the files call for that
-    /// the member lacks, and passes over those whose every held grant needs reconnecting, which it
-    /// never signs in to, and with [`Flow::runner`] each coding agent that runner's host supplies.
-    /// It asks nothing. A tree that calls for no provider is not taken to Cloud. The plan is
-    /// printed once the grants are read and before any sign-in; then the selection runs as without
-    /// `--workflow`, its summary naming the command of `scope` to run again. Returns its status.
+    /// Selects the missing providers inferred from the workflow files, passing over providers
+    /// whose every held grant needs reconnecting and, with [`Flow::runner`], each coding agent
+    /// that runner's host supplies. A tree that calls for no provider is not taken to Cloud.
+    /// Once the grants are read, the plan is printed and the selection runs as for `--all`,
+    /// with a summary naming the command of `scope` to run again. Returns its status.
     pub(in crate::cli) fn run_workflows(
         &self,
         deployment: &Deployment,
@@ -1194,17 +1193,14 @@ impl Flow<'_> {
         }))
     }
 
-    /// Runs the sign-in of each selected provider in turn, naming the provider on standard error
+    /// Processes each selected provider in turn, naming the provider on standard error
     /// before its prompts, then prints one outcome per provider. A held provider is never selected,
     /// and one whose grants need reconnecting is passed over as `reconnect_required`, the summary
     /// naming `useful account integration reconnect` with each of those grants' IDs. A sign-in that
-    /// fails does not stop the ones after it; a signal does, whether `useful` received it or it
-    /// ended a coding agent's sign-in on its own terminal. A coding agent the deployment does not
-    /// serve, or one no organization was resolved for, is reported and passed over without a
-    /// sign-in. Exits 0 when each provider ended with a grant or was passed over, as unavailable,
-    /// for want of an organization or as needing reconnecting, and at least one grant was made or
-    /// none was to be, 1 when any sign-in failed or nothing was made, and the signal's status when
-    /// one stopped the command.
+    /// fails does not stop the ones after it, and neither does a missing Claude Code token file.
+    /// A signal stops the command whether `useful` received it or it ended the Codex sign-in.
+    /// A coding agent the deployment does not serve, or one no organization was resolved for,
+    /// is reported and passed over. The exit status follows [`summary_code`].
     fn run_selection(
         &self,
         deployment: &Deployment,
@@ -1275,8 +1271,7 @@ impl Flow<'_> {
         Ok(code)
     }
 
-    /// Runs a coding agent's own sign-in in a selection and imports its login for
-    /// `organization`.
+    /// Attempts to connect a coding agent in a selection for `organization`.
     fn sign_in_native(
         &self,
         deployment: &Deployment,
@@ -1294,11 +1289,11 @@ impl Flow<'_> {
         })
     }
 
-    /// The coding agent's own sign-in, as no source option names another.
+    /// What the command can use when the member named no file or stream.
     pub(super) fn sign_in_of(&self, provider: ProviderArg) -> Login {
         match provider {
             ProviderArg::Codex => self.codex_sign_in(),
-            _ => Login::ClaudeCode,
+            _ => Login::ClaudeTokenFileRequired,
         }
     }
 
@@ -1395,9 +1390,7 @@ impl Flow<'_> {
             Login::Read(material) => Ok(material),
             Login::Codex(arguments) => codex_login::sign_in(arguments, material::read_codex_login)?
                 .map_err(|failure| (failure.report(&store.codex_import()), failure.stop())),
-            Login::ClaudeCode => {
-                claude_setup_token::sign_in()?.map_err(|failure| (failure.report(), failure.stop()))
-            }
+            Login::ClaudeTokenFileRequired => Err((claude_token_file_required(), None)),
         };
         let material = match signed_in {
             Ok(material) => material,
