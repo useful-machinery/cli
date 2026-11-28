@@ -23,8 +23,8 @@ pub use git::{RepositoryRootError, repository_root};
 pub use workflow_credentials::{
     CredentialKind, CredentialOrigin, CredentialRequirement, Declaration, DeclarationKind,
     DerivedCredentials, Difference, IntegrationDifference, Node, NodeKind, OriginDeclaration,
-    ReadinessCode, RepositorySource, UnknownCredential, UnknownDeclaration, WorkflowCredentials,
-    read_workflow_credentials,
+    ReadinessCode, RepositorySource, SlackChannelBinding, SlackDeclaration, UnknownCredential,
+    UnknownDeclaration, WorkflowCredentials, read_workflow_credentials,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

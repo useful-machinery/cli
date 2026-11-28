@@ -83,12 +83,6 @@ pub(super) fn mirror_for_run(
     // command that shows the run on this host. The external URL itself is what the start
     // comment looks for on the issue.
     let external_url = record.external.get("url");
-    let run_url = external_url.cloned().unwrap_or_else(|| {
-        url::Url::from_file_path(run_directory).map_or_else(
-            |()| format!("file://{}", run_directory.display()),
-            String::from,
-        )
-    });
     let run_reference = external_url
         .cloned()
         .unwrap_or_else(|| format!("useful workflow run show {}", record.id));
@@ -99,7 +93,7 @@ pub(super) fn mirror_for_run(
         MirrorRun {
             operator: record.owner.clone(),
             id: record.id.clone(),
-            url: run_url,
+            url: run_url(Some(record), run_directory),
             reference: run_reference,
             external_url: external_url.cloned(),
             directory: run_directory.to_owned(),
@@ -109,6 +103,19 @@ pub(super) fn mirror_for_run(
         Some(resolved_ids) => mirror.with_resolved_ids(resolved_ids),
         None => mirror,
     })
+}
+
+/// A Cloud run's page or the URL of a local run's directory.
+pub(super) fn run_url(record: Option<&WorkflowRunRecord>, run_directory: &Path) -> String {
+    record
+        .and_then(|record| record.external.get("url"))
+        .cloned()
+        .unwrap_or_else(|| {
+            url::Url::from_file_path(run_directory).map_or_else(
+                |()| format!("file://{}", run_directory.display()),
+                String::from,
+            )
+        })
 }
 
 /// `mirror_for_run` with the home `WorkflowHome::from_environment` locates.

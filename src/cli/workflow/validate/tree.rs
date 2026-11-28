@@ -15,7 +15,8 @@ use super::super::definition::report::{
 use crate::exit_code::ExitCode;
 use useful_execution::{
     BindingValue, BusyBehavior, Integration, IntegrationAs, IntegrationProvider, OwnerDeclaration,
-    OwnerSource, StopBefore, TriggerControlAction, ValidatedTree, validate_workflow_tree,
+    OwnerSource, SlackBlock, SlackTransition, StopBefore, TriggerControlAction, ValidatedTree,
+    validate_workflow_tree,
 };
 
 /// Validates the tree `directory` holds and prints its report: exit 0 for a valid tree, 1 for
@@ -214,6 +215,26 @@ fn write_human_valid(tree: &ValidatedTree) -> anyhow::Result<()> {
             display(&binding.kind)
         )?;
     }
+    if let Some(slack) = &tree.slack {
+        writeln!(stdout, "slack:")?;
+        if let Some(channel) = &slack.channel {
+            writeln!(stdout, "  channel: {}", display(&format!("${channel}")))?;
+        }
+        if !slack.on_step.is_empty() {
+            writeln!(stdout, "  onStep:")?;
+            for (step, hooks) in &slack.on_step {
+                writeln!(stdout, "    {}:", display(step))?;
+                for (transition, message) in hooks {
+                    writeln!(
+                        stdout,
+                        "      {}: {}",
+                        display(transition.as_str()),
+                        display(message)
+                    )?;
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -317,6 +338,7 @@ fn valid_report(tree: &ValidatedTree) -> JsonReport<'_> {
                 )
             })
             .collect(),
+        slack: tree.slack.as_ref().map(JsonSlack::from),
     }
 }
 
@@ -344,6 +366,41 @@ struct JsonReport<'a> {
     requires_integrations: BTreeMap<&'a str, JsonIntegration<'a>>,
     triggers: BTreeMap<&'a str, JsonTrigger<'a>>,
     bindings: BTreeMap<&'a str, JsonBinding<'a, BindingValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slack: Option<JsonSlack<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonSlack<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    on_step: BTreeMap<&'a str, BTreeMap<SlackTransition, JsonSlackHook<'a>>>,
+}
+
+impl<'a> From<&'a SlackBlock> for JsonSlack<'a> {
+    fn from(slack: &'a SlackBlock) -> Self {
+        Self {
+            channel: slack.channel.as_ref().map(|key| format!("${key}")),
+            on_step: slack
+                .on_step
+                .iter()
+                .map(|(step, hooks)| {
+                    let hooks = hooks
+                        .iter()
+                        .map(|(transition, message)| (*transition, JsonSlackHook { message }))
+                        .collect();
+                    (step.as_str(), hooks)
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonSlackHook<'a> {
+    message: &'a str,
 }
 
 /// The `as` that applies to a declared integration, absent where none does, and its bindings

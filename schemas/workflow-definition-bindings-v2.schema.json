@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.usefulmachinery.com/schemas/workflow-definition-bindings-v2.schema.json",
   "title": "Useful Machinery Workflow Definition Bindings Snapshot V2",
-  "description": "A revision's bindings.json: each binding of the root workflow's flat bindings block, keyed by its name, with its kind and the value bound for the environment, and, for each integration that declares bindings, a member keyed by the integration's id that holds that integration's bindings, each name with its provider-relative kind and its value. A members value is an array, empty included; every other value is a non-empty string. Every snapshot of the v1 shape has this shape. An empty object is the snapshot of a root workflow that declares no bindings.",
+  "description": "A revision's bindings.json: each binding of the root workflow's flat bindings block, keyed by its name, with its kind and the value bound for the environment, and, for each integration that declares bindings, a member keyed by the integration's id that holds that integration's bindings, each name with its provider-relative kind and its value. A members value is an array, empty included; every other value is a non-empty string. Every snapshot of the v1 shape has this shape. A definition or slack.channel binding given no value has no entry. An empty object represents a snapshot with no bound values.",
   "type": "object",
   "propertyNames": { "$ref": "#/$defs/Identifier" },
   "properties": {
@@ -27,7 +27,7 @@
       "pattern": "^[a-z][A-Za-z0-9]*$"
     },
     "BindingKind": {
-      "enum": ["connection", "linear.team", "linear.state", "github.repository", "member", "members", "definition"]
+      "enum": ["connection", "linear.team", "linear.state", "github.repository", "member", "members", "definition", "slack.channel"]
     },
     "BoundBinding": {
       "description": "A binding of the flat bindings block: its kind and the value bound for the environment.",

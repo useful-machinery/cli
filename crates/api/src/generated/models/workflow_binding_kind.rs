@@ -31,6 +31,8 @@ pub enum WorkflowBindingKind {
     WorkflowBindingMembers,
     #[serde(rename = "definition")]
     WorkflowBindingDefinition,
+    #[serde(rename = "slack.channel")]
+    WorkflowBindingSlackChannel,
 }
 
 impl std::fmt::Display for WorkflowBindingKind {
@@ -43,6 +45,7 @@ impl std::fmt::Display for WorkflowBindingKind {
             Self::WorkflowBindingMember => write!(f, "member"),
             Self::WorkflowBindingMembers => write!(f, "members"),
             Self::WorkflowBindingDefinition => write!(f, "definition"),
+            Self::WorkflowBindingSlackChannel => write!(f, "slack.channel"),
         }
     }
 }

@@ -1611,22 +1611,23 @@ async fn execute_attempt_phases(
         attempt.run = Some(owned_run);
         recorded.context("record the live local workflow attempt")?;
     }
-    // A root attempt's mirror; a child attempt mirrors nothing.
-    if !quiet {
-        let run = attempt.run()?;
-        attempt.mirror = run
-            .child_run_parent()
-            .ok()
-            .and_then(|parent| {
-                super::mirror::run_mirror(
-                    parent.record(),
-                    &workflow.definition,
-                    admitted.inputs(),
-                    run.run_directory(),
-                )
-            })
-            .map(Arc::new);
-    }
+    let run = attempt.run()?;
+    let parent = if quiet {
+        None
+    } else {
+        run.child_run_parent().ok()
+    };
+    let record = parent.as_ref().map(ChildRunParent::record);
+    attempt.mirror = record
+        .and_then(|record| {
+            super::mirror::run_mirror(
+                record,
+                &workflow.definition,
+                admitted.inputs(),
+                run.run_directory(),
+            )
+        })
+        .map(Arc::new);
     let admitted = admitted
         .clone()
         .with_step_workspaces(attempt.run()?.step_workspaces())
@@ -1677,68 +1678,90 @@ async fn execute_attempt_phases(
     };
     let run_clock = SystemObservationClock;
     let run_for_output = attempt.run()?;
-    let prepared = initialize_execution_presentation(run_clock, || {
-        match (child, presentation_config.mode()) {
-            (Some(child), _) => {
-                let timing_observation = RunTimingObservation::new(run_clock.sample());
-                Ok(PreparedExecutionPresentation {
-                    observer: RunExecutionObserver::Quiet(TimingObserver::new(
-                        child,
-                        cancellation.clone(),
-                        timing_observation.clone(),
-                        run_clock,
-                    )),
-                    host: ActiveRunHost::Quiet(QuietRunHost::default()),
-                    timing: timing_observation,
-                })
-            }
-            (None, PresentationMode::Tui) => {
-                let presentation_opened = run_clock.sample();
-                let timing_observation = RunTimingObservation::new(presentation_opened);
-                let view = WorkflowRunViewModel::new(
-                    workflow,
-                    admitted.execution().limits().maximum_parallel_steps().get(),
-                    timing_observation.clone(),
-                    run_clock,
-                );
-                let terminal = hooks.start_terminal(
-                    view.clone(),
-                    cancellation.clone(),
-                    presentation_config.color_enabled(),
-                )?;
-                Ok(PreparedExecutionPresentation {
-                    observer: RunExecutionObserver::Tui(view.clone()),
-                    host: ActiveRunHost::Tui {
-                        view,
-                        terminal: Some(terminal),
-                        failure: None,
-                        config: Box::new(presentation_config),
-                        leaf,
-                    },
-                    timing: timing_observation,
-                })
-            }
-            (None, PresentationMode::Plain | PresentationMode::Json) => {
-                let output = execution_output(presentation_config, run_for_output, leaf);
-                let presentation = output.start_for_result(
-                    workflow,
-                    &run_directory,
-                    admitted.execution().limits().maximum_parallel_steps().get(),
-                    run_clock,
-                )?;
-                let timing_observation = RunTimingObservation::new(presentation.opened_at());
-                let timing = TimingObserver::new(
-                    presentation.clone(),
+    let mode = presentation_config.mode();
+    let run_identity = if !quiet
+        && matches!(mode, PresentationMode::Plain | PresentationMode::Json)
+        && workflow
+            .definition
+            .root
+            .as_ref()
+            .and_then(|root| root.slack.as_ref())
+            .is_some_and(|slack| !slack.on_step.is_empty())
+    {
+        let id = match record {
+            Some(record) => record.id.clone(),
+            None => run_for_output.finalization_identity()?.0,
+        };
+        let url = super::mirror::run_url(record, run_for_output.run_directory());
+        Some((id, url))
+    } else {
+        None
+    };
+    let prepared = initialize_execution_presentation(run_clock, || match (child, mode) {
+        (Some(child), _) => {
+            let timing_observation = RunTimingObservation::new(run_clock.sample());
+            Ok(PreparedExecutionPresentation {
+                observer: RunExecutionObserver::Quiet(TimingObserver::new(
+                    child,
                     cancellation.clone(),
                     timing_observation.clone(),
                     run_clock,
-                );
-                Ok(PreparedExecutionPresentation {
-                    observer: RunExecutionObserver::Standard(timing),
-                    host: ActiveRunHost::Standard(presentation),
-                    timing: timing_observation,
-                })
-            }
+                )),
+                host: ActiveRunHost::Quiet(QuietRunHost::default()),
+                timing: timing_observation,
+            })
+        }
+        (None, PresentationMode::Tui) => {
+            let presentation_opened = run_clock.sample();
+            let timing_observation = RunTimingObservation::new(presentation_opened);
+            let view = WorkflowRunViewModel::new(
+                workflow,
+                admitted.execution().limits().maximum_parallel_steps().get(),
+                timing_observation.clone(),
+                run_clock,
+            );
+            let terminal = hooks.start_terminal(
+                view.clone(),
+                cancellation.clone(),
+                presentation_config.color_enabled(),
+            )?;
+            Ok(PreparedExecutionPresentation {
+                observer: RunExecutionObserver::Tui(view.clone()),
+                host: ActiveRunHost::Tui {
+                    view,
+                    terminal: Some(terminal),
+                    failure: None,
+                    config: Box::new(presentation_config),
+                    leaf,
+                },
+                timing: timing_observation,
+            })
+        }
+        (None, PresentationMode::Plain | PresentationMode::Json) => {
+            let output = execution_output(presentation_config, run_for_output, leaf);
+            let output = if let Some((id, url)) = run_identity {
+                output.with_run_identity(id, url)
+            } else {
+                output
+            };
+            let presentation = output.start_for_result(
+                workflow,
+                &run_directory,
+                admitted.execution().limits().maximum_parallel_steps().get(),
+                run_clock,
+            )?;
+            let timing_observation = RunTimingObservation::new(presentation.opened_at());
+            let timing = TimingObserver::new(
+                presentation.clone(),
+                cancellation.clone(),
+                timing_observation.clone(),
+                run_clock,
+            );
+            Ok(PreparedExecutionPresentation {
+                observer: RunExecutionObserver::Standard(timing),
+                host: ActiveRunHost::Standard(presentation),
+                timing: timing_observation,
+            })
         }
     })?;
     let observer = prepared.observer;

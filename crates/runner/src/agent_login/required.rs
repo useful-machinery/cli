@@ -390,6 +390,7 @@ mod tests {
             inferred: credentials.clone(),
             reported: credentials,
             differences: declares.then(Vec::new),
+            slack: Vec::new(),
         }
     }
 

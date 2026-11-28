@@ -19,6 +19,7 @@ use useful_runner::{
 
 use super::authorizations::{Authorization, InForce};
 use super::grants::{Held, OnRunner, ProviderView};
+use super::slack::{self, Bindings, ReadFailure, SlackFinding};
 
 /// The credentials the tree under `source_root` needs, or `None` once the first file that does
 /// not resolve was rejected as `useful workflow validate` rejects it.
@@ -93,6 +94,8 @@ pub(super) struct Report<'a> {
     /// Where a declaring file's integrations and the inference differ, when a named file
     /// declares them; they change no requirement, count or exit status.
     pub(super) differences: Option<Vec<IntegrationDifference>>,
+    /// Slack warnings, present when a named file declares a Slack block.
+    pub(super) slack: Option<Vec<SlackFinding>>,
     /// The organization in effect, for the next actions, when Cloud was asked.
     pub(super) organization: Option<&'a str>,
     /// The project in effect, for the next actions.
@@ -109,10 +112,19 @@ pub(super) struct Report<'a> {
 
 impl<'a> Report<'a> {
     /// The report of a derivation no Cloud read was made for.
-    pub(super) fn unread(derived: DerivedCredentials) -> Self {
+    pub(super) fn unread(derived: DerivedCredentials, bindings: &Bindings) -> Self {
+        let slack = slack::unread(&derived.slack, bindings, ReadFailure::NotSignedIn);
+        Self::from_derived(derived, slack)
+    }
+
+    pub(super) fn from_derived(
+        derived: DerivedCredentials,
+        slack: Option<Vec<SlackFinding>>,
+    ) -> Self {
         Self {
             credentials: derived.reported,
             differences: derived.differences,
+            slack,
             organization: None,
             project: None,
             authorization: None,
@@ -309,6 +321,10 @@ fn write_human_report_to(output: &mut impl Write, report: &Report<'_>) -> io::Re
         writeln!(output)?;
     }
 
+    if let Some(findings) = &report.slack {
+        slack::write_human(output, findings)?;
+    }
+
     let summary = report.summary();
     writeln!(output, "── summary ──")?;
     writeln!(output, "met: {}", summary.met)?;
@@ -467,6 +483,8 @@ struct JsonReport<'a> {
     /// Present when a named file declares its integrations.
     #[serde(skip_serializing_if = "Option::is_none")]
     differences: Option<Vec<JsonDifference<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slack: Option<&'a [SlackFinding]>,
     summary: JsonSummary,
 }
 
@@ -495,6 +513,7 @@ impl<'a> JsonReport<'a> {
                     .map(JsonDifference::from_difference)
                     .collect()
             }),
+            slack: report.slack.as_deref(),
             summary: JsonSummary {
                 met: summary.met,
                 missing: summary.missing,

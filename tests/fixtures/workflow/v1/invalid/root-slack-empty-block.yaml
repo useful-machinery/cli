@@ -1,0 +1,6 @@
+schemaVersion: 1
+steps:
+  deploy:
+    kind: cmd
+    command: {argv: ["true"]}
+slack: {}

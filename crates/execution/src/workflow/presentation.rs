@@ -46,6 +46,7 @@ use super::runtime::{
     ActiveStepInvocation, EnteredWait, RecoveryDecisionKind, RecoveryHandlerActivity,
     RecoveryHandlerKind, RunOutcome, StepState, StepStateKind, TransitionEvent,
 };
+use super::slack::SlackProgress;
 #[cfg(test)]
 use super::step_runtime::{CommandExecutionFailure, StepExecutionFailure, StepFailureCause};
 use super::tree::{TreeDiagnostic, TreeLocation};
@@ -347,6 +348,7 @@ pub struct WorkflowRunOutput<StandardOutput, StandardError> {
     /// run's latest attempt, under `command`.
     continuing: bool,
     retry_run_directory: Option<String>,
+    run_identity: Option<(String, String)>,
 }
 
 impl<StandardOutput, StandardError> WorkflowRunOutput<StandardOutput, StandardError>
@@ -366,7 +368,14 @@ where
             command: RUN_COMMAND,
             continuing: false,
             retry_run_directory: None,
+            run_identity: None,
         }
+    }
+
+    /// Supply the run id and URL used to render hooks in the progress stream.
+    pub fn with_run_identity(mut self, id: String, url: String) -> Self {
+        self.run_identity = Some((id, url));
+        self
     }
 
     /// The documents of `useful workflow run retry --all` of the run at `run_directory`, a
@@ -1067,7 +1076,7 @@ where
             self.standard_output,
             self.standard_error,
             workflow,
-            result_directory,
+            PresentationDefinition::from_workflow(workflow, result_directory, self.run_identity)?,
             maximum_parallel_steps,
             clock,
         )
@@ -1088,6 +1097,7 @@ where
         let definition = match PresentationDefinition::from_workflow(
             workflow,
             result_directory.unwrap_or("result"),
+            None,
         ) {
             Ok(definition) => definition,
             Err(failure) => return WorkflowRunPresentationResult::Failed(failure),
@@ -1226,7 +1236,7 @@ fn tree_code_message(code: &str) -> &'static str {
             "Declare the binding under the root's `bindings` or `requires.integrations.<id>.bindings`."
         }
         "binding_kind_mismatch" => {
-            "Name a `connection` binding as a trigger's source, and a `linear.state` one or a `state` one under `linear` in `mirror`."
+            "Name a `connection` binding as a trigger's source, a `linear.state` binding or a `state` binding under `linear` in `mirror`, and a `slack.channel` binding in `slack.channel`."
         }
         "binding_declared_twice" => {
             "Rename the flat binding so it names neither a binding under an integration nor an integration with bindings."
@@ -1251,6 +1261,10 @@ fn tree_code_message(code: &str) -> &'static str {
         }
         "mirror_variable_unknown" => {
             "Use only `{{name}}` placeholders the hook supplies in the mirror template."
+        }
+        "slack_step_undeclared" => "Name a declared root step or finalizer in `slack.onStep`.",
+        "slack_variable_unknown" => {
+            "Use only `{{run.url}}`, `{{run.id}}` and `{{step}}` placeholders in Slack messages."
         }
         "workflow_not_in_tree" => {
             "Select workflow.yaml or a workflow file directly under the tree root."
@@ -1458,7 +1472,7 @@ where
         standard_output: StandardOutput,
         standard_error: StandardError,
         workflow: &ResolvedWorkflow,
-        result_directory: &str,
+        definition: PresentationDefinition,
         maximum_parallel_steps: usize,
         clock: Clock,
     ) -> Result<Self, PresentationFailure> {
@@ -1469,7 +1483,7 @@ where
             terminal_width: config.wrapping_width(),
             standard_output,
             standard_error,
-            definition: PresentationDefinition::from_workflow(workflow, result_directory)?,
+            definition,
             feed: WorkflowPresentationFeed::new(workflow),
             last_accepted_order: None,
             step_starts: BTreeMap::new(),
@@ -1841,7 +1855,7 @@ where
             Scheduling::Dataflow => Some(Arc::new(Mutex::new(ChildStepScope {
                 workflow: WorkflowPresentationDefinition::from_workflow(workflow),
                 // A child's records name no result directory of their own.
-                definition: PresentationDefinition::from_workflow(workflow, "")?,
+                definition: PresentationDefinition::from_workflow(workflow, "", None)?,
                 step_starts: BTreeMap::new(),
             }))),
         };
@@ -1983,6 +1997,7 @@ struct PresentationDefinition {
     result_directory: String,
     steps: BTreeMap<String, PresentationStep>,
     scope_width: usize,
+    slack: Option<SlackProgress>,
 }
 
 #[derive(Clone)]
@@ -2001,6 +2016,7 @@ impl PresentationDefinition {
     fn from_workflow(
         workflow: &ResolvedWorkflow,
         result_directory: &str,
+        run_identity: Option<(String, String)>,
     ) -> Result<Self, PresentationFailure> {
         let steps = workflow
             .definition
@@ -2033,10 +2049,15 @@ impl PresentationDefinition {
             .chain(std::iter::once("@workflow".len()))
             .max()
             .unwrap_or("@workflow".len());
+        let slack = run_identity.and_then(|(id, url)| {
+            let block = workflow.definition.root.as_ref()?.slack.as_ref()?;
+            Some(SlackProgress::new(block, id, url))
+        });
         Ok(Self {
             result_directory: result_directory.to_owned(),
             steps,
             scope_width,
+            slack,
         })
     }
 }
@@ -2193,7 +2214,22 @@ where
                     to,
                     transition.step,
                 );
-                self.write_step_records(observed_at.utc, &step, records)
+                self.write_step_records(observed_at.utc, &step, records)?;
+                if let Some(message) = self
+                    .definition
+                    .slack
+                    .as_mut()
+                    .and_then(|slack| slack.message(&step, to))
+                {
+                    self.write_event(
+                        observed_at.utc,
+                        &step,
+                        "slack",
+                        &visible_text(&message),
+                        TokenRole::Neutral,
+                    )?;
+                }
+                Ok(())
             }
             TransitionEvent::Workflow { to, .. } => match *to {
                 super::runtime::WorkflowState::Finalizing { trigger, .. } => self.write_event(

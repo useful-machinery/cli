@@ -47,9 +47,9 @@ pub use doctor::{
     CheckDescriptor, CheckResult, CredentialKind, CredentialOrigin, CredentialRequirement,
     Declaration, DeclarationKind, DerivedCredentials, Difference, IntegrationDifference, Node,
     NodeKind, OperatorConfigSource, OriginDeclaration, Outcome, ReadinessCode, Registry,
-    RegistryError, Report, RepositoryRootError, RepositorySource, SelectionError, Status, Summary,
-    UnknownCredential, UnknownDeclaration, WorkflowCredentials, built_in_registry,
-    read_workflow_credentials, repository_root,
+    RegistryError, Report, RepositoryRootError, RepositorySource, SelectionError,
+    SlackChannelBinding, SlackDeclaration, Status, Summary, UnknownCredential, UnknownDeclaration,
+    WorkflowCredentials, built_in_registry, read_workflow_credentials, repository_root,
 };
 pub use enrollment::{
     ActivationArtifact, ActivationArtifactParts, AmbiguousCause, ArtifactDestination,

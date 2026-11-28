@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::admission::{CLAUDE_CODE_LOGIN_VARIABLE, CODEX_LOGIN_VARIABLE};
 use super::condition::TerminalDisposition;
 use super::mirror::MirrorBlock;
+use super::slack::SlackBlock;
 use super::validated::{ValidatedHarness, WorkflowValueType};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,9 +35,7 @@ pub(crate) struct WorkflowDocument {
     pub(crate) derived_outputs: BTreeMap<String, BTreeMap<String, Output>>,
 }
 
-/// The root-only blocks of a workflow file. A run acts on none of them but `mirror` and,
-/// through admission, `requires`; an absent block is empty, since the schema admits no
-/// empty block.
+/// The root-only blocks of a workflow file.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootBlocks {
     pub programs: Vec<String>,
@@ -45,6 +44,7 @@ pub struct RootBlocks {
     pub bindings: BTreeMap<String, Binding>,
     pub triggers: BTreeMap<String, Trigger>,
     pub mirror: Option<MirrorBlock>,
+    pub slack: Option<SlackBlock>,
 }
 
 impl RootBlocks {
@@ -247,6 +247,8 @@ pub enum BindingKind {
     /// trigger.
     #[serde(rename = "definition")]
     Definition,
+    #[serde(rename = "slack.channel")]
+    SlackChannel,
 }
 
 impl BindingKind {
@@ -259,6 +261,7 @@ impl BindingKind {
             Self::Member => "member",
             Self::Members => "members",
             Self::Definition => "definition",
+            Self::SlackChannel => "slack.channel",
         }
     }
 }

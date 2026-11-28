@@ -5,4 +5,4 @@ steps:
     command:
       argv: ["true"]
 bindings:
-  channel: {kind: slack.channel}
+  label: {kind: linear.label}

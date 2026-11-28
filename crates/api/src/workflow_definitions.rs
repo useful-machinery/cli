@@ -54,10 +54,10 @@ const EVALUATION_VOCABULARY: &str = "4";
 /// older Cloud answers it as its own latest, so there is no fallback.
 const EVALUATION_REPRESENTATION: (&str, &str) = ("representation", "4");
 /// The binding vocabulary this release decodes: its revision models hold the kinds
-/// `connection`, `linear.team`, `linear.state`, `github.repository`, `member` and `members`
-/// and the kind `definition`. A request that named none would be answered without a binding
-/// of a kind outside the first six.
-const BINDING_VOCABULARY: &str = "2";
+/// `connection`, `linear.team`, `linear.state`, `github.repository`, `member`, `members`,
+/// `definition` and `slack.channel`. A request that named none would be answered without a
+/// binding of a kind outside the first six.
+const BINDING_VOCABULARY: &str = "3";
 
 /// One file of a tree to upload: its tree-relative path, bytes and owner-execute bit.
 #[derive(Clone, Copy)]

@@ -63,28 +63,30 @@ repository changes.
 | `finalizers` | no | Nodes considered after the ordinary phase. |
 | `exports` | no | Stable names selecting declared outputs. |
 | `outcomes`, `outcome` | no | Declared run outcome names and the `text` output that chooses one; declared together. |
-| `programs`, `exclude`, `requires`, `bindings`, `triggers`, `mirror` | no | Root only: program directories, digest excludes, required `tools`, a host `check` and declared `integrations`, typed bindings (kinds include `definition`) with optional text `default`, triggers on a `$binding` or integration source's event (Linear issue, GitHub `push`) or a `$binding` definition's run outcome, and a run's Linear writes. |
+| `programs`, `exclude`, `requires`, `bindings`, `triggers`, `mirror`, `slack` | no | Root only. Program directories, digest excludes, host requirements and integrations, `{kind, default?}` bindings (including `definition` and `slack.channel`), triggers on Linear issue events, GitHub `push` or definition outcomes, Linear writes, and Slack step hooks. |
 
-Identifiers use lower camel case, contain 1 through 64 ASCII letters or digits, and
-match `^[a-z][A-Za-z0-9]*$`. Ordinary step and finalizer IDs share a namespace. V1
-rejects duplicate or non-string keys, anchors, aliases, merge keys, custom tags,
-multiple YAML documents, `%YAML` and unknown directives, and floating-point numbers
-(write `1`, not `1.0`). A workflow file is at most 1 MiB and nests values at most
-100 levels deep.
+Identifiers match `^[a-z][A-Za-z0-9]*$` and are at most 64 characters. Step and
+finalizer IDs share a namespace. V1 rejects duplicate or non-string keys, anchors,
+aliases, merge keys, custom tags, multiple documents, `%YAML`, unknown directives and floats.
+Each file is at most 1 MiB and 100 levels deep.
+
+The root's `slack` block holds `channel: $key` (a `slack.channel` binding), `onStep` or
+both. `onStep` maps root step or finalizer IDs to `{message}` hooks keyed by `started`,
+`succeeded`, `failed`, `skipped`, `cancelled`, `blocked` or `notRun`. Messages have
+1 to 2,000 characters and accept `{{run.url}}`, `{{run.id}}` and `{{step}}`.
 
 Root `requires` holds at least one of `tools`, `check`, `as`, and `integrations`, which declares
-needed services by provider id: `github`, `gitlab.com`, `linear`, `claude_code`, `codex`,
-`mergify`, `buildkite`, or `cloudflare`. `as` is `member` or `org`; an entry's own `as` overrides
-`requires.as`. An entry's `bindings` map names to `{kind, default?}`: `team` or `state`
-under `linear`, `repository` under `github`, none elsewhere; `default` is text. Reference
-one as `$<id>.<name>` (`$linear.done`; a `linear` `state` can be a mirror state) and name
-a declared integration as a trigger's `source: linear`. A flat `bindings` key naming an
-integration's binding, or the id of one with bindings, is `binding_declared_twice`. A
-publish's `--bindings` file gives an integration's values under its id,
-`{"linear": {"team": "AUTO"}}`, beside the flat members. `useful workflow doctor` reports
-declared integrations; `useful workflow run show` prints where a Cloud run got each
-credential. Every step, finalizer, and recovery handler gets each declared integration's
-variables, whatever `environmentPassthrough` says (missing ones are unset): `GH_TOKEN`,
+services by id: `github`, `gitlab.com`, `linear`, `claude_code`, `codex`, `mergify`,
+`buildkite`, or `cloudflare`. An entry's `as` overrides `requires.as` (both `member` or `org`).
+Integration bindings are `{kind, default?}` with a text default. Kinds are `team` or
+`state` for `linear`, and `repository` for `github`. Reference them as `$<id>.<name>`
+(`$linear.done` in a mirror). A trigger can name the integration itself (`source: linear`).
+A flat binding that shares an integration binding's name or its integration id is
+`binding_declared_twice`. A publish's `--bindings` file nests integration values by id
+(`{"linear": {"team": "AUTO"}}`). `useful workflow doctor` lists integrations. `useful
+workflow run show` reports Cloud credential sources. Declared integration variables
+reach all steps, finalizers and recovery handlers independently of `environmentPassthrough`
+(missing values are unset): `GH_TOKEN`,
 `GITLAB_TOKEN`, `USEFUL_LINEAR_ACCESS_TOKEN`, `MERGIFY_TOKEN`, `BUILDKITE_API_TOKEN`, and `CLOUDFLARE_API_TOKEN`,
 each with a `_FILE` twin, `CLAUDE_CODE_OAUTH_TOKEN`, and `CODEX_HOME`. A tree's root
 declaration covers every file. Unless its host sets them, a Cloud run gets the

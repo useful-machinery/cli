@@ -8158,16 +8158,18 @@ mod workflow_run_cloud {
         format!("GET /api/v1/organizations/{ORGANIZATION}/runs/{RUN_ID}/slack-messages?limit=100")
     }
 
-    fn slack_messages(outcome: &str, state: &str, reason: &str) -> [serde_json::Value; 2] {
+    fn slack_messages(outcome: &str, state: &str, reason: Option<&str>) -> [serde_json::Value; 2] {
         [
             serde_json::json!({
                 "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abc", "kind": "run_started",
                 "attempt": 1, "outcome": null, "state": "posted", "reason": null,
+                "step": null, "transition": null,
                 "createdAt": "2026-08-10T12:04:00Z", "updatedAt": "2026-08-10T12:04:01Z"
             }),
             serde_json::json!({
                 "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abd", "kind": "run_settled",
                 "attempt": 1, "outcome": outcome, "state": state, "reason": reason,
+                "step": null, "transition": null,
                 "createdAt": "2026-08-10T12:05:00Z", "updatedAt": "2026-08-10T12:05:01Z"
             }),
         ]
@@ -8176,7 +8178,7 @@ mod workflow_run_cloud {
     #[test]
     fn cloud_show_reports_slack_messages_in_event_order_with_their_delivery_result() {
         let home = tempfile::tempdir().unwrap();
-        let items = slack_messages("failed", "failed", "slack_unavailable");
+        let items = slack_messages("failed", "failed", Some("slack_unavailable"));
         let mut run = definition_run();
         run["state"] = serde_json::json!("failed");
         for json in [true, false] {
@@ -8212,11 +8214,68 @@ mod workflow_run_cloud {
         }
     }
 
+    // SC-SLACKHOOK-2
+    #[test]
+    fn cloud_show_reports_slack_messages_for_step_hooks_between_run_messages() {
+        let home = tempfile::tempdir().unwrap();
+        let [opening, settlement] = slack_messages("succeeded", "posted", None);
+        let hook = |id, transition, created_at, updated_at| {
+            serde_json::json!({
+                "id": id, "kind": "step_hook", "attempt": 1, "outcome": null,
+                "step": "deploy", "transition": transition, "state": "posted", "reason": null,
+                "createdAt": created_at, "updatedAt": updated_at,
+            })
+        };
+        let items = [
+            opening,
+            hook(
+                "slm_01k0z6r1w8f4jy2m7q9v3x5abe",
+                "started",
+                "2026-08-10T12:04:10Z",
+                "2026-08-10T12:04:11Z",
+            ),
+            hook(
+                "slm_01k0z6r1w8f4jy2m7q9v3x5abf",
+                "succeeded",
+                "2026-08-10T12:04:20Z",
+                "2026-08-10T12:04:21Z",
+            ),
+            settlement,
+        ];
+        for json in [true, false] {
+            let (output, _) = show_in_cloud(
+                RUN_ID,
+                if json { &["--json"] } else { &[] },
+                vec![
+                    run_response(run_body_with_state("succeeded")),
+                    slack_messages_response(&items, false),
+                ],
+                home.path(),
+            );
+            assert!(output.status.success(), "{output:?}");
+            if json {
+                assert_eq!(document(&output)["slackMessages"], serde_json::json!(items));
+            } else {
+                let text = String::from_utf8(output.stdout).unwrap();
+                let (_, lines) = reported_list(&text, "slack messages").unwrap();
+                assert_eq!(
+                    lines,
+                    [
+                        "run_started · attempt 1 · posted",
+                        "step_hook · attempt 1 · deploy started · posted",
+                        "step_hook · attempt 1 · deploy succeeded · posted",
+                        "run_settled · attempt 1 · outcome succeeded · posted",
+                    ]
+                );
+            }
+        }
+    }
+
     // SC-SLACKTHREAD-5: a run without a member or owner records both messages as skipped.
     #[test]
     fn cloud_show_explains_both_skipped_slack_messages_when_the_run_has_no_member() {
         let home = tempfile::tempdir().unwrap();
-        let mut items = slack_messages("succeeded", "skipped", "no_member");
+        let mut items = slack_messages("succeeded", "skipped", Some("no_member"));
         items[0]["state"] = serde_json::json!("skipped");
         items[0]["reason"] = serde_json::json!("no_member");
         let (output, _) = show_in_cloud(

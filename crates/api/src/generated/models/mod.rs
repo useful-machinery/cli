@@ -744,6 +744,8 @@ pub mod set_workflow_definition_execution_principal_request;
 pub use self::set_workflow_definition_execution_principal_request::SetWorkflowDefinitionExecutionPrincipalRequest;
 pub mod slack_authorization_session;
 pub use self::slack_authorization_session::SlackAuthorizationSession;
+pub mod slack_channel_check;
+pub use self::slack_channel_check::SlackChannelCheck;
 pub mod slack_connection;
 pub use self::slack_connection::SlackConnection;
 pub mod slack_connection_error;

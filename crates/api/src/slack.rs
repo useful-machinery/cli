@@ -12,6 +12,9 @@ use super::{HttpTransportPolicy, UnreachableCategory, generated_api_request, pro
 pub type SlackSession = models::SlackAuthorizationSession;
 pub type SlackConnection = models::SlackConnection;
 pub type SlackConnectionList = models::SlackConnectionList;
+pub type SlackChannelCheck = models::SlackChannelCheck;
+pub type SlackChannelCheckState = models::slack_channel_check::State;
+pub type SlackChannelCheckReason = models::slack_channel_check::Reason;
 pub type SlackSessionStatus = models::slack_authorization_session::Status;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +181,29 @@ impl SlackApi {
         Ok(connection)
     }
 
+    pub fn check_channel(
+        &self,
+        organization: &str,
+        connection: &str,
+        channel: &str,
+    ) -> Result<SlackChannelCheck, SlackFailure> {
+        let check = source_connections_api::check_slack_channel(
+            &self.configuration,
+            organization,
+            connection,
+            channel,
+        )
+        .map_err(failure)?;
+        let usable = check.state == SlackChannelCheckState::Usable;
+        if check.channel != channel
+            || check.channel_id.is_some() != usable
+            || check.reason.is_some() == usable
+        {
+            return Err(invalid().into());
+        }
+        Ok(check)
+    }
+
     pub fn list(
         &self,
         organization: &str,
@@ -252,11 +278,48 @@ fn validate_session(value: &SlackSession, id: Option<&str>) -> Result<(), Resour
 #[cfg(test)]
 #[allow(
     clippy::disallowed_macros,
+    clippy::expect_used,
     reason = "Slack client unit tests use Rust test assertions"
 )]
 mod tests {
     use super::*;
     use crate::resource::{classify_problem, problem_fixture};
+
+    #[test]
+    fn slack_channel_check_refuses_inconsistent_answers() {
+        use useful_test_support::ScriptedHttpServer;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        for body in [
+            r##"{"channel":"#runs","state":"usable"}"##,
+            r##"{"channel":"#runs","state":"unusable"}"##,
+            r##"{"channel":"#other","state":"usable","channelId":"C0123ABCD"}"##,
+        ] {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let server = ScriptedHttpServer::respond(response.into_bytes());
+            let api = SlackApi::new(
+                &server.api_url,
+                "fixture-token",
+                HttpTransportPolicy::AllowInsecureHttp,
+            )
+            .expect("fixture Slack API client");
+            let result = api.check_channel("example", "scn_01k0z6r1w8f4jy2m7q9v3x5abc", "#runs");
+            let request = server.finish_one();
+            assert!(request.starts_with(
+                "GET /api/v1/organizations/example/connections/slack/scn_01k0z6r1w8f4jy2m7q9v3x5abc/channel-check?channel=%23runs "
+            ));
+            assert_eq!(
+                result,
+                Err(SlackFailure::Resource(ResourceFailure::InvalidResponse {
+                    credential_rejected: false,
+                })),
+                "{body}"
+            );
+        }
+    }
 
     #[test]
     fn slack_problem_status_and_type_must_match() {

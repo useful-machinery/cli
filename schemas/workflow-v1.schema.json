@@ -1055,7 +1055,7 @@
       "description": "A reference to a declared binding, written `$` followed by the binding key, or `$<integration>.<name>` for a binding declared under an integration."
     },
     "BindingKind": {
-      "enum": ["connection", "linear.team", "linear.state", "github.repository", "member", "members", "definition"]
+      "enum": ["connection", "linear.team", "linear.state", "github.repository", "member", "members", "definition", "slack.channel"]
     },
     "EventName": {
       "type": "string",
@@ -1420,6 +1420,42 @@
         "linear": { "$ref": "#/$defs/MirrorLinear" }
       }
     },
+    "SlackHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "SlackStepHooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "started": { "$ref": "#/$defs/SlackHook" },
+        "succeeded": { "$ref": "#/$defs/SlackHook" },
+        "failed": { "$ref": "#/$defs/SlackHook" },
+        "skipped": { "$ref": "#/$defs/SlackHook" },
+        "cancelled": { "$ref": "#/$defs/SlackHook" },
+        "blocked": { "$ref": "#/$defs/SlackHook" },
+        "notRun": { "$ref": "#/$defs/SlackHook" }
+      }
+    },
+    "Slack": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "channel": { "$ref": "#/$defs/BindingReference" },
+        "onStep": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/Identifier" },
+          "additionalProperties": { "$ref": "#/$defs/SlackStepHooks" }
+        }
+      }
+    },
     "Workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -1453,7 +1489,8 @@
         "requires": { "$ref": "#/$defs/Requires" },
         "bindings": { "$ref": "#/$defs/Bindings" },
         "triggers": { "$ref": "#/$defs/Triggers" },
-        "mirror": { "$ref": "#/$defs/Mirror" }
+        "mirror": { "$ref": "#/$defs/Mirror" },
+        "slack": { "$ref": "#/$defs/Slack" }
       },
       "required": ["schemaVersion", "steps"]
     }

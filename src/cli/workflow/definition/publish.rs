@@ -92,7 +92,7 @@ pub(super) struct Command {
 }
 
 /// `KEY=VALUE`, split at the first `=`.
-fn parse_binding(value: &str) -> Result<(String, String), String> {
+pub(in crate::cli) fn parse_binding(value: &str) -> Result<(String, String), String> {
     let (key, value) = value
         .split_once('=')
         .ok_or_else(|| "expected KEY=VALUE".to_owned())?;

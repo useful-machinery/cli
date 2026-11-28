@@ -277,6 +277,112 @@ fn a_valid_tree_keeps_its_files_with_their_executable_bit() {
     );
 }
 
+const SLACK_ROOT: &str = r#"schemaVersion: 1
+steps:
+  deploy: {kind: cmd, command: {argv: ["true"]}}
+  notify: {kind: cmd, command: {argv: ["true"]}}
+finalizers:
+  cleanup: {kind: cmd, when: [succeeded], command: {argv: ["true"]}}
+bindings:
+  runsChannel: {kind: slack.channel}
+  linearTeam: {kind: linear.team}
+slack:
+  channel: $runsChannel
+  onStep:
+    deploy:
+      started: {message: "Deploy started. Follow along: {{run.url}}"}
+      succeeded: {message: "Deploy finished. Details: {{run.url}}"}
+    cleanup:
+      succeeded: {message: "{{step}} finished in {{run.id}}"}
+"#;
+
+#[test]
+fn slack_hooks_can_name_root_steps_and_finalizers() {
+    let tree = tempfile::tempdir().unwrap();
+    write(tree.path(), "workflow.yaml", SLACK_ROOT.as_bytes());
+    validate_workflow_tree(tree.path()).expect("the Slack hooks should validate");
+}
+
+#[test]
+fn slack_hook_on_an_undeclared_step_is_refused() {
+    let tree = tempfile::tempdir().unwrap();
+    let source = SLACK_ROOT.replace("    deploy:", "    unknown:");
+    write(tree.path(), "workflow.yaml", source.as_bytes());
+
+    let diagnostics = validate_workflow_tree(tree.path()).expect_err("undeclared Slack hook");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "slack_step_undeclared");
+    assert_eq!(
+        diagnostics[0].location,
+        TreeLocation::new("slack").key("onStep").step("unknown")
+    );
+}
+
+#[test]
+fn slack_hooks_refuse_unknown_and_malformed_placeholders() {
+    let tree = tempfile::tempdir().unwrap();
+    for placeholder in ["{{operator}}", "{{"] {
+        let source = SLACK_ROOT.replacen("{{run.url}}", placeholder, 1);
+        write(tree.path(), "workflow.yaml", source.as_bytes());
+
+        let diagnostics = validate_workflow_tree(tree.path()).expect_err("invalid Slack message");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].code, "slack_variable_unknown");
+        assert_eq!(
+            diagnostics[0].location,
+            TreeLocation::new("slack")
+                .key("onStep.started")
+                .step("deploy")
+        );
+    }
+}
+
+#[test]
+fn slack_channel_must_name_a_declared_slack_channel_binding() {
+    let tree = tempfile::tempdir().unwrap();
+    for (key, code) in [
+        ("unknown", "binding_undeclared"),
+        ("linearTeam", "binding_kind_mismatch"),
+    ] {
+        let source = SLACK_ROOT.replace("$runsChannel", &format!("${key}"));
+        write(tree.path(), "workflow.yaml", source.as_bytes());
+
+        let diagnostics = validate_workflow_tree(tree.path()).expect_err("invalid channel binding");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].code, code);
+        assert_eq!(
+            diagnostics[0].location,
+            TreeLocation::new("slack").key("channel").binding(key)
+        );
+    }
+}
+
+#[test]
+fn slack_block_is_refused_in_stage_files() {
+    let tree = tempfile::tempdir().unwrap();
+    write(tree.path(), "workflow.yaml", SLACK_ROOT.as_bytes());
+    write(
+        tree.path(),
+        "stage.yaml",
+        br#"schemaVersion: 1
+steps:
+  prepare: {kind: cmd, command: {argv: ["true"]}}
+slack:
+  channel: $runsChannel
+"#,
+    );
+
+    let diagnostics = validate_workflow_tree(tree.path()).expect_err("stage with Slack block");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "root_only_block_outside_root");
+    assert_eq!(
+        diagnostics[0].location,
+        TreeLocation::new("workflow")
+            .path("stage.yaml")
+            .key("slack")
+    );
+}
+
 const MEMBER_BINDINGS: &str = r#"bindings:
   includedOwners: {kind: members, default: []}
   reviewers: {kind: members, default: ["prn_a", "prn_b"]}

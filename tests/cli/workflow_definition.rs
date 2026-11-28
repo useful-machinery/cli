@@ -185,6 +185,7 @@ fn engineering_tree_validates_with_digest_files_triggers_and_bindings() {
     );
     assert_eq!(report["programs"], json!(["scripts"]));
     assert_eq!(report["requiresTools"], json!(["git", "gh", "python3"]));
+    assert!(report.get("slack").is_none());
     assert_eq!(
         report["triggers"],
         json!({
@@ -255,6 +256,45 @@ fn engineering_tree_validates_with_digest_files_triggers_and_bindings() {
             "missing {expected:?} in {stdout}"
         );
     }
+}
+
+#[test]
+fn tree_validation_reports_the_slack_block_as_declared() {
+    let root = include_str!("../fixtures/workflow/v1/valid/root-slack-hooks.yaml");
+    let tree = Tree::with(root, DESIGN_WORKFLOW);
+    let declared_hooks = json!({
+        "cleanup": {"succeeded": {"message": "Cleanup finished for {{run.id}}"}},
+        "deploy": {
+            "started": {"message": "Deploy started. Follow along: {{run.url}}"},
+            "succeeded": {"message": "Deploy finished. Details: {{run.url}}"},
+        },
+    });
+
+    let output = validate(tree.path(), true);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        report(&output)["slack"],
+        json!({"channel": "$runsChannel", "onStep": declared_hooks})
+    );
+
+    let human = validate(tree.path(), false);
+    assert_eq!(human.status.code(), Some(0), "{human:?}");
+    let stdout = String::from_utf8(human.stdout).expect("human output should be UTF-8");
+    let (_, slack) = stdout.split_once("slack:\n").expect("Slack report section");
+    let (channel, hooks) = slack.split_once("cleanup:").expect("cleanup hook section");
+    let (cleanup, deploy) = hooks.split_once("deploy:").expect("deploy hook section");
+    assert!(channel.contains("$runsChannel"), "{slack}");
+    assert!(cleanup.contains("succeeded:"), "{slack}");
+    assert!(deploy.contains("started:"), "{slack}");
+    assert!(deploy.contains("succeeded:"), "{slack}");
+
+    tree.write(
+        "workflow.yaml",
+        &root.replace("  channel: $runsChannel\n", ""),
+    );
+    let output = validate(tree.path(), true);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(report(&output)["slack"], json!({"onStep": declared_hooks}));
 }
 
 #[test]
@@ -5359,14 +5399,6 @@ fn gateway_integrations() -> (Value, Value) {
     )
 }
 
-/// Whether `request`'s query names vocabulary 2, as a revision read may.
-fn asks_for_vocabulary_2(request: &GatewayRequest) -> bool {
-    request
-        .path
-        .split_once('?')
-        .is_some_and(|(_, query)| query.split('&').any(|pair| pair == "vocabulary=2"))
-}
-
 /// The evaluation vocabulary `request`'s query names, 1 when it names none.
 fn evaluation_vocabulary(request: &GatewayRequest) -> u32 {
     query_number(request, "vocabulary").unwrap_or(1)
@@ -5385,7 +5417,7 @@ const CLOUD_BOUND_DEFINITION: &str = "def_01k0z6r1w8f4jy2m7q9v3x5abe";
 const CLOUD_BOUND_DEFINITION_NAME: &str = "verify-change";
 
 /// The `verify` binding of kind `definition` and its resolution, which Cloud shows only under
-/// binding vocabulary 2.
+/// binding vocabulary 2 and later.
 fn gateway_definition_binding() -> (Value, Value) {
     (
         json!({"kind": "definition", "value": CLOUD_BOUND_DEFINITION}),
@@ -5394,6 +5426,11 @@ fn gateway_definition_binding() -> (Value, Value) {
             "id": CLOUD_BOUND_DEFINITION, "name": CLOUD_BOUND_DEFINITION_NAME,
         }),
     )
+}
+
+/// The `runsChannel` binding and resolution share the same value.
+fn gateway_slack_channel_binding() -> Value {
+    json!({"kind": "slack.channel", "value": "#deploys"})
 }
 
 /// The answer to a delete of definition `id` under `key`, as Cloud answers it: 204 with the key
@@ -5482,14 +5519,19 @@ fn respond_settings(
         .strip_prefix('/')?
         .split_once('/')?;
     let definition = state.definitions.get_mut(id)?;
-    let latest = asks_for_vocabulary_2(request);
+    let vocabulary = query_number(request, "vocabulary").unwrap_or(1);
     let integrations = definition.integrations;
     let revision = |number| {
         let mut revision = gateway_revision(id, number, integrations);
-        if latest {
+        if vocabulary >= 2 {
             let (binding, resolved) = gateway_definition_binding();
             revision["bindings"]["verify"] = binding;
             revision["resolution"]["verify"] = resolved;
+        }
+        if vocabulary >= 3 {
+            let channel = gateway_slack_channel_binding();
+            revision["bindings"]["runsChannel"] = channel.clone();
+            revision["resolution"]["runsChannel"] = channel;
         }
         revision
     };
@@ -7001,11 +7043,11 @@ fn definition_evaluations_ask_for_vocabulary_4_and_show_a_run_end_with_its_run_a
     assert!(home.workflow_entries().is_empty());
 }
 
-// `show` asks for binding vocabulary 2 on the revision read and the revision listing, so a
-// `definition` binding is printed as Cloud sent it under `--json` and with the bound definition's
-// id and name in human output.
+// `show` asks for binding vocabulary 3 on both revision reads and prints the values
+// Cloud returns for the `definition` and `slack.channel` bindings.
 #[test]
-fn definition_show_asks_for_binding_vocabulary_2_and_prints_a_definition_binding() {
+fn definition_show_asks_for_binding_vocabulary_3_and_prints_definition_and_slack_channel_bindings()
+{
     let home = Home::new();
     let gateway = FakeGateway::new();
     let definition = format!("{CLOUD_ID_STEM}c");
@@ -7033,22 +7075,10 @@ fn definition_show_asks_for_binding_vocabulary_2_and_prints_a_definition_binding
         (output, requests)
     };
     let (binding, resolved) = gateway_definition_binding();
+    let channel = gateway_slack_channel_binding();
 
     let (output, requests) = show(true);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let shown = report(&output);
-    assert_eq!(shown["outcome"], "shown", "{shown}");
-    assert_eq!(shown["revision"]["bindings"]["verify"], binding, "{shown}");
-    assert_eq!(
-        shown["revision"]["resolution"]["verify"], resolved,
-        "{shown}"
-    );
-    let items = shown["revisions"].as_array().expect("revisions");
-    assert_eq!(items.len(), 2, "{shown}");
-    for item in items {
-        assert_eq!(item["bindings"]["verify"], binding, "{item}");
-        assert_eq!(item["resolution"]["verify"], resolved, "{item}");
-    }
     let revision_reads = requests
         .iter()
         .filter(|request| request.route().starts_with(&format!("GET {revisions}")))
@@ -7061,7 +7091,36 @@ fn definition_show_asks_for_binding_vocabulary_2_and_prints_a_definition_binding
         vec![format!("GET {revisions}/2"), format!("GET {revisions}")]
     );
     for request in revision_reads {
-        assert!(asks_for_vocabulary_2(request), "{}", request.path);
+        assert_eq!(
+            query_number(request, "vocabulary"),
+            Some(3),
+            "{}",
+            request.path
+        );
+    }
+
+    let shown = report(&output);
+    assert_eq!(shown["outcome"], "shown", "{shown}");
+    assert_eq!(shown["revision"]["bindings"]["verify"], binding, "{shown}");
+    assert_eq!(
+        shown["revision"]["resolution"]["verify"], resolved,
+        "{shown}"
+    );
+    assert_eq!(
+        shown["revision"]["bindings"]["runsChannel"], channel,
+        "{shown}"
+    );
+    assert_eq!(
+        shown["revision"]["resolution"]["runsChannel"], channel,
+        "{shown}"
+    );
+    let items = shown["revisions"].as_array().expect("revisions");
+    assert_eq!(items.len(), 2, "{shown}");
+    for item in items {
+        assert_eq!(item["bindings"]["verify"], binding, "{item}");
+        assert_eq!(item["resolution"]["verify"], resolved, "{item}");
+        assert_eq!(item["bindings"]["runsChannel"], channel, "{item}");
+        assert_eq!(item["resolution"]["runsChannel"], channel, "{item}");
     }
 
     let (output, _) = show(false);
@@ -7078,6 +7137,10 @@ fn definition_show_asks_for_binding_vocabulary_2_and_prints_a_definition_binding
             "definition",
             CLOUD_BOUND_DEFINITION_NAME,
         ],
+    );
+    assert!(
+        stdout.contains("runsChannel: #deploys (slack.channel)"),
+        "{stdout}"
     );
     assert!(home.workflow_entries().is_empty());
 }

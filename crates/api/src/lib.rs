@@ -223,7 +223,8 @@ pub use service_principals::{
 };
 pub use signup::{SignupError, SignupOutcome, signup_human};
 pub use slack::{
-    SlackApi, SlackConnection, SlackConnectionList, SlackFailure, SlackSession, SlackSessionStatus,
+    SlackApi, SlackChannelCheck, SlackChannelCheckReason, SlackChannelCheckState, SlackConnection,
+    SlackConnectionList, SlackFailure, SlackSession, SlackSessionStatus,
 };
 pub use webhooks::{
     Mutation as WebhookMutation, WebhookApi, WebhookDelivery, WebhookDeliveryList, WebhookFailure,

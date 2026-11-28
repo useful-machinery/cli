@@ -78,7 +78,7 @@ impl Roots {
     /// rejects it. The files of one root are derived together under it, each reading its
     /// repository's provider from `source`, and the derivations are merged by kind, the roots'
     /// inferences and reports each into their own. The roots' differences are concatenated,
-    /// present when any root's are.
+    /// present when any root's are. The Slack declarations are concatenated in root order.
     pub(in crate::cli) fn derive(
         &self,
         source: &RepositorySource,
@@ -94,6 +94,7 @@ impl Roots {
                     merge(&mut into.inferred, derived.inferred);
                     merge(&mut into.reported, derived.reported);
                     concatenate(&mut into.differences, derived.differences);
+                    into.slack.extend(derived.slack);
                 }
                 None => merged = Some(derived),
             }
@@ -102,6 +103,7 @@ impl Roots {
             inferred: nothing(),
             reported: nothing(),
             differences: None,
+            slack: Vec::new(),
         })))
     }
 }

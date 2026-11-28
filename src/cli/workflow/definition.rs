@@ -12,6 +12,8 @@ pub(in crate::cli::workflow) mod report;
 mod show;
 pub(in crate::cli) mod target;
 
+pub(in crate::cli) use publish::parse_binding;
+
 use anyhow::{Context, anyhow};
 use clap::{Args, Subcommand};
 

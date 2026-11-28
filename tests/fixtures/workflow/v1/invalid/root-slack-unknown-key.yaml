@@ -1,0 +1,9 @@
+schemaVersion: 1
+steps:
+  deploy:
+    kind: cmd
+    command: {argv: ["true"]}
+slack:
+  onStep:
+    deploy:
+      started: {message: Deploy started, channel: other}

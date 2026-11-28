@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use useful_execution::{
-    BindingKind, CommandRunner, IntegrationProvider, ResolutionFailure, ResolvedWorkflow,
-    RootBlocks, ValidatedHarness, ValidatedRecoveryHandler, ValidatedStep, resolve_workflow_file,
+    BindingKind, BindingValue, CommandRunner, IntegrationProvider, ResolutionFailure,
+    ResolvedWorkflow, RootBlocks, ValidatedHarness, ValidatedRecoveryHandler, ValidatedStep,
+    resolve_workflow_file,
 };
 
 use super::git::origin_remote_host;
@@ -538,6 +539,22 @@ pub struct DerivedCredentials {
     pub inferred: WorkflowCredentials,
     pub reported: WorkflowCredentials,
     pub differences: Option<Vec<IntegrationDifference>>,
+    /// The named files that declare a Slack block, in source-root-relative path order.
+    pub slack: Vec<SlackDeclaration>,
+}
+
+/// A named workflow's Slack block, with its channel reference when written.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlackDeclaration {
+    pub workflow: String,
+    pub channel: Option<SlackChannelBinding>,
+}
+
+/// The channel binding named by a Slack block and its declared text default.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlackChannelBinding {
+    pub binding: String,
+    pub default: Option<String>,
 }
 
 /// How a declaring file's integrations and the inference over its files disagree on a kind.
@@ -771,6 +788,33 @@ fn derive(
         differences
     });
 
+    let named_paths = named
+        .iter()
+        .map(|named| named.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let slack = named_paths
+        .into_iter()
+        .filter_map(|path| {
+            let root = resolved[path].definition.root.as_ref()?;
+            let block = root.slack.as_ref()?;
+            let channel = block.channel.as_ref().map(|key| SlackChannelBinding {
+                binding: key.clone(),
+                // Tree validation checks the binding separately from file resolution.
+                default: root
+                    .bindings
+                    .get(key)
+                    .filter(|binding| binding.kind == BindingKind::SlackChannel)
+                    .and_then(|binding| binding.default.as_ref())
+                    .and_then(BindingValue::as_text)
+                    .map(str::to_owned),
+            });
+            Some(SlackDeclaration {
+                workflow: path.to_owned(),
+                channel,
+            })
+        })
+        .collect();
+
     let workflows = resolved.into_keys().collect::<Vec<_>>();
     let forwarded = std::mem::take(&mut inference.forwarded);
     Ok((
@@ -778,6 +822,7 @@ fn derive(
             inferred: inference.finish(workflows.clone()),
             reported: report.finish(workflows),
             differences,
+            slack,
         },
         forwarded,
     ))
@@ -879,9 +924,11 @@ impl Reading {
                     self.add_unknown(path, UnknownDeclaration::ConnectionBinding, None, Some(key));
                     continue;
                 }
-                // A member names an organization principal and a definition a workflow
-                // definition, neither a provider credential.
-                BindingKind::Member | BindingKind::Members | BindingKind::Definition => continue,
+                // These bindings identify principals, workflow definitions or a Slack channel.
+                BindingKind::Member
+                | BindingKind::Members
+                | BindingKind::Definition
+                | BindingKind::SlackChannel => continue,
             };
             self.add_origin(kind, path, OriginDeclaration::Binding, None, Some(key));
         }
@@ -1074,8 +1121,8 @@ mod tests {
     use super::{
         CredentialKind, CredentialRequirement, Declaration, DerivedCredentials, Difference,
         ForwardedVariable, IntegrationDifference, Node, NodeKind, OriginDeclaration, ReadinessCode,
-        RepositorySource, UnknownDeclaration, WorkflowCredentials, classify_forwarded_variable,
-        read_workflow_credentials,
+        RepositorySource, SlackChannelBinding, SlackDeclaration, UnknownDeclaration,
+        WorkflowCredentials, classify_forwarded_variable, read_workflow_credentials,
     };
 
     /// The parts of a probe request a test compares.
@@ -1495,6 +1542,86 @@ steps:
     command:
       argv: ["./build"]
 "#;
+
+    #[test]
+    fn reports_named_slack_declarations_beside_credentials_and_differences() {
+        const HOOK: &str = "  onStep:\n    build:\n      started: {message: Build started}\n";
+        let workflow = with_override(PLAIN);
+        let with_default = format!(
+            r##"{workflow}bindings:
+  runsChannel: {{kind: slack.channel, default: "#runs"}}
+slack:
+  channel: $runsChannel
+{HOOK}"##
+        );
+        let without_default = with_default.replace(r##", default: "#runs""##, "");
+        let hooks_only = format!("{workflow}slack:\n{HOOK}");
+        let files = [
+            ("with-default.yaml", with_default.as_str()),
+            ("without-default.yaml", without_default.as_str()),
+            ("hooks-only.yaml", hooks_only.as_str()),
+            ("without-slack.yaml", workflow.as_str()),
+        ];
+        let named = [
+            "without-slack.yaml",
+            "with-default.yaml",
+            "without-default.yaml",
+            "hooks-only.yaml",
+            "with-default.yaml",
+        ];
+
+        let derived = derive_files(&files, &named);
+
+        assert_eq!(
+            derived.slack,
+            [
+                SlackDeclaration {
+                    workflow: "hooks-only.yaml".to_owned(),
+                    channel: None,
+                },
+                SlackDeclaration {
+                    workflow: "with-default.yaml".to_owned(),
+                    channel: Some(SlackChannelBinding {
+                        binding: "runsChannel".to_owned(),
+                        default: Some("#runs".to_owned()),
+                    }),
+                },
+                SlackDeclaration {
+                    workflow: "without-default.yaml".to_owned(),
+                    channel: Some(SlackChannelBinding {
+                        binding: "runsChannel".to_owned(),
+                        default: None,
+                    }),
+                },
+            ]
+        );
+        let baseline = derive_files(&files.map(|(path, _)| (path, workflow.as_str())), &named);
+        assert_eq!(derived.inferred, baseline.inferred);
+        assert_eq!(derived.reported, baseline.reported);
+        assert_eq!(derived.differences, baseline.differences);
+    }
+
+    #[test]
+    fn a_slack_reference_only_reports_a_default_from_a_channel_binding() {
+        let missing_binding = format!("{PLAIN}slack:\n  channel: $runsChannel\n");
+        let other_kind = format!(
+            "{missing_binding}bindings:\n  runsChannel: {{kind: definition, default: another-workflow}}\n"
+        );
+        for workflow in [&missing_binding, &other_kind] {
+            let derived = derive_files(&[("workflow.yaml", workflow)], &["workflow.yaml"]);
+
+            assert_eq!(
+                derived.slack,
+                [SlackDeclaration {
+                    workflow: "workflow.yaml".to_owned(),
+                    channel: Some(SlackChannelBinding {
+                        binding: "runsChannel".to_owned(),
+                        default: None,
+                    }),
+                }]
+            );
+        }
+    }
 
     /// `workflow` with a stage file's override declaring Codex.
     fn with_override(workflow: &str) -> String {

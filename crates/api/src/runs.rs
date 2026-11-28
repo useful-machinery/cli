@@ -684,6 +684,8 @@ impl<'a> RunApi<'a> {
                     && item.attempt >= 1
                     && item.reason.is_some() == matches!(item.state, State::Skipped | State::Failed)
                     && item.outcome.is_some() == (item.kind == Kind::RunSettled)
+                    && item.step.is_some() == (item.kind == Kind::StepHook)
+                    && item.transition.is_some() == (item.kind == Kind::StepHook)
             })
         {
             Ok((list.items, list.next_cursor))
@@ -3374,6 +3376,7 @@ mod run_client_tests {
         let item = serde_json::json!({
             "id": "slm_01k0z6r1w8f4jy2m7q9v3x5abc", "kind": "run_started",
             "attempt": 1, "outcome": null, "state": "posted", "reason": null,
+            "step": null, "transition": null,
             "createdAt": "2026-08-10T12:04:31Z", "updatedAt": "2026-08-10T12:04:32Z",
         });
         let list = |item: &serde_json::Value| {
@@ -3393,13 +3396,34 @@ mod run_client_tests {
         let (items, cursor) = list(&item).unwrap();
         assert_eq!(serde_json::json!(items), serde_json::json!([item]));
         assert_eq!(cursor.as_deref(), Some("newer"));
+        let mut hook = item.clone();
+        hook["kind"] = serde_json::json!("step_hook");
+        hook["step"] = serde_json::json!("deploy");
+        hook["transition"] = serde_json::json!("started");
+        let (items, _) = list(&hook).unwrap();
+        assert_eq!(serde_json::json!(items), serde_json::json!([hook]));
+
         for (field, value) in [
             ("id", serde_json::json!("run_01k0z6r1w8f4jy2m7q9v3x5abc")),
             ("state", serde_json::json!("skipped")),
             ("outcome", serde_json::json!("failed")),
             ("attempt", serde_json::json!(0)),
+            ("step", serde_json::json!("deploy")),
+            ("transition", serde_json::json!("started")),
         ] {
             let mut invalid = item.clone();
+            invalid[field] = value;
+            assert!(
+                matches!(list(&invalid), Err(RunFailure::Protocol { .. })),
+                "{invalid}"
+            );
+        }
+        for (field, value) in [
+            ("step", serde_json::Value::Null),
+            ("transition", serde_json::Value::Null),
+            ("outcome", serde_json::json!("succeeded")),
+        ] {
+            let mut invalid = hook.clone();
             invalid[field] = value;
             assert!(
                 matches!(list(&invalid), Err(RunFailure::Protocol { .. })),

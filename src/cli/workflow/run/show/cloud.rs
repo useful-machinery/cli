@@ -845,6 +845,9 @@ fn write_slack_messages(
             wire(message.kind),
             message.attempt
         )?;
+        if let (Some(step), Some(transition)) = (&message.step, message.transition) {
+            write!(out, " · {step} {}", wire(transition))?;
+        }
         if let Some(outcome) = message.outcome {
             write!(out, " · outcome {}", wire(outcome))?;
         }

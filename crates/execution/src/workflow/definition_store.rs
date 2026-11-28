@@ -782,10 +782,13 @@ impl<'a> Declared<'a> {
         }
     }
 
-    /// Whether the binding may have no value: a `definition` binding without one has no
-    /// entry in the snapshot.
+    /// A `definition` or `slack.channel` binding without a value has no snapshot entry.
     fn may_be_unbound(self) -> bool {
-        matches!(self, Self::Flat(binding) if binding.kind == BindingKind::Definition)
+        matches!(
+            self,
+            Self::Flat(binding)
+                if matches!(binding.kind, BindingKind::Definition | BindingKind::SlackChannel)
+        )
     }
 
     fn default(self) -> Option<BindingValue> {

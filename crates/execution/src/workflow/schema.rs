@@ -15,6 +15,7 @@ use super::document::{
     WaitRule, WaitRunner, WorkflowDocument, WorkflowNode,
 };
 use super::mirror::{MirrorBlock, MirrorState};
+use super::slack::{SlackBlock, SlackTransition};
 use super::validated::ValidatedHarness;
 use super::{claude_code, codex, pi};
 
@@ -51,6 +52,7 @@ pub(super) struct WorkflowDto {
     bindings: Option<BTreeMap<String, BindingDto>>,
     triggers: Option<BTreeMap<String, TriggerDto>>,
     mirror: Option<MirrorDto>,
+    slack: Option<SlackDto>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +126,42 @@ struct BindingDto {
 #[serde(deny_unknown_fields)]
 struct MirrorDto {
     linear: MirrorLinearDto,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SlackDto {
+    channel: Option<String>,
+    #[serde(default)]
+    on_step: BTreeMap<String, BTreeMap<SlackTransition, SlackHookDto>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SlackHookDto {
+    message: String,
+}
+
+impl SlackDto {
+    fn into_block(self) -> SlackBlock {
+        SlackBlock {
+            channel: self.channel.map(|key| match key.strip_prefix('$') {
+                Some(rest) => rest.to_owned(),
+                None => key,
+            }),
+            on_step: self
+                .on_step
+                .into_iter()
+                .map(|(step, hooks)| {
+                    let messages = hooks
+                        .into_iter()
+                        .map(|(transition, hook)| (transition, hook.message))
+                        .collect();
+                    (step, messages)
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1031,7 +1069,8 @@ impl WorkflowDto {
             || self.requires.is_some()
             || self.bindings.is_some()
             || self.triggers.is_some()
-            || self.mirror.is_some())
+            || self.mirror.is_some()
+            || self.slack.is_some())
         .then(|| RootBlocks {
             programs: self.programs.unwrap_or_default(),
             exclude: self.exclude.unwrap_or_default(),
@@ -1086,6 +1125,7 @@ impl WorkflowDto {
                 .map(|(name, trigger)| (name, trigger.into_trigger()))
                 .collect(),
             mirror: self.mirror.map(MirrorDto::into_block),
+            slack: self.slack.map(SlackDto::into_block),
         });
         let agent_profiles = AgentProfileDto::into_agent_profiles(self.agent_profiles)?;
         let steps = self

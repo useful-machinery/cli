@@ -777,6 +777,56 @@ fn a_definition_binding_given_no_value_has_no_entry_and_a_given_one_is_recorded_
 }
 
 #[test]
+fn a_slack_channel_binding_is_optional_and_records_the_value_as_written() {
+    let tree = Tree::with(
+        r#"schemaVersion: 1
+name: deploy
+bindings:
+  runsChannel: {kind: slack.channel}
+steps:
+  deploy: {kind: cmd, command: {argv: ["true"]}}
+"#,
+    )
+    .validated();
+    let home = Home::new();
+    let published = publish_named(
+        &home.home,
+        &tree,
+        PublishTarget::Resolve,
+        None,
+        &[],
+        "tester",
+    )
+    .expect("a Slack channel binding without a value should publish");
+    assert_eq!(home.snapshot_bytes(&published.record.id, 1), b"{}");
+    assert_records_match_schemas(&home, &published.record.id, 1);
+
+    let published = publish_named(
+        &home.home,
+        &tree,
+        PublishTarget::New,
+        Some(&bindings(json!({"runsChannel": "#runs"}))),
+        &[],
+        "tester",
+    )
+    .expect("a Slack channel value should publish");
+    let snapshot: Value =
+        serde_json::from_slice(&home.snapshot_bytes(&published.record.id, 1)).unwrap();
+    assert_eq!(
+        snapshot,
+        json!({"runsChannel": {"kind": "slack.channel", "value": "#runs"}})
+    );
+    assert_records_match_schemas(&home, &published.record.id, 1);
+
+    let error = resolve_file(&tree, json!({"runsChannel": ""}), &[])
+        .expect_err("an empty Slack channel value should refuse");
+    assert_eq!(
+        (error.code(), error.key()),
+        ("binding_value_invalid", Some("runsChannel"))
+    );
+}
+
+#[test]
 fn a_definition_binding_needs_no_file_and_a_later_publish_carries_what_was_recorded() {
     let home = Home::new();
     let only_definition =

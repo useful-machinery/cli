@@ -8668,6 +8668,97 @@ pub(super) fn progress_position(records: &[ProgressRecord], scope: &str, token: 
         })
 }
 
+const SLACK_HOOK_WORKFLOW: &str = r#"
+schemaVersion: 1
+steps:
+  deploy:
+    kind: cmd
+    command:
+      argv: ["DEPLOY_COMMAND"]
+  notify:
+    kind: cmd
+    command:
+      argv: ["true"]
+slack:
+  onStep:
+    deploy:
+      started: {message: "Deploy started {{run.id}} {{step}} {{run.url}}"}
+      succeeded: {message: "Deploy finished"}
+      failed: {message: "Deploy failed"}
+"#;
+
+// SC-SLACKHOOK-1
+#[test]
+fn a_local_run_writes_rendered_slack_hooks_in_progress_order() {
+    let bundle = TreeBundle::new(&SLACK_HOOK_WORKFLOW.replace("DEPLOY_COMMAND", "true"));
+    for mode in ["--plain", "--json"] {
+        let destination = bundle.result(&mode[2..]);
+        let mut args = bundle.args(&destination);
+        let format = args.iter_mut().find(|arg| *arg == "--json").unwrap();
+        *format = mode.to_owned();
+        let output = run(&args);
+        assert!(
+            output.status.success(),
+            "{mode}: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stream = if mode == "--json" {
+            succeeded(&output);
+            &output.stderr
+        } else {
+            &output.stdout
+        };
+        let record = run_record(&destination);
+        let id = record["id"].as_str().unwrap();
+        let url = url::Url::from_file_path(normalized_run_directory(&destination)).unwrap();
+        let records = progress_records(stream);
+        let hooks = records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| record.token == "slack")
+            .collect::<Vec<_>>();
+        assert_eq!(hooks.len(), 2, "{}", String::from_utf8_lossy(stream));
+        let (started, start_hook) = hooks[0];
+        let (succeeded, success_hook) = hooks[1];
+        assert_eq!(start_hook.scope, "deploy");
+        assert_eq!(
+            start_hook.detail,
+            ["Deploy", "started", id, "deploy", url.as_str()]
+        );
+        assert_eq!(success_hook.scope, "deploy");
+        assert_eq!(success_hook.detail, ["Deploy", "finished"]);
+        let start = progress_position(&records, "deploy", "start");
+        let finish = progress_position(&records, "deploy", "done");
+        assert!(start < started && started < finish && finish < succeeded);
+        progress_position(&records, "notify", "done");
+    }
+}
+
+#[test]
+fn a_failed_step_writes_its_failed_slack_hook() {
+    let bundle = TreeBundle::new(&SLACK_HOOK_WORKFLOW.replace("DEPLOY_COMMAND", "false"));
+    let destination = bundle.result("failed");
+    let mut args = bundle.args(&destination);
+    let format = args.iter_mut().find(|arg| *arg == "--json").unwrap();
+    *format = "--plain".to_owned();
+    let output = run(&args);
+    assert_eq!(output.status.code(), Some(1));
+    let records = progress_records(&output.stdout);
+    let messages = records
+        .iter()
+        .filter(|record| record.token == "slack" && record.scope == "deploy")
+        .map(|record| record.detail.as_slice())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages.len(),
+        2,
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(messages[1], ["Deploy", "failed"]);
+}
+
 // While each child runs, the parent's progress stream carries its step's state records scoped
 // `<step>.<child step>`, between the parent step's own `start` and `done`, and none of the child's
 // output records.

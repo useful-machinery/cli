@@ -1209,3 +1209,46 @@ fn a_step_workspace_validates_and_an_ambiguous_one_names_its_step() {
     assert_eq!(diagnostic["location"]["kind"], "step");
     assert_eq!(diagnostic["location"]["step"], "join");
 }
+
+#[test]
+fn tree_validation_reports_the_step_and_transition_of_an_invalid_slack_message() {
+    let tree = tempfile::tempdir().unwrap();
+    let workflow = tree.path().join("workflow.yaml");
+    fs::write(
+        &workflow,
+        r#"schemaVersion: 1
+steps:
+  deploy: {kind: cmd, command: {argv: ["true"]}}
+slack:
+  onStep:
+    deploy:
+      failed: {message: "{{operator}}"}
+"#,
+    )
+    .unwrap();
+
+    let file = run(&[
+        "workflow",
+        "validate",
+        "--source-root",
+        tree.path().to_str().unwrap(),
+        workflow.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(file.status.success(), "{file:?}");
+    let directory = run(&[
+        "workflow",
+        "validate",
+        tree.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(directory.status.code(), Some(1), "{directory:?}");
+    let report: serde_json::Value = serde_json::from_slice(&directory.stdout).unwrap();
+    assert_eq!(report["outcome"], "invalid");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "slack_variable_unknown");
+    assert_eq!(
+        diagnostic["location"],
+        serde_json::json!({"kind": "slack", "step": "deploy", "key": "onStep.failed"})
+    );
+}

@@ -12,6 +12,7 @@ use super::document::{
     WaitKind, WaitRule, WaitRunner, WorkflowNode,
 };
 use super::pi::{PiConfig, Thinking};
+use super::slack::SlackTransition;
 use super::validated::ValidatedHarness;
 use super::*;
 
@@ -795,6 +796,41 @@ fn root_requires_decodes_as_and_integrations_as_declared() {
 }
 
 #[test]
+fn root_slack_hooks_decode_by_step_and_transition() {
+    let source = fs::read(fixture_root().join("valid/root-slack-hooks.yaml")).unwrap();
+    let workflow = decode(&source).expect("a workflow with Slack hooks should decode");
+    let root = workflow.root.unwrap();
+    assert_eq!(root.bindings["runsChannel"].kind, BindingKind::SlackChannel);
+    let slack = root.slack.unwrap();
+    assert_eq!(slack.channel.as_deref(), Some("runsChannel"));
+    assert_eq!(
+        slack.on_step,
+        BTreeMap::from([
+            (
+                "deploy".to_owned(),
+                BTreeMap::from([
+                    (
+                        SlackTransition::Started,
+                        "Deploy started. Follow along: {{run.url}}".to_owned(),
+                    ),
+                    (
+                        SlackTransition::Succeeded,
+                        "Deploy finished. Details: {{run.url}}".to_owned(),
+                    ),
+                ]),
+            ),
+            (
+                "cleanup".to_owned(),
+                BTreeMap::from([(
+                    SlackTransition::Succeeded,
+                    "Cleanup finished for {{run.id}}".to_owned(),
+                )]),
+            ),
+        ])
+    );
+}
+
+#[test]
 fn a_definition_trigger_decodes_its_binding_and_outcomes_as_written() {
     let workflow =
         decode(&fs::read(fixture_root().join("valid/root-definition-trigger.yaml")).unwrap())
@@ -1367,6 +1403,39 @@ fn a_structural_failure_names_the_field_and_the_rule() {
             "requires.integrations.linear.bindings.team.default",
             "type",
             Some(serde_json::json!(["string"])),
+        ),
+        (
+            "root-slack-unknown-transition.yaml",
+            "slack.onStep.deploy.finished",
+            "unknown_field",
+            None,
+        ),
+        (
+            "root-slack-unknown-key.yaml",
+            "slack.onStep.deploy.started.channel",
+            "unknown_field",
+            None,
+        ),
+        (
+            "root-slack-long-message.yaml",
+            "slack.onStep.deploy.started.message",
+            "length",
+            None,
+        ),
+        (
+            "root-slack-empty-message.yaml",
+            "slack.onStep.deploy.started.message",
+            "length",
+            None,
+        ),
+        ("root-slack-empty-block.yaml", "slack", "count", None),
+        (
+            "root-slack-literal-channel.yaml",
+            "slack.channel",
+            "pattern",
+            Some(serde_json::json!(
+                r"^\$([a-z][a-z0-9_.]*\.)?[a-z][A-Za-z0-9]*$"
+            )),
         ),
     ] {
         assert_eq!(

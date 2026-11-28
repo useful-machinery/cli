@@ -25,6 +25,7 @@ use super::resolution::{
     resolve_workflow_file,
 };
 use super::schema_common::{is_identifier, lowercase_hex};
+use super::slack::SlackBlock;
 use super::validated::{
     Scheduling, ValidatedEdgeTarget, ValidatedRecoveryHandler, ValidatedStep, ValidatedWorkflow,
     WorkflowValueType,
@@ -56,6 +57,7 @@ pub struct ValidatedTree {
     pub required_integrations: BTreeMap<IntegrationProvider, Integration>,
     pub triggers: BTreeMap<String, TreeTrigger>,
     pub bindings: BTreeMap<String, Binding>,
+    pub slack: Option<SlackBlock>,
     /// Every file the walk kept, by tree-relative path, for the run copy.
     pub files: BTreeMap<String, TreeFile>,
 }
@@ -179,17 +181,17 @@ impl TreeDiagnostic {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct TreeLocation {
-    /// `tree`, `workflow`, `trigger`, `mirror`, `binding`, `program` or `exclude`.
+    /// `tree`, `workflow`, `trigger`, `mirror`, `slack`, `binding`, `program` or `exclude`.
     kind: &'static str,
     /// A tree-relative path.
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    /// The step, finalizer or recovered step a command belongs to.
+    /// The step, finalizer or recovered step a command or hook belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     step: Option<String>,
     /// A root-only key found outside the root, the key holding a command's `argv`, the key
-    /// inside `mirror.linear`, such as `onOutcome.unless`, or the key inside a trigger, such
-    /// as `owner.only` or `schedule`.
+    /// inside `mirror.linear` or `slack`, such as `onOutcome.unless` or `onStep.started`,
+    /// or the key inside a trigger, such as `owner.only` or `schedule`.
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,6 +350,9 @@ pub fn validate_workflow_tree(root: &Path) -> Result<ValidatedTree, Vec<TreeDiag
     if let Some(mirror) = &blocks.mirror {
         check_mirror(&root_workflow, &blocks, mirror, &mut diagnostics);
     }
+    if let Some(slack) = &blocks.slack {
+        check_slack(&root_workflow, &blocks, slack, &mut diagnostics);
+    }
     check_bindings_declared_once(&blocks, &mut diagnostics);
     for program in &blocks.programs {
         if !walk.directories.contains(program.trim_end_matches('/')) {
@@ -398,6 +403,7 @@ pub fn validate_workflow_tree(root: &Path) -> Result<ValidatedTree, Vec<TreeDiag
             .map(|(name, trigger)| (name.clone(), TreeTrigger::from(trigger)))
             .collect(),
         bindings: blocks.bindings,
+        slack: blocks.slack,
         files: walk.files,
     })
 }
@@ -534,6 +540,7 @@ fn check_stage_file(
             "mirror",
             blocks.is_some_and(|blocks| blocks.mirror.is_some()),
         ),
+        ("slack", blocks.is_some_and(|blocks| blocks.slack.is_some())),
     ];
     for (key, _) in present.into_iter().filter(|(_, present)| *present) {
         diagnostics.push(TreeDiagnostic::new(
@@ -951,8 +958,8 @@ fn check_event_reads(
     }
 }
 
-/// A binding reference in a trigger or the mirror names a declared binding of `kind`: a flat
-/// one of that kind, or for `linear.state` a `state` binding under `linear`.
+/// A binding reference names a declared binding of `kind`: a flat one of that kind,
+/// or for `linear.state` a `state` binding under `linear`.
 fn check_binding(
     blocks: &RootBlocks,
     key: &str,
@@ -1157,6 +1164,47 @@ fn check_mirror(
                 },
                 location("onOutcome.unless"),
             )),
+        }
+    }
+}
+
+fn check_slack(
+    root_workflow: &ResolvedWorkflow,
+    blocks: &RootBlocks,
+    slack: &SlackBlock,
+    diagnostics: &mut Vec<TreeDiagnostic>,
+) {
+    let location = |key| TreeLocation::new("slack").key(key);
+    if let Some(channel) = &slack.channel {
+        check_binding(
+            blocks,
+            channel,
+            BindingKind::SlackChannel,
+            location("channel"),
+            diagnostics,
+        );
+    }
+
+    let definition = &root_workflow.definition;
+    for (step, hooks) in &slack.on_step {
+        if !definition.steps.contains_key(step) && !definition.finalizers.contains_key(step) {
+            diagnostics.push(TreeDiagnostic::new(
+                "slack_step_undeclared",
+                location("onStep").step(step),
+            ));
+        }
+        for (transition, message) in hooks {
+            let resolves = Template::parse(message).is_ok_and(|template| {
+                template
+                    .variables()
+                    .all(|variable| matches!(variable, "run.url" | "run.id" | "step"))
+            });
+            if !resolves {
+                diagnostics.push(TreeDiagnostic::new(
+                    "slack_variable_unknown",
+                    location(transition.message_key()).step(step),
+                ));
+            }
         }
     }
 }

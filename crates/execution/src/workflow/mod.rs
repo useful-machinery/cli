@@ -59,6 +59,7 @@ pub(crate) mod run_view_model;
 pub(crate) mod runtime;
 mod schema;
 mod schema_common;
+pub(crate) mod slack;
 pub(crate) mod socket_alias;
 pub(crate) mod start_gate;
 pub(crate) mod step_runtime;
@@ -100,6 +101,7 @@ pub use profile_replacement::{
     AGENT_PROFILE_REPLACEMENT_SCHEMA, AgentProfileReplacementDocument,
     MAXIMUM_AGENT_PROFILE_REPLACEMENT_BYTES, ResolvedAgentProfileReplacement,
 };
+pub use slack::{SlackBlock, SlackTransition};
 pub use tree::{
     TreeDiagnostic, TreeFile, TreeLocation, TreeTriggerKind, ValidatedTree, is_workflow_tree,
     validate_workflow_tree,

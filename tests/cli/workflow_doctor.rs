@@ -3158,3 +3158,331 @@ fn workflow_doctor_reads_no_authorization_without_a_github_requirement() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(requests[1].starts_with(GITLAB_LIST), "{}", requests[1]);
 }
+
+const SLACK_HOOK: &str = "  onStep:\n    build:\n      started: {message: Build started}\n";
+const SLACK_CONNECTION: &str = "scn_01k0z6r1w8f4jy2m7q9v3x5abc";
+const SLACK_LIST: &str = "GET /api/v1/organizations/acme/connections/slack?limit=100";
+const SLACK_SCOPES: &[&str] = &["chat:write", "users:read", "users:read.email"];
+const SLACK_CHANNEL_SCOPES: &[&str] = &[
+    "chat:write",
+    "users:read",
+    "users:read.email",
+    "chat:write.public",
+    "channels:read",
+    "groups:read",
+];
+
+fn slack_tree(linear: bool, channel: bool, default: Option<&str>) -> WorkflowTree {
+    let mut root = COMMAND_WORKFLOW.to_owned();
+    if linear {
+        root.push_str("environmentPassthrough: [LINEAR_API_KEY]\n");
+    }
+    if channel {
+        root.push_str("bindings:\n  runsChannel:\n    kind: slack.channel\n");
+        if let Some(value) = default {
+            root.push_str(&format!("    default: \"{value}\"\n"));
+        }
+    }
+    root.push_str("slack:\n");
+    if channel {
+        root.push_str("  channel: $runsChannel\n");
+    }
+    root.push_str(SLACK_HOOK);
+    single_file_tree(&root)
+}
+
+fn slack_connection(status: &str, granted_scopes: &[&str]) -> Value {
+    json!({
+        "id": SLACK_CONNECTION,
+        "organizationId": "org_01k0z6r1w8f4jy2m7q9v3x5abc",
+        "workspaceId": "T12345678",
+        "workspaceName": "Research",
+        "status": status,
+        "grantedScopes": granted_scopes,
+        "lifecycleGeneration": 1,
+        "createdAt": "2026-09-05T12:00:00Z",
+        "updatedAt": "2026-09-05T12:01:00Z"
+    })
+}
+
+fn slack_linear_page() -> Vec<u8> {
+    connection_page(&[linear_connection("active", &["read"])], None)
+}
+
+fn slack_channel_request(channel: &str) -> String {
+    format!(
+        "GET /api/v1/organizations/acme/connections/slack/{SLACK_CONNECTION}/channel-check?channel=%23{channel} HTTP/1.1\r\n"
+    )
+}
+
+fn assert_slack_finding(finding: &Value, state: &str, code: &str) {
+    assert_eq!(finding["state"], state, "{finding}");
+    assert_eq!(finding["code"], code, "{finding}");
+}
+
+#[test]
+fn workflow_doctor_slack_missing_changes_no_credential_result() {
+    let without_slack = single_file_tree(&format!(
+        "{COMMAND_WORKFLOW}environmentPassthrough: [LINEAR_API_KEY]\n"
+    ));
+    let baseline = Deployment::signed_in(with_no_grants(vec![slack_linear_page()]));
+    let without = baseline.doctor(&without_slack, true);
+    let without_report = json_report(&without);
+    assert!(without_report.get("slack").is_none(), "{without_report}");
+    assert_eq!(baseline.linear_list_requests().len(), 1);
+
+    let tree = slack_tree(true, true, Some("#runs"));
+    let deployment = Deployment::signed_in(with_no_grants(vec![
+        slack_linear_page(),
+        connection_page(&[], None),
+    ]));
+    let output = deployment.doctor(&tree, true);
+    assert_eq!(output.status.code(), without.status.code(), "{output:?}");
+    let report = json_report(&output);
+    assert_eq!(report["summary"], without_report["summary"]);
+    let slack = &report["slack"][0];
+    assert_eq!(slack["workflow"], "main.yaml");
+    assert_slack_finding(&slack["connection"], "missing", "not_connected");
+    assert!(
+        next_action(&slack["connection"])
+            .contains("useful org integration connect slack --org acme")
+    );
+    assert_slack_finding(&slack["channel"], "not_checked", "connection_not_ready");
+    let requests = deployment.connection_requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(LINEAR_LIST), "{requests:?}");
+    assert!(requests[1].starts_with(SLACK_LIST), "{requests:?}");
+}
+
+#[test]
+fn workflow_doctor_slack_reports_connections_that_need_reconnecting() {
+    let tree = slack_tree(true, true, Some("#runs"));
+    for (status, code) in [
+        ("recovery_required", "connection_inactive"),
+        ("active", "channel_access_missing"),
+    ] {
+        let deployment = Deployment::signed_in(with_no_grants(vec![
+            slack_linear_page(),
+            connection_page(&[slack_connection(status, SLACK_SCOPES)], None),
+        ]));
+        let output = deployment.doctor(&tree, true);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = json_report(&output);
+        let slack = &report["slack"][0];
+        assert_slack_finding(&slack["connection"], "reconnect_required", code);
+        assert!(next_action(&slack["connection"]).contains(&format!(
+            "useful org integration reconnect {SLACK_CONNECTION} --org acme"
+        )));
+        assert_slack_finding(&slack["channel"], "not_checked", "connection_not_ready");
+        assert_eq!(deployment.connection_requests().len(), 2);
+    }
+}
+
+#[test]
+fn workflow_doctor_slack_checks_the_default_and_an_option() {
+    // SC-CREDREADY-7
+    let tree = slack_tree(true, true, Some("#runs"));
+    for (options, channel, from, state, code, answer) in [
+        (
+            &[][..],
+            "runs",
+            "default",
+            "unusable",
+            "channel_archived",
+            json!({"channel": "#runs", "state": "unusable", "reason": "channel_archived"}),
+        ),
+        (
+            &["--binding", "runsChannel=#deploys"],
+            "deploys",
+            "option",
+            "usable",
+            "channel_usable",
+            json!({"channel": "#deploys", "state": "usable", "channelId": "C12345678"}),
+        ),
+    ] {
+        let deployment = Deployment::signed_in(with_no_grants(vec![
+            slack_linear_page(),
+            connection_page(&[slack_connection("active", SLACK_CHANNEL_SCOPES)], None),
+            json_http_response("200 OK", answer),
+        ]));
+        let output = deployment.doctor_with(&deployment.server.api_url, &tree, true, options, &[]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = json_report(&output);
+        let slack = &report["slack"][0];
+        assert_slack_finding(&slack["connection"], "ready", "connection_ready");
+        let checked = &slack["channel"];
+        assert_slack_finding(checked, state, code);
+        assert_eq!(checked["binding"], "runsChannel");
+        assert_eq!(checked["value"], format!("#{channel}"));
+        assert_eq!(checked["from"], from);
+        let requests = deployment.connection_requests();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[2].starts_with(&slack_channel_request(channel)),
+            "{requests:?}"
+        );
+    }
+}
+
+#[test]
+fn workflow_doctor_slack_refuses_unknown_and_duplicate_binding_options() {
+    let tree = slack_tree(true, true, Some("#runs"));
+    for options in [
+        &["--binding", "other=#x"][..],
+        &["--binding", "runsChannel=#x", "--binding", "runsChannel=#y"],
+    ] {
+        let deployment = Deployment::signed_in(Vec::new());
+        let output = deployment.doctor_with(&deployment.server.api_url, &tree, true, options, &[]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(deployment.requests().is_empty());
+    }
+}
+
+#[test]
+fn workflow_doctor_slack_skips_a_channel_check_without_a_value_or_reference() {
+    for channel in [true, false] {
+        let tree = slack_tree(true, channel, None);
+        let scopes = if channel {
+            SLACK_CHANNEL_SCOPES
+        } else {
+            SLACK_SCOPES
+        };
+        let deployment = Deployment::signed_in(with_no_grants(vec![
+            slack_linear_page(),
+            connection_page(&[slack_connection("active", scopes)], None),
+        ]));
+        let output = deployment.doctor(&tree, true);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report = json_report(&output);
+        let slack = &report["slack"][0];
+        assert_slack_finding(&slack["connection"], "ready", "connection_ready");
+        if channel {
+            assert_slack_finding(&slack["channel"], "not_checked", "no_value");
+            assert!(slack["channel"].get("value").is_none(), "{slack}");
+            assert!(slack["channel"].get("from").is_none(), "{slack}");
+        } else {
+            assert!(slack.get("channel").is_none(), "{slack}");
+        }
+        assert_eq!(deployment.connection_requests().len(), 2);
+    }
+}
+
+#[test]
+fn workflow_doctor_slack_only_reads_slack_and_reports_when_signed_out() {
+    let tree = slack_tree(false, true, Some("#runs"));
+    let deployment = Deployment::signed_in(vec![
+        connection_page(&[slack_connection("active", SLACK_CHANNEL_SCOPES)], None),
+        json_http_response(
+            "200 OK",
+            json!({"channel": "#runs", "state": "usable", "channelId": "C12345678"}),
+        ),
+    ]);
+    let output = deployment.doctor_with(
+        &deployment.server.api_url,
+        &tree,
+        true,
+        &["--runner", "unused-runner", "--project", "unused-project"],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = json_report(&output);
+    assert_eq!(report["requirements"], json!([]));
+    assert_eq!(report["deployment"], deployment.server.api_url.as_str());
+    assert_slack_finding(
+        &report["slack"][0]["connection"],
+        "ready",
+        "connection_ready",
+    );
+    assert_slack_finding(&report["slack"][0]["channel"], "usable", "channel_usable");
+    let requests = deployment.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(SLACK_LIST), "{requests:?}");
+    assert!(
+        requests[1].starts_with(&slack_channel_request("runs")),
+        "{requests:?}"
+    );
+
+    let signed_out = Deployment::new(Vec::new(), false);
+    let output = signed_out.doctor(&tree, true);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_not_asked(&output);
+    let report = json_report(&output);
+    let slack = &report["slack"][0];
+    assert_slack_finding(&slack["connection"], "unverified", "not_signed_in");
+    assert_slack_finding(&slack["channel"], "unverified", "not_signed_in");
+    assert_eq!(slack["channel"]["value"], "#runs");
+    assert!(signed_out.requests().is_empty());
+}
+
+#[test]
+fn workflow_doctor_slack_human_report_carries_the_findings() {
+    let tree = slack_tree(true, true, Some("#runs"));
+    let deployment = Deployment::signed_in(with_no_grants(vec![
+        slack_linear_page(),
+        connection_page(&[], None),
+    ]));
+    let output = deployment.doctor(&tree, false);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("report should be UTF-8");
+    let (_, slack) = stdout.split_once("── slack ──").expect("Slack section");
+    for finding in [
+        "main.yaml",
+        "not_connected",
+        "#runs",
+        "connection_not_ready",
+    ] {
+        assert!(slack.contains(finding), "{stdout}");
+    }
+    assert_eq!(deployment.connection_requests().len(), 2);
+}
+
+#[test]
+fn workflow_doctor_slack_pages_and_checks_a_shared_value_once() {
+    let tree = slack_tree(false, true, Some("#runs"));
+    fs::copy(tree.root.join("main.yaml"), tree.root.join("other.yaml"))
+        .expect("second named workflow should exist");
+    let deployment = Deployment::signed_in(vec![
+        connection_page(
+            &[slack_connection("disconnected", SLACK_CHANNEL_SCOPES)],
+            Some("older-connections"),
+        ),
+        connection_page(&[slack_connection("active", SLACK_CHANNEL_SCOPES)], None),
+        forbidden(),
+    ]);
+    let output = deployment.doctor_with(
+        &deployment.server.api_url,
+        &tree,
+        true,
+        &["other.yaml", "--binding", "runsChannel=#deploys"],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = json_report(&output);
+    let findings = report["slack"].as_array().expect("Slack findings");
+    assert_eq!(findings.len(), 2);
+    for (finding, workflow) in findings.iter().zip(["main.yaml", "other.yaml"]) {
+        assert_eq!(finding["workflow"], workflow);
+        assert_slack_finding(&finding["connection"], "ready", "connection_ready");
+        assert_slack_finding(&finding["channel"], "unverified", "not_permitted");
+        assert_eq!(finding["channel"]["value"], "#deploys");
+        assert_eq!(finding["channel"]["from"], "option");
+    }
+    let requests = deployment.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].starts_with(&format!("{SLACK_LIST}&cursor=older-connections ")));
+    assert!(requests[2].starts_with(&slack_channel_request("deploys")));
+}
+
+#[test]
+fn workflow_doctor_slack_list_refusal_leaves_credential_status_intact() {
+    let tree = slack_tree(true, true, Some("#runs"));
+    let deployment = Deployment::signed_in(with_no_grants(vec![slack_linear_page(), forbidden()]));
+    let output = deployment.doctor(&tree, true);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = json_report(&output);
+    assert_eq!(requirement(&report, "linear")["state"], "met");
+    let slack = &report["slack"][0];
+    assert_slack_finding(&slack["connection"], "unverified", "not_permitted");
+    assert_slack_finding(&slack["channel"], "not_checked", "connection_not_ready");
+    assert_eq!(deployment.connection_requests().len(), 2);
+}

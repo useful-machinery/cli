@@ -1,0 +1,19 @@
+schemaVersion: 1
+steps:
+  deploy:
+    kind: cmd
+    command: {argv: ["true"]}
+finalizers:
+  cleanup:
+    kind: cmd
+    command: {argv: ["true"]}
+bindings:
+  runsChannel: {kind: slack.channel}
+slack:
+  channel: $runsChannel
+  onStep:
+    deploy:
+      started: {message: "Deploy started. Follow along: {{run.url}}"}
+      succeeded: {message: "Deploy finished. Details: {{run.url}}"}
+    cleanup:
+      succeeded: {message: "Cleanup finished for {{run.id}}"}

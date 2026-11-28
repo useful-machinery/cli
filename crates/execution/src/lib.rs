@@ -268,6 +268,7 @@ pub use workflow::{
     MirrorWrite, MirrorWriteOutcome, Template, TemplateError, TemplateSegment, hook_variables,
     read_mirror_writes, read_numbered_mirror_writes,
 };
+pub use workflow::{SlackBlock, SlackTransition};
 pub use workflow::{
     TreeDiagnostic, TreeFile, TreeLocation, TreeTriggerKind, ValidatedTree, is_workflow_tree,
     validate_workflow_tree,

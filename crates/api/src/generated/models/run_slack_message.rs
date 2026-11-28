@@ -25,6 +25,10 @@ pub struct RunSlackMessage {
     pub attempt: i32,
     #[serde(rename = "outcome", deserialize_with = "Option::deserialize")]
     pub outcome: Option<Outcome>,
+    #[serde(rename = "step", deserialize_with = "Option::deserialize")]
+    pub step: Option<String>,
+    #[serde(rename = "transition", deserialize_with = "Option::deserialize")]
+    pub transition: Option<Transition>,
     #[serde(rename = "state")]
     pub state: State,
     #[serde(rename = "reason", deserialize_with = "Option::deserialize")]
@@ -41,6 +45,8 @@ impl RunSlackMessage {
         kind: Kind,
         attempt: i32,
         outcome: Option<Outcome>,
+        step: Option<String>,
+        transition: Option<Transition>,
         state: State,
         reason: Option<Reason>,
         created_at: String,
@@ -51,6 +57,8 @@ impl RunSlackMessage {
             kind,
             attempt,
             outcome,
+            step,
+            transition,
             state,
             reason,
             created_at,
@@ -64,6 +72,8 @@ pub enum Kind {
     RunStarted,
     #[serde(rename = "run_settled")]
     RunSettled,
+    #[serde(rename = "step_hook")]
+    StepHook,
 }
 
 impl Default for Kind {
@@ -88,6 +98,29 @@ pub enum Outcome {
 impl Default for Outcome {
     fn default() -> Outcome {
         Self::Succeeded
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum Transition {
+    #[serde(rename = "started")]
+    Started,
+    #[serde(rename = "succeeded")]
+    Succeeded,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "skipped")]
+    Skipped,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "blocked")]
+    Blocked,
+    #[serde(rename = "notRun")]
+    NotRun,
+}
+
+impl Default for Transition {
+    fn default() -> Transition {
+        Self::Started
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -129,6 +162,16 @@ pub enum Reason {
     SlackUnavailable,
     #[serde(rename = "slack_rejected")]
     SlackRejected,
+    #[serde(rename = "channel_not_found")]
+    ChannelNotFound,
+    #[serde(rename = "channel_archived")]
+    ChannelArchived,
+    #[serde(rename = "not_in_channel")]
+    NotInChannel,
+    #[serde(rename = "channel_restricted")]
+    ChannelRestricted,
+    #[serde(rename = "permission_missing")]
+    PermissionMissing,
 }
 
 impl Default for Reason {
