@@ -64,7 +64,7 @@ use useful_execution::{
     Scheduling, WaitKind, WaitRecord, acquire_local_continuation, acquire_local_retry,
     admit_local_continuation_workflow, adopted_child_outcome, append_control, attempt_controls,
     await_child_start_gate, await_release_gate, await_settled_gate, position_path, read_controls,
-    read_numbered_controls, stop_in_force, wait_payload, wait_release,
+    read_numbered_controls, replayed_nested_wait, stop_in_force, wait_payload, wait_release,
 };
 use useful_execution::{
     DefinitionError, SubjectClaim, SubjectError, WITHDRAWN_OUTCOME, WorkflowHome, check_subject,
@@ -2633,8 +2633,8 @@ fn child_run_outcome(
 /// child an independent repair completed after its wait began, and otherwise, for a repair
 /// wait's retry, the failed child the wait names continues with the partition its preflight
 /// admitted. A wait the root carries from a nested run continues that nested run in place
-/// from the nested step that waited, with the stage recovery its repair names. An abandoned
-/// root's nested run that reads `running` continues in place the same way, from its running
+/// from the nested wait's `then`, with stage recovery when it returns to the waiting step.
+/// An abandoned root's nested run that reads `running` continues in place from its running
 /// step or recorded edge, and one that reads `waiting` is carried as the wait it recorded
 /// without starting anything. `item` is the fan-out element, at which the continuation
 /// resumes the step.
@@ -3141,9 +3141,8 @@ async fn run_local_child(
     let directory = prepared.2.run_directory().to_owned();
     parent.record_started(&request, &directory, &mut control);
     let root = parent.root.descend(&request.step, request.item);
-    // The step drives its child, so a nested run's attempt that ends `continued` is chained
-    // here, its next attempt begun in the same run directory, until the nested run ends; no
-    // other child ends `continued`.
+    // The step drives its nested run's continuations in the same run directory, including
+    // a wait whose resolution the root already holds.
     let outcome = loop {
         let (workflow, admitted, owned_run) = prepared;
         let copy_root = owned_run.tree_copy_directory();
@@ -3206,7 +3205,7 @@ async fn run_local_child(
                     begin_nested_continuation(
                         &continuation_parent,
                         &continued,
-                        edge.into(),
+                        NestedContinuation::Edge(edge.into()),
                         continuation_cancellation,
                     )
                 })
@@ -3217,11 +3216,58 @@ async fn run_local_child(
                 };
             }
             _ => {
-                break match attempt.host.as_mut() {
+                let outcome = match attempt.host.as_mut() {
                     Some(ActiveRunHost::Quiet(host)) => host.outcome.take(),
                     _ => None,
                 }
                 .unwrap_or(ChildRunOutcome::Interrupted);
+                let ChildRunOutcome::Waiting {
+                    wait,
+                    interruption: None,
+                } = &outcome
+                else {
+                    break outcome;
+                };
+                if cancellation.interruption_requested() {
+                    break outcome;
+                }
+                let continuation_parent = Arc::clone(&parent);
+                let continued = directory.clone();
+                let prefix = root.path.clone();
+                let continuation_cancellation = cancellation.clone();
+                let wait_id = wait.id();
+                let target = wait.then.clone();
+                prepared = match blocking_operation(move || {
+                    let reason = replayed_nested_wait(
+                        &continuation_parent.root.run_directory,
+                        &continued,
+                        &prefix,
+                    )
+                    .map_err(|_| CHILD_CONTINUATION_UNAVAILABLE.to_owned())?;
+                    let Some(reason) = reason else {
+                        return Ok(None);
+                    };
+                    if continuation_cancellation.interruption_requested() {
+                        return Ok(None);
+                    }
+                    begin_nested_continuation(
+                        &continuation_parent,
+                        &continued,
+                        NestedContinuation::ReplayedWait {
+                            id: wait_id,
+                            target,
+                            reason,
+                        },
+                        continuation_cancellation,
+                    )
+                    .map(Some)
+                })
+                .await
+                {
+                    Ok(Some(prepared)) => prepared,
+                    Ok(None) => break outcome,
+                    Err(_) => return ChildRunOutcome::Interrupted,
+                };
             }
         }
     };
@@ -3300,39 +3346,54 @@ fn carried_wait_record(
     WaitRecord::carried(nested, &root.path, step, child).ok()
 }
 
-/// The next attempt of the nested run at `directory`, whose latest attempt ended `continued`
-/// on `edge`: begun in the same run directory from the edge's target as `useful workflow run
-/// resume` begins a root's, with reason `edge`, its own definition and retained inputs and
-/// its unchanged tree copy, admitted under the parent's execution root, limits and
-/// environment. A limited edge is counted in the nested run's own `run.json` as the attempt
-/// begins. A refusal is the child's code.
+enum NestedContinuation {
+    Edge(ContinuationEdgeV1),
+    ReplayedWait {
+        id: String,
+        target: String,
+        reason: ContinuationReasonV1,
+    },
+}
+
+const CHILD_CONTINUATION_UNAVAILABLE: &str = "child_continuation_unavailable";
+
+/// Begins a nested run's next attempt from a continued edge or a replayed wait. The run
+/// keeps its definition, inputs and tree copy under the parent's execution root, limits
+/// and environment. A limited edge is counted in the nested run's own record.
 fn begin_nested_continuation(
     parent: &LocalChildRunParent,
     directory: &Path,
-    edge: ContinuationEdgeV1,
+    continuation: NestedContinuation,
     cancellation: CancellationSource,
 ) -> Result<(ResolvedWorkflow, AdmittedWorkflow, LocalAttemptOwner), String> {
-    const UNAVAILABLE: &str = "child_continuation_unavailable";
     let pending = match acquire_local_continuation(directory) {
         Ok(LocalContinuationOpen::Acquired(pending)) => *pending,
         Ok(LocalContinuationOpen::Rejected(rejection)) => {
             return Err(rejection.reason().as_str().to_owned());
         }
-        Err(_) => return Err(UNAVAILABLE.to_owned()),
+        Err(_) => return Err(CHILD_CONTINUATION_UNAVAILABLE.to_owned()),
     };
-    if !super::resume::still_continues(&pending, &edge) {
-        return Err(UNAVAILABLE.to_owned());
-    }
+    let (target, reason, edge) = match continuation {
+        NestedContinuation::Edge(edge) if super::resume::still_continues(&pending, &edge) => {
+            (edge.target.clone(), ContinuationReasonV1::Edge, Some(edge))
+        }
+        NestedContinuation::ReplayedWait { id, target, reason }
+            if super::resume::still_waits(&pending, &id) =>
+        {
+            (target, reason, None)
+        }
+        _ => return Err(CHILD_CONTINUATION_UNAVAILABLE.to_owned()),
+    };
     let tree = match pending.verify_tree_copy() {
         Some(Ok(tree)) => tree,
         Some(Err(_)) => return Err("tree_copy_modified".to_owned()),
         None => return Err("workflow_step_requires_tree".to_owned()),
     };
     let workflow = pending.previous_definition().clone();
-    let from = vec![edge.target.clone()];
+    let from = vec![target];
     let reexecuted = pending
         .candidate_reexecuted_steps(&workflow, &from)
-        .ok_or_else(|| UNAVAILABLE.to_owned())?;
+        .ok_or_else(|| CHILD_CONTINUATION_UNAVAILABLE.to_owned())?;
     let context = child_execution_context(parent, &workflow, tree, cancellation)?
         .with_continuation_reexecuted_steps(&reexecuted);
     let context = if workflow.requires_git_capture() {
@@ -3346,25 +3407,26 @@ fn begin_nested_continuation(
         context,
     )
     .map_err(|failures| {
-        failures
-            .first()
-            .map_or_else(|| UNAVAILABLE.to_owned(), child_admission_code)
+        failures.first().map_or_else(
+            || CHILD_CONTINUATION_UNAVAILABLE.to_owned(),
+            child_admission_code,
+        )
     })?;
     pending
         .validate_execution_root(&admitted)
-        .map_err(|_| UNAVAILABLE.to_owned())?;
+        .map_err(|_| CHILD_CONTINUATION_UNAVAILABLE.to_owned())?;
     let owned = pending
         .begin(
             &admitted,
             from,
             ContinuationDefinitionMode::Inherited,
-            ContinuationReasonV1::Edge,
-            Some(edge),
+            reason,
+            edge,
         )
-        .map_err(|_| UNAVAILABLE.to_owned())?;
+        .map_err(|_| CHILD_CONTINUATION_UNAVAILABLE.to_owned())?;
     let admitted = owned
         .bind_continuation_context(admitted)
-        .map_err(|_| UNAVAILABLE.to_owned())?;
+        .map_err(|_| CHILD_CONTINUATION_UNAVAILABLE.to_owned())?;
     Ok((workflow, admitted, owned))
 }
 

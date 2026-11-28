@@ -2656,6 +2656,120 @@ fn attempt_controls_keep_the_entering_fields_through_a_host_wait_the_condition_r
 }
 
 #[test]
+fn nested_wait_replay_passes_over_unsuccessful_root_attempts_without_a_wait() {
+    let fixture = tree_fixture();
+    let prefix = [json!("second")];
+    let mut wait = answer_wait_record();
+    wait.step = vec![json!("prepareChange")];
+    wait.then = "applyDecision".to_owned();
+    let carrier = WaitRecord::carried(&wait, &prefix, "second", None).unwrap();
+    wait.since = "2026-11-06T16:32:00Z".to_owned();
+
+    let nested = tempfile::tempdir().unwrap();
+    let nested_record = tree_record(&fixture, None);
+    fs::write(
+        nested.path().join("run.json"),
+        serde_json::to_vec(&nested_record).unwrap(),
+    )
+    .unwrap();
+    let attempt_directory = nested.path().join("attempts/000001");
+    fs::create_dir_all(&attempt_directory).unwrap();
+    fs::write(
+        attempt_directory.join("wait.json"),
+        serde_json::to_vec(&wait).unwrap(),
+    )
+    .unwrap();
+
+    for (name, state, expected) in [
+        ("continued", AttemptStateV1::Continued, None),
+        (
+            "interrupted",
+            AttemptStateV1::Interrupted,
+            Some(ContinuationReasonV1::Resume),
+        ),
+        (
+            "cancelled",
+            AttemptStateV1::Cancelled,
+            Some(ContinuationReasonV1::Resume),
+        ),
+        (
+            "failed",
+            AttemptStateV1::WorkflowFailed,
+            Some(ContinuationReasonV1::Resume),
+        ),
+    ] {
+        let (root, record, _writable) = predecessor_waiting_on(&fixture, name, &carrier);
+        let control = ControlEvent {
+            source: "um".to_owned(),
+            event: crate::workflow::wait::CONTROL_ANSWER.to_owned(),
+            run: record.id,
+            by: "saeed".to_owned(),
+            at: "2026-11-06T16:31:00Z".to_owned(),
+            wait: Some(carrier.id()),
+            payload: json!({"complete": true, "answers": {"1": "keep"}})
+                .as_object()
+                .cloned(),
+        };
+        crate::workflow::wait::append_control(&root, &control).unwrap();
+        let begin = || {
+            acquired(&root)
+                .begin(
+                    &fixture.admitted,
+                    vec!["first".to_owned()],
+                    ContinuationDefinitionMode::Inherited,
+                    ContinuationReasonV1::Resume,
+                    None,
+                )
+                .unwrap()
+        };
+        let second = begin();
+        second
+            .update_run_record(RunState::Running, 2, None)
+            .unwrap();
+        match state {
+            AttemptStateV1::Cancelled => settle_as_cancelled(&second),
+            AttemptStateV1::WorkflowFailed => settle_as_workflow_failed(&second),
+            AttemptStateV1::Interrupted => second
+                .state
+                .update(|state| {
+                    settle_interrupted_attempt(
+                        current_attempt_mut(state)?,
+                        InterruptionCauseV1::ExecutionOwnerLost,
+                        false,
+                        Some(fixture_settlement_snapshot()),
+                    )
+                })
+                .unwrap(),
+            AttemptStateV1::Continued => second
+                .state
+                .update(|state| {
+                    let attempt = current_attempt_mut(state)?;
+                    attempt.started_at = Some(attempt.created_at.clone());
+                    attempt.settled_at = attempt.started_at.clone();
+                    attempt.settlement_snapshot = Some(fixture_settlement_snapshot());
+                    attempt.state = AttemptStateV1::Continued;
+                    attempt.result = AttemptResultV1::NotPublished {
+                        reason: ResultAbsentReasonV1::PublicationPending,
+                    };
+                    Ok(())
+                })
+                .unwrap(),
+            _ => panic!("unexpected fixture state: {state:?}"),
+        }
+        drop(second);
+        assert!(!root.join("attempts/000002/wait.json").exists());
+        let third = begin();
+        third.update_run_record(RunState::Running, 3, None).unwrap();
+
+        assert_eq!(
+            crate::replayed_nested_wait(&root, nested.path(), &prefix).unwrap(),
+            expected,
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
 fn attempt_controls_carry_the_first_matching_cloud_events_text_fields() {
     let fixture = tree_fixture();
     let wait: WaitRecord = serde_json::from_value(json!({

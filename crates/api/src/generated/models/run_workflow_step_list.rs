@@ -25,6 +25,9 @@ pub struct RunWorkflowStepList {
     /// True once a report past the attempt's 4096 items was dropped.
     #[serde(rename = "truncated")]
     pub truncated: bool,
+    /// The attempt's waits, each with the interval Cloud observed for it, in the order they began: at most 256, the earliest, so a reader given 256 takes later waits as unknown. Carried on the first page alone; a page requested with a `cursor` omits it. An empty array says Cloud saw the attempt enter no wait. Absent from a first page says that the Cloud does not report waits, never that the attempt had none.
+    #[serde(rename = "waits", skip_serializing_if = "Option::is_none")]
+    pub waits: Option<Vec<models::RunWorkflowWaitInterval>>,
 }
 
 impl RunWorkflowStepList {
@@ -33,6 +36,7 @@ impl RunWorkflowStepList {
             items,
             next_cursor: None,
             truncated,
+            waits: None,
         }
     }
 }

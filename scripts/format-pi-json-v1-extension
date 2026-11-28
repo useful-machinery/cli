@@ -5,6 +5,11 @@ if [[ $# -eq 0 ]]; then
   exit 0
 fi
 
+# A hermetic caller supplies the Prettier that the extension's lock pins.
+if [[ -n ${USEFUL_PI_JSON_V1_PRETTIER:-} ]]; then
+  exec "$USEFUL_PI_JSON_V1_PRETTIER" --write -- "$@"
+fi
+
 public_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 package_root=$public_root/crates/execution/src/workflow/pi-json-v1-extension
 install_root=$(mktemp -d "${TMPDIR:-/tmp}/useful-pi-json-v1-format.XXXXXX")

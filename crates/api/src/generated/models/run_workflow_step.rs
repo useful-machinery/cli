@@ -30,6 +30,14 @@ pub struct RunWorkflowStep {
     pub state: State,
     #[serde(rename = "reportedAt")]
     pub reported_at: String,
+    /// When Cloud observed the step start: the time of the earliest report that showed the step under way (`starting`, `running`, `capturing_outputs` or `cancelling`), on the clock of `reportedAt`. It is the time of that report, not of the engine's own start, so it is as coarse as the runner's reports. Null when Cloud records starts and has seen none for the item: the step has not started, or it ended with no report that showed it under way, which `state` tells apart. Absent when no start was recorded, which never says that the step did not start: a Cloud that records no starts omits it, as it does for an item first reported before it recorded them.
+    #[serde(
+        rename = "startedAt",
+        default,
+        with = "crate::nullable::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub started_at: Option<Option<String>>,
 }
 
 impl RunWorkflowStep {
@@ -47,6 +55,7 @@ impl RunWorkflowStep {
             step,
             state,
             reported_at,
+            started_at: None,
         }
     }
 }

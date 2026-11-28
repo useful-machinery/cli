@@ -8817,6 +8817,13 @@ mod workflow_run_cloud {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(reported(&text, "waiting"), Some("runners_asleep"), "{text}");
+
+        let cloud_busy = queued_owned_run(serde_json::json!({"reason": "cloud_busy"}));
+        let (output, _) = show_in_cloud(RUN_ID, &[], path_run_responses(cloud_busy), home.path());
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let waiting = reported(&text, "waiting").unwrap_or_else(|| panic!("{text}"));
+        assert!(!waiting.contains("cloud_busy"), "{text}");
     }
 
     // Cloud show lists the other runs the run's runner holds, each with whether it is

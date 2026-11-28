@@ -400,24 +400,32 @@ steps:
         then: work
 ";
 
-/// A stage of the asking tree that runs `nested-step NAME VERDICT` for its `part`. `ask`
-/// also takes the `answers` its step maps from `controls.answers` and exports the questions
-/// and summary its wait's payload carries; `work` first runs `prep`, which `decide` follows.
+/// A stage that runs `nested-step NAME VERDICT` for its `part`. `ask` and `prepareChange`
+/// take answers and export questions and a summary. `applyDecision` takes answers and the
+/// draft. `work` runs `prep` before `decide`.
 fn asking_tree_stage(name: &str, outcomes: &str, verdict: &str) -> String {
-    let (answers, mapped, prep, exported) = match name {
-        "ask" => (
-            "  answers:\n    kind: json\n    optional: true\n",
-            "      answers:\n        ref: inputs.answers\n",
+    let answers = "  answers:\n    kind: json\n    optional: true\n";
+    let mapped_answers = "      answers:\n        ref: inputs.answers\n";
+    let (inputs, mapped, prep, exported) = match name {
+        "ask" | "prepareChange" => (
+            answers.to_owned(),
+            mapped_answers.to_owned(),
             "",
             "      questions:\n        kind: text\n        from: path\n        path: questions.txt\n      summary:\n        kind: text\n        from: path\n        path: summary.txt\nexports:\n  questions:\n    ref: outputs.decide.questions\n  summary:\n    ref: outputs.decide.summary\n",
         ),
+        "applyDecision" => (
+            format!("{answers}  draft:\n    kind: text\n"),
+            format!("{mapped_answers}      draft:\n        ref: inputs.draft\n"),
+            "",
+            "",
+        ),
         "work" => (
-            "",
-            "",
+            String::new(),
+            String::new(),
             "  prep:\n    kind: cmd\n    inputs:\n      part:\n        ref: inputs.part\n    command:\n      argv: [nested-prep]\n  decide:\n    dependsOn: [prep]\n",
             "",
         ),
-        _ => ("", "", "", ""),
+        _ => (String::new(), String::new(), "", ""),
     };
     let decide = if prep.is_empty() { "  decide:\n" } else { "" };
     format!(
@@ -425,7 +433,7 @@ fn asking_tree_stage(name: &str, outcomes: &str, verdict: &str) -> String {
 inputs:
   part:
     kind: text
-{answers}outcomes: [{outcomes}]
+{inputs}outcomes: [{outcomes}]
 outcome:
   from: outputs.decide.verdict
   onFailure: failed
@@ -446,11 +454,11 @@ steps:
 }
 
 /// `nested-step NAME VERDICT` appends `NAME PART` to the execution root's `stages.log` and
-/// records the answers it was given, when there are any, as `answers-NAME-PART`; while the
-/// execution root holds `hold-NAME-PART` it writes `held-NAME-PART` and sleeps until
+/// records its answers and draft, when present, as `answers-NAME-PART` and `draft-NAME-PART`.
+/// While the execution root holds `hold-NAME-PART` it writes `held-NAME-PART` and sleeps until
 /// `release-NAME-PART` appears; it fails while `fail-NAME-PART` exists, and otherwise reports
 /// the verdict `verdict-NAME-PART` holds, else `VERDICT`, with a question and a summary about
-/// the part.
+/// the part. The question comes from `question-NAME-PART` when that file exists.
 const ASKING_TREE_PROGRAM: &str = "#!/bin/sh
 set -eu
 stage=$1
@@ -465,6 +473,9 @@ if [ -f \"${USEFUL_STEP_INPUTS:-}/values/answers\" ]; then
     printf '%s' \"$answers\" > \"answers-$stage-$part\"
   fi
 fi
+if [ -f \"${USEFUL_STEP_INPUTS:-}/values/draft\" ]; then
+  cat \"$USEFUL_STEP_INPUTS/values/draft\" > \"draft-$stage-$part\"
+fi
 if [ -e \"hold-$stage-$part\" ]; then
   : > \"held-$stage-$part\"
   while [ ! -e \"release-$stage-$part\" ]; do sleep 0.1; done
@@ -477,7 +488,11 @@ if [ -e \"verdict-$stage-$part\" ]; then
 else
   printf '%s' \"$2\" > \"verdict-$stage.txt\"
 fi
-printf '1. which way for %s?' \"$part\" > questions.txt
+if [ -e \"question-$stage-$part\" ]; then
+  cat \"question-$stage-$part\" > questions.txt
+else
+  printf '1. which way for %s?' \"$part\" > questions.txt
+fi
 printf '%s needs a decision' \"$part\" > summary.txt
 ";
 
@@ -502,6 +517,58 @@ pub(super) fn asking_tree() -> TreeBundle {
     );
     bundle.write_program("bin/nested-step", ASKING_TREE_PROGRAM);
     bundle.write_program("bin/nested-prep", ASKING_TREE_PREP);
+    bundle
+}
+
+const DECISION_TREE_PART: &str = "schemaVersion: 1
+inputs:
+  part:
+    kind: text
+outcomes: [checked, failed]
+steps:
+  prepareChange:
+    kind: workflow
+    workflow: prepare.yaml
+    inputs:
+      part:
+        ref: inputs.part
+      answers:
+        ref: controls.answers
+    on:
+      prepared: applyDecision
+      blocked:
+        wait: answer
+        then: applyDecision
+      failed: exit.failed
+  applyDecision:
+    kind: workflow
+    workflow: decision.yaml
+    inputs:
+      part:
+        ref: inputs.part
+      answers:
+        ref: controls.answers
+      draft:
+        ref: outputs.prepareChange.summary
+    on:
+      applied: exit.checked
+      failed:
+        wait: repair
+        then: prepareChange
+";
+
+fn decision_tree() -> TreeBundle {
+    let bundle = nested_tree();
+    bundle.write_source("part.yaml", DECISION_TREE_PART);
+    bundle.write_source(
+        "prepare.yaml",
+        &asking_tree_stage("prepareChange", "prepared, blocked, failed", "prepared"),
+    );
+    bundle.write_source(
+        "decision.yaml",
+        &asking_tree_stage("applyDecision", "applied, failed", "applied"),
+    );
+    bundle.write_program("bin/nested-step", ASKING_TREE_PROGRAM);
     bundle
 }
 
@@ -1347,6 +1414,343 @@ fn a_carried_wait_continues_its_nested_run_in_place() {
     );
 }
 
+// SC-WFROUTE-2: answering continues the same nested run at the decision step, which
+// receives the answers and the inherited draft. Retrying from the preparation step
+// starts a new decision stage while preserving the failed stage's record.
+#[test]
+fn a_carried_wait_continues_its_nested_run_at_another_step() {
+    let bundle = decision_tree();
+    let execution = bundle.execution_root();
+    fs::write(execution.join("verdict-prepareChange-b"), "blocked").unwrap();
+    let terminal = completed(&create_nested(&bundle, "decision"));
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    let run = fs::canonicalize(bundle.result("decision")).unwrap();
+    let nested = nested_run(&run, 2);
+    assert_eq!(attempt_count(&nested), 1);
+
+    let path = serde_json::json!(["outer", {"item": 2}, "prepareChange"]);
+    let (wait, nested_wait) = carried_waits(&run, 2);
+    assert_eq!(run_record(&run)["position"], path);
+    assert_eq!(wait["kind"], "answer", "{wait}");
+    assert_eq!(wait["step"], path, "{wait}");
+    assert_eq!(wait["then"], "outer", "{wait}");
+    assert_eq!(wait["nestedThen"], "applyDecision", "{wait}");
+    assert_eq!(nested_wait["then"], "applyDecision", "{nested_wait}");
+
+    fs::write(execution.join("fail-applyDecision-b"), "").unwrap();
+    let answer = super::workflow_run_control::run_control(
+        None,
+        "answer",
+        &run,
+        &["--question", "1", "--text", "left", "--record-only"],
+    );
+    assert_eq!(answer.status.code(), Some(0), "{answer:?}");
+    let terminal = completed(&super::workflow_continue::resume(&run));
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+
+    assert_eq!(ordinals_of(nested.parent().unwrap()), ["000001"]);
+    assert_eq!(attempt_count(&nested), 2);
+    let resumed = attempt_result(&nested, 2);
+    assert_eq!(resumed["continuation"]["reason"], "resume", "{resumed}");
+    assert_eq!(
+        resumed["continuation"]["reexecutedSteps"],
+        serde_json::json!(["applyDecision"]),
+        "{resumed}"
+    );
+    assert_eq!(
+        read_json(&execution.join("answers-applyDecision-b")),
+        serde_json::json!({"1": "left"})
+    );
+    assert_eq!(
+        fs::read_to_string(execution.join("draft-applyDecision-b")).unwrap(),
+        "b needs a decision"
+    );
+    for stage in ["prepareChange-a", "prepareChange-b", "applyDecision-a"] {
+        assert!(!execution.join(format!("answers-{stage}")).exists());
+    }
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange a\napplyDecision a\nprepareChange b\napplyDecision b\n"
+    );
+
+    let path = serde_json::json!(["outer", {"item": 2}, "applyDecision"]);
+    let (wait, nested_wait) = carried_waits(&run, 2);
+    assert_eq!(run_record(&run)["position"], path);
+    assert_eq!(wait["kind"], "repair", "{wait}");
+    assert_eq!(wait["step"], path, "{wait}");
+    assert_eq!(wait["then"], "outer", "{wait}");
+    assert_eq!(wait["nestedThen"], "prepareChange", "{wait}");
+    assert_eq!(nested_wait["then"], "prepareChange", "{nested_wait}");
+
+    fs::remove_file(execution.join("verdict-prepareChange-b")).unwrap();
+    fs::remove_file(execution.join("fail-applyDecision-b")).unwrap();
+    let retry = super::workflow_run_control::run_control(None, "retry", &run, &[]);
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    let terminal = last_document(&retry);
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(ordinals_of(nested.parent().unwrap()), ["000001"]);
+    assert_eq!(attempt_count(&nested), 3);
+    let retried = attempt_result(&nested, 3);
+    assert_eq!(retried["continuation"]["reason"], "retry", "{retried}");
+    assert_eq!(
+        retried["continuation"]["fromSteps"],
+        serde_json::json!(["prepareChange"]),
+        "{retried}"
+    );
+    let stage = nested.join("children/applyDecision");
+    assert_eq!(ordinals_of(&stage), ["000001", "000002"]);
+    let failed = stage.join("000001");
+    assert_eq!(attempt_count(&failed), 1);
+    assert_eq!(run_record(&failed)["outcome"], "failed");
+    assert_eq!(run_record(&stage.join("000002"))["outcome"], "applied");
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange a\napplyDecision a\nprepareChange b\napplyDecision b\nprepareChange b\napplyDecision b\nfinish -\n"
+    );
+}
+
+fn decision_wait_answered(bundle: &TreeBundle, home: &Home) -> PathBuf {
+    let original = bundle.execution_root();
+    fs::write(original.join("verdict-prepareChange-b"), "blocked").unwrap();
+    let mut create = isolated_command(&["workflow".into(), "run".into(), "create".into()]);
+    create
+        .arg("--path")
+        .arg(bundle.source_root())
+        .arg("--execution-root")
+        .arg(original)
+        .args(["--input-json", "parts", r#"[{"name":"a"},{"name":"b"}]"#])
+        .arg("--json")
+        .env("USEFUL_HOME", home.path());
+    let terminal = completed(&signed_out(create));
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    let wait = &terminal["wait"];
+    assert_eq!(wait["kind"], "answer", "{wait}");
+    assert_eq!(
+        wait["step"],
+        serde_json::json!(["outer", {"item": 2}, "prepareChange"]),
+        "{wait}"
+    );
+    assert_eq!(wait["nestedThen"], "applyDecision", "{wait}");
+    let run = PathBuf::from(terminal["runDirectory"].as_str().unwrap());
+    let id = run.file_name().unwrap();
+
+    let answer = super::workflow_run_control::run_control(
+        Some(home),
+        "answer",
+        id,
+        &["--question", "1", "--text", "left", "--record-only"],
+    );
+    assert_eq!(answer.status.code(), Some(0), "{answer:?}");
+    run
+}
+
+#[test]
+fn a_carried_answer_continues_a_fresh_nested_run_at_another_step() {
+    let bundle = decision_tree();
+    let home = Home::new();
+    let run = decision_wait_answered(&bundle, &home);
+    let id = run.file_name().unwrap();
+    let original = bundle.execution_root();
+
+    let replacement = tempfile::tempdir().unwrap();
+    let execution = replacement.path();
+    fs::write(execution.join("verdict-prepareChange-b"), "blocked").unwrap();
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(execution);
+    let terminal = completed(&signed_out(resume));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(attempt_count(&run), 2);
+    assert!(!run.join("wait.json").exists());
+
+    let fresh = run.join("children/outer/000002/000002");
+    assert_eq!(attempt_count(&fresh), 2);
+    let replay = attempt_result(&fresh, 2);
+    assert_eq!(replay["continuation"]["reason"], "resume", "{replay}");
+    assert_eq!(
+        replay["continuation"]["fromSteps"],
+        serde_json::json!(["applyDecision"]),
+        "{replay}"
+    );
+    assert_eq!(
+        fs::read_to_string(original.join("stages.log")).unwrap(),
+        "prepareChange a\napplyDecision a\nprepareChange b\n"
+    );
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange b\napplyDecision b\nfinish -\n"
+    );
+    assert_eq!(
+        read_json(&execution.join("answers-applyDecision-b")),
+        serde_json::json!({"1": "left"})
+    );
+    assert_eq!(
+        fs::read_to_string(execution.join("draft-applyDecision-b")).unwrap(),
+        "b needs a decision"
+    );
+    assert!(!execution.join("answers-prepareChange-b").exists());
+}
+
+#[test]
+fn a_carried_answer_waits_again_when_the_question_changes() {
+    let bundle = decision_tree();
+    let home = Home::new();
+    let run = decision_wait_answered(&bundle, &home);
+    let id = run.file_name().unwrap();
+    let original = read_json(&run.join("wait.json"));
+
+    let replacement = tempfile::tempdir().unwrap();
+    let execution = replacement.path();
+    let question = "1. may we publish b?";
+    fs::write(execution.join("verdict-prepareChange-b"), "blocked").unwrap();
+    fs::write(execution.join("question-prepareChange-b"), question).unwrap();
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(execution);
+    let terminal = completed(&signed_out(resume));
+    assert_eq!(terminal["outcome"], "waiting", "{terminal}");
+    let wait = &terminal["wait"];
+    assert_eq!(wait["kind"], "answer", "{wait}");
+    assert_eq!(
+        wait["step"],
+        serde_json::json!(["outer", {"item": 2}, "prepareChange"]),
+        "{wait}"
+    );
+    assert_eq!(wait["payload"]["questions"], question, "{wait}");
+    assert_ne!(wait["since"], original["since"]);
+    assert_eq!(attempt_count(&run), 2);
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange b\n"
+    );
+    assert!(!execution.join("answers-applyDecision-b").exists());
+
+    let answer = super::workflow_run_control::run_control(
+        Some(&home),
+        "answer",
+        id,
+        &["--question", "1", "--text", "right", "--record-only"],
+    );
+    assert_eq!(answer.status.code(), Some(0), "{answer:?}");
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(execution);
+    let terminal = completed(&signed_out(resume));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(
+        read_json(&execution.join("answers-applyDecision-b")),
+        serde_json::json!({"1": "right"})
+    );
+}
+
+#[test]
+fn a_carried_answer_does_not_reach_a_step_that_bypasses_its_wait() {
+    let bundle = decision_tree();
+    let home = Home::new();
+    let run = decision_wait_answered(&bundle, &home);
+    let id = run.file_name().unwrap();
+
+    let replacement = tempfile::tempdir().unwrap();
+    let execution = replacement.path();
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(execution);
+    let terminal = completed(&signed_out(resume));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(attempt_count(&run), 2);
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange b\napplyDecision b\nfinish -\n"
+    );
+    assert!(!execution.join("answers-applyDecision-b").exists());
+}
+
+#[test]
+fn a_carried_answer_survives_a_replacement_killed_after_it_replays() {
+    let bundle = decision_tree();
+    let home = Home::new();
+    let run = decision_wait_answered(&bundle, &home);
+    let id = run.file_name().unwrap();
+
+    let second = tempfile::tempdir().unwrap();
+    fs::write(second.path().join("verdict-prepareChange-b"), "blocked").unwrap();
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(second.path());
+    kill_while_held(resume, &run, second.path(), "applyDecision-b");
+
+    let third = tempfile::tempdir().unwrap();
+    let execution = third.path();
+    fs::write(execution.join("verdict-prepareChange-b"), "blocked").unwrap();
+    let output = super::poll_until(
+        "the abandoned run's resume",
+        || {
+            let mut resume = control_command(Some(&home), "resume", id, &[]);
+            resume.arg("--execution-root").arg(execution);
+            signed_out(resume)
+        },
+        |output| output.status.success(),
+    );
+    let terminal = completed(&output);
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(
+        read_json(&execution.join("answers-applyDecision-b")),
+        serde_json::json!({"1": "left"})
+    );
+}
+
+#[test]
+fn a_carried_answer_survives_a_replacement_killed_while_it_prepares() {
+    let bundle = decision_tree();
+    let home = Home::new();
+    let run = decision_wait_answered(&bundle, &home);
+    let id = run.file_name().unwrap();
+
+    let second = tempfile::tempdir().unwrap();
+    fs::write(second.path().join("verdict-prepareChange-b"), "blocked").unwrap();
+    let mut resume = control_command(Some(&home), "resume", id, &[]);
+    resume.arg("--execution-root").arg(second.path());
+    kill_while_held(resume, &run, second.path(), "prepareChange-b");
+
+    let third = tempfile::tempdir().unwrap();
+    let execution = third.path();
+    fs::write(execution.join("verdict-prepareChange-b"), "blocked").unwrap();
+    let output = super::poll_until(
+        "the abandoned run's resume",
+        || {
+            let mut resume = control_command(Some(&home), "resume", id, &[]);
+            resume.arg("--execution-root").arg(execution);
+            signed_out(resume)
+        },
+        |output| output.status.success(),
+    );
+    let terminal = completed(&output);
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&run)["outcome"], "landed");
+    assert_eq!(attempt_count(&run), 3);
+    assert!(!run.join("wait.json").exists());
+    let state = read_json(&run.join("state.json"));
+    assert_eq!(state["attempts"][1]["state"], "interrupted", "{state}");
+    assert_eq!(
+        fs::read_to_string(execution.join("stages.log")).unwrap(),
+        "prepareChange b\napplyDecision b\nfinish -\n"
+    );
+    assert_eq!(
+        read_json(&execution.join("answers-applyDecision-b")),
+        serde_json::json!({"1": "left"})
+    );
+
+    let nested = run.join("children/outer/000002/000002");
+    assert_eq!(attempt_count(&nested), 3);
+    let replay = attempt_result(&nested, 3);
+    assert_eq!(replay["continuation"]["reason"], "resume", "{replay}");
+    assert_eq!(
+        replay["continuation"]["fromSteps"],
+        serde_json::json!(["applyDecision"]),
+        "{replay}"
+    );
+}
+
 // The root's carried host wait, resolved by the host condition, continues the nested run
 // in place from its waiting stage, and the nested run continues that stage's failed child
 // in place, each attempt with reason `host`.
@@ -1719,10 +2123,22 @@ fn a_withdrawal_is_honored_at_the_next_nested_step_boundary() {
 /// no lock holder. The hold is removed and the orphaned stage released, so a continuation
 /// runs the stage through.
 fn abandoned_while_held(bundle: &TreeBundle, name: &str, held: &str) -> std::path::PathBuf {
-    let execution = bundle.execution_root().to_owned();
-    fs::write(execution.join(format!("hold-{held}")), "").unwrap();
     let destination = bundle.result(name);
-    let mut live = nested_command(bundle, name)
+    kill_while_held(
+        nested_command(bundle, name),
+        &destination,
+        bundle.execution_root(),
+        held,
+    );
+    let run = fs::canonicalize(&destination).unwrap();
+    assert_eq!(run_record(&run)["state"], "running");
+    run
+}
+
+/// Kills the run command while the named stage holds, then releases the orphaned stage.
+fn kill_while_held(mut command: std::process::Command, run: &Path, execution: &Path, held: &str) {
+    fs::write(execution.join(format!("hold-{held}")), "").unwrap();
+    let mut live = command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -1730,16 +2146,13 @@ fn abandoned_while_held(bundle: &TreeBundle, name: &str, held: &str) -> std::pat
         .unwrap();
     super::poll_until(
         "the nested stage's held step",
-        || execution.join(format!("held-{held}")).exists() && crate::run_is_owned(&destination),
+        || execution.join(format!("held-{held}")).exists() && crate::run_is_owned(run),
         |held| *held,
     );
     live.kill().unwrap();
     assert!(!live.wait().unwrap().success());
     fs::remove_file(execution.join(format!("hold-{held}"))).unwrap();
     fs::write(execution.join(format!("release-{held}")), "").unwrap();
-    let run = fs::canonicalize(&destination).unwrap();
-    assert_eq!(run_record(&run)["state"], "running");
-    run
 }
 
 /// `useful workflow run resume RUN --json` of the abandoned `run`, once the killed process's lock
@@ -1883,14 +2296,19 @@ fn publish_asking(
     report
 }
 
-/// A run of the published asking tree, by definition, whose element 2 `ask` ended `blocked`:
-/// the root waits in the `answer` wait it carries at `[outer, {item: 2}, ask]`.
+/// A run of the published tree, by definition, whose element 2 stage ended `blocked`.
 fn published_run_waiting_in_a_carried_answer() -> (
     TreeBundle,
     super::workflow_definition::Home,
     std::path::PathBuf,
 ) {
-    let bundle = asking_tree();
+    publish_and_wait_for_a_carried_answer(asking_tree(), "ask")
+}
+
+fn publish_and_wait_for_a_carried_answer(
+    bundle: TreeBundle,
+    stage: &str,
+) -> (TreeBundle, Home, PathBuf) {
     let named =
         NESTED_TREE_ROOT.replacen("schemaVersion: 1\n", "schemaVersion: 1\nname: asking\n", 1);
     bundle.write_source("workflow.yaml", &named);
@@ -1900,7 +2318,7 @@ fn published_run_waiting_in_a_carried_answer() -> (
         .unwrap()
         .to_owned();
     let execution = bundle.execution_root().to_owned();
-    fs::write(execution.join("verdict-ask-b"), "blocked").unwrap();
+    fs::write(execution.join(format!("verdict-{stage}-b")), "blocked").unwrap();
     let mut create = isolated_command(&[
         "workflow".to_owned(),
         "run".to_owned(),
@@ -1918,6 +2336,30 @@ fn published_run_waiting_in_a_carried_answer() -> (
     assert_eq!(terminal["outcome"], "waiting", "{terminal}");
     let predecessor = std::path::PathBuf::from(terminal["runDirectory"].as_str().unwrap());
     (bundle, home, predecessor)
+}
+
+#[test]
+fn an_upgrade_refuses_a_missing_nested_wait_continuation_target() {
+    let (bundle, home, predecessor) =
+        publish_and_wait_for_a_carried_answer(decision_tree(), "prepareChange");
+    let wait = read_json(&predecessor.join("wait.json"));
+    assert_eq!(wait["nestedThen"], "applyDecision", "{wait}");
+    let predecessor_record = run_record(&predecessor);
+    let predecessor_id = predecessor_record["id"].as_str().unwrap();
+
+    bundle.write_source(
+        "part.yaml",
+        &DECISION_TREE_PART.replace("applyDecision", "recordDecision"),
+    );
+    assert_eq!(publish_asking(&bundle, &home)["revision"]["n"], 2);
+    let upgrade =
+        super::workflow_run_control::run_control(Some(&home), "upgrade", predecessor_id, &[]);
+    let refusal = super::workflow_run::tree_rejection(&upgrade);
+    assert_eq!(
+        refusal["diagnostics"][0]["code"], "wait_target_unresolved",
+        "{refusal}"
+    );
+    assert_eq!(run_record(&predecessor)["state"], "waiting");
 }
 
 // `upgrade` of a root waiting in a carried `answer` wait is refused while the current
@@ -1994,6 +2436,37 @@ fn an_upgrade_carries_a_nested_wait_and_starts_its_nested_run_afresh() {
         "ask a\nwork a\nask b\nask b\nwork b\nfinish -\n"
     );
     assert_eq!(attempt_count(&nested_run(&predecessor, 2)), 1);
+}
+
+#[test]
+fn an_upgrade_replays_a_nested_answer_at_another_step() {
+    let (bundle, home, predecessor) =
+        publish_and_wait_for_a_carried_answer(decision_tree(), "prepareChange");
+    bundle.write_source("part.yaml", &format!("{DECISION_TREE_PART}# revision 2\n"));
+    assert_eq!(publish_asking(&bundle, &home)["revision"]["n"], 2);
+    let predecessor_record = run_record(&predecessor);
+    let upgrade = completed(&super::workflow_run_control::run_control(
+        Some(&home),
+        "upgrade",
+        predecessor_record["id"].as_str().unwrap(),
+        &[],
+    ));
+    assert_eq!(upgrade["outcome"], "upgraded", "{upgrade}");
+    let successor = PathBuf::from(upgrade["runDirectory"].as_str().unwrap());
+    let successor_record = run_record(&successor);
+    let terminal = completed(&super::workflow_run_control::run_control(
+        Some(&home),
+        "answer",
+        successor_record["id"].as_str().unwrap(),
+        &["--question", "1", "--text", "left"],
+    ));
+    assert_eq!(terminal["outcome"], "succeeded", "{terminal}");
+    assert_eq!(run_record(&successor)["outcome"], "landed");
+    assert_eq!(attempt_count(&nested_run(&successor, 2)), 2);
+    assert_eq!(
+        fs::read_to_string(bundle.execution_root().join("stages.log")).unwrap(),
+        "prepareChange a\napplyDecision a\nprepareChange b\nprepareChange b\napplyDecision b\nfinish -\n"
+    );
 }
 
 // `upgrade` of a root waiting in a carried host wait carries the wait and its position, and

@@ -585,6 +585,7 @@ pub(crate) fn write_waiting(out: &mut impl Write, observation: &RunObservation) 
         "no_fitting_runner" => "no runner in its pools fits the run".to_owned(),
         "runners_offline" => "runners offline".to_owned(),
         "runners_busy" => "runners busy".to_owned(),
+        "cloud_busy" => "Cloud busy".to_owned(),
         other => visible_text(other),
     };
     match waiting.since.as_deref() {

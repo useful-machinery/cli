@@ -157,10 +157,26 @@ validate_public_fragment() {
     fi
 
     case "$character" in
-      '#'|'*'|'_'|'['|']'|'<'|'>')
+      '_')
+        # An underscore between two ASCII letters or digits, as in API_TOKEN, is not emphasis.
+        if [[ $index -eq 0 || $index -eq $((content_length - 1)) \
+          || ! ${content:index - 1:1} =~ ^[A-Za-z0-9]$ \
+          || ! ${content:index + 1:1} =~ ^[A-Za-z0-9]$ ]]; then
+          fail_path "$fragment" "unsupported Markdown is not permitted outside code spans"
+        fi
+        ;;
+      '#'|'*'|'['|']'|'<'|'>')
         fail_path "$fragment" "unsupported Markdown is not permitted outside code spans"
         ;;
-      '.'|'!'|'?')
+      '.')
+        # A period between two ASCII letters or digits, as in v1.2, ends no sentence.
+        if [[ $index -eq 0 || $index -eq $((content_length - 1)) \
+          || ! ${content:index - 1:1} =~ ^[A-Za-z0-9]$ \
+          || ! ${content:index + 1:1} =~ ^[A-Za-z0-9]$ ]]; then
+          ((terminator_count += 1))
+        fi
+        ;;
+      '!'|'?')
         ((terminator_count += 1))
         ;;
     esac

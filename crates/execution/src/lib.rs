@@ -147,7 +147,7 @@ pub use workflow::local_run::{
     live_running_steps, load_cloud_continuation_seed, locate_run, lock_holder,
     open_portable_record, portable_record_files, positioned_element, read_durable_record,
     read_local_run_status, read_run_file_bounded, read_run_file_tail, read_run_view,
-    restore_portable_record, retain_cloud_continuation_evidence, wait_child,
+    replayed_nested_wait, restore_portable_record, retain_cloud_continuation_evidence, wait_child,
 };
 pub use workflow::login_check::{
     HarnessLoginCheck, HarnessLoginCheckCause, HarnessLoginCheckStage, check_claude_code_login,

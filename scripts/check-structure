@@ -53,6 +53,7 @@ required_files=(
   scripts/release-impact
   scripts/run-named-test
   scripts/test-change-fragments
+  scripts/test-check-suite
   scripts/test-release-candidate
   scripts/test-release-impact
   scripts/test-release-package
@@ -97,6 +98,13 @@ for required_file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+# The public workflow runs ./scripts/check, so the exported tree must carry it
+# executable; a checkout that lost the mode would fail there.
+if [[ ! -x "$public_root/scripts/check" ]]; then
+  echo "Required public source file is not executable: scripts/check" >&2
+  exit 1
+fi
 
 if ! locked_devenv_revision=$(
   jq --exit-status --raw-output '
@@ -188,6 +196,7 @@ PY
 "$public_root/scripts/test-git-isolation-check"
 "$public_root/scripts/check-test-git-isolation"
 "$public_root/scripts/test-change-fragments"
+"$public_root/scripts/test-check-suite"
 "$public_root/scripts/check-change-fragments"
 "$public_root/scripts/test-release"
 python3 "$public_root/scripts/test-release-candidate"

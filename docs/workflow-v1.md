@@ -455,12 +455,13 @@ steps:
   (`child_input_undeclared`), kinds must match (`child_input_type_mismatch`), and a child
   `file` or `attachments` input cannot be mapped (`child_input_unsupported`). These
   failures are at location `step_input`.
-- A `workflow` step's `inputs` may also reference `wait.<field>`, a `text` value from
-  the payload of the control or recorded Cloud event that resolved the wait whose `then`
-  or `onHandBack` is this step. `controls.answers` is a `json` value: the answers recorded for this step's
-  questions. Either may be absent when the step starts, so the child input it maps onto
-  must be optional or defaulted (`control_reference_requires_optional` at `step_input`),
-  and kinds must match as above. `cmd` and `agent` steps accept neither form.
+- In a `workflow` step's `inputs`, `wait.<field>` is `text` from the control or
+  recorded Cloud event payload that resolved a wait targeting this step via `then`
+  or `onHandBack`. `controls.answers` is `json` containing the recorded answers for
+  an `answer` wait whose `then` targets this step. Either value may be absent at
+  start, so the mapped child input must be optional or defaulted
+  (`control_reference_requires_optional` at `step_input`) and match the reference's
+  kind. `cmd` and `agent` steps accept neither reference.
 - On a `forEach` step, `inputs` may also reference `item`, the element, or
   `item.<field>`, a top-level field of an object element. Either takes the kind of the
   `text` or `json` child input it maps onto; a `text` input needs a JSON string, checked
@@ -538,16 +539,15 @@ declared alone, because the `exit` edge a run reaches chooses the outcome; an `o
 block is `invalid_outcome_declaration`. Finalizers work as in any workflow. A
 `workflowPath` run refuses `workflow` steps.
 
-A child that declares `workflow` steps is a nested workflow: an edge-scheduled file
-whose steps run stages. The chain is at most two deep from the file being validated, so
-a nested workflow's children declare no `workflow` step; a deeper child, a cycle
-included, is `child_workflow_nested` at the outer file's step. A nested workflow declares
-no `forEach`, waits only for `answer`, `repair` or `host`, and a wait's `then` is the step
-whose edge enters it, directly, as a limited edge's `else` or as a host wait's `else`; any
-other shape is
-`nested_workflow_unsupported` at the parent's step, its remedy naming the nested step.
-A nested workflow's stages run inside the parent's step, and the root run holds its
-waits and controls.
+A child with `workflow` steps is a nested workflow. Its children cannot declare
+`workflow` steps. A deeper child or cycle is `child_workflow_nested` at the outer
+file's step. Nested workflows support `answer`, `repair` and `host` waits. For
+`answer` and `repair`, the same nested run continues at `then`, which must name the
+waiting step or another step in that nested workflow. A `host` wait continues at
+the waiting step. `forEach`, other wait kinds and exits as `then` are
+`nested_workflow_unsupported` at the parent's step. The remedy names the nested step.
+Stages run inside the parent's step. The root run holds the nested workflow's waits
+and controls.
 
 ## Complete example
 

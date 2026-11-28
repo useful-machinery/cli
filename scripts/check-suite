@@ -196,6 +196,7 @@ start_background_check() {
   background_names+=("$name")
   background_pids+=("$!")
 }
+
 start_background_check check-structure "$public_root/scripts/check-structure"
 start_background_check check-pi-json-v1-extension \
   "$public_root/scripts/check-pi-json-v1-extension"
@@ -222,73 +223,62 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tests/Cargo.toml --all -- --check
 "$public_root/scripts/check-msrv"
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo clippy --locked --manifest-path tests/Cargo.toml --all-targets --all-features -- -D warnings
+cargo clippy --locked --manifest-path tests/Cargo.toml --target-dir "$cargo_target_dir/e2e" --all-targets --all-features -- -D warnings
 "$public_root/scripts/check-lint-policy"
-# A caller that already builds and runs this suite on the same source, such as
-# the private pipeline's cli-nix step, names itself in USEFUL_CLI_SUITE_TESTS_RUN_BY.
-# Both entry points still run the source, format, MSRV and lint checks above.
-# The public workflow runs the workspace build, both test suites and the
-# release-archive check as well.
-tests_run_by=${USEFUL_CLI_SUITE_TESTS_RUN_BY:-}
-if [[ -n $tests_run_by ]]; then
-  printf 'Workspace build, workspace and process test suites, and release-archive check skipped: run by %s on this source.\n' \
-    "$tests_run_by"
-else
-  # --all-targets builds the example as a test harness, not as a worker.
-  # Build the ordinary executable before exporting its explicit test contract.
-  # Match the test run's packages and features, and build the binaries the
-  # integration tests need anyway: a build-time dependency that the command
-  # binary also links is otherwise built with a host-only profile, and every
-  # library above it, including the worker's, would compile a second time.
-  cargo build --locked --workspace --all-features --bins --example internal-worker
-  export USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE="$cargo_target_dir/debug/examples/internal-worker"
-  # Nextest normally re-executes itself before each test process. That second
-  # exec costs about 65 ms per test on macOS, roughly 15 s across this suite, and
-  # only guards an interactive job-control race that this noninteractive check
-  # never meets.
-  (
-    # On macOS many adapter tests wait on child processes, so run about 1.6
-    # workspace test threads per CPU. Linux keeps nextest's one thread per CPU.
-    if [[ $(uname -s) == Darwin ]]; then
-      # A separate assignment, so that a failed count stops the suite.
-      online_cpus=$(nproc)
-      export NEXTEST_TEST_THREADS=$((online_cpus * 8 / 5))
-    fi
-    NEXTEST_DOUBLE_SPAWN=0 cargo nextest run --locked --workspace --all-targets --all-features
-  )
-  "$public_root/scripts/test-e2e-rust" --no-fail-fast
+# --all-targets builds the example as a test harness, not as a worker.
+# Build the ordinary executable before exporting its explicit test contract.
+# Match the test run's packages and features, and build the binaries the
+# integration tests need anyway: a build-time dependency that the command
+# binary also links is otherwise built with a host-only profile, and every
+# library above it, including the worker's, would compile a second time.
+cargo build --locked --workspace --all-features --bins --example internal-worker
+export USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE="$cargo_target_dir/debug/examples/internal-worker"
+# Nextest normally re-executes itself before each test process. That second
+# exec costs about 65 ms per test on macOS, roughly 15 s across this suite, and
+# only guards an interactive job-control race that this noninteractive check
+# never meets.
+(
+  # On macOS many adapter tests wait on child processes, so run about 1.6
+  # workspace test threads per CPU. Linux keeps nextest's one thread per CPU.
+  if [[ $(uname -s) == Darwin ]]; then
+    # A separate assignment, so that a failed count stops the suite.
+    online_cpus=$(nproc)
+    export NEXTEST_TEST_THREADS=$((online_cpus * 8 / 5))
+  fi
+  NEXTEST_DOUBLE_SPAWN=0 cargo nextest run --locked --workspace --all-targets --all-features
+)
+"$public_root/scripts/test-e2e-rust" --no-fail-fast
 
-  # The packaging checks exercise archive layout, embedded authoring assets, and
-  # isolated execution, none of which depend on optimization level. Reuse the
-  # binary the process suite just tested instead of a second, optimized
-  # compilation of the whole crate. The Nix package and release builds compile
-  # optimized binaries with the injected version and identity and run this suite
-  # against them. Those publication paths keep the packager's maximum default
-  # compression; this layout check packs the large debug binary at the fastest
-  # level, which changes only the compressed bytes.
-  host_target=$(rustc -vV | awk '$1 == "host:" { print $2 }')
-  case $host_target in
-    aarch64-apple-darwin | aarch64-unknown-linux-gnu | x86_64-unknown-linux-gnu)
-      release_dist=$long_tmp_parent/release-dist
-      archive=$(
-        "$public_root/scripts/package-release-archive" \
-          --binary "$cargo_target_dir/debug/useful" \
-          --output "$release_dist" \
-          --target "$host_target" \
-          --version 0.0.0-dev \
-          --compression-level 1
-      )
-      "$public_root/scripts/verify-release-package-isolated" \
-        --archive "$archive" \
+# The packaging checks exercise archive layout, embedded authoring assets, and
+# isolated execution, none of which depend on optimization level. Reuse the
+# binary the process suite just tested instead of a second, optimized
+# compilation of the whole crate. The Nix package and release builds compile
+# optimized binaries with the injected version and identity and run this suite
+# against them. Those publication paths keep the packager's maximum default
+# compression; this layout check packs the large debug binary at the fastest
+# level, which changes only the compressed bytes.
+host_target=$(rustc -vV | awk '$1 == "host:" { print $2 }')
+case $host_target in
+  aarch64-apple-darwin | aarch64-unknown-linux-gnu | x86_64-unknown-linux-gnu)
+    release_dist=$long_tmp_parent/release-dist
+    archive=$(
+      "$public_root/scripts/package-release-archive" \
+        --binary "$cargo_target_dir/debug/useful" \
+        --output "$release_dist" \
         --target "$host_target" \
-        --version 0.0.0-dev
-      ;;
-    *)
-      printf 'Skipped release-package execution on unsupported host target: %s\n' \
-        "$host_target"
-      ;;
-  esac
-fi
+        --version 0.0.0-dev \
+        --compression-level 1
+    )
+    "$public_root/scripts/verify-release-package-isolated" \
+      --archive "$archive" \
+      --target "$host_target" \
+      --version 0.0.0-dev
+    ;;
+  *)
+    printf 'Skipped release-package execution on unsupported host target: %s\n' \
+      "$host_target"
+    ;;
+esac
 
 finish_background_checks
 

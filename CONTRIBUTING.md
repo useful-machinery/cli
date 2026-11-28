@@ -187,9 +187,8 @@ both suites and injects the package version and build identity into the build un
 and the driver's `USEFUL_TEST_VERSION` and `USEFUL_TEST_BUILD_IDENTITY`. The local suite
 uses development defaults and reuses the binary from the process suite to package and
 verify the release archive. The Nix package and release builds compile optimized binaries.
-When `USEFUL_CLI_SUITE_TESTS_RUN_BY` names a step that already ran the suites on the same
-source, `./scripts/check` skips the workspace build, both test suites and the
-release-archive check. The public workflow never sets this switch.
+Clippy runs in the local suite and as the package's `clippy` and `e2eClippy` passthru
+derivations, over the workspace and the standalone driver.
 
 Nextest gives each selected test its own process, preventing a child forked by one test from
 inheriting another test's open descriptors. This isolation does not prevent races among processes

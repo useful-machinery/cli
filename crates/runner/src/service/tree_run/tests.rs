@@ -4123,11 +4123,9 @@ steps:
     );
 }
 
-const fn nested_release_wait_tree(work_stage: &'static [u8]) -> [TreeFile; 4] {
-    [
-        TreeFile {
-            path: "workflow.yaml",
-            bytes: br#"schemaVersion: 1
+const NESTED_RELEASE_WAIT_ROOT: TreeFile = TreeFile {
+    path: "workflow.yaml",
+    bytes: br#"schemaVersion: 1
 name: nestedReleaseWait
 environmentPassthrough: [SHARED]
 outcomes: [landed, failed]
@@ -4137,11 +4135,12 @@ steps:
     workflow: part.yaml
     on: {checked: exit.landed, failed: exit.failed}
 "#,
-            executable: false,
-        },
-        TreeFile {
-            path: "part.yaml",
-            bytes: br#"schemaVersion: 1
+    executable: false,
+};
+
+const NESTED_RELEASE_WAIT_PART: TreeFile = TreeFile {
+    path: "part.yaml",
+    bytes: br#"schemaVersion: 1
 environmentPassthrough: [SHARED]
 outcomes: [checked, failed]
 steps:
@@ -4154,30 +4153,25 @@ steps:
     workflow: work.yaml
     on: {succeeded: exit.checked, failed: {wait: repair, runner: release, then: work}}
 "#,
-            executable: false,
-        },
-        TreeFile {
-            path: "prepare.yaml",
-            bytes: br#"schemaVersion: 1
+    executable: false,
+};
+
+const NESTED_RELEASE_WAIT_PREPARE: TreeFile = TreeFile {
+    path: "prepare.yaml",
+    bytes: br#"schemaVersion: 1
 environmentPassthrough: [SHARED]
 steps:
   prepare:
     kind: cmd
     workspace: new
-    command: {argv: [sh, -ec, 'echo prepare >> "$SHARED/calls"']}
+    command: {argv: [sh, -ec, 'echo prepare >> "$SHARED/calls"; while test -f "$SHARED/hold"; do sleep 0.05; done']}
 "#,
-            executable: false,
-        },
-        TreeFile {
-            path: "work.yaml",
-            bytes: work_stage,
-            executable: false,
-        },
-    ]
-}
+    executable: false,
+};
 
-const NESTED_RELEASE_WAIT_TREE: &[TreeFile] = &nested_release_wait_tree(
-    br#"schemaVersion: 1
+const NESTED_RELEASE_WAIT_WORK: TreeFile = TreeFile {
+    path: "work.yaml",
+    bytes: br#"schemaVersion: 1
 environmentPassthrough: [SHARED]
 steps:
   build:
@@ -4185,19 +4179,65 @@ steps:
     workspace: new
     command: {argv: [sh, -ec, 'echo work >> "$SHARED/calls"; test -f "$SHARED/fixed"']}
 "#,
-);
+    executable: false,
+};
+
+const NESTED_RELEASE_WAIT_TREE: &[TreeFile] = &[
+    NESTED_RELEASE_WAIT_ROOT,
+    NESTED_RELEASE_WAIT_PART,
+    NESTED_RELEASE_WAIT_PREPARE,
+    NESTED_RELEASE_WAIT_WORK,
+];
+
+const NESTED_RELEASE_WAIT_FIX_TREE: &[TreeFile] = &[
+    NESTED_RELEASE_WAIT_ROOT,
+    TreeFile {
+        path: "part.yaml",
+        bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+outcomes: [checked, failed]
+steps:
+  prepare:
+    kind: workflow
+    workflow: prepare.yaml
+    on: {succeeded: work, failed: exit.failed}
+  work:
+    kind: workflow
+    workflow: work.yaml
+    on: {succeeded: exit.checked, failed: {wait: repair, runner: release, then: fix}}
+  fix:
+    kind: workflow
+    workflow: fix.yaml
+    on: {succeeded: work, failed: exit.failed}
+"#,
+        executable: false,
+    },
+    NESTED_RELEASE_WAIT_PREPARE,
+    NESTED_RELEASE_WAIT_WORK,
+    TreeFile {
+        path: "fix.yaml",
+        bytes: br#"schemaVersion: 1
+environmentPassthrough: [SHARED]
+steps:
+  fix:
+    kind: cmd
+    workspace: new
+    command: {argv: [sh, -ec, 'touch "$SHARED/fixed"; echo fix >> "$SHARED/calls"']}
+"#,
+        executable: false,
+    },
+];
 
 fn assert_nested_repair_wait(wait: &Value) {
     assert_eq!(wait["kind"], "repair", "{wait}");
     assert_eq!(wait["step"], json!(["outer", "work"]), "{wait}");
 }
 
-async fn retry_nested_release_wait(
+async fn pending_nested_repair_wait(
     manager: &mut AssignmentManager,
     offer: &AssignmentOffer,
-    shared: &Path,
     release: Value,
-) {
+) -> Value {
     wait_for_assignment_reports(manager, &offer.assignment_id, |reports| {
         reported_state(reports, "waiting")
     })
@@ -4207,22 +4247,73 @@ async fn retry_nested_release_wait(
     let wait = reported_waits(&reports, offer).pop().unwrap().0;
     assert_nested_repair_wait(&wait);
     assert_eq!(wait["release"], release);
-    assert_eq!(logged_lines(shared, "calls"), ["prepare", "work"]);
+    wait
+}
 
-    fs::write(shared.join("fixed"), b"").unwrap();
+fn send_nested_repair_retry(
+    manager: &mut AssignmentManager,
+    offer: &AssignmentOffer,
+    wait: &Value,
+) {
     let control = run_control_for(
         offer,
         CONTROL_ID,
         json!({"kind": "retry", "wait": {"kind": "repair", "since": wait["since"]}}),
     );
     manager.handle_run_control(control).unwrap();
-    let reports = finished_assignment_reports(manager, &offer.assignment_id).await;
+}
+
+fn assert_nested_repair_landed(reports: &[ExecutionReport]) {
     assert_eq!(
-        control_applications(&reports),
+        control_applications(reports),
         [applied(CONTROL_ID, "succeeded")]
     );
-    assert_eq!(terminal_count(&reports), 1, "{reports:#?}");
-    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+    assert_eq!(terminal_count(reports), 1, "{reports:#?}");
+    assert_eq!(chosen_outcome(reports).as_deref(), Some("landed"));
+}
+
+async fn retry_nested_release_wait(
+    manager: &mut AssignmentManager,
+    offer: &AssignmentOffer,
+    shared: &Path,
+    release: Value,
+) {
+    let wait = pending_nested_repair_wait(manager, offer, release).await;
+    assert_eq!(logged_lines(shared, "calls"), ["prepare", "work"]);
+    fs::write(shared.join("fixed"), b"").unwrap();
+    send_nested_repair_retry(manager, offer, &wait);
+    let reports = finished_assignment_reports(manager, &offer.assignment_id).await;
+    assert_nested_repair_landed(&reports);
+}
+
+async fn retry_nested_release_wait_into_fix(
+    manager: &mut AssignmentManager,
+    offer: &AssignmentOffer,
+    shared: &Path,
+) {
+    let wait = pending_nested_repair_wait(manager, offer, json!({"permitted": true})).await;
+    assert_eq!(logged_lines(shared, "calls"), ["prepare", "work"]);
+    send_nested_repair_retry(manager, offer, &wait);
+    let waiting_reports = |reports: &[ExecutionReport]| {
+        reports
+            .iter()
+            .filter(|report| {
+                matches!(
+                    report,
+                    ExecutionReport::TreeProgress { progress, steps_only: false, .. }
+                        if progress.wait.is_some()
+                )
+            })
+            .count()
+    };
+    wait_for_assignment_reports(manager, &offer.assignment_id, |reports| {
+        terminal_count(reports) > 0 || waiting_reports(reports) > 1
+    })
+    .await;
+    let reports = queued_assignment_reports(manager, &offer.assignment_id);
+    assert_eq!(waiting_reports(&reports), 1, "{reports:#?}");
+    let reports = finished_assignment_reports(manager, &offer.assignment_id).await;
+    assert_nested_repair_landed(&reports);
 }
 
 // SC-CLOUDWAIT-7
@@ -4282,15 +4373,22 @@ async fn release_wait_in_a_nested_workflow_restarts_the_nested_workflow_on_hando
 // SC-CLOUDWAIT-7
 #[tokio::test]
 async fn release_wait_in_a_nested_workflow_holds_if_a_stage_needs_the_execution_root() {
-    const NEEDS_ROOT: &[TreeFile] = &nested_release_wait_tree(
-        br#"schemaVersion: 1
+    const NEEDS_ROOT: &[TreeFile] = &[
+        NESTED_RELEASE_WAIT_ROOT,
+        NESTED_RELEASE_WAIT_PART,
+        NESTED_RELEASE_WAIT_PREPARE,
+        TreeFile {
+            path: "work.yaml",
+            bytes: br#"schemaVersion: 1
 environmentPassthrough: [SHARED]
 steps:
   build:
     kind: cmd
     command: {argv: [sh, -ec, 'echo work >> "$SHARED/calls"; test -f "$SHARED/fixed"']}
 "#,
-    );
+            executable: false,
+        },
+    ];
     let gateway = RecordGateway::new(RecordFault::None);
     let shared = tempfile::tempdir().unwrap();
     let mut fixture = handover_fixture(&gateway, NEEDS_ROOT, shared.path());
@@ -4309,6 +4407,111 @@ steps:
     assert_eq!(
         logged_lines(shared.path(), "calls"),
         ["prepare", "work", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-8
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_continues_at_fix_on_the_retaining_boot() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut fixture = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    let (workspace, wait) = released_workspace(&mut fixture).await;
+    assert_nested_repair_wait(&wait);
+
+    let next = continuation_of(&fixture.offer, BOOT, &workspace, &[], "cn1");
+    assert_eq!(start_other(&mut fixture, &next, '6').await, None);
+    retry_nested_release_wait_into_fix(&mut fixture.manager, &next, shared.path()).await;
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        ["prepare", "work", "fix", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-8
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_continues_at_fix_after_replaying_the_wait_on_handover() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut prior = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    let (_, wait) = released_workspace(&mut prior).await;
+    assert_nested_repair_wait(&wait);
+
+    let mut replacement = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    replacement.offer = handover_of(&prior.offer, &[], "hn2");
+    drop(prior);
+    start_record_tree(&mut replacement).await;
+    retry_nested_release_wait_into_fix(&mut replacement.manager, &replacement.offer, shared.path())
+        .await;
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        ["prepare", "work", "prepare", "work", "fix", "work"]
+    );
+}
+
+// SC-CLOUDWAIT-9
+#[tokio::test]
+async fn release_wait_in_a_nested_workflow_uses_the_recorded_retry_on_a_second_handover() {
+    let gateway = RecordGateway::new(RecordFault::None);
+    let shared = tempfile::tempdir().unwrap();
+    let mut prior = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    let (_, wait) = released_workspace(&mut prior).await;
+    assert_nested_repair_wait(&wait);
+
+    let mut replacement = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    replacement.offer = handover_of(&prior.offer, &[], "hn2");
+    drop(prior);
+    start_record_tree(&mut replacement).await;
+    let wait = pending_nested_repair_wait(
+        &mut replacement.manager,
+        &replacement.offer,
+        json!({"permitted": true}),
+    )
+    .await;
+    let hold = shared.path().join("hold");
+    fs::write(&hold, b"").unwrap();
+    send_nested_repair_retry(&mut replacement.manager, &replacement.offer, &wait);
+    wait_for_record_condition(|| {
+        logged_lines(shared.path(), "calls") == ["prepare", "work", "prepare"]
+            && gateway
+                .state
+                .lock()
+                .unwrap()
+                .kept_json("run.json")
+                .is_some_and(|record| record["attempts"] == 2)
+    })
+    .await;
+    lose_recovery_runner(&mut replacement).await;
+    fs::remove_file(hold).unwrap();
+
+    let mut final_runner = handover_fixture(&gateway, NESTED_RELEASE_WAIT_FIX_TREE, shared.path());
+    final_runner.offer = handover_of(&replacement.offer, &[], "hn3");
+    drop(replacement);
+    start_record_tree(&mut final_runner).await;
+    wait_for_assignment_reports(
+        &mut final_runner.manager,
+        &final_runner.offer.assignment_id,
+        |reports| {
+            terminal_count(reports) > 0 || !reported_waits(reports, &final_runner.offer).is_empty()
+        },
+    )
+    .await;
+    let reports =
+        queued_assignment_reports(&mut final_runner.manager, &final_runner.offer.assignment_id);
+    assert!(
+        reported_waits(&reports, &final_runner.offer).is_empty(),
+        "{reports:#?}"
+    );
+    let reports =
+        finished_assignment_reports(&mut final_runner.manager, &final_runner.offer.assignment_id)
+            .await;
+    assert_eq!(terminal_count(&reports), 1, "{reports:#?}");
+    assert_eq!(chosen_outcome(&reports).as_deref(), Some("landed"));
+    assert_eq!(
+        logged_lines(shared.path(), "calls"),
+        [
+            "prepare", "work", "prepare", "prepare", "work", "fix", "work"
+        ]
     );
 }
 

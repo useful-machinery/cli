@@ -975,6 +975,7 @@ steps:
             step: vec![serde_json::Value::String("review".to_owned())],
             then: "merge".to_owned(),
             on_hand_back: None,
+            nested_then: None,
             rule: super::super::wait::derive_rule(super::super::document::WaitKind::Approval, true)
                 .unwrap(),
             payload: serde_json::Map::new(),

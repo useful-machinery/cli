@@ -2625,7 +2625,7 @@ fn a_host_wait_waits_at_its_own_step_under_a_limit_with_an_else() {
 }
 
 #[test]
-fn a_nested_host_wait_admits_an_else_wait_only_at_its_own_step() {
+fn a_nested_host_wait_admits_an_else_wait_continuing_at_another_step() {
     let nesting = |source: &str| {
         let workflow = validate_with_children(source, &host_wait_summaries())
             .unwrap_or_else(|failure| panic!("{failure:?} for:\n{source}"));
@@ -2638,21 +2638,8 @@ fn a_nested_host_wait_admits_an_else_wait_only_at_its_own_step() {
     let other_step = nesting(&host_wait_edge(
         "        wait: host\n        then: build\n        limit: 3\n        else:\n          wait: repair\n          then: review\n",
     ));
-    assert_eq!(
-        other_step,
-        ChildNesting::Unsupported(UnsupportedNestedShape {
-            step: "build".to_owned(),
-            shape: NestedShape::WaitThen,
-        })
-    );
-    assert_edge_failure(
-        EDGE_WORKFLOW,
-        &with_design_nesting(other_step),
-        ValidationFailureKind::NestedWorkflowUnsupported,
-        ValidationLocation::StepWorkflow {
-            step: "design".to_owned(),
-        },
-    );
+    assert_eq!(other_step, ChildNesting::Nested);
+    validate_with_children(EDGE_WORKFLOW, &with_design_nesting(other_step)).unwrap();
 }
 
 const EXTERNAL_WAIT_WORKFLOW: &str = r#"schemaVersion: 1
@@ -3222,14 +3209,14 @@ fn a_nested_workflows_first_refused_shape_is_its_summary() {
                 "planned: build",
                 "planned:\n        wait: answer\n        then: build",
             ),
-            refused("design", NestedShape::WaitThen),
+            ChildNesting::Nested,
         ),
         (
             edge_workflow(
                 "blocked: exit.failed",
                 "blocked:\n        then: build\n        limit: 2\n        else:\n          wait: repair\n          then: build",
             ),
-            refused("design", NestedShape::WaitThen),
+            ChildNesting::Nested,
         ),
         (
             edge_workflow(

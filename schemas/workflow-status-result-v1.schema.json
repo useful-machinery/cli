@@ -3167,6 +3167,12 @@
           "type": "string",
           "minLength": 1
         },
+        "nestedThen": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "The nested step a carried wait continues at when it differs from the waiting step."
+        },
         "rule": {
           "type": "object",
           "additionalProperties": false,

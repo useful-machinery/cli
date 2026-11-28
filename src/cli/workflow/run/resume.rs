@@ -918,7 +918,7 @@ pub(super) fn still_continues(
 }
 
 /// Whether the run, under the continuation's lock, still waits on the wait `wait` names.
-fn still_waits(pending: &PendingLocalContinuation, wait: &str) -> bool {
+pub(super) fn still_waits(pending: &PendingLocalContinuation, wait: &str) -> bool {
     matches!(pending.wait(), Ok(Some(current)) if current.id() == wait)
 }
 

@@ -127,6 +127,8 @@ pub struct WaitRecord {
     pub then: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_hand_back: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested_then: Option<String>,
     pub rule: WaitRule,
     pub payload: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -540,6 +542,7 @@ impl WaitRecord {
                 .collect(),
             then: wait.then.clone(),
             on_hand_back: wait.on_hand_back.clone(),
+            nested_then: None,
             rule,
             payload,
             release: None,
@@ -552,8 +555,9 @@ impl WaitRecord {
     /// nested wait's `kind`, `since` and `payload`, its `child` replaced by `child`, the
     /// nested run's child relative to the root's run directory; `step` the path `prefix`
     /// from the root to the nested run, `[<step>]` or `[<step>, {"item": n}]`, followed by
-    /// the nested wait's `step`; `then` the root's step and the rule the kind derives for
-    /// the root run, whose `run.id` and `wait.id` the controls recorded on the root
+    /// the nested wait's `step`; `then` the root's step, `nestedThen` the nested continuation
+    /// when it differs from the waiting step, and the rule the kind derives for the root run,
+    /// whose `run.id` and `wait.id` the controls recorded on the root
     /// correlate with; a `stop` correlates its lift by the stop's `payload.before` in place
     /// of `then`. A kind that derives no rule, or a record that is not valid, is
     /// `WaitRecordInvalid`.
@@ -578,6 +582,9 @@ impl WaitRecord {
             step: prefix.iter().chain(&nested.step).cloned().collect(),
             then: then.to_owned(),
             on_hand_back: None,
+            nested_then: (nested.step.first().and_then(Value::as_str)
+                != Some(nested.then.as_str()))
+            .then(|| nested.then.clone()),
             rule,
             payload,
             release: None,
@@ -590,6 +597,13 @@ impl WaitRecord {
     /// step's own path, `[<step>]` or `[<step>, {"item": n}]`, with the nested step.
     pub fn is_carried(&self) -> bool {
         self.step.len() >= 2 && self.step.last().is_some_and(Value::is_string)
+    }
+
+    /// The continuation step of a carried wait within the nested workflow.
+    pub(crate) fn nested_continuation_step(&self) -> Option<&str> {
+        self.nested_then
+            .as_deref()
+            .or_else(|| self.step.last().and_then(Value::as_str))
     }
 
     /// The wait's identity `<kind>@<since>`, which a control names in its `wait`.
@@ -621,8 +635,8 @@ impl WaitRecord {
 
     /// The facts this crate writes and relies on: a canonical `since`, a step position that
     /// starts with a step identifier and holds identifiers and fan-out elements of at least
-    /// 1, step identifiers for `then` and `onHandBack`, and a rule with a source, distinct
-    /// event names and a `where`.
+    /// 1, step identifiers for `then` and `onHandBack`, a distinct `nestedThen` identifier
+    /// only on a carried wait, and a rule with a source, distinct event names and a `where`.
     pub fn is_valid(&self) -> bool {
         parse_canonical_utc_timestamp(&self.since).is_some()
             && self
@@ -633,6 +647,11 @@ impl WaitRecord {
             && self.step.iter().all(super::run_record::is_position_element)
             && is_identifier(&self.then)
             && self.on_hand_back.as_deref().is_none_or(is_identifier)
+            && self.nested_then.as_deref().is_none_or(|step| {
+                self.is_carried()
+                    && is_identifier(step)
+                    && self.step.last().and_then(Value::as_str) != Some(step)
+            })
             && self.release.as_ref().is_none_or(WaitRelease::is_valid)
             && !self.rule.source.is_empty()
             && !self.rule.event.is_empty()

@@ -229,7 +229,7 @@ pub(crate) enum NestedShape {
     ForEach,
     /// A wait of the step's edges has a kind other than `answer` or `repair`.
     WaitKind,
-    /// A wait of the step's edges continues at a target other than the step.
+    /// A wait of the step's edges continues at a target other than a nested workflow step.
     WaitThen,
 }
 
@@ -289,9 +289,9 @@ impl ChildWorkflowSummary {
     }
 }
 
-/// A child with `workflow` steps is a nested workflow; its first step in source order that
-/// declares `forEach`, or whose edges reach a wait that is not an `answer`, `repair` or
-/// `host` wait continuing at the step, is the shape its parent refuses.
+/// A child with `workflow` steps is a nested workflow. Its parent refuses the first step
+/// in source order that declares `forEach` or whose edges reach an unsupported wait.
+/// Nested waits support `answer`, `repair` or `host` with a step as `then`.
 fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
     let mut workflow_steps = child
         .source_order
@@ -309,9 +309,7 @@ fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
             let shape = if step.for_each.is_some() {
                 Some(NestedShape::ForEach)
             } else {
-                step.edges
-                    .values()
-                    .find_map(|target| refused_wait(name, target))
+                step.edges.values().find_map(refused_wait)
             };
             shape.map(|shape| UnsupportedNestedShape {
                 step: name.clone(),
@@ -321,18 +319,18 @@ fn nesting_of(child: &ValidatedWorkflow) -> ChildNesting {
         .map_or(ChildNesting::Nested, ChildNesting::Unsupported)
 }
 
-/// The refused shape of a wait an edge of `step` reaches, directly or as a limited edge's or
-/// a host wait's `else`, which counts as entered by `step`. A host wait itself waits at
-/// `step`, which validation requires.
-fn refused_wait(step: &str, target: &ValidatedEdgeTarget) -> Option<NestedShape> {
+/// The refused shape of a wait an edge reaches, directly or as a limited edge's or a host
+/// wait's `else`. Validation has already checked that step targets exist and that a host
+/// wait's `then` is the step whose edge enters the wait.
+fn refused_wait(target: &ValidatedEdgeTarget) -> Option<NestedShape> {
     match target {
         ValidatedEdgeTarget::Step(_) | ValidatedEdgeTarget::Exit(_) => None,
         ValidatedEdgeTarget::Limited { else_, .. }
-        | ValidatedEdgeTarget::HostWait { else_, .. } => refused_wait(step, else_),
+        | ValidatedEdgeTarget::HostWait { else_, .. } => refused_wait(else_),
         ValidatedEdgeTarget::Wait { kind, then, .. } => {
             if !matches!(kind, WaitKind::Answer | WaitKind::Repair) {
                 Some(NestedShape::WaitKind)
-            } else if !matches!(then.as_ref(), ValidatedEdgeTarget::Step(then) if then == step) {
+            } else if !matches!(then.as_ref(), ValidatedEdgeTarget::Step(_)) {
                 Some(NestedShape::WaitThen)
             } else {
                 None

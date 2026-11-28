@@ -188,10 +188,19 @@ expect_success
 write_public "Use ${code_delimiter}one?${code_delimiter} and ${code_delimiter}two!${code_delimiter} safely."
 expect_success
 
+# An underscore between two ASCII letters or digits is not Markdown emphasis.
+write_public "Read API_TOKEN and API_TOKEN_FILE and v1_2 safely."
+expect_success
+
 for markdown_content in \
   'Reject # markup.' \
   'Reject * markup.' \
   'Reject _ markup.' \
+  'Reject _emphasis_ markup.' \
+  'Reject __strong__ markup.' \
+  'Reject x_ y markup.' \
+  'Reject x _y markup.' \
+  'Reject x__y markup.' \
   'Reject [ markup.' \
   'Reject ] markup.' \
   'Reject < markup.' \
@@ -239,5 +248,19 @@ write_public 'This has two. Really.'
 expect_failure "exactly one sentence terminator"
 write_public 'This terminator. is not final'
 expect_failure "terminator must be the final content byte"
+
+# A period between two ASCII letters or digits ends no sentence.
+write_public 'Read requires.integrations in a.b and v1.2 safely.'
+expect_success
+for terminator_content in \
+  'Reject a. b twice.' \
+  'Reject a .b twice.' \
+  'Reject a..b twice.' \
+  'Fix one thing. Fix another.'; do
+  write_public "$terminator_content"
+  expect_failure "exactly one sentence terminator"
+done
+write_public 'Fix requires.integrations'
+expect_failure "exactly one sentence terminator"
 
 printf 'CLI change fragment checks passed.\n'

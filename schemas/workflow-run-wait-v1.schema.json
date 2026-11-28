@@ -23,6 +23,10 @@
       "$ref": "#/$defs/Identifier",
       "description": "For an approval, the step a hand-back continues at."
     },
+    "nestedThen": {
+      "$ref": "#/$defs/Identifier",
+      "description": "The nested step a carried wait continues at when it differs from the waiting step."
+    },
     "rule": { "$ref": "#/$defs/WaitRule" },
     "release": {
       "type": "object",

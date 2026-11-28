@@ -71,8 +71,8 @@ use super::profile_replacement::{
     AgentProfileReplacementDocument, MAXIMUM_AGENT_PROFILE_REPLACEMENT_BYTES,
 };
 use super::publication::{
-    CancellationReasonV1, FailureDiagnosticV1, FinalizationTriggerV1, RunResultInvariant,
-    cancellation_reason, finalization_trigger,
+    CancellationReasonV1, ContinuationReasonV1, FailureDiagnosticV1, FinalizationTriggerV1,
+    RunResultInvariant, cancellation_reason, finalization_trigger,
 };
 use super::resolution::{ResolvedWorkflow, resolve_retained};
 use super::run_record::{RunState, WorkflowRunRecord};
@@ -2115,7 +2115,7 @@ impl PendingLocalContinuation {
     /// revision's, with `inputs` the run's inputs projected onto it: in this order, a record
     /// `position` naming no `workflow` step, or an element of a step that is not `forEach`
     /// (`position_unresolved`); the root wait record's `then`, or its `onHandBack`, naming no
-    /// step, or the nested step of a wait carried from a nested run that is not a `workflow`
+    /// step, or the waiting or continuation step of a carried wait that is not a `workflow`
     /// step of the nested workflow its root step names (`wait_target_unresolved`); the
     /// retained outcome of a `workflow` step the continuation from either target would
     /// inherit that is not a key of its `on` edges (`outcome_unrouted`); and a fan-out wait's
@@ -2180,33 +2180,37 @@ impl PendingLocalContinuation {
                 );
             }
         }
-        // A wait the root carries from a nested run also continues at its nested step, which
-        // must be a `workflow` step of the nested workflow the waiting step names in this
-        // revision's tree.
+        // The waiting and continuation steps of a carried wait must both be workflow steps
+        // of the nested workflow the root step names in this revision.
         if wait.is_carried()
-            && let (Some(step), Some(nested)) = (
+            && let (Some(step), Some(waiting)) = (
                 wait.step.first().and_then(Value::as_str),
                 wait.step.last().and_then(Value::as_str),
             )
             && let Some(defined) = workflow_step(step)
         {
             let root = &workflow.source.source_root;
-            let defines =
-                super::resolution::resolve_workflow_file(root, &root.join(&defined.workflow))
-                    .is_ok_and(|child| {
-                        matches!(
-                            child.definition.steps.get(nested),
-                            Some(super::validated::ValidatedStep::Workflow(_))
-                        )
-                    });
-            if !defines {
-                miss(
-                    "wait_target_unresolved",
-                    nested,
-                    format!(
-                        "The wait continues at nested step `{nested}` of step `{step}`, which the current revision does not define."
-                    ),
-                );
+            let child =
+                super::resolution::resolve_workflow_file(root, &root.join(&defined.workflow));
+            let continuation = wait
+                .nested_continuation_step()
+                .filter(|target| *target != waiting);
+            for target in std::iter::once(waiting).chain(continuation) {
+                let defines = child.as_ref().is_ok_and(|child| {
+                    matches!(
+                        child.definition.steps.get(target),
+                        Some(super::validated::ValidatedStep::Workflow(_))
+                    )
+                });
+                if !defines {
+                    miss(
+                        "wait_target_unresolved",
+                        target,
+                        format!(
+                            "The wait continues at nested step `{target}` of step `{step}`, which the current revision does not define."
+                        ),
+                    );
+                }
             }
         }
         let outcomes = self.inherited_child_outcomes()?;
@@ -7486,7 +7490,18 @@ pub fn attempt_controls(
 ) -> Result<AttemptControls, LocalRunDirectoryError> {
     let (normalized, root) = open_run_root(requested)?;
     let mut resolved = AttemptControls::default();
-    let waits = resolved_attempt_waits(&normalized, &root, attempt_number, reason)?;
+    let Some(record) = read_optional_run_record(&root)? else {
+        return Ok(resolved);
+    };
+    let state = read_optional_state(&root)?;
+    let waits = resolved_attempt_waits(
+        &normalized,
+        &record,
+        &root,
+        state.as_ref(),
+        attempt_number,
+        reason,
+    )?;
     for (_, wait, resolution) in &waits {
         resolved.record_answers(&wait.then, wait, resolution.as_ref());
     }
@@ -7494,16 +7509,33 @@ pub fn attempt_controls(
     Ok(resolved)
 }
 
+/// Whether the latest attempt of `nested` entered a wait that replays a resolution from
+/// the running `root` at `prefix`, and the reason its next attempt would record.
+pub fn replayed_nested_wait(
+    root: &Path,
+    nested: &Path,
+    prefix: &[Value],
+) -> Result<Option<ContinuationReasonV1>, LocalRunDirectoryError> {
+    let (_, nested_handle) = open_run_root(nested)?;
+    let Some(nested_record) = read_optional_run_record(&nested_handle)? else {
+        return Ok(None);
+    };
+    let carried = read_carried_attempt_waits(root, None)?;
+    let (_, replay) = pair_nested_waits(&carried, &nested_handle, nested_record.attempts, prefix)?;
+    Ok(replay)
+}
+
 impl AttemptControls {
     /// The control values attempt `attempt_number` of the nested run at `nested` starts with.
     /// Controls are recorded on the root at `root` alone, the nested run being at the root's
     /// path `prefix` (`[<step>]` or `[<step>, {"item": n}]`): the wait copies of the nested
-    /// run's earlier attempts are matched, by `kind@since` and the full path, with the root's
-    /// wait copies that carried them and read against the control or the host condition that
-    /// resolved the root's. `answers` come from every root wait copy at `prefix` followed by
-    /// one nested step, keyed by that step, so a fresh nested run at the element, as a
-    /// successor's carry starts, receives them too. `reason` is the continuation reason of the
-    /// root's attempt after its last recorded one, read for a carried copy that attempt
+    /// run's earlier attempts are paired with the root's wait copies by identity and full path
+    /// or by replay. A carried wait that continues at its own step supplies `answers` at
+    /// that step, even in a fresh nested run. A wait that continues at another step
+    /// supplies answers there only after the nested run pairs with the carried wait. The
+    /// nested run's own paired waits are read last, in its attempt order, so the latest per
+    /// step is the latest the run itself was given. `reason` is the continuation reason of
+    /// the root's attempt after its last recorded one, read for a carried copy that attempt
     /// continues while the root's `state.json` does not record it yet, as `attempt_controls`
     /// reads it.
     pub fn nested(
@@ -7513,36 +7545,26 @@ impl AttemptControls {
         prefix: &[Value],
         reason: Option<super::publication::ContinuationReasonV1>,
     ) -> Result<Self, LocalRunDirectoryError> {
-        let (root_normalized, root_handle) = open_run_root(root)?;
-        let root_attempts = read_optional_run_record(&root_handle)?
-            .map_or(0, |record| record.attempts)
-            .saturating_add(1);
-        let carried =
-            resolved_attempt_waits(&root_normalized, &root_handle, root_attempts, reason)?;
-        let nested_step = |wait: &WaitRecord| match wait.step.strip_prefix(prefix) {
-            Some([Value::String(step)]) => Some(step.clone()),
-            _ => None,
-        };
+        let carried = read_carried_attempt_waits(root, reason)?;
         let mut resolved = Self::default();
-        for (_, wait, resolution) in &carried {
-            if let Some(step) = nested_step(wait) {
-                resolved.record_answers(&step, wait, resolution.as_ref());
+        for (_, wait, resolution) in &carried.waits {
+            if wait.nested_then.is_none()
+                && let Some([Value::String(step)]) = wait.step.strip_prefix(prefix)
+            {
+                resolved.record_answers(step, wait, resolution.as_ref());
             }
         }
         let (_, nested_handle) = open_run_root(nested)?;
-        let mut waits = Vec::new();
-        for number in 1..attempt_number {
-            let Some(wait) = read_attempt_wait_record(&nested_handle, number)? else {
-                continue;
-            };
-            let resolution = carried
-                .iter()
-                .find(|(_, carrier, _)| {
-                    carrier.id() == wait.id()
-                        && carrier.step.strip_prefix(prefix) == Some(wait.step.as_slice())
-                })
-                .and_then(|(_, _, resolution)| resolution.clone());
-            waits.push((number, wait, resolution));
+        let (waits, _) = pair_nested_waits(
+            &carried,
+            &nested_handle,
+            attempt_number.saturating_sub(1),
+            prefix,
+        )?;
+        // In the nested run's attempt order, so a step that received another step's answers
+        // and then asked at its own step keeps the later answers.
+        for (_, wait, resolution) in &waits {
+            resolved.record_answers(&wait.then, wait, resolution.as_ref());
         }
         resolved.continue_latest(&waits, attempt_number);
         Ok(resolved)
@@ -7634,6 +7656,140 @@ impl WaitResolution {
 /// An earlier attempt's number, its wait copy and what resolved the wait, if anything.
 type ResolvedAttemptWait = (u64, WaitRecord, Option<WaitResolution>);
 
+#[derive(Default)]
+struct CarriedAttemptWaits {
+    root_attempt: u64,
+    waits: Vec<ResolvedAttemptWait>,
+    skippable_attempts: BTreeSet<u64>,
+}
+
+/// Reads all the root's wait copies for exact pairing and answer history. While a nested
+/// run executes, the recorded attempt count includes the live root attempt. Earlier failed,
+/// cancelled and interrupted attempts can be skipped during replay when they have no copy.
+fn read_carried_attempt_waits(
+    root: &Path,
+    reason: Option<ContinuationReasonV1>,
+) -> Result<CarriedAttemptWaits, LocalRunDirectoryError> {
+    let (normalized, root) = open_run_root(root)?;
+    let Some(record) = read_optional_run_record(&root)? else {
+        return Ok(CarriedAttemptWaits::default());
+    };
+    let root_attempt = record.attempts;
+    let state = read_optional_state(&root)?;
+    let waits = resolved_attempt_waits(
+        &normalized,
+        &record,
+        &root,
+        state.as_ref(),
+        root_attempt.saturating_add(1),
+        reason,
+    )?;
+    let skippable_attempts = state
+        .iter()
+        .flat_map(|state| &state.attempts)
+        .filter_map(|attempt| {
+            matches!(
+                attempt.state,
+                AttemptStateV1::Interrupted
+                    | AttemptStateV1::Cancelled
+                    | AttemptStateV1::WorkflowFailed
+            )
+            .then_some(attempt.attempt_number)
+        })
+        .collect();
+    Ok(CarriedAttemptWaits {
+        root_attempt,
+        waits,
+        skippable_attempts,
+    })
+}
+
+/// Pairs each nested wait with the root copy that carried or replayed it. Replays can only
+/// read the chain of resolved waits immediately before the running root attempt, passing
+/// over failed, cancelled or interrupted root attempts without a wait copy. A carrier can
+/// replay once per nested run. A prior pairing by identity also uses the carrier. Reports a
+/// replay reason only if the requested latest attempt entered a wait and paired by replay.
+fn pair_nested_waits(
+    carried: &CarriedAttemptWaits,
+    nested: &OwnedFd,
+    through_attempt: u64,
+    prefix: &[Value],
+) -> Result<(Vec<ResolvedAttemptWait>, Option<ContinuationReasonV1>), LocalRunDirectoryError> {
+    let mut copies = carried
+        .waits
+        .iter()
+        .rev()
+        .skip_while(|(number, _, _)| *number >= carried.root_attempt)
+        .peekable();
+    let mut chain = Vec::new();
+    for number in (1..carried.root_attempt).rev() {
+        if let Some(copy) = copies.next_if(|(attempt, _, _)| *attempt == number) {
+            if copy.2.is_none() {
+                break;
+            }
+            chain.push(copy);
+        } else if !carried.skippable_attempts.contains(&number) {
+            break;
+        }
+    }
+
+    let mut paired = BTreeSet::new();
+    let mut waits = Vec::new();
+    let mut replay = None;
+    for number in 1..=through_attempt {
+        let Some(wait) = read_attempt_wait_record(nested, number)? else {
+            continue;
+        };
+        let same_step = |carrier: &WaitRecord| {
+            carrier.kind == wait.kind
+                && carrier.step.strip_prefix(prefix) == Some(wait.step.as_slice())
+        };
+        let exact = carried
+            .waits
+            .iter()
+            .find(|(_, carrier, _)| same_step(carrier) && carrier.since == wait.since);
+        let resolution = if let Some((_, carrier, resolution)) = exact {
+            paired.insert(carrier.id());
+            resolution.clone()
+        } else if matches!(wait.step.as_slice(), [Value::String(_)])
+            && let Some((carrier, resolution, reason)) =
+                chain.iter().find_map(|(_, carrier, resolution)| {
+                    if !same_step(carrier)
+                        || carrier.nested_then.as_deref() != Some(wait.then.as_str())
+                    {
+                        return None;
+                    }
+                    let Some(resolution @ WaitResolution::Control(control)) = resolution else {
+                        return None;
+                    };
+                    let reason = match (wait.kind, control.event.as_str()) {
+                        (super::wait::WaitKind::Answer, super::wait::CONTROL_ANSWER)
+                            if super::wait::wait_questions(&carrier.payload)
+                                == super::wait::wait_questions(&wait.payload) =>
+                        {
+                            ContinuationReasonV1::Resume
+                        }
+                        (super::wait::WaitKind::Repair, super::wait::CONTROL_RETRY) => {
+                            ContinuationReasonV1::Retry
+                        }
+                        _ => return None,
+                    };
+                    Some((carrier, resolution, reason))
+                })
+            && paired.insert(carrier.id())
+        {
+            if number == through_attempt {
+                replay = Some(reason);
+            }
+            Some(resolution.clone())
+        } else {
+            None
+        };
+        waits.push((number, wait, resolution));
+    }
+    Ok((waits, replay))
+}
+
 /// The step a wait `resolution` resolved continues at: its `onHandBack` for a
 /// `control.hand_back`, else its `then`.
 fn continued_step<'a>(wait: &'a WaitRecord, resolution: &WaitResolution) -> &'a str {
@@ -7708,21 +7864,19 @@ fn continued_wait_fields(waits: &[ResolvedAttemptWait]) -> BTreeMap<String, Stri
 /// reason `host` in `state.json` or, not recorded yet, is attempt `attempt_number` with
 /// `reason` `host`. An imported attempt's copy is resolved by a control naming any run of the
 /// lineage: the run it was recorded under, copied with it, a successor that carried the wait
-/// and recorded the control, or this run. A run without a record has none.
+/// and recorded the control, or this run.
 fn resolved_attempt_waits(
     normalized: &Path,
+    record: &WorkflowRunRecord,
     root: &OwnedFd,
+    state: Option<&LocalRunStateV1>,
     attempt_number: u64,
     reason: Option<super::publication::ContinuationReasonV1>,
 ) -> Result<Vec<ResolvedAttemptWait>, LocalRunDirectoryError> {
-    let Some(record) = read_optional_run_record(root)? else {
-        return Ok(Vec::new());
-    };
     let controls = super::wait::read_controls(normalized)?;
     let deliveries = super::wait::read_run_events(normalized)?;
-    let state = read_optional_state(root)?;
     let recorded = |number: u64| {
-        state.as_ref().and_then(|state| {
+        state.and_then(|state| {
             state
                 .attempts
                 .iter()

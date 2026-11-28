@@ -538,9 +538,9 @@ fn unsupported_nested_shape_remedy(nested: &UnsupportedNestedShape) -> String {
         NestedShape::WaitKind => format!(
             "Make each wait on step {step} of the nested workflow an answer or repair wait."
         ),
-        NestedShape::WaitThen => {
-            format!("Make each wait on step {step} of the nested workflow continue at {step}.")
-        }
+        NestedShape::WaitThen => format!(
+            "Make each wait on step {step} of the nested workflow continue at a step of that workflow."
+        ),
     }
 }
 

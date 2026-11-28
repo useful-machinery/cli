@@ -1015,7 +1015,7 @@ fn process_environment(pid: u32) -> Vec<u8> {
     if cfg!(target_os = "linux") {
         return fs::read(format!("/proc/{pid}/environ")).unwrap();
     }
-    let output = Command::new("/bin/ps")
+    let output = Command::new("ps")
         .args(["eww", "-o", "command=", "-p", &pid.to_string()])
         .output()
         .unwrap();

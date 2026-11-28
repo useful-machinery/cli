@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+work=$(cd "$work" && pwd -P)
+bash_path=$(command -v bash)
+mkdir "$work/bin"
+
+write_script() {
+  local path=$1
+  {
+    printf '#!%s\n' "$bash_path"
+    cat
+  } >"$path"
+  chmod +x "$path"
+}
+
+write_script "$work/bin/cargo" <<'EOF'
+set -euo pipefail
+subcommand=$1
+shift
+manifest=Cargo.toml
+target_dir=
+while (($#)); do
+  case $1 in
+    --manifest-path) manifest=$2; shift ;;
+    --target-dir) target_dir=$2; shift ;;
+    --) break ;;
+  esac
+  shift
+done
+
+target_dir=${target_dir:-${CARGO_TARGET_DIR:-$(dirname "$manifest")/target}}
+if [[ $subcommand != fmt ]]; then
+  mkdir -p "$target_dir"
+  target_dir=$(cd "$target_dir" && pwd -P)
+fi
+printf '%s\t%s\t%s\n' "$subcommand" "$manifest" "$target_dir" >>"$SUITE_TEST_CARGO_LOG"
+if [[ $subcommand == build ]]; then
+  mkdir -p "$target_dir/debug"
+  printf '#!%s\nexit 0\n' "$BASH" >"$target_dir/debug/useful"
+  chmod +x "$target_dir/debug/useful"
+fi
+EOF
+
+write_script "$work/bin/rustc" <<'EOF'
+printf 'host: fixture-unsupported\n'
+EOF
+
+make_tree() {
+  local tree=$1 script
+  mkdir -p "$tree/scripts" "$tree/tests"
+  touch "$tree/Cargo.toml" "$tree/tests/Cargo.toml"
+  for script in "$script_dir/"*; do
+    printf '#!%s\nexit 0\n' "$bash_path" >"$tree/scripts/${script##*/}"
+  done
+  cp "$script_dir/check-suite" "$script_dir/test-e2e-rust" "$script_dir/test-e2e" "$tree/scripts/"
+  chmod +x "$tree/scripts/"*
+  write_script "$tree/scripts/check-lint-policy" <<'EOF'
+set -euo pipefail
+if [[ ${SUITE_TEST_LEAK_TARGET:-0} == 1 ]]; then
+  mkdir tests/target
+fi
+EOF
+}
+
+run_suite() {
+  local name=$1
+  shift
+  env -u CARGO_TARGET_DIR "PATH=$work/bin:$PATH" \
+    "SUITE_TEST_CARGO_LOG=$work/$name.cargo" SUITE_TEST_LEAK_TARGET=0 \
+    "$@" "$work/$name/scripts/check-suite" >"$work/$name.stdout" 2>"$work/$name.stderr"
+}
+
+expect_pass() {
+  local name=$1
+  if run_suite "$@"; then
+    return
+  else
+    local status=$?
+    cat "$work/$name.stderr" >&2
+    fail "CLI check suite failed in $name case with exit status $status."
+  fi
+}
+
+make_tree "$work/default"
+expect_pass default
+[[ ! -e "$work/default/tests/target" ]] || fail 'CLI check suite created tests/target.'
+grep -Fq -- $'clippy\ttests/Cargo.toml\t' "$work/default.cargo" \
+  || fail 'CLI check suite did not lint the standalone tests manifest.'
+
+make_tree "$work/external"
+external_target=$work/external-target
+expect_pass external "CARGO_TARGET_DIR=$external_target"
+[[ ! -e "$work/external/target" && ! -e "$work/external/tests/target" ]] \
+  || fail 'CLI check suite created a source-tree Cargo target with an external target configured.'
+while IFS=$'\t' read -r subcommand manifest target_dir; do
+  if [[ $subcommand != fmt && $target_dir != "$external_target" && $target_dir != "$external_target/"* ]]; then
+    fail "Cargo $subcommand for $manifest used $target_dir outside $external_target."
+  fi
+done <"$work/external.cargo"
+
+make_tree "$work/leak"
+if run_suite leak SUITE_TEST_LEAK_TARGET=1; then
+  fail 'CLI check suite accepted a leaked tests/target directory.'
+fi
+grep -Fq -- 'tests/target' "$work/leak.stderr" \
+  || fail 'CLI check suite did not diagnose the leaked tests/target directory.'
+
+printf 'CLI check suite isolation tests passed.\n'

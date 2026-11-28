@@ -5,10 +5,15 @@
   cacert,
   cargo-nextest,
   craneLib,
+  darwin,
   git,
   jq,
   lib,
+  # The CLI toolchain with Clippy. Only the passthru lint derivation uses it,
+  # so the package, its dependency artifacts and its tests do not depend on it.
+  lintCraneLib,
   python3,
+  stdenv,
   version,
 }:
 
@@ -104,69 +109,147 @@ let
     nativeBuildInputs = [
       git
       python3
-    ];
+    ]
+    ++ lib.optionals stdenv.hostPlatform.isDarwin [ darwin.ps ];
     env = certificateEnv // {
       USEFUL_BUILD_IDENTITY = testBuildIdentity;
       USEFUL_VERSION = testVersion;
     };
   };
 
-  # Run the workspace crate tests and the architecture test.
-  nextestTests = craneLib.cargoNextest (
+  # The workspace compiled once: every target with every feature, in Cargo's dev
+  # and test profiles, over the test dependency artifacts. `nextestTests` runs
+  # the suite from its artifacts without compiling again. Its `bin/useful` is
+  # the `useful` bin target of this build, so the runner's, execution's and
+  # support's `test-fixtures` features are compiled in; the Gateway's process
+  # checks start it (a variable such as USEFUL_TEST_METADATA_CLEANUP_IDENTITY
+  # changes it only when set). It needs only the compile, never a passing test.
+  testBuild = craneLib.mkCargoDerivation (
     testArgs
     // {
-      cargoExtraArgs = "--locked --workspace --all-targets --all-features";
+      pname = "cli-test-build";
       # Crane defaults CARGO_PROFILE to release. The empty value passes no
-      # --cargo-profile, so nextest builds Cargo's test profile, unoptimized
-      # with debug assertions and overflow checks, as check-suite does.
+      # --cargo-profile, so the tests are built in Cargo's test profile,
+      # unoptimized with debug assertions and overflow checks, as check-suite
+      # does.
       CARGO_PROFILE = "";
       cargoArtifacts = testCargoArtifacts;
-      doInstallCargoArtifacts = false;
       env = testArgs.env // testProfileEnv;
-      # Tests that spawn internal workers need the ordinary example executable.
-      preBuild = ''
-        cargo build --locked --workspace --all-targets --all-features
-        export USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE="$(realpath "''${CARGO_TARGET_DIR:-target}/debug/examples/internal-worker")"
-      '';
-    }
-  );
-
-  e2eCandidate = craneLib.mkCargoDerivation (
-    testArgs
-    // {
-      inherit src;
-      cargoArtifacts = testCargoArtifacts;
-      CARGO_PROFILE = "";
-      env = testArgs.env // testProfileEnv;
-      buildPhaseCargoCommand = "cargo build --locked --workspace --all-features --bins";
+      # A plain build, unlike `cargo nextest run`, also compiles the ordinary
+      # internal-worker example, which tests that spawn internal workers need.
+      buildPhaseCargoCommand = "cargo build --locked --workspace --all-targets --all-features";
+      doInstallCargoArtifacts = true;
       installPhaseCommand = ''
         mkdir -p "$out/bin"
         cp "''${CARGO_TARGET_DIR:-target}/debug/useful" "$out/bin/useful"
       '';
-      doInstallCargoArtifacts = false;
     }
   );
 
+  # Run the workspace crate tests and the architecture test from the test build.
+  nextestTests = craneLib.cargoNextest (
+    testArgs
+    // {
+      cargoExtraArgs = "--locked --workspace --all-targets --all-features";
+      CARGO_PROFILE = "";
+      cargoArtifacts = testBuild;
+      doInstallCargoArtifacts = false;
+      env = testArgs.env // testProfileEnv;
+      # Cargo leaves the workspace compiled: it compares sources with dep-info.
+      preBuild = ''
+        export USEFUL_TEST_INTERNAL_WORKER_EXECUTABLE="$(realpath "''${CARGO_TARGET_DIR:-target}/debug/examples/internal-worker")"
+      '';
+    }
+  );
+  # check-suite's lint gate over the test source and the Clippy configuration,
+  # in Cargo's dev and test profiles as the suite runs it. Clippy checks the
+  # dependencies in its own metadata-only mode, so it starts from the test
+  # dependency artifacts, which already hold the build scripts and procedural
+  # macros of that profile.
+  clippy = lintCraneLib.cargoClippy (
+    testArgs
+    // {
+      src = lib.fileset.toSource {
+        root = ../.;
+        fileset = lib.fileset.unions (
+          sourceFiles
+          ++ [
+            ../clippy.toml
+            ../docs/output-style.md
+          ]
+        );
+      };
+      cargoArtifacts = testCargoArtifacts;
+      cargoExtraArgs = "--locked --workspace";
+      cargoClippyExtraArgs = "--all-targets --all-features -- -D warnings";
+      CARGO_PROFILE = "";
+      doInstallCargoArtifacts = false;
+      env = testArgs.env // testProfileEnv;
+      installPhaseCommand = "mkdir -p $out";
+    }
+  );
+  # A derivation over the test source that starts from the test dependency
+  # artifacts in Cargo's test profile, as `nextestTests` does, for a check that
+  # runs its own Cargo commands against the workspace and the process-suite
+  # driver (`scripts/test-e2e`): both locks are vendored and nextest is on PATH.
+  # `args` supplies at least `pname` and `buildPhaseCargoCommand`; its `env` and
+  # `nativeBuildInputs` extend the test source's.
+  mkTestDerivation =
+    args:
+    craneLib.mkCargoDerivation (
+      testArgs
+      // {
+        src = lib.fileset.toSource {
+          root = ../.;
+          fileset = lib.fileset.unions (
+            sourceFiles
+            ++ [
+              ../docs/output-style.md
+              ../scripts/test-e2e
+            ]
+          );
+        };
+        cargoArtifacts = testCargoArtifacts;
+        cargoVendorDir = craneLib.vendorMultipleCargoDeps {
+          cargoLockList = [
+            ../Cargo.lock
+            ../tests/Cargo.lock
+          ];
+        };
+        CARGO_PROFILE = "";
+        doInstallCargoArtifacts = false;
+        installPhaseCommand = "mkdir -p $out";
+      }
+      // args
+      // {
+        env = testArgs.env // testProfileEnv // (args.env or { });
+        nativeBuildInputs =
+          testArgs.nativeBuildInputs ++ [ cargo-nextest ] ++ (args.nativeBuildInputs or [ ]);
+      }
+    );
   # Build the driver against its own lock. Run the entire process suite against
-  # the test candidate and two smoke tests against the packaged release binary.
+  # the test build's `useful` and two smoke tests against the packaged release
+  # binary.
+  # Keep the implementation out of the driver's build sandbox. The executable
+  # enters separately below, just as a rewrite candidate would.
+  e2eSourceFiles = [
+    ../tests
+    ../scripts/test-e2e
+    ../docs/command-migration.md
+    ../docs/workflow-v1.md
+    ../examples
+    ../schemas
+  ];
+  e2eVendorDir = craneLib.vendorCargoDeps { cargoLock = ../tests/Cargo.lock; };
   e2eTests = craneLib.mkCargoDerivation {
-    # Keep the implementation out of the driver's build sandbox. The executable
-    # enters separately below, just as a rewrite candidate would.
     src = lib.fileset.toSource {
       root = ../.;
-      fileset = lib.fileset.unions [
-        ../tests
-        ../scripts/test-e2e
-        ../docs/command-migration.md
-        ../docs/workflow-v1.md
-        ../examples
-        ../schemas
-      ];
+      fileset = lib.fileset.unions e2eSourceFiles;
     };
     pname = "useful-e2e";
     inherit version;
     cargoArtifacts = null;
-    cargoVendorDir = craneLib.vendorCargoDeps { cargoLock = ../tests/Cargo.lock; };
+    cargoVendorDir = e2eVendorDir;
     nativeBuildInputs = [
       cargo-nextest
       git
@@ -181,10 +264,27 @@ let
         USEFUL_TEST_BUILD_IDENTITY = testBuildIdentity;
       };
     buildPhaseCargoCommand = ''
-      bash scripts/test-e2e ${e2eCandidate}/bin/useful --features candidate-checkpoints --no-fail-fast
+      bash scripts/test-e2e ${testBuild}/bin/useful --features candidate-checkpoints --no-fail-fast
       bash scripts/test-e2e ${package}/bin/useful \
         -E 'test(installed_command_tree_has_the_declared_paths_visibility_and_options) | test(validate_create_list_show_and_view_follow_the_same_local_run)'
     '';
+    installPhaseCommand = "mkdir -p $out";
+    doInstallCargoArtifacts = false;
+  };
+
+  # check-suite's lint gate over the standalone process-suite driver, which
+  # builds against its own manifest and lock.
+  e2eClippy = lintCraneLib.mkCargoDerivation {
+    src = lib.fileset.toSource {
+      root = ../.;
+      fileset = lib.fileset.unions (e2eSourceFiles ++ [ ../clippy.toml ]);
+    };
+    pname = "useful-e2e-clippy";
+    inherit version;
+    cargoArtifacts = null;
+    cargoVendorDir = e2eVendorDir;
+    env = testProfileEnv;
+    buildPhaseCargoCommand = "cargo clippy --locked --manifest-path tests/Cargo.toml --all-targets --all-features -- -D warnings";
     installPhaseCommand = "mkdir -p $out";
     doInstallCargoArtifacts = false;
   };
@@ -205,7 +305,11 @@ let
       passthru = {
         inherit
           cargoArtifacts
+          clippy
+          e2eClippy
+          mkTestDerivation
           nextestTests
+          testBuild
           testCargoArtifacts
           e2eTests
           ;

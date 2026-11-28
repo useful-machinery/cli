@@ -1623,15 +1623,15 @@ fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
         "planned: vet",
         "planned:\n        wait: external\n        then: vet\n        rule:\n          source: github\n          event: pull_request.closed\n          where: 'event.merged == true'",
     );
-    let answer_elsewhere = nested_variant(
-        "planned: vet",
-        "planned:\n        wait: answer\n        then: vet",
+    let answer_exit = nested_variant(
+        "planned: vet\n      failed: exit.failed",
+        "planned:\n        wait: answer\n        then: exit.failed\n      failed: vet",
     );
     for (nested, shape) in [
         (for_each, NestedShape::ForEach),
         (approval, NestedShape::WaitKind),
         (external, NestedShape::WaitKind),
-        (answer_elsewhere, NestedShape::WaitThen),
+        (answer_exit, NestedShape::WaitThen),
     ] {
         let bundle = ChildBundle::nesting(&nested);
         // The nested workflow validates on its own.
@@ -1657,6 +1657,14 @@ fn a_nested_workflow_holding_a_refused_shape_fails_at_the_parents_step() {
         let remedy = crate::workflow::rejection::human_resolution_remedy(&failure);
         assert!(remedy.contains("draft"), "{remedy}");
     }
+
+    let answer_elsewhere = nested_variant(
+        "planned: vet",
+        "planned:\n        wait: answer\n        then: vet",
+    );
+    ChildBundle::nesting(&answer_elsewhere)
+        .resolve("workflow.yaml")
+        .unwrap();
 
     // A repair wait under a limited edge's `else`, continuing at the waiting step, is one
     // the nested workflow may hold.

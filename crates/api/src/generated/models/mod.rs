@@ -654,6 +654,8 @@ pub mod run_workflow_wait_failed_child;
 pub use self::run_workflow_wait_failed_child::RunWorkflowWaitFailedChild;
 pub mod run_workflow_wait_failed_child_node;
 pub use self::run_workflow_wait_failed_child_node::RunWorkflowWaitFailedChildNode;
+pub mod run_workflow_wait_interval;
+pub use self::run_workflow_wait_interval::RunWorkflowWaitInterval;
 pub mod run_workflow_wait_question;
 pub use self::run_workflow_wait_question::RunWorkflowWaitQuestion;
 pub mod run_workflow_wait_release;

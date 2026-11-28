@@ -13,6 +13,7 @@ use crate::workflow::admission::CancellationReason;
 use crate::workflow::admission::{ResolvedInput, ResolvedInputs};
 use crate::workflow::local_run::LocalRunDirectoryError;
 use crate::workflow::runtime::{ChildInterruption, EnteredWait};
+use crate::{AttemptControls, ContinuationReasonV1, replayed_nested_wait};
 
 const RUN: &str = "run_01jcf9a4r7t2m8k3v6x1z5n0pq";
 const OTHER_RUN: &str = "run_01jcfa3m6p9q2r5s8t1v4w7x0y";
@@ -79,6 +80,40 @@ fn record(kind: WaitKind, step: &str, then: &str, on_hand_back: Option<&str>) ->
         &BTreeMap::new(),
     )
     .unwrap()
+}
+
+#[test]
+fn a_carried_wait_records_a_distinct_nested_continuation_step() {
+    let prefix = [json!("part"), json!({"item": 2})];
+    let nested = record(WaitKind::Answer, "review", "review", None);
+    let same_step = WaitRecord::carried(&nested, &prefix, "part", None).unwrap();
+    assert_eq!(same_step.nested_then, None);
+    let previous = r#"{"kind":"answer","since":"2026-11-07T21:41:58Z","step":["part",{"item":2},"review"],"then":"part","rule":{"source":"um","event":["control.answer"],"where":"event.run == run.id and event.wait == wait.id and event.payload.complete == true"},"payload":{}}"#;
+    assert_eq!(serde_json::to_string(&same_step).unwrap(), previous);
+
+    let nested = record(WaitKind::Answer, "review", "fix", None);
+    let other_step = WaitRecord::carried(&nested, &prefix, "part", None).unwrap();
+    assert_eq!(other_step.nested_then.as_deref(), Some("fix"));
+    let document = serde_json::to_value(&other_step).unwrap();
+    assert_eq!(document["nestedThen"], "fix");
+    assert!(other_step.is_valid());
+    assert_valid(&validator("workflow-run-wait-v1.schema.json"), &document);
+}
+
+#[test]
+fn a_nested_continuation_target_must_be_a_distinct_step_of_a_carried_wait() {
+    let nested = record(WaitKind::Answer, "review", "fix", None);
+    let carried = WaitRecord::carried(&nested, &[json!("part")], "part", None).unwrap();
+    for (record, target) in [
+        (carried.clone(), "exit.failed"),
+        (carried, "review"),
+        (nested, "fix"),
+    ] {
+        let mut document = serde_json::to_value(record).unwrap();
+        document["nestedThen"] = json!(target);
+        let invalid = serde_json::from_value::<WaitRecord>(document).unwrap();
+        assert!(!invalid.is_valid(), "{invalid:?}");
+    }
 }
 
 #[test]
@@ -243,6 +278,12 @@ fn answered_run(wait: &WaitRecord) -> tempfile::TempDir {
 /// A run directory holding `run.json` and attempt 1's copy of `wait`, resolved by a control
 /// of `event` with `payload`.
 fn resolved_run(wait: &WaitRecord, event: &str, payload: Value) -> tempfile::TempDir {
+    let root = waiting_run(wait);
+    resolve_wait(root.path(), wait, event, Some(payload));
+    root
+}
+
+fn waiting_run(wait: &WaitRecord) -> tempfile::TempDir {
     let root = run_root();
     let record = crate::workflow::run_record::WorkflowRunRecord::new(
         None,
@@ -255,17 +296,7 @@ fn resolved_run(wait: &WaitRecord, event: &str, payload: Value) -> tempfile::Tem
         serde_json::to_vec(&record).unwrap(),
     )
     .unwrap();
-    fs::create_dir_all(root.path().join("attempts/000001")).unwrap();
-    fs::write(
-        root.path().join("attempts/000001/wait.json"),
-        serde_json::to_vec(wait).unwrap(),
-    )
-    .unwrap();
-    append_control(
-        root.path(),
-        &control(event, &record.id, Some(&wait.id()), Some(payload)),
-    )
-    .unwrap();
+    write_attempt_wait(root.path(), 1, Some(wait));
     root
 }
 
@@ -434,6 +465,13 @@ fn write_attempt_wait(run: &Path, attempt: u64, wait: Option<&WaitRecord>) {
     }
 }
 
+fn record_attempt_count(run: &Path, attempts: u64) {
+    let path = run.join("run.json");
+    let mut run_json: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    run_json["attempts"] = json!(attempts);
+    fs::write(path, serde_json::to_vec(&run_json).unwrap()).unwrap();
+}
+
 /// Appends to the run at `run` the control of `event` with `payload` resolving `wait`.
 fn resolve_wait(run: &Path, wait: &WaitRecord, event: &str, payload: Option<Value>) {
     let record: Value = serde_json::from_slice(&fs::read(run.join("run.json")).unwrap()).unwrap();
@@ -466,6 +504,275 @@ fn handed_back_then(wait: &WaitRecord, event: &str, payload: Option<Value>) -> t
     write_attempt_wait(run.path(), 2, Some(wait));
     resolve_wait(run.path(), wait, event, payload);
     run
+}
+
+#[test]
+fn nested_attempt_controls_replay_the_root_answer_at_the_continuation_step() {
+    let prefix = [json!("part")];
+    let mut original = record(WaitKind::Answer, "prepareChange", "applyDecision", None);
+    original
+        .payload
+        .insert("questions".to_owned(), json!("Is this draft accurate?"));
+    let carrier = WaitRecord::carried(&original, &prefix, "part", None).unwrap();
+    let root = answered_run(&carrier);
+    record_attempt_count(root.path(), 2);
+    let mut repeated = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 1);
+    repeated.payload = original.payload.clone();
+    let nested = waiting_run(&repeated);
+
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        Some(ContinuationReasonV1::Resume)
+    );
+    let resolved = AttemptControls::nested(root.path(), nested.path(), 2, &prefix, None).unwrap();
+    assert_eq!(
+        resolved.controls.wait,
+        Some((
+            "applyDecision".to_owned(),
+            BTreeMap::from([("summary".to_owned(), "ship it".to_owned())]),
+        ))
+    );
+    assert_eq!(
+        resolved
+            .controls
+            .answers
+            .get("applyDecision")
+            .map(Arc::as_ref),
+        Some(&json!({"q1": "yes"}))
+    );
+
+    let mut repeated_again = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 2);
+    repeated_again.payload = original.payload;
+    write_attempt_wait(nested.path(), 2, None);
+    write_attempt_wait(nested.path(), 3, Some(&repeated_again));
+    record_attempt_count(nested.path(), 3);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn nested_wait_replay_requires_the_same_answer_questions() {
+    let prefix = [json!("part")];
+    let listed = json!([
+        {"id": "q1", "text": "Is this draft accurate?"},
+        {"id": "q2", "text": "May this draft be published?"}
+    ]);
+    let mut changed_id = listed.clone();
+    changed_id[1]["id"] = json!("q3");
+    let mut changed_text = listed.clone();
+    changed_text[1]["text"] = json!("Who may publish this draft?");
+    for (original_questions, new_questions) in [
+        (
+            json!("Is this draft accurate?"),
+            json!("May this draft be published?"),
+        ),
+        (listed.clone(), changed_id),
+        (listed, changed_text),
+    ] {
+        let mut original = record(WaitKind::Answer, "prepareChange", "applyDecision", None);
+        original
+            .payload
+            .insert("questions".to_owned(), original_questions);
+        let carrier = WaitRecord::carried(&original, &prefix, "part", None).unwrap();
+        let root = resolved_run(
+            &carrier,
+            CONTROL_ANSWER,
+            json!({"complete": true, "answers": {"q1": "yes", "q2": "no"}}),
+        );
+        record_attempt_count(root.path(), 2);
+        let mut changed = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 1);
+        changed
+            .payload
+            .insert("questions".to_owned(), new_questions);
+        let nested = waiting_run(&changed);
+
+        assert_eq!(
+            replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+            None,
+            "changed questions: {:?}",
+            changed.payload["questions"]
+        );
+        let resolved =
+            AttemptControls::nested(root.path(), nested.path(), 2, &prefix, None).unwrap();
+        assert!(!resolved.controls.answers.contains_key("applyDecision"));
+    }
+}
+
+// A step that receives another step's answer and then asks its own question continues with
+// the answer to its own question, the later of the two.
+#[test]
+fn nested_attempt_controls_keep_the_later_answer_of_a_step_that_asks_after_receiving_one() {
+    let prefix = [json!("part")];
+    let asked = record(WaitKind::Answer, "prepareChange", "applyDecision", None);
+    let asked_again = wait_at(WaitKind::Answer, "applyDecision", "applyDecision", None, 1);
+    let root = resolved_run(
+        &WaitRecord::carried(&asked, &prefix, "part", None).unwrap(),
+        CONTROL_ANSWER,
+        json!({"complete": true, "answers": {"q1": "first"}}),
+    );
+    let carrier = WaitRecord::carried(&asked_again, &prefix, "part", None).unwrap();
+    write_attempt_wait(root.path(), 2, Some(&carrier));
+    resolve_wait(
+        root.path(),
+        &carrier,
+        CONTROL_ANSWER,
+        Some(json!({"complete": true, "answers": {"q1": "second"}})),
+    );
+    record_attempt_count(root.path(), 3);
+    let nested = waiting_run(&asked);
+    write_attempt_wait(nested.path(), 2, Some(&asked_again));
+
+    let resolved = AttemptControls::nested(root.path(), nested.path(), 3, &prefix, None).unwrap();
+    assert_eq!(
+        resolved
+            .controls
+            .answers
+            .get("applyDecision")
+            .map(Arc::as_ref),
+        Some(&json!({"q1": "second"}))
+    );
+}
+
+#[test]
+fn nested_wait_replay_requires_the_same_element_and_distinct_continuation_target() {
+    let prefix = [json!("part"), json!({"item": 2})];
+    let original = record(WaitKind::Answer, "prepareChange", "applyDecision", None);
+    let repeated = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 1);
+    let same_step = record(WaitKind::Answer, "prepareChange", "prepareChange", None);
+    let different_target = wait_at(WaitKind::Answer, "prepareChange", "applyOther", None, 1);
+    let other_element = [json!("part"), json!({"item": 1})];
+    for (carried, carried_prefix, entered) in [
+        (&original, &other_element, &repeated),
+        (&same_step, &prefix, &repeated),
+        (&original, &prefix, &different_target),
+    ] {
+        let carrier = WaitRecord::carried(carried, carried_prefix, "part", None).unwrap();
+        let root = answered_run(&carrier);
+        record_attempt_count(root.path(), 2);
+        let nested = waiting_run(entered);
+        assert_eq!(
+            replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+            None,
+            "carrier at {:?} with target {:?}, nested target {:?}",
+            carrier.step,
+            carrier.nested_then,
+            entered.then
+        );
+    }
+}
+
+#[test]
+fn nested_wait_replay_only_looks_at_the_unbroken_chain_and_uses_its_latest_match() {
+    let prefix = [json!("part")];
+    let original = record(WaitKind::Answer, "prepareChange", "applyDecision", None);
+    let later = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 1);
+    let repeated = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 2);
+    let carrier = WaitRecord::carried(&original, &prefix, "part", None).unwrap();
+    let later_carrier = WaitRecord::carried(&later, &prefix, "part", None).unwrap();
+    let root = answered_run(&carrier);
+    let nested = waiting_run(&repeated);
+
+    write_attempt_wait(root.path(), 2, None);
+    record_attempt_count(root.path(), 3);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+
+    write_attempt_wait(root.path(), 2, Some(&later_carrier));
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+
+    resolve_wait(
+        root.path(),
+        &later_carrier,
+        CONTROL_ANSWER,
+        Some(json!({"complete": true, "answers": {"q1": "no"}, "summary": "latest"})),
+    );
+
+    // The newest root wait can be at a different step, even if it continues to the same
+    // target. The replayed attempt reads the matching wait's answer as well as its text.
+    let unrelated = wait_at(WaitKind::Answer, "seekAdvice", "applyDecision", None, 3);
+    let unrelated_carrier = WaitRecord::carried(&unrelated, &prefix, "part", None).unwrap();
+    write_attempt_wait(root.path(), 3, Some(&unrelated_carrier));
+    resolve_wait(
+        root.path(),
+        &unrelated_carrier,
+        CONTROL_ANSWER,
+        Some(json!({"complete": true, "answers": {"q1": "unrelated"}})),
+    );
+    record_attempt_count(root.path(), 4);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        Some(ContinuationReasonV1::Resume)
+    );
+    let resolved = AttemptControls::nested(root.path(), nested.path(), 2, &prefix, None).unwrap();
+    assert_eq!(
+        resolved.controls.wait,
+        Some((
+            "applyDecision".to_owned(),
+            BTreeMap::from([("summary".to_owned(), "latest".to_owned())]),
+        ))
+    );
+    assert_eq!(
+        resolved
+            .controls
+            .answers
+            .get("applyDecision")
+            .map(Arc::as_ref),
+        Some(&json!({"q1": "no"}))
+    );
+    let repeated_again = wait_at(WaitKind::Answer, "prepareChange", "applyDecision", None, 4);
+    write_attempt_wait(nested.path(), 2, Some(&repeated_again));
+    record_attempt_count(nested.path(), 2);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn nested_wait_replay_requires_a_retry_for_repair_and_respects_exact_pairings() {
+    let prefix = [json!("part")];
+    let mut original = record(WaitKind::Repair, "prepareChange", "applyDecision", None);
+    original
+        .payload
+        .insert("questions".to_owned(), json!("What must be fixed?"));
+    let mut repeated = wait_at(WaitKind::Repair, "prepareChange", "applyDecision", None, 1);
+    repeated
+        .payload
+        .insert("questions".to_owned(), json!("What still must be fixed?"));
+    let carrier = WaitRecord::carried(&original, &prefix, "part", None).unwrap();
+    let withdrawn = resolved_run(&carrier, CONTROL_WITHDRAW, json!({}));
+    record_attempt_count(withdrawn.path(), 2);
+    let nested = waiting_run(&repeated);
+    assert_eq!(
+        replayed_nested_wait(withdrawn.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+
+    let root = resolved_run(&carrier, CONTROL_RETRY, json!({}));
+    record_attempt_count(root.path(), 2);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        Some(ContinuationReasonV1::Retry)
+    );
+
+    let nested = waiting_run(&original);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
+    write_attempt_wait(nested.path(), 2, Some(&repeated));
+    record_attempt_count(nested.path(), 2);
+    assert_eq!(
+        replayed_nested_wait(root.path(), nested.path(), &prefix).unwrap(),
+        None
+    );
 }
 
 // A `control.retry` of a repair wait entered at the step it continues at keeps, for that
@@ -541,14 +848,7 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     assert_eq!(carried.step, [json!("part"), json!("fix")]);
     write_attempt_wait(root.path(), 2, Some(&carried));
     resolve_wait(root.path(), &carried, "control.retry", None);
-    let mut run_json: Value =
-        serde_json::from_slice(&fs::read(root.path().join("run.json")).unwrap()).unwrap();
-    run_json["attempts"] = json!(2);
-    fs::write(
-        root.path().join("run.json"),
-        serde_json::to_vec(&run_json).unwrap(),
-    )
-    .unwrap();
+    record_attempt_count(root.path(), 2);
     let nested = tempfile::tempdir().unwrap();
     write_attempt_wait(nested.path(), 1, Some(&review));
     write_attempt_wait(nested.path(), 2, Some(&repair));
@@ -562,6 +862,34 @@ fn attempt_controls_keep_a_hand_back_field_across_repair_retries_at_its_step() {
     .unwrap()
     .controls;
     assert_eq!(controls.wait, at_fix(Some("tighten it")));
+    assert_eq!(
+        controls.answers.get("fix").map(Arc::as_ref),
+        Some(&json!({"q1": "yes"}))
+    );
+    assert!(!controls.answers.contains_key("review"));
+
+    let fresh = tempfile::tempdir().unwrap();
+    let controls = crate::workflow::local_run::AttemptControls::nested(
+        root.path(),
+        fresh.path(),
+        1,
+        &prefix,
+        None,
+    )
+    .unwrap()
+    .controls;
+    assert!(!controls.answers.contains_key("fix"));
+    assert!(!controls.answers.contains_key("review"));
+
+    let at_own_step = WaitRecord::carried(&answer, &prefix, "part", None).unwrap();
+    let root = answered_run(&at_own_step);
+    let controls = AttemptControls::nested(root.path(), fresh.path(), 1, &prefix, None)
+        .unwrap()
+        .controls;
+    assert_eq!(
+        controls.answers.get("fix").map(Arc::as_ref),
+        Some(&json!({"q1": "yes"}))
+    );
 }
 
 #[test]

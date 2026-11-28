@@ -7,8 +7,8 @@
 //!
 //! A wait the root carries from a nested run is continued one level down: `prepare_wait`
 //! verifies the waiting element's nested run under the root's lock and then its own, admits
-//! its next attempt from the nested step that waited and, for a repair, prepares that step's
-//! stage as `prepare` does with the nested run as the parent.
+//! its next attempt from the nested wait's `then` and prepares stage recovery when the
+//! continuation returns to the waiting step, with the nested run as the parent.
 //!
 //! An abandoned root's nested run is settled by its record: `prepare_abandoned` carries the
 //! wait of one that reads `waiting` and admits the in-place continuation of one that reads
@@ -393,9 +393,9 @@ async fn child_uses_execution_root(
 /// lie under the waiting element's nested run, which must name the root, the step and the
 /// element, keep its tree copy and wait on the root wait's kind and `since` at the nested step;
 /// anything else is refused, as for a failed child whose relationship to its wait does not
-/// verify. The nested run's next attempt is admitted from the nested step that waited with `reason`; for a repair, or a host
-/// wait the condition or a `control.retry` resolved, that step's stage is adopted, continued or
-/// started afresh as the run's own would be, with the nested run as its parent and the root's
+/// verify. The nested run's next attempt is admitted from the nested wait's `then` with `reason`.
+/// When a repair or host wait continues at the step that waited, its stage is adopted, continued
+/// or started afresh as the run's own would be, with the nested run as its parent and the root's
 /// resolving control, if any.
 async fn prepare_nested(
     repair: Repair<'_>,
@@ -521,7 +521,7 @@ async fn prepare_nested(
         workflow: &step.workflow,
     };
     check_mapped_inputs(mapped, &pending, &mut controls, output, NESTED_UNOWNED)?;
-    // The nested run's next attempt starts at the nested step that waited, under its own
+    // The nested run's next attempt starts at the nested wait's `then`, under its own
     // definition and retained inputs, launched from the root's admitted environment.
     let workflow = pending.previous_definition().clone();
     let from = vec![nested_wait.then.clone()];
